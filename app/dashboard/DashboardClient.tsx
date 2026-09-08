@@ -29,6 +29,18 @@ interface ClientProps {
   repositories: readonly string[]
 }
 
+export type AnswerModeKeyAction = 'cancel' | 'submit' | 'consume' | 'pass'
+
+const DASHBOARD_ROW_SHORTCUTS = new Set(['ArrowDown', 'ArrowUp', 'a', 'p', 'r', 'm', 'd', 'i', 'h'])
+
+/** Answer mode owns its row: only cancellation and non-editor submission may act. */
+export function answerModeKeyAction(key: string, editorTarget: boolean): AnswerModeKeyAction {
+  if (key === 'Escape') return 'cancel'
+  if (key === 'Enter') return editorTarget ? 'pass' : 'submit'
+  if (!editorTarget && DASHBOARD_ROW_SHORTCUTS.has(key)) return 'consume'
+  return 'pass'
+}
+
 interface RowControlHandlerDependencies {
   selection?: Selection
   setSelection: (selection: Selection) => void
@@ -289,20 +301,23 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     if (!model) return
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const target = event.target instanceof HTMLElement ? event.target : null
+    const editorTarget = Boolean(
+      target?.closest('input, textarea, select, [contenteditable="true"]'),
+    )
     if (answerStep) {
-      if (event.key === 'Escape') {
+      const action = answerModeKeyAction(event.key, editorTarget)
+      if (action === 'cancel') {
         event.preventDefault()
         cancelAnswerStep()
-      } else if (
-        event.key === 'Enter' &&
-        !target?.closest('input, textarea, select, [contenteditable="true"]')
-      ) {
+      } else if (action === 'submit') {
         event.preventDefault()
         submitAnswerStep()
+      } else if (action === 'consume') {
+        event.preventDefault()
       }
       return
     }
-    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+    if (editorTarget) return
     const entries: Selection[] = [
       ...(model.harvest ? [{ kind: 'harvest' } as Selection] : []),
       ...model.builds.map((row): Selection => ({ kind: 'build', slug: row.slug })),

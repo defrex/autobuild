@@ -15,9 +15,25 @@ Every action below is sessionless, records a human-authored fact, and accepts
 | Re-import an amended ticket | `ab answer <slug> --revise-spec-from-ticket` | Reads the build's recorded ticket and performs the same revision. |
 | Abandon the build | `ab abort <slug>` | Irrevocably requests abort; cleanup returns the ticket to Triage. |
 
-The dashboard's blocked-build `r` field supports guidance and a blank retry.
-Its build detail names the CLI-only dismissal and revision commands; it does not
-provide a spec editor.
+The dashboard's blocked-build `r` shortcut requests an inline answer step that
+supports guidance and a blank retry. While that step is open, it is exclusive
+to the selected row: the row exposes only **SUBMIT** and **CANCEL**. Its ordinary
+**RESUME**, **ABORT**, auto-merge, and detail controls are unavailable, and the
+`r` and `a` row shortcuts do not trigger them (those letters remain ordinary
+text while typing in the guidance field).
+
+A successful submit records the trimmed guidance, or a bare retry for blank
+input, resumes through the normal answer lifecycle, and closes the local step.
+**CANCEL** or Esc closes it without writing and preserves both the selected
+build and whether its detail was open. A later **RESUME** can request a fresh,
+empty answer step. A later **ABORT** first replaces the row controls with local
+**CONFIRM ABORT** and **CANCEL** confirmation; no durable abort occurs until it
+is confirmed.
+
+Controls on unrelated rows retain their established target-aware behavior.
+Activating one leaves the old answer mode, selects that row, and performs its
+normal action. The selected build's full detail names the CLI-only dismissal
+and revision commands; it does not provide a spec editor.
 
 Restarting `ab dispatch` or running `ab dispatch --once` is not an answer or a
 retry action. Every open escalation, including every policy and setup cause,

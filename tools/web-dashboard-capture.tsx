@@ -17,7 +17,6 @@ import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { DashboardModel, TranscriptPresentation } from 'autobuild/operator-presentation'
-import { buildActionAvailability } from 'autobuild/operator-presentation'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -330,13 +329,6 @@ function hoverSelection(model: DashboardModel, selected: Selection): Selection {
   return { kind: 'build', slug: candidate.slug }
 }
 
-/** A build whose abort control is available, for the two-step confirmation frame. */
-function abortableSelection(model: DashboardModel): Selection {
-  const candidate = model.builds.find((build) => buildActionAvailability(build).abort)
-  if (!candidate) throw new Error('web dashboard capture: the mixed model has no abortable build')
-  return { kind: 'build', slug: candidate.slug }
-}
-
 function emptyModel(model: DashboardModel): DashboardModel {
   return {
     ...model,
@@ -424,8 +416,9 @@ function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
       )
     }
     case 'builds-mixed-abort-wide': {
-      const selection = abortableSelection(models.mixed)
-      if (selection.kind !== 'build') throw new Error('abortable selection is not a build')
+      // The confirmation frame is the selected blocked row after leaving its answer step.
+      const selection = blockedSelection(models.mixed)
+      if (selection.kind !== 'build') throw new Error('blocked selection is not a build')
       return shell(
         builds(models.mixed, {
           selection,
@@ -709,8 +702,8 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the selected blocked row register keeps ABORT, RESUME, and DETAILS. No 390px frame carries a preview marker.',
     '- [ ] `builds-mixed-selected-narrow.png` shows the selected row controls without hover; labels fit the fixed two-row register with no clipping or overlap and other rows keep the same reserved height.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
-    '- [ ] Answer frames: the blocked row register contains only row-local `SUBMIT` and `CANCEL`, and the row unfolds a red `!` blocker line with a focused one-row optional-guidance field directly beneath it. Empty submission is identified as retry; the narrow register remains unclipped. The wide frame preserves the already-open full detail composer behind the focused answer step.',
-    '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line and row-local `CONFIRM ABORT` / `CANCEL` ghost controls under the selected row, with no duplicate global controls.',
+    '- [ ] Answer frames: the selected blocked row register contains only row-local `SUBMIT` and `CANCEL`—no selected-row `RESUME`, `ABORT`, auto-merge, or detail accessible names—while unrelated rows retain their ordinary controls. The row unfolds a red `!` blocker line with a focused one-row optional-guidance field directly beneath it. Empty submission is identified as retry; the narrow register remains unclipped. The wide frame preserves the already-open full detail composer behind the focused answer step.',
+    '- [ ] Abort frame (after leaving answer mode with CANCEL): a red `! abort <slug>? Enter confirms, Esc cancels` line and row-local `CONFIRM ABORT` / `CANCEL` ghost controls under the selected row, with no answer field, no ordinary selected-row controls, and no duplicate global controls.',
     '- [ ] No Builds frame renders a footer or global button row, and PAUSE ALL, RESUME ALL, and DESELECT never appear. Dispatcher intake, auto merge, and harvest toggles remain visible; the selected Harvest run retains its row-local RESUME control.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including row controls, are borderless transparent words. Row-head focus reveals its following controls for forward Tab, hidden registers leave tab order, and hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds REFUSED in the masthead and a red `!` notice.',

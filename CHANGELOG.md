@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#269](https://github.com/defrex/autobuild/pull/269) — Make blocked-build answer mode exclusive
 - [#268](https://github.com/defrex/autobuild/pull/268) — Unify dashboard build controls
 - [#267](https://github.com/defrex/autobuild/pull/267) — Remove the Fastext footer from Builds
 - [#266](https://github.com/defrex/autobuild/pull/266) — Add target-aware controls to dashboard rows
