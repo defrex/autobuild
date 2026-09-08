@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { OperatorBuildControlRequest } from 'autobuild/operator-api'
 import type { Selection } from './BuildsView'
-import { createRowControlHandlers } from './DashboardClient'
+import { createRowControlHandlers, isButtonKeyboardActivation } from './DashboardClient'
 
 type Action = OperatorBuildControlRequest['action']
 
@@ -43,6 +43,19 @@ function harness(selection?: Selection) {
     state: () => ({ detail, selected, answerSlug }),
   }
 }
+
+test('native button activation is excluded from dashboard-wide keyboard shortcuts', () => {
+  const button = {
+    closest: (selector: string) => (selector === 'button' ? button : null),
+  }
+  const nonButton = { closest: () => null }
+
+  expect(isButtonKeyboardActivation('Enter', button)).toBe(true)
+  expect(isButtonKeyboardActivation(' ', button)).toBe(true)
+  expect(isButtonKeyboardActivation('Enter', nonButton)).toBe(false)
+  expect(isButtonKeyboardActivation('Escape', button)).toBe(false)
+  expect(isButtonKeyboardActivation('Enter', null)).toBe(false)
+})
 
 test('a same-row action preserves open detail and keeps a blocked resume answer on its slug', () => {
   const slug = 'blocked-build'
