@@ -42,6 +42,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     detail: page([
       'Usage:',
       '  ab init [target] [--force]',
+      '  ab init [target] --validate',
       '',
       'Deterministically vendor the editable ab-* skills, maintain .gitignore, probe every',
       'registered agent runtime, and create a stack-neutral autobuild.toml only when absent.',
@@ -56,6 +57,14 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '',
       'On reruns, init preserves autobuild.toml and asks the setup agent to review and improve it.',
       '--force overwrites edited vendored skills only; it never overwrites autobuild.toml.',
+      '',
+      'After the setup agent has committed the repository-specific configuration,',
+      '--validate runs a noninteractive readiness check without creating a ticket, build,',
+      'phase, or session. It uses a disposable detached worktree for git-worktree and a',
+      'fresh Vercel Sandbox for vercel-sandbox; the environment is identified and removed.',
+      'Setup, plugins, every selected primary/alternate runtime and model, and read-only',
+      'Store access are checked in that execution context. Remote validation never falls',
+      'back locally. --validate cannot be combined with --force.',
     ]),
   },
   {

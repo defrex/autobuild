@@ -24,6 +24,10 @@ export interface VercelCommand {
   readonly exitCode: number | null
   wait(): Promise<{ exitCode: number }>
   kill(signal?: 'SIGTERM' | 'SIGKILL'): Promise<void>
+  /** Completed-command output. Validation is the only production caller that
+   * reads it; build state continues to travel exclusively through the Store. */
+  stdout?(): Promise<string>
+  stderr?(): Promise<string>
 }
 
 export interface VercelSandboxHandle {
@@ -41,26 +45,33 @@ export interface VercelSandboxHandle {
   update(params: { networkPolicy: NetworkPolicy }): Promise<unknown>
 }
 
+export type VercelSandboxCreateInput = {
+  name: string
+  source: {
+    type: 'git'
+    url: string
+    revision: string
+    depth?: number
+    username?: string
+    password?: string
+  }
+  image: string
+  resources: { vcpus: number }
+  timeout: number
+  persistent: true
+  region?: string
+  failoverRegions?: string[]
+  networkPolicy: NetworkPolicy
+}
+
 export interface VercelSandboxFacade {
   get(name: string): Promise<VercelSandboxHandle | null>
-  create(input: {
-    name: string
-    source: {
-      type: 'git'
-      url: string
-      revision: string
-      depth?: number
-      username?: string
-      password?: string
-    }
-    image: string
-    resources: { vcpus: number }
-    timeout: number
-    persistent: true
-    region?: string
-    failoverRegions?: string[]
-    networkPolicy: NetworkPolicy
-  }): Promise<VercelSandboxHandle>
+  /** Durable build workspaces retain the named get-or-create lifecycle. */
+  create(input: VercelSandboxCreateInput): Promise<VercelSandboxHandle>
+  /** Readiness always acquires a new unnamed disposable environment. */
+  createFresh?(
+    input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'>,
+  ): Promise<VercelSandboxHandle>
 }
 
 function sdkCredentials(env: Record<string, string | undefined>): Record<string, string> {
@@ -112,10 +123,21 @@ export function createVercelSdkFacade(
         ...credentials,
       })
     },
+    async createFresh(input) {
+      return await Sandbox.create({
+        ...input,
+        region: input.region as SandboxRegion | undefined,
+        failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
+        ...credentials,
+      })
+    },
   }
 }
 
-function requireValue(env: Record<string, string | undefined>, name: string): string {
+export function requireVercelEnvironmentValue(
+  env: Record<string, string | undefined>,
+  name: string,
+): string {
   const value = env[name]
   if (value === undefined || value === '') {
     throw new Error(`vercel-sandbox requires environment variable ${name}`)
@@ -238,6 +260,168 @@ export async function packageAutobuildDistribution(): Promise<Uint8Array> {
   }
 }
 
+export interface VercelReadinessOptions {
+  config: VercelSandboxConfig
+  env: Record<string, string | undefined>
+  storeRef: string
+  storeToken: string
+  repo: string
+  baseBranch: string
+  facade?: VercelSandboxFacade
+  exec?: Exec
+  packageArchive?: () => Promise<Uint8Array>
+  signal?: AbortSignal
+}
+
+export interface VercelReadinessResult {
+  sandbox: string
+  revision: string
+  origin: string
+  output: string
+}
+
+async function readableCommand(
+  sandbox: VercelSandboxHandle,
+  params: { cmd: string; args?: string[]; cwd?: string; env?: Record<string, string> },
+): Promise<string> {
+  const result = (await sandbox.runCommand(params)) as VercelCommand
+  const stderr = result.stderr === undefined ? '' : await result.stderr()
+  const stdout = result.stdout === undefined ? '' : await result.stdout()
+  if (result.exitCode === null || result.exitCode === undefined) {
+    throw new Error(`sandbox command ${params.cmd} did not return an exit status`)
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `sandbox command ${params.cmd} exited ${result.exitCode}: ${stderr.trim() || stdout.trim() || '(no output)'}`,
+    )
+  }
+  return stdout
+}
+
+/** Create, inspect, and always delete one remote readiness environment. Unlike
+ * build provisioning this never uses a stable name, branch, or marker. */
+export async function validateVercelSandbox(
+  options: VercelReadinessOptions,
+): Promise<VercelReadinessResult> {
+  if (!/^https:\/\//i.test(options.storeRef) || options.storeToken === '') {
+    throw new Error(
+      'remote validation requires an HTTPS AB_STORE and nonempty AB_TOKEN; configure a remotely reachable hosted Store',
+    )
+  }
+  if (options.signal?.aborted) throw options.signal.reason ?? new Error('validation cancelled')
+  const exec = options.exec ?? spawnExec
+  const rawOrigin = await execOrThrow(exec, ['git', 'remote', 'get-url', 'origin'], options.repo)
+  const origin = cleanGithubOrigin(rawOrigin)
+  const revision = oneSha(
+    await execOrThrow(
+      exec,
+      ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${options.baseBranch}`],
+      options.repo,
+    ),
+    `remote base ${options.baseBranch}`,
+  )
+  if (revision === null) {
+    throw new Error(
+      `remote base ${options.baseBranch} does not exist; commit and push the setup before validating`,
+    )
+  }
+  const username =
+    options.config.gitUsernameEnv === undefined
+      ? undefined
+      : requireVercelEnvironmentValue(options.env, options.config.gitUsernameEnv)
+  const password =
+    options.config.gitPasswordEnv === undefined
+      ? undefined
+      : requireVercelEnvironmentValue(options.env, options.config.gitPasswordEnv)
+  const facade = options.facade ?? createVercelSdkFacade(options.env)
+  if (facade.createFresh === undefined) {
+    throw new Error('the configured Vercel SDK facade does not support fresh validation sandboxes')
+  }
+  const sandbox = await facade.createFresh({
+    source: {
+      type: 'git',
+      url: origin.url,
+      revision,
+      ...(username !== undefined && password !== undefined ? { username, password } : {}),
+    },
+    image: options.config.image,
+    resources: { vcpus: options.config.vcpus },
+    timeout: options.config.timeoutSeconds * 1000,
+    ...(options.config.region !== undefined ? { region: options.config.region } : {}),
+    ...(options.config.failoverRegions.length > 0
+      ? { failoverRegions: options.config.failoverRegions }
+      : {}),
+    networkPolicy: 'allow-all',
+  })
+  const name = sandbox.name
+  let failure: unknown
+  let readiness: VercelReadinessResult | undefined
+  try {
+    const sourcePath = `/vercel/sandbox/${origin.directory}`
+    await commandOrThrow(sandbox, { cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] })
+    await commandOrThrow(sandbox, {
+      cmd: 'git',
+      args: ['remote', 'set-url', 'origin', origin.url],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    for (const key of ['credential.helper', 'http.extraheader', `http.${origin.url}.extraheader`]) {
+      const result = await sandbox.runCommand({
+        cmd: 'git',
+        args: ['config', '--local', '--unset-all', key],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+      if (result.exitCode !== 0 && result.exitCode !== 5) {
+        throw new Error(`failed to scrub git config ${key}`)
+      }
+    }
+    const archive = await (options.packageArchive ?? packageAutobuildDistribution)()
+    await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
+    await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
+    await commandOrThrow(sandbox, {
+      cmd: 'tar',
+      args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
+    })
+    await commandOrThrow(sandbox, {
+      cmd: 'bun',
+      args: ['install', '--production', '--ignore-scripts'],
+      cwd: VERCEL_AUTOBUILD_PATH,
+    })
+    await commandOrThrow(sandbox, {
+      cmd: 'sh',
+      args: [
+        '-c',
+        'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
+      ],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    const setup = await readableCommand(sandbox, {
+      cmd: 'bun',
+      args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-init-probe.ts`],
+      cwd: VERCEL_WORKSPACE_PATH,
+      env: Object.fromEntries([
+        ['AB_STORE', options.storeRef],
+        ['AB_TOKEN', options.storeToken],
+        ...options.config.environmentVariables.map((name) => [
+          name,
+          requireVercelEnvironmentValue(options.env, name),
+        ]),
+      ]),
+    })
+    readiness = { sandbox: name, revision, origin: origin.url, output: setup }
+  } catch (error) {
+    failure = error
+  }
+  try {
+    await sandbox.delete()
+  } catch (deleteError) {
+    const guidance = `disposable sandbox ${name} could not be deleted; delete it manually in the Vercel dashboard or with: vercel sandbox rm ${name}`
+    if (failure !== undefined) throw new AggregateError([failure, deleteError], guidance)
+    throw new Error(guidance, { cause: deleteError })
+  }
+  if (failure !== undefined) throw failure
+  return readiness!
+}
+
 export interface VercelSandboxProviderOptions {
   config: VercelSandboxConfig
   env: Record<string, string | undefined>
@@ -332,11 +516,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       const username =
         this.options.config.gitUsernameEnv === undefined
           ? undefined
-          : requireValue(this.options.env, this.options.config.gitUsernameEnv)
+          : requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv)
       const password =
         this.options.config.gitPasswordEnv === undefined
           ? undefined
-          : requireValue(this.options.env, this.options.config.gitPasswordEnv)
+          : requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)
       const readAuth =
         password === undefined
           ? undefined
@@ -463,7 +647,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         origin,
         this.options.config.gitPasswordEnv === undefined
           ? undefined
-          : `Basic ${Buffer.from(`${requireValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
+          : `Basic ${Buffer.from(`${requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv!)}:${requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)}`).toString('base64')}`,
       ),
     }
   }
@@ -493,7 +677,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }),
     }
     for (const name of this.options.config.environmentVariables)
-      env[name] = requireValue(this.options.env, name)
+      env[name] = requireVercelEnvironmentValue(this.options.env, name)
     const command = (await sandbox.runCommand({
       cmd: 'bun',
       args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`],
