@@ -219,6 +219,30 @@ test('flat-grid documentation forbids translucent surfaces without forbidding di
   )
 })
 
+test('row controls reserve in-flow geometry and share the documented reveal contract', () => {
+  expect(stylesheet).toMatch(
+    /\.row-controls\s*\{[\s\S]*?display:\s*grid;[\s\S]*?height:\s*var\(--row\);[\s\S]*?visibility:\s*hidden;[\s\S]*?pointer-events:\s*none;/,
+  )
+  expect(stylesheet).toMatch(
+    /\.row\[data-selected\] \.row-controls,\s*\.row:focus-within \.row-controls\s*\{[\s\S]*?visibility:\s*visible;/,
+  )
+  expect(stylesheet).toMatch(
+    /@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.row\[data-hovered\] \.row-controls/,
+  )
+  expect(stylesheet).toMatch(
+    /@media \(max-width: 719px\)[\s\S]*?\.row-controls\s*\{[\s\S]*?height:\s*calc\(var\(--row\) \* 2\);/,
+  )
+  expect(designDocument).toContain('A reserved in-flow control register sits beneath the headline')
+  expect(designDocument).toContain('Hidden words leave the tab order')
+  expect(designDocument).toContain('the repository Harvest gate remains global')
+  expect(designSidecar.components.find(({ name }) => name === 'Build row')?.description).toContain(
+    'without moving row content; hidden controls leave the tab order',
+  )
+  expect(
+    designSidecar.components.find(({ name }) => name === 'Fastext row')?.description,
+  ).toContain('The global keyboard legend')
+})
+
 test('design sidecar preserves the fine-pointer lane contract', () => {
   expect(designSidecar.extensions.glyphs.selectedLane).toBe('> (bold)')
   expect(designSidecar.extensions.glyphs.hoverPreviewLane).toBe('> (regular)')

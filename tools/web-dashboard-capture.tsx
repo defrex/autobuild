@@ -90,14 +90,14 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-harvest-wide',
     width: 1440,
     height: 1000,
-    requires: ['Harvest', 'RUNNING', 'HARVEST', 'DESELECT'],
+    requires: ['Harvest', 'RUNNING', 'RESUME', 'HARVEST', 'DESELECT'],
     forbids: ['PAUSE ALL', 'RESUME ALL'],
   },
   {
     id: 'builds-harvest-narrow',
     width: 390,
     height: 1700,
-    requires: ['Harvest', 'RUNNING', 'HARVEST', 'DESELECT'],
+    requires: ['Harvest', 'RUNNING', 'RESUME', 'HARVEST', 'DESELECT'],
     forbids: ['PAUSE ALL', 'RESUME ALL'],
   },
   {
@@ -112,10 +112,22 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     ],
   },
   {
+    id: 'builds-mixed-rest-wide',
+    width: 1440,
+    height: 1200,
+    requires: ['BLOCKED ×2', 'PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+  },
+  {
     id: 'builds-mixed-hover-wide',
     width: 1440,
     height: 1200,
     requires: ['BLOCKED ×2', 'PAUSED', '(held)', 'ABORT', 'RESUME', 'DETAILS'],
+  },
+  {
+    id: 'builds-mixed-selected-narrow',
+    width: 390,
+    height: 1700,
+    requires: ['BLOCKED ×2', 'ABORT', 'RESUME', 'DETAILS'],
   },
   {
     id: 'builds-mixed-detail-wide',
@@ -259,15 +271,17 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       model={model}
       now={RENDER_NOW}
       detailOpen={false}
-      confirmingAbort={false}
       answerPending={false}
       onActivate={noop}
       onHoverPreview={noop}
       onDeselect={noop}
       onToggleDetail={noop}
       onBuildControl={noop}
+      onRowBuildControl={noop}
       onRequestAbort={noop}
+      onRowRequestAbort={noop}
       onCancelAbort={noop}
+      onRowToggleDetail={noop}
       onAnswerStepInput={noop}
       onSubmitAnswerStep={noop}
       onCancelAnswerStep={noop}
@@ -276,6 +290,7 @@ function builds(model?: DashboardModel, extra: Partial<BuildsViewProps> = {}) {
       onSetting={noop}
       onBulk={noop}
       onHarvest={noop}
+      onRowHarvest={noop}
       {...extra}
     />
   )
@@ -304,6 +319,19 @@ function abortableSelection(model: DashboardModel): Selection {
   return { kind: 'build', slug: candidate.slug }
 }
 
+function actionableHarvestModel(model: DashboardModel): DashboardModel {
+  if (!model.harvest) throw new Error('web dashboard capture: the happy model has no Harvest run')
+  return {
+    ...model,
+    harvest: {
+      ...model.harvest,
+      status: model.harvest.action ? model.harvest.status : 'failed',
+      action: model.harvest.action ?? 'resume',
+      detail: 'Harvest run stopped and is ready to resume.',
+    },
+  }
+}
+
 function frameNode(id: string, models: WebFixtureModels): ReactNode {
   switch (id) {
     case 'builds-loading-wide':
@@ -313,14 +341,19 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
     case 'builds-happy-narrow':
       return shell(builds(models.happy), { model: models.happy })
     case 'builds-harvest-wide':
-    case 'builds-harvest-narrow':
-      return shell(builds(models.happy, { selection: { kind: 'harvest' } }), {
-        model: models.happy,
-      })
+    case 'builds-harvest-narrow': {
+      const model = actionableHarvestModel(models.happy)
+      return shell(builds(model, { selection: { kind: 'harvest' } }), { model })
+    }
     case 'builds-multirepo-wide':
       return shell(builds(models.happy), {
         model: models.happy,
         repositories: [FIXTURE_REPO, ALTERNATE_FIXTURE_REPO],
+      })
+    case 'builds-mixed-rest-wide':
+    case 'builds-mixed-selected-narrow':
+      return shell(builds(models.mixed, { selection: blockedSelection(models.mixed) }), {
+        model: models.mixed,
       })
     case 'builds-mixed-hover-wide': {
       const selection = blockedSelection(models.mixed)
@@ -355,14 +388,17 @@ function frameNode(id: string, models: WebFixtureModels): ReactNode {
         { model: models.mixed },
       )
     }
-    case 'builds-mixed-abort-wide':
+    case 'builds-mixed-abort-wide': {
+      const selection = abortableSelection(models.mixed)
+      if (selection.kind !== 'build') throw new Error('abortable selection is not a build')
       return shell(
         builds(models.mixed, {
-          selection: abortableSelection(models.mixed),
-          confirmingAbort: true,
+          selection,
+          confirmingAbort: selection.slug,
         }),
         { model: models.mixed },
       )
+    }
     case 'builds-longrepo-narrow':
       return shell(builds(models.mixed), { model: models.mixed, repo: LONG_FIXTURE_REPO })
     case 'signin-wide':
@@ -409,6 +445,11 @@ export function evidenceText(html: string): string {
     .replace(/\s+/g, ' ')
 }
 
+/** The rendered Fastext toolbar, for context-specific evidence checks. */
+export function fastextMarkup(html: string): string {
+  return html.match(/<div class="fastext"[\s\S]*?<\/div>/)?.[0] ?? ''
+}
+
 /** Throws naming the first missing or forbidden evidence string. */
 export function checkEvidence(spec: WebFrameSpec, html: string): void {
   const text = evidenceText(html)
@@ -430,8 +471,9 @@ export function checkEvidence(spec: WebFrameSpec, html: string): void {
       )
     }
   }
+  const forbiddenText = spec.id.includes('-answer-') ? evidenceText(fastextMarkup(html)) : text
   for (const forbidden of spec.forbids ?? []) {
-    if (text.includes(forbidden)) {
+    if (forbiddenText.includes(forbidden)) {
       throw new Error(
         `web dashboard capture ${spec.id}: frame contains forbidden evidence "${forbidden}"`,
       )
@@ -594,6 +636,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     'the host has it, otherwise DejaVu Sans Mono). Nothing here is a golden image:',
     'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
+    'The wide rest/hover pair uses one model and selection so row coordinates can be compared.',
     'The fine-pointer hover preview is modeled explicitly in the wide hover frame.',
     'Focus rings, the state-change flash, and keyboard shortcuts are code-reviewed',
     'rather than screenshotted; narrow frames carry no hover preview.',
@@ -610,19 +653,21 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Every PNG opens, is non-empty, and shows a black ground. Empty black below the content is the fixed viewport height, not a defect.',
     '- [ ] Compare loading and loaded Builds at both widths, then sign-in: the masthead is exactly one cell row high with identical coordinates in every state. The control line and the top and bottom edges of the Fastext footer are also stable where present.',
     '- [ ] Control line: no signed-in frame shows a BUILDS or TICKETS tab word. `builds-multirepo-wide.png` shows the `repo` label and selector with both repository options; every other Builds frame is configured with one repository and omits the complete selector and label.',
-    '- [ ] Loading frames show five static, neutral placeholder rows at the normal three-row build rhythm, with no digits, status words, imperative, synthetic values, or animation. The old polling sentence is absent.',
+    '- [ ] Loading frames show five static, neutral placeholder rows at the normal four-row build rhythm, with no digits, status words, imperative, synthetic values, or animation. The old polling sentence is absent.',
     '- [ ] The document itself does not scroll. Builds and open build detail are clipped only by and scroll within the centre between the control line and Fastext; the shell anchors do not move.',
     '- [ ] Masthead: every glyph keeps the monospace face’s natural width-to-height proportions with no axis-specific scaling; the repository name is yellow at left, one imperative word is bold in its tone (MERGED green on the happy frames, BLOCKED ×2 red on the mixed frames, REFUSED red on the sign-in error), and the poll clock is at the right edge on wide frames and absent on narrow ones. On `builds-longrepo-narrow.png` the long repository name visibly ellipsizes while `BLOCKED ×2` renders whole and remains the most prominent word.',
     '- [ ] Dispatcher line: queue, active, observations, repository state, and the intake, auto merge, and harvest toggle words with bold ON in green or OFF in yellow. The happy frames show everything ON and RUNNING; the mixed frames show PAUSED and OFF.',
     '- [ ] Rows: ticket id, bold slug, and a right-pinned bold STATUS word in its status color; beneath it the bracket step line `[x] [>] [~] [ ]` in green, bold cyan, yellow, and dim, wrapping by whole steps with nothing clipped or overlapping. The Harvest row uses the same grammar.',
     '- [ ] Palette: hues are visibly muted rather than pure-primary. Across the happy and mixed frames, BLOCKED/red, RUNNING/green, PAUSED/yellow, and QUEUED/cyan remain distinguishable at a glance before reading the words.',
     '- [ ] Mixed frames: the queued build shows `(held)` in yellow beside a literal cyan `QUEUED`; blocked rows carry red `!` message lines; the multi-paragraph blocker shows a three-row preview ending in a `... N more rows - Enter details` line.',
-    '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once without shifting row text: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the Fastext footer remains in the selected blocked build context (ABORT, RESUME, DETAILS). No 390px frame carries a preview marker.',
+    '- [ ] Row controls: every row reserves an in-grid control register beneath its headline. Compare `builds-mixed-rest-wide.png` with `builds-mixed-hover-wide.png`: build identity and STATUS coordinates are identical, while the dimmed hovered row gains its ghost-word controls. The selected row keeps visible controls in both frames.',
+    '- [ ] Hover frame: exactly two cyan `>` lane markers appear at once: the selected blocked row is bold, while a different dimmed row carries the regular-weight preview. Detail stays closed and the Fastext footer remains in the selected blocked build context (ABORT, RESUME, DETAILS). No 390px frame carries a preview marker.',
+    '- [ ] `builds-mixed-selected-narrow.png` shows the selected row controls without hover; labels fit the fixed two-row register with no clipping or overlap and other rows keep the same reserved height.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row between two dim rules with Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     '- [ ] Answer frames: the blocked row unfolds a red `!` blocker line and a focused one-row optional-guidance field directly beneath it. Empty submission is identified as retry. The footer contains only red `SUBMIT`, cyan `CANCEL`, and empty green/yellow outlined slots; the 390px frame keeps the two-row footer unclipped. The wide frame preserves the already-open full detail composer behind the focused answer step.',
-    '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line under the selected row, and a footer of `CONFIRM ABORT` in red, `CANCEL` in cyan, and two empty cells that keep their green and yellow outlines.',
-    '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at 0.9 opacity on only its foreground and outline, while its resting surface remains transparent on the black ground; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select the Harvest row and show empty red, the run action in green when available, yellow `HARVEST`, and cyan `DESELECT`. The capture has deterministically verified all four slot elements in this order.',
-    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
+    '- [ ] Abort frame: a red `! abort <slug>? Enter confirms, Esc cancels` line and row-local `CONFIRM ABORT` / `CANCEL` ghost controls under the selected row; the footer repeats CONFIRM ABORT in red and CANCEL in cyan with two empty outlined cells.',
+    '- [ ] Fastext footer: four transparent outline cells left to right red, green, yellow, cyan on wide frames, two per line on narrow frames; each border and label use its slot hue, labels never truncate, and no resting fill appears. A disabled cell keeps its hue at 0.9 opacity on only its foreground and outline, while its resting surface remains transparent on the black ground; an empty cell keeps its outline with no label. Slot colors never change with state. The Harvest frames select a failed Harvest row and show empty red, green `RESUME` in both the row register and legend, yellow `HARVEST`, and cyan `DESELECT`. The capture has deterministically verified all four slot elements in this order.',
+    '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including row controls, are borderless transparent words. Row-head focus reveals its following controls for forward Tab, hidden registers leave tab order, and hover, active, disabled, and keyboard focus treatments are distinct; focus and active are code-reviewed where a static capture cannot show them.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds REFUSED in the masthead and a red `!` notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
     '',

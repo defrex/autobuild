@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
-import { canPreviewPointer, fastextCells } from '../app/dashboard/BuildsView'
+import { buildRowActions, canPreviewPointer, fastextCells } from '../app/dashboard/BuildsView'
 import {
   checkEvidence,
   chromiumBinary,
   evidenceText,
+  fastextMarkup,
   renderWebFrame,
   WEB_FRAME_SPECS,
   type WebFixtureModels,
@@ -121,21 +122,37 @@ test('every web frame renders its required evidence and none of the forbidden', 
   }
 })
 
-test('selected Harvest frames keep fixed Fastext slots, empty outlines, and action labels', () => {
+test('selected Harvest frames keep fixed Fastext slots and repeat the row run action', () => {
   const fixtures = models()
   for (const id of ['builds-harvest-wide', 'builds-harvest-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const footer = html.match(/<div class="fastext"[\s\S]*?<\/div>/)?.[0]
+    const footer = fastextMarkup(html)
 
     expect(footer).toContain('data-slot="red" data-empty="true"')
-    expect(footer).toContain('data-slot="green" data-empty="true"')
+    expect(footer).toContain('data-slot="green"><kbd>p</kbd><span>RESUME</span>')
     expect(footer).toContain('data-slot="yellow"><kbd>h</kbd><span>HARVEST</span>')
+    expect(html).toContain('aria-label="RESUME Harvest run h1"')
     expect(footer).toContain('data-slot="cyan"><kbd>Esc</kbd><span>DESELECT</span>')
     expect(evidenceText(footer ?? '')).not.toContain('PAUSE ALL')
     expect(evidenceText(footer ?? '')).not.toContain('RESUME ALL')
   }
+})
+
+test('Harvest acknowledge is rendered as a run-qualified row control', () => {
+  const fixtures = models()
+  const harvest = fixtures.happy.harvest
+  if (!harvest) throw new Error('happy fixture has no Harvest run')
+  const model: DashboardModel = {
+    ...fixtures.happy,
+    harvest: { ...harvest, status: 'escalated', action: 'acknowledge' },
+  }
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-harvest-wide')!
+  const html = renderWebFrame(spec, { ...fixtures, happy: model }, { css: '', fontCss: '' })
+
+  expect(html).toContain('aria-label="ACKNOWLEDGE Harvest run h1"')
+  expect(html).toContain('>ACKNOWLEDGE</button>')
 })
 
 test('singleton capture frames omit the repository selector', () => {
@@ -206,6 +223,44 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
   }
 })
 
+test('build row controls follow authoritative status availability and Fastext labels', () => {
+  const expected: Array<[DashboardBuild['status'], string[]]> = [
+    ['queued', ['ABORT', 'DISCARD', 'AUTO MERGE', 'DETAILS']],
+    ['running', ['ABORT', 'PAUSE', 'AUTO MERGE', 'DETAILS']],
+    ['pausing', ['ABORT', 'CANCEL PAUSE', 'AUTO MERGE', 'DETAILS']],
+    ['paused', ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']],
+    ['resuming', ['ABORT', 'AUTO MERGE', 'DETAILS']],
+    ['blocked', ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']],
+    ['aborting', ['DETAILS']],
+    ['cleaning', ['DETAILS']],
+  ]
+  for (const [status, labels] of expected) {
+    expect(
+      buildRowActions(build({ status }), false).map((action) => action.label),
+      status,
+    ).toEqual(labels)
+  }
+  expect(buildRowActions(build({ status: 'running' }), true).at(-1)?.label).toBe('CLOSE')
+})
+
+test('rendered row registers follow row heads and qualify control names by target', () => {
+  const fixtures = models()
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
+  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const slug = 'plan-blocked-dashboard'
+  const start = html.indexOf(`id="build-${slug}"`)
+  const row = html.slice(start, html.indexOf('</li>', start))
+
+  expect(row.indexOf('class="rowhead"')).toBeGreaterThan(-1)
+  expect(row.indexOf('class="row-controls"')).toBeGreaterThan(row.indexOf('class="rowhead"'))
+  for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS']) {
+    expect(row).toContain(`aria-label="${label} ${slug}"`)
+  }
+  const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
+  const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
+  expect(happy).toContain('aria-label="Controls for Harvest run h1"')
+})
+
 test('hover frame keeps committed and preview state independent', () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-hover-wide')
   if (!spec) throw new Error('hover frame spec is missing')
@@ -230,7 +285,7 @@ test('answer frames expose only submit and cancel while retaining focused input 
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
-    const footer = html.match(/<div class="fastext"[\s\S]*?<\/div>/)?.[0]
+    const footer = fastextMarkup(html)
 
     expect(html).toContain('class="answer-step"')
     expect(html).toContain('optional guidance (empty retries)')
@@ -255,7 +310,7 @@ test('pending answer context disables submit and cancel', () => {
     pending: `${selected.slug}:answer`,
     selection: { kind: 'build', slug: selected.slug },
     detailOpen: false,
-    confirmingAbort: false,
+    confirmingAbort: undefined,
     answerStep: { slug: selected.slug, escalationIds: ['esc-1'], input: '' },
     answerPending: true,
     onDeselect: () => {},
