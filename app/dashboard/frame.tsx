@@ -162,6 +162,18 @@ export function DashboardSurface({ children }: { children: ReactNode }) {
 }
 
 const LOADING_ROWS = ['first', 'second', 'third', 'fourth', 'fifth'] as const
+const LOADING_CONTROLS = ['queue', 'active', 'observations', 'intake', 'merge', 'harvest'] as const
+
+/** Neutral control geometry occupying the shell line before the first model arrives. */
+export function LoadingControls() {
+  return (
+    <span className="loading-controls" aria-hidden="true">
+      {LOADING_CONTROLS.map((control) => (
+        <span className="skeleton-control control-item" data-control={control} key={control} />
+      ))}
+    </span>
+  )
+}
 
 /** Static, decorative row geometry with one assistive loading announcement. */
 export function LoadingRows({ label }: { label: string }) {
@@ -171,11 +183,6 @@ export function LoadingRows({ label }: { label: string }) {
         {label}
       </p>
       <div className="skeletons" aria-hidden="true">
-        <div className="skeleton-dispatch">
-          <span />
-          <span />
-          <span />
-        </div>
         {LOADING_ROWS.map((row) => (
           <div className="skeleton-row" data-loading-row="" key={row}>
             <span className="skeleton-identity" />
