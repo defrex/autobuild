@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#269](https://github.com/defrex/autobuild/pull/269) — Make blocked-build answer mode exclusive
 - [#267](https://github.com/defrex/autobuild/pull/267) — Remove the Fastext footer from Builds
 - [#266](https://github.com/defrex/autobuild/pull/266) — Add target-aware controls to dashboard rows
 - [#265](https://github.com/defrex/autobuild/pull/265) — Route blocked web RESUME into the answer step
