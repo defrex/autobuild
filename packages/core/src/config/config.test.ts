@@ -70,6 +70,7 @@ sessionBudgetSeconds = 1800
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3
+maxInfrastructureAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 4
 harvestThreshold = 7
@@ -144,6 +145,7 @@ describe('parseConfig — complete flattened surface', () => {
         stallRounds: 3,
         maxVerifyAttempts: 3,
         maxSetupAttempts: 3,
+        maxInfrastructureAttempts: 3,
         maxReconcileAttempts: 3,
         maxReviewRounds: 4,
         harvestThreshold: 7,
@@ -181,6 +183,7 @@ describe('parseConfig — defaults', () => {
         stallRounds: 3,
         maxVerifyAttempts: 3,
         maxSetupAttempts: 3,
+        maxInfrastructureAttempts: 3,
         maxReconcileAttempts: 3,
         maxReviewRounds: 6,
         harvestThreshold: 5,
@@ -292,6 +295,7 @@ describe('parseConfig — defaults', () => {
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 2700
+operationTimeoutMs = 30000
 vcpus = 8
 image = "vercel/sandbox/universal:latest"
 region = "iad1"
@@ -302,10 +306,13 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 ${READY}`).workspace
     expect(workspace.provider).toBe('vercel-sandbox')
     expect(workspace.config.timeoutSeconds).toBe(2700)
+    expect(workspace.config.operationTimeoutMs).toBe(30_000)
 
     for (const table of [
       'timeoutSeconds = 59',
       'timeoutSeconds = 86401',
+      'timeoutSeconds = 600\noperationTimeoutMs = 999',
+      'timeoutSeconds = 600\noperationTimeoutMs = 300001',
       'timeoutSeconds = 600\nunknown = true',
       'timeoutSeconds = 600\nenvironmentVariables = ["TOKEN", "TOKEN"]',
       'timeoutSeconds = 600\ngitPasswordEnv = "AB_GIT_READ_TOKEN"',
@@ -425,6 +432,7 @@ skill = "ab-verify-e2e"
       stallRounds: 7,
       maxVerifyAttempts: 3,
       maxSetupAttempts: 3,
+      maxInfrastructureAttempts: 3,
       maxReconcileAttempts: 3,
       maxReviewRounds: 6,
       harvestThreshold: 5,

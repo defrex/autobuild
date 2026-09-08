@@ -29,6 +29,10 @@ class FakeSandbox implements VercelSandboxHandle {
   provisioned = false
   detachedWait: () => Promise<{ exitCode: number }> = async () => ({ exitCode: 0 })
 
+  currentSession() {
+    return { sessionId: 'session-1' }
+  }
+
   async runCommand(params: Record<string, unknown>) {
     this.commands.push(params)
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
@@ -193,6 +197,20 @@ describe('VercelSandboxProvider', () => {
     expect(JSON.stringify(h.sandbox.commands)).not.toContain('forge-secret')
   })
 
+  test('uses generation-scoped deterministic names and an immutable recovery revision', async () => {
+    const h = harness()
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+      revision: 'b'.repeat(40),
+      generation: 2,
+    })
+    expect(h.createInput?.name).toMatch(/^autobuild-remote-build-g2-/)
+    expect((h.createInput!.source as { revision: string }).revision).toBe('b'.repeat(40))
+    expect(h.createInput?.signal).toBeInstanceOf(AbortSignal)
+  })
+
   test('deletes a partial setup so the next provisioning pass rematerializes cleanly', async () => {
     const first = new FakeSandbox()
     first.failSetupCommand = 'tar'
@@ -301,6 +319,12 @@ describe('VercelSandboxProvider', () => {
       storeRef: 'https://store.example.test',
       instance: 'i-1',
       workspaceRef: workspace.ref,
+    })
+    expect(handle.identity).toEqual({
+      provider: 'vercel-sandbox',
+      workspaceRef: workspace.ref,
+      environmentId: 'sandbox',
+      sessionId: 'session-1',
     })
     expect(await handle.completion).toEqual({ exitCode: 0 })
     const launch = h.sandbox.commands.find((command) => command.detached === true)!

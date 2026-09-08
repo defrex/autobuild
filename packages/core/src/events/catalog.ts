@@ -40,6 +40,9 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'runner.setup-failed': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.released': ['dispatcher', 'kernel'],
+  'execution.started': ['dispatcher'],
+  'infrastructure.failed': ['dispatcher'],
+  'infrastructure.cleanup-attempted': ['dispatcher'],
   'publication.requested': ['agent', 'kernel'],
   'abort.remote-branch-deleted': ['dispatcher'],
   'abort.local-branch-deleted': ['dispatcher'],
@@ -93,7 +96,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'reconcile.completed': ['agent', 'dispatcher'],
 
   'observation.recorded': ['kernel', 'agent'],
-  'escalation.raised': ['agent', 'kernel'],
+  'escalation.raised': ['agent', 'kernel', 'dispatcher'],
   // Answering an escalation is always a deliberate human act. Historical
   // dispatcher-authored retries remain reducible because replay does not
   // revalidate already-persisted envelopes.
@@ -157,6 +160,14 @@ export function validateEventWrite(input: {
   }
   if (input.type === 'escalation.raised') {
     const escalation = payloadResult.data as EventPayload<'escalation.raised'>
+    if (
+      actor.kind === 'dispatcher' &&
+      (escalation.source !== 'policy' || escalation.policyCause !== 'infrastructure-failure-limit')
+    ) {
+      throw new EventValidationError(
+        'invalid dispatcher escalation: only policy/infrastructure-failure-limit may be raised outside the kernel',
+      )
+    }
     if (escalation.source === 'policy' && escalation.policyCause === undefined) {
       throw new EventValidationError(
         'invalid payload for "escalation.raised": source "policy" requires a recognized policyCause',

@@ -150,6 +150,12 @@ export interface WorkspacePublication {
   publish(input: { ref: string; sha: string; branch: string }): Promise<void>
 }
 
+export interface WorkspaceRecovery {
+  /** Fence an unavailable environment. Unknown outcomes must reject so the
+   * dispatcher retains the lease/workspace fact and retries after its fence. */
+  reap(handle: WorkspaceHandle): Promise<'confirmed' | 'absent'>
+}
+
 export interface WorkspaceProvider {
   readonly name: string
   /** Optional workspace-adjacent executor. Remote providers substitute here;
@@ -157,10 +163,16 @@ export interface WorkspaceProvider {
   readonly buildExecution?: BuildExecution
   /** Trusted dispatcher-only publication capability for remote workspaces. */
   readonly publication?: WorkspacePublication
+  /** Optional only for remote/disposable providers. */
+  readonly recovery?: WorkspaceRecovery
   provision(opts: {
     repo: string
     baseBranch: string
     branch: string
+    /** Immutable recovery checkpoint, never a moved base branch. */
+    revision?: string
+    /** Monotonic environment generation used in provider idempotency keys. */
+    generation?: number
   }): Promise<WorkspaceProvisionResult>
   release(handle: WorkspaceHandle): Promise<void>
 }

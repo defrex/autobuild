@@ -39,6 +39,22 @@ const reasonOnly = z.strictObject({ reason: z.string().optional() })
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'launch'])
+const infrastructureOperation = z.enum([
+  'provision',
+  'start',
+  'wait',
+  'stop',
+  'delete',
+  'reconcile',
+])
+const infrastructureCause = z.enum([
+  'missing',
+  'session-expired',
+  'timeout',
+  'provider-limit',
+  'provider-error',
+  'unknown-outcome',
+])
 
 export const agentFailureCauseSchema = z.enum([
   'availability',
@@ -210,7 +226,43 @@ export const eventPayloadSchemas = {
     branch: z.string().min(1),
     base: workspaceBaseSchema,
   }),
-  'workspace.released': empty,
+  'workspace.released': z.union([
+    empty,
+    z.strictObject({
+      ref: z.string().min(1),
+      reason: z.enum(['completion', 'abort', 'pause', 'blocked', 'replacement', 'discard']),
+    }),
+  ]),
+  /** Dispatcher-owned identity and provider lifecycle evidence. These facts do
+   * not carry pipeline progress; they make disposable execution observable. */
+  'execution.started': z.strictObject({
+    provider: z.string().min(1),
+    workspaceRef: z.string().min(1),
+    instance: z.string().min(1),
+    environmentId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+  }),
+  'infrastructure.failed': z.strictObject({
+    provider: z.string().min(1),
+    workspaceRef: z.string().min(1),
+    instance: z.string().min(1),
+    environmentId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+    operation: infrastructureOperation,
+    cause: infrastructureCause,
+    attempt,
+    retryable: z.boolean(),
+    cleanupPending: z.boolean(),
+    error: z.string().min(1),
+  }),
+  'infrastructure.cleanup-attempted': z.strictObject({
+    provider: z.string().min(1),
+    workspaceRef: z.string().min(1),
+    operation: z.enum(['stop', 'delete', 'reconcile']),
+    attempt,
+    outcome: z.enum(['confirmed', 'absent', 'unknown']),
+    error: z.string().min(1).optional(),
+  }),
   /** Remote phases deposit their output and park before trusted publication.
    * The dispatcher settles the request only after the VM session and execution
    * lease are gone, then appends the ordinary phase completion fact. */

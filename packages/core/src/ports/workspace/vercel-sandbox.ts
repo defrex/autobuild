@@ -28,21 +28,26 @@ export interface VercelCommand {
 
 export interface VercelSandboxHandle {
   readonly name: string
+  currentSession?(): { sessionId: string }
   runCommand(params: {
     cmd: string
     args?: string[]
     cwd?: string
     env?: Record<string, string>
     detached?: true
+    signal?: AbortSignal
   }): Promise<VercelCommand | { exitCode: number }>
-  writeFiles(files: { path: string; content: Uint8Array }[]): Promise<void>
-  stop(): Promise<unknown>
-  delete(): Promise<void>
-  update(params: { networkPolicy: NetworkPolicy }): Promise<unknown>
+  writeFiles(
+    files: { path: string; content: Uint8Array }[],
+    opts?: { signal?: AbortSignal },
+  ): Promise<void>
+  stop(opts?: { signal?: AbortSignal }): Promise<unknown>
+  delete(opts?: { signal?: AbortSignal }): Promise<void>
+  update(params: { networkPolicy: NetworkPolicy; signal?: AbortSignal }): Promise<unknown>
 }
 
 export interface VercelSandboxFacade {
-  get(name: string): Promise<VercelSandboxHandle | null>
+  get(name: string, signal?: AbortSignal): Promise<VercelSandboxHandle | null>
   create(input: {
     name: string
     source: {
@@ -60,6 +65,7 @@ export interface VercelSandboxFacade {
     region?: string
     failoverRegions?: string[]
     networkPolicy: NetworkPolicy
+    signal?: AbortSignal
   }): Promise<VercelSandboxHandle>
 }
 
@@ -93,9 +99,9 @@ export function createVercelSdkFacade(
 ): VercelSandboxFacade {
   const credentials = sdkCredentials(env)
   return {
-    async get(name) {
+    async get(name, signal) {
       try {
-        return await Sandbox.get({ name, ...credentials })
+        return await Sandbox.get({ name, signal, ...credentials })
       } catch (error) {
         if (isMissingVercelSandbox(error)) return null
         throw error
@@ -154,14 +160,17 @@ export function validateVercelGithubOrigin(raw: string): {
 
 const cleanGithubOrigin = validateVercelGithubOrigin
 
-function sandboxName(origin: string, branch: string): string {
+function sandboxName(origin: string, branch: string, generation = 0): string {
   const readable = branch
     .replace(/^ab\//, '')
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
     .slice(0, 40)
-  const digest = createHash('sha256').update(`${origin}\0${branch}`).digest('hex').slice(0, 10)
-  return `autobuild-${readable || 'build'}-${digest}`.slice(0, 63)
+  const digest = createHash('sha256')
+    .update(`${origin}\0${branch}\0${generation}`)
+    .digest('hex')
+    .slice(0, 10)
+  return `autobuild-${readable || 'build'}-g${generation}-${digest}`.slice(0, 63)
 }
 
 async function execOrThrow(exec: Exec, cmd: string[], cwd: string): Promise<string> {
@@ -211,7 +220,13 @@ function uploadPackPolicy(
 
 async function commandOrThrow(
   sandbox: VercelSandboxHandle,
-  params: { cmd: string; args?: string[]; cwd?: string; env?: Record<string, string> },
+  params: {
+    cmd: string
+    args?: string[]
+    cwd?: string
+    env?: Record<string, string>
+    signal?: AbortSignal
+  },
 ): Promise<void> {
   const result = await sandbox.runCommand(params)
   if (result.exitCode === null || result.exitCode === undefined) {
@@ -256,6 +271,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   readonly name = 'vercel-sandbox'
   readonly buildExecution: BuildExecution
   readonly publication
+  readonly recovery
   private readonly facade: VercelSandboxFacade
   private readonly exec: Exec
   private readonly active = new Set<string>()
@@ -271,6 +287,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
     this.buildExecution = { start: (input) => this.start(input) }
+    this.recovery = { reap: (handle: WorkspaceHandle) => this.reap(handle.ref) }
     this.publication = {
       publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),
     }
@@ -280,6 +297,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     repo: string
     baseBranch: string
     branch: string
+    revision?: string
+    generation?: number
   }): Promise<WorkspaceProvisionResult> {
     const rawOrigin = await execOrThrow(
       this.exec,
@@ -287,8 +306,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       opts.repo,
     )
     const origin = cleanGithubOrigin(rawOrigin)
-    const name = sandboxName(origin.url, opts.branch)
-    let sandbox = await this.facade.get(name)
+    const name = sandboxName(origin.url, opts.branch, opts.generation)
+    let sandbox = await this.facade.get(name, this.operationSignal())
     const existing = oneSha(
       await execOrThrow(
         this.exec,
@@ -298,7 +317,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       `remote branch ${opts.branch}`,
     )
     const base =
-      existing === null
+      opts.revision ??
+      (existing === null
         ? oneSha(
             await execOrThrow(
               this.exec,
@@ -307,7 +327,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             ),
             `remote base ${opts.baseBranch}`,
           )
-        : existing
+        : existing)
     if (base === null)
       throw new Error(
         `remote branch ${existing === null ? opts.baseBranch : opts.branch} does not exist`,
@@ -319,11 +339,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         args: ['-f', VERCEL_PROVISIONED_MARKER],
       })
       if (marker.exitCode === 0) {
-        await sandbox.stop()
+        await sandbox.stop({ signal: this.operationSignal() })
       } else {
         // A named VM without the marker is a crashed/legacy provisioning
         // attempt. Never expose its potentially unscrubbed checkout to agents.
-        await sandbox.delete()
+        await sandbox.delete({ signal: this.operationSignal() })
         sandbox = null
       }
     }
@@ -358,6 +378,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           ? { failoverRegions: this.options.config.failoverRegions }
           : {}),
         networkPolicy: uploadPackPolicy(origin, readAuth),
+        signal: this.operationSignal(),
       })
       try {
         const sourcePath = `/vercel/sandbox/${origin.directory}`
@@ -386,7 +407,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             throw new Error(`failed to scrub git config ${key}`)
         }
         const archive = await (this.options.packageArchive ?? packageAutobuildDistribution)()
-        await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
+        await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
+          signal: this.operationSignal(),
+        })
         await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
         await commandOrThrow(sandbox, {
           cmd: 'tar',
@@ -412,14 +435,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           cmd: 'touch',
           args: [VERCEL_PROVISIONED_MARKER],
         })
-        await sandbox.stop()
+        await sandbox.stop({ signal: this.operationSignal() })
       } catch (error) {
         try {
-          await sandbox.delete()
+          this.sessions.set(name, sandbox)
+          await this.reap(name)
         } catch (deleteError) {
           throw new AggregateError(
             [error, deleteError],
-            `sandbox ${name} setup failed and its incomplete environment could not be deleted`,
+            `sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
           )
         }
         throw error
@@ -438,13 +462,43 @@ export class VercelSandboxProvider implements WorkspaceProvider {
 
   async release(handle: WorkspaceHandle): Promise<void> {
     if (this.active.has(handle.ref)) throw new Error(`cannot release active sandbox ${handle.ref}`)
-    const sandbox = this.sessions.get(handle.ref) ?? (await this.facade.get(handle.ref))
-    if (sandbox === null) return
-    await sandbox.delete()
-    this.active.delete(handle.ref)
-    this.uncertain.delete(handle.ref)
-    this.sessions.delete(handle.ref)
-    this.origins.delete(handle.ref)
+    await this.reap(handle.ref)
+  }
+
+  private operationSignal(): AbortSignal {
+    return AbortSignal.timeout(this.options.config.operationTimeoutMs ?? 30_000)
+  }
+
+  /** Stop/delete and then prove absence by exact deterministic name. */
+  private async reap(ref: string): Promise<'confirmed' | 'absent'> {
+    let sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
+    if (sandbox === null) {
+      this.forget(ref)
+      return 'absent'
+    }
+    try {
+      await sandbox.stop({ signal: this.operationSignal() })
+      await sandbox.delete({ signal: this.operationSignal() })
+      sandbox = await this.facade.get(ref, this.operationSignal())
+      if (sandbox !== null)
+        throw new Error(`sandbox ${ref} still exists after delete acknowledgement`)
+      this.forget(ref)
+      return 'confirmed'
+    } catch (error) {
+      this.uncertain.add(ref)
+      this.sessions.delete(ref)
+      throw new Error(
+        `sandbox ${ref} cleanup outcome is unknown and remains retryable: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
+  private forget(ref: string): void {
+    this.active.delete(ref)
+    this.uncertain.delete(ref)
+    this.sessions.delete(ref)
+    this.origins.delete(ref)
   }
 
   private async normalNetworkPolicy(ref: string): Promise<{
@@ -471,16 +525,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private async start(input: BuildExecutionStart): Promise<BuildExecutionHandle> {
     const ref = input.workspaceRef
     if (this.active.has(ref)) throw new Error(`sandbox ${ref} already has a live execution`)
-    const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref))
+    const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
     if (sandbox === null) throw new Error(`sandbox ${ref} no longer exists`)
     // A prior publication restore may have failed. Reassert the
     // receive-pack-free policy before any guest command can run.
     const { policy } = await this.normalNetworkPolicy(ref)
-    await sandbox.update({ networkPolicy: policy })
+    await sandbox.update({ networkPolicy: policy, signal: this.operationSignal() })
     if (this.uncertain.has(ref)) {
       // A prior wait/stop failure may have left agent code alive. Confirm a
       // stop before starting another runner in the same environment.
-      await sandbox.stop()
+      await sandbox.stop({ signal: this.operationSignal() })
       this.uncertain.delete(ref)
     }
     this.sessions.set(ref, sandbox)
@@ -500,13 +554,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       cwd: VERCEL_WORKSPACE_PATH,
       env,
       detached: true,
+      signal: this.operationSignal(),
     })) as VercelCommand
     this.active.add(ref)
     let environmentStop: Promise<void> | undefined
     const stopEnvironment = async (): Promise<void> => {
       environmentStop ??= (async () => {
         try {
-          await sandbox.stop()
+          await sandbox.stop({ signal: this.operationSignal() })
         } catch (error) {
           // Do not retain a potentially expired/stale SDK handle. A later
           // execution must first re-resolve and confirm teardown.
@@ -541,7 +596,27 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         throw error
       },
     )
-    return { completion, stop }
+    const sessionId = sandbox.currentSession?.().sessionId
+    return {
+      identity: {
+        provider: this.name,
+        workspaceRef: ref,
+        environmentId: sandbox.name,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      },
+      completion,
+      stop: async () => {
+        try {
+          await stop()
+          return { outcome: 'confirmed' }
+        } catch (error) {
+          return {
+            outcome: 'unknown',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+      },
+    }
   }
 
   private async publish(input: { ref: string; sha: string; branch: string }): Promise<void> {
@@ -556,7 +631,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       throw new Error('vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN')
     }
     const { origin, policy: normal } = await this.normalNetworkPolicy(input.ref)
-    const sandbox = this.sessions.get(input.ref) ?? (await this.facade.get(input.ref))
+    const sandbox =
+      this.sessions.get(input.ref) ?? (await this.facade.get(input.ref, this.operationSignal()))
     if (sandbox === null) throw new Error(`unknown sandbox ${input.ref}`)
     this.sessions.set(input.ref, sandbox)
     const publicationPolicy: NetworkPolicy = {
@@ -590,13 +666,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       },
     }
     try {
-      await sandbox.update({ networkPolicy: publicationPolicy })
+      await sandbox.update({
+        networkPolicy: publicationPolicy,
+        signal: this.operationSignal(),
+      })
       await commandOrThrow(sandbox, {
         cmd: 'git',
         args: ['push', '--no-verify', 'origin', `${input.sha}:refs/heads/${input.branch}`],
         cwd: VERCEL_WORKSPACE_PATH,
       })
-      await sandbox.stop()
+      await sandbox.stop({ signal: this.operationSignal() })
       const published = oneSha(
         await execOrThrow(
           this.exec,
@@ -609,9 +688,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         throw new Error(`published head ${published ?? '(missing)'} did not match ${input.sha}`)
     } finally {
       try {
-        await sandbox.update({ networkPolicy: normal })
+        await sandbox.update({ networkPolicy: normal, signal: this.operationSignal() })
       } finally {
-        await sandbox.stop()
+        await sandbox.stop({ signal: this.operationSignal() })
       }
     }
   }

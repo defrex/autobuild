@@ -262,6 +262,11 @@ export interface BuildState {
   setupFailure?: EventPayload<'runner.setup-failed'> & { seq: number }
   /** Pre-run dispatch attempts, retained as durable operator diagnostics. */
   dispatchFailures: Array<EventPayload<'dispatch.failed'> & { seq: number }>
+  /** Provider identities and failures are durable even after recovery clears the current error. */
+  executions: Array<EventPayload<'execution.started'> & { seq: number }>
+  infrastructureFailures: Array<EventPayload<'infrastructure.failed'> & { seq: number }>
+  infrastructureFailure?: EventPayload<'infrastructure.failed'> & { seq: number }
+  cleanupAttempts: Array<EventPayload<'infrastructure.cleanup-attempted'> & { seq: number }>
   /** Outstanding human discard intent. It is settled only by terminal completion. */
   discardRequest?: { seq: number; actor: Actor }
   /** Unacknowledged runner-owned operator commands in request order (D2). */
@@ -302,6 +307,10 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   const setupFailures: BuildState['setupFailures'] = []
   let setupFailure: BuildState['setupFailure']
   const dispatchFailures: BuildState['dispatchFailures'] = []
+  const executions: BuildState['executions'] = []
+  const infrastructureFailures: BuildState['infrastructureFailures'] = []
+  let infrastructureFailure: BuildState['infrastructureFailure']
+  const cleanupAttempts: BuildState['cleanupAttempts'] = []
   let discardRequest: BuildState['discardRequest']
   const pending: Record<PendingCommand['command'], PendingCommand[]> = {
     pause: [],
@@ -364,6 +373,19 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       }
       case 'dispatch.failed':
         dispatchFailures.push({ ...event.payload, seq: event.seq })
+        break
+      case 'execution.started':
+        executions.push({ ...event.payload, seq: event.seq })
+        infrastructureFailure = undefined
+        break
+      case 'infrastructure.failed': {
+        const failure = { ...event.payload, seq: event.seq }
+        infrastructureFailures.push(failure)
+        infrastructureFailure = failure
+        break
+      }
+      case 'infrastructure.cleanup-attempted':
+        cleanupAttempts.push({ ...event.payload, seq: event.seq })
         break
 
       // Operator commands (D2): requests queue until the kernel's fact event
@@ -699,6 +721,10 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     setupFailures,
     setupFailure,
     dispatchFailures,
+    executions,
+    infrastructureFailures,
+    infrastructureFailure,
+    cleanupAttempts,
     ...(terminal === undefined && discardRequest !== undefined ? { discardRequest } : {}),
     pendingCommands: [...pending.pause, ...pending.resume, ...pending.abort].sort(
       (a, b) => a.seq - b.seq,
