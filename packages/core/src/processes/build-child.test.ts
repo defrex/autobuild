@@ -69,7 +69,7 @@ test('build child uses durable location and a close failure cannot falsify a cle
     process.chdir(misleadingCwd)
     try {
       await runBuildChild(
-        { slug, storeRef: stateRoot, instance: 'child-1', parentPid: process.pid },
+        { slug, storeRef: stateRoot, instance: 'child-1', workspaceRef: durableWorkspace },
         process.env,
         (ref) => {
           const opened = openLocalStore(ref)

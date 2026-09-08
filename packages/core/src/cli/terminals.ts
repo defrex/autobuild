@@ -239,6 +239,15 @@ function requireImplementationProvisioning(events: AbEvent[]): void {
   )
 }
 
+function remotePublication(events: readonly AbEvent[]): boolean {
+  let remote = false
+  for (const event of events) {
+    if (event.type === 'workspace.provisioned') remote = event.payload.provider === 'vercel-sandbox'
+    else if (event.type === 'workspace.released') remote = false
+  }
+  return remote
+}
+
 async function buildBranch(deps: TerminalDeps): Promise<string> {
   const build = await deps.store.getBuild(deps.env.build)
   if (build === null) {
@@ -420,10 +429,26 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         head,
       )
       if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
-      // Push BEFORE the event (walkthrough §8.7 order): a push without an
-      // event is a harmless retry — the re-run pushes the same branch again —
-      // but an event without a push breaks cross-sandbox resume, which
-      // fetches the branch at the recorded head (§15.6-C, D3).
+      if (remotePublication(events)) {
+        const { event } = await store.appendWithArtifacts(
+          env.build,
+          [{ kind: 'implement-notes', content: notes }],
+          (deposited) => ({
+            actor,
+            type: 'publication.requested',
+            payload: {
+              operation: 'implement',
+              branch,
+              sha: head,
+              round: env.round,
+              base,
+              artifact: refOf(deposited[0]),
+            },
+          }),
+        )
+        return event
+      }
+      // Local publication remains immediate and push-before-fact.
       await deps.forge.pushBranch(deps.workspacePath, branch)
       const { event } = await store.appendWithArtifacts(
         env.build,
@@ -431,11 +456,7 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
         (deposited) => ({
           actor,
           type: 'implement.completed',
-          payload: {
-            round: env.round,
-            commits: { base, head },
-            artifact: refOf(deposited[0]),
-          },
+          payload: { round: env.round, commits: { base, head }, artifact: refOf(deposited[0]) },
         }),
       )
       return event
@@ -463,6 +484,20 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       }
       const baseBranch = baseBranchOf(events)
       const branch = await buildBranch(deps)
+      if (remotePublication(events)) {
+        await assertCleanWorktree(deps)
+        const head = await git(deps, ['rev-parse', '--verify', 'HEAD^{commit}'])
+        return await store.append(env.build, {
+          actor,
+          type: 'publication.requested',
+          payload: {
+            operation: 'finalize',
+            branch,
+            sha: head.trim(),
+            description: { kind: description.meta.kind, rev: description.meta.revision },
+          },
+        })
+      }
       // §15.3/D7: the kernel opens the PR after the agent's `ab done` — this
       // CLI call IS that kernel plumbing, so the event's actor is KERNEL.
       // openPr runs BEFORE the event (same rationale as implement's push): a
@@ -570,8 +605,24 @@ export async function done(deps: TerminalDeps, opts: DoneOpts = {}): Promise<Eve
       )
       if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
       const branch = await buildBranch(deps)
-      // Regular push, NEVER force (D1): the merge commit extends the branch;
-      // rewriting it would sever the SHAs recorded in implement.completed.
+      if (remotePublication(events)) {
+        const { event } = await store.appendWithArtifacts(
+          env.build,
+          [{ kind: 'reconcile-notes', content: notes }],
+          (deposited) => ({
+            actor,
+            type: 'publication.requested',
+            payload: {
+              operation: 'reconcile',
+              branch,
+              sha: head,
+              artifact: refOf(deposited[0]),
+            },
+          }),
+        )
+        return event
+      }
+      // Regular push, NEVER force (D1): the merge commit extends the branch.
       await deps.forge.pushBranch(deps.workspacePath, branch)
       const { event } = await store.appendWithArtifacts(
         env.build,

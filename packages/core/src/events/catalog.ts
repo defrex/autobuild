@@ -40,6 +40,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'runner.setup-failed': ['kernel'],
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.released': ['dispatcher', 'kernel'],
+  'publication.requested': ['agent', 'kernel'],
   'abort.remote-branch-deleted': ['dispatcher'],
   'abort.local-branch-deleted': ['dispatcher'],
   'abort.ticket-returned': ['dispatcher'],
@@ -68,7 +69,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'plan-review.started': ['kernel'],
   'plan-review.verdict': ['agent'],
   'implement.started': ['kernel'],
-  'implement.completed': ['agent'],
+  'implement.completed': ['agent', 'dispatcher'],
   'code-review.started': ['kernel'],
   'code-review.verdict': ['agent'],
 
@@ -89,7 +90,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'pr.conflicted': ['dispatcher'],
   'reconcile.progress-checked': ['kernel'],
   'reconcile.started': ['kernel'],
-  'reconcile.completed': ['agent'],
+  'reconcile.completed': ['agent', 'dispatcher'],
 
   'observation.recorded': ['kernel', 'agent'],
   'escalation.raised': ['agent', 'kernel'],

@@ -38,7 +38,10 @@ export class LocalBuildExecution implements BuildExecution {
     const child = this.spawn([process.execPath, this.entrypoint], {
       env: {
         ...this.env,
-        [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify(input),
+        [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
+          ...input,
+          supervision: { kind: 'local-parent', parentPid: process.pid },
+        }),
       },
       stdin: 'ignore',
       stdout: 'ignore',

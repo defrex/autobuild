@@ -31,7 +31,7 @@ import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
-import { DISPATCHER, humanActor } from '../events/envelope'
+import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
@@ -74,6 +74,7 @@ import {
   type BuildExecutionHandle,
 } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
+import { validateVercelGithubOrigin } from '../ports/workspace/vercel-sandbox'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   BUILD_RUNNER_DIAGNOSTIC_ARTIFACT,
@@ -324,6 +325,14 @@ async function defaultWire(
   state: RepoStatePaths,
   plugins: PluginRegistry,
 ): Promise<DispatchWiring> {
+  if (config.workspace.provider === 'vercel-sandbox') {
+    if (config.forge !== 'github') {
+      throw new Error('vercel-sandbox requires the builtin github forge')
+    }
+    const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], { cwd: opts.targetRepo })
+    if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
+    validateVercelGithubOrigin(origin.stdout.trim())
+  }
   const forge = await createForge({
     name: config.forge,
     registry: plugins,
@@ -348,6 +357,8 @@ async function defaultWire(
     worktreeRoot: opened.worktreeRoot,
     repoRoot: opened.repo,
     env: opts.env,
+    storeRef: opened.storeRef,
+    ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 
   return {
@@ -1697,6 +1708,107 @@ class DispatchLoop {
     return null
   }
 
+  /** Settle one remote request only after execution completion and lease
+   * release. Re-running is safe: the provider verifies the exact remote head
+   * and the ordinary completion fact is appended only when still absent. */
+  private async settlePendingPublication(slug: string): Promise<void> {
+    const publication = this.wiring.workspaces.publication
+    if (publication === undefined) return
+    let events = await this.wiring.store.getEvents(slug)
+    const completed = (
+      operation: 'implement' | 'reconcile' | 'finalize' | 'finalize-step',
+      after: number,
+      step?: string,
+    ) =>
+      events.some(
+        (event) =>
+          event.seq > after &&
+          (operation === 'implement'
+            ? event.type === 'implement.completed'
+            : operation === 'reconcile'
+              ? event.type === 'reconcile.completed'
+              : operation === 'finalize'
+                ? event.type === 'finalize.completed'
+                : event.type === 'finalize.step-completed' && event.payload.step === step),
+      )
+    const request = events.findLast(
+      (event) =>
+        event.type === 'publication.requested' &&
+        !completed(
+          event.payload.operation,
+          event.seq,
+          event.payload.operation === 'finalize-step' ? event.payload.step : undefined,
+        ),
+    )
+    if (request?.type !== 'publication.requested') return
+    let ref: string | undefined
+    for (const event of events) {
+      if (event.type === 'workspace.provisioned') ref = event.payload.ref
+      else if (event.type === 'workspace.released') ref = undefined
+    }
+    if (ref === undefined)
+      throw new Error(`build ${slug} has a publication request but no open workspace`)
+    await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+    events = await this.wiring.store.getEvents(slug)
+    if (
+      completed(
+        request.payload.operation,
+        request.seq,
+        request.payload.operation === 'finalize-step' ? request.payload.step : undefined,
+      )
+    )
+      return
+    if (request.payload.operation === 'implement') {
+      await this.wiring.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'implement.completed',
+        payload: {
+          round: request.payload.round,
+          commits: { base: request.payload.base, head: request.payload.sha },
+          artifact: request.payload.artifact,
+        },
+      })
+    } else if (request.payload.operation === 'reconcile') {
+      await this.wiring.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'reconcile.completed',
+        payload: { mergeCommit: request.payload.sha, artifact: request.payload.artifact },
+      })
+    } else if (request.payload.operation === 'finalize-step') {
+      await this.wiring.store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.step-completed',
+        payload: { step: request.payload.step, ok: true, headSha: request.payload.sha },
+      })
+    } else {
+      const description = await this.wiring.store.getArtifact(
+        slug,
+        request.payload.description.kind,
+        request.payload.description.rev,
+      )
+      if (description === null) throw new Error(`missing PR description for ${slug}`)
+      const text = new TextDecoder().decode(description.content)
+      const newline = text.indexOf('\n')
+      const title = (newline === -1 ? text : text.slice(0, newline)).replace(/^#+\s*/, '').trim()
+      if (title === '') throw new Error(`empty PR title for ${slug}`)
+      const created = events.findLast((event) => event.type === 'build.created')
+      if (created?.type !== 'build.created') throw new Error(`missing build.created for ${slug}`)
+      const pr = await this.wiring.forge.openPr({
+        workspacePath: this.opts.targetRepo,
+        head: request.payload.branch,
+        base: created.payload.baseBranch,
+        title,
+        body: newline === -1 ? '' : text.slice(newline + 1).replace(/^\n+/, ''),
+        mergeMessage: text,
+      })
+      await this.wiring.store.append(slug, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: { pr },
+      })
+    }
+  }
+
   /** Start one workspace-adjacent executor without handing it workspace,
    * config, or outcome channels. Capacity and local single-flight remain
    * kernel decisions; the kernel reserves the durable execution lease before
@@ -1727,11 +1839,18 @@ class DispatchLoop {
         this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
       }
+      const launchEvents = await this.wiring.store.getEvents(slug)
+      let workspaceRef: string | undefined
+      for (const event of launchEvents) {
+        if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
+        else if (event.type === 'workspace.released') workspaceRef = undefined
+      }
+      if (workspaceRef === undefined) throw new Error(`build ${slug} has no open workspace`)
       const handle = await this.wiring.buildExecution.start({
         slug,
         storeRef: this.wiring.storeRef,
         instance,
-        parentPid: process.pid,
+        workspaceRef,
       })
       active.handle = handle
 
@@ -1779,10 +1898,12 @@ class DispatchLoop {
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
               await this.wiring.store.releaseLease(slug, instance)
+              await this.settlePendingPublication(slug)
             }
           },
           async (error) => {
             await this.wiring.store.releaseLease(slug, instance)
+            await this.settlePendingPublication(slug)
             throw error
           },
         )

@@ -466,8 +466,14 @@ export interface DispatcherDeps {
  * dispatcher's concern), so the janitor scans the raw log. */
 function openWorkspace(
   events: AbEvent[],
-): { provider: string; ref: string; path?: string; branch: string } | null {
-  let open: { provider: string; ref: string; path?: string; branch: string } | null = null
+): { provider: string; ref: string; path?: string; localPath?: string; branch: string } | null {
+  let open: {
+    provider: string
+    ref: string
+    path?: string
+    localPath?: string
+    branch: string
+  } | null = null
   for (const event of events) {
     if (event.type === 'workspace.provisioned') open = event.payload
     else if (event.type === 'workspace.released') open = null
@@ -892,7 +898,10 @@ export class Dispatcher {
     // Forge calls run from the workspace when it still exists (it does until
     // the build completes); fall back to the repo itself for odd logs.
     const open = openWorkspace(events)
-    const workspacePath = open?.path ?? open?.ref ?? this.deps.repo
+    const workspacePath =
+      open?.provider === 'vercel-sandbox'
+        ? this.deps.repo
+        : (open?.localPath ?? open?.path ?? open?.ref ?? this.deps.repo)
     const prState = await forge.getPrState(workspacePath, pr.number)
     const autoMerge = prState.state === 'open' ? pendingAutoMerge(state) : undefined
 
@@ -1188,6 +1197,7 @@ export class Dispatcher {
             provider: handle.provider,
             ref: handle.ref,
             path: handle.path,
+            ...(handle.localPath !== undefined ? { localPath: handle.localPath } : {}),
             branch: handle.branch,
             base: handle.base,
           },

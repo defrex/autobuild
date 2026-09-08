@@ -129,10 +129,13 @@ export interface TicketSource {
 
 export interface WorkspaceHandle {
   provider: string
-  /** Provider-scoped identifier (e.g. the worktree path). */
+  /** Provider-scoped identifier (worktree path or sandbox name). */
   ref: string
-  /** Absolute path of the working copy. */
+  /** Absolute working-copy path in the provider's execution environment. It
+   * is not necessarily reachable from the dispatcher. */
   path: string
+  /** Dispatcher-reachable path when one exists. Remote providers omit it. */
+  localPath?: string
   branch: string
 }
 
@@ -141,11 +144,19 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
   base: WorkspaceBase
 }
 
+export interface WorkspacePublication {
+  /** Publish exactly one commit to exactly one branch; no arbitrary command
+   * surface is exposed to the dispatcher or build child. */
+  publish(input: { ref: string; sha: string; branch: string }): Promise<void>
+}
+
 export interface WorkspaceProvider {
   readonly name: string
   /** Optional workspace-adjacent executor. Remote providers substitute here;
    * locally reachable providers use the shipped subprocess capability. */
   readonly buildExecution?: BuildExecution
+  /** Trusted dispatcher-only publication capability for remote workspaces. */
+  readonly publication?: WorkspacePublication
   provision(opts: {
     repo: string
     baseBranch: string

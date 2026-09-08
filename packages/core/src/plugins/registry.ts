@@ -144,7 +144,7 @@ export class PluginRegistry {
   readonly workspaceProviders = reserved<
     WorkspaceProviderPluginFactory,
     WorkspaceProviderContractFactory
-  >(['git-worktree'])
+  >(['git-worktree', 'vercel-sandbox'])
   readonly forges = reserved<ForgePluginFactory, ForgeContractFactory>(['github', 'local-git'])
 
   register(

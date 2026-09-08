@@ -59,13 +59,13 @@ await Bun.sleep(60_000)
         slug: 'first',
         storeRef: '/store',
         instance: 'i-1',
-        parentPid: process.pid,
+        workspaceRef: '/workspace/first',
       })
       const second = await execution.start({
         slug: 'second',
         storeRef: '/store',
         instance: 'i-2',
-        parentPid: process.pid,
+        workspaceRef: '/workspace/second',
       })
       firstPid = first.pid
       secondPid = second.pid
@@ -90,8 +90,20 @@ await Bun.sleep(60_000)
         .map((line) => JSON.parse(line))
         .sort((a, b) => a.slug.localeCompare(b.slug))
       expect(lines).toEqual([
-        { slug: 'first', storeRef: '/store', instance: 'i-1', parentPid: process.pid },
-        { slug: 'second', storeRef: '/store', instance: 'i-2', parentPid: process.pid },
+        {
+          slug: 'first',
+          storeRef: '/store',
+          instance: 'i-1',
+          workspaceRef: '/workspace/first',
+          supervision: { kind: 'local-parent', parentPid: process.pid },
+        },
+        {
+          slug: 'second',
+          storeRef: '/store',
+          instance: 'i-2',
+          workspaceRef: '/workspace/second',
+          supervision: { kind: 'local-parent', parentPid: process.pid },
+        },
       ])
     } finally {
       forceCleanup(firstPid)
@@ -119,7 +131,7 @@ await Bun.sleep(60_000)
         slug: 'stubborn',
         storeRef: '/store',
         instance: 'i-stubborn',
-        parentPid: process.pid,
+        workspaceRef: '/workspace/stubborn',
       })
       leaderPid = handle.pid
       await waitFor(() => Bun.file(descendantFile).size > 0)
@@ -158,7 +170,7 @@ while (Bun.file(${JSON.stringify(descendantFile)}).size === 0) await Bun.sleep(5
         slug: 'natural',
         storeRef: '/store',
         instance: 'i-natural',
-        parentPid: process.pid,
+        workspaceRef: '/workspace/natural',
       })
       leaderPid = handle.pid
       await waitFor(() => Bun.file(descendantFile).size > 0)
@@ -183,7 +195,7 @@ while (Bun.file(${JSON.stringify(descendantFile)}).size === 0) await Bun.sleep(5
         slug: 'stop-empty',
         storeRef: '/store',
         instance: 'i-stop-empty',
-        parentPid: process.pid,
+        workspaceRef: '/workspace/stop-empty',
       })
       leaderPid = handle.pid
       await waitFor(() => alive(leaderPid!))
@@ -208,7 +220,7 @@ while (Bun.file(${JSON.stringify(descendantFile)}).size === 0) await Bun.sleep(5
         slug: 'empty',
         storeRef: '/store',
         instance: 'i-empty',
-        parentPid: process.pid,
+        workspaceRef: '/workspace/empty',
       })
       expect(await handle.completion).toEqual({ exitCode: 0 })
       expect(Date.now() - started).toBeLessThan(1_000)

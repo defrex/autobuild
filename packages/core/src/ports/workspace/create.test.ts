@@ -135,7 +135,7 @@ readyState = "ready"
     await expect(
       createWorkspaceProvider({ provider: 'missing', config: {} }, opts),
     ).rejects.toThrow(
-      'unknown workspace provider "missing"; available providers: alpha, git-worktree, zeta',
+      'unknown workspace provider "missing"; available providers: alpha, git-worktree, vercel-sandbox, zeta',
     )
   })
 

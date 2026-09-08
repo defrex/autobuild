@@ -287,6 +287,38 @@ describe('parseConfig — defaults', () => {
     }
   })
 
+  test('vercel-sandbox config is strict, bounded, and references secrets by name', () => {
+    const workspace = parseConfig(`[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 2700
+vcpus = 8
+image = "vercel/sandbox/universal:latest"
+region = "iad1"
+failoverRegions = ["sfo1"]
+environmentVariables = ["ANTHROPIC_API_KEY"]
+gitUsernameEnv = "AB_GIT_READ_USER"
+gitPasswordEnv = "AB_GIT_READ_TOKEN"
+${READY}`).workspace
+    expect(workspace.provider).toBe('vercel-sandbox')
+    expect(workspace.config.timeoutSeconds).toBe(2700)
+
+    for (const table of [
+      'timeoutSeconds = 59',
+      'timeoutSeconds = 86401',
+      'timeoutSeconds = 600\nunknown = true',
+      'timeoutSeconds = 600\nenvironmentVariables = ["TOKEN", "TOKEN"]',
+      'timeoutSeconds = 600\ngitPasswordEnv = "AB_GIT_READ_TOKEN"',
+      'timeoutSeconds = 600\ngitUsernameEnv = "x"\ngitPasswordEnv = "GITHUB_TOKEN"',
+    ]) {
+      expect(() =>
+        parseConfig(
+          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\n${table}\n${READY}`,
+        ),
+      ).toThrow(/workspace\.config/)
+    }
+  })
+
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
     expect(parseConfig(READY).forge).toBe('github')
     expect(parseConfig(`forge = "gitlab"\n${READY}`).forge).toBe('gitlab')

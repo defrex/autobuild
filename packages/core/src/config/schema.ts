@@ -87,10 +87,81 @@ export type PrConfig = z.infer<typeof prSchema>
 
 // ── [workspace] ─────────────────────────────────────────────────────────────
 
-/** Workspace selector. The host validates the selector envelope; the nested
- * config belongs to the selected plugin factory and is intentionally open. The
- * pass-through is faithful: every declared key reaches the factory verbatim,
- * including one named for an inherited object property such as `__proto__`. */
+const envNameSchema = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'must be a nonblank environment variable name')
+
+/** Strict built-in Vercel configuration. Values are operational policy only;
+ * credentials are referenced by variable name and never accepted as literals. */
+export const vercelSandboxConfigSchema = z
+  .strictObject({
+    image: z.string().min(1).default('vercel/sandbox/universal:latest'),
+    vcpus: z.number().int().min(1).max(32).default(4),
+    timeoutSeconds: z.number().int().min(60).max(86_400),
+    region: z.string().min(1).optional(),
+    failoverRegions: z.array(z.string().min(1)).default([]),
+    environmentVariables: z.array(envNameSchema).default([]),
+    gitUsernameEnv: envNameSchema.optional(),
+    gitPasswordEnv: envNameSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    const unique = (entries: readonly string[], path: string) => {
+      const seen = new Set<string>()
+      entries.forEach((entry, index) => {
+        if (seen.has(entry))
+          ctx.addIssue({
+            code: 'custom',
+            path: [path, index],
+            message: `duplicate environment variable ${JSON.stringify(entry)}`,
+          })
+        seen.add(entry)
+      })
+    }
+    unique(value.environmentVariables, 'environmentVariables')
+    unique(value.failoverRegions, 'failoverRegions')
+    if (value.region !== undefined && value.failoverRegions.includes(value.region)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['failoverRegions'],
+        message: 'failover regions must not include the primary region',
+      })
+    }
+    if ((value.gitUsernameEnv === undefined) !== (value.gitPasswordEnv === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['gitPasswordEnv'],
+        message: 'gitUsernameEnv and gitPasswordEnv must be configured together',
+      })
+    }
+    for (const [key, name] of [
+      ['gitUsernameEnv', value.gitUsernameEnv],
+      ['gitPasswordEnv', value.gitPasswordEnv],
+    ] as const) {
+      if (name !== undefined && value.environmentVariables.includes(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message:
+            'private repository clone credentials must not be exposed as runtime environment variables',
+        })
+      }
+      if (
+        name !== undefined &&
+        /^(?:GITHUB_TOKEN|GH_TOKEN|VERCEL_(?:TOKEN|OIDC_TOKEN|TEAM_ID|PROJECT_ID))$/.test(name)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message:
+            'private repository read credentials must be separate from Forge and Vercel credentials',
+        })
+      }
+    }
+  })
+export type VercelSandboxConfig = z.infer<typeof vercelSandboxConfigSchema>
+
+/** Workspace selector. The host validates the selector envelope; plugin nested
+ * config remains open, while built-in config is validated by configSchema. */
 export const workspaceSchema = z.strictObject({
   provider: z
     .string()
@@ -457,6 +528,9 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
       message:
         '[workspace.config] is not supported by the builtin "git-worktree" provider — remove it or select a plugin workspace provider',
     })
+  } else if (config.workspace.provider === 'vercel-sandbox') {
+    const parsed = vercelSandboxConfigSchema.safeParse(config.workspace.config)
+    if (!parsed.success) forwardIssues(parsed.error.issues, ctx, ['workspace', 'config'])
   }
 
   const commandNames = Object.keys(config.commands)

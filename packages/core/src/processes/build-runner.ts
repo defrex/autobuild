@@ -658,6 +658,32 @@ export class BuildRunner {
    * closes any live producer sessions (their per-round transcripts are
    * already deposited — see module doc).
    */
+  private publicationPending(events: readonly AbEvent[]): boolean {
+    let implementCompletion = 0
+    let reconcileCompletion = 0
+    let finalizeCompletion = 0
+    const finalizeSteps = new Map<string, number>()
+    for (const event of events) {
+      if (event.type === 'implement.completed') implementCompletion = event.seq
+      else if (event.type === 'reconcile.completed') reconcileCompletion = event.seq
+      else if (event.type === 'finalize.completed') finalizeCompletion = event.seq
+      else if (event.type === 'finalize.step-completed')
+        finalizeSteps.set(event.payload.step, event.seq)
+    }
+    return events.some(
+      (event) =>
+        event.type === 'publication.requested' &&
+        event.seq >
+          (event.payload.operation === 'implement'
+            ? implementCompletion
+            : event.payload.operation === 'reconcile'
+              ? reconcileCompletion
+              : event.payload.operation === 'finalize'
+                ? finalizeCompletion
+                : (finalizeSteps.get(event.payload.step) ?? 0)),
+    )
+  }
+
   async run(): Promise<BuildState> {
     if (!this.attached) {
       const attachment = await this.attach()
@@ -666,10 +692,14 @@ export class BuildRunner {
       }
     }
     try {
+      if (this.publicationPending(await this.deps.store.getEvents(this.deps.slug))) {
+        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
+      }
       for (;;) {
         await this.ensureLease()
         const decision = await this.step()
         if (decision.kind === 'wait') break
+        if (this.publicationPending(await this.deps.store.getEvents(this.deps.slug))) break
       }
       return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
     } finally {
@@ -1086,6 +1116,23 @@ export class BuildRunner {
             head,
           )
           if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
+          const remote = events.some(
+            (event) =>
+              event.type === 'workspace.provisioned' && event.payload.provider === 'vercel-sandbox',
+          )
+          if (remote) {
+            await this.deps.store.append(this.deps.slug, {
+              actor,
+              type: 'publication.requested',
+              payload: {
+                operation: 'finalize-step',
+                branch: this.deps.branch,
+                sha: head,
+                step,
+              },
+            })
+            return
+          }
           await this.deps.forge.pushBranch(this.deps.workspacePath, this.deps.branch)
           pushedHead = head
         }
