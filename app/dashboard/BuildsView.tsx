@@ -79,8 +79,6 @@ export interface BuildsViewProps {
   onCancelAnswerStep: () => void
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
   onTranscript: (build: DashboardBuild, kind: string, rev: number) => void
-  onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
-  onHarvest: (body: HarvestControl) => void
   onRowHarvest: (body: Extract<HarvestControl, { action: 'run' }>) => void
 }
 
@@ -190,12 +188,6 @@ export function BuildsView(props: BuildsViewProps) {
     (selection.kind === 'harvest' ? model.harvest !== undefined : selectedBuild !== undefined)
   return (
     <DashboardSurface>
-      <DispatcherLine
-        model={model}
-        pending={props.pending}
-        onSetting={props.onSetting}
-        onHarvest={props.onHarvest}
-      />
       {(model.warningLines?.length || model.availableUpgrade) && (
         <div className="messages">
           {model.warningLines?.map((line) => (
@@ -266,73 +258,79 @@ export function BuildsView(props: BuildsViewProps) {
   )
 }
 
-function DispatcherLine({
+export interface DispatcherControlsProps {
+  model: DashboardModel
+  pending?: string
+  onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
+  onHarvest: (body: HarvestControl) => void
+}
+
+/** Builds facts and settings composed into the shell's shared control line. */
+export function DispatcherControls({
   model,
   pending,
   onSetting,
   onHarvest,
-}: {
-  model: DashboardModel
-  pending?: string
-  onSetting: BuildsViewProps['onSetting']
-  onHarvest: BuildsViewProps['onHarvest']
-}) {
+}: DispatcherControlsProps) {
   const busy = pending !== undefined
   return (
-    <section className="line dispatch" aria-label="Dispatcher settings">
-      <span>queue {model.queued}</span>
-      <span className="sep" aria-hidden>
-        |
+    <>
+      <span className="control-item fact-item">
+        <span>queue {model.queued}</span>
+        <span className="sep" aria-hidden>
+          |
+        </span>
       </span>
-      <span>
-        active {model.active.current}/{model.active.limit}
+      <span className="control-item fact-item">
+        <span>
+          active {model.active.current}/{model.active.limit}
+        </span>
+        <span className="sep" aria-hidden>
+          |
+        </span>
       </span>
-      <span className="sep" aria-hidden>
-        |
+      <span className="control-item fact-item">
+        <span>
+          observations {model.observations.current}/{model.observations.limit}
+        </span>
+        <span className="sep" aria-hidden>
+          |
+        </span>
       </span>
-      <span>
-        observations {model.observations.current}/{model.observations.limit}
-      </span>
-      <span className="sep" aria-hidden>
-        |
-      </span>
-      <span>
-        repository{' '}
-        <b className={model.repositoryPaused ? 'off' : 'on'}>
-          {model.repositoryPaused ? 'PAUSED' : 'RUNNING'}
+      {model.repositoryPaused && (
+        <span className="control-item repository-state">
+          repository <b className="off">PAUSED</b>
+        </span>
+      )}
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy}
+        onClick={() => onSetting('intake', model.drained)}
+      >
+        intake <b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
+      </button>
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy}
+        onClick={() => onSetting('auto-merge-default', !model.defaultAutoMerge)}
+      >
+        auto merge{' '}
+        <b className={model.defaultAutoMerge ? 'on' : 'off'}>
+          {model.defaultAutoMerge ? 'ON' : 'OFF'}
         </b>
-      </span>
-      <span className="settings">
-        <button
-          type="button"
-          className="word"
-          disabled={busy}
-          onClick={() => onSetting('intake', model.drained)}
-        >
-          intake <b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
-        </button>
-        <button
-          type="button"
-          className="word"
-          disabled={busy}
-          onClick={() => onSetting('auto-merge-default', !model.defaultAutoMerge)}
-        >
-          auto merge{' '}
-          <b className={model.defaultAutoMerge ? 'on' : 'off'}>
-            {model.defaultAutoMerge ? 'ON' : 'OFF'}
-          </b>
-        </button>
-        <button
-          type="button"
-          className="word"
-          disabled={busy}
-          onClick={() => onHarvest({ action: 'toggle-gate' })}
-        >
-          harvest{' '}
-          <b className={model.harvestPaused ? 'off' : 'on'}>{model.harvestPaused ? 'OFF' : 'ON'}</b>
-        </button>
-      </span>
-    </section>
+      </button>
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy}
+        onClick={() => onHarvest({ action: 'toggle-gate' })}
+      >
+        harvest{' '}
+        <b className={model.harvestPaused ? 'off' : 'on'}>{model.harvestPaused ? 'OFF' : 'ON'}</b>
+      </button>
+    </>
   )
 }
 
