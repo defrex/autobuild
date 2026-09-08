@@ -69,6 +69,15 @@ function compositeOnBlack(foreground: string, opacity: number): string {
   return `#${channels.join('')}`
 }
 
+function designRule(name: string): string {
+  const marker = `**${name}.**`
+  const start = designDocument.indexOf(marker)
+  if (start === -1 || (start > 0 && designDocument[start - 1] !== '\n')) return ''
+
+  const end = designDocument.indexOf('\n\n', start)
+  return designDocument.slice(start, end === -1 ? designDocument.length : end)
+}
+
 function sidecarRule(name: string): string {
   return designSidecar.narrative.rules.find((rule) => rule.name === name)?.body ?? ''
 }
@@ -167,7 +176,10 @@ test('Fastext keeps slot hue through rest, interaction, empty, and disabled stat
   expect(stylesheet).not.toContain('--ft-dim-ink')
   expect(dashboardFrame).toContain('data-empty')
 
-  for (const source of [designDocument, sidecarRule('The Fastext Identity Rule')]) {
+  for (const source of [
+    designRule('The Fastext Identity Rule'),
+    sidecarRule('The Fastext Identity Rule'),
+  ]) {
     expect(source).toContain('colored foreground and outline at 0.9 opacity')
     expect(source).toContain('unchanged transparent resting surface')
   }
@@ -190,13 +202,14 @@ test('held queued builds keep their canonical yellow warning while rows dim', ()
   expect(stylesheet).toMatch(/\.tokens \.held\s*\{\s*color:\s*var\(--title\);\s*\}/)
 
   const documentedException = 'STATUS words, the yellow `(held)` annotation, and red alert lines'
-  expect(designDocument).toContain(documentedException)
+  expect(designRule('The Alert Never Dims Rule')).toContain(documentedException)
   expect(sidecarRule('The Alert Never Dims Rule')).toContain(documentedException)
 })
 
 test('flat-grid documentation forbids translucent surfaces without forbidding disabled emphasis', () => {
-  const flatGridRule = sidecarRule('The Flat Grid Rule')
-  for (const source of [designDocument, flatGridRule]) {
+  const flatGridRule = designRule('The Flat Grid Rule')
+  const flatGridSidecarRule = sidecarRule('The Flat Grid Rule')
+  for (const source of [flatGridRule, flatGridSidecarRule]) {
     expect(source).toContain('no surface, fill, panel, or overlay is translucent')
     expect(source).toContain('colored foreground and outline at 0.9 opacity')
     expect(source).toContain('unchanged transparent resting surface')
