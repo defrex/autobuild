@@ -99,7 +99,7 @@ workspace providers.
 Completed 2026-09-09 without recording secret values:
 
 - Hosted ticket
-  [AUT-295](https://linear.app/auto-build/issue/AUT-295/prove-the-live-vercel-consumer-rollout-and-recovery)
+  [AUT-295](https://linear.app/defrex/issue/AUT-295)
   drove build `vercel-recovery-probe-2` and merged
   [PR #290](https://github.com/defrex/autobuild/pull/290). The PR records only
   `docs/vercel-sandbox-rollout-probe.md`; its published head was
