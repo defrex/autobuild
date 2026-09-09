@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { abDispatch } from '../cli/dispatch'
+import { validateInitReadiness } from '../cli/init-validation'
 import { openProductionStore } from '../cli/store-opening'
 import { loadConfig } from '../config/load'
 import { vercelSandboxConfigSchema } from '../config/schema'
@@ -12,35 +13,90 @@ import { createVercelSdkFacade } from '../ports/workspace/vercel-sandbox'
 
 const enabled = process.env.AB_RUN_VERCEL_SANDBOX_LIVE === '1'
 
+async function liveSetup(): Promise<{ repo: string; storeRef: string; token: string }> {
+  const repoInput = process.env.AB_VERCEL_SANDBOX_LIVE_REPO
+  const storeRef = process.env.AB_STORE
+  const token = process.env.AB_TOKEN
+  if (!repoInput || !storeRef?.startsWith('https://') || !token) {
+    throw new Error(
+      'live Vercel test requires AB_VERCEL_SANDBOX_LIVE_REPO, HTTPS AB_STORE, and AB_TOKEN',
+    )
+  }
+  const repo = resolve(repoInput)
+  const config = await loadConfig(resolve(repo, 'autobuild.toml'))
+  if (config.workspace.provider !== 'vercel-sandbox') {
+    throw new Error('live Vercel test repository must select workspace provider vercel-sandbox')
+  }
+  const sandboxConfig = vercelSandboxConfigSchema.parse(config.workspace.config)
+  if (!sandboxConfig.image.startsWith('vercel/sandbox/universal')) {
+    throw new Error('live Vercel test requires the documented universal managed image')
+  }
+  return { repo, storeRef, token }
+}
+
 /**
  * Actual-provider evidence path. The operator supplies an independent minimal
  * consuming checkout (not this repository) containing a ready file ticket and
  * a vercel-sandbox autobuild.toml, plus the hosted Store, Vercel, runtime, and
- * GitHub credentials documented in docs/configuration.md. A successful run
- * deletes the first live environment, observes a distinct replacement
- * identity, reaches PR creation, and performs ordinary terminal cleanup.
+ * GitHub credentials documented in docs/configuration.md. The readiness case
+ * proves fresh creation, guest marker parsing, and deletion independently of
+ * the destructive build interruption and replacement case.
  */
-describe.skipIf(!enabled)('Vercel Sandbox complete build (opt-in)', () => {
+describe.skipIf(!enabled)('Vercel Sandbox lifecycle (opt-in)', () => {
+  test(
+    'validates readiness in a fresh sandbox and confirms its deletion',
+    async () => {
+      const { repo } = await liveSetup()
+      const report = await validateInitReadiness({
+        targetRepo: repo,
+        env: process.env,
+        exec: spawnExec,
+      })
+      const sandboxName = report.workspace
+      let primaryFailure: unknown
+      try {
+        expect(report.provider).toBe('vercel-sandbox')
+        expect(report.context).toBe('Vercel Sandbox')
+        expect(sandboxName).toBeDefined()
+        if (sandboxName === undefined)
+          throw new Error('readiness report omitted the fresh sandbox identity')
+        expect(report.revision).toMatch(/^[0-9a-f]{40,64}$/i)
+        expect(report.exitCode).toBe(0)
+        expect(report.checks.length).toBeGreaterThan(0)
+        expect(report.checks.every((check) => check.status === 'pass')).toBe(true)
+        expect(
+          await createVercelSdkFacade(process.env).get(sandboxName, AbortSignal.timeout(30_000)),
+        ).toBeNull()
+      } catch (error) {
+        primaryFailure = error
+      }
+
+      if (primaryFailure !== undefined) {
+        let cleanupFailure: unknown
+        if (sandboxName !== undefined) {
+          try {
+            const survivor = await createVercelSdkFacade(process.env).get(
+              sandboxName,
+              AbortSignal.timeout(30_000),
+            )
+            await survivor?.delete({ signal: AbortSignal.timeout(30_000) })
+          } catch (error) {
+            cleanupFailure = error
+          }
+        }
+        throw new AggregateError(
+          cleanupFailure === undefined ? [primaryFailure] : [primaryFailure, cleanupFailure],
+          `fresh readiness sandbox ${sandboxName ?? '(identity missing)'} failed post-validation assertions${cleanupFailure === undefined ? '' : ' and fallback cleanup also failed'}`,
+        )
+      }
+    },
+    15 * 60_000,
+  )
+
   test(
     'recovers an independent consuming repository after deleting its live sandbox',
     async () => {
-      const repoInput = process.env.AB_VERCEL_SANDBOX_LIVE_REPO
-      const storeRef = process.env.AB_STORE
-      const token = process.env.AB_TOKEN
-      if (!repoInput || !storeRef?.startsWith('https://') || !token) {
-        throw new Error(
-          'live Vercel test requires AB_VERCEL_SANDBOX_LIVE_REPO, HTTPS AB_STORE, and AB_TOKEN',
-        )
-      }
-      const repo = resolve(repoInput)
-      const config = await loadConfig(resolve(repo, 'autobuild.toml'))
-      if (config.workspace.provider !== 'vercel-sandbox') {
-        throw new Error('live Vercel test repository must select workspace provider vercel-sandbox')
-      }
-      const sandboxConfig = vercelSandboxConfigSchema.parse(config.workspace.config)
-      if (!sandboxConfig.image.startsWith('vercel/sandbox/universal')) {
-        throw new Error('live Vercel test requires the documented universal managed image')
-      }
+      const { repo, storeRef, token } = await liveSetup()
       const beforeStore = openProductionStore(storeRef, token)
       const before = new Set(
         (await beforeStore.listBuilds())
