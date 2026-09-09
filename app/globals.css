@@ -13,6 +13,9 @@
   --lh: 20px;
   --row: var(--lh);
   --button-border: 2px;
+  /* Distance from a control's bottom edge up to its hover underline: sits
+   * just under the baseline, where a text underline would. */
+  --underline-gap: 0.2em;
 
   /* Muted teletext hues: lower chroma and glare, with contrast preserved. */
   --tt-black: #000000;
@@ -179,10 +182,12 @@ h3 {
   margin-top: var(--row);
 }
 
-/* Masthead copy: one natural-proportion row, bold within the shared cell grid. */
+/* Masthead copy: one natural-proportion row, bold within the shared cell grid.
+ * The title and the account menu share the row and shrink together; the
+ * masthead carries no status, which lives in the content beneath it. */
 .masthead {
   display: grid;
-  grid-template-columns: minmax(0, max-content) max-content 1fr auto;
+  grid-template-columns: minmax(0, max-content) 1fr minmax(0, max-content);
   column-gap: 2ch;
   align-items: start;
   height: var(--row);
@@ -206,19 +211,9 @@ h3 {
 .masthead .title {
   color: var(--title);
 }
-.masthead .imperative[data-tone="alert"] {
-  color: var(--alert);
-}
-.masthead .imperative[data-tone="ready"] {
-  color: var(--ok);
-}
-.masthead .clock {
-  grid-column: 4;
-  color: var(--ink);
-  white-space: nowrap;
-}
-.masthead .clock[data-pending] {
-  color: var(--slack);
+.masthead .account {
+  grid-column: 3;
+  justify-self: end;
 }
 
 .line {
@@ -246,6 +241,14 @@ h3 {
 .navline .spacer {
   flex: 1 1 auto;
 }
+.navline .clock {
+  flex: 0 0 auto;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.navline .clock[data-pending] {
+  color: var(--slack);
+}
 .control-item {
   display: inline-flex;
   flex: 0 0 auto;
@@ -259,25 +262,112 @@ h3 {
   column-gap: 1ch;
   margin-right: -1ch;
 }
+/* A toggle word and its ON/OFF state belong together: one natural space. */
+.control-item.toggle {
+  column-gap: 1ch;
+}
 .identity {
-  display: inline-flex;
-  flex: 0 0 auto;
-  column-gap: 2ch;
-  white-space: nowrap;
   color: var(--slack);
 }
 
-/* Text controls: words that act. */
+/* Menu: the one drop-down. A ghost-word trigger with the select's ▾, and an
+ * opaque well beneath it holding one ghost word per row. */
+.menu {
+  position: relative;
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--row);
+}
+.menu-trigger {
+  display: inline-flex;
+  max-width: 100%;
+  column-gap: 1ch;
+  align-items: baseline;
+}
+.menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-glyph {
+  color: var(--slack);
+}
+.menu-trigger:hover:not(:disabled) .identity,
+.menu-trigger[aria-expanded="true"] .identity,
+.menu-trigger[aria-expanded="true"] .menu-glyph {
+  color: var(--live);
+}
+/* The menu never inverts to reverse video: pressed is the cyan word. */
+.menu .menu-trigger:active:not(:disabled),
+.menu .menu-item:active:not(:disabled) {
+  background: transparent;
+  color: var(--live);
+}
+.menu-trigger[aria-expanded="true"]::after {
+  background: transparent;
+}
+.menu-list {
+  position: absolute;
+  top: var(--row);
+  right: 0;
+  z-index: 1;
+  display: grid;
+  min-width: 100%;
+  padding: calc(var(--row) / 4) 0;
+  background: var(--well);
+}
+.menu-item {
+  height: var(--row);
+  padding: 0 1ch;
+  text-align: right;
+}
+/* An item fills the well's width; its hover underline spans only the word. */
+.menu-item::after {
+  display: none;
+}
+.menu-label {
+  position: relative;
+}
+.menu-label::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--underline-gap);
+  height: 1px;
+  background: transparent;
+}
+.menu-item:hover:not(:disabled) .menu-label::after {
+  background: currentColor;
+}
+
+/* Text controls: words that act. The hover underline is a one-pixel stroke
+ * drawn under the whole label at the text underline's offset, so a label of
+ * several words (or a word plus a state token) keeps one unbroken line. */
 .word {
+  position: relative;
   color: inherit;
   background: transparent;
   border: 0;
   white-space: nowrap;
 }
+.word::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--underline-gap);
+  height: 1px;
+  background: transparent;
+  pointer-events: none;
+}
 .word:hover:not(:disabled) {
   color: var(--live);
-  text-decoration: underline;
-  text-underline-offset: 0.15em;
+}
+.word:hover:not(:disabled)::after {
+  background: currentColor;
 }
 .on {
   color: var(--ok);
@@ -290,7 +380,9 @@ h3 {
 .word:active:not(:disabled) {
   background: var(--ink);
   color: var(--ground);
-  text-decoration: none;
+}
+.word:active:not(:disabled)::after {
+  background: transparent;
 }
 .word:active:not(:disabled) .on,
 .word:active:not(:disabled) .off {
@@ -404,6 +496,8 @@ h3 {
 }
 .row {
   padding-bottom: var(--row);
+  /* The row surface itself toggles detail; .detail and .answer-step reset the cursor. */
+  cursor: pointer;
 }
 /* Focus by dimming: the selection keeps its colors, the rest drop to slack.
  * STATUS and alert colors resolve outside these row tokens; the held annotation
@@ -448,6 +542,11 @@ h3 {
 }
 .rowhead:hover {
   color: var(--live);
+}
+@media (hover: hover) and (pointer: fine) {
+  .row:hover:not(:has(.detail:hover, .answer-step:hover)) .rowhead {
+    color: var(--live);
+  }
 }
 .rowhead .ticket {
   white-space: nowrap;
@@ -573,33 +672,6 @@ input.short {
 .rows[data-ticket-col="0"] .rowline .status {
   grid-column: 4;
 }
-/* The post-preview register always occupies its row. visibility hides its
- * controls from paint and the tab order without changing any row geometry. */
-.row-controls {
-  display: grid;
-  grid-template-columns: repeat(2, max-content);
-  align-items: baseline;
-  column-gap: 2ch;
-  height: var(--row);
-  padding-left: 2ch;
-  visibility: hidden;
-  pointer-events: none;
-}
-.row[data-selected] .row-controls,
-.row:focus-within .row-controls {
-  visibility: visible;
-  pointer-events: auto;
-}
-@media (hover: hover) and (pointer: fine) {
-  .row[data-hovered] .row-controls {
-    visibility: visible;
-    pointer-events: auto;
-  }
-}
-.row-control {
-  min-width: 0;
-  color: var(--ink);
-}
 .sub {
   padding-left: 2ch;
   color: var(--ink);
@@ -673,9 +745,9 @@ input.short {
 .answer-step {
   display: grid;
   row-gap: var(--row);
+  cursor: auto;
   max-width: 80ch;
-  margin-top: var(--row);
-  padding-left: 2ch;
+  margin-bottom: var(--row);
 }
 .answer-blocker {
   white-space: pre-wrap;
@@ -685,6 +757,7 @@ input.short {
 .detail {
   display: grid;
   row-gap: var(--row);
+  cursor: auto;
   margin-top: var(--row);
   padding-left: 2ch;
 }
@@ -766,6 +839,18 @@ textarea {
   column-gap: 2ch;
   row-gap: var(--row);
   align-items: baseline;
+}
+/* Lifecycle and destructive words live in detail, under their own heading. */
+.actions .action {
+  color: var(--ink);
+}
+.actions .message {
+  flex-basis: 100%;
+  padding-left: 0;
+}
+.tokens .run-action {
+  color: var(--ink);
+  font-weight: 700;
 }
 .btn {
   display: inline-flex;
@@ -858,9 +943,8 @@ textarea {
   .navline .spacer {
     display: none;
   }
-  .navline .identity {
-    flex-basis: 100%;
-    justify-content: flex-end;
+  .navline .clock {
+    display: none;
   }
   .skeleton-row {
     grid-template-columns: 2ch minmax(0, 1fr) 9ch;
@@ -870,11 +954,6 @@ textarea {
   }
   .skeleton-state {
     width: 8ch;
-  }
-  .row-controls {
-    grid-template-columns: repeat(2, max-content);
-    grid-template-rows: var(--row);
-    height: var(--row);
   }
   .tokens,
   .rows[data-ticket-col="0"] .tokens {
@@ -890,9 +969,6 @@ textarea {
   .rows[data-ticket-col="0"] .rowline .status {
     grid-column: 3;
     grid-row: 1;
-  }
-  .masthead .clock {
-    display: none;
   }
 }
 

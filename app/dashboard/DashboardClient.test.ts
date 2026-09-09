@@ -22,7 +22,9 @@ function harness(selection?: Selection, openAnswer?: { slug: string; input: stri
     selection,
     setSelection: (next) => {
       selected = next
-      events.push(`select:${next.kind === 'build' ? next.slug : 'harvest'}`)
+      events.push(
+        `select:${next === undefined ? 'none' : next.kind === 'build' ? next.slug : 'harvest'}`,
+      )
     },
     clearTranscript: () => events.push('clear-transcript'),
     clearAnswerStep: () => {
@@ -106,7 +108,7 @@ test('answer mode consumes row shortcuts and permits only cancel or non-editor s
   expect(answerModeKeyAction('Escape', true)).toBe('cancel')
   expect(answerModeKeyAction('Enter', false)).toBe('submit')
   expect(answerModeKeyAction('Enter', true)).toBe('pass')
-  for (const key of ['a', 'r', 'p', 'm', 'd', 'i', 'h', 'ArrowDown', 'ArrowUp']) {
+  for (const key of ['a', 'r', 'p', 'm', 'd', 'i', 'h']) {
     expect(answerModeKeyAction(key, false), key).toBe('consume')
   }
   expect(answerModeKeyAction('r', true)).toBe('pass')
@@ -199,11 +201,11 @@ test('title activation during an in-flight answer preserves its draft through fa
   expect(value.answerRequestState()).toEqual({ pending: false, error: 'answer request failed' })
 })
 
-test('title detail toggling affects only its named row and opens after switching targets', () => {
+test('closing detail releases the selection, and toggling opens after switching targets', () => {
   const same = harness({ kind: 'build', slug: 'selected-build' })
   same.handlers.toggleDetail('selected-build')
   expect(same.state().detail).toBe(false)
-  expect(same.state().selected).toEqual({ kind: 'build', slug: 'selected-build' })
+  expect(same.state().selected).toBeUndefined()
 
   const different = harness({ kind: 'build', slug: 'other-build' })
   different.handlers.toggleDetail('detail-target')

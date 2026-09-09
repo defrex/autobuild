@@ -218,7 +218,7 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
     expect(nav).toContain('class="loading-controls"')
     expect(nav?.match(/class="skeleton-control control-item"/g)).toHaveLength(6)
     expect(html).not.toContain('role="toolbar"')
-    expect(html.match(/aria-live="polite"/g)).toHaveLength(2)
+    expect(html.match(/aria-live="polite"/g)).toHaveLength(1)
     const loadingStart = html.indexOf('<div class="loading-state">')
     const skeletonStart = html.indexOf('<div class="skeletons"', loadingStart)
     const loadingAnnouncement = html.slice(loadingStart, skeletonStart)
@@ -244,7 +244,7 @@ test('running and paused repositories use terminal-compatible control vocabulary
 
   expect(controlLandmark(happy)).not.toContain('repository RUNNING')
   expect(controlLandmark(happy)).not.toContain('repository PAUSED')
-  expect(controlLandmark(mixed)).toContain('repository <b class="off">PAUSED</b>')
+  expect(controlLandmark(mixed)).toContain('repository<b class="off">PAUSED</b>')
 })
 
 test('build row controls contain only authoritative lifecycle and destructive actions', () => {
@@ -280,16 +280,22 @@ test('rendered build controls follow previews and direct controls name their tar
   expect(row).toContain(`aria-controls="detail-${slug}"`)
   expect(row).toContain(`aria-label="Auto merge off for ${slug}"`)
   expect(row).toContain('aria-pressed="false"')
-  expect(row.indexOf('class="row-controls"')).toBeGreaterThan(row.indexOf('class="message alert"'))
+  expect(row).not.toContain('role="toolbar"')
+  for (const label of ['ABORT', 'RESUME', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
+    expect(row).not.toContain(`aria-label="${label} ${slug}"`)
+  }
+  const detailSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
+  const detail = renderWebFrame(detailSpec, fixtures, { css: '', fontCss: '' })
+  const toolbar = detail.match(
+    /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+  )?.[0]
+  expect(toolbar).toBeDefined()
   for (const label of ['ABORT', 'RESUME']) {
-    expect(row).toContain(`aria-label="${label} ${slug}"`)
+    expect(toolbar).toContain(`aria-label="${label} ${slug}"`)
   }
-  for (const duplicate of ['AUTO MERGE', 'DETAILS', 'CLOSE']) {
-    expect(row).not.toContain(`aria-label="${duplicate} ${slug}"`)
-  }
-  const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
-  const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
-  expect(happy).toContain('aria-label="Controls for Harvest run h1"')
+  const harvestSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-harvest-wide')!
+  const harvest = renderWebFrame(harvestSpec, fixtures, { css: '', fontCss: '' })
+  expect(harvest).toContain('aria-label="RESUME Harvest run')
 })
 
 test('auto-merge indicator exposes all states and maps desired-state commands', () => {
@@ -361,14 +367,13 @@ test('hover frame keeps committed and preview state independent', () => {
   expect(selectedRow).toBeDefined()
   expect(hoveredRow).toBeDefined()
   expect(selectedRow).not.toBe(hoveredRow)
-  expect(evidenceText(html)).toContain('ABORT')
-  expect(evidenceText(html)).toContain('RESUME')
+  expect(evidenceText(html)).not.toContain('ABORT')
   expect(evidenceText(html)).not.toContain('DETAILS')
   expect(evidenceText(html)).not.toContain('Unresolved blockers')
   expect(spec.emulateFineHover).toBe(true)
-  expect(captureStateCss(spec)).toContain('.row[data-hovered] .row-controls')
+  expect(captureStateCss(spec)).toContain('.row[data-hovered] .rowhead')
   expect(html).toContain(
-    '<style data-capture-state>.row[data-hovered] .row-controls { visibility: visible;',
+    '<style data-capture-state>.row[data-hovered] .rowhead { color: var(--live); }',
   )
 })
 
@@ -390,10 +395,7 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     if (!spec) throw new Error(`${id} frame spec is missing`)
     const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     const toolbar = html.match(
-      /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
-    )?.[0]
-    const unrelatedToolbar = html.match(
-      /<div class="row-controls" role="toolbar" aria-label="Controls for implement-blocked-dashboard"[\s\S]*?<\/div>/,
+      /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
     )?.[0]
 
     expect(html).toContain('class="answer-step"')
@@ -411,8 +413,7 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     for (const label of ['RESUME', 'ABORT', 'AUTO MERGE', 'DETAILS', 'CLOSE']) {
       expect(toolbar).not.toContain(`aria-label="${label} plan-blocked-dashboard"`)
     }
-    expect(unrelatedToolbar).toContain('aria-label="RESUME implement-blocked-dashboard"')
-    expect(unrelatedToolbar).toContain('aria-label="ABORT implement-blocked-dashboard"')
+    expect(html).not.toContain('aria-label="RESUME implement-blocked-dashboard"')
     expect(html).not.toContain('class="fastext"')
   }
   const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
@@ -432,10 +433,10 @@ test('pending answer context disables row-local submit and cancel', () => {
   })
 
   expect(pendingHtml).toContain(
-    `<button type="button" class="word row-control" disabled="" aria-label="SUBMIT answer for ${selected.slug}"`,
+    `<button type="button" class="word action" disabled="" aria-label="SUBMIT answer for ${selected.slug}"`,
   )
   expect(pendingHtml).toContain(
-    `<button type="button" class="word row-control" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
+    `<button type="button" class="word action" disabled="" aria-label="CANCEL answer for ${selected.slug}"`,
   )
 })
 
@@ -444,7 +445,7 @@ test('post-cancel abort frame replaces answer mode with local confirmation contr
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-abort-wide')!
   const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const toolbar = html.match(
-    /<div class="row-controls" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
+    /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
   )?.[0]
 
   expect(html).not.toContain('class="answer-step"')

@@ -20,7 +20,6 @@ import {
 } from './BuildsView'
 import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
 import { clockText, LoadingControls } from './frame'
-import { dashboardImperative } from './imperative'
 import { OperatorShell } from './Shell'
 import { reconcileDashboard } from './view-model'
 
@@ -31,7 +30,7 @@ interface ClientProps {
 
 export type AnswerModeKeyAction = 'cancel' | 'submit' | 'consume' | 'pass'
 
-const DASHBOARD_ROW_SHORTCUTS = new Set(['ArrowDown', 'ArrowUp', 'a', 'p', 'r', 'm', 'd', 'i', 'h'])
+const DASHBOARD_ROW_SHORTCUTS = new Set(['a', 'p', 'r', 'm', 'd', 'i', 'h'])
 
 /** Answer mode owns its row: only cancellation and non-editor submission may act. */
 export function answerModeKeyAction(key: string, editorTarget: boolean): AnswerModeKeyAction {
@@ -43,7 +42,7 @@ export function answerModeKeyAction(key: string, editorTarget: boolean): AnswerM
 
 interface RowControlHandlerDependencies {
   selection?: Selection
-  setSelection: (selection: Selection) => void
+  setSelection: (selection: Selection | undefined) => void
   clearTranscript: () => void
   clearAnswerStep: () => void
   setConfirmingAbort: (slug: string | undefined) => void
@@ -88,7 +87,9 @@ export function createRowControlHandlers(deps: RowControlHandlerDependencies) {
       deps.setConfirmingAbort(undefined)
       deps.clearAnswerStep()
       if (deps.selection?.kind === 'build' && deps.selection.slug === slug) {
-        deps.setDetailOpen((open) => !open)
+        // Closing detail releases the selection: the row returns to rest.
+        deps.setSelection(undefined)
+        deps.setDetailOpen(false)
       } else {
         deps.setSelection({ kind: 'build', slug })
         deps.setDetailOpen(true)
@@ -107,6 +108,8 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   const [selection, setSelection] = useState<Selection>()
   const [hoverPreview, setHoverPreview] = useState<Selection>()
   const [detailOpen, setDetailOpen] = useState(false)
+  const detailOpenRef = useRef(false)
+  detailOpenRef.current = detailOpen
   const [confirmingAbort, setConfirmingAbort] = useState<string>()
   const [answerStep, setAnswerStep] = useState<{
     slug: string
@@ -158,6 +161,14 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     return () => window.clearInterval(timer)
   }, [])
 
+  /** A selection that carries nothing (no open detail, no local step) returns to rest. */
+  const releaseSelection = () => {
+    if (!detailOpenRef.current) {
+      setSelection(undefined)
+      setTranscript(undefined)
+      setConfirmingAbort(undefined)
+    }
+  }
   const act = async (key: string, operation: () => Promise<unknown>) => {
     setPending(key)
     setError(undefined)
@@ -169,11 +180,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       await poll()
     } finally {
       setPending(undefined)
+      releaseSelection()
     }
   }
 
   const model = snapshot?.model
-  const imperative = model ? dashboardImperative(model) : undefined
   const selectedBuild =
     selection?.kind === 'build'
       ? model?.builds.find((row) => row.slug === selection.slug)
@@ -189,11 +200,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     if (answerPending.current) return
     setConfirmingAbort(undefined)
     if (sameSelection(selection, next)) {
-      setDetailOpen((open) => !open)
+      deselect()
       return
     }
     select(next)
-    setDetailOpen(true)
+    setDetailOpen(next.kind === 'build')
   }
   const deselect = () => {
     select(undefined)
@@ -206,9 +217,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     setError(undefined)
     void (async () => {
       let actionError: string | undefined
+      let answering = false
       try {
         const result = classifyControlReply(slug, await api.buildControl(repo, slug, { action }))
         if (result.kind === 'answer') {
+          answering = true
           setAnswerStep({ slug: result.slug, escalationIds: result.escalationIds, input: '' })
         } else if (result.kind === 'unexpected') {
           actionError = result.text
@@ -220,6 +233,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       } finally {
         if (actionError !== undefined) setError(actionError)
         setPending(undefined)
+        if (!answering) releaseSelection()
       }
     })()
   }
@@ -260,7 +274,9 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     })()
   }
   const cancelAnswerStep = () => {
-    if (!answerPending.current) setAnswerStep(undefined)
+    if (answerPending.current) return
+    setAnswerStep(undefined)
+    releaseSelection()
   }
   const submitAnswerStep = () => {
     if (!answerStep || answerPending.current) return
@@ -276,8 +292,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           slug,
           await api.answerBuild(repo, slug, answerRequest(input)),
         )
-        if (result.kind === 'answered') setAnswerStep(undefined)
-        else actionError = result.text
+        if (result.kind === 'answered') {
+          setAnswerStep(undefined)
+          releaseSelection()
+        } else actionError = result.text
         await poll()
       } catch (cause) {
         actionError = cause instanceof Error ? cause.message : String(cause)
@@ -332,27 +350,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       return
     }
     if (editorTarget) return
-    const entries: Selection[] = [
-      ...(model.harvest ? [{ kind: 'harvest' } as Selection] : []),
-      ...model.builds.map((row): Selection => ({ kind: 'build', slug: row.slug })),
-    ]
-    const index = selection ? entries.findIndex((entry) => sameSelection(entry, selection)) : -1
     const available = selectedBuild ? buildActionAvailability(selectedBuild) : undefined
     const repository = repositoryActionAvailability(model)
     const busy = pending !== undefined
     switch (event.key) {
-      case 'ArrowDown': {
-        event.preventDefault()
-        const next = entries[Math.min(entries.length - 1, index + 1)]
-        if (next) select(next)
-        return
-      }
-      case 'ArrowUp': {
-        event.preventDefault()
-        const next = entries[Math.max(0, index - 1)]
-        if (next) select(next)
-        return
-      }
       case 'Enter':
         if (busy) return
         if (confirmingAbort === selectedBuild?.slug && selectedBuild) {
@@ -360,13 +361,15 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           control(selectedBuild.slug, 'abort')
         } else if (selection?.kind === 'build') {
           event.preventDefault()
-          setDetailOpen((open) => !open)
+          if (detailOpen) deselect()
+          else setDetailOpen(true)
         }
         return
       case 'Escape':
-        if (confirmingAbort) setConfirmingAbort(undefined)
-        else if (detailOpen) setDetailOpen(false)
-        else deselect()
+        if (confirmingAbort) {
+          setConfirmingAbort(undefined)
+          releaseSelection()
+        } else deselect()
         return
       case 'a':
         if (!busy && selectedBuild && available?.abort) setConfirmingAbort(selectedBuild.slug)
@@ -418,7 +421,6 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       repo={repo}
       repositories={repositories}
       identity={identity}
-      imperative={imperative}
       clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
       pending={pending !== undefined}
       error={error}
@@ -439,6 +441,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
             pending={pending}
             onSetting={setting}
             onHarvest={harvest}
+            onBulk={bulk}
           />
         ) : (
           <LoadingControls />
@@ -461,7 +464,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         onHoverPreview={setHoverPreview}
         onRowBuildControl={rowControls.buildControl}
         onRowRequestAbort={rowControls.requestAbort}
-        onCancelAbort={() => setConfirmingAbort(undefined)}
+        onCancelAbort={() => {
+          setConfirmingAbort(undefined)
+          releaseSelection()
+        }}
         onRowToggleDetail={rowControls.toggleDetail}
         onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
         onSubmitAnswerStep={submitAnswerStep}

@@ -55,7 +55,7 @@ test('shell renders every repository when there is a choice', () => {
   expectTabless(html)
 })
 
-test('shell composes selector, page controls, and account actions in one named landmark', () => {
+test('shell composes selector, page controls, and the clock in one named landmark', () => {
   const html = renderShell(['example/repository', 'example/alternate'])
   const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
 
@@ -65,8 +65,22 @@ test('shell composes selector, page controls, and account actions in one named l
     nav!.indexOf('data-testid="dispatcher-controls"'),
   )
   expect(nav!.indexOf('data-testid="dispatcher-controls"')).toBeLessThan(
-    nav!.indexOf('class="identity"'),
+    nav!.indexOf('class="clock"'),
   )
-  expect(nav).toContain('operator@example.com')
-  expect(nav).toContain('sign out')
+  expect(nav).toContain('--:--:--')
+  expect(nav).not.toContain('operator@example.com')
+  expect(nav).not.toContain('sign out')
+})
+
+test('shell places the account menu in the masthead, closed at rest', () => {
+  const html = renderShell(['example/repository'])
+  const header = html.match(/<header class="masthead"[\s\S]*?<\/header>/)?.[0]
+
+  expect(header).toBeDefined()
+  expect(header).toContain('class="menu account"')
+  expect(header).toContain('aria-haspopup="menu"')
+  expect(header).toContain('aria-expanded="false"')
+  expect(header).toContain('<span class="identity">operator@example.com</span>')
+  expect(header).not.toContain('sign out')
+  expect(header).not.toContain('class="clock"')
 })
