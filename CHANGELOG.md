@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#287](https://github.com/defrex/autobuild/pull/287) — Provision configured runtimes in Vercel sandboxes
 - [#282](https://github.com/defrex/autobuild/pull/282) — Make local store validation non-mutating
 - [#281](https://github.com/defrex/autobuild/pull/281) — Exercise the fresh Vercel sandbox lifecycle live
 - [#280](https://github.com/defrex/autobuild/pull/280) — Cover setup preflight safety rejections
