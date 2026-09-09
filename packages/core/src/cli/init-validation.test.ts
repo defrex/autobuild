@@ -60,6 +60,74 @@ function readOnlyStore(calls: string[]): BuildStore {
   ) as unknown as BuildStore
 }
 
+const completeVercelPreflightEnv: Record<string, string | undefined> = {
+  AB_STORE: 'https://store.example',
+  AB_TOKEN: 'store-token',
+  GITHUB_TOKEN: 'push-token',
+  VERCEL_TOKEN: 'vercel-token',
+  VERCEL_TEAM_ID: 'team-id',
+  VERCEL_PROJECT_ID: 'project-id',
+}
+
+async function vercelPreflightFixture(forge = 'github') {
+  const repo = await mkdtemp(join(tmpdir(), 'ab-vercel-preflight-'))
+  roots.push(repo)
+  await writeFile(
+    join(repo, 'autobuild.toml'),
+    `baseBranch = "main"
+forge = "${forge}"
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+  )
+
+  const reached = { repositoryResolution: 0, remoteGit: 0, sandbox: 0, packageArchive: 0 }
+  const exec: Exec = async (command) => {
+    if (command.includes('--show-toplevel')) {
+      reached.repositoryResolution += 1
+      return { stdout: '', stderr: 'not a Git repository', exitCode: 128 }
+    }
+    reached.remoteGit += 1
+    throw new Error(`remote Git validation must not run: ${command.join(' ')}`)
+  }
+  const vercelFacade: VercelSandboxFacade = {
+    get: async () => {
+      reached.sandbox += 1
+      throw new Error('Vercel validation must not run')
+    },
+    create: async () => {
+      reached.sandbox += 1
+      throw new Error('Vercel validation must not run')
+    },
+    createFresh: async () => {
+      reached.sandbox += 1
+      throw new Error('Vercel validation must not run')
+    },
+  }
+  const packageArchive = async () => {
+    reached.packageArchive += 1
+    throw new Error('package validation must not run')
+  }
+  const expectValidationNotReached = () => {
+    expect(reached).toEqual({
+      repositoryResolution: 1,
+      remoteGit: 0,
+      sandbox: 0,
+      packageArchive: 0,
+    })
+  }
+
+  return { repo, exec, vercelFacade, packageArchive, expectValidationNotReached }
+}
+
 describe('init readiness probe', () => {
   test('runs setup before the selected runtime and performs only a Store read', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-test-'))
@@ -375,6 +443,72 @@ readyState = "ready"
     expect((failure as Error).message).toContain('leaked-sandbox')
     expect((failure as AggregateError).errors.map(String).join(' ')).toContain('exited 9')
     expect((failure as AggregateError).errors.map(String).join(' ')).toContain('delete denied')
+  })
+
+  test('rejects a non-GitHub forge with publication remediation before remote validation', async () => {
+    const fixture = await vercelPreflightFixture('gitlab')
+
+    await expect(
+      validateInitReadiness({
+        targetRepo: fixture.repo,
+        env: { ...completeVercelPreflightEnv },
+        exec: fixture.exec,
+        vercelFacade: fixture.vercelFacade,
+        packageArchive: fixture.packageArchive,
+      }),
+    ).rejects.toThrow(
+      'vercel-sandbox supports forge = "github" only; configure GitHub publication before validating',
+    )
+    fixture.expectValidationNotReached()
+  })
+
+  test('rejects missing push-capable GitHub tokens before remote validation', async () => {
+    const fixture = await vercelPreflightFixture()
+
+    await expect(
+      validateInitReadiness({
+        targetRepo: fixture.repo,
+        env: { ...completeVercelPreflightEnv, GITHUB_TOKEN: '', GH_TOKEN: undefined },
+        exec: fixture.exec,
+        vercelFacade: fixture.vercelFacade,
+        packageArchive: fixture.packageArchive,
+      }),
+    ).rejects.toThrow('vercel-sandbox publication requires push-capable GITHUB_TOKEN or GH_TOKEN')
+    fixture.expectValidationNotReached()
+  })
+
+  for (const missing of ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'] as const) {
+    test(`rejects an incomplete durable Vercel credential tuple without ${missing}`, async () => {
+      const fixture = await vercelPreflightFixture()
+
+      await expect(
+        validateInitReadiness({
+          targetRepo: fixture.repo,
+          env: { ...completeVercelPreflightEnv, VERCEL_OIDC_TOKEN: '', [missing]: '' },
+          exec: fixture.exec,
+          vercelFacade: fixture.vercelFacade,
+          packageArchive: fixture.packageArchive,
+        }),
+      ).rejects.toThrow(
+        'Vercel authentication requires VERCEL_OIDC_TOKEN or the durable VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID set',
+      )
+      fixture.expectValidationNotReached()
+    })
+  }
+
+  test('rejects a non-HTTPS Store before remote validation', async () => {
+    const fixture = await vercelPreflightFixture()
+
+    await expect(
+      validateInitReadiness({
+        targetRepo: fixture.repo,
+        env: { ...completeVercelPreflightEnv, AB_STORE: 'http://store.example' },
+        exec: fixture.exec,
+        vercelFacade: fixture.vercelFacade,
+        packageArchive: fixture.packageArchive,
+      }),
+    ).rejects.toThrow('vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel')
+    fixture.expectValidationNotReached()
   })
 
   test('deletes the sandbox before reporting malformed remote probe output', async () => {
