@@ -2106,6 +2106,7 @@ describe('abDispatch watch build-runner coordination', () => {
     let sleeps = 0
     let claimsDuringAbsence: string[] = []
     let reloadsDuringAbsence = -1
+    let workspaceRuntimeReadyState: string | undefined
     try {
       await abDispatch({
         targetRepo: fx.origin,
@@ -2137,7 +2138,12 @@ describe('abDispatch watch build-runner coordination', () => {
             stop.abort()
           }
         },
-        wire: fx.wire,
+        wire: () => ({
+          ...fx.wire(),
+          updateRuntimeReferences: (config) => {
+            workspaceRuntimeReadyState = config.tickets.readyState
+          },
+        }),
       })
 
       const missingWarnings = fx.err.filter((line) =>
@@ -2150,6 +2156,7 @@ describe('abDispatch watch build-runner coordination', () => {
       expect(reloadsDuringAbsence).toBe(0)
       expect(fx.tickets.claims).toEqual(['T-retained-ready', 'T-restored-queued'])
       expect(out).toContain('autobuild.toml reloaded (revision 1)')
+      expect(workspaceRuntimeReadyState).toBe('Queued')
 
       const reloads = (await fx.store.getRepoEvents(fx.origin)).filter(
         (event) => event.type === 'dispatcher.config-reloaded',

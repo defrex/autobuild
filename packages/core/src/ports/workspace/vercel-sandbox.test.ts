@@ -89,11 +89,29 @@ class FakeSandbox implements VercelSandboxHandle {
   }
 }
 
+function runtimeReferenceFixtures() {
+  return [
+    {
+      runtime: 'pi',
+      references: ['role "implement" primary'],
+      models: [],
+      usesRuntimeDefaultModel: true,
+    },
+    {
+      runtime: 'plugin',
+      references: ['role "plan" alternate[0]'],
+      models: [],
+      usesRuntimeDefaultModel: true,
+    },
+  ]
+}
+
 function harness(
   options: {
     publishedSha?: string | null
     existingSha?: string | null
     provisionRuntimes?: boolean
+    runtimeReferences?: () => ReturnType<typeof runtimeReferenceFixtures>
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -162,12 +180,8 @@ function harness(
     facade,
     exec,
     packageArchive: async () => new Uint8Array([1, 2, 3]),
-    runtimeReferences: options.provisionRuntimes
-      ? [
-          { runtime: 'pi', references: ['role "implement" primary'], models: [] },
-          { runtime: 'plugin', references: ['role "plan" alternate[0]'], models: [] },
-        ]
-      : [],
+    runtimeReferences:
+      options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
   })
   return {
     provider,
@@ -514,6 +528,32 @@ describe('VercelSandboxProvider', () => {
         workspaceRef: workspace.ref,
       }),
     ).rejects.toThrow(/runtime "pi" preflight failed.*role "implement" primary/)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+  })
+
+  test('runner preflight reads runtime references updated after provisioning', async () => {
+    let references = runtimeReferenceFixtures().filter((group) => group.runtime === 'pi')
+    const h = harness({
+      provisionRuntimes: true,
+      runtimeReferences: () => references,
+    })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    references = runtimeReferenceFixtures().filter((group) => group.runtime === 'plugin')
+    h.sandbox.failCommand = (command) =>
+      command.cmd === 'sh' && (command.args as string[])[1] === 'plugin --version 1.2.3'
+
+    await expect(
+      h.provider.buildExecution.start({
+        slug: 'remote-build',
+        storeRef: 'https://store.example.test',
+        instance: 'i-hot-runtime-preflight',
+        workspaceRef: workspace.ref,
+      }),
+    ).rejects.toThrow(/runtime "plugin" preflight failed.*role "plan" alternate\[0\]/)
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 

@@ -612,6 +612,17 @@ export async function validateVercelSandbox(
   return readiness!
 }
 
+export type RuntimeReferencesSource =
+  | readonly RuntimeReferenceGroup[]
+  | (() => readonly RuntimeReferenceGroup[])
+
+function currentRuntimeReferences(
+  source: RuntimeReferencesSource | undefined,
+): readonly RuntimeReferenceGroup[] {
+  if (source === undefined) return []
+  return typeof source === 'function' ? source() : source
+}
+
 export interface VercelSandboxProviderOptions {
   config: VercelSandboxConfig
   env: Record<string, string | undefined>
@@ -622,7 +633,7 @@ export interface VercelSandboxProviderOptions {
   facade?: VercelSandboxFacade
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
-  runtimeReferences?: readonly RuntimeReferenceGroup[]
+  runtimeReferences?: RuntimeReferencesSource
 }
 
 /** Vercel-backed working copy and executor. SDK command output is never read:
@@ -796,7 +807,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           sandbox,
           this.options.config,
           this.options.env,
-          this.options.runtimeReferences ?? [],
+          currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
         await commandOrThrow(sandbox, {
@@ -910,7 +921,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       sandbox,
       this.options.config,
       this.options.env,
-      this.options.runtimeReferences ?? [],
+      currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
     this.sessions.set(ref, sandbox)

@@ -1,12 +1,11 @@
 import { resolve } from 'node:path'
-import type { RuntimeReferenceGroup } from '../../config/roles'
 import { vercelSandboxConfigSchema, type WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
 import type { WorkspaceProvider } from '../types'
 import type { BuildExecution } from './build-execution'
 import { GitWorktreeProvider } from './git-worktree'
 import { LocalBuildExecution } from './local-build-execution'
-import { VercelSandboxProvider } from './vercel-sandbox'
+import { type RuntimeReferencesSource, VercelSandboxProvider } from './vercel-sandbox'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
@@ -19,7 +18,7 @@ export interface CreateWorkspaceProviderOptions {
   storeRef?: string
   storeToken?: string
   /** Host-derived effective routes; consumed only by the built-in sandbox. */
-  runtimeReferences?: readonly RuntimeReferenceGroup[]
+  runtimeReferences?: RuntimeReferencesSource
 }
 
 export interface WorkspaceRuntime {

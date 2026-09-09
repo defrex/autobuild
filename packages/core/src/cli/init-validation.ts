@@ -102,8 +102,12 @@ function effectiveTargets(
     const defaultModel = runtimes[group.runtime]?.defaultModel
     return {
       runtime: group.runtime,
-      models:
-        group.models.length > 0 ? group.models : defaultModel === undefined ? [] : [defaultModel],
+      models: [
+        ...new Set([
+          ...group.models,
+          ...(group.usesRuntimeDefaultModel && defaultModel !== undefined ? [defaultModel] : []),
+        ]),
+      ].sort(),
     }
   })
 }

@@ -234,6 +234,42 @@ readyState = "ready"
     expect(calls).toEqual(['runtime', 'listBuilds', 'close'])
   })
 
+  test('probes both explicit and registry-default models selected on the same runtime', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-models-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `[commands]
+[roles.default]
+runtime = "fake"
+[roles.plan]
+model = "gateway/explicit"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    let models: readonly string[] = []
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example' },
+      runtimes: {
+        fake: {
+          runner,
+          servesModels: ['fake/', 'gateway/'],
+          defaultModel: 'fake/default',
+          initUsable: async (input) => {
+            models = input.models
+            return true
+          },
+        },
+      },
+      openStore: () => readOnlyStore([]),
+    })
+    expect(report.checks.every((check) => check.status === 'pass')).toBe(true)
+    expect(models).toEqual(['fake/default', 'gateway/explicit'])
+  })
+
   test('reports guest runtime authentication and unreachable Store remediation without secrets', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-failures-'))
     roots.push(repo)
@@ -364,7 +400,12 @@ readyState = "ready"
       exec,
       packageArchive: async () => new Uint8Array(),
       runtimeReferences: [
-        { runtime: 'pi', references: ['role "plan" primary'], models: ['gateway/model'] },
+        {
+          runtime: 'pi',
+          references: ['role "plan" primary'],
+          models: ['gateway/model'],
+          usesRuntimeDefaultModel: false,
+        },
       ],
     })
 

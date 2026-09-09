@@ -84,6 +84,8 @@ export interface RuntimeReferenceGroup {
   references: string[]
   /** Explicit configured models selected for readiness probing. */
   models: string[]
+  /** At least one selected route leaves its model to the runtime registration. */
+  usesRuntimeDefaultModel: boolean
 }
 
 /**
@@ -110,7 +112,10 @@ export function effectiveRuntimeReferences(
     })),
   ]
 
-  const grouped = new Map<string, { references: Set<string>; models: Set<string> }>()
+  const grouped = new Map<
+    string,
+    { references: Set<string>; models: Set<string>; usesRuntimeDefaultModel: boolean }
+  >()
   const declaredSpec = (role: string, aliases: readonly string[] = []) => {
     for (const key of [role, ...aliases]) {
       if (key === RESERVED_ROLE) return defaultSpec
@@ -120,9 +125,14 @@ export function effectiveRuntimeReferences(
   }
   const add = (runtime: string | undefined, model: string | undefined, reference: string) => {
     if (runtime === undefined || runtime.trim() === '') return
-    const group = grouped.get(runtime) ?? { references: new Set(), models: new Set() }
+    const group = grouped.get(runtime) ?? {
+      references: new Set(),
+      models: new Set(),
+      usesRuntimeDefaultModel: false,
+    }
     group.references.add(reference)
     if (model !== undefined) group.models.add(model)
+    else group.usesRuntimeDefaultModel = true
     grouped.set(runtime, group)
   }
 
@@ -147,6 +157,7 @@ export function effectiveRuntimeReferences(
       runtime,
       references: [...group.references].sort(),
       models: [...group.models].sort(),
+      usesRuntimeDefaultModel: group.usesRuntimeDefaultModel,
     }))
 }
 

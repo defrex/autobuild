@@ -61,6 +61,7 @@ runtime = "unused"
       runtime: 'plugin-runtime',
       references: ['agent verify role "e2e" primary'],
       models: ['plugin/model'],
+      usesRuntimeDefaultModel: false,
     })
     expect(groups.find((group) => group.runtime === 'backup')?.references).toContain(
       'role "implement" alternate[0]',
