@@ -232,7 +232,7 @@ function escapeBasic(name: string): string {
 /** A name IN PROSE — always quoted, always escaped. The one place a name is
  * wrapped in quotes, so a quote cannot break out of the phrase and nothing
  * unprintable can reach a line-oriented sink raw. */
-function displayName(name: string): string {
+export function displayName(name: string): string {
   return `"${escapeBasic(name)}"`
 }
 
@@ -243,7 +243,7 @@ function displayName(name: string): string {
  * renderings differ in exactly that one condition and share the escaper, so
  * they cannot drift into disagreeing about what is safe.
  */
-function tomlKey(name: string): string {
+export function tomlKey(name: string): string {
   return TOML_BARE_KEY.test(name) ? name : displayName(name)
 }
 

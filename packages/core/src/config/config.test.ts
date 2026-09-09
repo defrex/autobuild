@@ -396,6 +396,26 @@ ${READY}`
     expect(missing.message).toContain('role "plan" alternate[0]')
     expect(missing.message).toContain('[workspace.config.runtimeProvisioning."plugin.runtime"]')
 
+    const controlNameSource = `[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+[roles.default]
+runtime = "plugin\\u007F"
+${READY}`
+    const controlNameError = parseError(controlNameSource)
+    expect(controlNameError.message).toContain(
+      '[workspace.config.runtimeProvisioning."plugin\\u007F"]',
+    )
+    expect(() =>
+      parseConfig(
+        controlNameSource.replace(
+          '[roles.default]',
+          '[workspace.config.runtimeProvisioning."plugin\\u007F"]\ninstall = "install@1"\npreflight = "plugin --version"\n[roles.default]',
+        ),
+      ),
+    ).not.toThrow()
+
     for (const entry of [
       'install = ""\npreflight = "pi --version"',
       'install = "npm install pi@1"',

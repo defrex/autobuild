@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Sandbox, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
-import type { RuntimeReferenceGroup } from '../../config/roles'
+import { displayName, tomlKey, type RuntimeReferenceGroup } from '../../config/roles'
 import { type VercelSandboxConfig, vercelSandboxConfigSchema } from '../../config/schema'
 import { distributionRoot } from '../../distribution'
 import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
@@ -335,7 +335,7 @@ async function bootstrapRuntimes(
     const provisioning = config.runtimeProvisioning?.[group.runtime]
     if (provisioning === undefined) {
       throw new Error(
-        `runtime ${JSON.stringify(group.runtime)} selected by ${group.references.join(', ')} has no provisioning; add [workspace.config.runtimeProvisioning.${group.runtime}] with install and preflight commands`,
+        `runtime ${displayName(group.runtime)} selected by ${group.references.join(', ')} has no provisioning; add [workspace.config.runtimeProvisioning.${tomlKey(group.runtime)}] with install and preflight commands`,
       )
     }
     for (const stage of install ? (['install', 'preflight'] as const) : (['preflight'] as const)) {
@@ -349,7 +349,7 @@ async function bootstrapRuntimes(
         })
       } catch (error) {
         throw new Error(
-          `runtime ${JSON.stringify(group.runtime)} ${stage} failed (selected by ${group.references.join(', ')}); fix workspace.config.runtimeProvisioning.${group.runtime}.${stage}: ${redactRuntimeError(error, env)}`,
+          `runtime ${displayName(group.runtime)} ${stage} failed (selected by ${group.references.join(', ')}); fix workspace.config.runtimeProvisioning.${group.runtime}.${stage}: ${redactRuntimeError(error, env)}`,
         )
       }
     }

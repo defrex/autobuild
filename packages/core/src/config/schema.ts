@@ -15,7 +15,7 @@ import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
-import { effectiveRuntimeReferences } from './roles'
+import { displayName, effectiveRuntimeReferences, tomlKey } from './roles'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
@@ -578,15 +578,12 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
     ) {
       for (const group of effectiveRuntimeReferences(config)) {
         if (Object.hasOwn(parsed.data.runtimeProvisioning, group.runtime)) continue
-        const key = /^[A-Za-z0-9_-]+$/.test(group.runtime)
-          ? group.runtime
-          : JSON.stringify(group.runtime)
         ctx.addIssue({
           code: 'custom',
           path: ['workspace', 'config', 'runtimeProvisioning', group.runtime],
           message:
-            `runtime ${JSON.stringify(group.runtime)} is selected by ${group.references.join(', ')} but has no sandbox provisioning; add ` +
-            `[workspace.config.runtimeProvisioning.${key}] with nonblank install and preflight commands`,
+            `runtime ${displayName(group.runtime)} is selected by ${group.references.join(', ')} but has no sandbox provisioning; add ` +
+            `[workspace.config.runtimeProvisioning.${tomlKey(group.runtime)}] with nonblank install and preflight commands`,
         })
       }
     }

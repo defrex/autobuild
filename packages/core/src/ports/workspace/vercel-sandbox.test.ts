@@ -557,6 +557,27 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
+  test('missing provisioning quotes a plugin runtime name as a valid TOML key', async () => {
+    const h = harness({
+      provisionRuntimes: true,
+      runtimeReferences: () => [
+        {
+          runtime: 'plugin.runtime',
+          references: ['role "plan" primary'],
+          models: [],
+          usesRuntimeDefaultModel: true,
+        },
+      ],
+    })
+    await expect(
+      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toThrow(
+      /add \[workspace\.config\.runtimeProvisioning\."plugin\.runtime"\] with install and preflight commands/,
+    )
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+  })
+
   test('runtime failure names the route and field, creates no marker, and deletes the sandbox', async () => {
     const h = harness({ provisionRuntimes: true })
     h.sandbox.failCommand = (command) =>
