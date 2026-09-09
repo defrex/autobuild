@@ -43,6 +43,10 @@ export interface VercelCommand {
 
 export interface VercelSandboxHandle {
   readonly name: string
+  /** The session's default working directory, where the server places a git
+   * source checkout. Managed images differ (`/vercel/sandbox` on the language
+   * images, `/vercel` on universal), so the checkout is located through it. */
+  readonly cwd?: string
   currentSession?(): { sessionId: string }
   runCommand(params: {
     cmd: string
@@ -257,6 +261,49 @@ function uploadPackPolicy(
         },
       ],
     },
+  }
+}
+
+/** Default checkout root when the handle does not report its session cwd. */
+const VERCEL_DEFAULT_CWD = '/vercel/sandbox'
+
+/** Where the server checked out the git source: the session cwd plus the
+ * repository directory name. Never assume the image's working directory. */
+export function sourceCheckoutPath(sandbox: VercelSandboxHandle, directory: string): string {
+  const root = (sandbox.cwd ?? '').trim().replace(/\/+$/, '') || VERCEL_DEFAULT_CWD
+  return `${root}/${directory}`
+}
+
+/**
+ * Move the server's checkout to the adapter-owned workspace path. The
+ * workspace parent is created first: the universal image has no
+ * `/vercel/sandbox` directory of its own.
+ */
+async function relocateCheckout(
+  sandbox: VercelSandboxHandle,
+  directory: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const sourcePath = sourceCheckoutPath(sandbox, directory)
+  try {
+    await commandOrThrow(sandbox, {
+      cmd: 'sh',
+      args: [
+        '-c',
+        'mkdir -p "$(dirname "$2")" && mv "$1" "$2"',
+        'relocate',
+        sourcePath,
+        VERCEL_WORKSPACE_PATH,
+      ],
+      ...(signal === undefined ? {} : { signal }),
+    })
+  } catch (error) {
+    throw new Error(
+      `vercel-sandbox could not move the checkout ${sourcePath} to ${VERCEL_WORKSPACE_PATH}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    )
   }
 }
 
@@ -549,11 +596,7 @@ export async function validateVercelSandbox(
   try {
     options.onSandbox?.(name)
     checkCancellation()
-    const sourcePath = `/vercel/sandbox/${origin.directory}`
-    await commandOrThrow(
-      sandbox,
-      withSignal({ cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] }),
-    )
+    await relocateCheckout(sandbox, origin.directory, options.signal)
     await commandOrThrow(
       sandbox,
       withSignal({
@@ -799,8 +842,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         signal: this.operationSignal(),
       })
       try {
-        const sourcePath = `/vercel/sandbox/${origin.directory}`
-        await commandOrThrow(sandbox, { cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] })
+        await relocateCheckout(sandbox, origin.directory)
         await commandOrThrow(sandbox, {
           cmd: 'git',
           args: ['checkout', '-B', opts.branch, base],

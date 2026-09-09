@@ -16,6 +16,7 @@ import {
   VercelSandboxProvider,
   isMissingVercelSandbox,
   packageAutobuildDistribution,
+  sourceCheckoutPath,
   type VercelSandboxFacade,
   type VercelSandboxHandle,
 } from './vercel-sandbox'
@@ -24,6 +25,7 @@ const SHA = 'a'.repeat(40)
 
 class FakeSandbox implements VercelSandboxHandle {
   readonly name = 'sandbox'
+  cwd: string | undefined
   readonly commands: Array<Record<string, unknown>> = []
   readonly policies: NetworkPolicy[] = []
   readonly policySignals: Array<AbortSignal | undefined> = []
@@ -122,9 +124,12 @@ function harness(
     provisionRuntimes?: boolean
     runtimeReferences?: () => ReturnType<typeof runtimeReferenceFixtures>
     provisioning?: Array<{ name: string; command: string }>
+    /** The session cwd the fake reports; undefined models an SDK without one. */
+    cwd?: string
   } = {},
 ) {
   const sandbox = new FakeSandbox()
+  sandbox.cwd = options.cwd
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
   let created = false
@@ -393,6 +398,49 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
+  test('moves the checkout from the session cwd the image actually uses', async () => {
+    const universal = harness({ cwd: '/vercel' })
+    await universal.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(universal.sandbox.commands[0]).toMatchObject({
+      cmd: 'sh',
+      args: [
+        '-c',
+        expect.stringContaining('mkdir -p'),
+        'relocate',
+        '/vercel/app',
+        VERCEL_WORKSPACE_PATH,
+      ],
+    })
+
+    const legacy = harness()
+    await legacy.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(legacy.sandbox.commands[0]).toMatchObject({
+      cmd: 'sh',
+      args: [
+        '-c',
+        expect.stringContaining('mv "$1" "$2"'),
+        'relocate',
+        '/vercel/sandbox/app',
+        VERCEL_WORKSPACE_PATH,
+      ],
+    })
+
+    expect(sourceCheckoutPath({ cwd: '/vercel/sandbox/' } as VercelSandboxHandle, 'app')).toBe(
+      '/vercel/sandbox/app',
+    )
+    expect(sourceCheckoutPath({ cwd: '  ' } as VercelSandboxHandle, 'app')).toBe(
+      '/vercel/sandbox/app',
+    )
+  })
+
   test('uses generation-scoped names and the supplied checkpoint when the branch is absent', async () => {
     const h = harness()
     await h.provider.provision({
@@ -478,7 +526,7 @@ describe('VercelSandboxProvider', () => {
     expect(second.provisioned).toBe(true)
     expect(second.stops).toBe(1)
     expect(second.commands.map((command) => command.cmd)).toEqual([
-      'mv',
+      'sh',
       'git',
       'git',
       'git',
