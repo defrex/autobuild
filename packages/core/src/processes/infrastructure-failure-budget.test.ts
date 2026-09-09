@@ -6,6 +6,7 @@ import { MemoryBuildStore } from '../store/memory'
 import {
   classifyInfrastructureFailure,
   infrastructureFailureResetSeq,
+  normalizeInfrastructureError,
   recordInfrastructureFailure,
 } from './infrastructure-failure-budget'
 
@@ -232,6 +233,26 @@ describe('infrastructure failure epochs', () => {
         .map((entry) => entry.payload.attempt),
     ).toEqual([1, 1, 1])
   })
+})
+
+test('normalization preserves provisioning diagnostics when cleanup also fails', () => {
+  const provisioning = new Error(
+    'system provisioning step "browser" failed; stdout: downloaded; stderr: chromium missing; rerun ab init --validate',
+  )
+  const cleanup = new Error('sandbox cleanup outcome is unknown', {
+    cause: new Error('delete denied'),
+  })
+  const normalized = normalizeInfrastructureError(
+    new AggregateError(
+      [provisioning, cleanup],
+      'sandbox setup failed and its incomplete environment could not be confirmed deleted',
+    ),
+  )
+  expect(normalized).toContain('system provisioning step "browser" failed')
+  expect(normalized).toContain('stdout: downloaded')
+  expect(normalized).toContain('stderr: chromium missing')
+  expect(normalized).toContain('rerun ab init --validate')
+  expect(normalized).toContain('delete denied')
 })
 
 test('shared cause classification covers provider limits, timeouts, missing resources, and fallbacks', () => {

@@ -93,6 +93,15 @@ const envNameSchema = z
 
 /** Strict built-in Vercel configuration. Values are operational policy only;
  * credentials are referenced by variable name and never accepted as literals. */
+const nonblankProvisioningString = (field: string) =>
+  z.string().refine((value) => value.trim().length > 0, `${field} must be nonblank`)
+
+export const vercelProvisioningStepSchema = z.strictObject({
+  name: nonblankProvisioningString('provisioning step name'),
+  command: nonblankProvisioningString('provisioning step command'),
+})
+export type VercelProvisioningStep = z.infer<typeof vercelProvisioningStepSchema>
+
 const vercelUniversalImageSchema = z
   .string()
   .refine(
@@ -113,6 +122,7 @@ export const vercelSandboxConfigSchema = z
     region: z.string().min(1).optional(),
     failoverRegions: z.array(z.string().min(1)).default([]),
     environmentVariables: z.array(envNameSchema).default([]),
+    provisioning: z.array(vercelProvisioningStepSchema).default([]),
     gitUsernameEnv: envNameSchema.optional(),
     gitPasswordEnv: envNameSchema.optional(),
   })
@@ -131,6 +141,19 @@ export const vercelSandboxConfigSchema = z
     }
     unique(value.environmentVariables, 'environmentVariables')
     unique(value.failoverRegions, 'failoverRegions')
+    const provisioningNames = new Map<string, number>()
+    value.provisioning.forEach((step, index) => {
+      const first = provisioningNames.get(step.name)
+      if (first !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['provisioning', index, 'name'],
+          message: `duplicate provisioning step name ${JSON.stringify(step.name)} — first declared at provisioning[${first}].name`,
+        })
+      } else {
+        provisioningNames.set(step.name, index)
+      }
+    })
     if (value.region !== undefined && value.failoverRegions.includes(value.region)) {
       ctx.addIssue({
         code: 'custom',
@@ -173,8 +196,14 @@ export const vercelSandboxConfigSchema = z
 type NormalizedVercelSandboxConfig = z.infer<typeof vercelSandboxConfigSchema>
 /** Direct provider construction remains source-compatible; schema-parsed
  * production config always materializes operationTimeoutMs. */
-export type VercelSandboxConfig = Omit<NormalizedVercelSandboxConfig, 'operationTimeoutMs'> & {
+export type VercelSandboxConfig = Omit<
+  NormalizedVercelSandboxConfig,
+  'operationTimeoutMs' | 'provisioning'
+> & {
   operationTimeoutMs?: number
+  /** Optional only for source compatibility with direct adapter construction;
+   * schema-loaded repository configuration always materializes this list. */
+  provisioning?: VercelProvisioningStep[]
 }
 
 /** Workspace selector. The host validates the selector envelope; plugin nested
