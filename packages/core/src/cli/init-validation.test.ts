@@ -71,6 +71,157 @@ const usableRuntime: RuntimeRegistry = {
   fake: { runner, servesModels: [], initUsable: async () => ({ usable: true, reason: 'ready' }) },
 }
 
+const REAL_OPERATION_TIMEOUT_MS = 15_000
+const REAL_SCENARIO_TIMEOUT_MS = 45_000
+const REAL_TEST_TIMEOUT_MS = 60_000
+const FAKE_TEST_TIMEOUT_MS = 2_000
+
+interface DeadlineOptions {
+  operationMs: number
+  scenarioMs: number
+}
+
+class OperationTracker {
+  private activeOperation = 'no operation active'
+  private activeAbort: ((reason: Error) => void) | undefined
+  private readonly operationTimers = new Set<ReturnType<typeof setTimeout>>()
+  private scenarioTimer: ReturnType<typeof setTimeout> | undefined
+  private disposed = false
+
+  constructor(private readonly options: DeadlineOptions) {}
+
+  async run<T>(
+    label: string,
+    operation: () => Promise<T>,
+    abort?: (reason: Error) => void,
+  ): Promise<T> {
+    const previous = this.activeOperation
+    const previousAbort = this.activeAbort
+    this.activeOperation = label
+    this.activeAbort = abort
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(
+          `${label} exceeded ${this.options.operationMs}ms operation deadline`,
+        )
+        abort?.(error)
+        reject(error)
+      }, this.options.operationMs)
+      this.operationTimers.add(timer)
+    })
+    try {
+      return await Promise.race([operation(), deadline])
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        this.operationTimers.delete(timer)
+      }
+      this.activeOperation = previous
+      this.activeAbort = previousAbort
+    }
+  }
+
+  exec(base: Exec): Exec {
+    return async (command, options) => {
+      const label =
+        command[0] === 'sh' && command[1] === '-c'
+          ? `setup: sh -c ${command[2]}`
+          : command.join(' ')
+      const controller = new AbortController()
+      const relayAbort = () =>
+        controller.abort(options.signal?.reason ?? new Error(`${label} cancelled`))
+      if (options.signal?.aborted) relayAbort()
+      else options.signal?.addEventListener('abort', relayAbort, { once: true })
+      try {
+        return await this.run(
+          label,
+          () => base(command, { ...options, signal: controller.signal }),
+          (reason) => controller.abort(reason),
+        )
+      } finally {
+        options.signal?.removeEventListener('abort', relayAbort)
+      }
+    }
+  }
+
+  async scenario<T>(body: () => Promise<T>): Promise<T> {
+    const guard = new Promise<never>((_, reject) => {
+      this.scenarioTimer = setTimeout(() => {
+        const error = new Error(
+          `scenario exceeded ${this.options.scenarioMs}ms while ${this.activeOperation}`,
+        )
+        this.activeAbort?.(error)
+        reject(error)
+      }, this.options.scenarioMs)
+    })
+    try {
+      return await Promise.race([body(), guard])
+    } finally {
+      this.dispose()
+    }
+  }
+
+  private dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    if (this.scenarioTimer !== undefined) clearTimeout(this.scenarioTimer)
+    for (const timer of this.operationTimers) clearTimeout(timer)
+    this.operationTimers.clear()
+  }
+}
+
+function withTrackedScenario<T>(
+  options: DeadlineOptions,
+  body: (tracker: OperationTracker) => Promise<T>,
+) {
+  const tracker = new OperationTracker(options)
+  return tracker.scenario(() => body(tracker))
+}
+
+function realGitScenario<T>(body: (tracker: OperationTracker) => Promise<T>): Promise<T> {
+  expect(REAL_OPERATION_TIMEOUT_MS).toBeLessThan(REAL_SCENARIO_TIMEOUT_MS)
+  expect(REAL_SCENARIO_TIMEOUT_MS).toBeLessThan(REAL_TEST_TIMEOUT_MS)
+  return withTrackedScenario(
+    { operationMs: REAL_OPERATION_TIMEOUT_MS, scenarioMs: REAL_SCENARIO_TIMEOUT_MS },
+    body,
+  )
+}
+
+async function detachedReadinessFixture(
+  tracker: OperationTracker,
+  config = `baseBranch = "main"
+[commands]
+setup = "printf ready > setup-marker"
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+): Promise<{ repo: string; config: string; exec: Exec }> {
+  const repo = await mkdtemp(join(tmpdir(), 'ab-local-readiness-'))
+  roots.push(repo)
+  await writeFile(join(repo, 'autobuild.toml'), config)
+  const exec = tracker.exec(spawnExec)
+  for (const command of [
+    ['git', 'init', '-b', 'main'],
+    ['git', 'config', 'user.email', 'test@example.com'],
+    ['git', 'config', 'user.name', 'Test'],
+    ['git', 'add', 'autobuild.toml'],
+    ['git', 'commit', '-m', 'setup'],
+  ]) {
+    const result = await exec(command, { cwd: repo })
+    expect(result.exitCode, result.stderr).toBe(0)
+  }
+  return { repo, config, exec }
+}
+
+async function expectSingleWorktree(repo: string, exec: Exec): Promise<void> {
+  const worktrees = await exec(['git', 'worktree', 'list', '--porcelain'], { cwd: repo })
+  expect(worktrees.stdout.match(/^worktree /gm)).toHaveLength(1)
+}
+
 interface TreeEntry {
   kind: 'directory' | 'file'
   size: number
@@ -122,6 +273,32 @@ function readOnlyStore(calls: string[]): BuildStore {
       },
     },
   ) as unknown as BuildStore
+}
+
+function trackedRuntime(tracker: OperationTracker): RuntimeRegistry {
+  return {
+    fake: {
+      runner,
+      servesModels: [],
+      initUsable: () =>
+        tracker.run('runtime fake usability probe', async () => ({
+          usable: true,
+          reason: 'ready',
+        })),
+    },
+  }
+}
+
+function trackedReadOnlyStore(tracker: OperationTracker, calls: string[]): BuildStore {
+  const store = readOnlyStore(calls)
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      if (property === 'listBuilds')
+        return () => tracker.run('Store listBuilds', () => target.listBuilds())
+      if (property === 'close') return () => tracker.run('Store close', () => target.close())
+      return Reflect.get(target, property, receiver)
+    },
+  })
 }
 
 const completeVercelPreflightEnv: Record<string, string | undefined> = {
@@ -981,118 +1158,160 @@ readyState = "ready"
     }
   })
 
-  test('validates and removes a detached local worktree without changing config bytes', async () => {
-    const repo = await mkdtemp(join(tmpdir(), 'ab-local-readiness-'))
-    roots.push(repo)
-    const config = `baseBranch = "main"
-[commands]
-setup = "printf ready > setup-marker"
-[roles.default]
-runtime = "fake"
-[tickets]
-source = "file"
-readyState = "ready"
-`
-    await writeFile(join(repo, 'autobuild.toml'), config)
-    for (const command of [
-      ['git', 'init', '-b', 'main'],
-      ['git', 'config', 'user.email', 'test@example.com'],
-      ['git', 'config', 'user.name', 'Test'],
-      ['git', 'add', 'autobuild.toml'],
-      ['git', 'commit', '-m', 'setup'],
-    ]) {
-      const result = await spawnExec(command, { cwd: repo })
-      expect(result.exitCode, result.stderr).toBe(0)
-    }
-    const calls: string[] = []
-    const report = await validateInitReadiness({
-      targetRepo: repo,
-      env: {},
-      exec: spawnExec,
-      runtimes: {
-        fake: {
-          runner,
-          servesModels: [],
-          initUsable: async ({ cwd }) => ({
-            usable: (await readFile(join(cwd, 'setup-marker'), 'utf8')) === 'ready',
-            reason: 'ready',
+  test(
+    'validates and removes a detached local worktree without changing config bytes',
+    () =>
+      realGitScenario(async (tracker) => {
+        const { repo, config, exec } = await detachedReadinessFixture(tracker)
+        const calls: string[] = []
+        const report = await validateInitReadiness({
+          targetRepo: repo,
+          env: {},
+          exec,
+          runtimes: {
+            fake: {
+              runner,
+              servesModels: [],
+              initUsable: ({ cwd }) =>
+                tracker.run('runtime fake usability probe', async () => ({
+                  usable: (await readFile(join(cwd, 'setup-marker'), 'utf8')) === 'ready',
+                  reason: 'ready',
+                })),
+            },
+          },
+          openStore: () => trackedReadOnlyStore(tracker, calls),
+        })
+        expect(report.exitCode).toBe(0)
+        expect(await readFile(join(repo, 'autobuild.toml'), 'utf8')).toBe(config)
+        await expectSingleWorktree(repo, exec)
+        expect(calls).toEqual(['listBuilds', 'close'])
+      }),
+    REAL_TEST_TIMEOUT_MS,
+  )
+
+  test(
+    'rejects dirty configuration and removes the detached local worktree',
+    () =>
+      realGitScenario(async (tracker) => {
+        const { repo, config, exec } = await detachedReadinessFixture(tracker)
+        const changed = `${config}# local-only edit\n`
+        await writeFile(join(repo, 'autobuild.toml'), changed)
+        await expect(
+          validateInitReadiness({
+            targetRepo: repo,
+            env: {},
+            exec,
+            runtimes: usableRuntime,
+            openStore: () => readOnlyStore([]),
           }),
-        },
-      },
-      openStore: () => readOnlyStore(calls),
-    })
-    expect(report.exitCode).toBe(0)
-    expect(await readFile(join(repo, 'autobuild.toml'), 'utf8')).toBe(config)
-    const worktrees = await spawnExec(['git', 'worktree', 'list', '--porcelain'], { cwd: repo })
-    expect(worktrees.stdout.match(/^worktree /gm)).toHaveLength(1)
-    expect(calls).toEqual(['listBuilds', 'close'])
-
-    const changed = `${config}# local-only edit\n`
-    await writeFile(join(repo, 'autobuild.toml'), changed)
-    await expect(
-      validateInitReadiness({
-        targetRepo: repo,
-        env: {},
-        exec: spawnExec,
-        runtimes: {
-          fake: { runner, servesModels: [], initUsable: async () => true },
-        },
-        openStore: () => readOnlyStore([]),
+        ).rejects.toThrow('differs from committed main')
+        expect(await readFile(join(repo, 'autobuild.toml'), 'utf8')).toBe(changed)
+        await expectSingleWorktree(repo, exec)
       }),
-    ).rejects.toThrow('differs from committed main')
-    expect(await readFile(join(repo, 'autobuild.toml'), 'utf8')).toBe(changed)
-    const afterFailure = await spawnExec(['git', 'worktree', 'list', '--porcelain'], { cwd: repo })
-    expect(afterFailure.stdout.match(/^worktree /gm)).toHaveLength(1)
+    REAL_TEST_TIMEOUT_MS,
+  )
 
-    await writeFile(join(repo, 'autobuild.toml'), config)
-    const cleanupFailExec: Exec = async (command, options) => {
-      const result = await spawnExec(command, options)
-      return command.includes('remove')
-        ? { ...result, exitCode: 1, stderr: 'simulated cleanup denial' }
-        : result
-    }
-    await expect(
-      validateInitReadiness({
-        targetRepo: repo,
-        env: {},
-        exec: cleanupFailExec,
-        runtimes: {
-          fake: { runner, servesModels: [], initUsable: async () => true },
-        },
-        openStore: () => readOnlyStore([]),
+  test(
+    'reports cleanup failure after removing the detached local worktree registration',
+    () =>
+      realGitScenario(async (tracker) => {
+        const { repo, config } = await detachedReadinessFixture(tracker)
+        const cleanupFailExec: Exec = async (command, options) => {
+          const result = await spawnExec(command, options)
+          return command.includes('remove')
+            ? { ...result, exitCode: 1, stderr: 'simulated cleanup denial' }
+            : result
+        }
+        const exec = tracker.exec(cleanupFailExec)
+        await expect(
+          validateInitReadiness({
+            targetRepo: repo,
+            env: {},
+            exec,
+            runtimes: trackedRuntime(tracker),
+            openStore: () => trackedReadOnlyStore(tracker, []),
+          }),
+        ).rejects.toThrow('simulated cleanup denial')
+        expect(await readFile(join(repo, 'autobuild.toml'), 'utf8')).toBe(config)
+        await expectSingleWorktree(repo, exec)
       }),
-    ).rejects.toThrow('simulated cleanup denial')
-    const afterCleanupFailure = await spawnExec(['git', 'worktree', 'list', '--porcelain'], {
-      cwd: repo,
-    })
-    expect(afterCleanupFailure.stdout.match(/^worktree /gm)).toHaveLength(1)
+    REAL_TEST_TIMEOUT_MS,
+  )
 
-    const slowConfig = config.replace('setup = "printf ready > setup-marker"', 'setup = "sleep 10"')
-    await writeFile(join(repo, 'autobuild.toml'), slowConfig)
-    await spawnExec(['git', 'add', 'autobuild.toml'], { cwd: repo })
-    await spawnExec(['git', 'commit', '-m', 'slow setup'], { cwd: repo })
-    const controller = new AbortController()
-    const cancellingExec: Exec = async (command, options) => {
-      if (command[0] === 'sh') setTimeout(() => controller.abort(new Error('local cancelled')), 10)
-      return spawnExec(command, options)
-    }
-    await expect(
-      validateInitReadiness({
-        targetRepo: repo,
-        env: {},
-        exec: cancellingExec,
-        signal: controller.signal,
-        runtimes: {
-          fake: { runner, servesModels: [], initUsable: async () => true },
-        },
-        openStore: () => readOnlyStore([]),
+  test(
+    'cancels setup deterministically and removes the detached local worktree',
+    () =>
+      realGitScenario(async (tracker) => {
+        const { repo, config } = await detachedReadinessFixture(tracker)
+        const controller = new AbortController()
+        let markSetupStarted: () => void = () => {}
+        const setupStarted = new Promise<void>((resolve) => {
+          markSetupStarted = resolve
+        })
+        const cancellationExec: Exec = (command, options) => {
+          if (command[0] !== 'sh') return spawnExec(command, options)
+          markSetupStarted()
+          return new Promise((_, reject) => {
+            const rejectCancellation = () =>
+              reject(options.signal?.reason ?? new Error('setup cancelled'))
+            if (options.signal?.aborted) rejectCancellation()
+            else options.signal?.addEventListener('abort', rejectCancellation, { once: true })
+          })
+        }
+        const exec = tracker.exec(cancellationExec)
+        const validation = validateInitReadiness({
+          targetRepo: repo,
+          env: {},
+          exec,
+          signal: controller.signal,
+          runtimes: usableRuntime,
+          openStore: () => readOnlyStore([]),
+        })
+        await setupStarted
+        controller.abort(new Error('local cancelled'))
+        await expect(validation).rejects.toThrow('local cancelled')
+        expect(await readFile(join(repo, 'autobuild.toml'), 'utf8')).toBe(config)
+        await expectSingleWorktree(repo, exec)
       }),
-    ).rejects.toThrow('local cancelled')
-    const afterCancellation = await spawnExec(['git', 'worktree', 'list', '--porcelain'], {
-      cwd: repo,
-    })
-    expect(afterCancellation.stdout.match(/^worktree /gm)).toHaveLength(1)
-  }, 30_000)
+    REAL_TEST_TIMEOUT_MS,
+  )
+
+  test(
+    'operation deadlines identify stalled setup, runtime, Store, and cleanup seams',
+    async () => {
+      const never = () => new Promise<never>(() => {})
+      for (const exercise of [
+        (tracker: OperationTracker) => tracker.exec(async () => never())(['sh', '-c', 'setup'], {}),
+        (tracker: OperationTracker) =>
+          tracker.exec(async () => never())(['git', 'rev-parse', '--verify', 'main^{commit}'], {}),
+        (tracker: OperationTracker) => tracker.run('runtime fake usability probe', never),
+        (tracker: OperationTracker) => tracker.run('Store listBuilds', never),
+        (tracker: OperationTracker) => tracker.run('Store close', never),
+        (tracker: OperationTracker) =>
+          tracker.exec(async () => never())(['git', 'worktree', 'remove', '--force', '/fake'], {}),
+      ]) {
+        await expect(
+          withTrackedScenario({ operationMs: 20, scenarioMs: 200 }, exercise),
+        ).rejects.toThrow(
+          /(setup: sh -c setup|git rev-parse|runtime fake usability probe|Store (listBuilds|close)|git worktree remove).*20ms operation deadline/,
+        )
+      }
+    },
+    FAKE_TEST_TIMEOUT_MS,
+  )
+
+  test(
+    'scenario deadline identifies the active operation after cumulative latency',
+    () =>
+      expect(
+        withTrackedScenario({ operationMs: 30, scenarioMs: 55 }, async (tracker) => {
+          await tracker.run('first bounded operation', () => Bun.sleep(20))
+          await tracker.run('second bounded operation', () => Bun.sleep(20))
+          await tracker.run('runtime fallback probe', () => new Promise<never>(() => {}))
+        }),
+      ).rejects.toThrow('scenario exceeded 55ms while runtime fallback probe'),
+    FAKE_TEST_TIMEOUT_MS,
+  )
 
   test('CLI routes --validate sessionlessly and rejects --force with it', async () => {
     const calls: string[] = []
