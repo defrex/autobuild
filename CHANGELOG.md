@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#279](https://github.com/defrex/autobuild/pull/279) — Refresh infrastructure escalation deduplication
 - [#278](https://github.com/defrex/autobuild/pull/278) — Unify infrastructure failure-budget accounting
 - [#277](https://github.com/defrex/autobuild/pull/277) — Recover and clean up Vercel sandbox builds
 - [#276](https://github.com/defrex/autobuild/pull/276) — Reject non-canonical Vercel Sandbox image digests
