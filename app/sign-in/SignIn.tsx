@@ -31,10 +31,6 @@ export function SignIn({ providers, error }: { providers: readonly string[]; err
         <h1 className="masthead-copy title">
           <span>Autobuild operator</span>
         </h1>
-        <p className="masthead-copy imperative" data-tone={error ? 'alert' : undefined}>
-          {error && <span>REFUSED</span>}
-        </p>
-        <span className="clock" aria-hidden />
       </header>
       <div className="signin-centre">
         <section className="card" aria-labelledby="signin-title">

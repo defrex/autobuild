@@ -4,6 +4,7 @@ import type { OperatorAnswerRequest, OperatorBuildControlRequest } from 'autobui
 import {
   buildActionAvailability,
   type DashboardBuild,
+  repositoryActionAvailability,
   type DashboardHarvest,
   type DashboardModel,
   type TranscriptPresentation,
@@ -44,6 +45,23 @@ interface RowControlKeyEvent {
   key: string
   preventDefault: () => void
   stopPropagation: () => void
+}
+
+interface RowClickTarget {
+  closest: (selectors: string) => unknown
+}
+
+/**
+ * Whether a pointer click landed on the row itself rather than on a control,
+ * a link, a field, or the unfolded detail. Only such clicks toggle detail, so
+ * every explicit action keeps its own meaning.
+ */
+export function isRowSurfaceClick(target: RowClickTarget | null, selectedText = ''): boolean {
+  if (selectedText.length > 0) return false
+  return (
+    target?.closest('button, a[href], input, select, textarea, label, .detail, .answer-step') ==
+    null
+  )
 }
 
 /** Keep button activation from also reaching dashboard shortcuts; Esc cancels local abort. */
@@ -180,9 +198,9 @@ export function BuildsView(props: BuildsViewProps) {
     selection?.kind === 'build'
       ? model.builds.find((row) => row.slug === selection.slug)
       : undefined
-  const focused =
-    selection !== undefined &&
-    (selection.kind === 'harvest' ? model.harvest !== undefined : selectedBuild !== undefined)
+  // Focus by dimming only while a build's detail is unfolded; a bare
+  // selection (or a closed detail) leaves every row at full color.
+  const focused = detailOpen && selectedBuild !== undefined
   return (
     <DashboardSurface>
       {(model.warningLines?.length || model.availableUpgrade) && (
@@ -214,7 +232,7 @@ export function BuildsView(props: BuildsViewProps) {
             hasTicketColumn={widths.ticket > 0}
             selected={selection?.kind === 'harvest'}
             hovered={hoverPreview?.kind === 'harvest'}
-            dimmed={focused && selection?.kind !== 'harvest'}
+            dimmed={focused}
             pending={props.pending}
             onPointerEnter={preview({ kind: 'harvest' })}
             onActivate={props.onActivate}
@@ -259,6 +277,7 @@ export interface DispatcherControlsProps {
   pending?: string
   onSetting: (name: 'intake' | 'auto-merge-default', enabled: boolean) => void
   onHarvest: (body: HarvestControl) => void
+  onBulk: (action: 'pause' | 'resume') => void
 }
 
 /** Builds facts and settings composed into the shell's shared control line. */
@@ -267,8 +286,10 @@ export function DispatcherControls({
   pending,
   onSetting,
   onHarvest,
+  onBulk,
 }: DispatcherControlsProps) {
   const busy = pending !== undefined
+  const repository = repositoryActionAvailability(model)
   return (
     <>
       <span className="control-item fact-item">
@@ -294,37 +315,53 @@ export function DispatcherControls({
         </span>
       </span>
       {model.repositoryPaused && (
-        <span className="control-item repository-state">
-          repository <b className="off">PAUSED</b>
+        <span className="control-item toggle repository-state">
+          repository<b className="off">PAUSED</b>
         </span>
       )}
       <button
         type="button"
-        className="word control-item"
+        className="word control-item toggle"
         disabled={busy}
         onClick={() => onSetting('intake', model.drained)}
       >
-        intake <b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
+        intake<b className={model.drained ? 'off' : 'on'}>{model.drained ? 'OFF' : 'ON'}</b>
       </button>
       <button
         type="button"
-        className="word control-item"
+        className="word control-item toggle"
         disabled={busy}
         onClick={() => onSetting('auto-merge-default', !model.defaultAutoMerge)}
       >
-        auto merge{' '}
+        auto merge
         <b className={model.defaultAutoMerge ? 'on' : 'off'}>
           {model.defaultAutoMerge ? 'ON' : 'OFF'}
         </b>
       </button>
       <button
         type="button"
-        className="word control-item"
+        className="word control-item toggle"
         disabled={busy}
         onClick={() => onHarvest({ action: 'toggle-gate' })}
       >
-        harvest{' '}
+        harvest
         <b className={model.harvestPaused ? 'off' : 'on'}>{model.harvestPaused ? 'OFF' : 'ON'}</b>
+      </button>
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy || !repository.bulkPause}
+        onClick={() => onBulk('pause')}
+      >
+        pause all
+      </button>
+      <button
+        type="button"
+        className="word control-item"
+        disabled={busy || !repository.bulkResume}
+        onClick={() => onBulk('resume')}
+      >
+        resume all
       </button>
     </>
   )
@@ -354,6 +391,7 @@ function HarvestRow({
   onRowHarvest: BuildsViewProps['onRowHarvest']
 }) {
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the row surface is a pointer convenience; the title button is the keyboard path
     <li
       className="row harvest"
       data-status={harvest.status}
@@ -361,6 +399,10 @@ function HarvestRow({
       data-hovered={hovered || undefined}
       data-dimmed={dimmed || undefined}
       onPointerEnter={onPointerEnter}
+      onClick={(event) => {
+        if (isRowSurfaceClick(event.target as Element, window.getSelection()?.toString()))
+          onActivate({ kind: 'harvest' })
+      }}
     >
       <div className="rowline">
         <span className="lane" aria-hidden />
@@ -382,6 +424,17 @@ function HarvestRow({
           )}
         </button>
         <span className="tokens">
+          {harvest.action && (
+            <button
+              type="button"
+              className="word run-action"
+              disabled={pending !== undefined}
+              aria-label={`${harvest.action.toUpperCase()} Harvest run ${harvest.run}`}
+              onClick={() => onRowHarvest({ action: 'run', run: harvest.run })}
+            >
+              {harvest.action.toUpperCase()}
+            </button>
+          )}
           <span className="slack">
             {harvest.rounds} {harvest.rounds === 1 ? 'round' : 'rounds'}
           </span>
@@ -389,24 +442,6 @@ function HarvestRow({
         <span className="status" data-status={harvest.status}>
           <Flash value={harvest.status}>{harvest.status.toUpperCase()}</Flash>
         </span>
-      </div>
-      <div
-        className="row-controls"
-        role="toolbar"
-        aria-label={`Controls for Harvest run ${harvest.run}`}
-        onKeyDown={(event) => handleRowControlKey(event)}
-      >
-        {harvest.action && (
-          <button
-            type="button"
-            className="word row-control"
-            disabled={pending !== undefined}
-            aria-label={`${harvest.action.toUpperCase()} Harvest run ${harvest.run}`}
-            onClick={() => onRowHarvest({ action: 'run', run: harvest.run })}
-          >
-            {harvest.action.toUpperCase()}
-          </button>
-        )}
       </div>
       <StepLine steps={harvest.steps} now={now} label="Harvest pipeline" />
       {harvest.detail !== undefined && (
@@ -470,13 +505,13 @@ function BuildRow({
   const tone = statusTone(row.status)
   const ceiling = reviewCeilingText(row)
   const detailId = `detail-${encodeURIComponent(row.slug)}`
-  const abortConfirmationId = `abort-confirmation-${encodeURIComponent(row.slug)}`
   const open = selected && detailOpen
   const answering = selected && answerStep?.slug === row.slug
   const held = model.repositoryPaused && row.status === 'queued'
   const autoMergeAvailable = buildActionAvailability(row).autoMerge
   const autoMergeOn = row.autoMerge === 'requested' || row.autoMerge === 'enabled'
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the row surface is a pointer convenience; the title button is the keyboard path
     <li
       className="row"
       id={`build-${encodeURIComponent(row.slug)}`}
@@ -485,6 +520,13 @@ function BuildRow({
       data-hovered={hovered || undefined}
       data-dimmed={dimmed || undefined}
       onPointerEnter={onPointerEnter}
+      onClick={(event) => {
+        if (
+          !answering &&
+          isRowSurfaceClick(event.target as Element, window.getSelection()?.toString())
+        )
+          onRowToggleDetail(row.slug)
+      }}
     >
       <div className="rowline">
         <span className="lane" aria-hidden />
@@ -545,93 +587,6 @@ function BuildRow({
       {row.blockers.map((blocker) => (
         <MessagePreview key={blocker} value={blocker} tone="alert" expandable />
       ))}
-      <div
-        className="row-controls"
-        role="toolbar"
-        aria-label={`Controls for ${row.slug}`}
-        aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
-        onKeyDown={(event) =>
-          handleRowControlKey(
-            event,
-            answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
-          )
-        }
-      >
-        {answering ? (
-          <>
-            <button
-              type="button"
-              className="word row-control"
-              disabled={pending !== undefined || answerPending}
-              aria-label={`SUBMIT answer for ${row.slug}`}
-              onClick={onSubmitAnswerStep}
-            >
-              SUBMIT
-            </button>
-            <button
-              type="button"
-              className="word row-control"
-              disabled={pending !== undefined || answerPending}
-              aria-label={`CANCEL answer for ${row.slug}`}
-              onClick={onCancelAnswerStep}
-            >
-              CANCEL
-            </button>
-          </>
-        ) : confirmingAbort ? (
-          <>
-            <button
-              type="button"
-              className="word row-control"
-              disabled={pending !== undefined}
-              aria-label={`CONFIRM ABORT ${row.slug}`}
-              onClick={() => onRowBuildControl(row.slug, 'abort')}
-            >
-              CONFIRM ABORT
-            </button>
-            <button
-              type="button"
-              className="word row-control"
-              disabled={pending !== undefined}
-              aria-label={`CANCEL abort ${row.slug}`}
-              onClick={onCancelAbort}
-            >
-              CANCEL
-            </button>
-          </>
-        ) : (
-          buildRowActions(row).map((control) => (
-            <button
-              type="button"
-              className="word row-control"
-              key={control.action}
-              disabled={pending !== undefined}
-              aria-label={`${control.label} ${row.slug}`}
-              onClick={() => {
-                if (control.action === 'request-abort') onRowRequestAbort(row.slug)
-                else onRowBuildControl(row.slug, control.action)
-              }}
-            >
-              {control.label}
-            </button>
-          ))
-        )}
-      </div>
-      {selected && confirmingAbort && (
-        <p className="message alert" id={abortConfirmationId} role="status">
-          <span aria-hidden>! </span>abort {row.slug}? Enter confirms, Esc cancels
-        </p>
-      )}
-      {selected && answerStep?.slug === row.slug && (
-        <BlockedAnswerStep
-          blocker={row.blockers[0] ?? `Answer required for ${row.slug}.`}
-          input={answerStep.input}
-          pending={answerPending}
-          onInput={onAnswerStepInput}
-          onSubmit={onSubmitAnswerStep}
-          onCancel={onCancelAnswerStep}
-        />
-      )}
       {open && (
         <BuildDetail
           id={detailId}
@@ -639,6 +594,15 @@ function BuildRow({
           now={now}
           pending={pending}
           transcript={transcript}
+          confirmingAbort={confirmingAbort}
+          answerStep={answering ? answerStep : undefined}
+          answerPending={answerPending}
+          onRowBuildControl={onRowBuildControl}
+          onRowRequestAbort={onRowRequestAbort}
+          onCancelAbort={onCancelAbort}
+          onAnswerStepInput={onAnswerStepInput}
+          onSubmitAnswerStep={onSubmitAnswerStep}
+          onCancelAnswerStep={onCancelAnswerStep}
           onAnswer={onAnswer}
           onTranscript={onTranscript}
           onClose={() => onRowToggleDetail(row.slug)}
@@ -710,6 +674,15 @@ function BuildDetail({
   now,
   pending,
   transcript,
+  confirmingAbort,
+  answerStep,
+  answerPending,
+  onRowBuildControl,
+  onRowRequestAbort,
+  onCancelAbort,
+  onAnswerStepInput,
+  onSubmitAnswerStep,
+  onCancelAnswerStep,
   onAnswer,
   onTranscript,
   onClose,
@@ -719,10 +692,21 @@ function BuildDetail({
   now: number
   pending?: string
   transcript?: TranscriptPresentation
+  confirmingAbort: boolean
+  answerStep?: BuildsViewProps['answerStep']
+  answerPending: boolean
+  onRowBuildControl: BuildsViewProps['onRowBuildControl']
+  onRowRequestAbort: BuildsViewProps['onRowRequestAbort']
+  onCancelAbort: BuildsViewProps['onCancelAbort']
+  onAnswerStepInput: BuildsViewProps['onAnswerStepInput']
+  onSubmitAnswerStep: BuildsViewProps['onSubmitAnswerStep']
+  onCancelAnswerStep: BuildsViewProps['onCancelAnswerStep']
   onAnswer: BuildsViewProps['onAnswer']
   onTranscript: BuildsViewProps['onTranscript']
   onClose: () => void
 }) {
+  const answering = answerStep !== undefined
+  const abortConfirmationId = `abort-confirmation-${encodeURIComponent(build.slug)}`
   const [resolution, setResolution] = useState<AnswerChoice>('guidance')
   const [text, setText] = useState('')
   const [ceiling, setCeiling] = useState(1)
@@ -750,7 +734,6 @@ function BuildDetail({
 
   return (
     <article className="detail" id={id} aria-label={`${build.slug} detail`}>
-      <Rule />
       <div className="kv">
         {build.ticketId && (
           <span>
@@ -782,6 +765,100 @@ function BuildDetail({
         )}
         {build.alsoPaused && <span className="warn">(paused)</span>}
       </div>
+
+      <section className="section">
+        <h3>Actions</h3>
+        {confirmingAbort && (
+          <p className="message alert" id={abortConfirmationId} role="status">
+            <span aria-hidden>! </span>abort {build.slug}? Enter confirms, Esc cancels
+          </p>
+        )}
+        {answerStep && (
+          <BlockedAnswerStep
+            blocker={build.blockers[0] ?? `Answer required for ${build.slug}.`}
+            input={answerStep.input}
+            pending={answerPending}
+            onInput={onAnswerStepInput}
+            onSubmit={onSubmitAnswerStep}
+            onCancel={onCancelAnswerStep}
+          />
+        )}
+        <div
+          className="controls actions"
+          role="toolbar"
+          aria-label={`Controls for ${build.slug}`}
+          aria-describedby={confirmingAbort ? abortConfirmationId : undefined}
+          onKeyDown={(event) =>
+            handleRowControlKey(
+              event,
+              answering ? onCancelAnswerStep : confirmingAbort ? onCancelAbort : undefined,
+            )
+          }
+        >
+          {answering ? (
+            <>
+              <button
+                type="button"
+                className="word action"
+                disabled={busy || answerPending}
+                aria-label={`SUBMIT answer for ${build.slug}`}
+                onClick={onSubmitAnswerStep}
+              >
+                SUBMIT
+              </button>
+              <button
+                type="button"
+                className="word action"
+                disabled={busy || answerPending}
+                aria-label={`CANCEL answer for ${build.slug}`}
+                onClick={onCancelAnswerStep}
+              >
+                CANCEL
+              </button>
+            </>
+          ) : confirmingAbort ? (
+            <>
+              <button
+                type="button"
+                className="word action"
+                disabled={busy}
+                aria-label={`CONFIRM ABORT ${build.slug}`}
+                onClick={() => onRowBuildControl(build.slug, 'abort')}
+              >
+                CONFIRM ABORT
+              </button>
+              <button
+                type="button"
+                className="word action"
+                disabled={busy}
+                aria-label={`CANCEL abort ${build.slug}`}
+                onClick={onCancelAbort}
+              >
+                CANCEL
+              </button>
+            </>
+          ) : (
+            buildRowActions(build).map((control) => (
+              <button
+                type="button"
+                className="word action"
+                key={control.action}
+                disabled={busy}
+                aria-label={`${control.label} ${build.slug}`}
+                onClick={() => {
+                  if (control.action === 'request-abort') onRowRequestAbort(build.slug)
+                  else onRowBuildControl(build.slug, control.action)
+                }}
+              >
+                {control.label}
+              </button>
+            ))
+          )}
+          {buildRowActions(build).length === 0 && !answering && !confirmingAbort && (
+            <span className="slack">no actions available</span>
+          )}
+        </div>
+      </section>
 
       {build.abortProgress !== undefined ? (
         <section className="section">
@@ -923,8 +1000,8 @@ function BuildDetail({
       </section>
 
       <div className="controls">
-        <button type="button" className="word" onClick={onClose}>
-          close detail
+        <button type="button" className="word" aria-label="Close detail" onClick={onClose}>
+          <span aria-hidden>× </span>close
         </button>
       </div>
       <Rule />

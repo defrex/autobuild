@@ -1,14 +1,12 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import type { Imperative } from './imperative'
+import { Menu } from './Menu'
 
 export interface OperatorShellProps {
   repo: string
   repositories: readonly string[]
   identity: string
-  /** The one word the header carries, or nothing when nothing needs a human. */
-  imperative?: Imperative
   /** The last poll's wall clock, formatted; absent before the first frame. */
   clock?: string
   pending?: boolean
@@ -22,14 +20,14 @@ export interface OperatorShellProps {
 
 /**
  * The frame every operator page shares: a one-row masthead carrying the
- * repository, one imperative, and the poll clock; then the control line.
- * Pure presentation so a fixture can render the same frame the operator sees.
+ * repository title and the account menu; then the control line
+ * with the poll clock pinned right. Pure presentation so a fixture can render
+ * the same frame the operator sees.
  */
 export function OperatorShell({
   repo,
   repositories,
   identity,
-  imperative,
   clock,
   pending,
   error,
@@ -44,23 +42,11 @@ export function OperatorShell({
         <h1 className="masthead-copy title">
           <span>{repo || 'no repository configured'}</span>
         </h1>
-        <p
-          className="masthead-copy imperative"
-          data-tone={imperative?.tone}
-          aria-live="polite"
-          aria-atomic
-        >
-          {imperative && (
-            <span>
-              {imperative.word}
-              {imperative.count > 1 ? ` ×${imperative.count}` : ''}
-            </span>
-          )}
-        </p>
-        <span className="clock" data-pending={pending ? '' : undefined}>
-          <span className="sr-only">last poll </span>
-          {clock ?? '--:--:--'}
-        </span>
+        <Menu
+          className="account"
+          label={<span className="identity">{identity}</span>}
+          items={[{ label: 'sign out', onSelect: onSignOut }]}
+        />
       </header>
       <nav className="line navline" aria-label="Operator controls">
         {repositories.length > 1 && (
@@ -77,11 +63,9 @@ export function OperatorShell({
         )}
         {controls}
         <span className="spacer" />
-        <span className="identity">
-          <span>{identity}</span>
-          <button type="button" className="word" onClick={onSignOut}>
-            sign out
-          </button>
+        <span className="clock" data-pending={pending ? '' : undefined}>
+          <span className="sr-only">last poll </span>
+          {clock ?? '--:--:--'}
         </span>
       </nav>
       <div className="shell-body">
