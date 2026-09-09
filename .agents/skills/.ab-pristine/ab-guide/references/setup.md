@@ -95,9 +95,14 @@ For Vercel it identifies and permanently deletes a fresh unnamed sandbox, even
 when setup or a probe fails; cleanup failures name the environment for manual
 deletion. It runs `commands.setup`, loads repository plugins, checks every
 selected primary/alternate runtime and model, and performs a read-only Store
-request in the candidate execution context. It never silently falls back from
-Vercel to local execution. Local launcher probes printed by ordinary `ab init`
-are only setup-agent discovery and are not remote readiness evidence.
+request in the candidate execution context. If the local database is absent,
+validation reports that no repository history is available without creating
+`.autobuild` or any SQLite files. If it exists, validation copies the database
+and any WAL/SHM sidecars to a disposable filesystem snapshot and inspects that
+copy without SQLite-opening or modifying the repository Store files. It never
+silently falls back from Vercel to local execution. Local launcher probes
+printed by ordinary `ab init` are only setup-agent discovery and are not remote
+readiness evidence.
 
 Typical remediation is intentionally specific: add a missing executable to the
 setup command while retaining the universal image; add a runtime credential name to

@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { Config } from '../config/schema'
 import { vercelSandboxConfigSchema } from '../config/schema'
 import { loadConfig } from '../config/load'
@@ -13,15 +13,16 @@ import { type VercelSandboxFacade, validateVercelSandbox } from '../ports/worksp
 import { loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
+import { inspectLocalStoreSnapshot } from '../store/local/store'
 import type { StoreOpener } from './store-opening'
 import { openProductionStore } from './store-opening'
-import { resolveMainRepo, resolveRepoStatePaths } from './repo-state'
+import { isRemoteStoreRef, resolveMainRepo, resolveRepoStatePaths } from './repo-state'
 
 export const INIT_PROBE_MARKER = 'AB_INIT_READINESS_V1='
 
 export interface ReadinessCheck {
   name: string
-  status: 'pass' | 'fail'
+  status: 'pass' | 'fail' | 'absent'
   detail: string
 }
 
@@ -218,6 +219,30 @@ export async function runGuestReadinessProbe(opts: {
       status: 'fail',
       detail: 'AB_STORE is missing; configure the Store used by builds',
     })
+  } else if (opts.openStore === undefined && !isRemoteStoreRef(storeRef)) {
+    const localRoot = resolve(opts.repo, storeRef)
+    try {
+      const inspection = await inspectLocalStoreSnapshot(localRoot)
+      if (inspection.status === 'absent') {
+        checks.push({
+          name: 'BuildStore',
+          status: 'absent',
+          detail: `${inspection.databasePath} does not exist; no repository history was available to inspect and no Store was created`,
+        })
+      } else {
+        checks.push({
+          name: 'BuildStore',
+          status: 'pass',
+          detail: `${inspection.buildCount} readable build record(s) in a disposable snapshot of ${inspection.databasePath}`,
+        })
+      }
+    } catch (error) {
+      checks.push({
+        name: 'BuildStore',
+        status: 'fail',
+        detail: `${redact(error)}; verify the local Store database permissions and integrity`,
+      })
+    }
   } else {
     let store: ReturnType<StoreOpener> | undefined
     try {
@@ -519,8 +544,10 @@ export async function validateInitReadiness(opts: {
   }
   if (report.workspace !== undefined)
     stdout(`Disposable environment: ${report.workspace} (released)`)
-  for (const check of report.checks)
-    stdout(`  ${check.status === 'pass' ? 'PASS' : 'FAIL'} ${check.name}: ${redact(check.detail)}`)
+  for (const check of report.checks) {
+    const label = check.status === 'pass' ? 'PASS' : check.status === 'absent' ? 'ABSENT' : 'FAIL'
+    stdout(`  ${label} ${check.name}: ${redact(check.detail)}`)
+  }
   return {
     ...report,
     checks: report.checks.map((check) => ({ ...check, detail: redact(check.detail) })),

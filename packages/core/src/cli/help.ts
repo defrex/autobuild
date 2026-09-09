@@ -63,8 +63,10 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'phase, or session. It uses a disposable detached worktree for git-worktree and a',
       'fresh Vercel Sandbox for vercel-sandbox; the environment is identified and removed.',
       'Setup, plugins, every selected primary/alternate runtime and model, and read-only',
-      'Store access are checked in that execution context. Remote validation never falls',
-      'back locally. --validate cannot be combined with --force.',
+      'Store access are checked in that execution context. An absent local database is reported',
+      'without creating .autobuild; an existing one is inspected through a disposable snapshot',
+      'without opening or modifying its repository files. Remote validation never falls back',
+      'locally. --validate cannot be combined with --force.',
     ]),
   },
   {
