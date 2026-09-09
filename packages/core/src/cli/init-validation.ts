@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { effectiveRuntimeReferences } from '../config/roles'
 import type { Config } from '../config/schema'
 import { vercelSandboxConfigSchema } from '../config/schema'
 import { loadConfig } from '../config/load'
@@ -94,17 +95,21 @@ function effectiveTargets(
   config: Config,
   runtimes: RuntimeRegistry,
 ): Array<{ runtime: string; models: string[] }> {
-  const resolver = createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds)
-  const grouped = new Map<string, Set<string>>()
-  for (const role of new Set(['default', ...Object.keys(config.roles)])) {
-    const resolved = resolver.resolve(role)
-    for (const target of [resolved, ...resolved.alternates]) {
-      const models = grouped.get(target.runtime) ?? new Set<string>()
-      if (target.model !== undefined) models.add(target.model)
-      grouped.set(target.runtime, models)
+  // Preserve eager registry/model/argument validation, but probe only routes
+  // the pipeline can consume rather than every declared role table.
+  createRuntimeResolver(runtimes, config.roles, config.policy.sessionBudgetSeconds)
+  return effectiveRuntimeReferences(config).map((group) => {
+    const defaultModel = runtimes[group.runtime]?.defaultModel
+    return {
+      runtime: group.runtime,
+      models: [
+        ...new Set([
+          ...group.models,
+          ...(group.usesRuntimeDefaultModel && defaultModel !== undefined ? [defaultModel] : []),
+        ]),
+      ].sort(),
     }
-  }
-  return [...grouped].map(([runtime, models]) => ({ runtime, models: [...models].sort() }))
+  })
 }
 
 /** Probe code shared by the detached local worktree and the private sandbox entry. */
@@ -172,6 +177,11 @@ export async function runGuestReadinessProbe(opts: {
     }
   }
 
+  const runtimeRemediation = (runtime: string, preflightOnly: boolean): string =>
+    vercelConfig === undefined
+      ? 'install/authenticate this runtime in the local validation environment'
+      : `fix workspace.config.runtimeProvisioning.${runtime}${preflightOnly ? '.preflight' : ''} and expose API credential names in workspace.config.environmentVariables`
+
   try {
     for (const target of effectiveTargets(config, runtimes)) {
       if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
@@ -195,14 +205,14 @@ export async function runGuestReadinessProbe(opts: {
           status: usable ? 'pass' : 'fail',
           detail: usable
             ? redact(reason)
-            : `${redact(reason)}; install/authenticate this runtime and expose its credential names in workspace.config.environmentVariables`,
+            : `${redact(reason)}; ${runtimeRemediation(target.runtime, true)}`,
         })
       } catch (error) {
         if (opts.signal?.aborted) throw opts.signal.reason ?? error
         checks.push({
           name: `runtime ${target.runtime}`,
           status: 'fail',
-          detail: `${redact(error)}; install and authenticate this runtime in the validation environment`,
+          detail: `${redact(error)}; ${runtimeRemediation(target.runtime, false)}`,
         })
       }
     }
@@ -491,6 +501,7 @@ export async function validateInitReadiness(opts: {
         ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),
         exec,
         ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
+        runtimeReferences: effectiveRuntimeReferences(config),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
         onSandbox: (name) => opts.stdout?.(`Disposable Vercel Sandbox: ${name} (active)`),
       })
@@ -548,6 +559,9 @@ export async function validateInitReadiness(opts: {
     )
     stdout(
       `Guest environment variable names: ${vercelConfig.environmentVariables.join(', ') || '(none)'}`,
+    )
+    stdout(
+      `Runtime provisioning names: ${Object.keys(vercelConfig.runtimeProvisioning).sort().join(', ') || '(none)'}`,
     )
   }
   if (report.workspace !== undefined)

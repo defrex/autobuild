@@ -411,6 +411,69 @@ ${READY}`).workspace
     }
   })
 
+  test('vercel runtime provisioning is open by runtime name, strict by entry, and covers every effective route', () => {
+    const source = `[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+[workspace.config.runtimeProvisioning.pi]
+install = "npm install -g pi@1.2.3"
+preflight = "pi --version"
+[workspace.config.runtimeProvisioning."plugin.runtime"]
+install = "install-plugin@abc123"
+preflight = "plugin-runtime --version"
+[roles.default]
+runtime = "pi"
+alternates = [{ runtime = "plugin.runtime" }]
+${READY}`
+    const parsed = parseConfig(source)
+    expect(
+      Object.keys(vercelSandboxConfigSchema.parse(parsed.workspace.config).runtimeProvisioning),
+    ).toEqual(['pi', 'plugin.runtime'])
+
+    const missing = parseError(
+      source.replace(
+        '[workspace.config.runtimeProvisioning."plugin.runtime"]\ninstall = "install-plugin@abc123"\npreflight = "plugin-runtime --version"\n',
+        '',
+      ),
+    )
+    expect(missing.message).toContain('runtime "plugin.runtime"')
+    expect(missing.message).toContain('role "plan" alternate[0]')
+    expect(missing.message).toContain('[workspace.config.runtimeProvisioning."plugin.runtime"]')
+
+    const controlNameSource = `[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+[roles.default]
+runtime = "plugin\\u007F"
+${READY}`
+    const controlNameError = parseError(controlNameSource)
+    expect(controlNameError.message).toContain(
+      '[workspace.config.runtimeProvisioning."plugin\\u007F"]',
+    )
+    expect(() =>
+      parseConfig(
+        controlNameSource.replace(
+          '[roles.default]',
+          '[workspace.config.runtimeProvisioning."plugin\\u007F"]\ninstall = "install@1"\npreflight = "plugin --version"\n[roles.default]',
+        ),
+      ),
+    ).not.toThrow()
+
+    for (const entry of [
+      'install = ""\npreflight = "pi --version"',
+      'install = "npm install pi@1"',
+      'install = "npm install pi@1"\npreflight = "pi --version"\nunknown = true',
+    ]) {
+      expect(() =>
+        parseConfig(
+          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n[workspace.config.runtimeProvisioning.pi]\n${entry}\n[roles.default]\nruntime = "pi"\n${READY}`,
+        ),
+      ).toThrow(/workspace\.config\.runtimeProvisioning\.pi/)
+    }
+  })
+
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
     expect(parseConfig(READY).forge).toBe('github')
     expect(parseConfig(`forge = "gitlab"\n${READY}`).forge).toBe('gitlab')

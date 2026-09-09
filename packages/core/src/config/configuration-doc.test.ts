@@ -22,6 +22,8 @@ import {
   TOP_LEVEL_TABLES,
   verifyAgentStepSchema,
   verifyCheckStepSchema,
+  vercelSandboxConfigSchema,
+  runtimeProvisioningEntrySchema,
   workspaceSchema,
 } from './schema'
 import { parseConfig } from './load'
@@ -193,12 +195,32 @@ function hasTicketsTable(source: string): boolean {
   return /(?:^|\n)\[tickets\](?:\n|$)/.test(source)
 }
 
+describe('Vercel runtime provisioning documentation', () => {
+  test('covers every built-in and nested provisioning field structurally', () => {
+    const section = headingSection(doc, 3, 'Vercel Sandbox')
+    expectRows(
+      'docs/configuration.md Vercel Sandbox',
+      section,
+      Object.keys(vercelSandboxConfigSchema.shape),
+    )
+    expectRows(
+      'docs/configuration.md runtime provisioning',
+      section,
+      Object.keys(runtimeProvisioningEntrySchema.shape),
+    )
+    expect(section).toContain('@earendil-works/pi-coding-agent@0.84.4')
+    expect(section).toContain('AI_GATEWAY_API_KEY')
+    expect(section).toContain('plugin')
+  })
+})
+
 describe('configuration strictness summaries', () => {
   test('enumerate the same complete open-map surface and its workspace exception', () => {
     const expectedSurfaces = [
       '[commands]',
       '[roles]',
       '[workspace.config]',
+      '[workspace.config.runtimeProvisioning]',
       '[verify.<step>]',
       '[finalize.<step>]',
     ]

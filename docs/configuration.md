@@ -95,7 +95,8 @@ Vercel object names are deterministic and overwritten idempotently.
 Parsing is strict. Unknown top-level keys or tables, unknown fields in a known
 table, fields from the wrong step variant, malformed values, and dangling
 command references are errors. The open maps are `[commands]`, `[roles]`,
-`[workspace.config]`, `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
+`[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
+`[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
 `[workspace.config]` is plugin-owned and passed through unchanged for plugin
 providers; the builtin `git-worktree` provider requires it to be empty, while
@@ -404,7 +405,7 @@ timeoutSeconds = 2700
 operationTimeoutMs = 30000
 region = "iad1"
 failoverRegions = ["sfo1"]
-environmentVariables = ["ANTHROPIC_API_KEY"]
+environmentVariables = ["AI_GATEWAY_API_KEY"]
 provisioning = [
   { name = "system-install", command = """apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y chromium""" },
@@ -413,6 +414,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y chromium""" },
 # Private repositories only:
 gitUsernameEnv = "AB_GIT_READ_USER"
 gitPasswordEnv = "AB_GIT_READ_TOKEN"
+
+[workspace.config.runtimeProvisioning.pi]
+install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
+preflight = "test \"$(pi --version)\" = \"0.84.4\""
 ```
 
 | Vercel field | Default | Constraints |
@@ -423,9 +428,22 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 | `operationTimeoutMs` | `30000` | integer 1000–300000; deadline for each provider acknowledgement, not session lifetime |
 | `region` | Vercel default | nonempty region |
 | `failoverRegions` | `[]` | unique and different from `region` |
-| `environmentVariables` | `[]` | unique variable names copied into agent/check commands |
+| `environmentVariables` | `[]` | unique API-credential variable names copied into runtime and agent/check commands |
 | `provisioning` | `[]` | ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique |
-| `gitUsernameEnv`, `gitPasswordEnv` | — | optional pair naming a dedicated read-only clone identity |
+| `runtimeProvisioning` | `{}` | open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight` |
+| `gitUsernameEnv` | — | optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv` |
+| `gitPasswordEnv` | — | optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv` |
+
+Each `[workspace.config.runtimeProvisioning.<runtime>]` entry is strict:
+
+| Runtime provisioning field | Constraints |
+|---|---|
+| `install` | required nonblank shell command; use an immutable package version, digest, or commit |
+| `preflight` | required nonblank shell command; verify the expected executable and exact version |
+
+Runtime names are not a built-in enum. Plugin registrations work with the same
+map, for example `[workspace.config.runtimeProvisioning.opencode]` with a pinned
+plugin-owned install command and its executable/version preflight.
 
 The built-in adapter supports only Vercel's
 `vercel/sandbox/universal` managed image, selected by its bare/default name, a
@@ -457,18 +475,26 @@ contents write. It must be distinct from Forge and Vercel credentials and may
 not also appear in `environmentVariables`. Autobuild gives its firewall broker
 only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
 helpers, and extra headers after clone, and gives normal sessions no Forge
-credential. Provisioning writes its readiness marker only after all scrubbing, Bun
-verification, every declared system step, distribution installation, and
-dependency bootstrap complete; distribution packing/install disables package lifecycle scripts so
+credential. After Bun verification, every declared system step runs before the
+Autobuild distribution and dependency bootstrap. Then runtime provisioning runs
+each referenced runtime's `install` and `preflight` commands in sorted
+runtime-name order from the checkout. Only `environmentVariables` values enter
+runtime commands. The same sequence runs in fresh readiness sandboxes and every
+replacement sandbox. Provisioning writes its readiness marker only after all
+scrubbing, Bun verification, system steps, distribution installation,
+dependency bootstrap, and runtime preflights complete; distribution
+packing/install disables package lifecycle scripts so
 checkout-only hooks such as Husky are not provisioning dependencies. A Bun
 install or verification failure identifies the configured image and expected
 universal-image capabilities, deletes the partial environment, and leaves no
 readiness marker. A retry also deletes any named sandbox without that marker
-instead of adopting partial setup. Immediately before every build-child launch,
-the adapter verifies the provisioned absolute Bun executable again. A failed
-preflight launches no child and instructs the operator to release and
-reprovision the sandbox; this intentionally fails closed for legacy snapshots
-that have a marker but no adapter-owned runtime. Branch publication is
+instead of adopting partial setup. Immediately before every build-child launch, the adapter verifies the
+provisioned absolute Bun executable and every referenced runtime again. A
+failure names the runtime, selecting role/alternate, stage, and provisioning
+field, launches no child, and instructs the operator to fix/reprovision. This
+fails closed for stale marked snapshots. Runtime installation is deliberately
+separate from `[commands].setup`, which starts inside the runner and cannot make
+the runtime available before the first agent session. Branch publication is
 requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
@@ -536,9 +562,12 @@ Vercel images or package managers.
 Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
 `ref`; they omit dispatcher-local path evidence. Branch config, relative/package
 plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
-resolve in the guest checkout. Only names in `environmentVariables` plus
-scoped `AB_STORE`/`AB_TOKEN` enter commands—dispatcher environment variables
-are never copied wholesale.
+resolve in the guest checkout. Only names in `environmentVariables` plus scoped `AB_STORE`/`AB_TOKEN` enter
+commands—dispatcher environment variables are never copied wholesale. Pi in a
+sandbox should use an API-key provider such as `vercel-ai-gateway/...` with
+`AI_GATEWAY_API_KEY`; never copy dispatcher `~/.pi` state, OAuth refresh tokens,
+or attempt an interactive login. The same API-key-only rule applies to Codex,
+Claude Code, and plugin runtimes.
 
 The opt-in live lifecycle suite is
 `packages/core/src/integration/vercel-sandbox.live.test.ts`. Set

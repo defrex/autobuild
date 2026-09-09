@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import semver from 'semver'
 import { parseConfig } from '../config/load'
 import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
-import { roleKeyWarnings, SLUG_ROLE } from '../config/roles'
+import { effectiveRuntimeReferences, roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
@@ -224,6 +224,8 @@ export interface DispatchWiring {
   /** Validated startup catalog used by selected plugin adapters. Runtime
    * factories are materialized into `runtimes` before role resolution. */
   plugins?: PluginRegistry
+  /** Keeps workspace-owned runtime preflights aligned with accepted hot role reloads. */
+  updateRuntimeReferences?: (config: Config) => void
 }
 
 export type DispatchNonStoreWiring = Omit<DispatchWiring, 'store' | 'storeRef' | 'token'>
@@ -356,6 +358,7 @@ async function defaultWire(
     plugins,
   )
   const { runtimes } = createProductionRuntimes()
+  let runtimeReferences = effectiveRuntimeReferences(config)
   // A local override relocates the whole tree. Remote stores still need local
   // scratch beneath the repository default. Plugin factories receive only
   // their explicit config plus repository/environment context.
@@ -365,6 +368,7 @@ async function defaultWire(
     repoRoot: opened.repo,
     env: opts.env,
     storeRef: opened.storeRef,
+    runtimeReferences: () => runtimeReferences,
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 
@@ -383,6 +387,9 @@ async function defaultWire(
     uuids: randomUuids(),
     clock: systemClock,
     plugins,
+    updateRuntimeReferences: (effectiveConfig) => {
+      runtimeReferences = effectiveRuntimeReferences(effectiveConfig)
+    },
   }
 }
 
@@ -2613,6 +2620,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           }
         },
       )
+      wiring.updateRuntimeReferences?.(effectiveConfig)
     },
   )
 

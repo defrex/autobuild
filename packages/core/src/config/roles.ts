@@ -78,6 +78,89 @@ export interface RoleKeyDiagnostics {
 /** The structural shape both `[verify.<step>]` and `[finalize.<step>]` share. */
 type StepTable = { kind: 'check' } | { kind: 'agent'; skill: string }
 
+export interface RuntimeReferenceGroup {
+  runtime: string
+  /** Human-readable routes selecting this runtime, including alternates. */
+  references: string[]
+  /** Explicit configured models selected for readiness probing. */
+  models: string[]
+  /** At least one selected route leaves its model to the runtime registration. */
+  usesRuntimeDefaultModel: boolean
+}
+
+/**
+ * Derive the runtime targets that can actually start sessions. This mirrors the
+ * resolver's per-axis inheritance, role/alias precedence, and alternate overlay
+ * without requiring a runtime registry, so config validation and remote
+ * bootstrap share one source of truth.
+ */
+export function effectiveRuntimeReferences(
+  config: Pick<Config, 'roles' | 'verify' | 'finalize'>,
+): RuntimeReferenceGroup[] {
+  const defaultSpec = config.roles.default ?? {}
+  const routes: Array<{ role: string; aliases?: string[]; label: string }> = [
+    ...CORE_PHASES.map((role) => ({ role, label: `role ${displayName(role)}` })),
+    ...INTERNAL_ROLES.map((role) => ({ role, label: `role ${displayName(role)}` })),
+    ...agentSteps(config.verify.steps, config.verify.stepConfigs).map(({ step, skill }) => ({
+      role: step,
+      aliases: [skill],
+      label: `agent verify role ${displayName(step)}`,
+    })),
+    ...agentSteps(config.finalize.steps, config.finalize.stepConfigs).map(({ step }) => ({
+      role: step,
+      label: `agent finalize role ${displayName(step)}`,
+    })),
+  ]
+
+  const grouped = new Map<
+    string,
+    { references: Set<string>; models: Set<string>; usesRuntimeDefaultModel: boolean }
+  >()
+  const declaredSpec = (role: string, aliases: readonly string[] = []) => {
+    for (const key of [role, ...aliases]) {
+      if (key === RESERVED_ROLE) return defaultSpec
+      if (Object.hasOwn(config.roles, key)) return config.roles[key]!
+    }
+    return defaultSpec
+  }
+  const add = (runtime: string | undefined, model: string | undefined, reference: string) => {
+    if (runtime === undefined || runtime.trim() === '') return
+    const group = grouped.get(runtime) ?? {
+      references: new Set(),
+      models: new Set(),
+      usesRuntimeDefaultModel: false,
+    }
+    group.references.add(reference)
+    if (model !== undefined) group.models.add(model)
+    else group.usesRuntimeDefaultModel = true
+    grouped.set(runtime, group)
+  }
+
+  for (const route of routes) {
+    const spec = declaredSpec(route.role, route.aliases)
+    const runtime = spec.runtime ?? defaultSpec.runtime
+    const model = spec.model ?? defaultSpec.model
+    add(runtime, model, `${route.label} primary`)
+    const alternates = spec.alternates ?? defaultSpec.alternates ?? []
+    alternates.forEach((alternate, index) => {
+      add(
+        alternate.runtime ?? runtime,
+        alternate.model ?? model,
+        `${route.label} alternate[${index}]`,
+      )
+    })
+  }
+
+  return [...grouped.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([runtime, group]) => ({
+      runtime,
+      references: [...group.references].sort(),
+      models: [...group.models].sort(),
+      usesRuntimeDefaultModel: group.usesRuntimeDefaultModel,
+    }))
+}
+
 /** Declared steps that actually run, in declaration order, agent kind only —
  * a `kind = "check"` step starts no session and consumes no role. */
 function agentSteps(
@@ -149,7 +232,7 @@ function escapeBasic(name: string): string {
 /** A name IN PROSE — always quoted, always escaped. The one place a name is
  * wrapped in quotes, so a quote cannot break out of the phrase and nothing
  * unprintable can reach a line-oriented sink raw. */
-function displayName(name: string): string {
+export function displayName(name: string): string {
   return `"${escapeBasic(name)}"`
 }
 
@@ -160,7 +243,7 @@ function displayName(name: string): string {
  * renderings differ in exactly that one condition and share the escaper, so
  * they cannot drift into disagreeing about what is safe.
  */
-function tomlKey(name: string): string {
+export function tomlKey(name: string): string {
   return TOML_BARE_KEY.test(name) ? name : displayName(name)
 }
 

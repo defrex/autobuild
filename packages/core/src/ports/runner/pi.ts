@@ -160,7 +160,7 @@ export async function isPiRuntimeUsable(
           isRecord(payload) && typeof payload.reason === 'string' ? ` (${payload.reason})` : ''
         return {
           usable: false,
-          reason: `Pi model "${model}" is not ready in the local Pi login${reason}`,
+          reason: `Pi model "${model}" is not ready with the configured provider credentials${reason}`,
         }
       }
 

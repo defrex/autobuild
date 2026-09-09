@@ -29,8 +29,9 @@ maintainer before selecting it:
 - for a private repository, a separate read-only clone identity named by
   `gitUsernameEnv` and `gitPasswordEnv`;
 - an HTTPS hosted `AB_STORE` reachable from Vercel and a scoped `AB_TOKEN`;
-- each selected role and alternate's runtime/model, and the credential variable
-  names that runtime needs in `[workspace.config].environmentVariables`.
+- each selected role and alternate's runtime/model, its pinned
+  `[workspace.config.runtimeProvisioning.<runtime>]` commands, and the API
+  credential names it needs in `[workspace.config].environmentVariables`.
 
 Do not put `AB_STORE`, `AB_TOKEN`, Vercel credentials, Forge credentials, or
 private-clone credentials in `environmentVariables`. Autobuild supplies Store
@@ -45,7 +46,7 @@ provider = "vercel-sandbox"
 image = "vercel/sandbox/universal:latest"
 vcpus = 4
 timeoutSeconds = 2700
-environmentVariables = ["ANTHROPIC_API_KEY"]
+environmentVariables = ["AI_GATEWAY_API_KEY"]
 # Ordered system-level steps run once in every fresh/replacement sandbox as root.
 provisioning = [
   { name = "system-install", command = """apt-get update
@@ -55,7 +56,18 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y chromium""" },
 # Private repositories only:
 # gitUsernameEnv = "AB_GIT_READ_USER"
 # gitPasswordEnv = "AB_GIT_READ_TOKEN"
+
+[workspace.config.runtimeProvisioning.pi]
+install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
+preflight = "test \"$(pi --version)\" = \"0.84.4\""
 ```
+
+Use a `vercel-ai-gateway/...` Pi model with `AI_GATEWAY_API_KEY` in the
+dispatcher environment. Do not copy `~/.pi`, OAuth refresh tokens, or any local
+runtime auth state, and do not attempt interactive login in a sandbox. Runtime
+names are open: a plugin runtime uses the same strict map, for example
+`[workspace.config.runtimeProvisioning.opencode]`, with its own immutable
+install and exact-version preflight commands.
 
 ## Make the environment reproducible
 
@@ -73,6 +85,14 @@ authority after pinned Bun is verified and before dependency bootstrap,
 on every replacement. Commands are declarative TOML string data, not evaluated
 configuration logic. Local git worktrees never run this list; ensure their host
 already has required system tooling.
+
+Put each selected runtime's immutable install and executable/version check in
+its `runtimeProvisioning` entry. Autobuild runs install then preflight after
+checkout dependencies in every fresh/replacement sandbox and before the
+readiness probe, writes the marker only after success, and reruns every
+preflight before each build runner. A failure names the runtime, selecting
+role/alternate, and field and starts no agent. Runtime provisioning receives
+only the API credentials named by `[workspace.config].environmentVariables`.
 
 Keep package-level and checkout-level bootstrap in an idempotent
 `[commands].setup`. It runs after system provisioning and must remain safe to
@@ -107,11 +127,13 @@ Validation is explicit and noninteractive. It does not dispatch, claim a
 ticket, or create build, phase, session, event, transcript, or artifact history.
 For local execution it identifies and removes a disposable detached worktree.
 For Vercel it identifies and permanently deletes a fresh unnamed sandbox, even
-when provisioning, setup, or a probe fails; cleanup failures name the environment for manual
-deletion. Its `system provisioning` check lists completed step names (or says
-none were declared) before guest setup checks. A failed step reports its name,
-command, status, labeled stdout/stderr, and remediation without marking the
-environment ready. It then runs `commands.setup`, loads repository plugins, checks every
+when system or runtime provisioning, setup, or a probe fails; cleanup failures
+name the environment for manual deletion. Its `system provisioning` check lists
+completed step names (or says none were declared) before guest setup checks. A
+failed step reports its name, command, status, labeled stdout/stderr, and
+remediation without marking the environment ready. It provisions/preflights
+every effective primary and alternate runtime, then runs `commands.setup`, loads
+repository plugins, and checks every
 selected primary/alternate runtime and model, and performs a read-only Store
 request in the candidate execution context. If the local database is absent,
 validation reports that no repository history is available without creating

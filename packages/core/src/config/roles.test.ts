@@ -4,7 +4,12 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from './load'
-import { INTERNAL_ROLES, roleKeyDiagnostics, roleKeyWarnings } from './roles'
+import {
+  effectiveRuntimeReferences,
+  INTERNAL_ROLES,
+  roleKeyDiagnostics,
+  roleKeyWarnings,
+} from './roles'
 
 const TICKETS = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 
@@ -27,6 +32,56 @@ steps = ["e2e"]
 kind = "agent"
 skill = "ab-verify-e2e"
 `
+
+describe('effectiveRuntimeReferences', () => {
+  test('groups consumed primaries and inherited alternates while honoring verify aliases', () => {
+    const parsed = config(`[verify]
+steps = ["e2e", "lint"]
+[verify.e2e]
+kind = "agent"
+skill = "visual"
+[verify.lint]
+kind = "check"
+command = "check"
+[commands]
+check = "true"
+[roles.default]
+runtime = "pi"
+model = "gateway/default"
+alternates = [{ runtime = "backup", model = "backup/model" }]
+[roles.visual]
+runtime = "plugin-runtime"
+model = "plugin/model"
+[roles.lint]
+runtime = "unused"
+`)
+    const groups = effectiveRuntimeReferences(parsed)
+    expect(groups.map((group) => group.runtime)).toEqual(['backup', 'pi', 'plugin-runtime'])
+    expect(groups.find((group) => group.runtime === 'plugin-runtime')).toEqual({
+      runtime: 'plugin-runtime',
+      references: ['agent verify role "e2e" primary'],
+      models: ['plugin/model'],
+      usesRuntimeDefaultModel: false,
+    })
+    expect(groups.find((group) => group.runtime === 'backup')?.references).toContain(
+      'role "implement" alternate[0]',
+    )
+    expect(groups.some((group) => group.runtime === 'unused')).toBe(false)
+  })
+
+  test('a step-named route wins over its deprecated skill alias and overlays alternates', () => {
+    const parsed = withVerify(
+      E2E_STEP,
+      '[roles.e2e]\nruntime = "pi"\nalternates = [{ runtime = "custom" }]\n\n' +
+        '[roles.ab-verify-e2e]\nruntime = "ignored"\n',
+    )
+    const groups = effectiveRuntimeReferences(parsed)
+    expect(groups.find((group) => group.runtime === 'custom')?.references).toEqual([
+      'agent verify role "e2e" alternate[0]',
+    ])
+    expect(groups.some((group) => group.runtime === 'ignored')).toBe(false)
+  })
+})
 
 describe('roleKeyDiagnostics — unconsumed keys', () => {
   test('every unconsumed key is reported, sorted, and never just the first', () => {

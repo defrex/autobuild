@@ -5,7 +5,7 @@ import type { WorkspaceProvider } from '../types'
 import type { BuildExecution } from './build-execution'
 import { GitWorktreeProvider } from './git-worktree'
 import { LocalBuildExecution } from './local-build-execution'
-import { VercelSandboxProvider } from './vercel-sandbox'
+import { type RuntimeReferencesSource, VercelSandboxProvider } from './vercel-sandbox'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
@@ -17,6 +17,8 @@ export interface CreateWorkspaceProviderOptions {
   /** Required only by remote builtins. */
   storeRef?: string
   storeToken?: string
+  /** Host-derived effective routes; consumed only by the built-in sandbox. */
+  runtimeReferences?: RuntimeReferencesSource
 }
 
 export interface WorkspaceRuntime {
@@ -60,6 +62,7 @@ export async function createWorkspaceProvider(
         storeRef: opts.storeRef,
         storeToken: opts.storeToken,
         repo: resolve(opts.repoRoot),
+        runtimeReferences: opts.runtimeReferences ?? [],
       })
     }
     throw new Error(

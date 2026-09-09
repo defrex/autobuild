@@ -144,6 +144,9 @@ forge = "${forge}"
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 600
+[workspace.config.runtimeProvisioning.fake]
+install = "true"
+preflight = "true"
 [commands]
 [roles.default]
 runtime = "fake"
@@ -231,6 +234,42 @@ readyState = "ready"
     expect(calls).toEqual(['runtime', 'listBuilds', 'close'])
   })
 
+  test('probes both explicit and registry-default models selected on the same runtime', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-models-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `[commands]
+[roles.default]
+runtime = "fake"
+[roles.plan]
+model = "gateway/explicit"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    let models: readonly string[] = []
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example' },
+      runtimes: {
+        fake: {
+          runner,
+          servesModels: ['fake/', 'gateway/'],
+          defaultModel: 'fake/default',
+          initUsable: async (input) => {
+            models = input.models
+            return true
+          },
+        },
+      },
+      openStore: () => readOnlyStore([]),
+    })
+    expect(report.checks.every((check) => check.status === 'pass')).toBe(true)
+    expect(models).toEqual(['fake/default', 'gateway/explicit'])
+  })
+
   test('reports guest runtime authentication and unreachable Store remediation without secrets', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-failures-'))
     roots.push(repo)
@@ -264,8 +303,50 @@ readyState = "ready"
     })
     const details = report.checks.map((check) => check.detail).join('\n')
     expect(details).not.toContain('echo-secret')
-    expect(details).toContain('install/authenticate')
+    expect(details).toContain(
+      'install/authenticate this runtime in the local validation environment',
+    )
+    expect(details).not.toContain('runtimeProvisioning')
     expect(details).toContain('Store URL')
+  })
+
+  test('reports Vercel runtime failures against provisioning and API credentials', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-vercel-runtime-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+environmentVariables = ["MODEL_API_KEY"]
+[workspace.config.runtimeProvisioning.fake]
+install = "install-fake@1.0.0"
+preflight = "fake --version"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example', MODEL_API_KEY: 'secret' },
+      runtimes: {
+        fake: {
+          runner,
+          servesModels: [],
+          initUsable: async () => ({ usable: false, reason: 'not authenticated' }),
+        },
+      },
+      openStore: () => readOnlyStore([]),
+    })
+    const details = report.checks.map((check) => check.detail).join('\n')
+    expect(details).toContain('workspace.config.runtimeProvisioning.fake.preflight')
+    expect(details).toContain('workspace.config.environmentVariables')
+    expect(details).not.toContain('local validation environment')
   })
 
   test('private probe transports a structured failure with exit zero', async () => {
@@ -360,6 +441,9 @@ readyState = "ready"
           { name: 'browser packages', command: 'apt-get install -y chromium' },
           { name: 'browser smoke', command: './scripts/browser-smoke.sh' },
         ],
+        runtimeProvisioning: {
+          pi: { install: 'install-pi@0.84.4', preflight: 'pi --version 0.84.4' },
+        },
       },
       env: { MODEL_API_KEY: 'secret-model' },
       storeRef: 'https://store.example',
@@ -369,6 +453,14 @@ readyState = "ready"
       facade,
       exec,
       packageArchive: async () => new Uint8Array(),
+      runtimeReferences: [
+        {
+          runtime: 'pi',
+          references: ['role "plan" primary'],
+          models: ['gateway/model'],
+          usesRuntimeDefaultModel: false,
+        },
+      ],
     })
 
     expect(result.revision).toBe(sha)
@@ -393,7 +485,15 @@ readyState = "ready"
       image: 'vercel/sandbox/universal:latest',
       resources: { vcpus: 2 },
     })
-    expect(commands.find((command) => command.env !== undefined)?.env).toEqual({
+    expect(
+      commands
+        .filter((command) => command.cmd === 'sh')
+        .map((command) => command.args?.[1])
+        .filter((command) => command?.includes('pi')),
+    ).toEqual(['install-pi@0.84.4', 'pi --version 0.84.4'])
+    expect(
+      commands.find((command) => command.args?.some((arg) => arg.includes('ab-init-probe')))?.env,
+    ).toEqual({
       AB_STORE: 'https://store.example',
       AB_TOKEN: 'store-secret',
       MODEL_API_KEY: 'secret-model',
@@ -618,6 +718,9 @@ provider = "vercel-sandbox"
 timeoutSeconds = 600
 environmentVariables = ["PROVISION_SECRET"]
 provisioning = [{ name = "browser packages", command = "install browser packages" }]
+[workspace.config.runtimeProvisioning.fake]
+install = "install-fake@1.0.0"
+preflight = "fake --version 1.0.0"
 [commands]
 [roles.default]
 runtime = "fake"
@@ -710,6 +813,9 @@ forge = "github"
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 600
+[workspace.config.runtimeProvisioning.fake]
+install = "true"
+preflight = "true"
 [commands]
 [roles.default]
 runtime = "fake"
