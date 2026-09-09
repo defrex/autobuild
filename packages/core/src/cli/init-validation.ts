@@ -177,6 +177,11 @@ export async function runGuestReadinessProbe(opts: {
     }
   }
 
+  const runtimeRemediation = (runtime: string, preflightOnly: boolean): string =>
+    vercelConfig === undefined
+      ? 'install/authenticate this runtime in the local validation environment'
+      : `fix workspace.config.runtimeProvisioning.${runtime}${preflightOnly ? '.preflight' : ''} and expose API credential names in workspace.config.environmentVariables`
+
   try {
     for (const target of effectiveTargets(config, runtimes)) {
       if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
@@ -200,14 +205,14 @@ export async function runGuestReadinessProbe(opts: {
           status: usable ? 'pass' : 'fail',
           detail: usable
             ? redact(reason)
-            : `${redact(reason)}; fix workspace.config.runtimeProvisioning.${target.runtime}.preflight and expose API credential names in workspace.config.environmentVariables`,
+            : `${redact(reason)}; ${runtimeRemediation(target.runtime, true)}`,
         })
       } catch (error) {
         if (opts.signal?.aborted) throw opts.signal.reason ?? error
         checks.push({
           name: `runtime ${target.runtime}`,
           status: 'fail',
-          detail: `${redact(error)}; fix workspace.config.runtimeProvisioning.${target.runtime} and its API credential names in workspace.config.environmentVariables`,
+          detail: `${redact(error)}; ${runtimeRemediation(target.runtime, false)}`,
         })
       }
     }

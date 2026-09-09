@@ -303,8 +303,50 @@ readyState = "ready"
     })
     const details = report.checks.map((check) => check.detail).join('\n')
     expect(details).not.toContain('echo-secret')
-    expect(details).toContain('runtimeProvisioning.fake.preflight')
+    expect(details).toContain(
+      'install/authenticate this runtime in the local validation environment',
+    )
+    expect(details).not.toContain('runtimeProvisioning')
     expect(details).toContain('Store URL')
+  })
+
+  test('reports Vercel runtime failures against provisioning and API credentials', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-vercel-runtime-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+environmentVariables = ["MODEL_API_KEY"]
+[workspace.config.runtimeProvisioning.fake]
+install = "install-fake@1.0.0"
+preflight = "fake --version"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example', MODEL_API_KEY: 'secret' },
+      runtimes: {
+        fake: {
+          runner,
+          servesModels: [],
+          initUsable: async () => ({ usable: false, reason: 'not authenticated' }),
+        },
+      },
+      openStore: () => readOnlyStore([]),
+    })
+    const details = report.checks.map((check) => check.detail).join('\n')
+    expect(details).toContain('workspace.config.runtimeProvisioning.fake.preflight')
+    expect(details).toContain('workspace.config.environmentVariables')
+    expect(details).not.toContain('local validation environment')
   })
 
   test('private probe transports a structured failure with exit zero', async () => {
