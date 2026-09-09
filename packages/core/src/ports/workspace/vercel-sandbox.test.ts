@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
+import { parse as parseToml } from 'smol-toml'
 import { spawnExec, type Exec } from './git-worktree'
 import {
   VERCEL_AUTOBUILD_PATH,
@@ -672,25 +673,58 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
-  test('missing provisioning quotes a plugin runtime name as a valid TOML key', async () => {
-    const h = harness({
-      provisionRuntimes: true,
-      runtimeReferences: () => [
-        {
-          runtime: 'plugin.runtime',
-          references: ['role "plan" primary'],
-          models: [],
-          usesRuntimeDefaultModel: true,
-        },
-      ],
-    })
-    await expect(
-      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
-    ).rejects.toThrow(
-      /add \[workspace\.config\.runtimeProvisioning\."plugin\.runtime"\] with install and preflight commands/,
-    )
-    expect(h.sandbox.provisioned).toBe(false)
-    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+  test('missing provisioning remediation round-trips exotic runtime names as TOML keys', async () => {
+    const cases = [
+      ['pi', 'pi'],
+      ['plugin.runtime', '"plugin.runtime"'],
+      ['plugin"runtime', '"plugin\\"runtime"'],
+      ['plugin\\runtime', '"plugin\\\\runtime"'],
+      ['plugin\u0001runtime', '"plugin\\u0001runtime"'],
+      ['plugin\u007fruntime', '"plugin\\u007Fruntime"'],
+      ['插件', '"\\u63D2\\u4EF6"'],
+      ['plugin😀', '"plugin\\U0001F600"'],
+    ] as const
+
+    for (const [runtime, renderedKey] of cases) {
+      // Direct construction deliberately bypasses schema cross-validation so this
+      // defensive bootstrap branch remains covered without claiming production reachability.
+      const h = harness({
+        runtimeReferences: () => [
+          {
+            runtime,
+            references: ['role "plan" primary'],
+            models: [],
+            usesRuntimeDefaultModel: true,
+          },
+        ],
+      })
+      let rejection: unknown
+      try {
+        await h.provider.provision({
+          repo: '/repo',
+          baseBranch: 'main',
+          branch: 'ab/remote-build',
+        })
+      } catch (error) {
+        rejection = error
+      }
+      expect(rejection).toBeInstanceOf(Error)
+      const header = (rejection as Error).message.match(
+        /add (\[workspace\.config\.runtimeProvisioning\..+?\]) with/,
+      )?.[1]
+
+      expect(header, `missing remediation header for ${JSON.stringify(runtime)}`).toBe(
+        `[workspace.config.runtimeProvisioning.${renderedKey}]`,
+      )
+      const parsed = parseToml(header!) as {
+        workspace: { config: { runtimeProvisioning: Record<string, unknown> } }
+      }
+      expect(Object.keys(parsed.workspace.config.runtimeProvisioning)).toEqual([runtime])
+      expect(h.sandbox.provisioned).toBe(false)
+      expect(h.sandbox.deletes).toBe(1)
+      expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+      expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+    }
   })
 
   test('runtime failure names the route and field, creates no marker, and deletes the sandbox', async () => {
