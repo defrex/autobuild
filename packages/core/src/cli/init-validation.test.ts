@@ -606,6 +606,101 @@ readyState = "ready"
     fixture.expectValidationNotReached()
   })
 
+  test('redacts failed declared provisioning and deletes the disposable sandbox', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-provisioning-readiness-'))
+    roots.push(repo)
+    const secret = 'readiness-provision-secret'
+    const config = `baseBranch = "main"
+forge = "github"
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+environmentVariables = ["PROVISION_SECRET"]
+provisioning = [{ name = "browser packages", command = "install browser packages" }]
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`
+    await writeFile(join(repo, 'autobuild.toml'), config)
+
+    let deletes = 0
+    let available = true
+    let packageArchives = 0
+    const sandbox: VercelSandboxHandle = {
+      name: 'failed-provisioning-sandbox',
+      runCommand: async (params) => {
+        if (
+          params.cmd === 'sh' &&
+          params.sudo === true &&
+          params.cwd === '/vercel/sandbox/workspace' &&
+          params.args?.[1] === 'install browser packages'
+        ) {
+          return {
+            exitCode: 23,
+            stdout: async () => `download attempted with ${secret}`,
+            stderr: async () => `registry rejected ${secret}`,
+          }
+        }
+        return { exitCode: 0, stdout: async () => '', stderr: async () => '' }
+      },
+      writeFiles: async () => {},
+      stop: async () => {},
+      delete: async () => {
+        deletes += 1
+        available = false
+      },
+      update: async () => {},
+    }
+    const facade: VercelSandboxFacade = {
+      get: async () => (available ? sandbox : null),
+      create: async () => sandbox,
+      createFresh: async () => sandbox,
+    }
+    const sha = 'e'.repeat(40)
+    const exec: Exec = async (command) => {
+      if (command.includes('--show-toplevel'))
+        return { stdout: `${repo}\n`, stderr: '', exitCode: 0 }
+      if (command.includes('get-url'))
+        return { stdout: 'https://github.com/acme/repo.git\n', stderr: '', exitCode: 0 }
+      if (command.includes('ls-remote'))
+        return { stdout: `${sha}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
+      if (command.includes('show')) return { stdout: config, stderr: '', exitCode: 0 }
+      return { stdout: '', stderr: '', exitCode: 0 }
+    }
+
+    let failure: unknown
+    try {
+      await validateInitReadiness({
+        targetRepo: repo,
+        env: { ...completeVercelPreflightEnv, PROVISION_SECRET: secret },
+        exec,
+        vercelFacade: facade,
+        packageArchive: async () => {
+          packageArchives += 1
+          return new Uint8Array()
+        },
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(Error)
+    const diagnostic = (failure as Error).message
+    expect(diagnostic).toContain('browser packages')
+    expect(diagnostic).toContain('exit status: 23')
+    expect(diagnostic).toContain('[workspace.config].provisioning')
+    expect(diagnostic).toContain('ab init --validate')
+    expect(diagnostic).toContain('[REDACTED]')
+    expect(diagnostic).not.toContain(secret)
+    expect(deletes).toBe(1)
+    expect(packageArchives).toBe(0)
+    expect(await facade.get!('failed-provisioning-sandbox')).toBeNull()
+  })
+
   test('deletes the sandbox before reporting malformed remote probe output', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-malformed-remote-'))
     roots.push(repo)
