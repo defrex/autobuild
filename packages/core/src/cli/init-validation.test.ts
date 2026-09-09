@@ -1,8 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
+import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { NetworkPolicy } from '@vercel/sandbox'
+import { DISPATCHER } from '../events/envelope'
 import type { AgentRunner } from '../ports/types'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
@@ -11,6 +13,7 @@ import {
   type VercelSandboxFacade,
   type VercelSandboxHandle,
 } from '../ports/workspace/vercel-sandbox'
+import { openLocalStore } from '../store/local/store'
 import type { BuildStore } from '../store/types'
 import {
   createReadinessRedactor,
@@ -36,6 +39,67 @@ const runner: AgentRunner = {
   end: async () => {
     throw new Error('not used')
   },
+}
+
+async function committedLocalRepo(prefix: string): Promise<{ repo: string; config: string }> {
+  const repo = await mkdtemp(join(tmpdir(), prefix))
+  roots.push(repo)
+  const config = `baseBranch = "main"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`
+  await writeFile(join(repo, 'autobuild.toml'), config)
+  await writeFile(join(repo, '.gitignore'), '.autobuild/\n')
+  for (const command of [
+    ['git', 'init', '-b', 'main'],
+    ['git', 'config', 'user.email', 'test@example.com'],
+    ['git', 'config', 'user.name', 'Test'],
+    ['git', 'add', 'autobuild.toml', '.gitignore'],
+    ['git', 'commit', '-m', 'setup'],
+  ]) {
+    const result = await spawnExec(command, { cwd: repo })
+    expect(result.exitCode, result.stderr).toBe(0)
+  }
+  return { repo, config }
+}
+
+const usableRuntime: RuntimeRegistry = {
+  fake: { runner, servesModels: [], initUsable: async () => ({ usable: true, reason: 'ready' }) },
+}
+
+interface TreeEntry {
+  kind: 'directory' | 'file'
+  size: number
+  mtimeMs: number
+  bytes?: string
+}
+
+async function snapshotTree(root: string): Promise<Record<string, TreeEntry>> {
+  const snapshot: Record<string, TreeEntry> = {}
+  async function visit(path: string): Promise<void> {
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const entryPath = join(path, entry.name)
+      const metadata = await stat(entryPath)
+      const key = relative(root, entryPath)
+      if (entry.isDirectory()) {
+        snapshot[key] = { kind: 'directory', size: metadata.size, mtimeMs: metadata.mtimeMs }
+        await visit(entryPath)
+      } else {
+        snapshot[key] = {
+          kind: 'file',
+          size: metadata.size,
+          mtimeMs: metadata.mtimeMs,
+          bytes: Buffer.from(await readFile(entryPath)).toString('hex'),
+        }
+      }
+    }
+  }
+  await visit(root)
+  return snapshot
 }
 
 function readOnlyStore(calls: string[]): BuildStore {
@@ -446,6 +510,109 @@ readyState = "ready"
       }),
     ).rejects.toThrow('malformed-sandbox was deleted')
     expect(deletes).toBe(1)
+  })
+
+  test('reports an absent local Store without creating ignored repository state', async () => {
+    const { repo } = await committedLocalRepo('ab-local-absent-')
+    const output: string[] = []
+
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env: {},
+      exec: spawnExec,
+      runtimes: usableRuntime,
+      stdout: (line) => output.push(line),
+    })
+
+    expect(report.exitCode).toBe(0)
+    expect(report.checks.find((check) => check.name === 'BuildStore')).toMatchObject({
+      status: 'absent',
+    })
+    expect(output.join('\n')).toContain('ABSENT BuildStore')
+    expect(await stat(join(repo, '.autobuild')).catch(() => null)).toBeNull()
+    for (const name of [
+      'autobuild.sqlite',
+      'autobuild.sqlite-wal',
+      'autobuild.sqlite-shm',
+      'blobs',
+    ]) {
+      expect(await stat(join(repo, '.autobuild', name)).catch(() => null)).toBeNull()
+    }
+  })
+
+  test('inspects an existing local Store snapshot without changing source files or history', async () => {
+    const { repo } = await committedLocalRepo('ab-local-existing-')
+    const stateRoot = join(repo, '.autobuild')
+    const store = openLocalStore(stateRoot)
+    await store.createBuild({
+      slug: 'seeded-build',
+      repo,
+      ticket: { source: 'file', id: 'T-1', title: 'Seeded ticket' },
+      branch: 'ab/seeded-build',
+    })
+    await store.append('seeded-build', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'file', id: 'T-1', title: 'Seeded ticket' },
+        repo,
+        baseBranch: 'main',
+      },
+    })
+    await store.close()
+    const checkpoint = new Database(join(stateRoot, 'autobuild.sqlite'))
+    checkpoint.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    checkpoint.close()
+    await rm(join(stateRoot, 'autobuild.sqlite-wal'), { force: true })
+    await rm(join(stateRoot, 'autobuild.sqlite-shm'), { force: true })
+    const before = await snapshotTree(stateRoot)
+
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env: {},
+      exec: spawnExec,
+      runtimes: usableRuntime,
+    })
+
+    expect(report.exitCode).toBe(0)
+    expect(report.checks.find((check) => check.name === 'BuildStore')).toMatchObject({
+      status: 'pass',
+    })
+    expect(report.checks.find((check) => check.name === 'BuildStore')?.detail).toContain(
+      '1 readable build record(s)',
+    )
+    expect(await snapshotTree(stateRoot)).toEqual(before)
+    expect(Object.keys(before)).not.toContain('autobuild.sqlite-wal')
+    expect(Object.keys(before)).not.toContain('autobuild.sqlite-shm')
+  })
+
+  test('reads copied live WAL state while leaving source sidecars unchanged', async () => {
+    const { repo } = await committedLocalRepo('ab-local-live-wal-')
+    const stateRoot = join(repo, '.autobuild')
+    const store = openLocalStore(stateRoot)
+    const observer = openLocalStore(stateRoot)
+    try {
+      await store.createBuild({ slug: 'wal-build', repo, branch: 'ab/wal-build' })
+      const before = await snapshotTree(stateRoot)
+      expect(Object.keys(before)).toContain('autobuild.sqlite-wal')
+      expect(Object.keys(before)).toContain('autobuild.sqlite-shm')
+
+      const report = await validateInitReadiness({
+        targetRepo: repo,
+        env: {},
+        exec: spawnExec,
+        runtimes: usableRuntime,
+      })
+
+      expect(report.exitCode).toBe(0)
+      expect(report.checks.find((check) => check.name === 'BuildStore')?.detail).toContain(
+        '1 readable build record(s)',
+      )
+      expect(await snapshotTree(stateRoot)).toEqual(before)
+    } finally {
+      await store.close()
+      await observer.close()
+    }
   })
 
   test('validates and removes a detached local worktree without changing config bytes', async () => {

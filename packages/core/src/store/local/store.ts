@@ -14,6 +14,8 @@ import { Database } from 'bun:sqlite'
 import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite'
 import { mkdirSync } from 'node:fs'
+import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   validateEventWrite,
@@ -775,6 +777,78 @@ export class SqliteBuildStore implements BuildStore {
   async close(): Promise<void> {
     this.sqlite.close()
   }
+}
+
+export type LocalStoreInspection =
+  | { status: 'absent'; databasePath: string }
+  | { status: 'present'; databasePath: string; buildCount: number }
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+/**
+ * Inspect a repository-local Store without asking SQLite to open its source
+ * files. Bun can create WAL/SHM files even for a read-only connection, so the
+ * database and any live sidecars are copied to a disposable directory first.
+ */
+export async function inspectLocalStoreSnapshot(rootDir: string): Promise<LocalStoreInspection> {
+  const databasePath = join(rootDir, 'autobuild.sqlite')
+  try {
+    await access(databasePath)
+  } catch (error) {
+    if (isMissing(error)) return { status: 'absent', databasePath }
+    throw error
+  }
+
+  const snapshotRoot = await mkdtemp(join(tmpdir(), 'ab-store-inspection-'))
+  const snapshotPath = join(snapshotRoot, 'autobuild.sqlite')
+  let database: Database | undefined
+  let result: LocalStoreInspection | undefined
+  let failure: unknown
+  const cleanupFailures: unknown[] = []
+  try {
+    await copyFile(databasePath, snapshotPath)
+    for (const suffix of ['-wal', '-shm']) {
+      try {
+        await copyFile(`${databasePath}${suffix}`, `${snapshotPath}${suffix}`)
+      } catch (error) {
+        if (!isMissing(error)) throw error
+      }
+    }
+    database = new Database(snapshotPath, { readonly: true })
+    const row = database.query('SELECT count(*) AS count FROM builds').get() as {
+      count: number
+    } | null
+    if (row === null) throw new Error('local Store builds count returned no row')
+    result = { status: 'present', databasePath, buildCount: row.count }
+  } catch (error) {
+    failure = error
+  } finally {
+    try {
+      database?.close()
+    } catch (error) {
+      cleanupFailures.push(error)
+    }
+    try {
+      await rm(snapshotRoot, { recursive: true, force: true })
+    } catch (error) {
+      cleanupFailures.push(error)
+    }
+  }
+
+  if (failure !== undefined && cleanupFailures.length > 0) {
+    throw new AggregateError(
+      [failure, ...cleanupFailures],
+      'local Store snapshot inspection and cleanup both failed',
+    )
+  }
+  if (failure !== undefined) throw failure
+  if (cleanupFailures.length === 1) throw cleanupFailures[0]
+  if (cleanupFailures.length > 1)
+    throw new AggregateError(cleanupFailures, 'local Store snapshot cleanup failed')
+  if (result === undefined) throw new Error('local Store snapshot inspection produced no result')
+  return result
 }
 
 /**
