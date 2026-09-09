@@ -633,7 +633,32 @@ export function chromiumBinary(
   return undefined
 }
 
+/** Attempts per frame. Headless Chrome occasionally exits 0 without writing
+ * its screenshot on a loaded guest; a second launch on a fresh profile is
+ * cheap and keeps the capture deterministic without hiding a real failure. */
+const SCREENSHOT_ATTEMPTS = 2
+
 async function screenshot(
+  chromium: string,
+  htmlPath: string,
+  pngPath: string,
+  spec: WebFrameSpec,
+  profileDir: string,
+): Promise<void> {
+  let failure: Error | undefined
+  for (let attempt = 1; attempt <= SCREENSHOT_ATTEMPTS; attempt += 1) {
+    try {
+      await screenshotOnce(chromium, htmlPath, pngPath, spec, `${profileDir}-${attempt}`)
+      return
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error))
+      await rm(pngPath, { force: true })
+    }
+  }
+  throw failure ?? new Error(`web dashboard capture ${spec.id}: no screenshot attempt ran`)
+}
+
+async function screenshotOnce(
   chromium: string,
   htmlPath: string,
   pngPath: string,
@@ -664,7 +689,9 @@ async function screenshot(
   const code = await proc.exited
   if (code !== 0 || !existsSync(pngPath)) {
     throw new Error(
-      `web dashboard capture ${spec.id}: Chromium exited ${code} without a screenshot\n${stderr.trim()}`,
+      `web dashboard capture ${spec.id}: Chromium exited ${code}${
+        proc.signalCode ? ` (${proc.signalCode})` : ''
+      } without a screenshot at ${pngPath}\n${stderr.trim() || '(no stderr)'}`,
     )
   }
 }
