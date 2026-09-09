@@ -18,10 +18,14 @@ vcpus = 4
 timeoutSeconds = 2700
 operationTimeoutMs = 30000
 environmentVariables = ["AI_GATEWAY_API_KEY"]
+# The universal image is Ubuntu, where the apt `chromium` package is a snap
+# stub that installs no browser; Google's own .deb provides a real binary.
 provisioning = [
-  { name = "system-install", command = """apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y chromium fonts-noto-cjk fonts-noto-color-emoji fontconfig""" },
-  { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/chromium; \"$CHROMIUM_BIN\" --headless --no-sandbox --disable-gpu --dump-dom 'data:text/html,<title>Autobuild browser smoke</title>' >/dev/null" },
+  { name = "system-install", command = """export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
+apt-get install -y -qq /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji fontconfig""" },
+  { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/google-chrome-stable; \"$CHROMIUM_BIN\" --headless --no-sandbox --disable-gpu --dump-dom 'data:text/html,<title>Autobuild browser smoke</title>' >/dev/null" },
 ]
 
 [workspace.config.runtimeProvisioning.pi]

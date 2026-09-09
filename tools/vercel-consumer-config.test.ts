@@ -28,10 +28,10 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
     'system-install',
     'browser-smoke',
   ])
-  expect(workspace.provisioning[0]?.command).toContain('apt-get install -y chromium')
+  expect(workspace.provisioning[0]?.command).toContain('google-chrome-stable_current_amd64.deb')
   expect(workspace.provisioning[0]?.command).toContain('fonts-noto-cjk')
   expect(workspace.provisioning[0]?.command).toContain('fonts-noto-color-emoji')
-  expect(workspace.provisioning[1]?.command).toContain('CHROMIUM_BIN=/usr/bin/chromium')
+  expect(workspace.provisioning[1]?.command).toContain('CHROMIUM_BIN=/usr/bin/google-chrome-stable')
   expect(workspace.provisioning[1]?.command).toContain('--headless')
   expect(workspace.runtimeProvisioning).toEqual({
     pi: {
