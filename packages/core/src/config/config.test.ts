@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { ConfigError, loadConfig, parseConfig } from './load'
 import { vercelSandboxConfigSchema } from './schema'
 
@@ -431,36 +432,6 @@ ${READY}`
       Object.keys(vercelSandboxConfigSchema.parse(parsed.workspace.config).runtimeProvisioning),
     ).toEqual(['pi', 'plugin.runtime'])
 
-    const missing = parseError(
-      source.replace(
-        '[workspace.config.runtimeProvisioning."plugin.runtime"]\ninstall = "install-plugin@abc123"\npreflight = "plugin-runtime --version"\n',
-        '',
-      ),
-    )
-    expect(missing.message).toContain('runtime "plugin.runtime"')
-    expect(missing.message).toContain('role "plan" alternate[0]')
-    expect(missing.message).toContain('[workspace.config.runtimeProvisioning."plugin.runtime"]')
-
-    const controlNameSource = `[workspace]
-provider = "vercel-sandbox"
-[workspace.config]
-timeoutSeconds = 600
-[roles.default]
-runtime = "plugin\\u007F"
-${READY}`
-    const controlNameError = parseError(controlNameSource)
-    expect(controlNameError.message).toContain(
-      '[workspace.config.runtimeProvisioning."plugin\\u007F"]',
-    )
-    expect(() =>
-      parseConfig(
-        controlNameSource.replace(
-          '[roles.default]',
-          '[workspace.config.runtimeProvisioning."plugin\\u007F"]\ninstall = "install@1"\npreflight = "plugin --version"\n[roles.default]',
-        ),
-      ),
-    ).not.toThrow()
-
     for (const entry of [
       'install = ""\npreflight = "pi --version"',
       'install = "npm install pi@1"',
@@ -471,6 +442,42 @@ ${READY}`
           `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n[workspace.config.runtimeProvisioning.pi]\n${entry}\n[roles.default]\nruntime = "pi"\n${READY}`,
         ),
       ).toThrow(/workspace\.config\.runtimeProvisioning\.pi/)
+    }
+  })
+
+  test('vercel missing-runtime remediation round-trips every supported TOML key shape', () => {
+    const cases = [
+      ['pi', 'pi'],
+      ['plugin.runtime', '"plugin.runtime"'],
+      ['plugin"runtime', '"plugin\\"runtime"'],
+      ['plugin\\runtime', '"plugin\\\\runtime"'],
+      ['plugin\u0001runtime', '"plugin\\u0001runtime"'],
+      ['plugin\u007fruntime', '"plugin\\u007Fruntime"'],
+      ['插件', '"\\u63D2\\u4EF6"'],
+      ['plugin😀', '"plugin\\U0001F600"'],
+    ] as const
+
+    for (const [runtime, renderedKey] of cases) {
+      const source = stringifyToml({
+        workspace: {
+          provider: 'vercel-sandbox',
+          config: { timeoutSeconds: 600 },
+        },
+        roles: { default: { runtime } },
+        tickets: { source: 'file', readyState: 'ready' },
+      })
+      const error = parseError(source)
+      const header = error.message.match(
+        /add (\[workspace\.config\.runtimeProvisioning\..+?\]) with/,
+      )?.[1]
+
+      expect(header, `missing remediation header for ${JSON.stringify(runtime)}`).toBe(
+        `[workspace.config.runtimeProvisioning.${renderedKey}]`,
+      )
+      const parsed = parseToml(header!) as {
+        workspace: { config: { runtimeProvisioning: Record<string, unknown> } }
+      }
+      expect(Object.keys(parsed.workspace.config.runtimeProvisioning)).toEqual([runtime])
     }
   })
 

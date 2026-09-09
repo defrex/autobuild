@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#288](https://github.com/defrex/autobuild/pull/288) — Validate runtime remediation keys as TOML
 - [#287](https://github.com/defrex/autobuild/pull/287) — Provision configured runtimes in Vercel sandboxes
 - [#285](https://github.com/defrex/autobuild/pull/285) — Backfill Vercel provisioning seam coverage
 - [#284](https://github.com/defrex/autobuild/pull/284) — Correct Vercel command-output contract documentation
