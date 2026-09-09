@@ -68,7 +68,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
-import { infrastructureFailureResetSeq } from './infrastructure-failure-budget'
+import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
@@ -1145,18 +1145,13 @@ export class Dispatcher {
       cleanupPending: boolean
     },
   ): Promise<void> {
-    const lastReset = infrastructureFailureResetSeq(events)
-    const attempt =
-      events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
-        .length + 1
-    const message =
-      (input.error instanceof Error ? input.error.message : String(input.error)).trim() ||
-      'provider operation failed without an error message'
     const execution = [...events].reverse().find((event) => event.type === 'execution.started')
-    const failure = await this.deps.store.append(slug, {
-      actor: DISPATCHER,
-      type: 'infrastructure.failed',
-      payload: {
+    const appended = await appendInfrastructureFailure(
+      { store: this.deps.store, ids: this.deps.ids },
+      {
+        slug,
+        events,
+        maxAttempts: this.deps.config.policy.maxInfrastructureAttempts,
         provider: input.provider,
         workspaceRef: input.workspaceRef,
         instance:
@@ -1170,44 +1165,11 @@ export class Dispatcher {
           ? { sessionId: execution.payload.sessionId }
           : {}),
         operation: input.operation,
-        cause: /timeout|abort/i.test(message)
-          ? 'timeout'
-          : /limit|quota|cpu|duration/i.test(message)
-            ? 'provider-limit'
-            : input.cleanupPending
-              ? 'unknown-outcome'
-              : 'provider-error',
-        attempt,
-        retryable: true,
+        error: input.error,
         cleanupPending: input.cleanupPending,
-        error: message,
       },
-    })
-    events.push(failure)
-    const limit = this.deps.config.policy.maxInfrastructureAttempts
-    if (
-      attempt >= limit &&
-      !events.some(
-        (event) =>
-          event.seq > lastReset &&
-          event.type === 'escalation.raised' &&
-          event.payload.policyCause === 'infrastructure-failure-limit',
-      )
-    ) {
-      const raised = await this.deps.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'escalation.raised',
-        payload: {
-          id: this.deps.ids('esc'),
-          phase: 'setup',
-          source: 'policy',
-          policyCause: 'infrastructure-failure-limit',
-          question: `maxInfrastructureAttempts (${limit}) exhausted during ${input.operation}: ${message}`,
-          refs: [input.workspaceRef],
-        },
-      })
-      events.push(raised)
-    }
+    )
+    events.push(...appended)
   }
 
   /** Fence and remove a stale remote environment. A replacement is created
