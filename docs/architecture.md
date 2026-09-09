@@ -336,9 +336,19 @@ execution-time target refresh in `packages/core/src/processes/build-runner.ts` r
 third, deliberately separate boundary and also fails closed.
 
 The builtin `vercel-sandbox` adapter provisions an exact GitHub revision into a
-fixed guest path, installs the running Autobuild distribution and repository
-dependencies there, and starts the same private build child with environment
-supervision. Local children carry a positive parent PID and retain their
+fixed guest path. Fresh-environment bootstrap scrubs clone authority, installs
+and verifies pinned Bun, serially runs repository-declared named system
+provisioning through `sh -c` with provider root authority, installs the running
+Autobuild distribution and repository dependencies, and only then writes the
+readiness marker. Thus marked environments run the list once, while every new
+replacement generation reproduces it before `[commands].setup` or any phase.
+Step failures retain command/status/stdout/stderr, leave no marker, and flow
+through durable `infrastructure.failed`, its bounded retry budget, shared status
+and dashboard projection, and setup-targeted escalation; nested cleanup failure
+does not erase the original diagnostic. Readiness uses the same bootstrap helper
+in an always-deleted temporary sandbox and reports declared step names before
+guest setup checks. The adapter then starts the same private build child with
+environment supervision. Local children carry a positive parent PID and retain their
 watchdog/process-group reaper; remote children cannot see a meaningful host PID,
 so the detached SDK command plus VM stop owns full teardown. Scoped Store facts
 are the only state channel. Remote terminals append `publication.requested` and

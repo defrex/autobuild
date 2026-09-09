@@ -405,6 +405,11 @@ operationTimeoutMs = 30000
 region = "iad1"
 failoverRegions = ["sfo1"]
 environmentVariables = ["ANTHROPIC_API_KEY"]
+provisioning = [
+  { name = "system-install", command = """apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y chromium""" },
+  { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/chromium ./scripts/browser-smoke.sh" },
+]
 # Private repositories only:
 gitUsernameEnv = "AB_GIT_READ_USER"
 gitPasswordEnv = "AB_GIT_READ_TOKEN"
@@ -419,6 +424,7 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 | `region` | Vercel default | nonempty region |
 | `failoverRegions` | `[]` | unique and different from `region` |
 | `environmentVariables` | `[]` | unique variable names copied into agent/check commands |
+| `provisioning` | `[]` | ordered strict inline tables `{ name, command }`; names and commands are nonblank and names are unique |
 | `gitUsernameEnv`, `gitPasswordEnv` | — | optional pair naming a dedicated read-only clone identity |
 
 The built-in adapter supports only Vercel's
@@ -434,14 +440,26 @@ dependency installation. Package-registry network access is therefore required
 during provisioning. The child launch prepends the adapter-owned Bun directory
 to `PATH`, so setup, checks, agents, and their descendants resolve the same Bun.
 
+`provisioning` is repository-owned declarative data; Autobuild never evaluates
+configuration as code. After pinned Bun is verified, each command runs serially
+as `sh -c <command>` with provider `sudo: true` and
+`/vercel/sandbox/workspace` as its working directory. Distribution installation,
+lockfile dependency bootstrap, `[commands].setup`, and every agent session occur
+after these system steps. Put system packages here, not in repeated setup.
+Commands that need a browser should set the repository-controlled location,
+for example `CHROMIUM_BIN=/usr/bin/chromium bun test`; the example's checked-in
+`scripts/browser-smoke.sh` must start a local dev server, launch
+`"$CHROMIUM_BIN" --headless` against it in the same guest, verify the rendered
+page, and exit nonzero on failure.
+
 The private-repository token must grant repository contents read and no
 contents write. It must be distinct from Forge and Vercel credentials and may
 not also appear in `environmentVariables`. Autobuild gives its firewall broker
 only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
 helpers, and extra headers after clone, and gives normal sessions no Forge
-credential. Provisioning writes its readiness marker only after all scrubbing,
-Bun verification, distribution installation, and dependency bootstrap
-complete; distribution packing/install disables package lifecycle scripts so
+credential. Provisioning writes its readiness marker only after all scrubbing, Bun
+verification, every declared system step, distribution installation, and
+dependency bootstrap complete; distribution packing/install disables package lifecycle scripts so
 checkout-only hooks such as Husky are not provisioning dependencies. A Bun
 install or verification failure identifies the configured image and expected
 universal-image capabilities, deletes the partial environment, and leaves no
@@ -482,11 +500,22 @@ keeps ownership fenced until lease expiry and is retried visibly. After abrupt
 supervisor loss, Vercel's configured `timeoutSeconds` bounds orphan compute, and
 the next dispatcher waits for lease expiry before exact-name cleanup. Provider
 quota/vCPU/duration messages are retained verbatim in infrastructure events and
-status output.
+status output. A failed system step records its name, exact shell command, exit
+status, labeled stdout and stderr, and `ab init --validate` remediation. It never
+writes the marker or launches setup/an agent; the partial sandbox is deleted.
+The existing `infrastructure.failed` stream exposes the diagnostic in `ab
+status` and both dashboards, consumes `maxInfrastructureAttempts`, and raises
+one setup-targeted escalation when exhausted. If cleanup also fails, both the
+step output and cleanup uncertainty remain durable instead of hiding the root
+cause. A marked sandbox does not repeat provisioning; every replacement/new
+generation does.
 
 The representative actual-provider check is opt-in and must point at an
 independent consuming repository whose `autobuild.toml` selects the universal
-image above and contains one ready ticket. With hosted Store, Vercel, GitHub,
+image above, contains one ready ticket, and declares the `system-install` and
+`browser-smoke` provisioning steps shown above. The checked-in browser smoke
+must use `CHROMIUM_BIN`, serve a page, render it with headless Chromium in the
+same guest, and fail if any stage fails. With hosted Store, Vercel, GitHub,
 and configured agent-runtime credentials available, run:
 
 ```sh
@@ -497,8 +526,9 @@ bun test packages/core/src/integration/vercel-sandbox.live.test.ts
 ```
 
 The suite first runs `ab init` readiness validation through the production
-adapter: it creates an unnamed fresh sandbox, accepts the structured guest probe
-marker, and verifies deletion by querying that exact sandbox identity. A separate
+adapter: it creates an unnamed fresh sandbox, reports both named provisioning
+steps, accepts the structured guest probe marker, and verifies deletion by
+querying that exact sandbox identity. A separate
 case runs a complete child-driven build to publish and finalize, then requests
 cleanup and verifies sandbox deletion. It does not demonstrate support for other
 Vercel images or package managers.
