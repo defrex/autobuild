@@ -2336,6 +2336,72 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     expect(h.launches).toEqual(['interrupted-dispatch'])
   })
 
+  test('budgets repeated remote provisioning-step failures and escalates setup', async () => {
+    const diagnostic =
+      'system provisioning step "browser packages" failed\n' +
+      'command: install browser packages\n' +
+      'exit status: 23\n' +
+      'stderr: chromium package unavailable\n' +
+      'remediation: fix [workspace.config].provisioning and rerun ab init --validate'
+    let provisions = 0
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: { reap: async () => 'absent' },
+      provision: async () => {
+        provisions += 1
+        throw new Error(diagnostic)
+      },
+      release: async () => {},
+    }
+    const h = harness({
+      tickets: [readyTicket('T-recover')],
+      toml: '[policy]\nmaxInfrastructureAttempts = 2\n',
+      workspaceProvider,
+    })
+    await seedInterrupted(h, 'provisioning-budget')
+
+    for (const attempt of [1, 2]) {
+      expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
+        ...emptyTickReport(),
+        dispatchFailed: 1,
+      })
+      const failures = (await h.store.getEvents('provisioning-budget')).filter(
+        (event) => event.type === 'infrastructure.failed',
+      )
+      expect(failures.at(-1)?.payload).toEqual({
+        provider: 'remote-test',
+        workspaceRef: 'provisioning-budget',
+        instance: 'dispatcher-recovery',
+        operation: 'provision',
+        cause: 'unknown-outcome',
+        attempt,
+        retryable: true,
+        cleanupPending: true,
+        error: diagnostic,
+      })
+    }
+
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+    const events = await h.store.getEvents('provisioning-budget')
+    expect(events.filter((event) => event.type === 'infrastructure.failed')).toHaveLength(2)
+    const escalations = events.filter(
+      (event) =>
+        event.type === 'escalation.raised' &&
+        event.payload.policyCause === 'infrastructure-failure-limit',
+    )
+    expect(escalations).toHaveLength(1)
+    expect(escalations[0]?.payload).toMatchObject({
+      phase: 'setup',
+      source: 'policy',
+      policyCause: 'infrastructure-failure-limit',
+      refs: ['provisioning-budget'],
+    })
+    expect(escalations[0]?.payload.question).toContain(diagnostic)
+    expect(events.some((event) => event.type === 'workspace.provisioned')).toBe(false)
+    expect(h.launches).toEqual([])
+    expect(provisions).toBe(2)
+  })
+
   test('reconstructs an empty dispatch stream with a conditional build.created append', async () => {
     const h = harness({ tickets: [readyTicket('T-recover')] })
     const ticket = (await h.tickets.get('T-recover'))!
