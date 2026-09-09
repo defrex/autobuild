@@ -38,6 +38,7 @@ export interface VercelSandboxHandle {
     cwd?: string
     env?: Record<string, string>
     detached?: true
+    signal?: AbortSignal
   }): Promise<VercelCommand | { exitCode: number }>
   writeFiles(files: { path: string; content: Uint8Array }[]): Promise<void>
   stop(): Promise<unknown>
@@ -70,7 +71,7 @@ export interface VercelSandboxFacade {
   create(input: VercelSandboxCreateInput): Promise<VercelSandboxHandle>
   /** Readiness always acquires a new unnamed disposable environment. */
   createFresh?(
-    input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'>,
+    input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'> & { signal?: AbortSignal },
   ): Promise<VercelSandboxHandle>
 }
 
@@ -186,8 +187,13 @@ function sandboxName(origin: string, branch: string): string {
   return `autobuild-${readable || 'build'}-${digest}`.slice(0, 63)
 }
 
-async function execOrThrow(exec: Exec, cmd: string[], cwd: string): Promise<string> {
-  const result = await exec(cmd, { cwd })
+async function execOrThrow(
+  exec: Exec,
+  cmd: string[],
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await exec(cmd, { cwd, ...(signal === undefined ? {} : { signal }) })
   if (result.exitCode !== 0) {
     throw new Error(
       `${cmd.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}`,
@@ -233,7 +239,13 @@ function uploadPackPolicy(
 
 async function commandOrThrow(
   sandbox: VercelSandboxHandle,
-  params: { cmd: string; args?: string[]; cwd?: string; env?: Record<string, string> },
+  params: {
+    cmd: string
+    args?: string[]
+    cwd?: string
+    env?: Record<string, string>
+    signal?: AbortSignal
+  },
 ): Promise<void> {
   const result = await sandbox.runCommand(params)
   if (result.exitCode === null || result.exitCode === undefined) {
@@ -271,6 +283,8 @@ export interface VercelReadinessOptions {
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
   signal?: AbortSignal
+  /** Called as soon as the fresh sandbox has an identity, before bootstrap. */
+  onSandbox?: (name: string) => void
 }
 
 export interface VercelReadinessResult {
@@ -282,7 +296,13 @@ export interface VercelReadinessResult {
 
 async function readableCommand(
   sandbox: VercelSandboxHandle,
-  params: { cmd: string; args?: string[]; cwd?: string; env?: Record<string, string> },
+  params: {
+    cmd: string
+    args?: string[]
+    cwd?: string
+    env?: Record<string, string>
+    signal?: AbortSignal
+  },
 ): Promise<string> {
   const result = (await sandbox.runCommand(params)) as VercelCommand
   const stderr = result.stderr === undefined ? '' : await result.stderr()
@@ -310,13 +330,19 @@ export async function validateVercelSandbox(
   }
   if (options.signal?.aborted) throw options.signal.reason ?? new Error('validation cancelled')
   const exec = options.exec ?? spawnExec
-  const rawOrigin = await execOrThrow(exec, ['git', 'remote', 'get-url', 'origin'], options.repo)
+  const rawOrigin = await execOrThrow(
+    exec,
+    ['git', 'remote', 'get-url', 'origin'],
+    options.repo,
+    options.signal,
+  )
   const origin = cleanGithubOrigin(rawOrigin)
   const revision = oneSha(
     await execOrThrow(
       exec,
       ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${options.baseBranch}`],
       options.repo,
+      options.signal,
     ),
     `remote base ${options.baseBranch}`,
   )
@@ -352,61 +378,94 @@ export async function validateVercelSandbox(
       ? { failoverRegions: options.config.failoverRegions }
       : {}),
     networkPolicy: 'allow-all',
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
   const name = sandbox.name
+  const withSignal = <T extends { cmd: string }>(params: T): T & { signal?: AbortSignal } => ({
+    ...params,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
+  const checkCancellation = (): void => {
+    if (options.signal?.aborted)
+      throw options.signal.reason ?? new Error(`validation cancelled; releasing sandbox ${name}`)
+  }
   let failure: unknown
   let readiness: VercelReadinessResult | undefined
   try {
+    options.onSandbox?.(name)
+    checkCancellation()
     const sourcePath = `/vercel/sandbox/${origin.directory}`
-    await commandOrThrow(sandbox, { cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] })
-    await commandOrThrow(sandbox, {
-      cmd: 'git',
-      args: ['remote', 'set-url', 'origin', origin.url],
-      cwd: VERCEL_WORKSPACE_PATH,
-    })
-    for (const key of ['credential.helper', 'http.extraheader', `http.${origin.url}.extraheader`]) {
-      const result = await sandbox.runCommand({
+    await commandOrThrow(
+      sandbox,
+      withSignal({ cmd: 'mv', args: [sourcePath, VERCEL_WORKSPACE_PATH] }),
+    )
+    await commandOrThrow(
+      sandbox,
+      withSignal({
         cmd: 'git',
-        args: ['config', '--local', '--unset-all', key],
+        args: ['remote', 'set-url', 'origin', origin.url],
         cwd: VERCEL_WORKSPACE_PATH,
-      })
+      }),
+    )
+    for (const key of ['credential.helper', 'http.extraheader', `http.${origin.url}.extraheader`]) {
+      const result = await sandbox.runCommand(
+        withSignal({
+          cmd: 'git',
+          args: ['config', '--local', '--unset-all', key],
+          cwd: VERCEL_WORKSPACE_PATH,
+        }),
+      )
       if (result.exitCode !== 0 && result.exitCode !== 5) {
         throw new Error(`failed to scrub git config ${key}`)
       }
     }
     const archive = await (options.packageArchive ?? packageAutobuildDistribution)()
+    checkCancellation()
     await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
-    await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
-    await commandOrThrow(sandbox, {
-      cmd: 'tar',
-      args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
-    })
-    await commandOrThrow(sandbox, {
-      cmd: 'bun',
-      args: ['install', '--production', '--ignore-scripts'],
-      cwd: VERCEL_AUTOBUILD_PATH,
-    })
-    await commandOrThrow(sandbox, {
-      cmd: 'sh',
-      args: [
-        '-c',
-        'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
-      ],
-      cwd: VERCEL_WORKSPACE_PATH,
-    })
-    const setup = await readableCommand(sandbox, {
-      cmd: 'bun',
-      args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-init-probe.ts`],
-      cwd: VERCEL_WORKSPACE_PATH,
-      env: Object.fromEntries([
-        ['AB_STORE', options.storeRef],
-        ['AB_TOKEN', options.storeToken],
-        ...options.config.environmentVariables.map((name) => [
-          name,
-          requireVercelEnvironmentValue(options.env, name),
+    checkCancellation()
+    await commandOrThrow(sandbox, withSignal({ cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] }))
+    await commandOrThrow(
+      sandbox,
+      withSignal({
+        cmd: 'tar',
+        args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
+      }),
+    )
+    await commandOrThrow(
+      sandbox,
+      withSignal({
+        cmd: 'bun',
+        args: ['install', '--production', '--ignore-scripts'],
+        cwd: VERCEL_AUTOBUILD_PATH,
+      }),
+    )
+    await commandOrThrow(
+      sandbox,
+      withSignal({
+        cmd: 'sh',
+        args: [
+          '-c',
+          'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
+        ],
+        cwd: VERCEL_WORKSPACE_PATH,
+      }),
+    )
+    const setup = await readableCommand(
+      sandbox,
+      withSignal({
+        cmd: 'bun',
+        args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-init-probe.ts`],
+        cwd: VERCEL_WORKSPACE_PATH,
+        env: Object.fromEntries([
+          ['AB_STORE', options.storeRef],
+          ['AB_TOKEN', options.storeToken],
+          ...options.config.environmentVariables.map((name) => [
+            name,
+            requireVercelEnvironmentValue(options.env, name),
+          ]),
         ]),
-      ]),
-    })
+      }),
+    )
     readiness = { sandbox: name, revision, origin: origin.url, output: setup }
   } catch (error) {
     failure = error
@@ -418,7 +477,12 @@ export async function validateVercelSandbox(
     if (failure !== undefined) throw new AggregateError([failure, deleteError], guidance)
     throw new Error(guidance, { cause: deleteError })
   }
-  if (failure !== undefined) throw failure
+  if (failure !== undefined) {
+    throw new Error(
+      `disposable sandbox ${name} was deleted after validation failed: ${failure instanceof Error ? failure.message : String(failure)}`,
+      { cause: failure },
+    )
+  }
   return readiness!
 }
 

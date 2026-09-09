@@ -18,7 +18,10 @@ export interface ExecResult {
 }
 
 /** Injectable exec seam — the default shells out via Bun.spawn. */
-export type Exec = (cmd: string[], opts: { cwd?: string }) => Promise<ExecResult>
+export type Exec = (
+  cmd: string[],
+  opts: { cwd?: string; signal?: AbortSignal },
+) => Promise<ExecResult>
 
 export const spawnExec: Exec = async (cmd, opts) => {
   const proc = Bun.spawn(cmd, {
@@ -26,6 +29,7 @@ export const spawnExec: Exec = async (cmd, opts) => {
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   })
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),

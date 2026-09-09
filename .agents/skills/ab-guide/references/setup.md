@@ -19,8 +19,11 @@ maintainer before selecting it:
 - the intended Vercel team and project;
 - durable dispatcher authentication with `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and
   `VERCEL_PROJECT_ID`, or short-lived `VERCEL_OIDC_TOKEN` obtained from a linked
-  project (`vercel link` and `vercel env pull`); access-token credentials are
-  preferable for a continuously running local dispatcher;
+  project (`vercel link` and `vercel env pull`); when validating a target other
+  than the current directory, export OIDC in the launcher environment because
+  the Vercel SDK resolves it from ambient process state. Access-token
+  credentials in the target's ignored `.env` are the durable choice for a
+  continuously running local dispatcher;
 - an HTTPS `github.com/owner/repository` origin and `forge = "github"`;
 - a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`;
 - for a private repository, a separate read-only clone identity named by

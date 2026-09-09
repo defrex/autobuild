@@ -13,5 +13,7 @@ try {
   console.log(
     `${INIT_PROBE_MARKER}${JSON.stringify({ checks: [{ name: 'readiness probe', status: 'fail', detail }] })}`,
   )
-  process.exit(1)
+  // Emitting the structured marker is transport success. The host turns its
+  // failing check into the command's user-facing nonzero result.
+  process.exit(0)
 }

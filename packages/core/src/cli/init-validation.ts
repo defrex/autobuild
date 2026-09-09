@@ -72,8 +72,16 @@ export function createReadinessRedactor(
   }
 }
 
-async function shell(exec: Exec, cwd: string, command: string): Promise<void> {
-  const result = await exec(['sh', '-c', command], { cwd })
+async function shell(
+  exec: Exec,
+  cwd: string,
+  command: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const result = await exec(['sh', '-c', command], {
+    cwd,
+    ...(signal === undefined ? {} : { signal }),
+  })
   if (result.exitCode !== 0) {
     throw new Error(
       `setup command exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim() || '(no output)'}`,
@@ -105,6 +113,7 @@ export async function runGuestReadinessProbe(opts: {
   runtimes?: RuntimeRegistry
   openStore?: StoreOpener
   exec?: Exec
+  signal?: AbortSignal
 }): Promise<GuestProbeReport> {
   const checks: ReadinessCheck[] = []
   const config = await loadConfig(join(opts.repo, 'autobuild.toml'))
@@ -115,13 +124,15 @@ export async function runGuestReadinessProbe(opts: {
   const redact = createReadinessRedactor(opts.env, vercelConfig?.environmentVariables)
   try {
     const setup = config.commands.setup
-    if (setup !== undefined) await shell(opts.exec ?? spawnExec, opts.repo, setup)
+    if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
+    if (setup !== undefined) await shell(opts.exec ?? spawnExec, opts.repo, setup, opts.signal)
     checks.push({
       name: 'repository setup',
       status: 'pass',
       detail: setup === undefined ? 'no commands.setup configured' : 'commands.setup completed',
     })
   } catch (error) {
+    if (opts.signal?.aborted) throw opts.signal.reason ?? error
     return {
       checks: [
         {
@@ -162,6 +173,7 @@ export async function runGuestReadinessProbe(opts: {
 
   try {
     for (const target of effectiveTargets(config, runtimes)) {
+      if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
       const probe = runtimes[target.runtime]?.initUsable
       if (probe === undefined) {
         checks.push({
@@ -185,6 +197,7 @@ export async function runGuestReadinessProbe(opts: {
             : `${redact(reason)}; install/authenticate this runtime and expose its credential names in workspace.config.environmentVariables`,
         })
       } catch (error) {
+        if (opts.signal?.aborted) throw opts.signal.reason ?? error
         checks.push({
           name: `runtime ${target.runtime}`,
           status: 'fail',
@@ -193,9 +206,11 @@ export async function runGuestReadinessProbe(opts: {
       }
     }
   } catch (error) {
+    if (opts.signal?.aborted) throw opts.signal.reason ?? error
     checks.push({ name: 'runtime routing', status: 'fail', detail: redact(error) })
   }
 
+  if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
   const storeRef = opts.env.AB_STORE
   if (storeRef === undefined || storeRef === '') {
     checks.push({
@@ -234,8 +249,16 @@ function parseGuestOutput(output: string): GuestProbeReport {
   return value
 }
 
-async function gitText(exec: Exec, repo: string, args: string[]): Promise<string> {
-  const result = await exec(['git', ...args], { cwd: repo })
+async function gitText(
+  exec: Exec,
+  repo: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await exec(['git', ...args], {
+    cwd: repo,
+    ...(signal === undefined ? {} : { signal }),
+  })
   if (result.exitCode !== 0)
     throw new Error(
       `git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}`,
@@ -275,6 +298,7 @@ export async function validateInitReadiness(opts: {
   signal?: AbortSignal
 }): Promise<InitValidationReport> {
   const exec = opts.exec ?? spawnExec
+  if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
   const repo = await resolveMainRepo(opts.targetRepo, exec)
   const configPath = join(repo, 'autobuild.toml')
   const configBytes = await readFile(configPath, 'utf8')
@@ -318,13 +342,15 @@ export async function validateInitReadiness(opts: {
     let failure: unknown
     let cleanupFailure: unknown
     try {
-      const revision = await gitText(exec, repo, [
-        'rev-parse',
-        '--verify',
-        `${config.baseBranch}^{commit}`,
-      ])
+      const revision = await gitText(
+        exec,
+        repo,
+        ['rev-parse', '--verify', `${config.baseBranch}^{commit}`],
+        opts.signal,
+      )
       const add = await exec(['git', 'worktree', 'add', '--detach', workspace, revision], {
         cwd: repo,
+        ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       })
       if (add.exitCode !== 0)
         throw new Error(
@@ -341,6 +367,7 @@ export async function validateInitReadiness(opts: {
         ...(opts.openStore !== undefined ? { openStore: opts.openStore } : {}),
         ...(opts.runtimes !== undefined ? { runtimes: opts.runtimes } : {}),
         exec,
+        ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       })
       report = {
         provider: 'git-worktree',
@@ -388,28 +415,34 @@ export async function validateInitReadiness(opts: {
       throw new Error('vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel')
     const token = opts.env.AB_TOKEN
     if (!token) throw new Error('vercel-sandbox requires nonempty AB_TOKEN for the hosted Store')
-    const remoteLine = await gitText(exec, repo, [
-      'ls-remote',
-      '--heads',
-      'origin',
-      `refs/heads/${config.baseBranch}`,
-    ])
+    const remoteLine = await gitText(
+      exec,
+      repo,
+      ['ls-remote', '--heads', 'origin', `refs/heads/${config.baseBranch}`],
+      opts.signal,
+    )
     const remoteRevision = remoteLine.split(/\s+/)[0]
     if (!/^[0-9a-f]{40,64}$/i.test(remoteRevision ?? '')) {
       throw new Error(
         `remote base ${config.baseBranch} does not exist; commit and push setup changes before validating`,
       )
     }
-    await gitText(exec, repo, [
-      'fetch',
-      '--no-tags',
-      '--no-write-fetch-head',
-      '--refmap=',
-      'origin',
-      `refs/heads/${config.baseBranch}`,
-    ])
+    await gitText(
+      exec,
+      repo,
+      [
+        'fetch',
+        '--no-tags',
+        '--no-write-fetch-head',
+        '--refmap=',
+        'origin',
+        `refs/heads/${config.baseBranch}`,
+      ],
+      opts.signal,
+    )
     const shownConfig = await exec(['git', 'show', `${remoteRevision}:autobuild.toml`], {
       cwd: repo,
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
     })
     if (shownConfig.exitCode !== 0) {
       throw new Error(
@@ -434,11 +467,19 @@ export async function validateInitReadiness(opts: {
         exec,
         ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        onSandbox: (name) => opts.stdout?.(`Disposable Vercel Sandbox: ${name} (active)`),
       })
     } catch (error) {
       throw new Error(redact(error))
     }
-    const guest = parseGuestOutput(remote.output)
+    let guest: GuestProbeReport
+    try {
+      guest = parseGuestOutput(remote.output)
+    } catch (error) {
+      throw new Error(
+        `disposable sandbox ${remote.sandbox} was deleted, but its readiness output was invalid: ${redact(error)}`,
+      )
+    }
     report = {
       provider: 'vercel-sandbox',
       context: 'Vercel Sandbox',

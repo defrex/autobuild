@@ -461,6 +461,14 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       if (parsed.flags.has('validate')) {
         const env = { ...(deps.processEnv ?? process.env) }
         loadDotEnv(join(targetRepo, '.env'), env)
+        if (
+          env.VERCEL_OIDC_TOKEN !== undefined &&
+          (deps.processEnv ?? process.env).VERCEL_OIDC_TOKEN === undefined
+        ) {
+          throw new Error(
+            'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to the Vercel SDK; export it in the launcher environment or configure VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
+          )
+        }
         const report = await (deps.initValidation ?? validateInitReadiness)({
           targetRepo,
           env,
