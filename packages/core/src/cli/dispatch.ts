@@ -22,7 +22,7 @@
  * next tick advances the post-PR epilogue (§15.7).
  */
 import { hostname } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import semver from 'semver'
 import { parseConfig } from '../config/load'
 import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
@@ -70,6 +70,7 @@ import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
 import { createWorkspaceRuntime } from '../ports/workspace/create'
+import { GitWorktreeProvider } from '../ports/workspace/git-worktree'
 import {
   BUILD_EXECUTION_LEASE_TTL_MS,
   type BuildExecution,
@@ -206,6 +207,9 @@ export interface DispatchWiring {
   tickets: TicketSource
   forge: Forge
   workspaces: WorkspaceProvider
+  /** Providers for workspaces recorded before a `[workspace].provider`
+   * switch; see DispatcherDeps.retiredWorkspaces. */
+  retiredWorkspaces?: readonly WorkspaceProvider[]
   /** Workspace-adjacent build executor. Production always supplies the local
    * subprocess implementation; tests may inject an in-process double. */
   buildExecution: BuildExecution
@@ -372,11 +376,19 @@ async function defaultWire(
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 
+  // Builds provisioned before this repository switched providers still hold
+  // local worktrees; the builtin can release them when they finish.
+  const retiredWorkspaces =
+    config.workspace.provider === 'git-worktree'
+      ? []
+      : [new GitWorktreeProvider({ root: resolve(opened.worktreeRoot) })]
+
   return {
     store: opened.store,
     tickets,
     forge,
     workspaces: workspaceRuntime.provider,
+    retiredWorkspaces,
     buildExecution: workspaceRuntime.execution,
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
@@ -534,6 +546,9 @@ class DispatchLoop {
       store: wiring.store,
       tickets: wiring.tickets,
       workspaces: wiring.workspaces,
+      ...(wiring.retiredWorkspaces === undefined
+        ? {}
+        : { retiredWorkspaces: wiring.retiredWorkspaces }),
       forge: wiring.forge,
       config,
       getConfig: () => this.liveConfig.current().config,

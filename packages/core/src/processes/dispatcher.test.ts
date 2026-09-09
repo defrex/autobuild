@@ -108,6 +108,10 @@ function harness(
      * the restart tests use to hand a second Dispatcher a reopened store. */
     store?: BuildStore
     workspaceProvider?: WorkspaceProvider
+    retiredWorkspaces?: readonly WorkspaceProvider[]
+    /** Present the harness fake under another provider name, for facts that
+     * name a specific provider (the dispatcher routes by that name). */
+    workspaceName?: string
   } = {},
 ) {
   const clock = manualClock()
@@ -139,7 +143,15 @@ function harness(
   const dispatcher = new Dispatcher({
     store,
     tickets,
-    workspaces: opts.workspaceProvider ?? workspaces,
+    workspaces:
+      opts.workspaceProvider ??
+      (opts.workspaceName === undefined
+        ? workspaces
+        : new Proxy(workspaces, {
+            get: (target, key, receiver) =>
+              key === 'name' ? opts.workspaceName : Reflect.get(target, key, receiver),
+          })),
+    ...(opts.retiredWorkspaces === undefined ? {} : { retiredWorkspaces: opts.retiredWorkspaces }),
     forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
@@ -175,6 +187,8 @@ async function seedBuild(
     workspace?: boolean
     workspaceRef?: string
     workspacePath?: string
+    /** Provider recorded on the provisioned fact; defaults to the harness fake. */
+    workspaceProvider?: string
     attached?: boolean
     pr?: { number: number; url: string; headSha: string }
   } = {},
@@ -198,7 +212,7 @@ async function seedBuild(
       actor: DISPATCHER,
       type: 'workspace.provisioned',
       payload: {
-        provider: 'fake',
+        provider: opts.workspaceProvider ?? 'fake',
         ref: opts.workspaceRef ?? `/ws/ab/${slug}`,
         ...(opts.workspacePath !== undefined ? { path: opts.workspacePath } : {}),
         branch: `ab/${slug}`,
@@ -3471,7 +3485,11 @@ describe('Dispatcher janitor', () => {
       release: async () => undefined,
     }
     const h = harness({ workspaceProvider })
-    const slug = await seedBuild(h, { pr: PR, workspaceRef: 'sandbox-g0' })
+    const slug = await seedBuild(h, {
+      pr: PR,
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
     await h.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.released',
@@ -3533,7 +3551,10 @@ describe('Dispatcher janitor', () => {
       async release() {},
     }
     const h = harness({ workspaceProvider: remote })
-    const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
     await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
     expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
@@ -3614,7 +3635,7 @@ describe('Dispatcher janitor', () => {
   })
 
   test('aborted remote build closes its PR from the dispatcher checkout before releasing the sandbox', async () => {
-    const h = harness()
+    const h = harness({ workspaceName: 'vercel-sandbox' })
     const slug = await seedBuild(h, { slug: 'remote-abort', pr: PR })
     await h.store.append(slug, {
       actor: DISPATCHER,
@@ -4120,6 +4141,69 @@ describe('Dispatcher startup resume', () => {
 // ── Lease sweep (§15.6-C) ────────────────────────────────────────────────────
 
 describe('Dispatcher lease sweep', () => {
+  test('a workspace from a retired provider is never handed to the configured remote provider', async () => {
+    const operations: string[] = []
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap(handle) {
+          operations.push(`reap:${handle.provider}:${handle.ref}`)
+          return 'confirmed'
+        },
+      },
+      async provision(opts) {
+        operations.push('provision')
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+        }
+      },
+      async release(handle) {
+        operations.push(`release:${handle.provider}:${handle.ref}`)
+      },
+    }
+    const retired: WorkspaceProvider = {
+      name: 'git-worktree',
+      async provision() {
+        throw new Error('retired providers never provision')
+      },
+      async release(handle) {
+        operations.push(`retired-release:${handle.provider}:${handle.ref}`)
+      },
+    }
+    const h = harness({ workspaceProvider: remote, retiredWorkspaces: [retired] })
+    const slug = await seedBuild(h, {
+      workspaceRef: '/repo/.autobuild/worktrees/ab-local-build',
+      workspaceProvider: 'git-worktree',
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id: 'esc_local', phase: 'implement', source: 'agent', question: 'Which path?' },
+    })
+
+    // Blocked with an open local worktree: the remote provider's recovery must
+    // not be asked to reap a path it cannot own, and nothing is recorded.
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(operations).toEqual([])
+    const events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'infrastructure.cleanup-attempted')).toBe(false)
+    expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
+
+    // Abort releases the worktree through the provider that owns it.
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(operations).toEqual([
+      'retired-release:git-worktree:/repo/.autobuild/worktrees/ab-local-build',
+    ])
+    expect(
+      (await h.store.getEvents(slug)).some((event) => event.type === 'workspace.released'),
+    ).toBe(true)
+  })
+
   test('remote recovery fences the stale identity before provisioning from the durable checkpoint', async () => {
     const operations: string[] = []
     let recoveredRevision: string | undefined
@@ -4147,7 +4231,10 @@ describe('Dispatcher lease sweep', () => {
       async release() {},
     }
     const h = harness({ workspaceProvider })
-    const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
     await h.store.append(slug, {
       actor: KERNEL,
       type: 'publication.requested',

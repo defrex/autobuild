@@ -428,6 +428,11 @@ export interface DispatcherDeps {
   store: BuildStore
   tickets: TicketSource
   workspaces: WorkspaceProvider
+  /** Providers that owned workspaces recorded under an earlier
+   * `[workspace].provider`, so their builds can still be released after a
+   * configuration switch. A workspace is only ever reaped or released by the
+   * provider named on its provisioned fact. */
+  retiredWorkspaces?: readonly WorkspaceProvider[]
   forge: Forge
   config: Config
   /** Current process snapshot, captured once at the beginning of each tick.
@@ -1172,6 +1177,15 @@ export class Dispatcher {
     events.push(...appended)
   }
 
+  /** The provider that owns a recorded workspace: the one named on its
+   * provisioned fact. A handle from any other provider (a build that outlived
+   * a `[workspace].provider` change) is never handed to the current provider,
+   * whose reap or release would misread the ref. */
+  private workspaceOwner(open: { provider: string }): WorkspaceProvider | null {
+    if (open.provider === this.deps.workspaces.name) return this.deps.workspaces
+    return this.deps.retiredWorkspaces?.find((provider) => provider.name === open.provider) ?? null
+  }
+
   /** Fence and remove a stale remote environment. A replacement is created
    * only after exact-name cleanup is durably acknowledged. */
   private async reapStaleWorkspace(
@@ -1180,8 +1194,9 @@ export class Dispatcher {
     reason: 'pause' | 'blocked' | 'replacement',
   ): Promise<boolean> {
     const open = openWorkspace(events)
-    const recovery = this.deps.workspaces.recovery
-    if (open === null || recovery === undefined) return false
+    if (open === null) return false
+    const recovery = this.workspaceOwner(open)?.recovery
+    if (recovery === undefined) return false
     const attempt =
       events.filter(
         (event) =>
@@ -1273,13 +1288,17 @@ export class Dispatcher {
   ): Promise<AbEvent | undefined> {
     const open = openWorkspace(events)
     if (!open) return undefined
+    const owner = this.workspaceOwner(open)
+    // No live provider can act on this ref; leave the fact open rather than
+    // claim a release that never happened.
+    if (owner === null) return undefined
     const handle = {
       provider: open.provider,
       ref: open.ref,
       path: open.path ?? open.ref,
       branch: open.branch,
     }
-    const recovery = this.deps.workspaces.recovery
+    const recovery = owner.recovery
     if (recovery !== undefined) {
       const attempt =
         events.filter(
@@ -1326,7 +1345,7 @@ export class Dispatcher {
         throw error
       }
     } else {
-      await this.deps.workspaces.release(handle)
+      await owner.release(handle)
     }
     return this.deps.store.append(slug, {
       actor: DISPATCHER,
@@ -1687,7 +1706,7 @@ export class Dispatcher {
         state.status !== 'blocked' &&
         (publicationPending(events) || abandonedPublicationPending(events))
       const open = openWorkspace(events)
-      if (open !== null && this.deps.workspaces.recovery !== undefined) {
+      if (open !== null && this.workspaceOwner(open)?.recovery !== undefined) {
         const parked = decision.kind === 'wait' && !publicationRecoveryDue
         const reason =
           state.status === 'paused'
