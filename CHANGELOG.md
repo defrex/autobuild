@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#280](https://github.com/defrex/autobuild/pull/280) — Cover setup preflight safety rejections
 - [#279](https://github.com/defrex/autobuild/pull/279) — Refresh infrastructure escalation deduplication
 - [#278](https://github.com/defrex/autobuild/pull/278) — Unify infrastructure failure-budget accounting
 - [#277](https://github.com/defrex/autobuild/pull/277) — Recover and clean up Vercel sandbox builds
