@@ -131,16 +131,29 @@ test('outline and ghost controls expose the complete state contract', () => {
   expect(stylesheet).toMatch(/\.word:disabled/)
 })
 
-test('the unified control line wraps whole items and reserves a narrow account row', () => {
+test('the unified control line wraps whole items and pins the clock right', () => {
   expect(stylesheet).toMatch(
     /\.control-item\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/,
   )
+  expect(stylesheet).toMatch(/\.navline \.clock\s*\{[\s\S]*?flex:\s*0 0 auto;/)
   expect(stylesheet).toMatch(
-    /@media \(max-width: 719px\)[\s\S]*?\.navline \.identity\s*\{[\s\S]*?flex-basis:\s*100%;[\s\S]*?justify-content:\s*flex-end;/,
+    /@media \(max-width: 719px\)[\s\S]*?\.navline \.clock\s*\{\s*display:\s*none;/,
   )
+  expect(stylesheet).not.toMatch(/\.navline \.identity/)
+  expect(stylesheet).not.toMatch(/\.masthead \.clock/)
   expect(stylesheet).not.toContain('.dispatch')
   expect(stylesheet).not.toContain('.skeleton-dispatch')
   expect(dashboardFrame).not.toContain('skeleton-dispatch')
+})
+
+test('the masthead carries the account menu as the one opaque drop-down', () => {
+  expect(stylesheet).toMatch(/\.masthead \.account\s*\{[\s\S]*?grid-column:\s*3;/)
+  expect(stylesheet).not.toContain('.imperative')
+  expect(stylesheet).toMatch(
+    /\.menu-list\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?background:\s*var\(--well\);/,
+  )
+  expect(stylesheet).not.toMatch(/\.menu-list\s*\{[^}]*(?:border|box-shadow|opacity|backdrop)/)
+  expect(stylesheet).toMatch(/\.menu-item\s*\{[\s\S]*?height:\s*var\(--row\);/)
 })
 
 test('retired footer presentation is absent from app and design artifacts', () => {
@@ -177,26 +190,16 @@ test('flat-grid documentation forbids translucent surfaces', () => {
   )
 })
 
-test('row controls reserve in-flow geometry and share the documented reveal contract', () => {
-  expect(stylesheet).toMatch(
-    /\.row-controls\s*\{[\s\S]*?display:\s*grid;[\s\S]*?height:\s*var\(--row\);[\s\S]*?visibility:\s*hidden;[\s\S]*?pointer-events:\s*none;/,
-  )
-  expect(stylesheet).toMatch(
-    /\.row\[data-selected\] \.row-controls,\s*\.row:focus-within \.row-controls\s*\{[\s\S]*?visibility:\s*visible;/,
-  )
-  expect(stylesheet).toMatch(
-    /@media \(hover: hover\) and \(pointer: fine\)\s*\{\s*\.row\[data-hovered\] \.row-controls/,
-  )
-  expect(stylesheet).toMatch(
-    /@media \(max-width: 719px\)[\s\S]*?\.row-controls\s*\{[\s\S]*?grid-template-rows:\s*var\(--row\);[\s\S]*?height:\s*var\(--row\);/,
-  )
-  expect(designDocument).toContain(
-    'A reserved one-row in-flow control register then sits beneath the previews',
-  )
-  expect(designDocument).toContain('Hidden words leave the tab order')
+test('lifecycle actions live in detail and no row reserves a control register', () => {
+  expect(stylesheet).not.toContain('.row-controls')
+  expect(stylesheet).not.toContain('.row-control')
+  expect(buildsView).not.toContain('row-controls')
+  expect(stylesheet).toMatch(/\.actions \.action\s*\{\s*color:\s*var\(--ink\);/)
+  expect(stylesheet).toMatch(/\.control-item\.toggle\s*\{\s*column-gap:\s*1ch;/)
+  expect(designDocument).toContain('Actions section')
   expect(designDocument).toContain('the repository Harvest gate remains global')
   expect(designSidecar.components.find(({ name }) => name === 'Build row')?.description).toContain(
-    'without moving row content; hidden controls leave the tab order',
+    'Actions section',
   )
 })
 
@@ -227,7 +230,7 @@ test('design sidecar preserves the fine-pointer lane contract', () => {
     'Bracket glyphs `[x] [>] [~] [ ]` for step state, `>` for the selected and fine-pointer preview lanes, `!` for messages, box-drawing `─` for rules.',
   )
   expect(designSidecar.narrative.rules.find(({ name }) => name === 'The Glyph Rule')?.body).toBe(
-    'Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select, `─` for rules, `×N` for the imperative count. No icon font, no SVG icon set, no emoji in the interface.',
+    'Icons are text: `[x] [>] [~] [ ]` for step state, `>` for the selected or fine-pointer preview lane, `!` for the first row of a message, `▾` for a select or menu, `─` for rules. No icon font, no SVG icon set, no emoji in the interface.',
   )
 })
 

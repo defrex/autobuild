@@ -502,6 +502,28 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     ).toBeUndefined()
   })
 
+  test('projects durable system provisioning diagnostics through the shared setup field', () => {
+    const diagnostic =
+      'system provisioning step "browser-smoke" failed\nstdout:\nserver ready\nstderr:\nchromium missing\nremediation: rerun ab init --validate'
+    const failed = toLog([
+      ...prelude().map(({ actor, type, payload }) => ({ actor, type, payload })),
+      ev('infrastructure.failed', {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-g0',
+        instance: 'i1',
+        operation: 'provision',
+        cause: 'provider-error',
+        attempt: 2,
+        retryable: true,
+        cleanupPending: false,
+        error: diagnostic,
+      }),
+    ])
+    expect(projectBuild(RECORD, reduceBuild(failed), CONFIG, failed)?.setupError).toBe(
+      `vercel-sandbox provision failed (attempt 2, provider-error): ${diagnostic}`,
+    )
+  })
+
   test('carries reducer-projected review round ceilings and clears them on spec revision', () => {
     const withCeiling = toLog([
       ...prelude(),

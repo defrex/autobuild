@@ -50,6 +50,18 @@ async function liveSetup(): Promise<{ repo: string; storeRef: string; token: str
   ) {
     throw new Error('live Vercel test requires AI_GATEWAY_API_KEY allowlisted and set')
   }
+  const install = sandboxConfig.provisioning.find((step) => step.name === 'system-install')
+  const smoke = sandboxConfig.provisioning.find((step) => step.name === 'browser-smoke')
+  if (install === undefined || smoke === undefined) {
+    throw new Error(
+      'live Vercel test fixture must declare provisioning steps named system-install and browser-smoke',
+    )
+  }
+  if (!/CHROMIUM_BIN/.test(smoke.command) || !/(headless|browser-smoke)/i.test(smoke.command)) {
+    throw new Error(
+      'browser-smoke provisioning must use the repository-controlled CHROMIUM_BIN and launch the checked-in headless browser smoke script',
+    )
+  }
   return { repo, storeRef, token }
 }
 
@@ -83,6 +95,11 @@ describe.skipIf(!enabled)('Vercel Sandbox lifecycle (opt-in)', () => {
         expect(report.exitCode).toBe(0)
         expect(report.checks.length).toBeGreaterThan(0)
         expect(report.checks.every((check) => check.status === 'pass')).toBe(true)
+        expect(report.checks).toContainEqual({
+          name: 'system provisioning',
+          status: 'pass',
+          detail: 'completed: system-install, browser-smoke',
+        })
         expect(
           await createVercelSdkFacade(process.env).get(sandboxName, AbortSignal.timeout(30_000)),
         ).toBeNull()

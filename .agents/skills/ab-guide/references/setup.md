@@ -47,6 +47,12 @@ image = "vercel/sandbox/universal:latest"
 vcpus = 4
 timeoutSeconds = 2700
 environmentVariables = ["AI_GATEWAY_API_KEY"]
+# Ordered system-level steps run once in every fresh/replacement sandbox as root.
+provisioning = [
+  { name = "system-install", command = """apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y chromium""" },
+  { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/chromium ./scripts/browser-smoke.sh" },
+]
 # Private repositories only:
 # gitUsernameEnv = "AB_GIT_READ_USER"
 # gitPasswordEnv = "AB_GIT_READ_TOKEN"
@@ -70,23 +76,34 @@ conventions. Read the installed sibling `../SKILL.md` for Autobuild's complete
 configuration and ticket surfaces.
 
 Use the supported `vercel/sandbox/universal` image. Other managed images and
-custom VCR images are rejected. Autobuild remains stack-neutral. Put each selected runtime's immutable install
-and executable/version check in its `runtimeProvisioning` entry. Autobuild runs
-install then preflight after checkout dependencies in every fresh/replacement
-sandbox and before the readiness probe, writes the marker only after success,
-and reruns every preflight before each build runner. A failure names the runtime,
-selecting role/alternate, and field and starts no agent. Put the repository's
-other reproducible toolchain bootstrap in idempotent `[commands].setup`; setup
-runs inside the build runner and must not install an agent runtime. Expose only
-required runtime API credentials through `[workspace.config].environmentVariables`.
-For example, setup may install
-Python and `uv`, a pinned Rust toolchain and native libraries, or a JDK and
-Gradle. Those are repository decisions, not toolchains inferred by Autobuild.
+custom VCR images are rejected. Autobuild remains stack-neutral. For Vercel,
+put repository-specific operating-system packages and machine-level tooling in
+the ordered `[workspace.config].provisioning` list. Each strict `{ name,
+command }` entry runs from the checkout through `sh -c` with provider root
+authority after pinned Bun is verified and before dependency bootstrap,
+`[commands].setup`, or an agent. It runs once per fresh environment and repeats
+on every replacement. Commands are declarative TOML string data, not evaluated
+configuration logic. Local git worktrees never run this list; ensure their host
+already has required system tooling.
 
-Configure an idempotent `[commands].setup` to install package dependencies and
-perform repeatable bootstrap on every fresh or replacement environment. It must
-be safe to rerun. Keep generated caches disposable and lock dependencies in the
-repository. Then:
+Put each selected runtime's immutable install and executable/version check in
+its `runtimeProvisioning` entry. Autobuild runs install then preflight after
+checkout dependencies in every fresh/replacement sandbox and before the
+readiness probe, writes the marker only after success, and reruns every
+preflight before each build runner. A failure names the runtime, selecting
+role/alternate, and field and starts no agent. Runtime provisioning receives
+only the API credentials named by `[workspace.config].environmentVariables`.
+
+Keep package-level and checkout-level bootstrap in an idempotent
+`[commands].setup`. It runs after system provisioning and must remain safe to
+rerun on attachment. Do not repeatedly install OS packages there. Expose only
+required runtime credentials through
+`[workspace.config].environmentVariables`, keep generated caches disposable,
+and lock dependencies in the repository. A browser-capable repository should
+check in a dependency-free `scripts/browser-smoke.sh` that starts its dev server,
+uses a repository-controlled path such as `CHROMIUM_BIN=/usr/bin/chromium` to
+launch headless Chromium in the same guest, verifies the rendered page, and
+exits nonzero on failure. Then:
 
 1. Configure real `[commands]` and ordered `[verify]` steps from the toolchain
    this repository actually uses. Do not invent commands or retain placeholders.
@@ -110,9 +127,13 @@ Validation is explicit and noninteractive. It does not dispatch, claim a
 ticket, or create build, phase, session, event, transcript, or artifact history.
 For local execution it identifies and removes a disposable detached worktree.
 For Vercel it identifies and permanently deletes a fresh unnamed sandbox, even
-when runtime installation, setup, or a probe fails; cleanup failures name the
-environment for manual deletion. It provisions/preflights every effective
-primary and alternate runtime, runs `commands.setup`, loads repository plugins, checks every
+when system or runtime provisioning, setup, or a probe fails; cleanup failures
+name the environment for manual deletion. Its `system provisioning` check lists
+completed step names (or says none were declared) before guest setup checks. A
+failed step reports its name, command, status, labeled stdout/stderr, and
+remediation without marking the environment ready. It provisions/preflights
+every effective primary and alternate runtime, then runs `commands.setup`, loads
+repository plugins, and checks every
 selected primary/alternate runtime and model, and performs a read-only Store
 request in the candidate execution context. If the local database is absent,
 validation reports that no repository history is available without creating
@@ -123,8 +144,9 @@ silently falls back from Vercel to local execution. Local launcher probes
 printed by ordinary `ab init` are only setup-agent discovery and are not remote
 readiness evidence.
 
-Typical remediation is intentionally specific: add a missing executable to the
-setup command while retaining the universal image; add a runtime credential name to
+Typical remediation is intentionally specific: add a missing system executable
+to `workspace.config.provisioning` (or a package dependency to setup) while
+retaining the universal image; add a runtime credential name to
 `environmentVariables` and its value to the dispatcher environment; correct the
 Vercel team/project credential set; provide separate private-clone credentials;
 use an HTTPS GitHub origin and hosted Store; authorize the Store token; or commit

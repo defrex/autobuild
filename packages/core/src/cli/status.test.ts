@@ -677,6 +677,35 @@ describe('detail', () => {
     expect(renderDetail(d, NOW).join('\n')).not.toContain('setup failure:')
   })
 
+  test('shows the complete durable system provisioning diagnostic', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    const diagnostic =
+      'system provisioning step "browser-smoke" failed\nstdout:\nserver ready\nstderr:\nchromium missing\nremediation: rerun ab init --validate'
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'infrastructure.failed',
+      payload: {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-g0',
+        instance: 'i1',
+        operation: 'provision',
+        cause: 'provider-error',
+        attempt: 1,
+        retryable: true,
+        cleanupPending: false,
+        error: diagnostic,
+      },
+    })
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.infrastructureFailure?.error).toBe(diagnostic)
+    const rendered = renderDetail(d, NOW).join('\n')
+    expect(rendered).toContain('system provisioning step "browser-smoke" failed')
+    expect(rendered).toContain('stdout:\\u{a}server ready')
+    expect(rendered).toContain('stderr:\\u{a}chromium missing')
+    expect(rendered).toContain('remediation: rerun ab init --validate')
+  })
+
   test('confirmed cleanup clears a parked build cleanup-pending diagnostic', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })

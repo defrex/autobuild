@@ -330,6 +330,51 @@ describe('parseConfig — defaults', () => {
     }
   })
 
+  test('vercel-sandbox provisioning is ordered, strict, named, and declarative', () => {
+    const config = parseConfig(`[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+provisioning = [
+  { name = "browser packages", command = """apt-get update
+apt-get install -y chromium""" },
+  { name = "browser smoke", command = "CHROMIUM_BIN=/usr/bin/chromium ./scripts/browser-smoke.sh" },
+]
+${READY}`).workspace.config
+    expect(config.provisioning).toEqual([
+      { name: 'browser packages', command: 'apt-get update\napt-get install -y chromium' },
+      {
+        name: 'browser smoke',
+        command: 'CHROMIUM_BIN=/usr/bin/chromium ./scripts/browser-smoke.sh',
+      },
+    ])
+    expect(
+      vercelSandboxConfigSchema.parse(
+        parseConfig(
+          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n${READY}`,
+        ).workspace.config,
+      ).provisioning,
+    ).toEqual([])
+
+    for (const declaration of [
+      'provisioning = [{ name = "", command = "ok" }]',
+      'provisioning = [{ name = "blank", command = "   " }]',
+      'provisioning = [{ name = "same", command = "one" }, { name = "same", command = "two" }]',
+      'provisioning = [{ name = "step", command = "ok", unknown = true }]',
+    ]) {
+      expect(() =>
+        parseConfig(
+          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n${declaration}\n${READY}`,
+        ),
+      ).toThrow(/workspace\.config\.provisioning/)
+    }
+    expect(() =>
+      parseConfig(
+        `[workspace]\nprovider = "git-worktree"\n[workspace.config]\nprovisioning = []\n${READY}`,
+      ),
+    ).toThrow(/is not supported by the builtin "git-worktree" provider/)
+  })
+
   test('vercel-sandbox config is strict, bounded, and references secrets by name', () => {
     const workspace = parseConfig(`[workspace]
 provider = "vercel-sandbox"

@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Sandbox, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
 import { displayName, tomlKey, type RuntimeReferenceGroup } from '../../config/roles'
-import { type VercelSandboxConfig, vercelSandboxConfigSchema } from '../../config/schema'
+import {
+  type VercelProvisioningStep,
+  type VercelSandboxConfig,
+  vercelSandboxConfigSchema,
+} from '../../config/schema'
 import { distributionRoot } from '../../distribution'
 import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
 import type {
@@ -29,8 +33,10 @@ export interface VercelCommand {
   readonly exitCode: number | null
   wait(): Promise<{ exitCode: number }>
   kill(signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }): Promise<void>
-  /** Completed-command output. Validation is the only production caller that
-   * reads it; build state continues to travel exclusively through the Store. */
+  /** Completed-command output is read only for readiness/validation reporting
+   * and declared system-provisioning failure diagnostics, including failures
+   * during durable build provisioning. It is not a durable build-state channel;
+   * scoped Store facts/events remain authoritative. */
   stdout?(): Promise<string>
   stderr?(): Promise<string>
 }
@@ -44,6 +50,7 @@ export interface VercelSandboxHandle {
     cwd?: string
     env?: Record<string, string>
     detached?: true
+    sudo?: boolean
     signal?: AbortSignal
   }): Promise<VercelCommand | { exitCode: number }>
   writeFiles(
@@ -260,6 +267,7 @@ async function commandOrThrow(
     args?: string[]
     cwd?: string
     env?: Record<string, string>
+    sudo?: boolean
     signal?: AbortSignal
   },
 ): Promise<void> {
@@ -356,6 +364,39 @@ async function bootstrapRuntimes(
   }
 }
 
+async function runSystemProvisioning(
+  sandbox: VercelSandboxHandle,
+  steps: readonly VercelProvisioningStep[],
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const completed: string[] = []
+  for (const step of steps) {
+    const result = (await sandbox.runCommand({
+      cmd: 'sh',
+      args: ['-c', step.command],
+      cwd: VERCEL_WORKSPACE_PATH,
+      sudo: true,
+      ...(signal === undefined ? {} : { signal }),
+    })) as VercelCommand
+    if (result.exitCode !== 0) {
+      const [stdout, stderr] = await Promise.all([
+        result.stdout?.() ?? Promise.resolve(''),
+        result.stderr?.() ?? Promise.resolve(''),
+      ])
+      throw new Error(
+        `system provisioning step ${JSON.stringify(step.name)} failed\n` +
+          `command: ${step.command}\n` +
+          `exit status: ${result.exitCode ?? '(missing)'}\n` +
+          `stdout:\n${stdout.trim() === '' ? '(empty)' : stdout}\n` +
+          `stderr:\n${stderr.trim() === '' ? '(empty)' : stderr}\n` +
+          'remediation: fix [workspace.config].provisioning and rerun ab init --validate',
+      )
+    }
+    completed.push(step.name)
+  }
+  return completed
+}
+
 async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promise<void> {
   try {
     await commandOrThrow(sandbox, { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'] })
@@ -404,6 +445,7 @@ export interface VercelReadinessResult {
   sandbox: string
   revision: string
   origin: string
+  provisioning: string[]
   output: string
 }
 
@@ -414,6 +456,7 @@ async function readableCommand(
     args?: string[]
     cwd?: string
     env?: Record<string, string>
+    sudo?: boolean
     signal?: AbortSignal
   },
 ): Promise<string> {
@@ -532,6 +575,7 @@ export async function validateVercelSandbox(
       }
     }
     await provisionBun(sandbox, config.image, options.signal)
+    const provisioning = await runSystemProvisioning(sandbox, config.provisioning, options.signal)
     const archive = await (options.packageArchive ?? packageAutobuildDistribution)()
     checkCancellation()
     await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
@@ -592,7 +636,7 @@ export async function validateVercelSandbox(
         ]),
       }),
     )
-    readiness = { sandbox: name, revision, origin: origin.url, output: setup }
+    readiness = { sandbox: name, revision, origin: origin.url, provisioning, output: setup }
   } catch (error) {
     failure = error
   }
@@ -636,8 +680,11 @@ export interface VercelSandboxProviderOptions {
   runtimeReferences?: RuntimeReferencesSource
 }
 
-/** Vercel-backed working copy and executor. SDK command output is never read:
- * durable Store events remain the sole build-state channel. */
+/** Vercel-backed working copy and executor. Completed SDK command output is
+ * read only for readiness/validation reporting and declared system-provisioning
+ * failure diagnostics, including failures during durable build provisioning. It
+ * is not a durable build-state channel; scoped Store facts/events remain the
+ * authoritative build-state channel. */
 export class VercelSandboxProvider implements WorkspaceProvider {
   readonly name = 'vercel-sandbox'
   readonly buildExecution: BuildExecution
@@ -778,6 +825,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
             throw new Error(`failed to scrub git config ${key}`)
         }
         await provisionBun(sandbox, this.options.config.image)
+        await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
         const archive = await (this.options.packageArchive ?? packageAutobuildDistribution)()
         await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
           signal: this.operationSignal(),

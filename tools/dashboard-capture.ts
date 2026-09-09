@@ -220,7 +220,7 @@ function captureHandlers(): SkillHandlers {
   return handlers
 }
 
-async function prepareScenario(): Promise<E2eHarness> {
+export async function prepareScenario(): Promise<E2eHarness> {
   const harness = await makeHarness({
     handlers: captureHandlers(),
     configToml: CAPTURE_CONFIG_TOML,
@@ -356,7 +356,7 @@ async function prepareScenario(): Promise<E2eHarness> {
   }
 }
 
-interface HappyScenario {
+export interface HappyScenario {
   harness: E2eHarness
   buildEventsBefore: Record<HappyBuildSlug, string[]>
   repoJournalBefore: string
@@ -583,7 +583,7 @@ async function seedHappyBuild(
   return observationSeq === undefined ? {} : { observationSeq }
 }
 
-async function prepareHappyScenario(): Promise<HappyScenario> {
+export async function prepareHappyScenario(): Promise<HappyScenario> {
   const harness = await makeHarness({
     handlers: {},
     configToml: HAPPY_CAPTURE_CONFIG_TOML,

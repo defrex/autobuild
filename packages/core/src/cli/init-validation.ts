@@ -527,6 +527,14 @@ export async function validateInitReadiness(opts: {
           status: 'pass',
           detail: `${remote.origin} ${remote.revision}`,
         },
+        {
+          name: 'system provisioning',
+          status: 'pass',
+          detail:
+            remote.provisioning.length === 0
+              ? 'no workspace.config.provisioning steps declared'
+              : `completed: ${remote.provisioning.join(', ')}`,
+        },
         ...guest.checks,
       ],
       exitCode: guest.checks.some((check) => check.status === 'fail') ? 1 : 0,

@@ -10,6 +10,7 @@ import {
   VERCEL_BUN_EXECUTABLE,
   VERCEL_BUN_PREFIX,
   VERCEL_BUN_VERSION,
+  VERCEL_PROVISIONED_MARKER,
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
   isMissingVercelSandbox,
@@ -36,6 +37,8 @@ class FakeSandbox implements VercelSandboxHandle {
   failRestore = false
   failSetupCommand: string | undefined
   failCommand: ((params: Record<string, unknown>) => boolean) | undefined
+  failureStdout = ''
+  failureStderr = ''
   provisioned = false
   detachedWait: () => Promise<{ exitCode: number }> = async () => ({ exitCode: 0 })
 
@@ -45,7 +48,12 @@ class FakeSandbox implements VercelSandboxHandle {
 
   async runCommand(params: Record<string, unknown>) {
     this.commands.push(params)
-    if (this.failCommand?.(params)) return { exitCode: 1 }
+    if (this.failCommand?.(params))
+      return {
+        exitCode: 1,
+        stdout: async () => this.failureStdout,
+        stderr: async () => this.failureStderr,
+      }
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
     if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
     if (params.cmd === 'touch') this.provisioned = true
@@ -112,17 +120,20 @@ function harness(
     existingSha?: string | null
     provisionRuntimes?: boolean
     runtimeReferences?: () => ReturnType<typeof runtimeReferenceFixtures>
+    provisioning?: Array<{ name: string; command: string }>
   } = {},
 ) {
   const sandbox = new FakeSandbox()
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
   let created = false
+  let creates = 0
   const facade: VercelSandboxFacade = {
     get: async () =>
       created && (sandbox.deletes === 0 || sandbox.remainAfterDelete) ? sandbox : null,
     create: async (input) => {
       created = true
+      creates += 1
       createInput = input
       return sandbox
     },
@@ -159,6 +170,7 @@ function harness(
       timeoutSeconds: 2700,
       failoverRegions: [],
       environmentVariables: ['ANTHROPIC_API_KEY'],
+      provisioning: options.provisioning ?? [],
       ...(options.provisionRuntimes
         ? {
             runtimeProvisioning: {
@@ -188,6 +200,9 @@ function harness(
     sandbox,
     get createInput() {
       return createInput
+    },
+    get creates() {
+      return creates
     },
   }
 }
@@ -275,6 +290,106 @@ describe('VercelSandboxProvider', () => {
     expect((repositoryBootstrap!.args as string[])[1]).toContain(
       `${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile`,
     )
+  })
+
+  test('runs named provisioning serially as root between Bun verification and bootstrap', async () => {
+    const steps = [
+      { name: 'packages', command: 'apt-get update && apt-get install -y chromium' },
+      { name: 'browser smoke', command: './scripts/browser-smoke.sh' },
+    ]
+    const h = harness({ provisioning: steps })
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+
+    const system = h.sandbox.commands.filter(
+      (command) => command.cmd === 'sh' && command.sudo === true,
+    )
+    expect(system).toEqual(
+      steps.map((step) => ({
+        cmd: 'sh',
+        args: ['-c', step.command],
+        cwd: VERCEL_WORKSPACE_PATH,
+        sudo: true,
+      })),
+    )
+    const verification = h.sandbox.commands.findIndex(
+      (command) =>
+        command.cmd === VERCEL_BUN_EXECUTABLE &&
+        (command.args as string[] | undefined)?.[0] === '--version',
+    )
+    const firstSystem = h.sandbox.commands.indexOf(system[0]!)
+    const distribution = h.sandbox.commands.findIndex(
+      (command) => command.cmd === 'mkdir' && command.cwd !== VERCEL_WORKSPACE_PATH,
+    )
+    expect(firstSystem).toBeGreaterThan(verification)
+    expect(distribution).toBeGreaterThan(firstSystem)
+  })
+
+  test('reuses a completed sandbox without rerunning declared provisioning', async () => {
+    const h = harness({
+      provisioning: [{ name: 'browser packages', command: 'install browser packages' }],
+    })
+    const first = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const commandCount = h.sandbox.commands.length
+    const provisioningCount = h.sandbox.commands.filter(
+      (command) => command.cmd === 'sh' && command.sudo === true,
+    ).length
+
+    const reused = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+
+    expect(reused.ref).toBe(first.ref)
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.writes).toHaveLength(1)
+    expect(h.sandbox.commands.slice(commandCount)).toEqual([
+      { cmd: 'test', args: ['-f', VERCEL_PROVISIONED_MARKER] },
+    ])
+    expect(
+      h.sandbox.commands.filter((command) => command.cmd === 'sh' && command.sudo === true),
+    ).toHaveLength(provisioningCount)
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-reused',
+      workspaceRef: reused.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+    await h.provider.release(reused)
+    expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('retains provisioning output and remediation while deleting an unready sandbox', async () => {
+    const h = harness({
+      provisioning: [
+        { name: 'packages', command: 'install browser' },
+        { name: 'browser smoke', command: 'run browser smoke' },
+      ],
+    })
+    h.sandbox.failCommand = (command) =>
+      command.cmd === 'sh' && (command.args as string[] | undefined)?.[1] === 'run browser smoke'
+    h.sandbox.failureStdout = 'server started\n'
+    h.sandbox.failureStderr = 'chromium missing\n'
+
+    await expect(
+      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toThrow(
+      /browser smoke[\s\S]*exit status: 1[\s\S]*server started[\s\S]*chromium missing[\s\S]*ab init --validate/,
+    )
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.cmd === 'mkdir')).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
   test('uses generation-scoped names and the supplied checkpoint when the branch is absent', async () => {

@@ -15,7 +15,7 @@ Content: live operator API data only. Loading shows a diagnostic, never zeros. V
 
 Constraints: keep the Builds API client, view-model, parity projection, event vocabulary, and control names. Presentation is free. Dark only. One monospace face loaded through next/font, a face engineers know from their terminals. Colors as tokens; contrast outranks palette strictness. Page numbers deliberately undecided.
 
-Memorable moment: the bold one-row masthead carrying one imperative word.
+Memorable moment: the bold one-row masthead that is only a title, over rows whose colored STATUS words carry every state.
 
 ## Direction contract
 
@@ -25,7 +25,7 @@ OWN-WORLD: Black ground. One mono face and one natural-proportion size, with a b
 
 STORY: Glance, read one word, act on one row, leave.
 
-FIRST VIEWPORT: A natural top-to-bottom document flow: one-row masthead with repository yellow left, imperative in its color, and clock right; control line with identity, sign out, and the repository selector when there is a choice; dispatcher line with ON/OFF toggle words; then Build and Harvest rows with detail unfolding in place. No shell block is sticky or pinned.
+FIRST VIEWPORT: A natural top-to-bottom document flow: one-row masthead with repository yellow left and the account menu right; control line with the repository selector when there is a choice, dispatcher facts, ON/OFF toggle words, pause all and resume all, and the clock right; then Build and Harvest rows with detail unfolding in place. No shell block is sticky or pinned.
 
 FORM: Teletext Dispatch, user-steered hybrid of grounded candidates 4 and 1, re-roll round 1; seed key 6c8eba83.
 
