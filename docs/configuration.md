@@ -7,7 +7,10 @@ while scoped phase commands read the build worktree's branch-owned file.
 Configuration changes therefore move through review like any other change and,
 once merged, can be adopted by the running dispatcher.
 
-This document covers the complete accepted TOML surface. Examples labelled as
+This document covers the complete accepted TOML surface. Follow the
+[installation and repository setup procedure](setup.md) for the supported local
+versus Vercel decision flow, credential checklist, reproducible provisioning,
+and sessionless `ab init --validate` readiness check. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
 example](#complete-example) is valid on its own.
 

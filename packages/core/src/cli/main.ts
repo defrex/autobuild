@@ -10,6 +10,7 @@
  * loop is immediate and cheap.
  */
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { TicketRef } from '../ontology'
 import type { Clock } from '../store/types'
 import type { BuildStore } from '../store/types'
@@ -34,6 +35,8 @@ import type { DashboardRendererResolver } from './dashboard/render'
 import type { TerminalInput, TerminalOut } from './terminal'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { abInit } from './init'
+import { validateInitReadiness } from './init-validation'
+import { loadDotEnv } from './dotenv'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { SetupAgentLauncher } from './init-agent'
 import { abModels } from './models'
@@ -168,6 +171,8 @@ export interface SessionlessCliDeps {
   initLauncher?: SetupAgentLauncher
   /** Injectable init detection registry; production uses shipped registrations. */
   initRuntimes?: RuntimeRegistry
+  /** Complete readiness seam for CLI routing tests. */
+  initValidation?: typeof validateInitReadiness
   /** Optional per-paint presentation lookup used only by the repo-local dev
    * entry. The published binary never supplies it. */
   resolveDashboardRenderer?: DashboardRendererResolver
@@ -434,7 +439,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
     case 'init': {
-      const usage = 'usage: ab init [target] [--force] (§16.3)'
+      const usage = 'usage: ab init [target] [--force | --validate] (§16.3)'
       const removed = [
         '--forge',
         '--ticket-source',
@@ -447,10 +452,36 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           `${removed} was removed — ab init now installs a neutral skeleton and hands setup to a coding agent. ${usage}`,
         )
       }
-      const parsed = parseArgs(rest, { force: 'boolean' }, usage)
+      const parsed = parseArgs(rest, { force: 'boolean', validate: 'boolean' }, usage)
       if (parsed.positionals.length > 1) throw new Error(usage)
+      if (parsed.flags.has('force') && parsed.flags.has('validate')) {
+        throw new Error(`--force and --validate cannot be combined — ${usage}`)
+      }
+      const targetRepo = parsed.positionals[0] ?? deps.workspacePath
+      if (parsed.flags.has('validate')) {
+        const env = { ...(deps.processEnv ?? process.env) }
+        loadDotEnv(join(targetRepo, '.env'), env)
+        if (
+          env.VERCEL_OIDC_TOKEN !== undefined &&
+          (deps.processEnv ?? process.env).VERCEL_OIDC_TOKEN === undefined
+        ) {
+          throw new Error(
+            'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to the Vercel SDK; export it in the launcher environment or configure VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
+          )
+        }
+        const report = await (deps.initValidation ?? validateInitReadiness)({
+          targetRepo,
+          env,
+          stdout,
+          ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
+          ...(deps.initRuntimes !== undefined ? { runtimes: deps.initRuntimes } : {}),
+          ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+          ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+        })
+        return report.exitCode
+      }
       const report = await abInit({
-        targetRepo: parsed.positionals[0] ?? deps.workspacePath,
+        targetRepo,
         force: parsed.flags.has('force'),
         stdout,
         interactive: deps.initInteractive === true,

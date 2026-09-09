@@ -1,35 +1,110 @@
 # Repository setup
 
 Configure Autobuild outside the build pipeline. This conversation is not a
-build or phase. Work directly in the repository and involve the user in choices
-that cannot be derived from source.
+build or phase. Work directly in the repository and involve the maintainer in
+choices that cannot be derived from source. Secrets belong in the environment
+or an ignored `.env`, never in `autobuild.toml`, commits, or validation reports.
 
-1. Inspect the repository's manifests, documentation, CI, test layout, and
-   conventions. Read the installed sibling `../SKILL.md` for Autobuild's
-   complete configuration and ticket surfaces.
-2. Configure real `[commands]` and ordered `[verify]` steps from the toolchain
+## Choose the execution environment
+
+Keep the default `git-worktree` provider unless the maintainer explicitly opts
+into remote builds. It creates local disposable worktrees and uses the tools,
+network, and credentials available to the dispatcher machine.
+
+For remote execution, set `[workspace].provider = "vercel-sandbox"`. A Vercel
+Sandbox is a fresh independent machine; a runtime that works on the setup
+machine is not evidence that it works there. Confirm all of these with the
+maintainer before selecting it:
+
+- the intended Vercel team and project;
+- durable dispatcher authentication with `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and
+  `VERCEL_PROJECT_ID`, or short-lived `VERCEL_OIDC_TOKEN` obtained from a linked
+  project (`vercel link` and `vercel env pull`); when validating a target other
+  than the current directory, export OIDC in the launcher environment because
+  the Vercel SDK resolves it from ambient process state. Access-token
+  credentials in the target's ignored `.env` are the durable choice for a
+  continuously running local dispatcher;
+- an HTTPS `github.com/owner/repository` origin and `forge = "github"`;
+- a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`;
+- for a private repository, a separate read-only clone identity named by
+  `gitUsernameEnv` and `gitPasswordEnv`;
+- an HTTPS hosted `AB_STORE` reachable from Vercel and a scoped `AB_TOKEN`;
+- each selected role and alternate's runtime/model, and the credential variable
+  names that runtime needs in `[workspace.config].environmentVariables`.
+
+Do not put `AB_STORE`, `AB_TOKEN`, Vercel credentials, Forge credentials, or
+private-clone credentials in `environmentVariables`. Autobuild supplies Store
+credentials separately, keeps clone credentials out of guest commands, and
+performs publication from the trusted host.
+
+```toml
+[workspace]
+provider = "vercel-sandbox"
+
+[workspace.config]
+image = "vercel/sandbox/universal:latest"
+vcpus = 4
+timeoutSeconds = 2700
+environmentVariables = ["ANTHROPIC_API_KEY"]
+# Private repositories only:
+# gitUsernameEnv = "AB_GIT_READ_USER"
+# gitPasswordEnv = "AB_GIT_READ_TOKEN"
+```
+
+## Make the environment reproducible
+
+Inspect the repository's manifests, documentation, CI, test layout, and
+conventions. Read the installed sibling `../SKILL.md` for Autobuild's complete
+configuration and ticket surfaces.
+
+Use the supported `vercel/sandbox/universal` image. Other managed images and
+custom VCR images are rejected. Autobuild remains stack-neutral: put the
+repository's own reproducible toolchain bootstrap in idempotent
+`[commands].setup`, and expose only required runtime credentials through
+`[workspace.config].environmentVariables`. For example, setup may install
+Python and `uv`, a pinned Rust toolchain and native libraries, or a JDK and
+Gradle. Those are repository decisions, not toolchains inferred by Autobuild.
+
+Configure an idempotent `[commands].setup` to install package dependencies and
+perform repeatable bootstrap on every fresh or replacement environment. It must
+be safe to rerun. Keep generated caches disposable and lock dependencies in the
+repository. Then:
+
+1. Configure real `[commands]` and ordered `[verify]` steps from the toolchain
    this repository actually uses. Do not invent commands or retain placeholders.
-3. Decide the runtime and model arrangement for all pipeline roles. The runtime
-   that launched this setup conversation and the temporary
-   `[roles.default].runtime` in a fresh skeleton exist only to make setup
-   possible and do **not** constrain the final arrangement.
-4. Choose and configure the repository's ticket source and workflow states. Ask
-   the user for team-specific facts you cannot inspect. Secrets belong in the
-   environment (a local `.env` is acceptable), never in `autobuild.toml`.
-5. Arrange repository-appropriate end-to-end verification. Include whatever
-   this repository needs to make a running application available to the tests;
-   describe and configure the goal using its actual tooling and conventions.
-   When that verification requires agent judgment, author a repository-owned
-   agent-verify skill and name it from the appropriate `[verify.<step>]` table.
-   Autobuild does not ship a generic sample verifier to edit.
-6. Validate the resulting configuration with the available `ab` commands and
-   repository checks. Explain the final setup to the user.
-7. Use the installed grooming and ticket skills to create one groomed,
-   dispatchable ticket, so the user can run `ab dispatch` immediately.
+2. Decide the runtime and model arrangement for every pipeline role and
+   alternate. The runtime that launched setup and the temporary fresh-skeleton
+   default do not constrain the final arrangement.
+3. Choose the ticket source and workflow states. Confirm account/team facts and
+   required environment credentials. Configure end-to-end verification with the
+   repository's real lifecycle and tools. When judgment is required, author a repository-owned
+   agent-verify skill and select it from an agent verify step.
+4. Preserve an existing `autobuild.toml` and unrelated repository choices on a
+   rerun. Change only choices the maintainer approves.
+5. Commit the config, setup files, lockfiles, and installed reference changes,
+   then push them to `baseBranch`. A remote sandbox clones the authoritative
+   GitHub revision; it cannot acquire local-only edits.
+6. Run `ab init --validate`. Fix every named failure and rerun until every check
+   passes. Only then use the installed grooming/ticket skills to create the
+   first groomed Ready ticket and start `ab dispatch`.
 
-Ask focused questions rather than constraining the user to a fixed list. Do not
-create an Autobuild build, session, event, transcript, or other BuildStore
-record as part of setup.
+Validation is explicit and noninteractive. It does not dispatch, claim a
+ticket, or create build, phase, session, event, transcript, or artifact history.
+For local execution it identifies and removes a disposable detached worktree.
+For Vercel it identifies and permanently deletes a fresh unnamed sandbox, even
+when setup or a probe fails; cleanup failures name the environment for manual
+deletion. It runs `commands.setup`, loads repository plugins, checks every
+selected primary/alternate runtime and model, and performs a read-only Store
+request in the candidate execution context. It never silently falls back from
+Vercel to local execution. Local launcher probes printed by ordinary `ab init`
+are only setup-agent discovery and are not remote readiness evidence.
+
+Typical remediation is intentionally specific: add a missing executable to the
+setup command while retaining the universal image; add a runtime credential name to
+`environmentVariables` and its value to the dispatcher environment; correct the
+Vercel team/project credential set; provide separate private-clone credentials;
+use an HTTPS GitHub origin and hosted Store; authorize the Store token; or commit
+and push the selected base branch.
 
 ## Authoring an agent verifier
 
@@ -40,19 +115,16 @@ hold. It does not inspect the diff for style or edit product code.
 Its session instructions must preserve this contract:
 
 1. Run `ab context`. The verifier receives `.ab/spec.md`, the configured step,
-   the commit range, and, after its own escalation is answered,
-   `.ab/guidance.json`. Treat that answer as authoritative input for the rerun.
-2. Exercise the real behavior for each applicable acceptance criterion using
-   the repository's application lifecycle and tooling. Prefer the narrowest
-   honest flow that would catch a regression.
-3. For an applicable run, write a criterion-oriented report: criterion, action,
-   observation, and pass/fail. A failure report must include exact reproduction
-   details, inputs, expected versus observed behavior, and relevant
-   repository-native logs so the implementer can act on it.
-4. Explicitly deposit exact review evidence with
-   `ab artifact put <kind> <file> --attach`. Attach only evidence from a passing
-   run, never failed or partial output, and use stable kinds so a retry replaces
-   the prior designation.
+   the commit range, and, after escalation is answered, `.ab/guidance.json`.
+2. Exercise each applicable acceptance criterion through the repository's real
+   application lifecycle. Prefer the narrowest honest flow that catches a
+   regression.
+3. Write criterion-oriented evidence: criterion, action, observation, and
+   pass/fail. Failures include reproduction inputs, expected/observed behavior,
+   and relevant repository-native logs.
+4. Deposit passing review evidence explicitly with
+   `ab artifact put <kind> <file> --attach`. Never attach failed or partial
+   output; use stable kinds so retries replace the designation.
 5. Finish with exactly one terminal:
 
    ```text
@@ -62,8 +134,7 @@ Its session instructions must preserve this contract:
    ```
 
 An applicable behavior that cannot be exercised is a failure with an
-explanation, never a skip or silent pass. Use `skip` only when the entire
-configured step genuinely does not apply. If `.ab/guidance.json` still does not
-make a verdict possible, escalate again and explain what remains unresolved.
-The verifier reports build defects to the implementer and records out-of-scope
-work with `ab observe`; it does not fix either itself.
+explanation, never a skip or silent pass. Use `skip` only when the complete step
+does not apply. If guidance still cannot make a verdict possible, escalate and
+explain what remains unresolved. Record out-of-scope work with `ab observe`;
+the verifier does not fix it.

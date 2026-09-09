@@ -6,6 +6,7 @@
 - [#278](https://github.com/defrex/autobuild/pull/278) — Unify infrastructure failure-budget accounting
 - [#277](https://github.com/defrex/autobuild/pull/277) — Recover and clean up Vercel sandbox builds
 - [#276](https://github.com/defrex/autobuild/pull/276) — Reject non-canonical Vercel Sandbox image digests
+- [#275](https://github.com/defrex/autobuild/pull/275) — Add Vercel setup readiness validation
 - [#274](https://github.com/defrex/autobuild/pull/274) — Guarantee Bun availability in Vercel sandboxes
 - [#273](https://github.com/defrex/autobuild/pull/273) — Protect build-row child interactions
 - [#272](https://github.com/defrex/autobuild/pull/272) — Make Vercel sandbox provisioning failure-safe
