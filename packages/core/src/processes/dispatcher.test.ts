@@ -3417,6 +3417,42 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([])
   })
 
+  test('abort cleanup records an unknown remote delete and retries it durably', async () => {
+    let fail = true
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap() {
+          if (fail) throw new Error('delete acknowledgement timed out')
+          return 'confirmed'
+        },
+      },
+      async provision() {
+        throw new Error('not used')
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider: remote })
+    const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    let events = await h.store.getEvents(slug)
+    expect(events.filter((event) => event.type === 'infrastructure.failed')).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
+    ).toMatchObject({ operation: 'delete', outcome: 'unknown', attempt: 1 })
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
+
+    fail = false
+    await h.dispatcher.tick({ acceptNewWork: false })
+    events = await h.store.getEvents(slug)
+    expect(
+      events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
+    ).toMatchObject({ operation: 'delete', outcome: 'confirmed', attempt: 2 })
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+  })
+
   test('aborted build: releases everything, preserves labels, returns to Triage, and second tick no-ops', async () => {
     const h = harness({ tickets: [readyTicket('T-1', { labels: ['autobuild', 'priority:high'] })] })
     const slug = await seedBuild(h, { ticketId: 'T-1' })
@@ -4012,6 +4048,18 @@ describe('Dispatcher lease sweep', () => {
     }
     const h = harness({ workspaceProvider })
     const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: `ab/${slug}`,
+        sha: 'f'.repeat(40),
+        round: 1,
+        base: 'e'.repeat(40),
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
     await h.store.append(slug, {
       actor: DISPATCHER,
       type: 'execution.started',

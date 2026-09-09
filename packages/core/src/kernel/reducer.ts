@@ -378,6 +378,9 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         executions.push({ ...event.payload, seq: event.seq })
         infrastructureFailure = undefined
         break
+      case 'execution.ended':
+        infrastructureFailure = undefined
+        break
       case 'infrastructure.failed': {
         const failure = { ...event.payload, seq: event.seq }
         infrastructureFailures.push(failure)
@@ -386,6 +389,12 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       }
       case 'infrastructure.cleanup-attempted':
         cleanupAttempts.push({ ...event.payload, seq: event.seq })
+        if (
+          event.payload.outcome !== 'unknown' &&
+          infrastructureFailure?.workspaceRef === event.payload.workspaceRef
+        ) {
+          infrastructureFailure = undefined
+        }
         break
 
       // Operator commands (D2): requests queue until the kernel's fact event

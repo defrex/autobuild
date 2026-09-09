@@ -23,6 +23,7 @@ class FakeSandbox implements VercelSandboxHandle {
   stops = 0
   stopFailures = 0
   deletes = 0
+  remainAfterDelete = false
   failPush = false
   failRestore = false
   failSetupCommand: string | undefined
@@ -80,7 +81,8 @@ function harness(options: { publishedSha?: string | null } = {}) {
   let createInput: Record<string, unknown> | undefined
   let created = false
   const facade: VercelSandboxFacade = {
-    get: async () => (created && sandbox.deletes === 0 ? sandbox : null),
+    get: async () =>
+      created && (sandbox.deletes === 0 || sandbox.remainAfterDelete) ? sandbox : null,
     create: async (input) => {
       created = true
       createInput = input
@@ -384,6 +386,36 @@ describe('VercelSandboxProvider', () => {
     await expect(abortExecution.completion).rejects.toThrow(/sandbox stop failed/)
     await aborted.provider.release(abortWorkspace)
     expect(aborted.sandbox.deletes).toBe(1)
+  })
+
+  test('reap rejects unknown deletion, then safely retries and becomes an absence no-op', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.remainAfterDelete = true
+    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(
+      /still exists after delete acknowledgement/,
+    )
+    h.sandbox.remainAfterDelete = false
+    expect(await h.provider.recovery.reap(workspace)).toBe('absent')
+    expect(await h.provider.recovery.reap(workspace)).toBe('absent')
+  })
+
+  test('reap retains an interrupted stop for a later confirmed retry', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.stopFailures = 1
+    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(/outcome is unknown/)
+    expect(h.sandbox.deletes).toBe(0)
+    expect(await h.provider.recovery.reap(workspace)).toBe('confirmed')
+    expect(h.sandbox.deletes).toBe(1)
   })
 
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {

@@ -41,6 +41,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'workspace.provisioned': ['dispatcher', 'kernel'],
   'workspace.released': ['dispatcher', 'kernel'],
   'execution.started': ['dispatcher'],
+  'execution.ended': ['dispatcher'],
   'infrastructure.failed': ['dispatcher'],
   'infrastructure.cleanup-attempted': ['dispatcher'],
   'publication.requested': ['agent', 'kernel'],

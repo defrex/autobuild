@@ -677,6 +677,41 @@ describe('detail', () => {
     expect(renderDetail(d, NOW).join('\n')).not.toContain('setup failure:')
   })
 
+  test('confirmed cleanup clears a parked build cleanup-pending diagnostic', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'infrastructure.failed',
+      payload: {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-g0',
+        instance: 'i1',
+        operation: 'delete',
+        cause: 'unknown-outcome',
+        attempt: 1,
+        retryable: true,
+        cleanupPending: true,
+        error: 'delete acknowledgement timed out',
+      },
+    })
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'infrastructure.cleanup-attempted',
+      payload: {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-g0',
+        operation: 'delete',
+        attempt: 2,
+        outcome: 'confirmed',
+      },
+    })
+    const d = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(d.infrastructureFailure).toBeUndefined()
+    expect(d.cleanupPending).toBe(false)
+    expect(renderDetail(d, NOW).join('\n')).not.toContain('cleanup: pending')
+  })
+
   test('open escalations, open sessions, and lastEvent', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1', status: 'blocked' })

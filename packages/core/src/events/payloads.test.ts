@@ -126,6 +126,18 @@ describe('remote infrastructure lifecycle protocol', () => {
     expect(
       validateEventWrite({
         actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: {
+          instance: 'instance-1',
+          workspaceRef: 'sandbox-g1',
+          outcome: 'completed',
+          exitCode: 0,
+        },
+      }),
+    ).toMatchObject({ type: 'execution.ended' })
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
         type: 'infrastructure.failed',
         payload: {
           provider: 'vercel-sandbox',

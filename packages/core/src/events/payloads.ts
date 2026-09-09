@@ -242,6 +242,13 @@ export const eventPayloadSchemas = {
     environmentId: z.string().min(1).optional(),
     sessionId: z.string().min(1).optional(),
   }),
+  /** Confirmed executor completion is the infrastructure retry-epoch boundary. */
+  'execution.ended': z.strictObject({
+    instance: z.string().min(1),
+    workspaceRef: z.string().min(1),
+    outcome: z.enum(['completed', 'stopped']),
+    exitCode: z.number().int().nullable().optional(),
+  }),
   'infrastructure.failed': z.strictObject({
     provider: z.string().min(1),
     workspaceRef: z.string().min(1),

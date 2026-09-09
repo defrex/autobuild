@@ -1742,7 +1742,7 @@ class DispatchLoop {
     const events = await this.wiring.store.getEvents(input.slug)
     const lastReset = events.reduce(
       (seq, event) =>
-        event.type === 'execution.started' ||
+        event.type === 'execution.ended' ||
         (event.type === 'escalation.answered' && event.payload.resolution === 'retry')
           ? event.seq
           : seq,
@@ -1867,6 +1867,16 @@ class DispatchLoop {
         .then(
           async (exit) => {
             try {
+              await this.wiring.store.append(slug, {
+                actor: DISPATCHER,
+                type: 'execution.ended',
+                payload: {
+                  instance,
+                  workspaceRef,
+                  outcome: active.stopping ? 'stopped' : 'completed',
+                  exitCode: exit.exitCode,
+                },
+              })
               if (active.stopping) return
               const diagnostic = await this.matchingRunnerDiagnostic(slug, instance)
               if (diagnostic?.outcome === 'lease-held') {

@@ -40,8 +40,11 @@ import type { OneShotCompletionInput } from '../ports/runner/one-shot'
 import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../ports/runner/fake'
 import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
-import type { Ticket } from '../ports/types'
-import type { BuildExecution } from '../ports/workspace/build-execution'
+import type { Ticket, WorkspaceProvider } from '../ports/types'
+import {
+  BUILD_EXECUTION_LEASE_TTL_MS,
+  type BuildExecution,
+} from '../ports/workspace/build-execution'
 import { GitWorktreeProvider, spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { MemoryBuildStore } from '../store/memory'
@@ -1292,7 +1295,7 @@ args = ["--naming-style", "concise"]
         .filter((event) => event.type === 'escalation.raised')
         .map((event) => event.payload.id)
       expect(openIds).toHaveLength(1)
-      expect(parked.at(-1)?.type).toBe('escalation.raised')
+      expect(parked.at(-1)?.type).toBe('execution.ended')
       expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
       const diagnostic = `build ${slug} skipped: open escalations ${openIds.join(', ')}`
 
@@ -1749,6 +1752,181 @@ describe('abDispatch watch build-runner coordination', () => {
       releaseStop.resolve()
       completion.resolve()
       await dispatch.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('unknown remote stop returns within its bound, records evidence, and retains the lease', async () => {
+    const fx = await makeFixture(readyTicket('T-unknown-stop'), happyHandlers())
+    const stop = new AbortController()
+    const completion = deferred()
+    let slug: string | undefined
+    const execution: BuildExecution = {
+      async start(input) {
+        slug = input.slug
+        return {
+          identity: {
+            provider: 'remote-test',
+            workspaceRef: input.workspaceRef,
+            environmentId: 'sandbox-g0',
+            sessionId: 'session-g0',
+          },
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            return { outcome: 'unknown', error: 'stop acknowledgement timed out' }
+          },
+        }
+      },
+    }
+    const baseWire = fx.wire()
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: { reap: async () => 'confirmed' },
+      provision: (opts) => baseWire.workspaces.provision(opts),
+      release: (handle) => baseWire.workspaces.release(handle),
+    }
+    const dispatch = abDispatch({
+      targetRepo: fx.origin,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      signal: stop.signal,
+      intervalMs: 60_000,
+      wire: () => ({ ...baseWire, workspaces: remote, buildExecution: execution }),
+    })
+    try {
+      await waitFor(() => slug !== undefined)
+      stop.abort()
+      await dispatch
+      const record = await fx.store.getBuild(slug!)
+      expect(record?.lease).toBeDefined()
+      const failures = (await fx.store.getEvents(slug!)).filter(
+        (event) => event.type === 'infrastructure.failed',
+      )
+      expect(failures.at(-1)?.payload).toMatchObject({
+        operation: 'stop',
+        cleanupPending: true,
+        error: 'stop acknowledgement timed out',
+      })
+    } finally {
+      completion.resolve()
+      await dispatch.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('recurring remote wait loss retains leases and reaches the infrastructure retry limit', async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const slug = 'remote-wait-loss'
+    const branch = `ab/${slug}`
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-loss', title: 'loss' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'remote-test',
+        ref: 'sandbox-g0',
+        path: '/remote/workspace',
+        branch,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-loss', title: 'loss' },
+        },
+      }),
+    )
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'old', host: 'remote' },
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 1 },
+    })
+
+    let generation = 0
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: { reap: async () => 'confirmed' },
+      async provision(opts) {
+        generation += 1
+        return {
+          provider: 'remote-test',
+          ref: `sandbox-g${generation}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision! },
+        }
+      },
+      async release() {},
+    }
+    const execution: BuildExecution = {
+      async start(input) {
+        return {
+          identity: {
+            provider: 'remote-test',
+            workspaceRef: input.workspaceRef,
+            environmentId: input.workspaceRef,
+            sessionId: `session-${generation}`,
+          },
+          completion: Promise.reject(new Error('session expired while waiting')),
+          async stop() {
+            return { outcome: 'confirmed' }
+          },
+        }
+      },
+    }
+    const baseWire = fx.wire()
+    const wire = () => ({ ...baseWire, workspaces: remote, buildExecution: execution })
+
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await abDispatch({
+          targetRepo: fx.origin,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          wire,
+        })
+        if (attempt < 3) clock.advance(BUILD_EXECUTION_LEASE_TTL_MS + 1)
+      }
+      const events = await fx.store.getEvents(slug)
+      expect(
+        events
+          .filter((event) => event.type === 'infrastructure.failed')
+          .map((event) => event.payload.attempt),
+      ).toEqual([1, 2, 3])
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'escalation.raised' &&
+            event.payload.policyCause === 'infrastructure-failure-limit',
+        ),
+      ).toHaveLength(1)
+    } finally {
       await fx.cleanup()
     }
   }, 10_000)

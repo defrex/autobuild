@@ -1097,16 +1097,24 @@ export class Dispatcher {
   }
 
   private recoveryCheckpoint(events: AbEvent[]): string | undefined {
-    let published: string | undefined
+    let settled: string | undefined
     let original: string | undefined
     for (const event of events) {
       if (event.type === 'workspace.provisioned' && original === undefined) {
         original = event.payload.base.sha
-      } else if (event.type === 'publication.requested') {
-        published = event.payload.sha
+      } else if (event.type === 'implement.completed') {
+        settled = event.payload.commits.head
+      } else if (event.type === 'reconcile.completed') {
+        settled = event.payload.mergeCommit
+      } else if (
+        event.type === 'finalize.step-completed' &&
+        event.payload.ok &&
+        event.payload.headSha !== undefined
+      ) {
+        settled = event.payload.headSha
       }
     }
-    return published ?? original
+    return settled ?? original
   }
 
   private async recordInfrastructureFailure(
@@ -1122,7 +1130,7 @@ export class Dispatcher {
   ): Promise<void> {
     const lastReset = events.reduce(
       (seq, event) =>
-        event.type === 'execution.started' ||
+        event.type === 'execution.ended' ||
         (event.type === 'escalation.answered' && event.payload.resolution === 'retry')
           ? event.seq
           : seq,
@@ -1293,12 +1301,61 @@ export class Dispatcher {
   ): Promise<AbEvent | undefined> {
     const open = openWorkspace(events)
     if (!open) return undefined
-    await this.deps.workspaces.release({
+    const handle = {
       provider: open.provider,
       ref: open.ref,
       path: open.path ?? open.ref,
       branch: open.branch,
-    })
+    }
+    const recovery = this.deps.workspaces.recovery
+    if (recovery !== undefined) {
+      const attempt =
+        events.filter(
+          (event) =>
+            event.type === 'infrastructure.cleanup-attempted' &&
+            event.payload.workspaceRef === open.ref,
+        ).length + 1
+      try {
+        const outcome = await recovery.reap(handle)
+        const cleaned = await this.deps.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'infrastructure.cleanup-attempted',
+          payload: {
+            provider: open.provider,
+            workspaceRef: open.ref,
+            operation: 'delete',
+            attempt,
+            outcome,
+          },
+        })
+        events.push(cleaned)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const failed = await this.deps.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'infrastructure.cleanup-attempted',
+          payload: {
+            provider: open.provider,
+            workspaceRef: open.ref,
+            operation: 'delete',
+            attempt,
+            outcome: 'unknown',
+            error: message || 'cleanup failed without an error message',
+          },
+        })
+        events.push(failed)
+        await this.recordInfrastructureFailure(slug, events, {
+          provider: open.provider,
+          workspaceRef: open.ref,
+          operation: 'delete',
+          error,
+          cleanupPending: true,
+        })
+        throw error
+      }
+    } else {
+      await this.deps.workspaces.release(handle)
+    }
     return this.deps.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.released',
@@ -1652,6 +1709,7 @@ export class Dispatcher {
         continue
       }
       const decision = decideNext(events, this.deps.config)
+      if (state.status === 'done' || state.status === 'aborted') continue
       const open = openWorkspace(events)
       if (open !== null && this.deps.workspaces.recovery !== undefined) {
         const parked = decision.kind === 'wait'
