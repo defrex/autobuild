@@ -308,13 +308,21 @@ describe('parseConfig — defaults', () => {
       'vercel/sandbox/ubuntu:latest',
       'acme/project/custom:latest',
       'vcr.vercel.com/acme/project/custom:latest',
-      'vercel/sandbox/universal@sha256:short',
     ]) {
       const error = parseError(
         `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
       )
       expect(error.message).toContain('workspace.config.image')
       expect(error.message).toContain('Bun provisioning is validated only')
+    }
+
+    for (const digest of [`A${'a'.repeat(63)}`, 'a'.repeat(63), `${'a'.repeat(63)}g`]) {
+      const image = `vercel/sandbox/universal@sha256:${digest}`
+      const error = parseError(
+        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
+      )
+      expect(error.message).toContain('workspace.config.image')
+      expect(error.message).toContain('64 lowercase hexadecimal characters')
     }
   })
 

@@ -97,10 +97,10 @@ const vercelUniversalImageSchema = z
   .string()
   .refine(
     (image) =>
-      /^vercel\/sandbox\/universal(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[0-9a-fA-F]{64})?$/.test(
+      /^vercel\/sandbox\/universal(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[0-9a-f]{64})?$/.test(
         image,
       ),
-    'Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest',
+    'Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters',
   )
 
 export const vercelSandboxConfigSchema = z
