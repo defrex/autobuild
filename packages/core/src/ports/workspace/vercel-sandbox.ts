@@ -748,7 +748,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
     this.buildExecution = { start: (input) => this.start(input) }
-    this.recovery = { reap: (handle: WorkspaceHandle) => this.reap(handle.ref) }
+    this.recovery = {
+      reap: (handle: WorkspaceHandle) => {
+        if (handle.provider !== this.name) {
+          throw new Error(
+            `vercel-sandbox cannot reap a workspace owned by provider "${handle.provider}" (${handle.ref})`,
+          )
+        }
+        return this.reap(handle.ref)
+      },
+    }
     this.publication = {
       isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
       publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),

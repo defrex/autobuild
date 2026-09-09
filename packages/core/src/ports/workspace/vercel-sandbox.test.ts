@@ -775,6 +775,42 @@ describe('VercelSandboxProvider', () => {
     }
   })
 
+  test('runtime failure redacts an allowlisted secret while preserving provisioning context', async () => {
+    const h = harness({ provisionRuntimes: true })
+    h.sandbox.failCommand = (command) =>
+      command.cmd === 'sh' && (command.args as string[])[1] === 'plugin --version 1.2.3'
+    h.sandbox.failureStderr =
+      'plugin registry denied credential runtime-secret; manifest unavailable'
+
+    let rejection: unknown
+    try {
+      await h.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
+      })
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBeInstanceOf(Error)
+    const message = (rejection as Error).message
+    const failedCommand = h.sandbox.commands.find((command) => h.sandbox.failCommand?.(command))
+    expect(failedCommand).toBeDefined()
+    expect((failedCommand!.env as Record<string, string>).ANTHROPIC_API_KEY).toBe('runtime-secret')
+    expect(message).not.toContain('runtime-secret')
+    expect(message).toContain('[REDACTED]')
+    expect(message).toContain('plugin registry denied credential')
+    expect(message).toContain('manifest unavailable')
+    expect(message).toContain('runtime "plugin" preflight failed')
+    expect(message).toContain('role "plan" alternate[0]')
+    expect(message).toContain('workspace.config.runtimeProvisioning.plugin.preflight')
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+  })
+
   test('runtime failure names the route and field, creates no marker, and deletes the sandbox', async () => {
     const h = harness({ provisionRuntimes: true })
     h.sandbox.failCommand = (command) =>

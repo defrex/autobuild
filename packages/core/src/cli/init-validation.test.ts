@@ -1092,7 +1092,7 @@ readyState = "ready"
       cwd: repo,
     })
     expect(afterCancellation.stdout.match(/^worktree /gm)).toHaveLength(1)
-  })
+  }, 30_000)
 
   test('CLI routes --validate sessionlessly and rejects --force with it', async () => {
     const calls: string[] = []

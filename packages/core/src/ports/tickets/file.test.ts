@@ -383,7 +383,8 @@ describe('FileTicketSource', () => {
       /malformed ticket file — missing opening/,
     )
     expect(await readFile(malformedPath, 'utf8')).toBe(malformed)
-    expect(await readdir(join(dir, 'ready'))).toEqual(['broken.md', 'file-1.md'])
+    // readdir order is filesystem-defined; only the set of files is asserted.
+    expect((await readdir(join(dir, 'ready'))).sort()).toEqual(['broken.md', 'file-1.md'])
   })
 
   // ── Comments ───────────────────────────────────────────────────────────────

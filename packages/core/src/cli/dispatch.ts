@@ -22,7 +22,7 @@
  * next tick advances the post-PR epilogue (§15.7).
  */
 import { hostname } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import semver from 'semver'
 import { parseConfig } from '../config/load'
 import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
@@ -69,7 +69,9 @@ import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
 import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
-import { createWorkspaceRuntime } from '../ports/workspace/create'
+import { createWorkspaceRuntime, type WorkspaceRuntime } from '../ports/workspace/create'
+import { GitWorktreeProvider } from '../ports/workspace/git-worktree'
+import { LocalBuildExecution } from '../ports/workspace/local-build-execution'
 import {
   BUILD_EXECUTION_LEASE_TTL_MS,
   type BuildExecution,
@@ -206,6 +208,10 @@ export interface DispatchWiring {
   tickets: TicketSource
   forge: Forge
   workspaces: WorkspaceProvider
+  /** Provider and executor pairs for workspaces recorded before a
+   * `[workspace].provider` switch. A build is reaped, released, and executed
+   * only through the runtime named on its provisioned fact. */
+  retiredWorkspaces?: readonly WorkspaceRuntime[]
   /** Workspace-adjacent build executor. Production always supplies the local
    * subprocess implementation; tests may inject an in-process double. */
   buildExecution: BuildExecution
@@ -372,11 +378,24 @@ async function defaultWire(
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 
+  // Builds provisioned before this repository switched providers still hold
+  // local worktrees; the builtin can release them when they finish.
+  const retiredWorkspaces: WorkspaceRuntime[] =
+    config.workspace.provider === 'git-worktree'
+      ? []
+      : [
+          {
+            provider: new GitWorktreeProvider({ root: resolve(opened.worktreeRoot) }),
+            execution: new LocalBuildExecution({ env: opts.env }),
+          },
+        ]
+
   return {
     store: opened.store,
     tickets,
     forge,
     workspaces: workspaceRuntime.provider,
+    retiredWorkspaces,
     buildExecution: workspaceRuntime.execution,
     // Shipped registrations are shared with other non-phase judgment paths.
     // Model ids stay in config; production.ts owns adapter compatibility data.
@@ -534,6 +553,9 @@ class DispatchLoop {
       store: wiring.store,
       tickets: wiring.tickets,
       workspaces: wiring.workspaces,
+      ...(wiring.retiredWorkspaces === undefined
+        ? {}
+        : { retiredWorkspaces: wiring.retiredWorkspaces.map((runtime) => runtime.provider) }),
       forge: wiring.forge,
       config,
       getConfig: () => this.liveConfig.current().config,
@@ -1799,16 +1821,38 @@ class DispatchLoop {
       }
       const launchEvents = await this.wiring.store.getEvents(slug)
       let workspaceRef: string | undefined
+      let workspaceProvider: string | undefined
       for (const event of launchEvents) {
-        if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
-        else if (event.type === 'workspace.released') workspaceRef = undefined
+        if (event.type === 'workspace.provisioned') {
+          workspaceRef = event.payload.ref
+          workspaceProvider = event.payload.provider
+        } else if (event.type === 'workspace.released') {
+          workspaceRef = undefined
+          workspaceProvider = undefined
+        }
       }
       if (workspaceRef === undefined) throw new Error(`build ${slug} has no open workspace`)
+      // Execute through the runtime that owns the workspace: a build
+      // provisioned before a provider switch still runs where it lives.
+      const owning =
+        workspaceProvider === undefined || workspaceProvider === this.wiring.workspaces.name
+          ? { name: this.wiring.workspaces.name, execution: this.wiring.buildExecution }
+          : (() => {
+              const retired = this.wiring.retiredWorkspaces?.find(
+                (runtime) => runtime.provider.name === workspaceProvider,
+              )
+              if (retired === undefined) {
+                throw new Error(
+                  `build ${slug} workspace ${workspaceRef} belongs to provider "${workspaceProvider}", which is no longer configured`,
+                )
+              }
+              return { name: retired.provider.name, execution: retired.execution }
+            })()
       // A prior publication acknowledgement may have been lost after its push
       // reached the durable branch. Reconcile that fact before a replacement
       // runner can rerun the phase and create a non-fast-forward successor.
       await this.settlePendingPublication(slug)
-      const handle = await this.wiring.buildExecution.start({
+      const handle = await owning.execution.start({
         slug,
         storeRef: this.wiring.storeRef,
         instance,
@@ -1816,7 +1860,7 @@ class DispatchLoop {
       })
       active.handle = handle
       const identity = handle.identity ?? {
-        provider: this.wiring.workspaces.name,
+        provider: owning.name,
         workspaceRef,
       }
       await this.wiring.store.append(slug, {

@@ -1783,7 +1783,12 @@ describe('abDispatch watch build-runner coordination', () => {
     const remote: WorkspaceProvider = {
       name: 'remote-test',
       recovery: { reap: async () => 'confirmed' },
-      provision: (opts) => baseWire.workspaces.provision(opts),
+      // The fake records its own name; this fixture stands in as the remote
+      // provider, so the recorded fact must name it.
+      provision: async (opts) => ({
+        ...(await baseWire.workspaces.provision(opts)),
+        provider: 'remote-test',
+      }),
       release: (handle) => baseWire.workspaces.release(handle),
     }
     const dispatch = abDispatch({
@@ -1813,6 +1818,108 @@ describe('abDispatch watch build-runner coordination', () => {
     } finally {
       completion.resolve()
       await dispatch.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('a build still in a retired local worktree launches through that runtime, not the remote one', async () => {
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
+    const slug = 'retired-local-build'
+    const branch = `ab/${slug}`
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-retired', title: 'retired' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    const worktree = `${fx.origin}/.autobuild/worktrees/ab-${slug}`
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: worktree,
+        path: worktree,
+        localPath: worktree,
+        branch,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-retired', title: 'retired' },
+        },
+      }),
+    )
+
+    const starts: string[] = []
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap(handle) {
+          starts.push(`reap:${handle.provider}:${handle.ref}`)
+          return 'confirmed'
+        },
+      },
+      async provision() {
+        throw new Error('the remote provider must not provision for a local build')
+      },
+      async release() {},
+    }
+    const remoteExecution: BuildExecution = {
+      async start(input) {
+        starts.push(`remote:${input.workspaceRef}`)
+        throw new Error('the remote executor must not start a local worktree')
+      },
+    }
+    const baseWire = fx.wire()
+    const localExecution: BuildExecution = {
+      async start(input) {
+        starts.push(`local:${input.workspaceRef}`)
+        return baseWire.buildExecution.start(input)
+      },
+    }
+    const retiredLocal: WorkspaceProvider = {
+      name: 'git-worktree',
+      async provision() {
+        throw new Error('retired providers never provision')
+      },
+      async release() {},
+    }
+    const wire = () => ({
+      ...baseWire,
+      workspaces: remote,
+      buildExecution: remoteExecution,
+      retiredWorkspaces: [{ provider: retiredLocal, execution: localExecution }],
+    })
+
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire,
+      })
+      expect(starts).toEqual([`local:${worktree}`])
+      const events = await fx.store.getEvents(slug)
+      const started = events.find((event) => event.type === 'execution.started')
+      expect(started?.payload).toMatchObject({ workspaceRef: worktree })
+      expect(events.some((event) => event.type === 'infrastructure.cleanup-attempted')).toBe(false)
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
+    } finally {
       await fx.cleanup()
     }
   }, 10_000)
