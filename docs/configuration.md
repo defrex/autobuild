@@ -401,6 +401,7 @@ provider = "vercel-sandbox"
 image = "vercel/sandbox/universal:latest"
 vcpus = 4
 timeoutSeconds = 2700
+operationTimeoutMs = 30000
 region = "iad1"
 failoverRegions = ["sfo1"]
 environmentVariables = ["ANTHROPIC_API_KEY"]
@@ -411,13 +412,27 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 
 | Vercel field | Default | Constraints |
 |---|---:|---|
-| `image` | `vercel/sandbox/universal:latest` | nonempty managed/VCR image |
+| `image` | `vercel/sandbox/universal:latest` | `vercel/sandbox/universal`, a tag such as `:latest`, or a `@sha256:<64 hex digits>` digest |
 | `vcpus` | `4` | integer 1–32 (account limits may be lower) |
-| `timeoutSeconds` | — | required, integer 60–86400; Hobby currently permits at most 2700 |
+| `timeoutSeconds` | — | required, integer 60–86400; VM/session lifetime and abrupt-orphan bound; Hobby currently permits at most 2700 |
+| `operationTimeoutMs` | `30000` | integer 1000–300000; deadline for each provider acknowledgement, not session lifetime |
 | `region` | Vercel default | nonempty region |
 | `failoverRegions` | `[]` | unique and different from `region` |
 | `environmentVariables` | `[]` | unique variable names copied into agent/check commands |
 | `gitUsernameEnv`, `gitPasswordEnv` | — | optional pair naming a dedicated read-only clone identity |
+
+The built-in adapter supports only Vercel's
+`vercel/sandbox/universal` managed image, selected by its bare/default name, a
+tag, or a digest. Other managed images and arbitrary VCR images are rejected at
+configuration load because their package tools, libc/CPU, and filesystem
+contract have not been validated. The universal image must retain working
+Node/npm, `sh`, and the ordinary writable filesystem layout. Autobuild does not
+rely on image-preinstalled Bun: on each fresh sandbox it uses npm to install the
+pinned `bun@1.4.0` package under `/opt/autobuild-runtime`, verifies that exact
+executable with `--version`, and uses it for Autobuild and Bun-lockfile
+dependency installation. Package-registry network access is therefore required
+during provisioning. The child launch prepends the adapter-owned Bun directory
+to `PATH`, so setup, checks, agents, and their descendants resolve the same Bun.
 
 The private-repository token must grant repository contents read and no
 contents write. It must be distinct from Forge and Vercel credentials and may
@@ -425,18 +440,65 @@ not also appear in `environmentVariables`. Autobuild gives its firewall broker
 only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
 helpers, and extra headers after clone, and gives normal sessions no Forge
 credential. Provisioning writes its readiness marker only after all scrubbing,
-distribution installation, and dependency bootstrap complete; distribution
-packing/install disables package lifecycle scripts so checkout-only hooks such
-as Husky are not provisioning dependencies. A retry deletes any named sandbox
-without that marker instead of adopting partial setup. Branch
-publication is requested durably, then performed by the
+Bun verification, distribution installation, and dependency bootstrap
+complete; distribution packing/install disables package lifecycle scripts so
+checkout-only hooks such as Husky are not provisioning dependencies. A Bun
+install or verification failure identifies the configured image and expected
+universal-image capabilities, deletes the partial environment, and leaves no
+readiness marker. A retry also deletes any named sandbox without that marker
+instead of adopting partial setup. Immediately before every build-child launch,
+the adapter verifies the provisioned absolute Bun executable again. A failed
+preflight launches no child and instructs the operator to release and
+reprovision the sandbox; this intentionally fails closed for legacy snapshots
+that have a marker but no adapter-owned runtime. Branch publication is
+requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
-recording completion; PR API work stays local. Before every guest runner launch,
-the provider reasserts the normal receive-pack-free policy, so a failed policy
+recording completion; PR API work stays local. If that acknowledgement is lost
+after the push lands, the next launch observes the exact remote branch head and
+records the missing completion before allowing a replacement phase to run. If
+the commit is absent, release of the old workspace abandons its request and the
+replacement reruns the phase. Before every guest runner launch, the provider
+reasserts the normal receive-pack-free policy, so a failed policy
 restore cannot expose publication authority to later setup or plugin code.
 Ordinary completion deletes the sandbox.
+
+A Vercel VM is disposable, not durable build state. Every execution records its
+Autobuild instance, deterministic sandbox name, and Vercel session id. After a
+lease expires, recovery first stops/deletes the exact old name and confirms its
+absence; only then does it provision the next generation. An interrupted create
+is retried with the same deterministic generation/name, so an unknown response
+cannot fan out duplicate VMs. Recovery uses the published build branch when it
+exists and otherwise the original recorded branch-cut SHA, never a newly moved
+base. Setup reruns and open sessions are reclaimed by the normal durable
+protocol. Uncommitted files and `.ab` scratch may be lost; Store events/artifacts
+and published Git checkpoints remain authoritative.
+
+Paused and policy-blocked builds release their sandbox after the execution
+lease expires. Resume creates a replacement and reruns setup. Graceful shutdown
+bounds stop/delete calls by `operationTimeoutMs`; an unknown acknowledgement
+keeps ownership fenced until lease expiry and is retried visibly. After abrupt
+supervisor loss, Vercel's configured `timeoutSeconds` bounds orphan compute, and
+the next dispatcher waits for lease expiry before exact-name cleanup. Provider
+quota/vCPU/duration messages are retained verbatim in infrastructure events and
+status output.
+
+The representative actual-provider check is opt-in and must point at an
+independent consuming repository whose `autobuild.toml` selects the universal
+image above and contains one ready ticket. With hosted Store, Vercel, GitHub,
+and configured agent-runtime credentials available, run:
+
+```sh
+AB_RUN_VERCEL_SANDBOX_LIVE=1 \
+AB_VERCEL_SANDBOX_LIVE_REPO=/absolute/path/to/consumer \
+AB_STORE=https://store.example AB_TOKEN=… \
+bun test packages/core/src/integration/vercel-sandbox.live.test.ts
+```
+
+The test requires a complete child-driven build to publish and finalize, then
+requests cleanup and verifies sandbox deletion. It does not demonstrate support
+for other Vercel images or package managers.
 
 Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
 `ref`; they omit dispatcher-local path evidence. Branch config, relative/package
@@ -444,6 +506,16 @@ plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
 resolve in the guest checkout. Only names in `environmentVariables` plus
 scoped `AB_STORE`/`AB_TOKEN` enter commands—dispatcher environment variables
 are never copied wholesale.
+
+The opt-in real interruption exercise is
+`packages/core/src/integration/vercel-sandbox.live.test.ts`. Set
+`AB_RUN_VERCEL_SANDBOX_LIVE=1`, `AB_VERCEL_SANDBOX_LIVE_REPO` to an independent
+checkout with a ready file ticket and this provider configuration, plus the
+hosted Store, Vercel, runtime, and GitHub credentials above. The test deletes
+the first sandbox while its durable execution identity is live, waits through
+the lease fence, and asserts a distinct replacement sandbox/session identity,
+successful continuation, and final provider cleanup. It may run for up to 30
+minutes and mutates the configured test repository/Store.
 
 ## `[commands]`
 
@@ -852,6 +924,7 @@ Optional. Every field receives its own default. All are positive integers except
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
+| `maxInfrastructureAttempts` | `3` | positive integer | Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget. |
 | `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
 | `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. An operator may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
@@ -1102,6 +1175,7 @@ sessionBudgetSeconds = 3600
 stallRounds = 3
 maxVerifyAttempts = 3
 maxSetupAttempts = 3
+maxInfrastructureAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5

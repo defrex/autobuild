@@ -811,14 +811,19 @@ export function projectBuild(
   steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
 
   const setupError =
-    state.setupFailure === undefined
-      ? undefined
-      : `[commands].setup ${JSON.stringify(state.setupFailure.command)} failed ` +
-        `(attempt ${state.setupFailure.attempt}, ${
-          state.setupFailure.exitStatus === null
-            ? 'exit status unavailable'
-            : `exit status ${state.setupFailure.exitStatus}`
-        }): ${state.setupFailure.output || '(no output)'}`
+    state.infrastructureFailure !== undefined
+      ? `${state.infrastructureFailure.provider} ${state.infrastructureFailure.operation} failed ` +
+        `(attempt ${state.infrastructureFailure.attempt}, ${state.infrastructureFailure.cause}${
+          state.infrastructureFailure.cleanupPending ? ', cleanup pending' : ''
+        }): ${state.infrastructureFailure.error}`
+      : state.setupFailure === undefined
+        ? undefined
+        : `[commands].setup ${JSON.stringify(state.setupFailure.command)} failed ` +
+          `(attempt ${state.setupFailure.attempt}, ${
+            state.setupFailure.exitStatus === null
+              ? 'exit status unavailable'
+              : `exit status ${state.setupFailure.exitStatus}`
+          }): ${state.setupFailure.output || '(no output)'}`
 
   const decision = decideNext(events, config)
   const mergeWaitReason =

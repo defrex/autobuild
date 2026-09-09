@@ -11,6 +11,11 @@ import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import {
+  VERCEL_AUTOBUILD_PATH,
+  VERCEL_BUN_BIN_PATH,
+  VERCEL_BUN_EXECUTABLE,
+  VERCEL_BUN_PREFIX,
+  VERCEL_BUN_VERSION,
   VercelSandboxProvider,
   type VercelCommand,
   type VercelSandboxFacade,
@@ -324,7 +329,28 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
     expect(events.some((event) => event.type === 'phase.failed')).toBe(false)
     expect(forge.opened).toHaveLength(1)
     expect(remote.head).toBe('c'.repeat(40))
-    expect(commands.filter((command) => command.detached === true)).toHaveLength(4)
+    const detached = commands.filter((command) => command.detached === true)
+    expect(detached).toHaveLength(4)
+    expect(commands).toContainEqual({
+      cmd: 'npm',
+      args: ['install', '--prefix', VERCEL_BUN_PREFIX, '--no-save', `bun@${VERCEL_BUN_VERSION}`],
+    })
+    expect(
+      commands.filter(
+        (command) =>
+          command.cmd === VERCEL_BUN_EXECUTABLE &&
+          (command.args as string[] | undefined)?.[0] === '--version',
+      ),
+    ).toHaveLength(5)
+    for (const launch of detached) {
+      expect(launch).toMatchObject({
+        cmd: 'sh',
+        args: [
+          '-c',
+          `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`,
+        ],
+      })
+    }
     expect(hostCommands.some((command) => command.includes('worktree'))).toBe(false)
   } finally {
     await store.close()

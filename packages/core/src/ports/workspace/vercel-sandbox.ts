@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Sandbox, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
-import type { VercelSandboxConfig } from '../../config/schema'
+import { type VercelSandboxConfig, vercelSandboxConfigSchema } from '../../config/schema'
 import { distributionRoot } from '../../distribution'
 import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
 import type {
@@ -19,11 +19,15 @@ import { spawnExec } from './git-worktree'
 export const VERCEL_WORKSPACE_PATH = '/vercel/sandbox/workspace'
 export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
 export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
+export const VERCEL_BUN_VERSION = '1.4.0'
+export const VERCEL_BUN_PREFIX = '/opt/autobuild-runtime'
+export const VERCEL_BUN_BIN_PATH = `${VERCEL_BUN_PREFIX}/node_modules/.bin`
+export const VERCEL_BUN_EXECUTABLE = `${VERCEL_BUN_BIN_PATH}/bun`
 
 export interface VercelCommand {
   readonly exitCode: number | null
   wait(): Promise<{ exitCode: number }>
-  kill(signal?: 'SIGTERM' | 'SIGKILL'): Promise<void>
+  kill(signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }): Promise<void>
   /** Completed-command output. Validation is the only production caller that
    * reads it; build state continues to travel exclusively through the Store. */
   stdout?(): Promise<string>
@@ -32,6 +36,7 @@ export interface VercelCommand {
 
 export interface VercelSandboxHandle {
   readonly name: string
+  currentSession?(): { sessionId: string }
   runCommand(params: {
     cmd: string
     args?: string[]
@@ -40,10 +45,16 @@ export interface VercelSandboxHandle {
     detached?: true
     signal?: AbortSignal
   }): Promise<VercelCommand | { exitCode: number }>
-  writeFiles(files: { path: string; content: Uint8Array }[]): Promise<void>
-  stop(): Promise<unknown>
-  delete(): Promise<void>
-  update(params: { networkPolicy: NetworkPolicy }): Promise<unknown>
+  writeFiles(
+    files: { path: string; content: Uint8Array }[],
+    opts?: { signal?: AbortSignal },
+  ): Promise<void>
+  stop(opts?: { signal?: AbortSignal }): Promise<unknown>
+  delete(opts?: { signal?: AbortSignal }): Promise<void>
+  update(
+    params: { networkPolicy: NetworkPolicy },
+    opts?: { signal?: AbortSignal },
+  ): Promise<unknown>
 }
 
 export type VercelSandboxCreateInput = {
@@ -63,15 +74,16 @@ export type VercelSandboxCreateInput = {
   region?: string
   failoverRegions?: string[]
   networkPolicy: NetworkPolicy
+  signal?: AbortSignal
 }
 
 export interface VercelSandboxFacade {
-  get(name: string): Promise<VercelSandboxHandle | null>
+  get(name: string, signal?: AbortSignal): Promise<VercelSandboxHandle | null>
   /** Durable build workspaces retain the named get-or-create lifecycle. */
   create(input: VercelSandboxCreateInput): Promise<VercelSandboxHandle>
   /** Readiness always acquires a new unnamed disposable environment. */
   createFresh?(
-    input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'> & { signal?: AbortSignal },
+    input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'>,
   ): Promise<VercelSandboxHandle>
 }
 
@@ -105,9 +117,9 @@ export function createVercelSdkFacade(
 ): VercelSandboxFacade {
   const credentials = sdkCredentials(env)
   return {
-    async get(name) {
+    async get(name, signal) {
       try {
-        return await Sandbox.get({ name, ...credentials })
+        return await Sandbox.get({ name, signal, ...credentials })
       } catch (error) {
         if (isMissingVercelSandbox(error)) return null
         throw error
@@ -177,14 +189,17 @@ export function validateVercelGithubOrigin(raw: string): {
 
 const cleanGithubOrigin = validateVercelGithubOrigin
 
-function sandboxName(origin: string, branch: string): string {
+function sandboxName(origin: string, branch: string, generation = 0): string {
   const readable = branch
     .replace(/^ab\//, '')
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
     .slice(0, 40)
-  const digest = createHash('sha256').update(`${origin}\0${branch}`).digest('hex').slice(0, 10)
-  return `autobuild-${readable || 'build'}-${digest}`.slice(0, 63)
+  const digest = createHash('sha256')
+    .update(`${origin}\0${branch}\0${generation}`)
+    .digest('hex')
+    .slice(0, 10)
+  return `autobuild-${readable || 'build'}-g${generation}-${digest}`.slice(0, 63)
 }
 
 async function execOrThrow(
@@ -255,6 +270,49 @@ async function commandOrThrow(
     throw new Error(`sandbox command ${params.cmd} exited ${result.exitCode}`)
 }
 
+function bunProvisioningError(image: string, operation: string, error: unknown): Error {
+  return new Error(
+    `vercel-sandbox could not ${operation} Bun ${VERCEL_BUN_VERSION} on image ${JSON.stringify(image)}; Autobuild supports the universal managed image with working Node/npm, shell, filesystem, and package-registry access`,
+    { cause: error },
+  )
+}
+
+async function provisionBun(
+  sandbox: VercelSandboxHandle,
+  image: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    await commandOrThrow(sandbox, {
+      cmd: 'npm',
+      args: ['install', '--prefix', VERCEL_BUN_PREFIX, '--no-save', `bun@${VERCEL_BUN_VERSION}`],
+      ...(signal === undefined ? {} : { signal }),
+    })
+  } catch (error) {
+    throw bunProvisioningError(image, 'provision', error)
+  }
+  try {
+    await commandOrThrow(sandbox, {
+      cmd: VERCEL_BUN_EXECUTABLE,
+      args: ['--version'],
+      ...(signal === undefined ? {} : { signal }),
+    })
+  } catch (error) {
+    throw bunProvisioningError(image, 'verify provisioned', error)
+  }
+}
+
+async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promise<void> {
+  try {
+    await commandOrThrow(sandbox, { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'] })
+  } catch (error) {
+    throw new Error(
+      `vercel-sandbox Bun ${VERCEL_BUN_VERSION} preflight failed on image ${JSON.stringify(image)}; release and reprovision this sandbox before retrying the build`,
+      { cause: error },
+    )
+  }
+}
+
 export async function packageAutobuildDistribution(): Promise<Uint8Array> {
   const destination = await mkdtemp(join(tmpdir(), 'autobuild-pack-'))
   try {
@@ -323,6 +381,7 @@ async function readableCommand(
 export async function validateVercelSandbox(
   options: VercelReadinessOptions,
 ): Promise<VercelReadinessResult> {
+  const config = vercelSandboxConfigSchema.parse(options.config)
   if (!/^https:\/\//i.test(options.storeRef) || options.storeToken === '') {
     throw new Error(
       'remote validation requires an HTTPS AB_STORE and nonempty AB_TOKEN; configure a remotely reachable hosted Store',
@@ -352,13 +411,13 @@ export async function validateVercelSandbox(
     )
   }
   const username =
-    options.config.gitUsernameEnv === undefined
+    config.gitUsernameEnv === undefined
       ? undefined
-      : requireVercelEnvironmentValue(options.env, options.config.gitUsernameEnv)
+      : requireVercelEnvironmentValue(options.env, config.gitUsernameEnv)
   const password =
-    options.config.gitPasswordEnv === undefined
+    config.gitPasswordEnv === undefined
       ? undefined
-      : requireVercelEnvironmentValue(options.env, options.config.gitPasswordEnv)
+      : requireVercelEnvironmentValue(options.env, config.gitPasswordEnv)
   const facade = options.facade ?? createVercelSdkFacade(options.env)
   if (facade.createFresh === undefined) {
     throw new Error('the configured Vercel SDK facade does not support fresh validation sandboxes')
@@ -370,13 +429,11 @@ export async function validateVercelSandbox(
       revision,
       ...(username !== undefined && password !== undefined ? { username, password } : {}),
     },
-    image: options.config.image,
-    resources: { vcpus: options.config.vcpus },
-    timeout: options.config.timeoutSeconds * 1000,
-    ...(options.config.region !== undefined ? { region: options.config.region } : {}),
-    ...(options.config.failoverRegions.length > 0
-      ? { failoverRegions: options.config.failoverRegions }
-      : {}),
+    image: config.image,
+    resources: { vcpus: config.vcpus },
+    timeout: config.timeoutSeconds * 1000,
+    ...(config.region !== undefined ? { region: config.region } : {}),
+    ...(config.failoverRegions.length > 0 ? { failoverRegions: config.failoverRegions } : {}),
     networkPolicy: 'allow-all',
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
@@ -419,9 +476,12 @@ export async function validateVercelSandbox(
         throw new Error(`failed to scrub git config ${key}`)
       }
     }
+    await provisionBun(sandbox, config.image, options.signal)
     const archive = await (options.packageArchive ?? packageAutobuildDistribution)()
     checkCancellation()
-    await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
+    await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
     checkCancellation()
     await commandOrThrow(sandbox, withSignal({ cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] }))
     await commandOrThrow(
@@ -434,7 +494,7 @@ export async function validateVercelSandbox(
     await commandOrThrow(
       sandbox,
       withSignal({
-        cmd: 'bun',
+        cmd: VERCEL_BUN_EXECUTABLE,
         args: ['install', '--production', '--ignore-scripts'],
         cwd: VERCEL_AUTOBUILD_PATH,
       }),
@@ -445,7 +505,7 @@ export async function validateVercelSandbox(
         cmd: 'sh',
         args: [
           '-c',
-          'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
+          `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
         ],
         cwd: VERCEL_WORKSPACE_PATH,
       }),
@@ -453,13 +513,16 @@ export async function validateVercelSandbox(
     const setup = await readableCommand(
       sandbox,
       withSignal({
-        cmd: 'bun',
-        args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-init-probe.ts`],
+        cmd: 'sh',
+        args: [
+          '-c',
+          `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-init-probe.ts`,
+        ],
         cwd: VERCEL_WORKSPACE_PATH,
         env: Object.fromEntries([
           ['AB_STORE', options.storeRef],
           ['AB_TOKEN', options.storeToken],
-          ...options.config.environmentVariables.map((name) => [
+          ...config.environmentVariables.map((name) => [
             name,
             requireVercelEnvironmentValue(options.env, name),
           ]),
@@ -504,6 +567,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   readonly name = 'vercel-sandbox'
   readonly buildExecution: BuildExecution
   readonly publication
+  readonly recovery
   private readonly facade: VercelSandboxFacade
   private readonly exec: Exec
   private readonly active = new Set<string>()
@@ -519,7 +583,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
     this.buildExecution = { start: (input) => this.start(input) }
+    this.recovery = { reap: (handle: WorkspaceHandle) => this.reap(handle.ref) }
     this.publication = {
+      isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
       publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),
     }
   }
@@ -528,6 +594,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     repo: string
     baseBranch: string
     branch: string
+    revision?: string
+    generation?: number
   }): Promise<WorkspaceProvisionResult> {
     const rawOrigin = await execOrThrow(
       this.exec,
@@ -535,8 +603,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       opts.repo,
     )
     const origin = cleanGithubOrigin(rawOrigin)
-    const name = sandboxName(origin.url, opts.branch)
-    let sandbox = await this.facade.get(name)
+    const name = sandboxName(origin.url, opts.branch, opts.generation)
+    let sandbox = await this.facade.get(name, this.operationSignal())
     const existing = oneSha(
       await execOrThrow(
         this.exec,
@@ -546,16 +614,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       `remote branch ${opts.branch}`,
     )
     const base =
-      existing === null
-        ? oneSha(
-            await execOrThrow(
-              this.exec,
-              ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${opts.baseBranch}`],
-              opts.repo,
-            ),
-            `remote base ${opts.baseBranch}`,
-          )
-        : existing
+      existing ??
+      opts.revision ??
+      oneSha(
+        await execOrThrow(
+          this.exec,
+          ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${opts.baseBranch}`],
+          opts.repo,
+        ),
+        `remote base ${opts.baseBranch}`,
+      )
     if (base === null)
       throw new Error(
         `remote branch ${existing === null ? opts.baseBranch : opts.branch} does not exist`,
@@ -567,11 +635,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         args: ['-f', VERCEL_PROVISIONED_MARKER],
       })
       if (marker.exitCode === 0) {
-        await sandbox.stop()
+        await sandbox.stop({ signal: this.operationSignal() })
       } else {
         // A named VM without the marker is a crashed/legacy provisioning
         // attempt. Never expose its potentially unscrubbed checkout to agents.
-        await sandbox.delete()
+        await sandbox.delete({ signal: this.operationSignal() })
         sandbox = null
       }
     }
@@ -606,6 +674,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           ? { failoverRegions: this.options.config.failoverRegions }
           : {}),
         networkPolicy: uploadPackPolicy(origin, readAuth),
+        signal: this.operationSignal(),
       })
       try {
         const sourcePath = `/vercel/sandbox/${origin.directory}`
@@ -633,15 +702,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           if (result.exitCode !== 0 && result.exitCode !== 5)
             throw new Error(`failed to scrub git config ${key}`)
         }
+        await provisionBun(sandbox, this.options.config.image)
         const archive = await (this.options.packageArchive ?? packageAutobuildDistribution)()
-        await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }])
+        await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
+          signal: this.operationSignal(),
+        })
         await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
         await commandOrThrow(sandbox, {
           cmd: 'tar',
           args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
         })
         await commandOrThrow(sandbox, {
-          cmd: 'bun',
+          cmd: VERCEL_BUN_EXECUTABLE,
           args: ['install', '--production', '--ignore-scripts'],
           cwd: VERCEL_AUTOBUILD_PATH,
         })
@@ -652,7 +724,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           cmd: 'sh',
           args: [
             '-c',
-            'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
+            `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
           ],
           cwd: VERCEL_WORKSPACE_PATH,
         })
@@ -660,14 +732,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           cmd: 'touch',
           args: [VERCEL_PROVISIONED_MARKER],
         })
-        await sandbox.stop()
+        await sandbox.stop({ signal: this.operationSignal() })
       } catch (error) {
         try {
-          await sandbox.delete()
+          this.sessions.set(name, sandbox)
+          await this.reap(name)
         } catch (deleteError) {
           throw new AggregateError(
             [error, deleteError],
-            `sandbox ${name} setup failed and its incomplete environment could not be deleted`,
+            `sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
           )
         }
         throw error
@@ -686,13 +759,43 @@ export class VercelSandboxProvider implements WorkspaceProvider {
 
   async release(handle: WorkspaceHandle): Promise<void> {
     if (this.active.has(handle.ref)) throw new Error(`cannot release active sandbox ${handle.ref}`)
-    const sandbox = this.sessions.get(handle.ref) ?? (await this.facade.get(handle.ref))
-    if (sandbox === null) return
-    await sandbox.delete()
-    this.active.delete(handle.ref)
-    this.uncertain.delete(handle.ref)
-    this.sessions.delete(handle.ref)
-    this.origins.delete(handle.ref)
+    await this.reap(handle.ref)
+  }
+
+  private operationSignal(): AbortSignal {
+    return AbortSignal.timeout(this.options.config.operationTimeoutMs ?? 30_000)
+  }
+
+  /** Stop/delete and then prove absence by exact deterministic name. */
+  private async reap(ref: string): Promise<'confirmed' | 'absent'> {
+    let sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
+    if (sandbox === null) {
+      this.forget(ref)
+      return 'absent'
+    }
+    try {
+      await sandbox.stop({ signal: this.operationSignal() })
+      await sandbox.delete({ signal: this.operationSignal() })
+      sandbox = await this.facade.get(ref, this.operationSignal())
+      if (sandbox !== null)
+        throw new Error(`sandbox ${ref} still exists after delete acknowledgement`)
+      this.forget(ref)
+      return 'confirmed'
+    } catch (error) {
+      this.uncertain.add(ref)
+      this.sessions.delete(ref)
+      throw new Error(
+        `sandbox ${ref} cleanup outcome is unknown and remains retryable: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
+  private forget(ref: string): void {
+    this.active.delete(ref)
+    this.uncertain.delete(ref)
+    this.sessions.delete(ref)
+    this.origins.delete(ref)
   }
 
   private async normalNetworkPolicy(ref: string): Promise<{
@@ -719,18 +822,19 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private async start(input: BuildExecutionStart): Promise<BuildExecutionHandle> {
     const ref = input.workspaceRef
     if (this.active.has(ref)) throw new Error(`sandbox ${ref} already has a live execution`)
-    const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref))
+    const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
     if (sandbox === null) throw new Error(`sandbox ${ref} no longer exists`)
     // A prior publication restore may have failed. Reassert the
     // receive-pack-free policy before any guest command can run.
     const { policy } = await this.normalNetworkPolicy(ref)
-    await sandbox.update({ networkPolicy: policy })
+    await sandbox.update({ networkPolicy: policy }, { signal: this.operationSignal() })
     if (this.uncertain.has(ref)) {
       // A prior wait/stop failure may have left agent code alive. Confirm a
       // stop before starting another runner in the same environment.
-      await sandbox.stop()
+      await sandbox.stop({ signal: this.operationSignal() })
       this.uncertain.delete(ref)
     }
+    await preflightBun(sandbox, this.options.config.image)
     this.sessions.set(ref, sandbox)
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,
@@ -743,18 +847,22 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     for (const name of this.options.config.environmentVariables)
       env[name] = requireVercelEnvironmentValue(this.options.env, name)
     const command = (await sandbox.runCommand({
-      cmd: 'bun',
-      args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`],
+      cmd: 'sh',
+      args: [
+        '-c',
+        `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`,
+      ],
       cwd: VERCEL_WORKSPACE_PATH,
       env,
       detached: true,
+      signal: this.operationSignal(),
     })) as VercelCommand
     this.active.add(ref)
     let environmentStop: Promise<void> | undefined
     const stopEnvironment = async (): Promise<void> => {
       environmentStop ??= (async () => {
         try {
-          await sandbox.stop()
+          await sandbox.stop({ signal: this.operationSignal() })
         } catch (error) {
           // Do not retain a potentially expired/stale SDK handle. A later
           // execution must first re-resolve and confirm teardown.
@@ -771,7 +879,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const stop = async () => {
       stopping ??= (async () => {
         try {
-          await command.kill('SIGTERM')
+          await command.kill('SIGTERM', { abortSignal: this.operationSignal() })
         } catch {
           /* already exited */
         }
@@ -789,7 +897,39 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         throw error
       },
     )
-    return { completion, stop }
+    const sessionId = sandbox.currentSession?.().sessionId
+    return {
+      identity: {
+        provider: this.name,
+        workspaceRef: ref,
+        environmentId: sandbox.name,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      },
+      completion,
+      stop: async () => {
+        try {
+          await stop()
+          return { outcome: 'confirmed' }
+        } catch (error) {
+          return {
+            outcome: 'unknown',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+      },
+    }
+  }
+
+  private async isPublished(input: { sha: string; branch: string }): Promise<boolean> {
+    const head = oneSha(
+      await execOrThrow(
+        this.exec,
+        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${input.branch}`],
+        this.options.repo,
+      ),
+      `published branch ${input.branch}`,
+    )
+    return head === input.sha
   }
 
   private async publish(input: { ref: string; sha: string; branch: string }): Promise<void> {
@@ -804,7 +944,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       throw new Error('vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN')
     }
     const { origin, policy: normal } = await this.normalNetworkPolicy(input.ref)
-    const sandbox = this.sessions.get(input.ref) ?? (await this.facade.get(input.ref))
+    const sandbox =
+      this.sessions.get(input.ref) ?? (await this.facade.get(input.ref, this.operationSignal()))
     if (sandbox === null) throw new Error(`unknown sandbox ${input.ref}`)
     this.sessions.set(input.ref, sandbox)
     const publicationPolicy: NetworkPolicy = {
@@ -838,13 +979,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       },
     }
     try {
-      await sandbox.update({ networkPolicy: publicationPolicy })
+      await sandbox.update({ networkPolicy: publicationPolicy }, { signal: this.operationSignal() })
       await commandOrThrow(sandbox, {
         cmd: 'git',
         args: ['push', '--no-verify', 'origin', `${input.sha}:refs/heads/${input.branch}`],
         cwd: VERCEL_WORKSPACE_PATH,
       })
-      await sandbox.stop()
+      await sandbox.stop({ signal: this.operationSignal() })
       const published = oneSha(
         await execOrThrow(
           this.exec,
@@ -857,9 +998,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         throw new Error(`published head ${published ?? '(missing)'} did not match ${input.sha}`)
     } finally {
       try {
-        await sandbox.update({ networkPolicy: normal })
+        await sandbox.update({ networkPolicy: normal }, { signal: this.operationSignal() })
       } finally {
-        await sandbox.stop()
+        await sandbox.stop({ signal: this.operationSignal() })
       }
     }
   }

@@ -56,14 +56,30 @@ export interface BuildExecutionExit {
   signal?: string
 }
 
+/** Immutable provider identity recorded as soon as an execution starts. */
+export interface BuildExecutionIdentity {
+  provider: string
+  workspaceRef: string
+  /** Provider-native VM/container identity when it differs from workspaceRef. */
+  environmentId?: string
+  /** Provider-native session identity. A resumed persistent VM gets a new one. */
+  sessionId?: string
+}
+
+/** Teardown must distinguish proof from an interrupted/ambiguous acknowledgement. */
+export type BuildExecutionTeardownResult =
+  | { outcome: 'confirmed' | 'absent' }
+  | { outcome: 'unknown'; error: string }
+
 export interface BuildExecutionHandle {
   /** Available for supervision/tests, never used as build state. */
   readonly pid?: number
+  readonly identity?: BuildExecutionIdentity
   /** Resolves only after the execution environment has reaped everything the
    * build started. The exit projection still describes the build leader. */
   readonly completion: Promise<BuildExecutionExit>
   /** Idempotent shutdown: graceful, bounded force escalation, then full reap. */
-  stop(): Promise<void>
+  stop(): Promise<BuildExecutionTeardownResult | void>
 }
 
 /** The substitutable seam at the workspace boundary. A remote workspace

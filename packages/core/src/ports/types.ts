@@ -145,9 +145,18 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
 }
 
 export interface WorkspacePublication {
+  /** Observe whether the exact requested commit already reached the durable
+   * remote branch after an interrupted acknowledgement. */
+  isPublished?(input: { sha: string; branch: string }): Promise<boolean>
   /** Publish exactly one commit to exactly one branch; no arbitrary command
    * surface is exposed to the dispatcher or build child. */
   publish(input: { ref: string; sha: string; branch: string }): Promise<void>
+}
+
+export interface WorkspaceRecovery {
+  /** Fence an unavailable environment. Unknown outcomes must reject so the
+   * dispatcher retains the lease/workspace fact and retries after its fence. */
+  reap(handle: WorkspaceHandle): Promise<'confirmed' | 'absent'>
 }
 
 export interface WorkspaceProvider {
@@ -157,10 +166,16 @@ export interface WorkspaceProvider {
   readonly buildExecution?: BuildExecution
   /** Trusted dispatcher-only publication capability for remote workspaces. */
   readonly publication?: WorkspacePublication
+  /** Optional only for remote/disposable providers. */
+  readonly recovery?: WorkspaceRecovery
   provision(opts: {
     repo: string
     baseBranch: string
     branch: string
+    /** Immutable recovery checkpoint, never a moved base branch. */
+    revision?: string
+    /** Monotonic environment generation used in provider idempotency keys. */
+    generation?: number
   }): Promise<WorkspaceProvisionResult>
   release(handle: WorkspaceHandle): Promise<void>
 }

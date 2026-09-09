@@ -169,8 +169,7 @@ readyState = "ready"
       name: 'fresh-random-sandbox',
       runCommand: async (params) => {
         commands.push({ cmd: params.cmd, ...(params.env === undefined ? {} : { env: params.env }) })
-        const probe =
-          params.cmd === 'bun' && params.args?.some((arg) => arg.includes('ab-init-probe'))
+        const probe = params.args?.some((arg) => arg.includes('ab-init-probe'))
         return {
           exitCode: 0,
           wait: async () => ({ exitCode: 0 }),
@@ -208,7 +207,7 @@ readyState = "ready"
     }
     const result = await validateVercelSandbox({
       config: {
-        image: 'custom:v1',
+        image: 'vercel/sandbox/universal:latest',
         vcpus: 2,
         timeoutSeconds: 600,
         failoverRegions: [],
@@ -227,12 +226,47 @@ readyState = "ready"
     expect(result.revision).toBe(sha)
     expect(deletes).toBe(1)
     expect(freshInput).not.toHaveProperty('name')
-    expect(freshInput).toMatchObject({ image: 'custom:v1', resources: { vcpus: 2 } })
+    expect(freshInput).toMatchObject({
+      image: 'vercel/sandbox/universal:latest',
+      resources: { vcpus: 2 },
+    })
     expect(commands.find((command) => command.env !== undefined)?.env).toEqual({
       AB_STORE: 'https://store.example',
       AB_TOKEN: 'store-secret',
       MODEL_API_KEY: 'secret-model',
     })
+  })
+
+  test('rejects unsupported images before allocating a validation sandbox', async () => {
+    let creates = 0
+    await expect(
+      validateVercelSandbox({
+        config: {
+          image: 'custom:v1',
+          vcpus: 1,
+          timeoutSeconds: 60,
+          failoverRegions: [],
+          environmentVariables: [],
+        },
+        env: {},
+        storeRef: 'https://store.example',
+        storeToken: 'token',
+        repo: '/repo',
+        baseBranch: 'main',
+        facade: {
+          get: async () => null,
+          create: async () => {
+            creates += 1
+            throw new Error('must not allocate')
+          },
+          createFresh: async () => {
+            creates += 1
+            throw new Error('must not allocate')
+          },
+        },
+      }),
+    ).rejects.toThrow(/universal managed image/)
+    expect(creates).toBe(0)
   })
 
   test('deletes and identifies the Vercel sandbox when cancellation interrupts bootstrap', async () => {
@@ -272,7 +306,7 @@ readyState = "ready"
     await expect(
       validateVercelSandbox({
         config: {
-          image: 'custom:v1',
+          image: 'vercel/sandbox/universal:latest',
           vcpus: 1,
           timeoutSeconds: 60,
           failoverRegions: [],
@@ -320,7 +354,7 @@ readyState = "ready"
     try {
       await validateVercelSandbox({
         config: {
-          image: 'custom:v1',
+          image: 'vercel/sandbox/universal:latest',
           vcpus: 1,
           timeoutSeconds: 60,
           failoverRegions: [],

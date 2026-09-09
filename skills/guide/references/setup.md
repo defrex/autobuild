@@ -57,12 +57,13 @@ Inspect the repository's manifests, documentation, CI, test layout, and
 conventions. Read the installed sibling `../SKILL.md` for Autobuild's complete
 configuration and ticket surfaces.
 
-Choose a pinned Vercel managed image or custom VCR image containing the system
-tools and agent CLIs this repository needs. Autobuild does not infer a language
-stack and does not install an Autobuild development image. A Python repository
-might use an image with Python and `uv`; a Rust repository might need a pinned
-Rust toolchain and native libraries; a JVM repository might require a JDK and
-Gradle. Those are repository decisions.
+Use the supported `vercel/sandbox/universal` image. Other managed images and
+custom VCR images are rejected. Autobuild remains stack-neutral: put the
+repository's own reproducible toolchain bootstrap in idempotent
+`[commands].setup`, and expose only required runtime credentials through
+`[workspace.config].environmentVariables`. For example, setup may install
+Python and `uv`, a pinned Rust toolchain and native libraries, or a JDK and
+Gradle. Those are repository decisions, not toolchains inferred by Autobuild.
 
 Configure an idempotent `[commands].setup` to install package dependencies and
 perform repeatable bootstrap on every fresh or replacement environment. It must
@@ -99,7 +100,7 @@ Vercel to local execution. Local launcher probes printed by ordinary `ab init`
 are only setup-agent discovery and are not remote readiness evidence.
 
 Typical remediation is intentionally specific: add a missing executable to the
-image or setup command; add a runtime credential name to
+setup command while retaining the universal image; add a runtime credential name to
 `environmentVariables` and its value to the dispatcher environment; correct the
 Vercel team/project credential set; provide separate private-clone credentials;
 use an HTTPS GitHub origin and hosted Store; authorize the Store token; or commit

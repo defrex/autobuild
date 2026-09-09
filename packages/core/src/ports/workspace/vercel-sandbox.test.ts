@@ -5,6 +5,11 @@ import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
 import { spawnExec, type Exec } from './git-worktree'
 import {
+  VERCEL_AUTOBUILD_PATH,
+  VERCEL_BUN_BIN_PATH,
+  VERCEL_BUN_EXECUTABLE,
+  VERCEL_BUN_PREFIX,
+  VERCEL_BUN_VERSION,
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
   isMissingVercelSandbox,
@@ -19,26 +24,38 @@ class FakeSandbox implements VercelSandboxHandle {
   readonly name = 'sandbox'
   readonly commands: Array<Record<string, unknown>> = []
   readonly policies: NetworkPolicy[] = []
+  readonly policySignals: Array<AbortSignal | undefined> = []
+  readonly killSignals: Array<AbortSignal | undefined> = []
   writes: Array<{ path: string; content: Uint8Array }> = []
   stops = 0
   stopFailures = 0
   deletes = 0
+  remainAfterDelete = false
+  deleteFailure: Error | undefined
   failPush = false
   failRestore = false
   failSetupCommand: string | undefined
+  failCommand: ((params: Record<string, unknown>) => boolean) | undefined
   provisioned = false
   detachedWait: () => Promise<{ exitCode: number }> = async () => ({ exitCode: 0 })
 
+  currentSession() {
+    return { sessionId: 'session-1' }
+  }
+
   async runCommand(params: Record<string, unknown>) {
     this.commands.push(params)
+    if (this.failCommand?.(params)) return { exitCode: 1 }
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
-    if (params.cmd === 'touch') this.provisioned = true
     if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
+    if (params.cmd === 'touch') this.provisioned = true
     if (params.detached === true) {
       return {
         exitCode: null,
         wait: this.detachedWait,
-        kill: async () => undefined,
+        kill: async (_signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }) => {
+          this.killSignals.push(opts?.abortSignal)
+        },
       }
     }
     return {
@@ -62,21 +79,24 @@ class FakeSandbox implements VercelSandboxHandle {
   }
   async delete() {
     this.deletes += 1
+    if (this.deleteFailure !== undefined) throw this.deleteFailure
   }
-  async update(params: { networkPolicy: NetworkPolicy }) {
+  async update(params: { networkPolicy: NetworkPolicy }, opts?: { signal?: AbortSignal }) {
     this.policies.push(params.networkPolicy)
+    this.policySignals.push(opts?.signal)
     const isPublicationPolicy = JSON.stringify(params.networkPolicy).includes('git-receive-pack')
     if (this.failRestore && !isPublicationPolicy) throw new Error('restore failed')
   }
 }
 
-function harness(options: { publishedSha?: string | null } = {}) {
+function harness(options: { publishedSha?: string | null; existingSha?: string | null } = {}) {
   const sandbox = new FakeSandbox()
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
   let created = false
   const facade: VercelSandboxFacade = {
-    get: async () => (created && sandbox.deletes === 0 ? sandbox : null),
+    get: async () =>
+      created && (sandbox.deletes === 0 || sandbox.remainAfterDelete) ? sandbox : null,
     create: async (input) => {
       created = true
       createInput = input
@@ -93,11 +113,13 @@ function harness(options: { publishedSha?: string | null } = {}) {
       const sha =
         ref === 'refs/heads/main'
           ? SHA
-          : buildBranch && buildBranchLookups > 1
-            ? options.publishedSha === undefined
-              ? SHA
-              : options.publishedSha
-            : null
+          : buildBranch && buildBranchLookups === 1
+            ? (options.existingSha ?? null)
+            : buildBranch
+              ? options.publishedSha === undefined
+                ? SHA
+                : options.publishedSha
+              : null
       return {
         stdout: sha === null ? '' : `${sha}\t${ref}\n`,
         stderr: '',
@@ -191,6 +213,62 @@ describe('VercelSandboxProvider', () => {
       }),
     )
     expect(JSON.stringify(h.sandbox.commands)).not.toContain('forge-secret')
+
+    const npmInstall = h.sandbox.commands.findIndex((command) => command.cmd === 'npm')
+    const verification = h.sandbox.commands.findIndex(
+      (command) =>
+        command.cmd === VERCEL_BUN_EXECUTABLE &&
+        (command.args as string[] | undefined)?.[0] === '--version',
+    )
+    const distributionInstall = h.sandbox.commands.findIndex(
+      (command) =>
+        command.cmd === VERCEL_BUN_EXECUTABLE &&
+        (command.args as string[] | undefined)?.[0] === 'install',
+    )
+    const marker = h.sandbox.commands.findIndex((command) => command.cmd === 'touch')
+    expect(h.sandbox.commands[npmInstall]).toEqual({
+      cmd: 'npm',
+      args: ['install', '--prefix', VERCEL_BUN_PREFIX, '--no-save', `bun@${VERCEL_BUN_VERSION}`],
+    })
+    expect(npmInstall).toBeGreaterThan(-1)
+    expect(verification).toBeGreaterThan(npmInstall)
+    expect(distributionInstall).toBeGreaterThan(verification)
+    expect(marker).toBeGreaterThan(distributionInstall)
+    const repositoryBootstrap = h.sandbox.commands.find(
+      (command) => command.cmd === 'sh' && command.cwd === VERCEL_WORKSPACE_PATH,
+    )
+    expect(repositoryBootstrap).toBeDefined()
+    expect((repositoryBootstrap!.args as string[])[1]).toContain(
+      `${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile`,
+    )
+  })
+
+  test('uses generation-scoped names and the supplied checkpoint when the branch is absent', async () => {
+    const h = harness()
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+      revision: 'b'.repeat(40),
+      generation: 2,
+    })
+    expect(h.createInput?.name).toMatch(/^autobuild-remote-build-g2-/)
+    expect((h.createInput!.source as { revision: string }).revision).toBe('b'.repeat(40))
+    expect(h.createInput?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  test('prefers the authoritative remote build head over an older supplied checkpoint', async () => {
+    const remoteHead = 'c'.repeat(40)
+    const h = harness({ existingSha: remoteHead })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+      revision: 'b'.repeat(40),
+      generation: 3,
+    })
+    expect((h.createInput!.source as { revision: string }).revision).toBe(remoteHead)
+    expect(workspace.base).toEqual({ source: 'existing', sha: remoteHead })
   })
 
   test('deletes a partial setup so the next provisioning pass rematerializes cleanly', async () => {
@@ -236,6 +314,9 @@ describe('VercelSandboxProvider', () => {
       provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
     ).rejects.toThrow(/tar exited 1/)
     expect(first.deletes).toBe(1)
+    expect(first.provisioned).toBe(false)
+    // Recovery cleanup stops before deleting and confirming absence.
+    expect(first.stops).toBe(1)
 
     const workspace = await provider.provision({
       repo: '/repo',
@@ -245,6 +326,66 @@ describe('VercelSandboxProvider', () => {
     expect(workspace.provider).toBe('vercel-sandbox')
     expect(creates).toBe(2)
     expect(second.provisioned).toBe(true)
+    expect(second.stops).toBe(1)
+    expect(second.commands.map((command) => command.cmd)).toEqual([
+      'mv',
+      'git',
+      'git',
+      'git',
+      'git',
+      'git',
+      'npm',
+      VERCEL_BUN_EXECUTABLE,
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'touch',
+    ])
+  })
+
+  test('retains setup and cleanup diagnostics when deleting a partial sandbox fails', async () => {
+    const h = harness()
+    const cleanupError = new Error('sandbox delete failed')
+    h.sandbox.failSetupCommand = 'tar'
+    h.sandbox.deleteFailure = cleanupError
+
+    let rejection: unknown
+    try {
+      await h.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
+      })
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection).toBeInstanceOf(AggregateError)
+    const aggregate = rejection as AggregateError
+    expect(aggregate.errors).toHaveLength(2)
+    expect(aggregate.errors[0]).toBeInstanceOf(Error)
+    expect((aggregate.errors[0] as Error).message).toContain('tar exited 1')
+    expect(aggregate.errors[1]).toBeInstanceOf(Error)
+    expect((aggregate.errors[1] as Error).message).toContain(
+      'cleanup outcome is unknown and remains retryable: sandbox delete failed',
+    )
+    expect((aggregate.errors[1] as Error).cause).toBe(cleanupError)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.provisioned).toBe(false)
+  })
+
+  test('reports Bun provisioning failure, deletes the partial sandbox, and never marks or launches it', async () => {
+    const h = harness()
+    h.sandbox.failCommand = (command) => command.cmd === 'npm'
+
+    await expect(
+      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toThrow(/could not provision Bun 1\.4\.0.*universal managed image/)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.cmd === 'touch')).toBe(false)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
   test('discards an existing named sandbox without the completed setup marker', async () => {
@@ -302,6 +443,12 @@ describe('VercelSandboxProvider', () => {
       instance: 'i-1',
       workspaceRef: workspace.ref,
     })
+    expect(handle.identity).toEqual({
+      provider: 'vercel-sandbox',
+      workspaceRef: workspace.ref,
+      environmentId: 'sandbox',
+      sessionId: 'session-1',
+    })
     expect(await handle.completion).toEqual({ exitCode: 0 })
     const launch = h.sandbox.commands.find((command) => command.detached === true)!
     const env = launch.env as Record<string, string>
@@ -311,8 +458,65 @@ describe('VercelSandboxProvider', () => {
     expect(env.VERCEL_TOKEN).toBeUndefined()
     expect(env.UNDECLARED_SECRET).toBeUndefined()
     expect(JSON.parse(env.AB_BUILD_RUNNER_OPTIONS!).supervision).toEqual({ kind: 'environment' })
+    expect(h.sandbox.policySignals).toHaveLength(1)
+    expect(h.sandbox.policySignals[0]).toBeInstanceOf(AbortSignal)
+    expect(launch).toMatchObject({
+      cmd: 'sh',
+      args: [
+        '-c',
+        `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`,
+      ],
+      cwd: VERCEL_WORKSPACE_PATH,
+    })
+    const launchIndex = h.sandbox.commands.indexOf(launch)
+    expect(h.sandbox.commands[launchIndex - 1]).toEqual({
+      cmd: VERCEL_BUN_EXECUTABLE,
+      args: ['--version'],
+    })
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('bounds the command kill acknowledgement during graceful stop', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-bounded-kill',
+      workspaceRef: workspace.ref,
+    })
+
+    expect(await execution.stop()).toEqual({ outcome: 'confirmed' })
+    expect(h.sandbox.killSignals).toHaveLength(1)
+    expect(h.sandbox.killSignals[0]).toBeInstanceOf(AbortSignal)
+  })
+
+  test('fails preflight closed when provisioned Bun is missing and does not start a child', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.failCommand = (command) =>
+      command.cmd === VERCEL_BUN_EXECUTABLE &&
+      (command.args as string[] | undefined)?.[0] === '--version'
+
+    await expect(
+      h.provider.buildExecution.start({
+        slug: 'remote-build',
+        storeRef: 'https://store.example.test',
+        instance: 'i-missing-bun',
+        workspaceRef: workspace.ref,
+      }),
+    ).rejects.toThrow(/Bun 1\.4\.0 preflight failed.*release and reprovision/)
+    expect(h.sandbox.commands.filter((command) => command.detached === true)).toHaveLength(0)
   })
 
   test('a transient environment stop failure does not poison future starts or release', async () => {
@@ -362,6 +566,55 @@ describe('VercelSandboxProvider', () => {
     expect(aborted.sandbox.deletes).toBe(1)
   })
 
+  test('reap rejects unknown deletion, then safely retries and becomes an absence no-op', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.remainAfterDelete = true
+    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(
+      /still exists after delete acknowledgement/,
+    )
+    h.sandbox.remainAfterDelete = false
+    expect(await h.provider.recovery.reap(workspace)).toBe('absent')
+    expect(await h.provider.recovery.reap(workspace)).toBe('absent')
+  })
+
+  test('reap retains an interrupted stop for a later confirmed retry', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.stopFailures = 1
+    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(/outcome is unknown/)
+    expect(h.sandbox.deletes).toBe(0)
+    expect(await h.provider.recovery.reap(workspace)).toBe('confirmed')
+    expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('observes an exact durable branch head without requiring the old sandbox', async () => {
+    const landed = harness({ publishedSha: SHA })
+    const workspace = await landed.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    await landed.provider.recovery.reap(workspace)
+    expect(
+      await landed.provider.publication.isPublished({ sha: SHA, branch: workspace.branch }),
+    ).toBe(true)
+    expect(
+      await landed.provider.publication.isPublished({
+        sha: 'b'.repeat(40),
+        branch: workspace.branch,
+      }),
+    ).toBe(false)
+  })
+
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
@@ -380,6 +633,8 @@ describe('VercelSandboxProvider', () => {
     expect(temporary).toContain('git-receive-pack')
     expect(temporary).toContain(Buffer.from('x-access-token:forge-secret').toString('base64'))
     expect(JSON.stringify(h.sandbox.policies[1])).not.toContain('forge-secret')
+    expect(h.sandbox.policySignals).toHaveLength(2)
+    expect(h.sandbox.policySignals.every((signal) => signal instanceof AbortSignal)).toBe(true)
   })
 
   test('restores the normal policy when push fails and rejects mismatched remote heads', async () => {

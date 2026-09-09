@@ -93,11 +93,23 @@ const envNameSchema = z
 
 /** Strict built-in Vercel configuration. Values are operational policy only;
  * credentials are referenced by variable name and never accepted as literals. */
+const vercelUniversalImageSchema = z
+  .string()
+  .refine(
+    (image) =>
+      /^vercel\/sandbox\/universal(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[0-9a-f]{64})?$/.test(
+        image,
+      ),
+    'Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters',
+  )
+
 export const vercelSandboxConfigSchema = z
   .strictObject({
-    image: z.string().min(1).default('vercel/sandbox/universal:latest'),
+    image: vercelUniversalImageSchema.default('vercel/sandbox/universal:latest'),
     vcpus: z.number().int().min(1).max(32).default(4),
     timeoutSeconds: z.number().int().min(60).max(86_400),
+    /** Deadline for each provider acknowledgement; distinct from VM lifetime. */
+    operationTimeoutMs: z.number().int().min(1_000).max(300_000).default(30_000),
     region: z.string().min(1).optional(),
     failoverRegions: z.array(z.string().min(1)).default([]),
     environmentVariables: z.array(envNameSchema).default([]),
@@ -158,7 +170,12 @@ export const vercelSandboxConfigSchema = z
       }
     }
   })
-export type VercelSandboxConfig = z.infer<typeof vercelSandboxConfigSchema>
+type NormalizedVercelSandboxConfig = z.infer<typeof vercelSandboxConfigSchema>
+/** Direct provider construction remains source-compatible; schema-parsed
+ * production config always materializes operationTimeoutMs. */
+export type VercelSandboxConfig = Omit<NormalizedVercelSandboxConfig, 'operationTimeoutMs'> & {
+  operationTimeoutMs?: number
+}
 
 /** Workspace selector. The host validates the selector envelope; plugin nested
  * config remains open, while built-in config is validated by configSchema. */
@@ -363,6 +380,8 @@ export const policySchema = z.strictObject({
   maxVerifyAttempts: z.number().int().positive().default(3),
   /** Consecutive workspace setup failures before human intervention is required. */
   maxSetupAttempts: z.number().int().positive().default(3),
+  /** Consecutive provider lifecycle failures before recovery requires a human retry. */
+  maxInfrastructureAttempts: z.number().int().positive().default(3),
   maxReconcileAttempts: z.number().int().positive().default(3),
   /** converge's `maxRounds` for the review loops (SPEC §10). */
   maxReviewRounds: z.number().int().positive().default(6),
