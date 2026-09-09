@@ -496,9 +496,12 @@ AB_STORE=https://store.example AB_TOKEN=… \
 bun test packages/core/src/integration/vercel-sandbox.live.test.ts
 ```
 
-The test requires a complete child-driven build to publish and finalize, then
-requests cleanup and verifies sandbox deletion. It does not demonstrate support
-for other Vercel images or package managers.
+The suite first runs `ab init` readiness validation through the production
+adapter: it creates an unnamed fresh sandbox, accepts the structured guest probe
+marker, and verifies deletion by querying that exact sandbox identity. A separate
+case runs a complete child-driven build to publish and finalize, then requests
+cleanup and verifies sandbox deletion. It does not demonstrate support for other
+Vercel images or package managers.
 
 Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
 `ref`; they omit dispatcher-local path evidence. Branch config, relative/package
@@ -507,15 +510,18 @@ resolve in the guest checkout. Only names in `environmentVariables` plus
 scoped `AB_STORE`/`AB_TOKEN` enter commands—dispatcher environment variables
 are never copied wholesale.
 
-The opt-in real interruption exercise is
+The opt-in live lifecycle suite is
 `packages/core/src/integration/vercel-sandbox.live.test.ts`. Set
 `AB_RUN_VERCEL_SANDBOX_LIVE=1`, `AB_VERCEL_SANDBOX_LIVE_REPO` to an independent
 checkout with a ready file ticket and this provider configuration, plus the
-hosted Store, Vercel, runtime, and GitHub credentials above. The test deletes
-the first sandbox while its durable execution identity is live, waits through
-the lease fence, and asserts a distinct replacement sandbox/session identity,
-successful continuation, and final provider cleanup. It may run for up to 30
-minutes and mutates the configured test repository/Store.
+hosted Store, Vercel, runtime, and GitHub credentials above. Its readiness case
+creates and probes a fresh sandbox, parses the guest marker, and confirms
+deletion by exact identity. Separately, its interruption case deletes the first
+build sandbox while its durable execution identity is live, waits through the
+lease fence, and asserts a distinct replacement sandbox/session identity,
+successful continuation, and final provider cleanup. The suite is credentialed,
+long-running, and mutates the configured test repository/Store; it is skipped
+unless the opt-in flag is set.
 
 ## `[commands]`
 
