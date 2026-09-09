@@ -20,6 +20,28 @@ function event(seq: number, type: string, payload: unknown): AbEvent {
   } as AbEvent
 }
 
+class EscalationOnNextReadStore extends MemoryBuildStore {
+  injectEscalation = false
+
+  override async getEvents(slug: string, sinceSeq = 0): Promise<AbEvent[]> {
+    if (this.injectEscalation) {
+      this.injectEscalation = false
+      await super.append(slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: {
+          id: 'concurrent-infrastructure-limit',
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'infrastructure-failure-limit',
+          question: 'retry infrastructure?',
+        },
+      })
+    }
+    return super.getEvents(slug, sinceSeq)
+  }
+}
+
 async function record(
   store: MemoryBuildStore,
   maxAttempts = 3,
@@ -122,6 +144,56 @@ describe('infrastructure failure epochs', () => {
     ).toEqual([1, 2, 3, 4])
     expect(
       events.filter(
+        (entry) =>
+          entry.type === 'escalation.raised' &&
+          entry.payload.policyCause === 'infrastructure-failure-limit',
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('a refreshed escalation after the failure append prevents a duplicate', async () => {
+    const store = new EscalationOnNextReadStore()
+    await store.createBuild({ slug: 'budget', repo: '/repo' })
+    const initialEvents = await store.getEvents('budget')
+    store.injectEscalation = true
+
+    const appended = await recordInfrastructureFailure(
+      { store, ids: sequentialIds() },
+      {
+        slug: 'budget',
+        events: initialEvents,
+        maxAttempts: 1,
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g1',
+        instance: 'instance-1',
+        operation: 'provision',
+        error: 'provider failed',
+        cleanupPending: true,
+      },
+    )
+
+    expect(appended.map((entry) => entry.type)).toEqual(['infrastructure.failed'])
+    expect(
+      (await store.getEvents('budget')).filter(
+        (entry) =>
+          entry.type === 'escalation.raised' &&
+          entry.payload.policyCause === 'infrastructure-failure-limit',
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('threshold crossing emits one escalation when the refreshed stream has none', async () => {
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'budget', repo: '/repo' })
+
+    const appended = await record(store, 1)
+
+    expect(appended.map((entry) => entry.type)).toEqual([
+      'infrastructure.failed',
+      'escalation.raised',
+    ])
+    expect(
+      (await store.getEvents('budget')).filter(
         (entry) =>
           entry.type === 'escalation.raised' &&
           entry.payload.policyCause === 'infrastructure-failure-limit',

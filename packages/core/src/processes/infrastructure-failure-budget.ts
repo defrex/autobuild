@@ -22,7 +22,7 @@ export interface InfrastructureFailureInput {
 }
 
 export interface InfrastructureFailureDependencies {
-  store: Pick<BuildStore, 'append'>
+  store: Pick<BuildStore, 'append' | 'getEvents'>
   ids: IdSource
 }
 
@@ -99,9 +99,11 @@ export async function recordInfrastructureFailure(
   })
   const appended: AbEvent[] = [failure]
 
+  if (attempt < input.maxAttempts) return appended
+
+  const currentEvents = await deps.store.getEvents(input.slug)
   if (
-    attempt >= input.maxAttempts &&
-    !input.events.some(
+    !currentEvents.some(
       (event) =>
         event.seq > lastReset &&
         event.type === 'escalation.raised' &&
