@@ -3,6 +3,8 @@ import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { abDispatch } from '../cli/dispatch'
 import { openProductionStore } from '../cli/store-opening'
+import { loadConfig } from '../config/load'
+import { vercelSandboxConfigSchema } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
@@ -31,6 +33,14 @@ describe.skipIf(!enabled)('Vercel Sandbox complete build (opt-in)', () => {
         )
       }
       const repo = resolve(repoInput)
+      const config = await loadConfig(resolve(repo, 'autobuild.toml'))
+      if (config.workspace.provider !== 'vercel-sandbox') {
+        throw new Error('live Vercel test repository must select workspace provider vercel-sandbox')
+      }
+      const sandboxConfig = vercelSandboxConfigSchema.parse(config.workspace.config)
+      if (!sandboxConfig.image.startsWith('vercel/sandbox/universal')) {
+        throw new Error('live Vercel test requires the documented universal managed image')
+      }
       const beforeStore = openProductionStore(storeRef, token)
       const before = new Set(
         (await beforeStore.listBuilds())

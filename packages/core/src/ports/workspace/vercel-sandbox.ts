@@ -19,6 +19,10 @@ import { spawnExec } from './git-worktree'
 export const VERCEL_WORKSPACE_PATH = '/vercel/sandbox/workspace'
 export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
 export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
+export const VERCEL_BUN_VERSION = '1.4.0'
+export const VERCEL_BUN_PREFIX = '/opt/autobuild-runtime'
+export const VERCEL_BUN_BIN_PATH = `${VERCEL_BUN_PREFIX}/node_modules/.bin`
+export const VERCEL_BUN_EXECUTABLE = `${VERCEL_BUN_BIN_PATH}/bun`
 
 export interface VercelCommand {
   readonly exitCode: number | null
@@ -239,6 +243,40 @@ async function commandOrThrow(
     throw new Error(`sandbox command ${params.cmd} exited ${result.exitCode}`)
 }
 
+function bunProvisioningError(image: string, operation: string, error: unknown): Error {
+  return new Error(
+    `vercel-sandbox could not ${operation} Bun ${VERCEL_BUN_VERSION} on image ${JSON.stringify(image)}; Autobuild supports the universal managed image with working Node/npm, shell, filesystem, and package-registry access`,
+    { cause: error },
+  )
+}
+
+async function provisionBun(sandbox: VercelSandboxHandle, image: string): Promise<void> {
+  try {
+    await commandOrThrow(sandbox, {
+      cmd: 'npm',
+      args: ['install', '--prefix', VERCEL_BUN_PREFIX, '--no-save', `bun@${VERCEL_BUN_VERSION}`],
+    })
+  } catch (error) {
+    throw bunProvisioningError(image, 'provision', error)
+  }
+  try {
+    await commandOrThrow(sandbox, { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'] })
+  } catch (error) {
+    throw bunProvisioningError(image, 'verify provisioned', error)
+  }
+}
+
+async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promise<void> {
+  try {
+    await commandOrThrow(sandbox, { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'] })
+  } catch (error) {
+    throw new Error(
+      `vercel-sandbox Bun ${VERCEL_BUN_VERSION} preflight failed on image ${JSON.stringify(image)}; release and reprovision this sandbox before retrying the build`,
+      { cause: error },
+    )
+  }
+}
+
 export async function packageAutobuildDistribution(): Promise<Uint8Array> {
   const destination = await mkdtemp(join(tmpdir(), 'autobuild-pack-'))
   try {
@@ -409,6 +447,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           if (result.exitCode !== 0 && result.exitCode !== 5)
             throw new Error(`failed to scrub git config ${key}`)
         }
+        await provisionBun(sandbox, this.options.config.image)
         const archive = await (this.options.packageArchive ?? packageAutobuildDistribution)()
         await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
           signal: this.operationSignal(),
@@ -419,7 +458,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
         })
         await commandOrThrow(sandbox, {
-          cmd: 'bun',
+          cmd: VERCEL_BUN_EXECUTABLE,
           args: ['install', '--production', '--ignore-scripts'],
           cwd: VERCEL_AUTOBUILD_PATH,
         })
@@ -430,7 +469,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           cmd: 'sh',
           args: [
             '-c',
-            'if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi',
+            `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
           ],
           cwd: VERCEL_WORKSPACE_PATH,
         })
@@ -540,6 +579,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       await sandbox.stop({ signal: this.operationSignal() })
       this.uncertain.delete(ref)
     }
+    await preflightBun(sandbox, this.options.config.image)
     this.sessions.set(ref, sandbox)
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,
@@ -552,8 +592,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     for (const name of this.options.config.environmentVariables)
       env[name] = requireValue(this.options.env, name)
     const command = (await sandbox.runCommand({
-      cmd: 'bun',
-      args: [`${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`],
+      cmd: 'sh',
+      args: [
+        '-c',
+        `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-build-runner.ts`,
+      ],
       cwd: VERCEL_WORKSPACE_PATH,
       env,
       detached: true,

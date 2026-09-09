@@ -4,7 +4,7 @@ import type { Selection } from './BuildsView'
 import {
   answerModeKeyAction,
   createRowControlHandlers,
-  isButtonKeyboardActivation,
+  isNativeKeyboardActivation,
 } from './DashboardClient'
 
 type Action = OperatorBuildControlRequest['action']
@@ -16,6 +16,8 @@ function harness(selection?: Selection, openAnswer?: { slug: string; input: stri
   let detail = true
   let selected = selection
   let answer = openAnswer
+  let answerPending = false
+  let error: string | undefined
   const handlers = createRowControlHandlers({
     selection,
     setSelection: (next) => {
@@ -35,6 +37,7 @@ function harness(selection?: Selection, openAnswer?: { slug: string; input: stri
       detail = typeof next === 'function' ? next(detail) : next
       events.push(`detail:${detail}`)
     },
+    isAnswerPending: () => answerPending,
     control: (slug, action) => {
       controls.push({ slug, action })
       events.push(`control:${slug}:${action}`)
@@ -51,21 +54,35 @@ function harness(selection?: Selection, openAnswer?: { slug: string; input: stri
     cancelAnswer: () => {
       answer = undefined
     },
+    startAnswerSubmission: () => {
+      answerPending = true
+      error = undefined
+    },
+    settleAnswerFailure: (message: string) => {
+      error = message
+      answerPending = false
+    },
     state: () => ({ detail, selected, answer }),
+    answerRequestState: () => ({ pending: answerPending, error }),
   }
 }
 
-test('native button activation is excluded from dashboard-wide keyboard shortcuts', () => {
+test('native control activation is excluded from dashboard-wide keyboard shortcuts', () => {
   const button = {
-    closest: (selector: string) => (selector === 'button' ? button : null),
+    closest: (selector: string) => (selector.includes('button') ? button : null),
   }
-  const nonButton = { closest: () => null }
+  const link = {
+    closest: (selector: string) => (selector.includes('a[href]') ? link : null),
+  }
+  const rowTarget = { closest: () => null }
 
-  expect(isButtonKeyboardActivation('Enter', button)).toBe(true)
-  expect(isButtonKeyboardActivation(' ', button)).toBe(true)
-  expect(isButtonKeyboardActivation('Enter', nonButton)).toBe(false)
-  expect(isButtonKeyboardActivation('Escape', button)).toBe(false)
-  expect(isButtonKeyboardActivation('Enter', null)).toBe(false)
+  expect(isNativeKeyboardActivation('Enter', button)).toBe(true)
+  expect(isNativeKeyboardActivation(' ', button)).toBe(true)
+  expect(isNativeKeyboardActivation('Enter', link)).toBe(true)
+  expect(isNativeKeyboardActivation(' ', link)).toBe(false)
+  expect(isNativeKeyboardActivation('Enter', rowTarget)).toBe(false)
+  expect(isNativeKeyboardActivation('Escape', button)).toBe(false)
+  expect(isNativeKeyboardActivation('Enter', null)).toBe(false)
 })
 
 test('a same-row action preserves open detail and keeps a blocked resume answer on its slug', () => {
@@ -162,6 +179,24 @@ test('requesting row abort selects and confirms locally without dispatching unti
   confirmation.handlers.buildControl('abort-target', 'abort')
   expect(confirmation.controls).toEqual([{ slug: 'abort-target', action: 'abort' }])
   expect(confirmation.state().detail).toBe(true)
+})
+
+test('title activation during an in-flight answer preserves its draft through failure', () => {
+  const slug = 'blocked-build'
+  const value = harness({ kind: 'build', slug }, { slug, input: 'guidance that must survive' })
+  value.startAnswerSubmission()
+
+  value.handlers.toggleDetail(slug)
+  expect(value.state()).toEqual({
+    detail: true,
+    selected: { kind: 'build', slug },
+    answer: { slug, input: 'guidance that must survive' },
+  })
+  expect(value.events).toEqual([])
+
+  value.settleAnswerFailure('answer request failed')
+  expect(value.state().answer).toEqual({ slug, input: 'guidance that must survive' })
+  expect(value.answerRequestState()).toEqual({ pending: false, error: 'answer request failed' })
 })
 
 test('title detail toggling affects only its named row and opens after switching targets', () => {

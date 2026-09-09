@@ -290,6 +290,45 @@ describe('parseConfig — defaults', () => {
     }
   })
 
+  test('vercel-sandbox accepts only universal managed-image names, tags, and digests', () => {
+    const imageConfig = (image: string) =>
+      parseConfig(
+        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
+      ).workspace.config
+
+    for (const image of [
+      'vercel/sandbox/universal',
+      'vercel/sandbox/universal:latest',
+      'vercel/sandbox/universal:2025-03-03',
+      `vercel/sandbox/universal@sha256:${'a'.repeat(64)}`,
+    ]) {
+      expect(imageConfig(image).image).toBe(image)
+    }
+
+    for (const image of [
+      'vercel/sandbox/node:latest',
+      'vercel/sandbox/python:latest',
+      'vercel/sandbox/ubuntu:latest',
+      'acme/project/custom:latest',
+      'vcr.vercel.com/acme/project/custom:latest',
+    ]) {
+      const error = parseError(
+        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
+      )
+      expect(error.message).toContain('workspace.config.image')
+      expect(error.message).toContain('Bun provisioning is validated only')
+    }
+
+    for (const digest of [`A${'a'.repeat(63)}`, 'a'.repeat(63), `${'a'.repeat(63)}g`]) {
+      const image = `vercel/sandbox/universal@sha256:${digest}`
+      const error = parseError(
+        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
+      )
+      expect(error.message).toContain('workspace.config.image')
+      expect(error.message).toContain('64 lowercase hexadecimal characters')
+    }
+  })
+
   test('vercel-sandbox config is strict, bounded, and references secrets by name', () => {
     const workspace = parseConfig(`[workspace]
 provider = "vercel-sandbox"

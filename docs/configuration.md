@@ -409,7 +409,7 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 
 | Vercel field | Default | Constraints |
 |---|---:|---|
-| `image` | `vercel/sandbox/universal:latest` | nonempty managed/VCR image |
+| `image` | `vercel/sandbox/universal:latest` | `vercel/sandbox/universal`, a tag such as `:latest`, or a `@sha256:<64 hex digits>` digest |
 | `vcpus` | `4` | integer 1–32 (account limits may be lower) |
 | `timeoutSeconds` | — | required, integer 60–86400; VM/session lifetime and abrupt-orphan bound; Hobby currently permits at most 2700 |
 | `operationTimeoutMs` | `30000` | integer 1000–300000; deadline for each provider acknowledgement, not session lifetime |
@@ -418,17 +418,37 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 | `environmentVariables` | `[]` | unique variable names copied into agent/check commands |
 | `gitUsernameEnv`, `gitPasswordEnv` | — | optional pair naming a dedicated read-only clone identity |
 
+The built-in adapter supports only Vercel's
+`vercel/sandbox/universal` managed image, selected by its bare/default name, a
+tag, or a digest. Other managed images and arbitrary VCR images are rejected at
+configuration load because their package tools, libc/CPU, and filesystem
+contract have not been validated. The universal image must retain working
+Node/npm, `sh`, and the ordinary writable filesystem layout. Autobuild does not
+rely on image-preinstalled Bun: on each fresh sandbox it uses npm to install the
+pinned `bun@1.4.0` package under `/opt/autobuild-runtime`, verifies that exact
+executable with `--version`, and uses it for Autobuild and Bun-lockfile
+dependency installation. Package-registry network access is therefore required
+during provisioning. The child launch prepends the adapter-owned Bun directory
+to `PATH`, so setup, checks, agents, and their descendants resolve the same Bun.
+
 The private-repository token must grant repository contents read and no
 contents write. It must be distinct from Forge and Vercel credentials and may
 not also appear in `environmentVariables`. Autobuild gives its firewall broker
 only exact upload-pack GET/POST matchers, scrubs origin credentials, credential
 helpers, and extra headers after clone, and gives normal sessions no Forge
 credential. Provisioning writes its readiness marker only after all scrubbing,
-distribution installation, and dependency bootstrap complete; distribution
-packing/install disables package lifecycle scripts so checkout-only hooks such
-as Husky are not provisioning dependencies. A retry deletes any named sandbox
-without that marker instead of adopting partial setup. Branch
-publication is requested durably, then performed by the
+Bun verification, distribution installation, and dependency bootstrap
+complete; distribution packing/install disables package lifecycle scripts so
+checkout-only hooks such as Husky are not provisioning dependencies. A Bun
+install or verification failure identifies the configured image and expected
+universal-image capabilities, deletes the partial environment, and leaves no
+readiness marker. A retry also deletes any named sandbox without that marker
+instead of adopting partial setup. Immediately before every build-child launch,
+the adapter verifies the provisioned absolute Bun executable again. A failed
+preflight launches no child and instructs the operator to release and
+reprovision the sandbox; this intentionally fails closed for legacy snapshots
+that have a marker but no adapter-owned runtime. Branch publication is
+requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
@@ -460,6 +480,22 @@ supervisor loss, Vercel's configured `timeoutSeconds` bounds orphan compute, and
 the next dispatcher waits for lease expiry before exact-name cleanup. Provider
 quota/vCPU/duration messages are retained verbatim in infrastructure events and
 status output.
+
+The representative actual-provider check is opt-in and must point at an
+independent consuming repository whose `autobuild.toml` selects the universal
+image above and contains one ready ticket. With hosted Store, Vercel, GitHub,
+and configured agent-runtime credentials available, run:
+
+```sh
+AB_RUN_VERCEL_SANDBOX_LIVE=1 \
+AB_VERCEL_SANDBOX_LIVE_REPO=/absolute/path/to/consumer \
+AB_STORE=https://store.example AB_TOKEN=… \
+bun test packages/core/src/integration/vercel-sandbox.live.test.ts
+```
+
+The test requires a complete child-driven build to publish and finalize, then
+requests cleanup and verifies sandbox deletion. It does not demonstrate support
+for other Vercel images or package managers.
 
 Vercel workspaces return an absolute guest `path` plus an opaque sandbox-name
 `ref`; they omit dispatcher-local path evidence. Branch config, relative/package
