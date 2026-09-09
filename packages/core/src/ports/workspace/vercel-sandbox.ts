@@ -23,7 +23,7 @@ export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
 export interface VercelCommand {
   readonly exitCode: number | null
   wait(): Promise<{ exitCode: number }>
-  kill(signal?: 'SIGTERM' | 'SIGKILL'): Promise<void>
+  kill(signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }): Promise<void>
 }
 
 export interface VercelSandboxHandle {
@@ -321,17 +321,16 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       `remote branch ${opts.branch}`,
     )
     const base =
+      existing ??
       opts.revision ??
-      (existing === null
-        ? oneSha(
-            await execOrThrow(
-              this.exec,
-              ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${opts.baseBranch}`],
-              opts.repo,
-            ),
-            `remote base ${opts.baseBranch}`,
-          )
-        : existing)
+      oneSha(
+        await execOrThrow(
+          this.exec,
+          ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${opts.baseBranch}`],
+          opts.repo,
+        ),
+        `remote base ${opts.baseBranch}`,
+      )
     if (base === null)
       throw new Error(
         `remote branch ${existing === null ? opts.baseBranch : opts.branch} does not exist`,
@@ -582,7 +581,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const stop = async () => {
       stopping ??= (async () => {
         try {
-          await command.kill('SIGTERM')
+          await command.kill('SIGTERM', { abortSignal: this.operationSignal() })
         } catch {
           /* already exited */
         }

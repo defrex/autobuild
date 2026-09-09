@@ -20,6 +20,7 @@ class FakeSandbox implements VercelSandboxHandle {
   readonly commands: Array<Record<string, unknown>> = []
   readonly policies: NetworkPolicy[] = []
   readonly policySignals: Array<AbortSignal | undefined> = []
+  readonly killSignals: Array<AbortSignal | undefined> = []
   writes: Array<{ path: string; content: Uint8Array }> = []
   stops = 0
   stopFailures = 0
@@ -44,7 +45,9 @@ class FakeSandbox implements VercelSandboxHandle {
       return {
         exitCode: null,
         wait: this.detachedWait,
-        kill: async () => undefined,
+        kill: async (_signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }) => {
+          this.killSignals.push(opts?.abortSignal)
+        },
       }
     }
     return {
@@ -77,7 +80,7 @@ class FakeSandbox implements VercelSandboxHandle {
   }
 }
 
-function harness(options: { publishedSha?: string | null } = {}) {
+function harness(options: { publishedSha?: string | null; existingSha?: string | null } = {}) {
   const sandbox = new FakeSandbox()
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
@@ -101,11 +104,13 @@ function harness(options: { publishedSha?: string | null } = {}) {
       const sha =
         ref === 'refs/heads/main'
           ? SHA
-          : buildBranch && buildBranchLookups > 1
-            ? options.publishedSha === undefined
-              ? SHA
-              : options.publishedSha
-            : null
+          : buildBranch && buildBranchLookups === 1
+            ? (options.existingSha ?? null)
+            : buildBranch
+              ? options.publishedSha === undefined
+                ? SHA
+                : options.publishedSha
+              : null
       return {
         stdout: sha === null ? '' : `${sha}\t${ref}\n`,
         stderr: '',
@@ -201,7 +206,7 @@ describe('VercelSandboxProvider', () => {
     expect(JSON.stringify(h.sandbox.commands)).not.toContain('forge-secret')
   })
 
-  test('uses generation-scoped deterministic names and an immutable recovery revision', async () => {
+  test('uses generation-scoped names and the supplied checkpoint when the branch is absent', async () => {
     const h = harness()
     await h.provider.provision({
       repo: '/repo',
@@ -213,6 +218,20 @@ describe('VercelSandboxProvider', () => {
     expect(h.createInput?.name).toMatch(/^autobuild-remote-build-g2-/)
     expect((h.createInput!.source as { revision: string }).revision).toBe('b'.repeat(40))
     expect(h.createInput?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  test('prefers the authoritative remote build head over an older supplied checkpoint', async () => {
+    const remoteHead = 'c'.repeat(40)
+    const h = harness({ existingSha: remoteHead })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+      revision: 'b'.repeat(40),
+      generation: 3,
+    })
+    expect((h.createInput!.source as { revision: string }).revision).toBe(remoteHead)
+    expect(workspace.base).toEqual({ source: 'existing', sha: remoteHead })
   })
 
   test('deletes a partial setup so the next provisioning pass rematerializes cleanly', async () => {
@@ -343,6 +362,26 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.policySignals[0]).toBeInstanceOf(AbortSignal)
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('bounds the command kill acknowledgement during graceful stop', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-bounded-kill',
+      workspaceRef: workspace.ref,
+    })
+
+    expect(await execution.stop()).toEqual({ outcome: 'confirmed' })
+    expect(h.sandbox.killSignals).toHaveLength(1)
+    expect(h.sandbox.killSignals[0]).toBeInstanceOf(AbortSignal)
   })
 
   test('a transient environment stop failure does not poison future starts or release', async () => {
