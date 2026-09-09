@@ -32,8 +32,10 @@ export interface VercelCommand {
   readonly exitCode: number | null
   wait(): Promise<{ exitCode: number }>
   kill(signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }): Promise<void>
-  /** Completed-command output. Validation is the only production caller that
-   * reads it; build state continues to travel exclusively through the Store. */
+  /** Completed-command output is read only for readiness/validation reporting
+   * and declared system-provisioning failure diagnostics, including failures
+   * during durable build provisioning. It is not a durable build-state channel;
+   * scoped Store facts/events remain authoritative. */
   stdout?(): Promise<string>
   stderr?(): Promise<string>
 }
@@ -603,8 +605,11 @@ export interface VercelSandboxProviderOptions {
   packageArchive?: () => Promise<Uint8Array>
 }
 
-/** Vercel-backed working copy and executor. SDK command output is never read:
- * durable Store events remain the sole build-state channel. */
+/** Vercel-backed working copy and executor. Completed SDK command output is
+ * read only for readiness/validation reporting and declared system-provisioning
+ * failure diagnostics, including failures during durable build provisioning. It
+ * is not a durable build-state channel; scoped Store facts/events remain the
+ * authoritative build-state channel. */
 export class VercelSandboxProvider implements WorkspaceProvider {
   readonly name = 'vercel-sandbox'
   readonly buildExecution: BuildExecution

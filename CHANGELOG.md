@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#285](https://github.com/defrex/autobuild/pull/285) — Backfill Vercel provisioning seam coverage
+- [#284](https://github.com/defrex/autobuild/pull/284) — Correct Vercel command-output contract documentation
 - [#283](https://github.com/defrex/autobuild/pull/283) — Add repository-configured Vercel sandbox provisioning
 - [#282](https://github.com/defrex/autobuild/pull/282) — Make local store validation non-mutating
 - [#281](https://github.com/defrex/autobuild/pull/281) — Exercise the fresh Vercel sandbox lifecycle live
