@@ -144,6 +144,9 @@ forge = "${forge}"
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 600
+[workspace.config.runtimeProvisioning.fake]
+install = "true"
+preflight = "true"
 [commands]
 [roles.default]
 runtime = "fake"
@@ -264,7 +267,7 @@ readyState = "ready"
     })
     const details = report.checks.map((check) => check.detail).join('\n')
     expect(details).not.toContain('echo-secret')
-    expect(details).toContain('install/authenticate')
+    expect(details).toContain('runtimeProvisioning.fake.preflight')
     expect(details).toContain('Store URL')
   })
 
@@ -295,12 +298,16 @@ readyState = "ready"
   })
 
   test('fresh Vercel validation uses the remote SHA, exact guest env, and always deletes', async () => {
-    const commands: Array<{ cmd: string; env?: Record<string, string> }> = []
+    const commands: Array<{ cmd: string; args?: string[]; env?: Record<string, string> }> = []
     let deletes = 0
     const sandbox: VercelSandboxHandle = {
       name: 'fresh-random-sandbox',
       runCommand: async (params) => {
-        commands.push({ cmd: params.cmd, ...(params.env === undefined ? {} : { env: params.env }) })
+        commands.push({
+          cmd: params.cmd,
+          ...(params.args === undefined ? {} : { args: params.args }),
+          ...(params.env === undefined ? {} : { env: params.env }),
+        })
         const probe = params.args?.some((arg) => arg.includes('ab-init-probe'))
         return {
           exitCode: 0,
@@ -344,6 +351,9 @@ readyState = "ready"
         timeoutSeconds: 600,
         failoverRegions: [],
         environmentVariables: ['MODEL_API_KEY'],
+        runtimeProvisioning: {
+          pi: { install: 'install-pi@0.84.4', preflight: 'pi --version 0.84.4' },
+        },
       },
       env: { MODEL_API_KEY: 'secret-model' },
       storeRef: 'https://store.example',
@@ -353,6 +363,9 @@ readyState = "ready"
       facade,
       exec,
       packageArchive: async () => new Uint8Array(),
+      runtimeReferences: [
+        { runtime: 'pi', references: ['role "plan" primary'], models: ['gateway/model'] },
+      ],
     })
 
     expect(result.revision).toBe(sha)
@@ -362,7 +375,15 @@ readyState = "ready"
       image: 'vercel/sandbox/universal:latest',
       resources: { vcpus: 2 },
     })
-    expect(commands.find((command) => command.env !== undefined)?.env).toEqual({
+    expect(
+      commands
+        .filter((command) => command.cmd === 'sh')
+        .map((command) => command.args?.[1])
+        .filter((command) => command?.includes('pi')),
+    ).toEqual(['install-pi@0.84.4', 'pi --version 0.84.4'])
+    expect(
+      commands.find((command) => command.args?.some((arg) => arg.includes('ab-init-probe')))?.env,
+    ).toEqual({
       AB_STORE: 'https://store.example',
       AB_TOKEN: 'store-secret',
       MODEL_API_KEY: 'secret-model',
@@ -584,6 +605,9 @@ forge = "github"
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 600
+[workspace.config.runtimeProvisioning.fake]
+install = "true"
+preflight = "true"
 [commands]
 [roles.default]
 runtime = "fake"

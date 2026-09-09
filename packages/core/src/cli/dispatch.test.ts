@@ -342,6 +342,7 @@ describe('abDispatch guards', () => {
       'forge = "github"\n' +
       '[workspace]\nprovider = "vercel-sandbox"\n' +
       '[workspace.config]\ntimeoutSeconds = 2700\n' +
+      '[workspace.config.runtimeProvisioning.claude]\ninstall = "true"\npreflight = "true"\n' +
       '[roles.default]\nruntime = "claude"\n' +
       '[tickets]\nsource = "file"\nreadyState = "ready"\n'
     try {

@@ -89,7 +89,13 @@ class FakeSandbox implements VercelSandboxHandle {
   }
 }
 
-function harness(options: { publishedSha?: string | null; existingSha?: string | null } = {}) {
+function harness(
+  options: {
+    publishedSha?: string | null
+    existingSha?: string | null
+    provisionRuntimes?: boolean
+  } = {},
+) {
   const sandbox = new FakeSandbox()
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
@@ -135,6 +141,14 @@ function harness(options: { publishedSha?: string | null; existingSha?: string |
       timeoutSeconds: 2700,
       failoverRegions: [],
       environmentVariables: ['ANTHROPIC_API_KEY'],
+      ...(options.provisionRuntimes
+        ? {
+            runtimeProvisioning: {
+              plugin: { install: 'install-plugin@abc123', preflight: 'plugin --version 1.2.3' },
+              pi: { install: 'install-pi@0.84.4', preflight: 'pi --version 0.84.4' },
+            },
+          }
+        : {}),
     },
     env: {
       ANTHROPIC_API_KEY: 'runtime-secret',
@@ -148,6 +162,12 @@ function harness(options: { publishedSha?: string | null; existingSha?: string |
     facade,
     exec,
     packageArchive: async () => new Uint8Array([1, 2, 3]),
+    runtimeReferences: options.provisionRuntimes
+      ? [
+          { runtime: 'pi', references: ['role "implement" primary'], models: [] },
+          { runtime: 'plugin', references: ['role "plan" alternate[0]'], models: [] },
+        ]
+      : [],
   })
   return {
     provider,
@@ -428,6 +448,87 @@ describe('VercelSandboxProvider', () => {
     expect(incomplete.deletes).toBe(1)
     expect(created).toBe(true)
     expect(replacement.provisioned).toBe(true)
+  })
+
+  test('installs and preflights every referenced runtime before the marker and preflights again before launch', async () => {
+    const h = harness({ provisionRuntimes: true })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const runtimeCommands = h.sandbox.commands.filter(
+      (command) =>
+        command.cmd === 'sh' &&
+        [
+          'install-plugin@abc123',
+          'plugin --version 1.2.3',
+          'install-pi@0.84.4',
+          'pi --version 0.84.4',
+        ].includes((command.args as string[])[1]!),
+    )
+    expect(runtimeCommands.map((command) => (command.args as string[])[1])).toEqual([
+      'install-pi@0.84.4',
+      'pi --version 0.84.4',
+      'install-plugin@abc123',
+      'plugin --version 1.2.3',
+    ])
+    expect(runtimeCommands.every((command) => command.cwd === VERCEL_WORKSPACE_PATH)).toBe(true)
+    expect(
+      runtimeCommands.every(
+        (command) => (command.env as Record<string, string>).ANTHROPIC_API_KEY === 'runtime-secret',
+      ),
+    ).toBe(true)
+    expect(JSON.stringify(runtimeCommands)).not.toContain('forge-secret')
+    expect(JSON.stringify(runtimeCommands)).not.toContain('provider-secret')
+    expect(JSON.stringify(runtimeCommands)).not.toContain('never-copy')
+    const marker = h.sandbox.commands.findIndex((command) => command.cmd === 'touch')
+    expect(marker).toBeGreaterThan(h.sandbox.commands.indexOf(runtimeCommands.at(-1)!))
+
+    await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-runtime-preflight',
+      workspaceRef: workspace.ref,
+    })
+    const commands = h.sandbox.commands
+    const detached = commands.findIndex((command) => command.detached === true)
+    expect((commands[detached - 2]!.args as string[])[1]).toBe('pi --version 0.84.4')
+    expect((commands[detached - 1]!.args as string[])[1]).toBe('plugin --version 1.2.3')
+  })
+
+  test('a repeated runtime preflight failure prevents the detached child', async () => {
+    const h = harness({ provisionRuntimes: true })
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.failCommand = (command) =>
+      command.cmd === 'sh' && (command.args as string[])[1] === 'pi --version 0.84.4'
+    await expect(
+      h.provider.buildExecution.start({
+        slug: 'remote-build',
+        storeRef: 'https://store.example.test',
+        instance: 'i-failed-runtime-preflight',
+        workspaceRef: workspace.ref,
+      }),
+    ).rejects.toThrow(/runtime "pi" preflight failed.*role "implement" primary/)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+  })
+
+  test('runtime failure names the route and field, creates no marker, and deletes the sandbox', async () => {
+    const h = harness({ provisionRuntimes: true })
+    h.sandbox.failCommand = (command) =>
+      command.cmd === 'sh' && (command.args as string[])[1] === 'plugin --version 1.2.3'
+    await expect(
+      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toThrow(
+      /runtime "plugin" preflight failed.*role "plan" alternate\[0\].*runtimeProvisioning\.plugin\.preflight/,
+    )
+    expect(h.sandbox.provisioned).toBe(false)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
   })
 
   test('launches the environment-supervised child with only allowlisted and Store values', async () => {

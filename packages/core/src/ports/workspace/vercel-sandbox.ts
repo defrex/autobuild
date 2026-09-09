@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Sandbox, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
+import type { RuntimeReferenceGroup } from '../../config/roles'
 import { type VercelSandboxConfig, vercelSandboxConfigSchema } from '../../config/schema'
 import { distributionRoot } from '../../distribution'
 import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
@@ -302,6 +303,59 @@ async function provisionBun(
   }
 }
 
+function runtimeEnvironment(
+  config: VercelSandboxConfig,
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  return Object.fromEntries(
+    config.environmentVariables.map((name) => [name, requireVercelEnvironmentValue(env, name)]),
+  )
+}
+
+function redactRuntimeError(error: unknown, env: Record<string, string>): string {
+  let detail = error instanceof Error ? error.message : String(error)
+  for (const value of Object.values(env).sort((a, b) => b.length - a.length)) {
+    if (value !== '') detail = detail.split(value).join('[REDACTED]')
+  }
+  return detail
+}
+
+async function bootstrapRuntimes(
+  sandbox: VercelSandboxHandle,
+  config: VercelSandboxConfig,
+  hostEnv: Record<string, string | undefined>,
+  references: readonly RuntimeReferenceGroup[],
+  install: boolean,
+  signal?: AbortSignal,
+): Promise<void> {
+  const env = runtimeEnvironment(config, hostEnv)
+  for (const group of [...references].sort((left, right) =>
+    left.runtime < right.runtime ? -1 : left.runtime > right.runtime ? 1 : 0,
+  )) {
+    const provisioning = config.runtimeProvisioning?.[group.runtime]
+    if (provisioning === undefined) {
+      throw new Error(
+        `runtime ${JSON.stringify(group.runtime)} selected by ${group.references.join(', ')} has no provisioning; add [workspace.config.runtimeProvisioning.${group.runtime}] with install and preflight commands`,
+      )
+    }
+    for (const stage of install ? (['install', 'preflight'] as const) : (['preflight'] as const)) {
+      try {
+        await readableCommand(sandbox, {
+          cmd: 'sh',
+          args: ['-c', provisioning[stage]],
+          cwd: VERCEL_WORKSPACE_PATH,
+          env,
+          ...(signal === undefined ? {} : { signal }),
+        })
+      } catch (error) {
+        throw new Error(
+          `runtime ${JSON.stringify(group.runtime)} ${stage} failed (selected by ${group.references.join(', ')}); fix workspace.config.runtimeProvisioning.${group.runtime}.${stage}: ${redactRuntimeError(error, env)}`,
+        )
+      }
+    }
+  }
+}
+
 async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promise<void> {
   try {
     await commandOrThrow(sandbox, { cmd: VERCEL_BUN_EXECUTABLE, args: ['--version'] })
@@ -340,6 +394,7 @@ export interface VercelReadinessOptions {
   facade?: VercelSandboxFacade
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
+  runtimeReferences?: readonly RuntimeReferenceGroup[]
   signal?: AbortSignal
   /** Called as soon as the fresh sandbox has an identity, before bootstrap. */
   onSandbox?: (name: string) => void
@@ -510,6 +565,14 @@ export async function validateVercelSandbox(
         cwd: VERCEL_WORKSPACE_PATH,
       }),
     )
+    await bootstrapRuntimes(
+      sandbox,
+      config,
+      options.env,
+      options.runtimeReferences ?? [],
+      true,
+      options.signal,
+    )
     const setup = await readableCommand(
       sandbox,
       withSignal({
@@ -559,6 +622,7 @@ export interface VercelSandboxProviderOptions {
   facade?: VercelSandboxFacade
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
+  runtimeReferences?: readonly RuntimeReferenceGroup[]
 }
 
 /** Vercel-backed working copy and executor. SDK command output is never read:
@@ -728,6 +792,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           ],
           cwd: VERCEL_WORKSPACE_PATH,
         })
+        await bootstrapRuntimes(
+          sandbox,
+          this.options.config,
+          this.options.env,
+          this.options.runtimeReferences ?? [],
+          true,
+        )
         await commandOrThrow(sandbox, {
           cmd: 'touch',
           args: [VERCEL_PROVISIONED_MARKER],
@@ -835,6 +906,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       this.uncertain.delete(ref)
     }
     await preflightBun(sandbox, this.options.config.image)
+    await bootstrapRuntimes(
+      sandbox,
+      this.options.config,
+      this.options.env,
+      this.options.runtimeReferences ?? [],
+      false,
+    )
     this.sessions.set(ref, sandbox)
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,

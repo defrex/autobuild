@@ -144,7 +144,7 @@ describe('Pi init usability', () => {
     )
     expect(await isPiRuntimeUsable(input, unready.run)).toEqual({
       usable: false,
-      reason: expect.stringContaining('is not ready in the local Pi login'),
+      reason: expect.stringContaining('is not ready with the configured provider credentials'),
     })
     expect(unready.calls.map((call) => call.args)).not.toContainEqual(['--list-models'])
   })

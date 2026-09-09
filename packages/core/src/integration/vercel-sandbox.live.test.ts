@@ -5,6 +5,7 @@ import { abDispatch } from '../cli/dispatch'
 import { validateInitReadiness } from '../cli/init-validation'
 import { openProductionStore } from '../cli/store-opening'
 import { loadConfig } from '../config/load'
+import { effectiveRuntimeReferences } from '../config/roles'
 import { vercelSandboxConfigSchema } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
@@ -30,6 +31,24 @@ async function liveSetup(): Promise<{ repo: string; storeRef: string; token: str
   const sandboxConfig = vercelSandboxConfigSchema.parse(config.workspace.config)
   if (!sandboxConfig.image.startsWith('vercel/sandbox/universal')) {
     throw new Error('live Vercel test requires the documented universal managed image')
+  }
+  const pi = effectiveRuntimeReferences(config).find((group) => group.runtime === 'pi')
+  if (pi === undefined || !pi.models.some((model) => model.startsWith('vercel-ai-gateway/'))) {
+    throw new Error('live Vercel test requires an effective Pi route using vercel-ai-gateway/...')
+  }
+  const provisioning = sandboxConfig.runtimeProvisioning.pi
+  if (
+    provisioning === undefined ||
+    !provisioning.install.includes('@earendil-works/pi-coding-agent@0.84.4') ||
+    !provisioning.preflight.includes('0.84.4')
+  ) {
+    throw new Error('live Vercel test requires the documented pinned Pi 0.84.4 provisioning')
+  }
+  if (
+    !sandboxConfig.environmentVariables.includes('AI_GATEWAY_API_KEY') ||
+    !process.env.AI_GATEWAY_API_KEY
+  ) {
+    throw new Error('live Vercel test requires AI_GATEWAY_API_KEY allowlisted and set')
   }
   return { repo, storeRef, token }
 }

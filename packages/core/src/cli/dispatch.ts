@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import semver from 'semver'
 import { parseConfig } from '../config/load'
 import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
-import { roleKeyWarnings, SLUG_ROLE } from '../config/roles'
+import { effectiveRuntimeReferences, roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
@@ -365,6 +365,7 @@ async function defaultWire(
     repoRoot: opened.repo,
     env: opts.env,
     storeRef: opened.storeRef,
+    runtimeReferences: effectiveRuntimeReferences(config),
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 

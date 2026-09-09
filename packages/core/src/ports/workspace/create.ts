@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import type { RuntimeReferenceGroup } from '../../config/roles'
 import { vercelSandboxConfigSchema, type WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
 import type { WorkspaceProvider } from '../types'
@@ -17,6 +18,8 @@ export interface CreateWorkspaceProviderOptions {
   /** Required only by remote builtins. */
   storeRef?: string
   storeToken?: string
+  /** Host-derived effective routes; consumed only by the built-in sandbox. */
+  runtimeReferences?: readonly RuntimeReferenceGroup[]
 }
 
 export interface WorkspaceRuntime {
@@ -60,6 +63,7 @@ export async function createWorkspaceProvider(
         storeRef: opts.storeRef,
         storeToken: opts.storeToken,
         repo: resolve(opts.repoRoot),
+        runtimeReferences: opts.runtimeReferences ?? [],
       })
     }
     throw new Error(

@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
+import { effectiveRuntimeReferences } from './roles'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,18 @@ const vercelUniversalImageSchema = z
     'Autobuild Bun provisioning is validated only on the vercel/sandbox/universal managed image; use its bare name, a tag, or a sha256 digest containing exactly 64 lowercase hexadecimal characters',
   )
 
+export const runtimeProvisioningEntrySchema = z.strictObject({
+  install: z.string().refine((value) => value.trim().length > 0, 'install must be nonblank'),
+  preflight: z.string().refine((value) => value.trim().length > 0, 'preflight must be nonblank'),
+})
+export type RuntimeProvisioningEntry = z.infer<typeof runtimeProvisioningEntrySchema>
+
+export const runtimeProvisioningSchema = openMap(
+  '[workspace.config.runtimeProvisioning]',
+  runtimeProvisioningEntrySchema,
+  { keys: 'nonblank' },
+)
+
 export const vercelSandboxConfigSchema = z
   .strictObject({
     image: vercelUniversalImageSchema.default('vercel/sandbox/universal:latest'),
@@ -113,6 +126,7 @@ export const vercelSandboxConfigSchema = z
     region: z.string().min(1).optional(),
     failoverRegions: z.array(z.string().min(1)).default([]),
     environmentVariables: z.array(envNameSchema).default([]),
+    runtimeProvisioning: runtimeProvisioningSchema,
     gitUsernameEnv: envNameSchema.optional(),
     gitPasswordEnv: envNameSchema.optional(),
   })
@@ -173,8 +187,14 @@ export const vercelSandboxConfigSchema = z
 type NormalizedVercelSandboxConfig = z.infer<typeof vercelSandboxConfigSchema>
 /** Direct provider construction remains source-compatible; schema-parsed
  * production config always materializes operationTimeoutMs. */
-export type VercelSandboxConfig = Omit<NormalizedVercelSandboxConfig, 'operationTimeoutMs'> & {
+export type VercelSandboxConfig = Omit<
+  NormalizedVercelSandboxConfig,
+  'operationTimeoutMs' | 'runtimeProvisioning'
+> & {
   operationTimeoutMs?: number
+  /** Optional only for source compatibility in direct adapter construction;
+   * parsed production configuration always materializes this map. */
+  runtimeProvisioning?: NormalizedVercelSandboxConfig['runtimeProvisioning']
 }
 
 /** Workspace selector. The host validates the selector envelope; plugin nested
@@ -549,7 +569,27 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
     })
   } else if (config.workspace.provider === 'vercel-sandbox') {
     const parsed = vercelSandboxConfigSchema.safeParse(config.workspace.config)
-    if (!parsed.success) forwardIssues(parsed.error.issues, ctx, ['workspace', 'config'])
+    if (!parsed.success) {
+      forwardIssues(parsed.error.issues, ctx, ['workspace', 'config'])
+    } else if (
+      config.roles !== undefined &&
+      config.verify !== undefined &&
+      config.finalize !== undefined
+    ) {
+      for (const group of effectiveRuntimeReferences(config)) {
+        if (Object.hasOwn(parsed.data.runtimeProvisioning, group.runtime)) continue
+        const key = /^[A-Za-z0-9_-]+$/.test(group.runtime)
+          ? group.runtime
+          : JSON.stringify(group.runtime)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['workspace', 'config', 'runtimeProvisioning', group.runtime],
+          message:
+            `runtime ${JSON.stringify(group.runtime)} is selected by ${group.references.join(', ')} but has no sandbox provisioning; add ` +
+            `[workspace.config.runtimeProvisioning.${key}] with nonblank install and preflight commands`,
+        })
+      }
+    }
   }
 
   const commandNames = Object.keys(config.commands)
