@@ -1890,7 +1890,7 @@ describe('abDispatch watch build-runner coordination', () => {
             environmentId: input.workspaceRef,
             sessionId: `session-${generation}`,
           },
-          completion: Promise.reject(new Error('session expired while waiting')),
+          completion: Promise.reject(new Error('remote environment no longer exists')),
           async stop() {
             return { outcome: 'confirmed' }
           },
@@ -1914,11 +1914,13 @@ describe('abDispatch watch build-runner coordination', () => {
         if (attempt < 3) clock.advance(BUILD_EXECUTION_LEASE_TTL_MS + 1)
       }
       const events = await fx.store.getEvents(slug)
-      expect(
-        events
-          .filter((event) => event.type === 'infrastructure.failed')
-          .map((event) => event.payload.attempt),
-      ).toEqual([1, 2, 3])
+      const failures = events.filter((event) => event.type === 'infrastructure.failed')
+      expect(failures.map((event) => event.payload.attempt)).toEqual([1, 2, 3])
+      expect(failures.map((event) => event.payload.cause)).toEqual([
+        'missing',
+        'missing',
+        'missing',
+      ])
       expect(
         events.filter(
           (event) =>
