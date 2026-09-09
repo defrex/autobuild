@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#276](https://github.com/defrex/autobuild/pull/276) — Reject non-canonical Vercel Sandbox image digests
 - [#274](https://github.com/defrex/autobuild/pull/274) — Guarantee Bun availability in Vercel sandboxes
 - [#273](https://github.com/defrex/autobuild/pull/273) — Protect build-row child interactions
 - [#272](https://github.com/defrex/autobuild/pull/272) — Make Vercel sandbox provisioning failure-safe
