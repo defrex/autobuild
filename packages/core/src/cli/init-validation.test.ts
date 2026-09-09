@@ -295,12 +295,24 @@ readyState = "ready"
   })
 
   test('fresh Vercel validation uses the remote SHA, exact guest env, and always deletes', async () => {
-    const commands: Array<{ cmd: string; env?: Record<string, string> }> = []
+    const commands: Array<{
+      cmd: string
+      args?: string[]
+      cwd?: string
+      sudo?: boolean
+      env?: Record<string, string>
+    }> = []
     let deletes = 0
     const sandbox: VercelSandboxHandle = {
       name: 'fresh-random-sandbox',
       runCommand: async (params) => {
-        commands.push({ cmd: params.cmd, ...(params.env === undefined ? {} : { env: params.env }) })
+        commands.push({
+          cmd: params.cmd,
+          ...(params.args === undefined ? {} : { args: params.args }),
+          ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
+          ...(params.sudo === undefined ? {} : { sudo: params.sudo }),
+          ...(params.env === undefined ? {} : { env: params.env }),
+        })
         const probe = params.args?.some((arg) => arg.includes('ab-init-probe'))
         return {
           exitCode: 0,
@@ -344,6 +356,10 @@ readyState = "ready"
         timeoutSeconds: 600,
         failoverRegions: [],
         environmentVariables: ['MODEL_API_KEY'],
+        provisioning: [
+          { name: 'browser packages', command: 'apt-get install -y chromium' },
+          { name: 'browser smoke', command: './scripts/browser-smoke.sh' },
+        ],
       },
       env: { MODEL_API_KEY: 'secret-model' },
       storeRef: 'https://store.example',
@@ -356,6 +372,21 @@ readyState = "ready"
     })
 
     expect(result.revision).toBe(sha)
+    expect(result.provisioning).toEqual(['browser packages', 'browser smoke'])
+    expect(commands.filter((command) => command.sudo === true)).toEqual([
+      {
+        cmd: 'sh',
+        args: ['-c', 'apt-get install -y chromium'],
+        cwd: '/vercel/sandbox/workspace',
+        sudo: true,
+      },
+      {
+        cmd: 'sh',
+        args: ['-c', './scripts/browser-smoke.sh'],
+        cwd: '/vercel/sandbox/workspace',
+        sudo: true,
+      },
+    ])
     expect(deletes).toBe(1)
     expect(freshInput).not.toHaveProperty('name')
     expect(freshInput).toMatchObject({

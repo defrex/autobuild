@@ -50,10 +50,26 @@ export function infrastructureFailureResetSeq(events: readonly AbEvent[]): numbe
 }
 
 export function normalizeInfrastructureError(error: unknown): string {
-  return (
-    (error instanceof Error ? error.message : String(error)).trim() ||
-    'provider operation failed without an error message'
-  )
+  const seen = new Set<unknown>()
+  const collect = (value: unknown): string[] => {
+    if ((typeof value === 'object' && value !== null) || typeof value === 'function') {
+      if (seen.has(value)) return []
+      seen.add(value)
+    }
+    if (value instanceof AggregateError) {
+      return [value.message, ...value.errors.flatMap(collect), ...collect(value.cause)].filter(
+        (part) => part.trim().length > 0,
+      )
+    }
+    if (value instanceof Error) {
+      return [value.message, ...collect(value.cause)].filter((part) => part.trim().length > 0)
+    }
+    if (value === undefined) return []
+    const text = String(value).trim()
+    return text === '' ? [] : [text]
+  }
+  const messages = [...new Set(collect(error).map((part) => part.trim()))]
+  return messages.join('; ') || 'provider operation failed without an error message'
 }
 
 /** One deterministic provider-failure taxonomy shared by every dispatch path. */

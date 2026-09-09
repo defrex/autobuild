@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#283](https://github.com/defrex/autobuild/pull/283) — Add repository-configured Vercel sandbox provisioning
 - [#282](https://github.com/defrex/autobuild/pull/282) — Make local store validation non-mutating
 - [#281](https://github.com/defrex/autobuild/pull/281) — Exercise the fresh Vercel sandbox lifecycle live
 - [#280](https://github.com/defrex/autobuild/pull/280) — Cover setup preflight safety rejections
