@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { constants } from 'node:fs'
+import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadConfig } from '../packages/core/src/config/load'
 import { effectiveRuntimeReferences } from '../packages/core/src/config/roles'
@@ -31,8 +33,13 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(workspace.provisioning[0]?.command).toContain('google-chrome-stable_current_amd64.deb')
   expect(workspace.provisioning[0]?.command).toContain('fonts-noto-cjk')
   expect(workspace.provisioning[0]?.command).toContain('fonts-noto-color-emoji')
-  expect(workspace.provisioning[1]?.command).toContain('CHROMIUM_BIN=/usr/bin/google-chrome-stable')
-  expect(workspace.provisioning[1]?.command).toContain('--headless')
+  const browserSmoke = workspace.provisioning[1]?.command
+  expect(browserSmoke).toContain('CHROMIUM_BIN=/usr/bin/google-chrome-stable')
+  expect(browserSmoke).toContain('BUN_BIN=/opt/autobuild-runtime/node_modules/.bin/bun')
+  expect(browserSmoke).toContain('./scripts/browser-smoke.sh')
+  expect(browserSmoke).not.toContain('--headless')
+  await access(join(REPO_ROOT, 'scripts/browser-smoke.sh'), constants.X_OK)
+  await access(join(REPO_ROOT, 'scripts/browser-smoke-server.ts'), constants.R_OK)
   expect(workspace.runtimeProvisioning).toEqual({
     pi: {
       install: 'npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4',

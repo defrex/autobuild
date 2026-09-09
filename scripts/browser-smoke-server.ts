@@ -1,8 +1,6 @@
 import { rename, writeFile } from 'node:fs/promises'
 
 const readyFile = process.argv[2]
-const marker = 'AUTOBUILD_BROWSER_SMOKE_RENDERED'
-
 if (readyFile === undefined) {
   console.error('browser-smoke server startup failure: readiness file argument is required')
   process.exit(2)
@@ -24,7 +22,8 @@ try {
 <body>
   <main id="browser-smoke-result">PENDING</main>
   <script>
-    document.getElementById('browser-smoke-result').textContent = '${marker}'
+    document.getElementById('browser-smoke-result').textContent =
+      ['AUTOBUILD', 'BROWSER', 'SMOKE', 'RENDERED'].join('_')
   </script>
 </body>
 </html>`,
