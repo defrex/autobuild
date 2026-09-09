@@ -56,8 +56,8 @@ The validation report must name `vercel-sandbox`, Pi 0.84.4, all three configure
 `system-install`, `browser-smoke`, repository setup, and hosted Store access. It must also report
 that its temporary readiness sandbox was released. A successful local parser test is not a
 substitute for this provider call. In a guest or retained diagnostic shell, check
-`pi --version`, `/usr/bin/chromium --version`, and `fc-list | head` without exposing environment
-values.
+`pi --version`, `/usr/bin/google-chrome-stable --version`, and `fc-list | head` without exposing
+environment values.
 
 For a failed or recovering build, preserve the complete durable projection before acting:
 
