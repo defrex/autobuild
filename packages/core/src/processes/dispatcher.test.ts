@@ -3398,7 +3398,7 @@ describe('Dispatcher janitor', () => {
       name: 'remote-test',
       recovery: { reap: async () => 'absent' },
       provision: async () => {
-        throw new Error('provider replacement limit reached')
+        throw new Error('remote environment no longer exists')
       },
       release: async () => undefined,
     }
@@ -3420,7 +3420,8 @@ describe('Dispatcher janitor', () => {
     expect(failures[0]?.payload).toMatchObject({
       provider: 'remote-test',
       workspaceRef: 'sandbox-g0',
-      error: 'provider replacement limit reached',
+      cause: 'missing',
+      error: 'remote environment no longer exists',
     })
   })
 

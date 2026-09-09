@@ -61,7 +61,7 @@ import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './das
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
-import { infrastructureFailureResetSeq } from '../processes/infrastructure-failure-budget'
+import { recordInfrastructureFailure as appendInfrastructureFailure } from '../processes/infrastructure-failure-budget'
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
@@ -1740,28 +1740,12 @@ class DispatchLoop {
     cleanupPending: boolean
     identity?: BuildExecutionHandle['identity']
   }): Promise<void> {
-    const events = await this.wiring.store.getEvents(input.slug)
-    const lastReset = infrastructureFailureResetSeq(events)
-    const attempt =
-      events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
-        .length + 1
-    const message =
-      (input.error instanceof Error ? input.error.message : String(input.error)).trim() ||
-      'provider operation failed without an error message'
-    const lower = message.toLowerCase()
-    const cause = /limit|quota|cpu|duration/.test(lower)
-      ? ('provider-limit' as const)
-      : /timeout|abort/.test(lower)
-        ? ('timeout' as const)
-        : /no longer exists|not found|missing/.test(lower)
-          ? ('missing' as const)
-          : input.cleanupPending
-            ? ('unknown-outcome' as const)
-            : ('provider-error' as const)
-    await this.wiring.store.append(input.slug, {
-      actor: DISPATCHER,
-      type: 'infrastructure.failed',
-      payload: {
+    await appendInfrastructureFailure(
+      { store: this.wiring.store, ids: this.wiring.ids },
+      {
+        slug: input.slug,
+        events: await this.wiring.store.getEvents(input.slug),
+        maxAttempts: this.currentConfig().config.policy.maxInfrastructureAttempts,
         provider: input.identity?.provider ?? this.wiring.workspaces.name,
         workspaceRef: input.workspaceRef,
         instance: input.instance,
@@ -1770,36 +1754,10 @@ class DispatchLoop {
           : {}),
         ...(input.identity?.sessionId !== undefined ? { sessionId: input.identity.sessionId } : {}),
         operation: input.operation,
-        cause,
-        attempt,
-        retryable: true,
+        error: input.error,
         cleanupPending: input.cleanupPending,
-        error: message,
       },
-    })
-    const limit = this.currentConfig().config.policy.maxInfrastructureAttempts
-    if (attempt < limit) return
-    const latest = await this.wiring.store.getEvents(input.slug)
-    const alreadyRaised = latest.some(
-      (event) =>
-        event.seq > lastReset &&
-        event.type === 'escalation.raised' &&
-        event.payload.policyCause === 'infrastructure-failure-limit',
     )
-    if (!alreadyRaised) {
-      await this.wiring.store.append(input.slug, {
-        actor: DISPATCHER,
-        type: 'escalation.raised',
-        payload: {
-          id: this.wiring.ids('esc'),
-          phase: 'setup',
-          source: 'policy',
-          policyCause: 'infrastructure-failure-limit',
-          question: `maxInfrastructureAttempts (${limit}) exhausted during ${input.operation}; provider cleanup/recovery must succeed before retry: ${message}`,
-          refs: [input.workspaceRef],
-        },
-      })
-    }
   }
 
   /** Start one workspace-adjacent executor without handing it workspace,
