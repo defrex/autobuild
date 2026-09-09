@@ -2390,13 +2390,15 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
         event.payload.policyCause === 'infrastructure-failure-limit',
     )
     expect(escalations).toHaveLength(1)
-    expect(escalations[0]?.payload).toMatchObject({
+    const escalation = escalations[0]
+    expect(escalation?.payload).toMatchObject({
       phase: 'setup',
       source: 'policy',
       policyCause: 'infrastructure-failure-limit',
       refs: ['provisioning-budget'],
     })
-    expect(escalations[0]?.payload.question).toContain(diagnostic)
+    if (escalation?.type !== 'escalation.raised') throw new Error('setup escalation missing')
+    expect(escalation.payload.question).toContain(diagnostic)
     expect(events.some((event) => event.type === 'workspace.provisioned')).toBe(false)
     expect(h.launches).toEqual([])
     expect(provisions).toBe(2)
