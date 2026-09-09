@@ -29,8 +29,9 @@ maintainer before selecting it:
 - for a private repository, a separate read-only clone identity named by
   `gitUsernameEnv` and `gitPasswordEnv`;
 - an HTTPS hosted `AB_STORE` reachable from Vercel and a scoped `AB_TOKEN`;
-- each selected role and alternate's runtime/model, and the credential variable
-  names that runtime needs in `[workspace.config].environmentVariables`.
+- each selected role and alternate's runtime/model, its pinned
+  `[workspace.config.runtimeProvisioning.<runtime>]` commands, and the API
+  credential names it needs in `[workspace.config].environmentVariables`.
 
 Do not put `AB_STORE`, `AB_TOKEN`, Vercel credentials, Forge credentials, or
 private-clone credentials in `environmentVariables`. Autobuild supplies Store
@@ -45,11 +46,22 @@ provider = "vercel-sandbox"
 image = "vercel/sandbox/universal:latest"
 vcpus = 4
 timeoutSeconds = 2700
-environmentVariables = ["ANTHROPIC_API_KEY"]
+environmentVariables = ["AI_GATEWAY_API_KEY"]
 # Private repositories only:
 # gitUsernameEnv = "AB_GIT_READ_USER"
 # gitPasswordEnv = "AB_GIT_READ_TOKEN"
+
+[workspace.config.runtimeProvisioning.pi]
+install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
+preflight = "test \"$(pi --version)\" = \"0.84.4\""
 ```
+
+Use a `vercel-ai-gateway/...` Pi model with `AI_GATEWAY_API_KEY` in the
+dispatcher environment. Do not copy `~/.pi`, OAuth refresh tokens, or any local
+runtime auth state, and do not attempt interactive login in a sandbox. Runtime
+names are open: a plugin runtime uses the same strict map, for example
+`[workspace.config.runtimeProvisioning.opencode]`, with its own immutable
+install and exact-version preflight commands.
 
 ## Make the environment reproducible
 
@@ -58,10 +70,16 @@ conventions. Read the installed sibling `../SKILL.md` for Autobuild's complete
 configuration and ticket surfaces.
 
 Use the supported `vercel/sandbox/universal` image. Other managed images and
-custom VCR images are rejected. Autobuild remains stack-neutral: put the
-repository's own reproducible toolchain bootstrap in idempotent
-`[commands].setup`, and expose only required runtime credentials through
-`[workspace.config].environmentVariables`. For example, setup may install
+custom VCR images are rejected. Autobuild remains stack-neutral. Put each selected runtime's immutable install
+and executable/version check in its `runtimeProvisioning` entry. Autobuild runs
+install then preflight after checkout dependencies in every fresh/replacement
+sandbox and before the readiness probe, writes the marker only after success,
+and reruns every preflight before each build runner. A failure names the runtime,
+selecting role/alternate, and field and starts no agent. Put the repository's
+other reproducible toolchain bootstrap in idempotent `[commands].setup`; setup
+runs inside the build runner and must not install an agent runtime. Expose only
+required runtime API credentials through `[workspace.config].environmentVariables`.
+For example, setup may install
 Python and `uv`, a pinned Rust toolchain and native libraries, or a JDK and
 Gradle. Those are repository decisions, not toolchains inferred by Autobuild.
 
@@ -92,8 +110,9 @@ Validation is explicit and noninteractive. It does not dispatch, claim a
 ticket, or create build, phase, session, event, transcript, or artifact history.
 For local execution it identifies and removes a disposable detached worktree.
 For Vercel it identifies and permanently deletes a fresh unnamed sandbox, even
-when setup or a probe fails; cleanup failures name the environment for manual
-deletion. It runs `commands.setup`, loads repository plugins, checks every
+when runtime installation, setup, or a probe fails; cleanup failures name the
+environment for manual deletion. It provisions/preflights every effective
+primary and alternate runtime, runs `commands.setup`, loads repository plugins, checks every
 selected primary/alternate runtime and model, and performs a read-only Store
 request in the candidate execution context. If the local database is absent,
 validation reports that no repository history is available without creating

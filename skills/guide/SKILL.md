@@ -217,7 +217,8 @@ evaluated as config logic.
 **Strictness:** unknown top-level keys/tables and unknown keys inside known
 tables are **errors**, not warnings — a typo must not silently disable a
 verifier. The open maps are `[commands]`, `[roles]`, `[workspace.config]`,
-`[verify.<step>]`, and `[finalize.<step>]`. Autobuild strictly validates the
+`[workspace.config.runtimeProvisioning]`, `[verify.<step>]`, and
+`[finalize.<step>]`. Autobuild strictly validates the
 repository-defined command, role, and step entries. `[workspace.config]` is
 plugin-owned and passed through unchanged for plugins; the builtin `git-worktree` provider requires it to be
 empty, while `vercel-sandbox`
@@ -326,18 +327,29 @@ provider = "vercel-sandbox"
 timeoutSeconds = 2700
 image = "vercel/sandbox/universal:latest"
 vcpus = 4
-environmentVariables = ["ANTHROPIC_API_KEY"]
+environmentVariables = ["AI_GATEWAY_API_KEY"]
 # private repository only; dedicated contents-read/no-write identity:
 gitUsernameEnv = "AB_GIT_READ_USER"
 gitPasswordEnv = "AB_GIT_READ_TOKEN"
+
+[workspace.config.runtimeProvisioning.pi]
+install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
+preflight = "test \"$(pi --version)\" = \"0.84.4\""
 ```
 
 `timeoutSeconds` is required (60–86400; Hobby currently caps at 2700), `vcpus`
 is 1–32, and optional `region`/unique `failoverRegions` select placement. Only
 the named runtime variables and scoped `AB_STORE`/`AB_TOKEN` enter guest
 commands. Never list Store, Forge, Vercel, or private-clone credentials there.
-The clone identity is upload-pack-only and scrubbed from Git config before an
-agent starts. Agents cannot push. Remote phase terminals deposit a durable
+Every effective primary/alternate runtime needs a strict
+`runtimeProvisioning` entry with pinned `install` and exact-version `preflight`
+commands; runtime names remain open for plugins. Install/preflight runs before
+the marker in every fresh/replacement/readiness sandbox, and preflight reruns
+before every child. Failures name the runtime, role/alternate, and field and
+start no agent. Keep runtime installation out of `commands.setup`. Pi over
+`vercel-ai-gateway/...` uses `AI_GATEWAY_API_KEY`; never copy OAuth tokens,
+`~/.pi`, or interactive login state. The clone identity is upload-pack-only and
+scrubbed from Git config before an agent starts. Agents cannot push. Remote phase terminals deposit a durable
 publication request and park; that successful `ab done` is the one terminal and
 must not be repeated. After VM stop and lease release, the local kernel
 publishes the exact SHA/branch through a temporary narrow firewall transform,
