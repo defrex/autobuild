@@ -35,6 +35,63 @@ describe('publicationPending', () => {
     ).toBe(false)
   })
 
+  test('a later workspace release abandons a request whose SHA died with that workspace', () => {
+    const request = event(4, 'publication.requested', {
+      operation: 'implement',
+      branch: 'ab/build',
+      sha: 'a'.repeat(40),
+      round: 1,
+      base: 'b'.repeat(40),
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    expect(
+      publicationPending([
+        event(3, 'workspace.provisioned', {
+          provider: 'vercel-sandbox',
+          ref: 'sandbox-g0',
+          branch: 'ab/build',
+          base: { source: 'existing', sha: 'b'.repeat(40) },
+        }),
+        request,
+        event(5, 'workspace.released', {
+          provider: 'vercel-sandbox',
+          ref: 'sandbox-g0',
+          reason: 'replacement',
+        }),
+        event(6, 'workspace.provisioned', {
+          provider: 'vercel-sandbox',
+          ref: 'sandbox-g1',
+          branch: 'ab/build',
+          base: { source: 'existing', sha: 'b'.repeat(40) },
+        }),
+      ]),
+    ).toBe(false)
+  })
+
+  test('does not abandon a request for an unrelated workspace release', () => {
+    const provisioned = event(3, 'workspace.provisioned', {
+      provider: 'vercel-sandbox',
+      ref: 'sandbox-g1',
+      branch: 'ab/build',
+      base: { source: 'existing', sha: 'b'.repeat(40) },
+    })
+    const request = event(4, 'publication.requested', {
+      operation: 'implement',
+      branch: 'ab/build',
+      sha: 'a'.repeat(40),
+      round: 1,
+      base: 'b'.repeat(40),
+      artifact: { kind: 'implement-notes', rev: 0 },
+    })
+    expect(
+      publicationPending([
+        provisioned,
+        request,
+        event(5, 'workspace.released', { ref: 'sandbox-g0', reason: 'replacement' }),
+      ]),
+    ).toBe(true)
+  })
+
   test('does not accept a later completion for the wrong SHA or implementation round', () => {
     const request = event(4, 'publication.requested', {
       operation: 'implement',

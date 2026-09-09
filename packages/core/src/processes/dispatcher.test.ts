@@ -16,7 +16,7 @@ import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
-import type { Ticket } from '../ports/types'
+import type { Ticket, WorkspaceProvider } from '../ports/types'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -107,6 +107,7 @@ function harness(
     /** A store to dispatch over instead of a fresh in-memory one — the seam
      * the restart tests use to hand a second Dispatcher a reopened store. */
     store?: BuildStore
+    workspaceProvider?: WorkspaceProvider
   } = {},
 ) {
   const clock = manualClock()
@@ -138,7 +139,7 @@ function harness(
   const dispatcher = new Dispatcher({
     store,
     tickets,
-    workspaces,
+    workspaces: opts.workspaceProvider ?? workspaces,
     forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
@@ -3392,6 +3393,37 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([slug])
   })
 
+  test('conflicted re-entry records replacement provisioning failures durably', async () => {
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: { reap: async () => 'absent' },
+      provision: async () => {
+        throw new Error('provider replacement limit reached')
+      },
+      release: async () => undefined,
+    }
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, { pr: PR, workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-g0', reason: 'replacement' },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+
+    const failures = (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'infrastructure.failed' && event.payload.operation === 'provision',
+    )
+    expect(failures.length).toBeGreaterThan(0)
+    expect(failures[0]?.payload).toMatchObject({
+      provider: 'remote-test',
+      workspaceRef: 'sandbox-g0',
+      error: 'provider replacement limit reached',
+    })
+  })
+
   test('conflict resolved upstream (mergeable true after reconcile.completed): no event', async () => {
     const h = harness()
     const slug = await seedBuild(h, { pr: PR })
@@ -3414,6 +3446,42 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(before)
     expect(h.launches).toEqual([])
+  })
+
+  test('abort cleanup records an unknown remote delete and retries it durably', async () => {
+    let fail = true
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap() {
+          if (fail) throw new Error('delete acknowledgement timed out')
+          return 'confirmed'
+        },
+      },
+      async provision() {
+        throw new Error('not used')
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider: remote })
+    const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).janitorFailed).toBe(1)
+    let events = await h.store.getEvents(slug)
+    expect(events.filter((event) => event.type === 'infrastructure.failed')).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
+    ).toMatchObject({ operation: 'delete', outcome: 'unknown', attempt: 1 })
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
+
+    fail = false
+    await h.dispatcher.tick({ acceptNewWork: false })
+    events = await h.store.getEvents(slug)
+    expect(
+      events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
+    ).toMatchObject({ operation: 'delete', outcome: 'confirmed', attempt: 2 })
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
   })
 
   test('aborted build: releases everything, preserves labels, returns to Triage, and second tick no-ops', async () => {
@@ -3983,6 +4051,72 @@ describe('Dispatcher startup resume', () => {
 // ── Lease sweep (§15.6-C) ────────────────────────────────────────────────────
 
 describe('Dispatcher lease sweep', () => {
+  test('remote recovery fences the stale identity before provisioning from the durable checkpoint', async () => {
+    const operations: string[] = []
+    let recoveredRevision: string | undefined
+    let recoveredGeneration: number | undefined
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap(handle) {
+          operations.push(`reap:${handle.ref}`)
+          return 'confirmed'
+        },
+      },
+      async provision(opts) {
+        operations.push('provision')
+        recoveredRevision = opts.revision
+        recoveredGeneration = opts.generation
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision! },
+        }
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, { workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: `ab/${slug}`,
+        sha: 'f'.repeat(40),
+        round: 1,
+        base: 'e'.repeat(40),
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'old-instance',
+        environmentId: 'sandbox-g0',
+        sessionId: 'old-session',
+      },
+    })
+    expect(await h.store.claimLease(slug, 'old-instance', 100)).toBe(true)
+    h.clock.advance(101)
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    expect(operations).toEqual(['reap:sandbox-g0', 'provision'])
+    expect(recoveredRevision).toBe('fake-base-sha')
+    expect(recoveredGeneration).toBe(1)
+    expect(h.launches).toEqual([slug])
+    const events = await h.store.getEvents(slug)
+    expect(events.filter((event) => event.type === 'workspace.released')).toHaveLength(1)
+    expect(
+      events.filter((event) => event.type === 'workspace.provisioned').at(-1)?.payload.ref,
+    ).toBe('sandbox-g1')
+  })
+
   test('expired lease + running: relaunch', async () => {
     const h = harness()
     const slug = await seedBuild(h)

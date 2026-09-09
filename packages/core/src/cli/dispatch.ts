@@ -61,6 +61,7 @@ import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './das
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
+import { infrastructureFailureResetSeq } from '../processes/infrastructure-failure-budget'
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
@@ -1730,6 +1731,77 @@ class DispatchLoop {
     )
   }
 
+  private async recordInfrastructureFailure(input: {
+    slug: string
+    instance: string
+    workspaceRef: string
+    operation: 'provision' | 'start' | 'wait' | 'stop' | 'delete' | 'reconcile'
+    error: unknown
+    cleanupPending: boolean
+    identity?: BuildExecutionHandle['identity']
+  }): Promise<void> {
+    const events = await this.wiring.store.getEvents(input.slug)
+    const lastReset = infrastructureFailureResetSeq(events)
+    const attempt =
+      events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
+        .length + 1
+    const message =
+      (input.error instanceof Error ? input.error.message : String(input.error)).trim() ||
+      'provider operation failed without an error message'
+    const lower = message.toLowerCase()
+    const cause = /limit|quota|cpu|duration/.test(lower)
+      ? ('provider-limit' as const)
+      : /timeout|abort/.test(lower)
+        ? ('timeout' as const)
+        : /no longer exists|not found|missing/.test(lower)
+          ? ('missing' as const)
+          : input.cleanupPending
+            ? ('unknown-outcome' as const)
+            : ('provider-error' as const)
+    await this.wiring.store.append(input.slug, {
+      actor: DISPATCHER,
+      type: 'infrastructure.failed',
+      payload: {
+        provider: input.identity?.provider ?? this.wiring.workspaces.name,
+        workspaceRef: input.workspaceRef,
+        instance: input.instance,
+        ...(input.identity?.environmentId !== undefined
+          ? { environmentId: input.identity.environmentId }
+          : {}),
+        ...(input.identity?.sessionId !== undefined ? { sessionId: input.identity.sessionId } : {}),
+        operation: input.operation,
+        cause,
+        attempt,
+        retryable: true,
+        cleanupPending: input.cleanupPending,
+        error: message,
+      },
+    })
+    const limit = this.currentConfig().config.policy.maxInfrastructureAttempts
+    if (attempt < limit) return
+    const latest = await this.wiring.store.getEvents(input.slug)
+    const alreadyRaised = latest.some(
+      (event) =>
+        event.seq > lastReset &&
+        event.type === 'escalation.raised' &&
+        event.payload.policyCause === 'infrastructure-failure-limit',
+    )
+    if (!alreadyRaised) {
+      await this.wiring.store.append(input.slug, {
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: this.wiring.ids('esc'),
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'infrastructure-failure-limit',
+          question: `maxInfrastructureAttempts (${limit}) exhausted during ${input.operation}; provider cleanup/recovery must succeed before retry: ${message}`,
+          refs: [input.workspaceRef],
+        },
+      })
+    }
+  }
+
   /** Start one workspace-adjacent executor without handing it workspace,
    * config, or outcome channels. Capacity and local single-flight remain
    * kernel decisions; the kernel reserves the durable execution lease before
@@ -1767,6 +1839,10 @@ class DispatchLoop {
         else if (event.type === 'workspace.released') workspaceRef = undefined
       }
       if (workspaceRef === undefined) throw new Error(`build ${slug} has no open workspace`)
+      // A prior publication acknowledgement may have been lost after its push
+      // reached the durable branch. Reconcile that fact before a replacement
+      // runner can rerun the phase and create a non-fast-forward successor.
+      await this.settlePendingPublication(slug)
       const handle = await this.wiring.buildExecution.start({
         slug,
         storeRef: this.wiring.storeRef,
@@ -1774,12 +1850,31 @@ class DispatchLoop {
         workspaceRef,
       })
       active.handle = handle
+      const identity = handle.identity ?? {
+        provider: this.wiring.workspaces.name,
+        workspaceRef,
+      }
+      await this.wiring.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { ...identity, instance },
+      })
 
       let tracked: Promise<void>
       tracked = handle.completion
         .then(
           async (exit) => {
             try {
+              await this.wiring.store.append(slug, {
+                actor: DISPATCHER,
+                type: 'execution.ended',
+                payload: {
+                  instance,
+                  workspaceRef,
+                  outcome: active.stopping ? 'stopped' : 'completed',
+                  exitCode: exit.exitCode,
+                },
+              })
               if (active.stopping) return
               const diagnostic = await this.matchingRunnerDiagnostic(slug, instance)
               if (diagnostic?.outcome === 'lease-held') {
@@ -1824,10 +1919,17 @@ class DispatchLoop {
           },
           async (error) => {
             // A rejected executor completion cannot prove the remote VM was
-            // stopped. Release liveness ownership, but leave publication
-            // pending until a later confirmed execution teardown.
-            await this.wiring.store.releaseLease(slug, instance)
-            throw error
+            // stopped. Keep the lease until expiry: recovery fences and reaps
+            // the exact recorded identity before authorizing a replacement.
+            await this.recordInfrastructureFailure({
+              slug,
+              instance,
+              workspaceRef,
+              operation: 'wait',
+              error,
+              cleanupPending: true,
+              identity,
+            })
           },
         )
         .finally(() => {
@@ -1843,7 +1945,29 @@ class DispatchLoop {
       if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
         this.activeBuildRuns.delete(slug)
       }
-      if (leaseClaimed) await this.wiring.store.releaseLease(slug, instance)
+      if (leaseClaimed) {
+        const events = await this.wiring.store.getEvents(slug)
+        let workspaceRef = ''
+        for (const event of events) {
+          if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
+          else if (event.type === 'workspace.released') workspaceRef = ''
+        }
+        if (workspaceRef !== '') {
+          await this.recordInfrastructureFailure({
+            slug,
+            instance,
+            workspaceRef,
+            operation: 'start',
+            error,
+            cleanupPending: this.wiring.workspaces.recovery !== undefined,
+          })
+        }
+        // Local start failures have no possible remote holder. Remote failures
+        // retain the lease until its TTL fences an ambiguous start.
+        if (this.wiring.workspaces.recovery === undefined) {
+          await this.wiring.store.releaseLease(slug, instance)
+        }
+      }
       await this.appendStatus({
         actor: DISPATCHER,
         type: 'dispatcher.runner-settled',
@@ -1873,10 +1997,28 @@ class DispatchLoop {
    * execution lease is released only after its complete tree has settled. */
   private async stopBuildExecutions(): Promise<void> {
     this.acceptingBuildLaunches = false
-    const active = [...this.activeBuildRuns.values()]
-    for (const entry of active) entry.stopping = true
-    await Promise.all(active.map((entry) => entry.handle?.stop()))
-    await Promise.all(active.map((entry) => entry.settled))
+    const active = [...this.activeBuildRuns.entries()]
+    for (const [, entry] of active) entry.stopping = true
+    await Promise.all(
+      active.map(async ([slug, entry]) => {
+        const result = await entry.handle?.stop()
+        if (result?.outcome === 'unknown') {
+          await this.recordInfrastructureFailure({
+            slug,
+            instance: entry.instance,
+            workspaceRef: entry.handle?.identity?.workspaceRef ?? slug,
+            operation: 'stop',
+            error: result.error,
+            cleanupPending: true,
+            identity: entry.handle?.identity,
+          })
+          // Do not wait forever for command.wait after an ambiguous stop. The
+          // durable lease intentionally remains until TTL expiry and fencing.
+          return
+        }
+        await entry.settled
+      }),
+    )
   }
 
   // ── Message routing ───────────────────────────────────────────────────────

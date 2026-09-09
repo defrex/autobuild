@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { abDispatch } from '../cli/dispatch'
 import { openProductionStore } from '../cli/store-opening'
 import { loadConfig } from '../config/load'
@@ -16,11 +17,12 @@ const enabled = process.env.AB_RUN_VERCEL_SANDBOX_LIVE === '1'
  * consuming checkout (not this repository) containing a ready file ticket and
  * a vercel-sandbox autobuild.toml, plus the hosted Store, Vercel, runtime, and
  * GitHub credentials documented in docs/configuration.md. A successful run
- * must reach PR creation and ordinary sandbox deletion through durable facts.
+ * deletes the first live environment, observes a distinct replacement
+ * identity, reaches PR creation, and performs ordinary terminal cleanup.
  */
 describe.skipIf(!enabled)('Vercel Sandbox complete build (opt-in)', () => {
   test(
-    'runs an independent consuming repository through publication and PR creation',
+    'recovers an independent consuming repository after deleting its live sandbox',
     async () => {
       const repoInput = process.env.AB_VERCEL_SANDBOX_LIVE_REPO
       const storeRef = process.env.AB_STORE
@@ -61,8 +63,7 @@ describe.skipIf(!enabled)('Vercel Sandbox complete build (opt-in)', () => {
 
       let slug: string | undefined
       let events: AbEvent[] = []
-      for (let pass = 0; pass < 20; pass += 1) {
-        await dispatchOnce()
+      const observe = async () => {
         const observed = openProductionStore(storeRef, token)
         try {
           slug ??= (await observed.listBuilds())
@@ -72,10 +73,69 @@ describe.skipIf(!enabled)('Vercel Sandbox complete build (opt-in)', () => {
         } finally {
           await observed.close()
         }
-        if (events.some((event) => event.type === 'finalize.completed')) break
       }
 
+      // Start the first remote execution without awaiting it, then delete the
+      // exact environment named by its durable identity while its lease is
+      // live. The attached rejection handler prevents a deliberate provider
+      // interruption from becoming an unhandled promise rejection.
+      const firstDispatch = dispatchOnce().then(
+        () => undefined,
+        (error) => error,
+      )
+      let original: Extract<AbEvent, { type: 'execution.started' }> | undefined
+      for (let poll = 0; poll < 240; poll += 1) {
+        await observe()
+        original = events.findLast(
+          (event): event is Extract<AbEvent, { type: 'execution.started' }> =>
+            event.type === 'execution.started' &&
+            !events.some(
+              (candidate) =>
+                candidate.type === 'execution.ended' &&
+                candidate.payload.instance === event.payload.instance,
+            ),
+        )
+        if (original !== undefined) break
+        await delay(250)
+      }
       expect(slug).toBeDefined()
+      expect(original?.payload.environmentId).toBeDefined()
+      expect(original?.payload.sessionId).toBeDefined()
+      const originalSandbox = await createVercelSdkFacade(process.env).get(
+        original!.payload.environmentId!,
+      )
+      expect(originalSandbox).not.toBeNull()
+      await originalSandbox!.delete({ signal: AbortSignal.timeout(30_000) })
+      await firstDispatch
+
+      // The retained lease deliberately delays takeover. Poll ordinary
+      // dispatcher invocations until expiry, replacement, and continuation.
+      for (let pass = 0; pass < 180; pass += 1) {
+        await dispatchOnce()
+        await observe()
+        if (events.some((event) => event.type === 'finalize.completed')) break
+        await delay(1_000)
+      }
+
+      const executions = events.filter(
+        (event): event is Extract<AbEvent, { type: 'execution.started' }> =>
+          event.type === 'execution.started',
+      )
+      const replacement = executions.find(
+        (event) => event.payload.instance !== original!.payload.instance,
+      )
+      expect(replacement?.payload.environmentId).toBeDefined()
+      expect(replacement?.payload.sessionId).toBeDefined()
+      expect(replacement?.payload.environmentId).not.toBe(original!.payload.environmentId)
+      expect(replacement?.payload.sessionId).not.toBe(original!.payload.sessionId)
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'workspace.released' &&
+            'reason' in event.payload &&
+            event.payload.reason === 'replacement',
+        ),
+      ).toBe(true)
       expect(events.some((event) => event.type === 'publication.requested')).toBe(true)
       const finalized = events.findLast((event) => event.type === 'finalize.completed')
       expect(finalized?.type).toBe('finalize.completed')

@@ -108,6 +108,102 @@ describe('dispatch recovery event protocol', () => {
   })
 })
 
+describe('remote infrastructure lifecycle protocol', () => {
+  test('records strict execution identities, retry diagnostics, and historical release payloads', () => {
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: {
+          provider: 'vercel-sandbox',
+          workspaceRef: 'sandbox-g1',
+          instance: 'instance-1',
+          environmentId: 'sandbox-g1',
+          sessionId: 'session-1',
+        },
+      }),
+    ).toMatchObject({ type: 'execution.started' })
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: {
+          instance: 'instance-1',
+          workspaceRef: 'sandbox-g1',
+          outcome: 'completed',
+          exitCode: 0,
+        },
+      }),
+    ).toMatchObject({ type: 'execution.ended' })
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'infrastructure.failed',
+        payload: {
+          provider: 'vercel-sandbox',
+          workspaceRef: 'sandbox-g1',
+          instance: 'instance-1',
+          operation: 'wait',
+          cause: 'session-expired',
+          attempt: 1,
+          retryable: true,
+          cleanupPending: true,
+          error: 'session expired',
+        },
+      }),
+    ).toMatchObject({ type: 'infrastructure.failed' })
+    expect(eventPayloadSchemas['workspace.released'].safeParse({}).success).toBe(true)
+    expect(
+      eventPayloadSchemas['workspace.released'].safeParse({
+        ref: 'sandbox-g1',
+        reason: 'replacement',
+      }).success,
+    ).toBe(true)
+    expect(
+      eventPayloadSchemas['infrastructure.failed'].safeParse({
+        provider: 'vercel-sandbox',
+        workspaceRef: 'x',
+        instance: 'i',
+        operation: 'wait',
+        cause: 'unknown',
+        attempt: 1,
+        retryable: true,
+        cleanupPending: true,
+        error: 'x',
+      }).success,
+    ).toBe(false)
+  })
+
+  test('permits only the infrastructure policy cause from a dispatcher', () => {
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-infra',
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'infrastructure-failure-limit',
+          question: 'retry cleanup?',
+        },
+      }),
+    ).toMatchObject({ type: 'escalation.raised' })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-other',
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'setup-failure-limit',
+          question: 'not dispatcher-owned',
+        },
+      }),
+    ).toThrow(/only policy\/infrastructure-failure-limit/)
+  })
+})
+
 describe('reconcile progress event protocol', () => {
   test('progress checks are strict kernel facts tied to one conflict and completed attempt', () => {
     expect(

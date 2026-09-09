@@ -67,9 +67,15 @@ export class LocalBuildExecution implements BuildExecution {
 
     return {
       pid: child.pid,
+      identity: {
+        provider: 'local-process',
+        workspaceRef: input.workspaceRef,
+        environmentId: String(child.pid),
+      },
       completion,
       stop: async () => {
         await Promise.all([reap(), leaderExit])
+        return { outcome: 'confirmed' }
       },
     }
   }

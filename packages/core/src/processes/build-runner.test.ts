@@ -3922,6 +3922,80 @@ describe('remote publication terminal boundary', () => {
     expect(ofType(events, 'phase.failed')).toEqual([])
     expect(ofType(events, 'session.ended')).toHaveLength(3)
   })
+
+  test('replacement ignores a request abandoned with the dead workspace and reruns its phase', async () => {
+    let implementations = 0
+    const replacementSha = 'c'.repeat(40)
+    const h = await makeHarness({
+      handlers: (store) => {
+        const handlers = happyHandlers(store)
+        handlers.implement = async (ctx: ScriptContext) => {
+          implementations += 1
+          await store.appendWithArtifacts(
+            SLUG,
+            [{ kind: 'implement-notes', content: 'replacement implementation' }],
+            (deposited) => ({
+              actor: agentActor('implement', sessionOf(ctx)),
+              type: 'publication.requested',
+              payload: {
+                operation: 'implement',
+                branch: BRANCH,
+                sha: replacementSha,
+                round: 1,
+                base: 'b'.repeat(40),
+                artifact: refOf(deposited),
+              },
+            }),
+          )
+          return defaultTurnResult('replacement publication requested')
+        }
+        return handlers
+      },
+    })
+    await seedPlanApproved(h.store)
+    const originalWorkspace = (await h.store.getEvents(SLUG)).findLast(
+      (event) => event.type === 'workspace.provisioned',
+    )
+    if (originalWorkspace?.type !== 'workspace.provisioned') throw new Error('missing workspace')
+    const stale = await h.store.putArtifact(SLUG, {
+      kind: 'implement-notes',
+      content: 'lost with sandbox g0',
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'lost-session'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: 'a'.repeat(40),
+        round: 1,
+        base: 'b'.repeat(40),
+        artifact: { kind: stale.kind, rev: stale.revision },
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: originalWorkspace.payload.ref, reason: 'replacement' },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-g1',
+        branch: BRANCH,
+        base: { source: 'existing', sha: 'b'.repeat(40) },
+      },
+    })
+
+    await h.br.run()
+
+    const requests = ofType(await h.store.getEvents(SLUG), 'publication.requested')
+    expect(implementations).toBe(1)
+    expect(requests).toHaveLength(2)
+    expect(requests.at(-1)?.payload.sha).toBe(replacementSha)
+  })
 })
 
 // ── No terminal (D5, §8.4) ───────────────────────────────────────────────────

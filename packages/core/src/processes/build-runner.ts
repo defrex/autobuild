@@ -80,6 +80,9 @@ import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/work
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildScopedStore, Clock } from '../store/types'
 import { resetsPhaseFailureBudget, type PhaseFailureResetEscalation } from './phase-failure-budget'
+import { publicationPending } from './publication-state'
+
+export { publicationPending } from './publication-state'
 
 // ── Seams ────────────────────────────────────────────────────────────────────
 
@@ -388,37 +391,6 @@ function isPublicationBoundary(event: AbEvent, spec: SessionSpec, session: strin
   if (spec.phase === 'reconcile') return event.payload.operation === 'reconcile'
   if (spec.phase === 'finalize') return event.payload.operation === 'finalize'
   return false
-}
-
-export function publicationPending(events: readonly AbEvent[]): boolean {
-  return events.some(
-    (request) =>
-      request.type === 'publication.requested' &&
-      !events.some((event) => {
-        if (event.seq <= request.seq) return false
-        if (request.payload.operation === 'implement')
-          return (
-            event.type === 'implement.completed' &&
-            event.payload.round === request.payload.round &&
-            event.payload.commits.base === request.payload.base &&
-            event.payload.commits.head === request.payload.sha
-          )
-        if (request.payload.operation === 'reconcile')
-          return (
-            event.type === 'reconcile.completed' &&
-            event.payload.mergeCommit === request.payload.sha
-          )
-        if (request.payload.operation === 'finalize')
-          return (
-            event.type === 'finalize.completed' && event.payload.pr.headSha === request.payload.sha
-          )
-        return (
-          event.type === 'finalize.step-completed' &&
-          event.payload.step === request.payload.step &&
-          (!event.payload.ok || event.payload.headSha === request.payload.sha)
-        )
-      }),
-  )
 }
 
 export class BuildRunner {
