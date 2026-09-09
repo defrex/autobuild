@@ -61,6 +61,7 @@ import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './das
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import { createKeyboardProtocol, type KeyboardProtocol } from './keyboard'
+import { infrastructureFailureResetSeq } from '../processes/infrastructure-failure-budget'
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
@@ -1740,14 +1741,7 @@ class DispatchLoop {
     identity?: BuildExecutionHandle['identity']
   }): Promise<void> {
     const events = await this.wiring.store.getEvents(input.slug)
-    const lastReset = events.reduce(
-      (seq, event) =>
-        event.type === 'execution.ended' ||
-        (event.type === 'escalation.answered' && event.payload.resolution === 'retry')
-          ? event.seq
-          : seq,
-      0,
-    )
+    const lastReset = infrastructureFailureResetSeq(events)
     const attempt =
       events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
         .length + 1
@@ -1845,6 +1839,10 @@ class DispatchLoop {
         else if (event.type === 'workspace.released') workspaceRef = undefined
       }
       if (workspaceRef === undefined) throw new Error(`build ${slug} has no open workspace`)
+      // A prior publication acknowledgement may have been lost after its push
+      // reached the durable branch. Reconcile that fact before a replacement
+      // runner can rerun the phase and create a non-fast-forward successor.
+      await this.settlePendingPublication(slug)
       const handle = await this.wiring.buildExecution.start({
         slug,
         storeRef: this.wiring.storeRef,

@@ -432,8 +432,12 @@ publication is requested durably, then performed by the
 local supervisor only after the remote command exits, the VM is stopped, and
 the execution lease is released. The supervisor uses a narrow credential
 transform for a fixed non-force push and verifies the remote head before
-recording completion; PR API work stays local. Before every guest runner launch,
-the provider reasserts the normal receive-pack-free policy, so a failed policy
+recording completion; PR API work stays local. If that acknowledgement is lost
+after the push lands, the next launch observes the exact remote branch head and
+records the missing completion before allowing a replacement phase to run. If
+the commit is absent, release of the old workspace abandons its request and the
+replacement reruns the phase. Before every guest runner launch, the provider
+reasserts the normal receive-pack-free policy, so a failed policy
 restore cannot expose publication authority to later setup or plugin code.
 Ordinary completion deletes the sandbox.
 
@@ -463,6 +467,16 @@ plugins, installed skills, setup, runtimes, checks, and phase CLI commands all
 resolve in the guest checkout. Only names in `environmentVariables` plus
 scoped `AB_STORE`/`AB_TOKEN` enter commands—dispatcher environment variables
 are never copied wholesale.
+
+The opt-in real interruption exercise is
+`packages/core/src/integration/vercel-sandbox.live.test.ts`. Set
+`AB_RUN_VERCEL_SANDBOX_LIVE=1`, `AB_VERCEL_SANDBOX_LIVE_REPO` to an independent
+checkout with a ready file ticket and this provider configuration, plus the
+hosted Store, Vercel, runtime, and GitHub credentials above. The test deletes
+the first sandbox while its durable execution identity is live, waits through
+the lease fence, and asserts a distinct replacement sandbox/session identity,
+successful continuation, and final provider cleanup. It may run for up to 30
+minutes and mutates the configured test repository/Store.
 
 ## `[commands]`
 

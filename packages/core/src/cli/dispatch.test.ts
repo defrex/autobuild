@@ -1931,6 +1931,170 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 10_000)
 
+  test('repairs an already-landed abandoned publication before replacement execution starts', async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const slug = 'remote-landed-publication'
+    const branch = `ab/${slug}`
+    const base = 'a'.repeat(40)
+    const head = 'b'.repeat(40)
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-landed', title: 'landed publication' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'remote-test',
+        ref: 'sandbox-g0',
+        path: '/remote/workspace',
+        branch,
+        base: { source: 'remote', sha: base },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [
+        { kind: 'spec', content: '# Spec' },
+        { kind: 'plan', content: '# Plan' },
+        { kind: 'plan-review', content: 'approved' },
+        { kind: 'implement-notes', content: 'landed remotely' },
+      ],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-landed', title: 'landed publication' },
+        },
+      }),
+    )
+    await fx.store.append(slug, {
+      actor: agentActor('plan', 'plan-session'),
+      type: 'plan.completed',
+      payload: { round: 1, artifact: { kind: 'plan', rev: 0 }, verifySteps: [] },
+    })
+    await fx.store.append(slug, {
+      actor: agentActor('plan-review', 'review-session'),
+      type: 'plan-review.verdict',
+      payload: {
+        round: 1,
+        verdict: 'approve',
+        findings: [],
+        artifact: { kind: 'plan-review', rev: 0 },
+      },
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'implement.started',
+      payload: { round: 1 },
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: {
+        session: 'lost-ack-session',
+        role: 'implement',
+        runner: 'pi',
+        phase: 'implement',
+        round: 1,
+      },
+    })
+    await fx.store.append(slug, {
+      actor: agentActor('implement', 'lost-ack-session'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch,
+        sha: head,
+        round: 1,
+        base,
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'session.ended',
+      payload: {
+        session: 'lost-ack-session',
+        outcome: 'reclaimed',
+        reclaimedBy: { instance: 'replacement', resumedFromSeq: 0 },
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'lost-instance',
+        environmentId: 'sandbox-g0',
+        sessionId: 'lost-session',
+      },
+    })
+    expect(await fx.store.claimLease(slug, 'lost-instance', 100)).toBe(true)
+    clock.advance(101)
+
+    let publishCalls = 0
+    let startSawCompletion = false
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      publication: {
+        isPublished: async (input) => input.sha === head && input.branch === branch,
+        publish: async () => {
+          publishCalls += 1
+        },
+      },
+      recovery: { reap: async () => 'confirmed' },
+      provision: async (opts) => ({
+        provider: 'remote-test',
+        ref: 'sandbox-g1',
+        path: '/remote/workspace',
+        branch: opts.branch,
+        base: { source: 'existing', sha: opts.revision! },
+      }),
+      release: async () => undefined,
+    }
+    const execution: BuildExecution = {
+      async start(input) {
+        startSawCompletion = (await fx.store.getEvents(input.slug)).some(
+          (event) => event.type === 'implement.completed' && event.payload.commits.head === head,
+        )
+        return {
+          completion: Promise.resolve({ exitCode: 0 }),
+          stop: async () => ({ outcome: 'confirmed' }),
+        }
+      },
+    }
+    const baseWire = fx.wire()
+
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: () => ({ ...baseWire, workspaces: remote, buildExecution: execution }),
+      })
+      expect(startSawCompletion).toBe(true)
+      expect(publishCalls).toBe(0)
+      expect(
+        (await fx.store.getEvents(slug)).filter((event) => event.type === 'implement.completed'),
+      ).toHaveLength(1)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 10_000)
+
   test('retains the accepted config across deletion and reloads after restoration', async () => {
     const fx = await makeFixture([], happyHandlers())
     const stop = new AbortController()

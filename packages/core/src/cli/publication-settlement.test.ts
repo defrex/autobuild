@@ -212,6 +212,56 @@ describe('settlePendingPublication', () => {
     ).toHaveLength(1)
   })
 
+  test('repairs completion when an abandoned request already reached the remote branch', async () => {
+    const h = await seed()
+    const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'landed' })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'lost-ack-session'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-1', reason: 'replacement' },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-2',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'existing', sha: BASE },
+      },
+    })
+    let observations = 0
+    h.deps.publication = {
+      isPublished: async (input) => {
+        observations += 1
+        return input.sha === SHA && input.branch === BRANCH
+      },
+      publish: async () => {
+        throw new Error('already-landed request must not publish again')
+      },
+    }
+
+    await settlePendingPublication(h.deps, SLUG)
+
+    expect(observations).toBe(1)
+    expect(
+      (await h.store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
+    ).toHaveLength(1)
+  })
+
   test('rejects a request with no open workspace before invoking publication', async () => {
     const h = await seed({ workspace: false })
     const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })

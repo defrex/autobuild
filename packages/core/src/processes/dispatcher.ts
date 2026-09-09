@@ -68,6 +68,8 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
+import { infrastructureFailureResetSeq } from './infrastructure-failure-budget'
+import { abandonedPublicationPending, publicationPending } from './publication-state'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
 
@@ -1143,14 +1145,7 @@ export class Dispatcher {
       cleanupPending: boolean
     },
   ): Promise<void> {
-    const lastReset = events.reduce(
-      (seq, event) =>
-        event.type === 'execution.ended' ||
-        (event.type === 'escalation.answered' && event.payload.resolution === 'retry')
-          ? event.seq
-          : seq,
-      0,
-    )
+    const lastReset = infrastructureFailureResetSeq(events)
     const attempt =
       events.filter((event) => event.type === 'infrastructure.failed' && event.seq > lastReset)
         .length + 1
@@ -1725,9 +1720,13 @@ export class Dispatcher {
       }
       const decision = decideNext(events, this.deps.config)
       if (state.status === 'done' || state.status === 'aborted') continue
+      const publicationRecoveryDue =
+        state.status !== 'paused' &&
+        state.status !== 'blocked' &&
+        (publicationPending(events) || abandonedPublicationPending(events))
       const open = openWorkspace(events)
       if (open !== null && this.deps.workspaces.recovery !== undefined) {
-        const parked = decision.kind === 'wait'
+        const parked = decision.kind === 'wait' && !publicationRecoveryDue
         const reason =
           state.status === 'paused'
             ? ('pause' as const)
@@ -1753,7 +1752,7 @@ export class Dispatcher {
           }
         }
       }
-      if (decision.kind === 'wait') continue
+      if (decision.kind === 'wait' && !publicationRecoveryDue) continue
       if (
         openWorkspace(events) === null &&
         this.deps.workspaces.recovery !== undefined &&

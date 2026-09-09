@@ -292,6 +292,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.buildExecution = { start: (input) => this.start(input) }
     this.recovery = { reap: (handle: WorkspaceHandle) => this.reap(handle.ref) }
     this.publication = {
+      isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
       publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),
     }
   }
@@ -620,6 +621,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         }
       },
     }
+  }
+
+  private async isPublished(input: { sha: string; branch: string }): Promise<boolean> {
+    const head = oneSha(
+      await execOrThrow(
+        this.exec,
+        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${input.branch}`],
+        this.options.repo,
+      ),
+      `published branch ${input.branch}`,
+    )
+    return head === input.sha
   }
 
   private async publish(input: { ref: string; sha: string; branch: string }): Promise<void> {

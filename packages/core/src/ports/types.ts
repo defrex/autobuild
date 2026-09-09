@@ -145,6 +145,9 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
 }
 
 export interface WorkspacePublication {
+  /** Observe whether the exact requested commit already reached the durable
+   * remote branch after an interrupted acknowledgement. */
+  isPublished?(input: { sha: string; branch: string }): Promise<boolean>
   /** Publish exactly one commit to exactly one branch; no arbitrary command
    * surface is exposed to the dispatcher or build child. */
   publish(input: { ref: string; sha: string; branch: string }): Promise<void>

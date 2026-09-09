@@ -31,20 +31,29 @@ export async function settlePendingPublication(
   if (publication === undefined) return
   let events = await deps.store.getEvents(slug)
   const request = events.findLast(
-    (event) => event.type === 'publication.requested' && !publicationRequestSettled(events, event),
+    (event) =>
+      event.type === 'publication.requested' && !publicationRequestCompleted(events, event),
   )
   if (request?.type !== 'publication.requested') return
 
-  let ref: string | undefined
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') ref = event.payload.ref
-    else if (event.type === 'workspace.released') ref = undefined
-  }
-  if (ref === undefined)
-    throw new Error(`build ${slug} has a publication request but no open workspace`)
+  const abandoned = publicationRequestSettled(events, request)
+  const alreadyPublished =
+    abandoned && publication.isPublished !== undefined
+      ? await publication.isPublished({ sha: request.payload.sha, branch: request.payload.branch })
+      : false
+  if (abandoned && !alreadyPublished) return
 
   try {
-    await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+    if (!alreadyPublished) {
+      let ref: string | undefined
+      for (const event of events) {
+        if (event.type === 'workspace.provisioned') ref = event.payload.ref
+        else if (event.type === 'workspace.released') ref = undefined
+      }
+      if (ref === undefined)
+        throw new Error(`build ${slug} has a publication request but no open workspace`)
+      await publication.publish({ ref, sha: request.payload.sha, branch: request.payload.branch })
+    }
   } catch (error) {
     if (request.payload.operation !== 'finalize-step') throw error
     const detail = error instanceof Error ? error.message : String(error)

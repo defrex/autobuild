@@ -55,6 +55,14 @@ export function publicationRequestSettled(
   )
 }
 
+export function abandonedPublicationPending(events: readonly AbEvent[]): boolean {
+  const request = events.findLast(
+    (event) =>
+      event.type === 'publication.requested' && !publicationRequestCompleted(events, event),
+  )
+  return request?.type === 'publication.requested' && publicationRequestSettled(events, request)
+}
+
 export function publicationPending(events: readonly AbEvent[]): boolean {
   return events.some(
     (request) =>

@@ -422,6 +422,25 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.deletes).toBe(1)
   })
 
+  test('observes an exact durable branch head without requiring the old sandbox', async () => {
+    const landed = harness({ publishedSha: SHA })
+    const workspace = await landed.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    await landed.provider.recovery.reap(workspace)
+    expect(
+      await landed.provider.publication.isPublished({ sha: SHA, branch: workspace.branch }),
+    ).toBe(true)
+    expect(
+      await landed.provider.publication.isPublished({
+        sha: 'b'.repeat(40),
+        branch: workspace.branch,
+      }),
+    ).toBe(false)
+  })
+
   test('publishes only the exact SHA/branch under a temporary credential transform', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
