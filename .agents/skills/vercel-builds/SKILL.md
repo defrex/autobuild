@@ -96,13 +96,49 @@ workspace providers.
 
 ## Rollout evidence
 
-Do not mark this section complete from configuration, mocks, or readiness alone. Record no secrets.
+Completed 2026-09-09 without recording secret values:
 
-- Live ticket/build/PR: **pending**
-- First Vercel execution/environment/session identity: **pending**
-- Controlled deletion and same-slug replacement identity/event references: **pending**
-- Replacement setup and applicable lint/types/unit verification: **pending**
-- Terminal dashboard report and every inspected PNG artifact kind/revision: **pending**
-- Web dashboard report and every inspected PNG artifact kind/revision: **pending**
-- `finalize.completed`, publication SHAs, and open PR head including finalize: **pending**
-- Original/replacement/completed sandbox absence plus `workspace.released` references: **pending**
+- Hosted ticket
+  [AUT-295](https://linear.app/auto-build/issue/AUT-295/prove-the-live-vercel-consumer-rollout-and-recovery)
+  drove build `vercel-recovery-probe-2` and merged
+  [PR #290](https://github.com/defrex/autobuild/pull/290). The PR records only
+  `docs/vercel-sandbox-rollout-probe.md`; its published head was
+  `cb753c53ec91517af399ab5dbe757bb7e452cbd4`, merged to `main` as `4ee6110`.
+- Store events 3/6 record the first Vercel environment
+  `autobuild-vercel-recovery-probe-2-g0-7d86cfd3f8`, execution
+  `aron-desktop-vercel-recovery-probe-2-inst_ec6a5ebd`, and session
+  `sbx_mhFLmTOwKV0ueTpg6xB39jiVa15V`. Its controlled out-of-band deletion is confirmed absent by
+  cleanup event 11 and release event 12. Events 13-16 record distinct replacement environment
+  `autobuild-vercel-recovery-probe-2-g1-9f3ac1a661`, execution
+  `aron-desktop-vercel-recovery-probe-2-inst_a42aaf87`, session
+  `sbx_DpjC7lrD4siZHk47h4A9onWQEw66`, and reclamation of the same plan session/build rather than a
+  duplicate owner.
+- Events 105-140 provide the explicit interruption exercise later in the same slug: pause event
+  116 stopped environment `g3-9a48247500`/session `sbx_EaWW1qKzcNLJ5ee81jd4QKBUSYBz`
+  (exit 143), cleanup/release events 134-135 confirmed it gone, resume event 136 provisioned
+  `g4-0d3d410af7`/session `sbx_DV6Hf60eTrtpIltYqeAIucaZGS4z`, and event 139 reclaimed the same
+  implement session. Every generation reran production provisioning/setup before execution.
+- The final replacement (`g7-73d99e606f`, execution `inst_7d9cea66`, session
+  `sbx_SNdUbhCoNLnaJtU58M6EHWGb139y`; events 233-235) passed lint, types, unit, terminal dashboard,
+  and web dashboard on first attempts (events 241, 243, 245, 258, and 282). Agent sessions used Pi
+  with the configured Vercel AI Gateway models, including implement event 196, code review event
+  237, visual verifier events 247/261, finalize event 285, and changelog event 295.
+- Terminal visual evidence is `rollout-probe:terminal-report@4`; all inspected PNGs are
+  `dashboard-frame:{headline-happy-wide,mixed-wide,mixed-narrow,unicode-transcript,resume-prompt}:png@4`
+  from the remote manual exercise (designation events 197-202). The configured verifier retained
+  its independent passing report `verify-report:dashboard@0` and the five PNGs at revision 5
+  (events 248-258).
+- Web visual evidence is `rollout-probe:web-report@4`; all 23 inspected PNGs use
+  `web-dashboard-frame:<frame>:png`, designated by events 204-226 at revisions 3/4. The configured
+  verifier independently passed and retained `verify-report:web-dashboard@0` plus all 23 PNGs at
+  revisions 4/5 (events 262-282).
+- Implement publication `cb753c5` is event 227. Finalize publication event 286 used that same head
+  because the changelog agent required no additional diff; `finalize.completed` event 291 records
+  open PR #290 at that head. Events 293-296 prove the changelog session completed in a fresh guest,
+  and build completion event 302 records the eventual merge.
+- Cleanup/release events 11-12, 61-62, 102-103, 134-135, 178-179, 189-190, 231-232, 289-290, and
+  299-300 cover every environment `g0` through `g8` (the externally deleted `g0` was already
+  absent; every other cleanup was confirmed). A post-completion Vercel API query by the exact
+  `autobuild-vercel-recovery-probe-2-` name prefix returned no sandboxes. Readiness also released
+  disposable environment `salmon-painful-spoonbill-fu5i8j` after acquisition, system/browser
+  provisioning, setup, Pi/Gateway diagnostics, and hosted Store access all passed.
