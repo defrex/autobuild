@@ -57,7 +57,7 @@ async function liveSetup(): Promise<{ repo: string; storeRef: string; token: str
       'live Vercel test fixture must declare provisioning steps named system-install and browser-smoke',
     )
   }
-  if (!/CHROMIUM_BIN/.test(smoke.command) || !/(headless|browser-smoke)/i.test(smoke.command)) {
+  if (!/CHROMIUM_BIN/.test(smoke.command) || !/scripts\/browser-smoke\.sh/.test(smoke.command)) {
     throw new Error(
       'browser-smoke provisioning must use the repository-controlled CHROMIUM_BIN and launch the checked-in headless browser smoke script',
     )
