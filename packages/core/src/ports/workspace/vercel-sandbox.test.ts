@@ -19,6 +19,7 @@ class FakeSandbox implements VercelSandboxHandle {
   readonly name = 'sandbox'
   readonly commands: Array<Record<string, unknown>> = []
   readonly policies: NetworkPolicy[] = []
+  readonly policySignals: Array<AbortSignal | undefined> = []
   writes: Array<{ path: string; content: Uint8Array }> = []
   stops = 0
   stopFailures = 0
@@ -68,8 +69,9 @@ class FakeSandbox implements VercelSandboxHandle {
   async delete() {
     this.deletes += 1
   }
-  async update(params: { networkPolicy: NetworkPolicy }) {
+  async update(params: { networkPolicy: NetworkPolicy }, opts?: { signal?: AbortSignal }) {
     this.policies.push(params.networkPolicy)
+    this.policySignals.push(opts?.signal)
     const isPublicationPolicy = JSON.stringify(params.networkPolicy).includes('git-receive-pack')
     if (this.failRestore && !isPublicationPolicy) throw new Error('restore failed')
   }
@@ -337,6 +339,8 @@ describe('VercelSandboxProvider', () => {
     expect(env.VERCEL_TOKEN).toBeUndefined()
     expect(env.UNDECLARED_SECRET).toBeUndefined()
     expect(JSON.parse(env.AB_BUILD_RUNNER_OPTIONS!).supervision).toEqual({ kind: 'environment' })
+    expect(h.sandbox.policySignals).toHaveLength(1)
+    expect(h.sandbox.policySignals[0]).toBeInstanceOf(AbortSignal)
     await h.provider.release(workspace)
     expect(h.sandbox.deletes).toBe(1)
   })
@@ -436,6 +440,8 @@ describe('VercelSandboxProvider', () => {
     expect(temporary).toContain('git-receive-pack')
     expect(temporary).toContain(Buffer.from('x-access-token:forge-secret').toString('base64'))
     expect(JSON.stringify(h.sandbox.policies[1])).not.toContain('forge-secret')
+    expect(h.sandbox.policySignals).toHaveLength(2)
+    expect(h.sandbox.policySignals.every((signal) => signal instanceof AbortSignal)).toBe(true)
   })
 
   test('restores the normal policy when push fails and rejects mismatched remote heads', async () => {

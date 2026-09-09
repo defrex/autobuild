@@ -43,7 +43,10 @@ export interface VercelSandboxHandle {
   ): Promise<void>
   stop(opts?: { signal?: AbortSignal }): Promise<unknown>
   delete(opts?: { signal?: AbortSignal }): Promise<void>
-  update(params: { networkPolicy: NetworkPolicy; signal?: AbortSignal }): Promise<unknown>
+  update(
+    params: { networkPolicy: NetworkPolicy },
+    opts?: { signal?: AbortSignal },
+  ): Promise<unknown>
 }
 
 export interface VercelSandboxFacade {
@@ -530,7 +533,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // A prior publication restore may have failed. Reassert the
     // receive-pack-free policy before any guest command can run.
     const { policy } = await this.normalNetworkPolicy(ref)
-    await sandbox.update({ networkPolicy: policy, signal: this.operationSignal() })
+    await sandbox.update({ networkPolicy: policy }, { signal: this.operationSignal() })
     if (this.uncertain.has(ref)) {
       // A prior wait/stop failure may have left agent code alive. Confirm a
       // stop before starting another runner in the same environment.
@@ -666,10 +669,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       },
     }
     try {
-      await sandbox.update({
-        networkPolicy: publicationPolicy,
-        signal: this.operationSignal(),
-      })
+      await sandbox.update({ networkPolicy: publicationPolicy }, { signal: this.operationSignal() })
       await commandOrThrow(sandbox, {
         cmd: 'git',
         args: ['push', '--no-verify', 'origin', `${input.sha}:refs/heads/${input.branch}`],
@@ -688,7 +688,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         throw new Error(`published head ${published ?? '(missing)'} did not match ${input.sha}`)
     } finally {
       try {
-        await sandbox.update({ networkPolicy: normal, signal: this.operationSignal() })
+        await sandbox.update({ networkPolicy: normal }, { signal: this.operationSignal() })
       } finally {
         await sandbox.stop({ signal: this.operationSignal() })
       }

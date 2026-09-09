@@ -2,6 +2,10 @@ import type { IdSource } from '../ids'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import type { Forge, WorkspacePublication } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
+import {
+  publicationRequestCompleted,
+  publicationRequestSettled,
+} from '../processes/publication-state'
 import type { BuildStore } from '../store/types'
 import { completeFinalizePr } from './terminals'
 
@@ -26,34 +30,8 @@ export async function settlePendingPublication(
   const publication = deps.publication
   if (publication === undefined) return
   let events = await deps.store.getEvents(slug)
-  const completed = (
-    request: Extract<(typeof events)[number], { type: 'publication.requested' }>,
-  ) =>
-    events.some((event) => {
-      if (event.seq <= request.seq) return false
-      if (request.payload.operation === 'implement')
-        return (
-          event.type === 'implement.completed' &&
-          event.payload.round === request.payload.round &&
-          event.payload.commits.base === request.payload.base &&
-          event.payload.commits.head === request.payload.sha
-        )
-      if (request.payload.operation === 'reconcile')
-        return (
-          event.type === 'reconcile.completed' && event.payload.mergeCommit === request.payload.sha
-        )
-      if (request.payload.operation === 'finalize')
-        return (
-          event.type === 'finalize.completed' && event.payload.pr.headSha === request.payload.sha
-        )
-      return (
-        event.type === 'finalize.step-completed' &&
-        event.payload.step === request.payload.step &&
-        (!event.payload.ok || event.payload.headSha === request.payload.sha)
-      )
-    })
   const request = events.findLast(
-    (event) => event.type === 'publication.requested' && !completed(event),
+    (event) => event.type === 'publication.requested' && !publicationRequestSettled(events, event),
   )
   if (request?.type !== 'publication.requested') return
 
@@ -88,7 +66,7 @@ export async function settlePendingPublication(
     return
   }
   events = await deps.store.getEvents(slug)
-  if (completed(request)) return
+  if (publicationRequestCompleted(events, request)) return
 
   if (request.payload.operation === 'implement') {
     await deps.store.append(slug, {

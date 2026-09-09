@@ -3393,6 +3393,37 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([slug])
   })
 
+  test('conflicted re-entry records replacement provisioning failures durably', async () => {
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: { reap: async () => 'absent' },
+      provision: async () => {
+        throw new Error('provider replacement limit reached')
+      },
+      release: async () => undefined,
+    }
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, { pr: PR, workspaceRef: 'sandbox-g0' })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-g0', reason: 'replacement' },
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+
+    const failures = (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'infrastructure.failed' && event.payload.operation === 'provision',
+    )
+    expect(failures.length).toBeGreaterThan(0)
+    expect(failures[0]?.payload).toMatchObject({
+      provider: 'remote-test',
+      workspaceRef: 'sandbox-g0',
+      error: 'provider replacement limit reached',
+    })
+  })
+
   test('conflict resolved upstream (mergeable true after reconcile.completed): no event', async () => {
     const h = harness()
     const slug = await seedBuild(h, { pr: PR })

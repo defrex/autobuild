@@ -938,7 +938,22 @@ export class Dispatcher {
       } satisfies EventWrite<'pr.conflicted'>)
       events.push(conflicted)
       if (openWorkspace(events) === null && this.deps.workspaces.recovery !== undefined) {
-        await this.provisionReplacement(record, events)
+        try {
+          await this.provisionReplacement(record, events)
+        } catch (error) {
+          const released = events.findLast((event) => event.type === 'workspace.released')
+          await this.recordInfrastructureFailure(record.slug, events, {
+            provider: this.deps.workspaces.name,
+            workspaceRef:
+              released?.type === 'workspace.released' && 'ref' in released.payload
+                ? released.payload.ref
+                : record.slug,
+            operation: 'provision',
+            error,
+            cleanupPending: true,
+          })
+          throw error
+        }
       }
       // The dispatcher never runs agents (§15.7): re-attach a build-runner,
       // which executes the reconcile epilogue phase.

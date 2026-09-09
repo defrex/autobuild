@@ -155,6 +155,63 @@ describe('settlePendingPublication', () => {
     ).toHaveLength(1)
   })
 
+  test('skips a request abandoned by workspace replacement and settles only its rerun', async () => {
+    const h = await seed()
+    const stale = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'lost' })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'lost-session'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: stale.kind, rev: stale.revision },
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-1', reason: 'replacement' },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-2',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'existing', sha: BASE },
+      },
+    })
+
+    await settlePendingPublication(h.deps, SLUG)
+    expect(h.published).toEqual([])
+
+    const rerun = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'rerun' })
+    const rerunSha = 'c'.repeat(40)
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'replacement-session'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: rerunSha,
+        round: 1,
+        base: BASE,
+        artifact: { kind: rerun.kind, rev: rerun.revision },
+      },
+    })
+    await settlePendingPublication(h.deps, SLUG)
+
+    expect(h.published).toEqual([{ ref: 'sandbox-2', sha: rerunSha, branch: BRANCH }])
+    expect(
+      (await h.store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
+    ).toHaveLength(1)
+  })
+
   test('rejects a request with no open workspace before invoking publication', async () => {
     const h = await seed({ workspace: false })
     const artifact = await h.store.putArtifact(SLUG, { kind: 'implement-notes', content: 'notes' })

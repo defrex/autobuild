@@ -1522,7 +1522,11 @@ renews the same-holder lease, captures the current resume boundary, and appends
 resumedFromSeq}}` before `runner.attached {resumedFromSeq}`. The reducer now
 shows no pre-boundary session as open and says implement r2
 started-not-completed, so the process re-runs the phase from its start and opens
-one fresh session. A crash while closing several sessions lands no attachment;
+one fresh session. A `publication.requested` fact issued before the old
+`workspace.released` is likewise abandoned: its commit may have existed only in
+the deleted sandbox, so neither the replacement runner nor publication
+settlement treats it as pending; the phase rerun must issue a new request. A
+crash while closing several sessions lands no attachment;
 the next recovery closes only those still open, so repeated takeover converges.
 Historical orphan-only logs remain valid and require no repair.
 
