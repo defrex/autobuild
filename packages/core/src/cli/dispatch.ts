@@ -261,8 +261,11 @@ export interface DispatchOpts {
    * builtin github forge (from the fetched config). */
   repository?: string
   /** Resolved repository identity — the normalized origin, or the checkout
-   * path when the checkout has no origin. Set by `abDispatch` from repo
-   * state; every Store-keyed key and record write uses it. */
+   * path when the checkout has no origin. Derived from repo state by
+   * `abDispatch`; an explicitly supplied value WINS, letting an embedding
+   * that already resolved the identity (and keyed its store by it) pin the
+   * dispatcher to the same key. Every Store-keyed key and record write uses
+   * it. */
   repo?: string
   /** Test seam for origin mode: the GitHub transport the startup config
    * fetch (and the default forge) use instead of real fetch. */
@@ -2886,7 +2889,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     ...opts,
     targetRepo: state.checkout,
     storeRef: state.storeRef,
-    repo: state.repo,
+    repo: opts.repo ?? state.repo,
   }
 
   // Interactive production dispatch is two programs. Resolve/open only the

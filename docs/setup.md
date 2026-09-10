@@ -124,7 +124,8 @@ exits nonzero on failure. Then:
    first groomed Ready ticket and start `ab dispatch`.
 
 Validation is explicit and noninteractive. It does not dispatch, claim a
-ticket, or create build, phase, session, event, transcript, or artifact history.For local execution it identifies and removes a disposable detached worktree.
+ticket, or create build, phase, session, event, transcript, or artifact history.
+For local execution it identifies and removes a disposable detached worktree.
 For Vercel it identifies and permanently deletes a fresh unnamed sandbox, even
 when system or runtime provisioning, setup, or a probe fails; cleanup failures
 name the environment for manual deletion. Its `system provisioning` check lists
