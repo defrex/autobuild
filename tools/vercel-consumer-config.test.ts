@@ -7,10 +7,10 @@ import { effectiveRuntimeReferences } from '../packages/core/src/config/roles'
 import { vercelSandboxConfigSchema } from '../packages/core/src/config/schema'
 
 const REPO_ROOT = join(import.meta.dir, '..')
-const OPENAI = 'vercel-ai-gateway/openai/gpt-5.6-sol'
-const KIMI = 'vercel-ai-gateway/moonshotai/kimi-k3'
+const GLM = 'vercel-ai-gateway/zai/glm-5.3-flash'
+const MUSE = 'vercel-ai-gateway/meta/muse-spark-1.3'
 const CLAUDE = 'vercel-ai-gateway/anthropic/claude-opus-5'
-const APPROVED_MODELS = [OPENAI, KIMI, CLAUDE]
+const APPROVED_MODELS = [GLM, MUSE, CLAUDE]
 
 test('repository dispatches every agent route through provisioned Pi in Vercel Sandbox', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
@@ -55,10 +55,10 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(effective[0]?.references.length).toBeGreaterThan(0)
 
   const expectedRoutes: Record<string, [string, string, string]> = {
-    default: [OPENAI, KIMI, CLAUDE],
-    implement: [OPENAI, KIMI, CLAUDE],
-    'plan-review': [KIMI, OPENAI, CLAUDE],
-    'code-review': [KIMI, OPENAI, CLAUDE],
+    default: [GLM, MUSE, CLAUDE],
+    implement: [GLM, MUSE, CLAUDE],
+    'plan-review': [MUSE, GLM, CLAUDE],
+    'code-review': [MUSE, GLM, CLAUDE],
   }
   for (const [role, expected] of Object.entries(expectedRoutes)) {
     const route = config.roles[role]
