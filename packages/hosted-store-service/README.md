@@ -114,7 +114,17 @@ The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: server-only OAuth app values.
 - `AB_WEB_AUTH_PROVIDERS=github`: enabled provider set.
 - `AB_WEB_ALLOWED_EMAILS`: comma-separated, case-insensitive operator allowlist.
-- `AB_WEB_REPOSITORIES`: comma-separated repositories visible through the web gateway.
+- `AB_WEB_REPOSITORIES`: comma-separated repositories visible through the web
+  gateway. Entries are repository identities — normalized `https://` origins
+  (e.g. `https://github.com/defrex/autobuild`); ssh-like spellings such as
+  `git@github.com:defrex/autobuild.git` are accepted and normalized. They must
+  match the Store's identity for the repository: since the checkoutless
+  dispatch change, `BuildRecord.repo` and the dispatcher's repository key are
+  the repository's normalized origin URL, not a checkout path. Records written
+  before that change are keyed by checkout path, are not migrated, and remain
+  visible only where their recorded `repoOrigin` matches the querying
+  checkout's origin (decision 2026-09-10: dropping the old identity's history
+  is acceptable).
 
 Removing an email blocks its next gateway request even if its database-backed
 session has not expired. Rotate `BETTER_AUTH_SECRET` to end every browser

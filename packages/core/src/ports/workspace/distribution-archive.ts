@@ -19,6 +19,7 @@ import {
   createGitHubFetchTransport,
   GitHubApiError,
   githubTokenFromEnv,
+  type GitHubRequest,
 } from '../forge/github-transport'
 import { packageAutobuildDistribution } from './vercel-sandbox'
 
@@ -68,12 +69,14 @@ export function distributionAssetName(version: string): string {
 export async function fetchDistributionReleaseAsset(
   version: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  transport: GitHubRequest = createGitHubFetchTransport({
+    token: githubTokenFromEnv(env),
+  }),
 ): Promise<Uint8Array> {
   const coordinates = parseRepoCoordinates(CANONICAL_REPOSITORY_URL)
   if (coordinates === null) {
     throw new Error(`the canonical repository URL is not parseable: ${CANONICAL_REPOSITORY_URL}`)
   }
-  const transport = createGitHubFetchTransport({ token: githubTokenFromEnv(env) })
   const repo = `repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.name)}`
   const tag = `v${version}`
   const release = await transport('GET', `${repo}/releases/tags/${tag}`).catch((error: unknown) => {
@@ -115,10 +118,11 @@ export async function fetchDistributionReleaseAsset(
  */
 export async function defaultDistributionArchive(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  transport?: GitHubRequest,
 ): Promise<Uint8Array> {
   if (await fileExists(join(distributionRoot(), '.git'))) {
     return packageAutobuildDistribution()
   }
   const version = await readDistributionIdentity()
-  return fetchDistributionReleaseAsset(version, env)
+  return fetchDistributionReleaseAsset(version, env, transport)
 }
