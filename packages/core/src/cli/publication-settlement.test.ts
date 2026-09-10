@@ -4,6 +4,7 @@ import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import type { EventType } from '../events/payloads'
 import { FakeForge } from '../ports/forge/fake'
 import { MemoryBuildStore } from '../store/memory'
+import { manualClock } from '../testing/fixed'
 import { settlePendingPublication, type PublicationSettlementDeps } from './publication-settlement'
 
 const SLUG = 'remote-settlement'
@@ -395,5 +396,188 @@ describe('settlePendingPublication', () => {
     await expect(settlePendingPublication(h.deps, SLUG)).rejects.toThrow(/missing PR description/)
     expect(h.published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
     expect(h.forge.opened).toEqual([])
+  })
+
+  test('drives the settlement guard across lease expiry deterministically via the injected clock', async () => {
+    const clock = manualClock()
+    const store = new FailOnceStore({ clock })
+    await store.createBuild({
+      slug: SLUG,
+      repo: '/repo',
+      branch: BRANCH,
+      ticket: { source: 'file', id: 'T-1', title: 'Remote settlement' },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'file', id: 'T-1', title: 'Remote settlement' },
+        repo: '/repo',
+        baseBranch: 'main',
+      },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-1',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'remote', sha: BASE },
+      },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-1',
+        instance: 'inst-1',
+      },
+    })
+    const artifact = await store.putArtifact(SLUG, {
+      kind: 'implement-notes',
+      content: 'notes',
+    })
+    await store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    // With the manual clock frozen, the lease expires exactly at epoch + 60s.
+    expect(await store.claimLease(SLUG, 'runner-1', 60_000)).toBe(true)
+
+    const published: Array<{ ref: string; sha: string; branch: string }> = []
+    const deps: PublicationSettlementDeps = {
+      store,
+      storeRef: 'https://store.example.test',
+      publication: {
+        publish: async (input) => {
+          published.push(input)
+        },
+      },
+      forge: new FakeForge(),
+      workspacePath: '/repo',
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      ids: (prefix) => `${prefix}_1`,
+      runId: 'run-1',
+      clock,
+    }
+
+    // Guard holds: the guest execution is open and the lease is live.
+    await settlePendingPublication(deps, SLUG)
+    expect(published).toEqual([])
+    expect(
+      (await store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
+    ).toHaveLength(0)
+
+    // Boundary: now === expiresAt means the lease is expired (strict `>`),
+    // matching the lease-sweep semantics — publication unlocks with zero
+    // real-time waits because the guard reads the injected clock.
+    clock.advance(60_000)
+    await settlePendingPublication(deps, SLUG)
+    expect(published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
+    expect(
+      (await store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
+    ).toHaveLength(1)
+  })
+
+  test('a recorded execution end unlocks publication while the injected lease is still live', async () => {
+    const clock = manualClock()
+    const store = new FailOnceStore({ clock })
+    await store.createBuild({
+      slug: SLUG,
+      repo: '/repo',
+      branch: BRANCH,
+      ticket: { source: 'file', id: 'T-1', title: 'Remote settlement' },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'file', id: 'T-1', title: 'Remote settlement' },
+        repo: '/repo',
+        baseBranch: 'main',
+      },
+    })
+    await store.append(SLUG, {
+      actor: KERNEL,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'vercel-sandbox',
+        ref: 'sandbox-1',
+        path: '/vercel/sandbox/workspace',
+        branch: BRANCH,
+        base: { source: 'remote', sha: BASE },
+      },
+    })
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-1',
+        instance: 'inst-1',
+      },
+    })
+    const artifact = await store.putArtifact(SLUG, {
+      kind: 'implement-notes',
+      content: 'notes',
+    })
+    await store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    expect(await store.claimLease(SLUG, 'runner-1', 60_000)).toBe(true)
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'inst-1',
+        workspaceRef: 'sandbox-1',
+        outcome: 'completed',
+      },
+    })
+
+    const published: Array<{ ref: string; sha: string; branch: string }> = []
+    const deps: PublicationSettlementDeps = {
+      store,
+      storeRef: 'https://store.example.test',
+      publication: {
+        publish: async (input) => {
+          published.push(input)
+        },
+      },
+      forge: new FakeForge(),
+      workspacePath: '/repo',
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      ids: (prefix) => `${prefix}_1`,
+      runId: 'run-1',
+      clock,
+    }
+
+    // No open execution even though the lease is live: publish proceeds,
+    // with the clock still frozen at its epoch (no real time has passed).
+    await settlePendingPublication(deps, SLUG)
+    expect(published).toEqual([{ ref: 'sandbox-1', sha: SHA, branch: BRANCH }])
+    expect(
+      (await store.getEvents(SLUG)).filter((event) => event.type === 'implement.completed'),
+    ).toHaveLength(1)
   })
 })
