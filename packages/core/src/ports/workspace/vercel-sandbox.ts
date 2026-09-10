@@ -1158,7 +1158,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }
     }
     try {
-      await sandbox.stop({ signal: this.operationSignal() })
+      try {
+        await sandbox.stop({ signal: this.operationSignal() })
+      } catch (error) {
+        // A persistent sandbox that was resumed once can wedge so that stop
+        // never returns while delete still succeeds within seconds. Absence
+        // is proven below either way, so a timed-out stop is not fatal.
+        if (!isInterruptedLongPoll(error)) throw error
+      }
       // Purge between stop and delete: the sandbox still exists, so the exact
       // name filter is unambiguous, and after the explicit stop no new
       // snapshot can be created.

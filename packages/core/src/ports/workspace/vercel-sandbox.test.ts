@@ -85,8 +85,13 @@ class FakeSandbox implements VercelSandboxHandle {
   async writeFiles(files: Array<{ path: string; content: Uint8Array }>) {
     this.writes.push(...files)
   }
+  stopTimeouts = 0
   async stop() {
     this.stops += 1
+    if (this.stopTimeouts > 0) {
+      this.stopTimeouts -= 1
+      throw Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' })
+    }
     if (this.stopFailures > 0) {
       this.stopFailures -= 1
       throw new Error('sandbox stop failed')
@@ -923,6 +928,18 @@ describe('VercelSandboxProvider', () => {
     expect(await execution.stop()).toEqual({ outcome: 'confirmed' })
     expect(h.sandbox.killSignals).toHaveLength(1)
     expect(h.sandbox.killSignals[0]).toBeInstanceOf(AbortSignal)
+  })
+
+  test('release deletes a sandbox whose stop times out and still proves absence', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.stopTimeouts = 1
+    await h.provider.release(workspace)
+    expect(h.sandbox.deletes).toBe(1)
   })
 
   test('re-issues an interrupted wait long-poll until the detached runner exits', async () => {
