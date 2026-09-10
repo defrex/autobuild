@@ -82,7 +82,11 @@ export function createGitHubFetchTransport(opts: {
   const token = opts.token
   const base = opts.apiBase ?? GITHUB_API_BASE
   return async (method, path, request = {}) => {
-    const url = /^https:\/\//i.test(path) ? path : `${base}/${path.replace(/^\/+/, '')}`
+    let url = /^https:\/\//i.test(path) ? path : `${base}/${path.replace(/^\/+/, '')}`
+    if (request.query !== undefined) {
+      const params = new URLSearchParams(request.query)
+      url += (url.includes('?') ? '&' : '?') + params.toString()
+    }
     const headers: Record<string, string> = {
       'X-GitHub-Api-Version': GITHUB_API_VERSION,
       Accept: 'application/vnd.github+json',
@@ -106,19 +110,24 @@ export function createGitHubFetchTransport(opts: {
       headerMap[key.toLowerCase()] = value
     })
     const contentType = headerMap['content-type'] ?? ''
-    const text = await response.text()
+    let text = ''
     let json: unknown
     let bytes: Uint8Array | undefined
     if (contentType.includes('application/json')) {
+      text = await response.text()
       try {
         json = JSON.parse(text)
       } catch {
         // A non-JSON body behind a JSON content type is ordinary garbage.
       }
-    } else if (text.length > 0) {
-      bytes = new TextEncoder().encode(text)
+    } else {
+      // Binary bodies (release assets, raw file contents) are read as bytes —
+      // never round-tripped through text, which would corrupt arbitrary data.
+      const buffer = await response.arrayBuffer()
+      if (buffer.byteLength > 0) bytes = new Uint8Array(buffer)
     }
     if (!response.ok) {
+      if (bytes !== undefined) text = new TextDecoder().decode(bytes)
       throw new GitHubApiError(
         response.status,
         githubErrorMessage(response.status, json, text),
