@@ -1,49 +1,76 @@
 import { describe, expect, test } from 'bun:test'
-import type { Exec, ExecResult, TempFileWriter } from './github'
-import { GitHubForge, rulesetsHaveMergeGate } from './github'
+import { GitHubForge, parseRepoCoordinates, rulesetsHaveMergeGate } from './github'
+import {
+  GitHubApiError,
+  type GitHubRequest,
+  type GitHubRequestOpts,
+  type GitHubResponse,
+} from './github-transport'
 
-interface ExecCall {
-  cmd: string[]
-  cwd: string
+interface ApiCall {
+  method: string
+  path: string
+  opts?: GitHubRequestOpts
 }
 
-/** Scripted exec: journals every call, replies from a queue (default ok). */
-function makeExec(responses: Partial<ExecResult>[] = []) {
-  const calls: ExecCall[] = []
+interface Scripted {
+  status?: number
+  json?: unknown
+  bytes?: Uint8Array
+}
+
+/** Scripted transport: journals every call, replies from a queue (default
+ * 200 `{}`), asserting method/path per operation. */
+function makeTransport(responses: (Scripted | GitHubResponse)[] = []) {
+  const calls: ApiCall[] = []
   const queue = [...responses]
-  const exec: Exec = async (cmd, opts) => {
-    calls.push({ cmd, cwd: opts.cwd })
+  const transport: GitHubRequest = async (method, path, opts) => {
+    calls.push({ method, path, ...(opts !== undefined ? { opts } : {}) })
     const next = queue.shift() ?? {}
-    return { stdout: '', stderr: '', exitCode: 0, ...next }
+    const status = next.status ?? 200
+    if (status >= 300) {
+      throw new GitHubApiError(
+        status,
+        (next.json as { message?: string } | undefined)?.message ?? 'GitHub API error',
+        next.json,
+      )
+    }
+    return {
+      status,
+      headers: {},
+      ...(next.json !== undefined ? { json: next.json } : {}),
+      ...(next.bytes !== undefined ? { bytes: next.bytes } : {}),
+    }
   }
-  return { exec, calls }
+  return { transport, calls }
 }
 
-/** Deterministic temp-file seam: fixed paths, journals delivered bodies. */
-function makeTempWriter() {
-  const bodies: string[] = []
-  const writer: TempFileWriter = async (content) => {
-    bodies.push(content)
-    return `/fake/tmp/body-${bodies.length}.md`
-  }
-  return { writer, bodies }
+/** A forge whose coordinates resolve from the explicit option (origin mode
+ * never touches git). */
+function makeForge(responses: (Scripted | GitHubResponse)[] = []) {
+  const { transport, calls } = makeTransport(responses)
+  const forge = new GitHubForge({ transport, repository: 'acme/app' })
+  return { forge, calls }
 }
 
-function makeForge(responses: Partial<ExecResult>[] = []) {
-  const { exec, calls } = makeExec(responses)
-  const { writer, bodies } = makeTempWriter()
-  return { forge: new GitHubForge({ exec, writeTempFile: writer }), calls, bodies }
-}
+const paths = (calls: ApiCall[]): string[] => calls.map((call) => `${call.method} ${call.path}`)
 
-const PR_VIEW_JSON = JSON.stringify({
+const PR_REF = {
   number: 123,
-  url: 'https://github.com/acme/app/pull/123',
-  headRefOid: 'abc123def',
-})
+  html_url: 'https://github.com/acme/app/pull/123',
+  head: { sha: 'abc123def' },
+}
 
 describe('GitHubForge.pushBranch', () => {
   test('publishes HEAD to an explicit destination ref with no rewrite bypass (D1)', async () => {
-    const { forge, calls } = makeForge()
+    const calls: { cmd: string[]; cwd: string }[] = []
+    const forge = new GitHubForge({
+      transport: async () => ({ status: 200, headers: {} }),
+      exec: async (cmd, opts) => {
+        calls.push({ cmd, cwd: opts.cwd })
+        return { stdout: '', stderr: '', exitCode: 0 }
+      },
+    })
     await forge.pushBranch('/ws/build-1', 'ab/fix-login')
     expect(calls).toEqual([
       {
@@ -55,23 +82,20 @@ describe('GitHubForge.pushBranch', () => {
     for (const forbidden of ['--force', '--force-with-lease', '--rebase']) {
       expect(argv).not.toContain(forbidden)
     }
-    expect(argv.at(-1)?.startsWith('+')).toBe(false)
   })
 
-  test('a non-fast-forward exit surfaces the exact command and diagnostic', async () => {
-    const { forge } = makeForge([
-      {
-        exitCode: 1,
+  test('a failed push surfaces the exact command and diagnostic', async () => {
+    const forge = new GitHubForge({
+      transport: async () => ({ status: 200, headers: {} }),
+      exec: async () => ({
+        stdout: '',
         stderr: '! [rejected] HEAD -> ab/fix-login (non-fast-forward)',
-      },
-    ])
-    const error = await forge
-      .pushBranch('/ws/build-1', 'ab/fix-login')
-      .then(() => null)
-      .catch((e: unknown) => e as Error)
-    expect(error?.message).toContain('git push -u origin HEAD:refs/heads/ab/fix-login')
-    expect(error?.message).toContain('non-fast-forward')
-    expect(error?.message).toContain('exit 1')
+        exitCode: 1,
+      }),
+    })
+    expect(
+      await forge.pushBranch('/ws/build-1', 'ab/fix-login').catch((e: unknown) => e as Error),
+    ).toMatchObject({ message: expect.stringContaining('non-fast-forward') })
   })
 })
 
@@ -84,240 +108,148 @@ describe('GitHubForge.openPr', () => {
     body: 'Line one\n\n"quoted" `backticks` $VARS\n',
   }
 
-  /** First response: the idempotency probe finds no open PR for the head. */
-  const NO_EXISTING = { stdout: '[]' }
-
-  test('probes for an existing PR, creates via --body-file, then views by head branch — exact argv', async () => {
-    const { forge, calls } = makeForge([NO_EXISTING, {}, { stdout: PR_VIEW_JSON }])
+  test('probes by head, then creates with the body inline', async () => {
+    const { forge, calls } = makeForge([{ json: [] }, { json: PR_REF }])
     await forge.openPr(opts)
-    expect(calls).toEqual([
-      {
-        cmd: [
-          'gh',
-          'pr',
-          'list',
-          '--head',
-          'ab/fix-login',
-          '--state',
-          'open',
-          '--json',
-          'number,url,headRefOid',
-        ],
-        cwd: '/ws/build-1',
+    expect(calls[0]).toEqual({
+      method: 'GET',
+      path: 'repos/acme/app/pulls?head=acme%3Aab%2Ffix-login&state=open',
+    })
+    expect(calls[1]).toEqual({
+      method: 'POST',
+      path: 'repos/acme/app/pulls',
+      opts: {
+        body: { title: 'Fix login', head: 'ab/fix-login', base: 'main', body: opts.body },
       },
-      {
-        cmd: [
-          'gh',
-          'pr',
-          'create',
-          '--head',
-          'ab/fix-login',
-          '--base',
-          'main',
-          '--title',
-          'Fix login',
-          '--body-file',
-          '/fake/tmp/body-1.md',
-        ],
-        cwd: '/ws/build-1',
-      },
-      {
-        cmd: ['gh', 'pr', 'view', 'ab/fix-login', '--json', 'number,url,headRefOid'],
-        cwd: '/ws/build-1',
-      },
-    ])
+    })
   })
 
   test('adopts an existing open PR for the head branch instead of creating (§8.7 crash path)', async () => {
-    // A prior finalize attempt opened the PR but crashed before its
-    // finalize.completed landed — the retry must adopt, not error on
-    // `gh pr create`'s "a pull request already exists".
-    const { forge, calls } = makeForge([{ stdout: `[${PR_VIEW_JSON}]` }])
+    const { forge, calls } = makeForge([{ json: [PR_REF] }])
     expect(await forge.openPr(opts)).toEqual({
       number: 123,
       url: 'https://github.com/acme/app/pull/123',
       headSha: 'abc123def',
     })
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.cmd).toEqual([
-      'gh',
-      'pr',
-      'list',
-      '--head',
-      'ab/fix-login',
-      '--state',
-      'open',
-      '--json',
-      'number,url,headRefOid',
-    ])
-  })
-
-  test('delivers the body verbatim through the temp-file seam', async () => {
-    const { forge, bodies } = makeForge([NO_EXISTING, {}, { stdout: PR_VIEW_JSON }])
-    await forge.openPr(opts)
-    expect(bodies).toEqual(['Line one\n\n"quoted" `backticks` $VARS\n'])
-  })
-
-  test('returns the PrRef parsed from gh pr view', async () => {
-    const { forge } = makeForge([NO_EXISTING, {}, { stdout: PR_VIEW_JSON }])
-    expect(await forge.openPr(opts)).toEqual({
-      number: 123,
-      url: 'https://github.com/acme/app/pull/123',
-      headSha: 'abc123def',
-    })
-  })
-
-  test('create failure propagates stderr and skips the view call', async () => {
-    const { forge, calls } = makeForge([
-      NO_EXISTING,
-      { exitCode: 1, stderr: 'a pull request already exists' },
-    ])
-    const error = await forge
-      .openPr(opts)
-      .then(() => null)
-      .catch((e: unknown) => e as Error)
-    expect(error?.message).toContain('gh pr create')
-    expect(error?.message).toContain('a pull request already exists')
-    expect(calls).toHaveLength(2)
-  })
-
-  test('malformed view JSON throws with the command in the message', async () => {
-    const { forge } = makeForge([NO_EXISTING, {}, { stdout: 'not json' }])
-    await expect(forge.openPr(opts)).rejects.toThrow(
-      'gh pr view ab/fix-login --json number,url,headRefOid',
-    )
   })
 
   test('a malformed probe result throws rather than blindly creating', async () => {
-    const { forge } = makeForge([{ stdout: 'not json' }])
-    await expect(forge.openPr(opts)).rejects.toThrow(
-      'gh pr list --head ab/fix-login --state open --json number,url,headRefOid',
-    )
+    const { forge } = makeForge([{ json: { surprise: true } }])
+    await expect(forge.openPr(opts)).rejects.toThrow('unexpected GitHub response')
+  })
+
+  test('a create failure surfaces the API message', async () => {
+    const { forge } = makeForge([
+      { json: [] },
+      { status: 422, json: { message: 'A pull request already exists' } },
+    ])
+    await expect(forge.openPr(opts)).rejects.toThrow('A pull request already exists')
   })
 })
 
 describe('GitHubForge.getPrState', () => {
   const stateJson = (
     state: string,
-    mergeable = 'UNKNOWN',
-    mergeCommit: { oid: string } | null = null,
-  ) => JSON.stringify({ state, mergeable, mergeCommit })
+    mergeable: boolean | null = null,
+    merge_commit_sha: string | null = null,
+    merged = false,
+  ) => ({ state, mergeable, merge_commit_sha, merged })
 
-  test('polls with exact argv', async () => {
-    const { forge, calls } = makeForge([{ stdout: stateJson('CLOSED') }])
+  test('polls one REST PR read', async () => {
+    const { forge, calls } = makeForge([{ json: stateJson('closed') }])
     await forge.getPrState('/ws/build-1', 42)
-    expect(calls).toEqual([
-      {
-        cmd: ['gh', 'pr', 'view', '42', '--json', 'state,mergeable,mergeCommit'],
-        cwd: '/ws/build-1',
-      },
-    ])
+    expect(calls).toEqual([{ method: 'GET', path: 'repos/acme/app/pulls/42' }])
   })
 
-  test('OPEN + MERGEABLE → open with mergeable true', async () => {
-    const { forge } = makeForge([{ stdout: stateJson('OPEN', 'MERGEABLE') }])
-    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
-      state: 'open',
-      mergeable: true,
-    })
+  test('OPEN + mergeable true/false/null map straight through', async () => {
+    for (const mergeable of [true, false, null] as const) {
+      const { forge } = makeForge([{ json: stateJson('open', mergeable) }])
+      expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
+        state: 'open',
+        mergeable,
+      })
+    }
   })
 
-  test('OPEN + CONFLICTING → open with mergeable false (janitor emits pr.conflicted, §15.7)', async () => {
-    const { forge } = makeForge([{ stdout: stateJson('OPEN', 'CONFLICTING') }])
-    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
-      state: 'open',
-      mergeable: false,
-    })
-  })
-
-  test('OPEN + UNKNOWN → open with mergeable null', async () => {
-    const { forge } = makeForge([{ stdout: stateJson('OPEN', 'UNKNOWN') }])
-    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
-      state: 'open',
-      mergeable: null,
-    })
-  })
-
-  test('MERGED → merged with the merge-commit sha', async () => {
-    const { forge } = makeForge([
-      { stdout: stateJson('MERGED', 'UNKNOWN', { oid: 'squash-sha-99' }) },
-    ])
+  test('merged → merged with the squash-commit sha', async () => {
+    const { forge } = makeForge([{ json: stateJson('closed', null, 'squash-sha-99', true) }])
     expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
       state: 'merged',
       sha: 'squash-sha-99',
     })
   })
 
-  test('MERGED without a mergeCommit throws', async () => {
-    const { forge } = makeForge([{ stdout: stateJson('MERGED') }])
-    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('merged with no mergeCommit')
+  test('merged without a merge_commit_sha throws', async () => {
+    const { forge } = makeForge([{ json: stateJson('closed', null, null, true) }])
+    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow(
+      'merged with no merge_commit_sha',
+    )
   })
 
-  test('CLOSED → closed', async () => {
-    const { forge } = makeForge([{ stdout: stateJson('CLOSED') }])
-    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
-      state: 'closed',
-    })
+  test('closed → closed', async () => {
+    const { forge } = makeForge([{ json: stateJson('closed') }])
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'closed' })
   })
 
-  test('nonzero exit throws with the command and stderr', async () => {
-    const { forge } = makeForge([{ exitCode: 1, stderr: 'no pull requests found' }])
-    const error = await forge
-      .getPrState('/ws/build-1', 42)
-      .then(() => null)
-      .catch((e: unknown) => e as Error)
-    expect(error?.message).toContain('gh pr view 42')
-    expect(error?.message).toContain('no pull requests found')
+  test('a malformed state value throws rather than misreporting', async () => {
+    const { forge } = makeForge([{ json: { state: 'DRAFT', merged: false } }])
+    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('unexpected GitHub response')
   })
 
-  test('an unexpected state value throws rather than misreporting', async () => {
-    const { forge } = makeForge([{ stdout: stateJson('DRAFT') }])
-    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('unexpected output')
+  test('a 404 surfaces the API message', async () => {
+    const { forge } = makeForge([{ status: 404, json: { message: 'Not Found' } }])
+    await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('Not Found')
   })
 })
 
 describe('GitHubForge abort cleanup', () => {
-  const stateJson = (
-    state: string,
-    mergeable = 'UNKNOWN',
-    mergeCommit: { oid: string } | null = null,
-  ) => JSON.stringify({ state, mergeable, mergeCommit })
-
   test('closes only an open PR and confirms authoritative closed state', async () => {
     const { forge, calls } = makeForge([
-      { stdout: stateJson('OPEN') },
+      { json: { state: 'open', merged: false, mergeable: null, merge_commit_sha: null } },
       {},
-      { stdout: stateJson('CLOSED') },
+      { json: { state: 'closed', merged: false, mergeable: null, merge_commit_sha: null } },
     ])
     expect(await forge.closePr('/repo', 42)).toEqual({ state: 'closed' })
-    expect(calls.map((call) => call.cmd)).toEqual([
-      ['gh', 'pr', 'view', '42', '--json', 'state,mergeable,mergeCommit'],
-      ['gh', 'pr', 'close', '42'],
-      ['gh', 'pr', 'view', '42', '--json', 'state,mergeable,mergeCommit'],
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/pulls/42',
+      'PATCH repos/acme/app/pulls/42',
+      'GET repos/acme/app/pulls/42',
     ])
   })
 
   test('preserves a merge that races a failed close', async () => {
     const { forge } = makeForge([
-      { stdout: stateJson('OPEN') },
-      { exitCode: 1, stderr: 'PR already merged' },
-      { stdout: stateJson('MERGED', 'UNKNOWN', { oid: 'landing' }) },
+      { json: { state: 'open', merged: false, mergeable: null, merge_commit_sha: null } },
+      { status: 422, json: { message: 'PR already merged' } },
+      { json: { state: 'closed', merged: true, mergeable: null, merge_commit_sha: 'landing' } },
     ])
     expect(await forge.closePr('/repo', 42)).toEqual({ state: 'merged', sha: 'landing' })
   })
 
   test('deletes an existing exact branch and treats a missing branch as clean', async () => {
-    const existing = makeForge([{}, { stdout: 'abc\trefs/heads/ab/work\n' }, {}])
+    const existing = makeForge([{}, {}])
     await existing.forge.deleteBranch('/repo', 'ab/work')
-    expect(existing.calls.map((call) => call.cmd)).toEqual([
-      ['git', 'check-ref-format', 'refs/heads/ab/work'],
-      ['git', 'ls-remote', '--exit-code', '--heads', 'origin', 'refs/heads/ab/work'],
-      ['git', 'push', 'origin', '--delete', 'ab/work'],
+    expect(paths(existing.calls)).toEqual([
+      'GET repos/acme/app/git/ref/heads/ab/work',
+      'DELETE repos/acme/app/git/refs/heads/ab/work',
     ])
 
-    const missing = makeForge([{}, { exitCode: 2 }])
+    const missing = makeForge([{ status: 404, json: { message: 'Not Found' } }])
     await missing.forge.deleteBranch('/repo', 'ab/work')
-    expect(missing.calls).toHaveLength(2)
+    expect(missing.calls).toHaveLength(1)
+
+    const probeError = makeForge([{ status: 500, json: { message: 'boom' } }])
+    await expect(probeError.forge.deleteBranch('/repo', 'ab/work')).rejects.toThrow('boom')
+    expect(probeError.calls).toHaveLength(1)
+  })
+
+  test('rejects an invalid branch name before any API call', async () => {
+    for (const invalid of ['../escape', 'a b', '-flag', 'ends.lock', 'x@{y', 'double//slash']) {
+      const { forge, calls } = makeForge()
+      await expect(forge.deleteBranch('/repo', invalid)).rejects.toThrow('rejected invalid ref')
+      expect(calls).toHaveLength(0)
+    }
   })
 })
 
@@ -370,191 +302,134 @@ describe('rulesetsHaveMergeGate', () => {
 })
 
 describe('GitHubForge.setAutoMerge', () => {
-  const view = (
-    mergeStateStatus = 'CLEAN',
-    autoMergeRequest: Record<string, unknown> | null = null,
-  ) => ({
-    stdout: JSON.stringify({
-      autoMergeRequest,
-      mergeStateStatus,
-      headRefOid: 'head-42',
-      baseRefName: 'main',
-    }),
+  const prView = (mergeableState = 'clean', autoMerge: Record<string, unknown> | null = null) => ({
+    json: {
+      auto_merge: autoMerge,
+      mergeable_state: mergeableState,
+      head: { ref: 'ab/fix-login', sha: 'head-42' },
+      base: { ref: 'main' },
+    },
   })
-  const repo = { stdout: JSON.stringify({ nameWithOwner: 'acme/app' }) }
-  const classic = (rule: Record<string, unknown> | null = null) => ({
-    stdout: JSON.stringify({
-      data: { repository: { ref: { branchProtectionRule: rule } } },
-    }),
-  })
-  const classicRule = (over: Record<string, unknown> = {}) => ({
-    requiresStatusChecks: false,
-    requiresApprovingReviews: false,
-    requiredApprovingReviewCount: 0,
-    requiresCodeOwnerReviews: false,
-    requireLastPushApproval: false,
-    requiresConversationResolution: false,
-    requiresDeployments: false,
-    requiresCommitSignatures: false,
-    ...over,
-  })
-  const noGate = [repo, classic(), { stdout: '[]' }]
   const nativeState = (enabled: boolean) => ({
-    stdout: JSON.stringify({
-      autoMergeRequest: enabled ? { mergeMethod: 'SQUASH' } : null,
-    }),
+    json: { auto_merge: enabled ? { merge_method: 'squash' } : null },
   })
-  const repositoryAutoMerge = (enabled: boolean) => ({
-    stdout: JSON.stringify({ allow_auto_merge: enabled }),
-  })
+  const branchWith = (protection: unknown) => ({ json: { protection } })
+  const fullProtection = {
+    required_status_checks: null,
+    required_pull_request_reviews: null,
+    restrictions: null,
+  }
+  const ruleset = (rules: unknown[]) => ({ json: rules })
+  const repositoryAutoMerge = (enabled: boolean) => ({ json: { allow_auto_merge: enabled } })
 
-  test('CLEAN plus a real gate uses native squash auto-merge even though requirements are satisfied', async () => {
+  test('clean plus a real gate uses native squash auto-merge', async () => {
     const { forge, calls } = makeForge([
-      view('CLEAN'),
-      repo,
-      classic(classicRule({ requiresStatusChecks: true })),
-      { stdout: '[]' },
+      prView('clean'),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+      }),
+      ruleset([]),
       repositoryAutoMerge(true),
       {},
       nativeState(true),
     ])
-    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
-      kind: 'applied',
-    })
-    expect(calls[0]).toEqual({
-      cmd: [
-        'gh',
-        'pr',
-        'view',
-        '42',
-        '--json',
-        'autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
-      ],
-      cwd: '/ws/build-1',
-    })
-    expect(calls[1]).toEqual({
-      cmd: ['gh', 'repo', 'view', '--json', 'nameWithOwner'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls[2]!.cmd.slice(0, 4)).toEqual(['gh', 'api', 'graphql', '-f'])
-    expect(calls[2]!.cmd).toContain('qualifiedRef=refs/heads/main')
-    expect(calls[3]).toEqual({
-      cmd: ['gh', 'api', 'repos/acme/app/rules/branches/main'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls.at(-3)).toEqual({
-      cmd: ['gh', 'api', 'repos/acme/app', '--jq', '{allow_auto_merge: .allow_auto_merge}'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls.at(-2)).toEqual({
-      cmd: ['gh', 'pr', 'merge', '42', '--auto', '--squash'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls.at(-1)).toEqual({
-      cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls.flatMap((call) => call.cmd)).not.toContain('--admin')
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/pulls/42',
+      'GET repos/acme/app/branches/main',
+      'GET repos/acme/app/rules/branches/main',
+      'GET repos/acme/app',
+      'PUT repos/acme/app/pulls/42/auto-merge',
+      'GET repos/acme/app/pulls/42',
+    ])
+    const put = calls[4]!
+    expect(put.opts?.body).toEqual({ merge_method: 'squash' })
   })
 
-  test('an active inherited ruleset gate also retains native ownership', async () => {
-    const rules = [
-      {
-        type: 'required_status_checks',
-        ruleset_source_type: 'Organization',
-        parameters: { required_status_checks: [{ context: 'ci' }] },
-      },
-    ]
+  test('a ruleset gate also retains native ownership', async () => {
     const { forge, calls } = makeForge([
-      view(),
-      repo,
-      classic(),
-      { stdout: JSON.stringify(rules) },
+      prView(),
+      branchWith(fullProtection),
+      ruleset([
+        {
+          type: 'required_status_checks',
+          ruleset_source_type: 'Organization',
+          parameters: { required_status_checks: [{ context: 'ci' }] },
+        },
+      ]),
       repositoryAutoMerge(true),
       {},
       nativeState(true),
     ])
-    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
-      kind: 'applied',
-    })
-    expect(calls.at(-2)!.cmd).toEqual(['gh', 'pr', 'merge', '42', '--auto', '--squash'])
-    expect(calls.at(-1)!.cmd).toEqual(['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    expect(calls.at(-2)!.method).toBe('PUT')
+    expect(calls.at(-1)!.path).toBe('repos/acme/app/pulls/42')
   })
 
-  test('CLEAN or UNSTABLE with two successful negative probes returns a guarded direct candidate', async () => {
-    for (const state of ['CLEAN', 'UNSTABLE'] as const) {
-      const { forge, calls } = makeForge([view(state), ...noGate])
+  test('clean or unstable with two successful negative probes returns a guarded direct candidate', async () => {
+    for (const state of ['clean', 'unstable'] as const) {
+      const { forge, calls } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
       expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
         kind: 'ungated',
         headSha: 'head-42',
       })
-      expect(calls.some((call) => call.cmd.includes('merge'))).toBe(false)
+      expect(calls.some((call) => call.path.includes('/merge') || call.method === 'PUT')).toBe(
+        false,
+      )
     }
   })
 
   test('ungated transient/conflict states defer, while an unexplained blocker fails closed with a reason', async () => {
-    for (const state of ['UNKNOWN', 'DIRTY'] as const) {
-      const { forge } = makeForge([view(state), ...noGate])
-      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
-        kind: 'deferred',
-      })
+    for (const state of ['unknown', 'dirty'] as const) {
+      const { forge } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
+      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
     }
-    const blocked = makeForge([view('BLOCKED'), ...noGate])
+    const blocked = makeForge([prView('blocked'), branchWith(fullProtection), ruleset([])])
     expect(await blocked.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
       kind: 'deferred',
       reason: { code: 'unproven-gate-state', detail: expect.stringContaining('BLOCKED') },
     })
   })
 
-  test('HAS_HOOKS is never treated as ungated and delegates to native auto-merge', async () => {
-    const { forge, calls } = makeForge([
-      view('HAS_HOOKS'),
-      ...noGate,
+  test('has_hooks is never treated as ungated and delegates to native auto-merge', async () => {
+    const { forge } = makeForge([
+      prView('has_hooks'),
+      branchWith(fullProtection),
+      ruleset([]),
       repositoryAutoMerge(true),
       {},
       nativeState(true),
     ])
-    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
-      kind: 'applied',
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+  })
+
+  test('an unrecognized REST mergeable_state defers instead of merging directly', async () => {
+    const { forge } = makeForge([prView('future_state'), branchWith(fullProtection), ruleset([])])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'unproven-gate-state', detail: expect.stringContaining('future_state') },
     })
-    expect(calls.at(-2)!.cmd).toEqual(['gh', 'pr', 'merge', '42', '--auto', '--squash'])
-    expect(calls.at(-1)!.cmd).toEqual(['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'])
   })
 
   test('disabling inspects only native state, so future merge-state enums cannot block cancellation', async () => {
-    const { forge, calls } = makeForge([
-      {
-        stdout: JSON.stringify({
-          autoMergeRequest: { mergeMethod: 'SQUASH' },
-        }),
-      },
-      {},
-      nativeState(false),
+    const { forge, calls } = makeForge([nativeState(true), {}, nativeState(false)])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({ kind: 'applied' })
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/pulls/42',
+      'DELETE repos/acme/app/pulls/42/auto-merge',
+      'GET repos/acme/app/pulls/42',
     ])
-    expect(await forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({
-      kind: 'applied',
-    })
-    expect(calls[0]).toEqual({
-      cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls.at(-2)).toEqual({
-      cmd: ['gh', 'pr', 'merge', '42', '--disable-auto'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls.at(-1)).toEqual({
-      cmd: ['gh', 'pr', 'view', '42', '--json', 'autoMergeRequest'],
-      cwd: '/ws/build-1',
-    })
-    expect(calls).toHaveLength(3)
   })
 
-  test('a successful command without matching native projection stays deferred', async () => {
+  test('a successful mutation without matching native projection stays deferred', async () => {
     const enable = makeForge([
-      view(),
-      repo,
-      classic(classicRule({ requiresStatusChecks: true })),
-      { stdout: '[]' },
+      prView(),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [], contexts: [] },
+      }),
+      ruleset([]),
       repositoryAutoMerge(true),
       {},
       nativeState(false),
@@ -567,38 +442,13 @@ describe('GitHubForge.setAutoMerge', () => {
 
   test('idempotent desired state only inspects the PR', async () => {
     for (const [enabled, response] of [
-      [true, view('UNKNOWN', { mergeMethod: 'SQUASH' })],
+      [true, prView('unknown', { mergeMethod: 'SQUASH' })],
       [false, nativeState(false)],
     ] as const) {
       const { forge, calls } = makeForge([response])
-      expect(await forge.setAutoMerge('/ws/build-1', 42, enabled)).toEqual({
-        kind: 'applied',
-      })
+      expect(await forge.setAutoMerge('/ws/build-1', 42, enabled)).toEqual({ kind: 'applied' })
       expect(calls).toHaveLength(1)
     }
-  })
-
-  test('a repeated enable is acknowledged without repeating the mutation', async () => {
-    const { forge, calls } = makeForge([
-      view(),
-      repo,
-      classic(classicRule({ requiresStatusChecks: true })),
-      { stdout: '[]' },
-      repositoryAutoMerge(true),
-      {},
-      nativeState(true),
-      view('UNKNOWN', { mergeMethod: 'SQUASH' }),
-    ])
-
-    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
-      kind: 'applied',
-    })
-    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
-      kind: 'applied',
-    })
-    expect(
-      calls.filter((call) => call.cmd.join(' ') === 'gh pr merge 42 --auto --squash'),
-    ).toHaveLength(1)
   })
 
   test('probe, inspection, and native mutation failures become typed fail-closed deferrals', async () => {
@@ -609,64 +459,66 @@ describe('GitHubForge.setAutoMerge', () => {
       })
     }
 
-    await expectUnproven(makeForge([{ exitCode: 1, stderr: 'not found' }]).forge, 'gh pr view')
     await expectUnproven(
-      makeForge([
-        view(),
-        repo,
-        { exitCode: 1, stderr: 'resource not accessible' },
-        { stdout: '[]' },
-      ]).forge,
-      'classic branch-protection probe failed',
+      makeForge([{ status: 500, json: { message: 'network down' } }]).forge,
+      'network down',
     )
     await expectUnproven(
       makeForge([
-        view(),
-        repo,
-        classic(classicRule({ requiresStatusChecks: true })),
-        { stdout: '[]' },
-        repositoryAutoMerge(true),
-        { exitCode: 1, stderr: 'permission denied' },
+        prView(),
+        branchWith({
+          required_status_checks: null,
+          required_pull_request_reviews: null,
+          // restrictions omitted entirely — auth-scoped response, unprovable.
+        }),
+        ruleset([]),
       ]).forge,
-      'gh pr merge 42 --auto --squash',
+      'restrictions missing',
+    )
+    await expectUnproven(
+      makeForge([
+        prView(),
+        branchWith({
+          ...fullProtection,
+          required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+        }),
+        ruleset([]),
+        repositoryAutoMerge(true),
+        { status: 403, json: { message: 'permission denied' } },
+      ]).forge,
+      'permission denied',
     )
   })
 
   test('the exact plan-limitation response plus classic absence proves the branch ungated', async () => {
     const planLimitation = {
-      stdout: JSON.stringify({
+      status: 403,
+      json: {
         message: 'Upgrade to GitHub Pro or make this repository public to enable this feature.',
         documentation_url: 'https://docs.github.com/rest/repos/rules#get-rules-for-a-branch',
-        status: '403',
-      }),
-      stderr:
-        'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)',
-      exitCode: 1,
+      },
     }
-    const direct = makeForge([view(), repo, classic(), planLimitation])
+    const direct = makeForge([prView(), branchWith(fullProtection), planLimitation])
     expect(await direct.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
       kind: 'ungated',
       headSha: 'head-42',
     })
 
-    const unprovedClassic = makeForge([view(), repo, { stdout: '{}' }, planLimitation])
+    const unprovedClassic = makeForge([
+      prView(),
+      branchWith({ required_status_checks: null }),
+      planLimitation,
+    ])
     expect(await unprovedClassic.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
       kind: 'deferred',
       reason: { code: 'github-plan-limitation' },
     })
 
     for (const nearMiss of [
-      { ...planLimitation, stderr: 'gh: forbidden (HTTP 403)' },
-      {
-        ...planLimitation,
-        stdout: JSON.stringify({
-          message: 'Resource not accessible by integration',
-          documentation_url: 'https://docs.github.com/rest/repos/rules#get-rules-for-a-branch',
-          status: '403',
-        }),
-      },
+      { ...planLimitation, json: { message: 'Resource not accessible by integration' } },
+      { status: 500, json: { message: 'Server Error' } },
     ]) {
-      const generic = makeForge([view(), repo, classic(), nearMiss])
+      const generic = makeForge([prView(), branchWith(fullProtection), nearMiss])
       expect(await generic.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
         kind: 'deferred',
         reason: { code: 'unproven-gate-state' },
@@ -676,10 +528,12 @@ describe('GitHubForge.setAutoMerge', () => {
 
   test('repository-level auto-merge disablement is classified before mutation', async () => {
     const { forge, calls } = makeForge([
-      view(),
-      repo,
-      classic(classicRule({ requiresStatusChecks: true })),
-      { stdout: '[]' },
+      prView(),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [], contexts: [] },
+      }),
+      ruleset([]),
       repositoryAutoMerge(false),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
@@ -689,44 +543,22 @@ describe('GitHubForge.setAutoMerge', () => {
         detail: 'GitHub reports allow_auto_merge=false; the PR was left open for a human',
       },
     })
-    expect(calls.some((call) => call.cmd.includes('--auto'))).toBe(false)
+    expect(calls.some((call) => call.path.endsWith('/auto-merge'))).toBe(false)
 
     const malformed = makeForge([
-      view(),
-      repo,
-      classic(classicRule({ requiresStatusChecks: true })),
-      { stdout: '[]' },
-      { stdout: JSON.stringify({ allow_auto_merge: 'yes' }) },
+      prView(),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [], contexts: [] },
+      }),
+      ruleset([]),
+      { json: { allow_auto_merge: 'yes' } },
     ])
     expect(await malformed.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
       kind: 'deferred',
       reason: { code: 'unproven-gate-state', detail: expect.stringContaining('allow_auto_merge') },
     })
-    expect(malformed.calls.some((call) => call.cmd.includes('--auto'))).toBe(false)
-  })
-
-  test('unknown/malformed gate data and future PR states become fail-closed deferrals', async () => {
-    for (const responses of [
-      [
-        view(),
-        repo,
-        classic(),
-        { stdout: JSON.stringify([{ type: 'future_required_ai_review' }]) },
-      ],
-      [
-        view(),
-        repo,
-        classic(),
-        { stdout: JSON.stringify([{ type: 'pull_request', parameters: {} }]) },
-      ],
-      [{ stdout: '{}' }],
-      [view('FUTURE_STATE')],
-    ]) {
-      expect(await makeForge(responses).forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
-        kind: 'deferred',
-        reason: { code: 'unproven-gate-state' },
-      })
-    }
+    expect(malformed.calls.some((call) => call.path.endsWith('/auto-merge'))).toBe(false)
   })
 })
 
@@ -736,44 +568,144 @@ describe('GitHubForge.squashMerge', () => {
     await forge.squashMerge('/ws/build-1', 42, 'head-42')
     expect(calls).toEqual([
       {
-        cmd: ['gh', 'pr', 'merge', '42', '--squash', '--match-head-commit', 'head-42'],
-        cwd: '/ws/build-1',
+        method: 'PUT',
+        path: 'repos/acme/app/pulls/42/merge',
+        opts: { body: { merge_method: 'squash', sha: 'head-42' } },
       },
     ])
-    const argv = calls[0]!.cmd
-    for (const forbidden of ['--admin', '--force', '--rebase', '--auto']) {
-      expect(argv).not.toContain(forbidden)
-    }
   })
 
-  test('command failures remain visible', async () => {
-    const { forge } = makeForge([{ exitCode: 1, stderr: 'head sha mismatch' }])
+  test('a moved head (409) remains a hard error', async () => {
+    const { forge } = makeForge([
+      { status: 409, json: { message: 'Pull Request is not mergeable' } },
+    ])
     await expect(forge.squashMerge('/ws/build-1', 42, 'stale-head')).rejects.toThrow(
-      'head sha mismatch',
+      'Pull Request is not mergeable',
     )
   })
 })
 
 describe('GitHubForge.commentOnPr', () => {
-  test('comments via --body-file with exact argv and delivers the body', async () => {
-    const { forge, calls, bodies } = makeForge()
+  test('posts the body inline to the issue-comments endpoint', async () => {
+    const { forge, calls } = makeForge()
     await forge.commentOnPr('/ws/build-1', 42, '## Summary\n\nverdicts…\n')
     expect(calls).toEqual([
       {
-        cmd: ['gh', 'pr', 'comment', '42', '--body-file', '/fake/tmp/body-1.md'],
-        cwd: '/ws/build-1',
+        method: 'POST',
+        path: 'repos/acme/app/issues/42/comments',
+        opts: { body: { body: '## Summary\n\nverdicts…\n' } },
       },
     ])
-    expect(bodies).toEqual(['## Summary\n\nverdicts…\n'])
   })
 
-  test('nonzero exit throws with the command and stderr', async () => {
-    const { forge } = makeForge([{ exitCode: 1, stderr: 'not found' }])
+  test('nonzero status throws with the API message', async () => {
+    const { forge } = makeForge([{ status: 404, json: { message: 'Not Found' } }])
+    await expect(forge.commentOnPr('/ws/build-1', 42, 'body')).rejects.toThrow('Not Found')
+  })
+})
+
+describe('GitHubForge optional capabilities', () => {
+  test('remoteBranchSha reads the branch endpoint', async () => {
+    const { forge, calls } = makeForge([
+      { json: { commit: { sha: 'basesha1' }, protection: null } },
+    ])
+    expect(await forge.remoteBranchSha('main')).toBe('basesha1')
+    expect(calls).toEqual([{ method: 'GET', path: 'repos/acme/app/branches/main' }])
+  })
+
+  test('remoteBranchSha throws a typed 404 when the branch is absent', async () => {
+    const { forge } = makeForge([{ status: 404, json: { message: 'Branch not found' } }])
     const error = await forge
-      .commentOnPr('/ws/build-1', 42, 'body')
+      .remoteBranchSha('ab/missing')
       .then(() => null)
-      .catch((e: unknown) => e as Error)
-    expect(error?.message).toContain('gh pr comment 42')
-    expect(error?.message).toContain('not found')
+      .catch((e: unknown) => e as GitHubApiError)
+    expect(error).toBeInstanceOf(GitHubApiError)
+    expect(error?.status).toBe(404)
+  })
+
+  test('readFile fetches raw bytes, optionally at a ref', async () => {
+    const { forge, calls } = makeForge([
+      { bytes: new TextEncoder().encode('baseBranch = "main"\n') },
+      { bytes: new TextEncoder().encode('baseBranch = "dev"\n') },
+    ])
+    expect(await forge.readFile('autobuild.toml')).toBe('baseBranch = "main"\n')
+    expect(await forge.readFile('autobuild.toml', 'dev')).toBe('baseBranch = "dev"\n')
+    expect(calls[0]).toEqual({
+      method: 'GET',
+      path: 'repos/acme/app/contents/autobuild.toml',
+      opts: { headers: { Accept: 'application/vnd.github.raw' } },
+    })
+    expect(calls[1]?.opts).toEqual({
+      headers: { Accept: 'application/vnd.github.raw' },
+      query: { ref: 'dev' },
+    })
+  })
+
+  test('readFile throws when the path is absent', async () => {
+    const { forge } = makeForge([{ status: 404, json: { message: 'Not Found' } }])
+    await expect(forge.readFile('autobuild.toml')).rejects.toThrow('Not Found')
+  })
+})
+
+describe('GitHubForge repository coordinates', () => {
+  test('parses owner/name from slugs and every remote URL spelling', () => {
+    expect(parseRepoCoordinates('acme/app')).toEqual({ owner: 'acme', name: 'app' })
+    expect(parseRepoCoordinates('https://github.com/acme/app')).toEqual({
+      owner: 'acme',
+      name: 'app',
+    })
+    expect(parseRepoCoordinates('https://github.com/acme/app.git')).toEqual({
+      owner: 'acme',
+      name: 'app',
+    })
+    expect(parseRepoCoordinates('git@github.com:acme/app.git')).toEqual({
+      owner: 'acme',
+      name: 'app',
+    })
+    expect(parseRepoCoordinates('ssh://git@github.com/acme/app')).toEqual({
+      owner: 'acme',
+      name: 'app',
+    })
+    expect(parseRepoCoordinates('not a repository')).toBeNull()
+  })
+
+  test('without coordinates the first API call fails with an actionable error', async () => {
+    const { transport } = makeTransport()
+    const forge = new GitHubForge({ transport })
+    await expect(forge.getPrState('/ws', 42)).rejects.toThrow(
+      'could not resolve the repository owner/name',
+    )
+  })
+
+  test('AB_REPOSITORY supplies coordinates when no explicit option is given', async () => {
+    const { transport, calls } = makeTransport([{ json: [PR_REF] }])
+    const forge = new GitHubForge({ transport, env: { AB_REPOSITORY: 'other/app' } })
+    await forge.openPr({
+      workspacePath: '/ws',
+      head: 'ab/x',
+      base: 'main',
+      title: 't',
+      body: 'b',
+    })
+    expect(calls[0]?.path).toContain('repos/other/app/')
+  })
+
+  test('checkout mode resolves coordinates from the origin remote', async () => {
+    const gitCalls: string[][] = []
+    const { transport, calls } = makeTransport([
+      { json: { state: 'closed', merged: false, mergeable: null, merge_commit_sha: null } },
+    ])
+    const forge = new GitHubForge({
+      transport,
+      repoRoot: '/repo',
+      exec: async (cmd, opts) => {
+        gitCalls.push([...cmd])
+        expect(opts.cwd).toBe('/repo')
+        return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+      },
+    })
+    await forge.getPrState('/ws', 42)
+    expect(gitCalls).toEqual([['git', 'remote', 'get-url', 'origin']])
+    expect(calls[0]?.path).toBe('repos/acme/app/pulls/42')
   })
 })

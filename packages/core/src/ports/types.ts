@@ -308,6 +308,15 @@ export interface Forge {
   squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void>
   /** Post the build's summary comment (§7.5). */
   commentOnPr(workspacePath: string, number: number, body: string): Promise<void>
+  /** Optional checkout-less capability: the current tip of a remote branch.
+   * Throws when the branch does not exist (including 404); callers decide
+   * whether absence is an error or an `undefined`. Its absence retains the
+   * legacy host `git ls-remote` base resolution. */
+  remoteBranchSha?(branch: string): Promise<string>
+  /** Optional checkout-less capability: raw file bytes from the repository.
+   * Ref omitted → the repository's default branch. Throws when the path does
+   * not exist. Its absence retains reading configuration from a checkout. */
+  readFile?(path: string, ref?: string): Promise<string>
 }
 
 // ── AgentRunner (SPEC §9) ────────────────────────────────────────────────────

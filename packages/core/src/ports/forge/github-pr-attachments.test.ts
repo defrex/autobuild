@@ -1,29 +1,43 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, test } from 'bun:test'
 import type { PrAttachmentUploadRequest } from '../types'
-import {
-  GitHubPrAttachmentHosting,
-  githubPrAttachmentAssetName,
-  type PrAttachmentExec,
-  type PrAttachmentExecResult,
-  type PrAttachmentTempFileWriter,
-} from './github-pr-attachments'
+import { GitHubPrAttachmentHosting, githubPrAttachmentAssetName } from './github-pr-attachments'
+import { GitHubApiError, type GitHubRequest, type GitHubRequestOpts } from './github-transport'
 
-interface Call {
-  cmd: string[]
-  cwd: string
-  signal?: AbortSignal
+interface ApiCall {
+  method: string
+  path: string
+  opts?: GitHubRequestOpts
 }
 
-function scripted(responses: Partial<PrAttachmentExecResult>[]) {
-  const calls: Call[] = []
+interface Scripted {
+  status?: number
+  json?: unknown
+  bytes?: Uint8Array
+}
+
+function makeTransport(responses: Scripted[] = []) {
+  const calls: ApiCall[] = []
   const queue = [...responses]
-  const exec: PrAttachmentExec = async (cmd, opts) => {
-    calls.push({ cmd, cwd: opts.cwd, signal: opts.signal })
+  const transport: GitHubRequest = async (method, path, opts) => {
+    calls.push({ method, path, ...(opts !== undefined ? { opts } : {}) })
     const next = queue.shift() ?? {}
-    return { stdout: '', stderr: '', exitCode: 0, ...next }
+    const status = next.status ?? 200
+    if (status >= 300) {
+      throw new GitHubApiError(
+        status,
+        (next.json as { message?: string } | undefined)?.message ?? 'GitHub API error',
+        next.json,
+      )
+    }
+    return {
+      status,
+      headers: {},
+      ...(next.json !== undefined ? { json: next.json } : {}),
+      ...(next.bytes !== undefined ? { bytes: next.bytes } : {}),
+    }
   }
-  return { exec, calls }
+  return { transport, calls }
 }
 
 const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3])
@@ -47,20 +61,20 @@ const request: PrAttachmentUploadRequest = {
 const filename = githubPrAttachmentAssetName(request)
 const downloadUrl = `https://github.com/acme/review-assets/releases/download/review/${filename}`
 
-const PUBLIC = { stdout: JSON.stringify({ private: false }) }
+const PUBLIC = { json: { private: false } }
 const RELEASE = {
-  stdout: JSON.stringify({
+  json: {
     id: 42,
     draft: false,
     published_at: '2026-01-01T00:00:00Z',
     immutable: false,
     upload_url:
       'https://uploads.github.com/repos/acme/review-assets/releases/42/assets{?name,label}',
-  }),
+  },
 }
 
-function asset(overrides: Record<string, unknown> = {}): string {
-  return JSON.stringify({
+function asset(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
     id: 77,
     name: filename,
     state: 'uploaded',
@@ -69,32 +83,13 @@ function asset(overrides: Record<string, unknown> = {}): string {
     digest: `sha256:${sha256}`,
     browser_download_url: downloadUrl,
     ...overrides,
-  })
-}
-
-function tempWriter() {
-  const writes: Uint8Array[] = []
-  let cleanups = 0
-  const writer: PrAttachmentTempFileWriter = async (content) => {
-    writes.push(content.slice())
-    return {
-      path: '/tmp/frame.png',
-      cleanup: async () => {
-        cleanups += 1
-      },
-    }
   }
-  return { writer, writes, cleanups: () => cleanups }
 }
 
 describe('GitHubPrAttachmentHosting.upload', () => {
-  test('validates the public release, pages assets, uploads exact PNG bytes, and returns a durable handle', async () => {
-    const { exec, calls } = scripted([PUBLIC, RELEASE, { stdout: '[[]]' }, { stdout: asset() }])
-    const temp = tempWriter()
-    const hosting = new GitHubPrAttachmentHosting({
-      exec,
-      writeTempFile: temp.writer,
-    })
+  test('validates the public release, lists assets, uploads exact PNG bytes, and returns a durable handle', async () => {
+    const { transport, calls } = makeTransport([PUBLIC, RELEASE, { json: [] }, { json: asset() }])
+    const hosting = new GitHubPrAttachmentHosting({ transport })
 
     expect(await hosting.upload(request)).toEqual({
       provider: 'github-release',
@@ -103,83 +98,54 @@ describe('GitHubPrAttachmentHosting.upload', () => {
       assetId: 77,
       url: downloadUrl,
     })
-    expect(temp.writes).toEqual([bytes])
-    expect(temp.cleanups()).toBe(1)
-    expect(calls.map((call) => call.cmd)).toEqual([
-      ['gh', 'api', 'repos/acme/review-assets'],
-      ['gh', 'api', 'repos/acme/review-assets/releases/42'],
-      [
-        'gh',
-        'api',
-        '--paginate',
-        '--slurp',
-        'repos/acme/review-assets/releases/42/assets?per_page=100',
-      ],
-      [
-        'gh',
-        'api',
-        '--method',
-        'POST',
-        `https://uploads.github.com/repos/acme/review-assets/releases/42/assets?name=${filename}`,
-        '--header',
-        'Content-Type: image/png',
-        '--input',
-        '/tmp/frame.png',
-      ],
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'GET repos/acme/review-assets',
+      'GET repos/acme/review-assets/releases/42',
+      'GET repos/acme/review-assets/releases/42/assets?per_page=100&page=1',
+      `POST https://uploads.github.com/repos/acme/review-assets/releases/42/assets?name=${filename}`,
     ])
-    expect(calls.every((call) => call.cwd === '/ws/build')).toBe(true)
+    expect(calls[3]?.opts?.raw).toEqual(bytes)
+    expect(calls[3]?.opts?.headers).toEqual({ 'Content-Type': 'image/png' })
   })
 
-  test('adopts a compatible asset found on a later paginated page', async () => {
-    const { exec, calls } = scripted([
-      PUBLIC,
-      RELEASE,
-      {
-        stdout: JSON.stringify([[], [JSON.parse(asset())]]),
-      },
-    ])
-    const temp = tempWriter()
-    const hosting = new GitHubPrAttachmentHosting({
-      exec,
-      writeTempFile: temp.writer,
-    })
-
+  test('adopts a compatible asset found in the listing instead of uploading', async () => {
+    const { transport, calls } = makeTransport([PUBLIC, RELEASE, { json: [asset()] }])
+    const hosting = new GitHubPrAttachmentHosting({ transport })
     expect((await hosting.upload(request)).assetId).toBe(77)
     expect(calls).toHaveLength(3)
-    expect(temp.writes).toEqual([])
   })
 
   test('rejects private, unpublished, and immutable targets before upload', async () => {
-    const cases: Partial<PrAttachmentExecResult>[][] = [
-      [{ stdout: JSON.stringify({ private: true }) }],
+    const cases: Scripted[][] = [
+      [{ json: { private: true } }],
       [
         PUBLIC,
         {
-          stdout: JSON.stringify({
+          json: {
             id: 42,
             draft: true,
             published_at: null,
             immutable: false,
             upload_url: 'https://uploads.github.com/release{?name}',
-          }),
+          },
         },
       ],
       [
         PUBLIC,
         {
-          stdout: JSON.stringify({
+          json: {
             id: 42,
             draft: false,
             published_at: '2026-01-01',
             immutable: true,
             upload_url: 'https://uploads.github.com/release{?name}',
-          }),
+          },
         },
       ],
     ]
     for (const responses of cases) {
-      const { exec } = scripted(responses)
-      const hosting = new GitHubPrAttachmentHosting({ exec })
+      const { transport } = makeTransport(responses)
+      const hosting = new GitHubPrAttachmentHosting({ transport })
       await expect(hosting.upload(request)).rejects.toThrow(/private|not published|immutable/)
     }
   })
@@ -191,108 +157,78 @@ describe('GitHubPrAttachmentHosting.upload', () => {
       { digest: `sha256:${'0'.repeat(64)}` },
       { state: 'mystery' },
     ]) {
-      const { exec, calls } = scripted([
-        PUBLIC,
-        RELEASE,
-        { stdout: JSON.stringify([[JSON.parse(asset(mismatch))]]) },
-      ])
-      const hosting = new GitHubPrAttachmentHosting({ exec })
+      const { transport, calls } = makeTransport([PUBLIC, RELEASE, { json: [asset(mismatch)] }])
+      const hosting = new GitHubPrAttachmentHosting({ transport })
       await expect(hosting.upload(request)).rejects.toThrow(/content type|size|digest|state/)
       expect(calls).toHaveLength(3)
     }
   })
 
   test('deletes a starter remnant before retrying the binary upload', async () => {
-    const { exec, calls } = scripted([
+    const { transport, calls } = makeTransport([
       PUBLIC,
       RELEASE,
-      { stdout: JSON.stringify([[JSON.parse(asset({ state: 'starter' }))]]) },
+      { json: [asset({ state: 'starter' })] },
       {},
-      { stdout: asset({ id: 88 }) },
+      { json: asset({ id: 88 }) },
     ])
-    const temp = tempWriter()
-    const hosting = new GitHubPrAttachmentHosting({
-      exec,
-      writeTempFile: temp.writer,
-    })
+    const hosting = new GitHubPrAttachmentHosting({ transport })
     expect((await hosting.upload(request)).assetId).toBe(88)
-    expect(calls[3]!.cmd).toEqual([
-      'gh',
-      'api',
-      '--method',
-      'DELETE',
-      'repos/acme/review-assets/releases/assets/77',
-    ])
-    expect(calls[4]!.cmd).toContain('POST')
+    expect(calls[3]?.method).toBe('DELETE')
+    expect(calls[3]?.path).toBe('repos/acme/review-assets/releases/assets/77')
+    expect(calls[4]?.method).toBe('POST')
   })
 
   test('reconciles an ambiguous upload error by adopting the committed asset', async () => {
-    const { exec, calls } = scripted([
+    const { transport, calls } = makeTransport([
       PUBLIC,
       RELEASE,
-      { stdout: '[[]]' },
-      { exitCode: 1, stderr: 'connection closed after request body' },
-      { stdout: JSON.stringify([[JSON.parse(asset())]]) },
+      { json: [] },
+      { status: 500, json: { message: 'connection closed after request body' } },
+      { json: [asset()] },
     ])
-    const temp = tempWriter()
-    const hosting = new GitHubPrAttachmentHosting({
-      exec,
-      writeTempFile: temp.writer,
-    })
+    const hosting = new GitHubPrAttachmentHosting({ transport })
 
     expect((await hosting.upload(request)).assetId).toBe(77)
     expect(calls).toHaveLength(5)
-    expect(temp.cleanups()).toBe(1)
   })
 
   test('removes a starter created by a failed upload before reporting fallback', async () => {
-    const { exec, calls } = scripted([
+    const { transport, calls } = makeTransport([
       PUBLIC,
       RELEASE,
-      { stdout: '[[]]' },
-      { exitCode: 1, stderr: 'upload interrupted' },
-      { stdout: JSON.stringify([[JSON.parse(asset({ state: 'starter' }))]]) },
+      { json: [] },
+      { status: 500, json: { message: 'upload interrupted' } },
+      { json: [asset({ state: 'starter' })] },
       {},
     ])
-    const temp = tempWriter()
-    const hosting = new GitHubPrAttachmentHosting({
-      exec,
-      writeTempFile: temp.writer,
-    })
+    const hosting = new GitHubPrAttachmentHosting({ transport })
 
     await expect(hosting.upload(request)).rejects.toThrow('upload interrupted')
-    expect(calls.at(-1)!.cmd).toEqual([
-      'gh',
-      'api',
-      '--method',
-      'DELETE',
-      'repos/acme/review-assets/releases/assets/77',
-    ])
-    expect(temp.cleanups()).toBe(1)
+    expect(calls.at(-1)?.method).toBe('DELETE')
+    expect(calls.at(-1)?.path).toBe('repos/acme/review-assets/releases/assets/77')
   })
 
   test('checks the supplied blob hash before any GitHub call', async () => {
-    const { exec, calls } = scripted([])
-    const hosting = new GitHubPrAttachmentHosting({ exec })
+    const { transport, calls } = makeTransport([])
+    const hosting = new GitHubPrAttachmentHosting({ transport })
     await expect(hosting.upload({ ...request, sha256: '0'.repeat(64) })).rejects.toThrow(
       /bytes hash to/,
     )
     expect(calls).toEqual([])
   })
 
-  test('an internal deadline aborts a hung gh child', async () => {
+  test('applies the request deadline to every call', async () => {
     let aborted = false
-    const exec: PrAttachmentExec = (_cmd, opts) =>
-      new Promise((_resolve) => {
-        opts.signal?.addEventListener('abort', () => {
+    const transport: GitHubRequest = (_method, _path, opts) =>
+      new Promise((_resolve, reject) => {
+        opts?.signal?.addEventListener('abort', () => {
           aborted = true
+          reject(new Error('aborted'))
         })
       })
-    const hosting = new GitHubPrAttachmentHosting({
-      exec,
-      commandTimeoutMs: 1,
-    })
-    await expect(hosting.upload(request)).rejects.toThrow(/timed out/)
+    const hosting = new GitHubPrAttachmentHosting({ transport, requestTimeoutMs: 1 })
+    await expect(hosting.upload(request)).rejects.toThrow()
     expect(aborted).toBe(true)
   })
 
@@ -307,12 +243,12 @@ describe('GitHubPrAttachmentHosting.upload', () => {
     }
     const webpName = githubPrAttachmentAssetName(webpRequest)
     const webpUrl = `https://example.invalid/${webpName}`
-    const { exec, calls } = scripted([
+    const { transport, calls } = makeTransport([
       PUBLIC,
       RELEASE,
-      { stdout: '[[]]' },
+      { json: [] },
       {
-        stdout: JSON.stringify({
+        json: {
           id: 88,
           name: webpName,
           state: 'uploaded',
@@ -320,16 +256,16 @@ describe('GitHubPrAttachmentHosting.upload', () => {
           size: bytes.byteLength,
           digest: `sha256:${sha256}`,
           browser_download_url: webpUrl,
-        }),
+        },
       },
     ])
 
-    expect(await new GitHubPrAttachmentHosting({ exec }).upload(webpRequest)).toMatchObject({
+    expect(await new GitHubPrAttachmentHosting({ transport }).upload(webpRequest)).toMatchObject({
       assetId: 88,
       url: webpUrl,
     })
     expect(webpName).toMatch(/^autobuild-attachment-[0-9a-f]{64}\.webp$/)
-    expect(calls.at(-1)?.cmd).toContain('Content-Type: image/webp')
+    expect(calls.at(-1)?.opts?.headers).toEqual({ 'Content-Type': 'image/webp' })
     expect(
       githubPrAttachmentAssetName({
         ...webpRequest,
@@ -342,9 +278,9 @@ describe('GitHubPrAttachmentHosting.upload', () => {
   })
 
   test('rejects non-image requests at the host boundary before any GitHub call', async () => {
-    const { exec, calls } = scripted([])
+    const { transport, calls } = makeTransport([])
     await expect(
-      new GitHubPrAttachmentHosting({ exec }).upload({
+      new GitHubPrAttachmentHosting({ transport }).upload({
         ...request,
         attachment: {
           artifact: { kind: 'trace', rev: 0 },
@@ -369,22 +305,18 @@ describe('GitHubPrAttachmentHosting.reclaim', () => {
     },
   }
 
-  test('deletes by durable repository/asset id from the supplied cwd', async () => {
-    const { exec, calls } = scripted([{}])
-    const hosting = new GitHubPrAttachmentHosting({ exec })
+  test('deletes by durable repository/asset id', async () => {
+    const { transport, calls } = makeTransport([{}])
+    const hosting = new GitHubPrAttachmentHosting({ transport })
     await hosting.reclaim(reclaim)
-    expect(calls).toEqual([
-      {
-        cmd: ['gh', 'api', '--method', 'DELETE', 'repos/acme/review-assets/releases/assets/77'],
-        cwd: '/repos/main',
-        signal: expect.any(AbortSignal),
-      },
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'DELETE repos/acme/review-assets/releases/assets/77',
     ])
   })
 
-  test('treats an HTTP 404 as successful idempotent cleanup', async () => {
-    const { exec } = scripted([{ exitCode: 1, stderr: 'gh: Not Found (HTTP 404)' }])
-    const hosting = new GitHubPrAttachmentHosting({ exec })
+  test('treats a 404 as successful idempotent cleanup', async () => {
+    const { transport } = makeTransport([{ status: 404, json: { message: 'Not Found' } }])
+    const hosting = new GitHubPrAttachmentHosting({ transport })
     await expect(hosting.reclaim(reclaim)).resolves.toBeUndefined()
   })
 })
