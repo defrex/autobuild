@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { Sandbox, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
+import { Sandbox, Snapshot, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
 import { displayName, tomlKey, type RuntimeReferenceGroup } from '../../config/roles'
 import {
   type VercelProvisioningStep,
@@ -10,7 +10,12 @@ import {
   vercelSandboxConfigSchema,
 } from '../../config/schema'
 import { distributionRoot } from '../../distribution'
-import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
+import type {
+  WorkspaceHandle,
+  WorkspaceProvider,
+  WorkspaceProvisionResult,
+  WorkspaceReapOutcome,
+} from '../types'
 import type {
   BuildExecution,
   BuildExecutionExit,
@@ -115,6 +120,40 @@ export type VercelSandboxCreateInput = {
   failoverRegions?: string[]
   networkPolicy: NetworkPolicy
   signal?: AbortSignal
+  /** Retention bound for this environment's automatic snapshots. Snapshots
+   * are created whenever a session stops, and `Sandbox.delete()` never removes
+   * them; the bound keeps a live environment at exactly what resuming it
+   * needs. Release purges even this snapshot. */
+  keepLastSnapshots: { count: number; deleteEvicted: boolean }
+}
+
+/** Snapshots retained for a live environment: exactly the one resuming it
+ * needs. Each session stop supersedes the previous snapshot, so stops along
+ * the build never accumulate one snapshot per stop. */
+export const VERCEL_KEEP_LAST_SNAPSHOTS = 1
+
+/** The snapshot rows that hold billed storage. `deleted`/`failed` rows hold
+ * none and are never purge targets. */
+const LIVE_SNAPSHOT_STATUS = 'created'
+
+/** Bounded list→delete→re-list repetitions that absorb the provider's
+ * snapshot materialization lag between a session stop and its snapshot
+ * becoming listed. */
+const SNAPSHOT_PURGE_PASSES = 3
+
+export interface VercelSnapshotInfo {
+  id: string
+  sourceSessionId: string
+  status: 'created' | 'deleted' | 'failed'
+  sizeBytes?: number
+}
+
+/** Result of purging one environment's snapshots by exact name. `unknown`
+ * never silently claims confirmation. */
+export interface VercelSnapshotPurge {
+  outcome: 'confirmed' | 'unknown'
+  deleted: number
+  error?: string
 }
 
 export interface VercelSandboxFacade {
@@ -125,6 +164,10 @@ export interface VercelSandboxFacade {
   createFresh?(
     input: Omit<VercelSandboxCreateInput, 'name' | 'persistent'>,
   ): Promise<VercelSandboxHandle>
+  /** Snapshots listed under the exact sandbox name — the deterministic
+   * per-environment purge key. */
+  listSnapshots(name: string, signal?: AbortSignal): Promise<VercelSnapshotInfo[]>
+  deleteSnapshot(snapshotId: string, signal?: AbortSignal): Promise<void>
 }
 
 function sdkCredentials(env: Record<string, string | undefined>): Record<string, string> {
@@ -184,6 +227,26 @@ export function createVercelSdkFacade(
         ...credentials,
       })
     },
+    async listSnapshots(name, signal) {
+      const page = await Snapshot.list({
+        name,
+        limit: 100,
+        ...(signal === undefined ? {} : { signal }),
+        ...credentials,
+      })
+      return (await page.toArray()).map((snapshot) => ({
+        id: snapshot.id,
+        sourceSessionId: snapshot.sourceSessionId,
+        status: snapshot.status,
+        ...(typeof snapshot.sizeBytes === 'number' && Number.isFinite(snapshot.sizeBytes)
+          ? { sizeBytes: snapshot.sizeBytes }
+          : {}),
+      }))
+    },
+    async deleteSnapshot(snapshotId, signal) {
+      const snapshot = await Snapshot.get({ snapshotId, ...credentials })
+      await snapshot.delete(signal === undefined ? {} : { signal })
+    },
   }
 }
 
@@ -196,6 +259,52 @@ export function requireVercelEnvironmentValue(
     throw new Error(`vercel-sandbox requires environment variable ${name}`)
   }
   return value
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Delete every `created` snapshot listed under the exact sandbox name, then
+ * re-list to prove absence, repeating a bounded number of times to absorb the
+ * provider's snapshot materialization lag. Any SDK failure — or a name that
+ * still lists live snapshots after the bounded passes — is reported as
+ * `unknown` so callers can retry rather than silently claim a purge.
+ */
+export async function purgeEnvironmentSnapshots(
+  facade: VercelSandboxFacade,
+  name: string,
+  signal?: AbortSignal,
+): Promise<VercelSnapshotPurge> {
+  let deleted = 0
+  for (let pass = 0; ; pass += 1) {
+    let listed: VercelSnapshotInfo[]
+    try {
+      listed = await facade.listSnapshots(name, signal)
+    } catch (error) {
+      return { outcome: 'unknown', deleted, error: describeError(error) }
+    }
+    const live = listed.filter((snapshot) => snapshot.status === LIVE_SNAPSHOT_STATUS)
+    if (live.length === 0) return { outcome: 'confirmed', deleted }
+    if (pass >= SNAPSHOT_PURGE_PASSES) {
+      return {
+        outcome: 'unknown',
+        deleted,
+        error:
+          `${live.length} snapshot(s) still listed under ${JSON.stringify(name)} ` +
+          `after ${SNAPSHOT_PURGE_PASSES} purge passes`,
+      }
+    }
+    for (const snapshot of live) {
+      try {
+        await facade.deleteSnapshot(snapshot.id, signal)
+        deleted += 1
+      } catch (error) {
+        return { outcome: 'unknown', deleted, error: describeError(error) }
+      }
+    }
+  }
 }
 
 export function validateVercelGithubOrigin(raw: string): {
@@ -522,6 +631,9 @@ export interface VercelReadinessResult {
   origin: string
   provisioning: string[]
   output: string
+  /** Automatic snapshots deleted while releasing the disposable environment;
+   * zero proves the readiness check left no snapshot storage behind. */
+  snapshotsDeleted: number
 }
 
 async function readableCommand(
@@ -608,6 +720,7 @@ export async function validateVercelSandbox(
     ...(config.region !== undefined ? { region: config.region } : {}),
     ...(config.failoverRegions.length > 0 ? { failoverRegions: config.failoverRegions } : {}),
     networkPolicy: 'allow-all',
+    keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
   const name = sandbox.name
@@ -707,16 +820,58 @@ export async function validateVercelSandbox(
         ]),
       }),
     )
-    readiness = { sandbox: name, revision, origin: origin.url, provisioning, output: setup }
+    readiness = {
+      sandbox: name,
+      revision,
+      origin: origin.url,
+      provisioning,
+      output: setup,
+      snapshotsDeleted: 0,
+    }
   } catch (error) {
     failure = error
   }
+  // Release with zero snapshot storage left behind. Stop first: it ends the
+  // session deterministically, so no new snapshot can appear after the purge.
+  // Deleting a running sandbox instead stops its session and thereby creates
+  // exactly the orphan this sequence exists to prevent. A purge failure is a
+  // release failure and surfaces the same manual-remediation guidance.
+  const releaseErrors: unknown[] = []
+  let snapshotsDeleted = 0
   try {
-    await sandbox.delete()
-  } catch (deleteError) {
-    const guidance = `disposable sandbox ${name} could not be deleted; delete it manually in the Vercel dashboard or with: vercel sandbox rm ${name}`
-    if (failure !== undefined) throw new AggregateError([failure, deleteError], guidance)
-    throw new Error(guidance, { cause: deleteError })
+    await sandbox.stop()
+  } catch (stopError) {
+    releaseErrors.push(stopError)
+  }
+  for (const pass of ['pre-delete', 'post-delete'] as const) {
+    const purged = await purgeEnvironmentSnapshots(facade, name)
+    if (purged.outcome === 'unknown') {
+      releaseErrors.push(
+        new Error(
+          `disposable sandbox ${name} ${pass} snapshot purge did not confirm: ${purged.error ?? 'unknown outcome'}`,
+        ),
+      )
+    }
+    snapshotsDeleted += purged.deleted
+    if (pass === 'pre-delete') {
+      try {
+        await sandbox.delete()
+      } catch (deleteError) {
+        releaseErrors.push(deleteError)
+      }
+    }
+  }
+  if (releaseErrors.length > 0) {
+    const guidance =
+      `disposable sandbox ${name} could not be fully released; ` +
+      `delete it manually in the Vercel dashboard or with: vercel sandbox rm ${name}, ` +
+      'and delete any snapshots remaining under its name (they keep incurring storage ' +
+      'until deleted or expired)'
+    if (failure !== undefined) throw new AggregateError([failure, ...releaseErrors], guidance)
+    if (releaseErrors.length === 1) {
+      throw new Error(guidance, { cause: releaseErrors[0] })
+    }
+    throw new AggregateError(releaseErrors, guidance)
   }
   if (failure !== undefined) {
     throw new Error(
@@ -724,7 +879,7 @@ export async function validateVercelSandbox(
       { cause: failure },
     )
   }
-  return readiness!
+  return { ...readiness!, snapshotsDeleted }
 }
 
 export type RuntimeReferencesSource =
@@ -876,6 +1031,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           ? { failoverRegions: this.options.config.failoverRegions }
           : {}),
         networkPolicy: uploadPackPolicy(origin, readAuth),
+        keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
         signal: this.operationSignal(),
       })
       try {
@@ -975,29 +1131,67 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     return AbortSignal.timeout(this.options.config.operationTimeoutMs ?? 30_000)
   }
 
-  /** Stop/delete and then prove absence by exact deterministic name. */
-  private async reap(ref: string): Promise<'confirmed' | 'absent'> {
+  /** Stop/delete and then prove absence by exact deterministic name — for the
+   * sandbox and, because deleting a sandbox never removes the automatic
+   * snapshots its sessions created, for its snapshot storage too. */
+  private async reap(ref: string): Promise<WorkspaceReapOutcome> {
     let sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
     if (sandbox === null) {
-      this.forget(ref)
-      return 'absent'
+      // An environment can vanish without its snapshots; the purge still
+      // applies and only a confirmed empty list may forget the reference.
+      try {
+        const snapshots = await this.purgeOrRetryable(ref)
+        this.forget(ref)
+        return { outcome: 'absent', snapshots }
+      } catch (error) {
+        throw this.retryableCleanup(ref, error)
+      }
     }
     try {
       await sandbox.stop({ signal: this.operationSignal() })
+      // Purge between stop and delete: the sandbox still exists, so the exact
+      // name filter is unambiguous, and after the explicit stop no new
+      // snapshot can be created.
+      const purged = await this.purgeOrRetryable(ref)
       await sandbox.delete({ signal: this.operationSignal() })
       sandbox = await this.facade.get(ref, this.operationSignal())
       if (sandbox !== null)
         throw new Error(`sandbox ${ref} still exists after delete acknowledgement`)
+      // The post-delete pass catches anything the delete itself created;
+      // after the stop above it is normally empty.
+      const postDelete = await this.purgeOrRetryable(ref)
       this.forget(ref)
-      return 'confirmed'
+      return {
+        outcome: 'confirmed',
+        snapshots: {
+          outcome: 'confirmed',
+          deleted: purged.deleted + postDelete.deleted,
+        },
+      }
     } catch (error) {
       this.uncertain.add(ref)
       this.sessions.delete(ref)
+      throw this.retryableCleanup(ref, error)
+    }
+  }
+
+  /** Purge one environment's snapshots, converting an unknown outcome into
+   * the retryable cleanup failure the dispatcher already retries. */
+  private async purgeOrRetryable(ref: string): Promise<VercelSnapshotPurge> {
+    const purged = await purgeEnvironmentSnapshots(this.facade, ref, this.operationSignal())
+    if (purged.outcome === 'unknown') {
       throw new Error(
-        `sandbox ${ref} cleanup outcome is unknown and remains retryable: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
+        `snapshot purge for ${JSON.stringify(ref)} is unconfirmed: ${purged.error ?? 'unknown outcome'}`,
       )
     }
+    return purged
+  }
+
+  private retryableCleanup(ref: string, error: unknown): Error {
+    return new Error(
+      `sandbox ${ref} cleanup outcome is unknown and remains retryable: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    )
   }
 
   private forget(ref: string): void {

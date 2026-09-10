@@ -34,6 +34,9 @@ export interface InitValidationReport {
   revision?: string
   checks: ReadinessCheck[]
   exitCode: number
+  /** Vercel only: automatic snapshots deleted while releasing the disposable
+   * environment; zero proves no snapshot storage was left behind. */
+  snapshotsDeleted?: number
 }
 
 export interface GuestProbeReport {
@@ -521,6 +524,7 @@ export async function validateInitReadiness(opts: {
       context: 'Vercel Sandbox',
       workspace: remote.sandbox,
       revision: remote.revision,
+      snapshotsDeleted: remote.snapshotsDeleted,
       checks: [
         {
           name: 'repository acquisition',
@@ -565,7 +569,9 @@ export async function validateInitReadiness(opts: {
     )
   }
   if (report.workspace !== undefined)
-    stdout(`Disposable environment: ${report.workspace} (released)`)
+    stdout(
+      `Disposable environment: ${report.workspace} (released${report.snapshotsDeleted === undefined ? '' : `; ${report.snapshotsDeleted} snapshot(s) deleted`})`,
+    )
   for (const check of report.checks) {
     const label = check.status === 'pass' ? 'PASS' : check.status === 'absent' ? 'ABSENT' : 'FAIL'
     stdout(`  ${label} ${check.name}: ${redact(check.detail)}`)

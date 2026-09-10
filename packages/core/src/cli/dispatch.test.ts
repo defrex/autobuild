@@ -1782,7 +1782,12 @@ describe('abDispatch watch build-runner coordination', () => {
     const baseWire = fx.wire()
     const remote: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       // The fake records its own name; this fixture stands in as the remote
       // provider, so the recorded fact must name it.
       provision: async (opts) => ({
@@ -1868,7 +1873,7 @@ describe('abDispatch watch build-runner coordination', () => {
       recovery: {
         async reap(handle) {
           starts.push(`reap:${handle.provider}:${handle.ref}`)
-          return 'confirmed'
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
         },
       },
       async provision() {
@@ -1976,7 +1981,12 @@ describe('abDispatch watch build-runner coordination', () => {
     let generation = 0
     const remote: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       async provision(opts) {
         generation += 1
         return {
@@ -2162,7 +2172,12 @@ describe('abDispatch watch build-runner coordination', () => {
           publishCalls += 1
         },
       },
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       provision: async (opts) => ({
         provider: 'remote-test',
         ref: 'sandbox-g1',

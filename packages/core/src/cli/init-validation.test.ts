@@ -11,6 +11,7 @@ import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import {
   validateVercelSandbox,
   type VercelSandboxFacade,
+  type VercelSnapshotInfo,
   type VercelSandboxHandle,
 } from '../ports/workspace/vercel-sandbox'
 import { openLocalStore } from '../store/local/store'
@@ -355,6 +356,8 @@ readyState = "ready"
       reached.sandbox += 1
       throw new Error('Vercel validation must not run')
     },
+    listSnapshots: async () => [],
+    deleteSnapshot: async () => {},
   }
   const packageArchive = async () => {
     reached.packageArchive += 1
@@ -561,6 +564,8 @@ readyState = "ready"
       env?: Record<string, string>
     }> = []
     let deletes = 0
+    const snapshots: VercelSnapshotInfo[] = []
+    const deletedSnapshotIds: string[] = []
     const sandbox: VercelSandboxHandle = {
       name: 'fresh-random-sandbox',
       runCommand: async (params) => {
@@ -584,7 +589,14 @@ readyState = "ready"
         }
       },
       writeFiles: async () => {},
-      stop: async () => {},
+      stop: async () => {
+        // A session stop materializes an automatic snapshot.
+        snapshots.push({
+          id: `snap-${snapshots.length + 1}`,
+          sourceSessionId: 'session-1',
+          status: 'created',
+        })
+      },
       delete: async () => {
         deletes += 1
       },
@@ -599,6 +611,12 @@ readyState = "ready"
       createFresh: async (input) => {
         freshInput = input
         return sandbox
+      },
+      listSnapshots: async () => [...snapshots],
+      deleteSnapshot: async (id) => {
+        deletedSnapshotIds.push(id)
+        const index = snapshots.findIndex((snapshot) => snapshot.id === id)
+        if (index !== -1) snapshots.splice(index, 1)
       },
     }
     const sha = 'a'.repeat(40)
@@ -661,7 +679,13 @@ readyState = "ready"
     expect(freshInput).toMatchObject({
       image: 'vercel/sandbox/universal:latest',
       resources: { vcpus: 2 },
+      keepLastSnapshots: { count: 1, deleteEvicted: true },
     })
+    // Release stopped first (one deterministic snapshot), purged it, deleted,
+    // and the post-delete pass confirmed nothing else remained.
+    expect(result.snapshotsDeleted).toBe(1)
+    expect(deletedSnapshotIds).toHaveLength(1)
+    expect(snapshots).toEqual([])
     expect(
       commands
         .filter((command) => command.cmd === 'sh')
@@ -703,6 +727,8 @@ readyState = "ready"
             creates += 1
             throw new Error('must not allocate')
           },
+          listSnapshots: async () => [],
+          deleteSnapshot: async () => {},
         },
       }),
     ).rejects.toThrow(/universal managed image/)
@@ -734,6 +760,8 @@ readyState = "ready"
         expect(input.signal).toBe(controller.signal)
         return sandbox
       },
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
     }
     const exec: Exec = async (command) => ({
       stdout: command.includes('get-url')
@@ -782,6 +810,8 @@ readyState = "ready"
       get: async () => null,
       create: async () => sandbox,
       createFresh: async () => sandbox,
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
     }
     const exec: Exec = async (command) => ({
       stdout: command.includes('get-url')
@@ -815,6 +845,65 @@ readyState = "ready"
     expect((failure as Error).message).toContain('leaked-sandbox')
     expect((failure as AggregateError).errors.map(String).join(' ')).toContain('exited 9')
     expect((failure as AggregateError).errors.map(String).join(' ')).toContain('delete denied')
+  })
+
+  test('surfaces snapshot purge failure as manual release remediation', async () => {
+    const sandbox: VercelSandboxHandle = {
+      name: 'snapshot-leak-sandbox',
+      runCommand: async () => ({ exitCode: 0, stdout: async () => '', stderr: async () => '' }),
+      writeFiles: async () => {},
+      stop: async () => {},
+      delete: async () => {},
+      update: async () => {},
+    }
+    const stuck: VercelSnapshotInfo = {
+      id: 'snap-stuck',
+      sourceSessionId: 'session-1',
+      status: 'created',
+    }
+    const facade: VercelSandboxFacade = {
+      get: async () => null,
+      create: async () => sandbox,
+      createFresh: async () => sandbox,
+      listSnapshots: async () => [{ ...stuck }],
+      deleteSnapshot: async () => {
+        throw new Error('snapshot delete denied')
+      },
+    }
+    const exec: Exec = async (command) => ({
+      stdout: command.includes('get-url')
+        ? 'https://github.com/acme/repo.git\n'
+        : `${'d'.repeat(40)}\trefs/heads/main\n`,
+      stderr: '',
+      exitCode: 0,
+    })
+
+    let failure: unknown
+    try {
+      await validateVercelSandbox({
+        config: {
+          image: 'vercel/sandbox/universal:latest',
+          vcpus: 1,
+          timeoutSeconds: 60,
+          failoverRegions: [],
+          environmentVariables: [],
+        },
+        env: {},
+        storeRef: 'https://store.example',
+        storeToken: 'token',
+        repo: '/repo',
+        baseBranch: 'main',
+        facade,
+        exec,
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(AggregateError)
+    const aggregate = failure as AggregateError
+    expect(aggregate.message).toContain('snapshot-leak-sandbox')
+    expect(aggregate.message).toContain('snapshots remaining under its name')
+    expect(aggregate.errors.map(String).join(' ')).toContain('snapshot delete denied')
   })
 
   test('rejects a non-GitHub forge with publication remediation before remote validation', async () => {
@@ -939,6 +1028,8 @@ readyState = "ready"
       get: async () => (available ? sandbox : null),
       create: async () => sandbox,
       createFresh: async () => sandbox,
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
     }
     const sha = 'e'.repeat(40)
     const exec: Exec = async (command) => {
@@ -1025,6 +1116,8 @@ readyState = "ready"
       get: async () => null,
       create: async () => sandbox,
       createFresh: async () => sandbox,
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
     }
     const sha = 'd'.repeat(40)
     const exec: Exec = async (command) => {

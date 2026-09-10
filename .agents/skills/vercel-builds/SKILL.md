@@ -79,6 +79,42 @@ replacement, and completed environment identities are absent and retain the matc
 `workspace.released` events. If an exact-name sandbox survives, stop intake and escalate for
 provider cleanup rather than claiming completion.
 
+## Snapshot cleanup
+
+Snapshots are created automatically whenever a session stops, and deleting a sandbox does not
+delete them: they keep incurring storage until deleted or expired. Autobuild bounds and purges
+them itself:
+
+- Every environment is created with `keepLastSnapshots: { count: 1, deleteEvicted: true }`, so a
+  live environment holds at most the one snapshot resuming it needs — stops never accumulate one
+  snapshot per stop.
+- Releasing an environment stops it, purges every snapshot listed under its exact name, deletes
+  it, and re-purges; the durable `infrastructure.cleanup-attempted` event then carries
+  `snapshots: { outcome: "confirmed", deleted: N }`. That fact proves absence from the Store
+  without querying Vercel. `outcome: "unknown"` with `cleanupPending: true` means the purge is
+  retrying; a build is never failed or wedged by a snapshot cleanup problem.
+- `ab init --validate` reports the readiness sandbox's purge count on its
+  `Disposable environment: … (released; N snapshot(s) deleted)` line.
+
+To audit or remediate leftovers for an exact environment identity (name and generation digest,
+from `workspace.provisioned` events):
+
+```sh
+curl -H "Authorization: Bearer $VERCEL_TOKEN" \
+  "https://api.vercel.com/v2/sandboxes/snapshots?project=$VERCEL_PROJECT_ID&name=<environment>&teamId=$VERCEL_TEAM_ID"
+```
+
+Only entries with `status: "created"` hold storage; `deleted` and `failed` rows hold none. Remove
+one with:
+
+```sh
+curl -X DELETE "https://api.vercel.com/v2/sandboxes/snapshots/<snapshotId>?teamId=$VERCEL_TEAM_ID"
+```
+
+Once the sandbox itself is deleted its name may no longer filter the listing. Then match each
+snapshot's `sourceSessionId` against the session ids in `execution.started` events
+(`ab build status <slug> --events 200 --json`) to attribute storage to a build before deleting it.
+
 ## Return future builds to local execution
 
 1. Stop ticket intake and stop the dispatcher. Let active remote builds settle, or explicitly
