@@ -113,6 +113,13 @@ function harness(
     /** Present the harness fake under another provider name, for facts that
      * name a specific provider (the dispatcher routes by that name). */
     workspaceName?: string
+    /** Physical checkout path, distinct from the store identity — the seam
+     * the identity-split tests use (deps.repo as origin URL, checkout as
+     * the local path). */
+    checkout?: string
+    /** Store identity override — an origin URL for the identity-split
+     * tests; defaults to the origin-less path fixture. */
+    repo?: string
   } = {},
 ) {
   const clock = manualClock()
@@ -131,8 +138,10 @@ function harness(
     })
   const launches: string[] = []
   const execCalls: string[][] = []
+  const execCwds: (string | undefined)[] = []
   const exec: Exec = async (cmd, execOpts) => {
     execCalls.push(cmd)
+    execCwds.push(execOpts.cwd)
     return (
       opts.exec?.(cmd, execOpts) ?? {
         stdout: `${BASE_SHA}\trefs/heads/main\n`,
@@ -156,7 +165,8 @@ function harness(
     forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
-    repo: REPO,
+    repo: opts.repo ?? REPO,
+    ...(opts.checkout !== undefined ? { checkout: opts.checkout } : {}),
     exec,
     launchRunner: async (slug) => {
       await opts.onLaunch?.(slug, store)
@@ -170,7 +180,7 @@ function harness(
     clock,
     ...(opts.opts ? { opts: opts.opts } : {}),
   })
-  return { clock, store, tickets, workspaces, forge, launches, execCalls, dispatcher }
+  return { clock, store, tickets, workspaces, forge, launches, execCalls, execCwds, dispatcher }
 }
 
 type Harness = ReturnType<typeof harness>
@@ -718,6 +728,29 @@ describe('Dispatcher dispatch', () => {
     await h.dispatcher.tick()
     const builds = await h.store.listBuilds()
     expect(builds.map((build) => build.repoOrigin)).toEqual([undefined])
+  })
+
+  test('the origin probe runs in the physical checkout, not the origin-URL identity', async () => {
+    const remoteCwds: (string | undefined)[] = []
+    const h = harness({
+      tickets: [readyTicket('T-1')],
+      // deps.repo is the store identity (an origin URL); deps.checkout is the
+      // physical path. `git remote get-url origin` with cwd = the URL would
+      // silently lose the origin (f_8061f912).
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+      exec: async (cmd, execOpts) => {
+        if (cmd[1] === 'remote') {
+          remoteCwds.push(execOpts.cwd)
+          return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+        }
+        return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
+      },
+    })
+    await h.dispatcher.tick()
+    expect(remoteCwds).toEqual(['/repos/checkout'])
+    const builds = await h.store.listBuilds()
+    expect(builds[0]?.repoOrigin).toBe('https://github.com/acme/app')
   })
 
   test('uses the top-level baseBranch for the durable fact and workspace', async () => {
@@ -3517,6 +3550,26 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([slug])
   })
 
+  test('legacy baseSha ls-remotes the physical checkout, not the origin-URL identity', async () => {
+    // A forge without `remoteBranchSha` falls back to git — against the
+    // checkout path, never the store identity (f_8061f912).
+    const h = harness({
+      tickets: [readyTicket('T-1', { labels: [] })],
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+    })
+    await seedBuild(h, {
+      ticketId: 'T-1',
+      pr: PR,
+      repo: 'https://github.com/acme/app',
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+
+    const report = await h.dispatcher.tick()
+    expect(report).toEqual({ ...emptyTickReport(), conflicted: 1 })
+    expect(h.execCalls).toEqual([['git', 'ls-remote', '/repos/checkout', 'refs/heads/main']])
+  })
+
   test('conflicted re-entry records replacement provisioning failures durably', async () => {
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
@@ -3744,6 +3797,22 @@ describe('Dispatcher janitor', () => {
 
     expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
     expect(await h.store.getEvents(slug)).toHaveLength(events.length)
+  })
+
+  test('abort local-branch cleanup runs git in the physical checkout, not the origin-URL identity', async () => {
+    // The saga's git steps cwd into the checkout — with cwd = the store
+    // identity (an origin URL) check-ref-format/update-ref fail and strand
+    // the abort (f_8061f912).
+    const h = harness({
+      tickets: [readyTicket('T-1', { labels: [] })],
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+    })
+    const slug = await seedBuild(h, { ticketId: 'T-1', repo: 'https://github.com/acme/app' })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    await h.dispatcher.tick()
+    expect(h.execCwds.slice(-2)).toEqual(['/repos/checkout', '/repos/checkout'])
   })
 
   test('queued abort is dispatcher-acknowledged before the complete cleanup saga', async () => {

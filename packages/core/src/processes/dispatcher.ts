@@ -593,7 +593,11 @@ export class Dispatcher {
       this.repoOrigin ??= Promise.resolve(this.deps.repoOrigin)
       return this.repoOrigin
     }
-    this.repoOrigin ??= resolveRepoOrigin(this.deps.repo, this.deps.exec)
+    // Probe the physical checkout, not the store identity: since the identity
+    // change `deps.repo` is the normalized origin (or a path only for
+    // origin-less fixtures), and `git remote get-url` in a URL cwd silently
+    // loses the origin. Origin mode returns above and never execs.
+    this.repoOrigin ??= resolveRepoOrigin(this.deps.checkout ?? this.deps.repo, this.deps.exec)
     return this.repoOrigin
   }
   private readonly leaseTtlMs: number
@@ -1228,12 +1232,16 @@ export class Dispatcher {
     if (branch !== undefined && !has('abort.local-branch-deleted') && hadLocalWorkspace) {
       const ref = `refs/heads/${branch}`
       try {
+        // Local-branch cleanup runs in the physical checkout — the store
+        // identity is an origin URL (or a path only for origin-less fixtures),
+        // and git with cwd = a URL fails the whole saga.
+        const cwd = this.deps.checkout ?? this.deps.repo
         const valid = await this.deps.exec(['git', 'check-ref-format', ref], {
-          cwd: this.deps.repo,
+          cwd,
         })
         if (valid.exitCode !== 0) throw new Error(`invalid exact build ref ${ref}`)
         const deleted = await this.deps.exec(['git', 'update-ref', '-d', ref], {
-          cwd: this.deps.repo,
+          cwd,
         })
         if (deleted.exitCode !== 0) {
           throw new Error(
@@ -1737,14 +1745,23 @@ export class Dispatcher {
 
   /** Current tip of the base branch. A forge with the checkout-less
    * `remoteBranchSha` capability answers from the GitHub API (origin mode);
-   * otherwise `git ls-remote <repo> refs/heads/<b>` against the dispatcher's
-   * local repo path (§15.7: no network). */
+   * otherwise `git ls-remote <path> refs/heads/<b>` against the dispatcher's
+   * physical checkout (§15.7: no network). The checkout, not the store
+   * identity — `deps.repo` is the normalized origin since the identity
+   * change, and ls-remote against it would hit the network from a URL.
+   * Origin-less fixtures whose identity is a path keep working through the
+   * fallback. */
   private async baseSha(baseBranch: string): Promise<string> {
     const remoteBranchSha = this.deps.forge.remoteBranchSha
     if (remoteBranchSha !== undefined) {
       return await remoteBranchSha.call(this.deps.forge, baseBranch)
     }
-    const args = ['git', 'ls-remote', this.deps.repo, `refs/heads/${baseBranch}`]
+    const args = [
+      'git',
+      'ls-remote',
+      this.deps.checkout ?? this.deps.repo,
+      `refs/heads/${baseBranch}`,
+    ]
     const result = await this.deps.exec(args, {})
     const sha = result.stdout.trim().split(/\s+/)[0]
     if (result.exitCode !== 0 || !sha) {
