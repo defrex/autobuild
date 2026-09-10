@@ -1259,6 +1259,59 @@ describe('HarvestRunner', () => {
     expect(await store.getRepoEvents('/repo')).toEqual([])
   })
 
+  test('a loop-held lease is adopted: harvest heartbeats the holder and never claims or releases', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-adopt-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    expect(await store.claimRepoLease('/repo', 'dispatch-run-1', 3_600_000)).toBe(true)
+    const originalHeartbeat = store.heartbeatRepo.bind(store)
+    const beats: string[] = []
+    store.heartbeatRepo = async (repo, holder, ...rest) => {
+      beats.push(holder)
+      return originalHeartbeat(repo, holder, ...rest)
+    }
+    let claims = 0
+    const originalClaim = store.claimRepoLease.bind(store)
+    store.claimRepoLease = async (...args) => {
+      claims += 1
+      return originalClaim(...args)
+    }
+    await seedObservation(store, 'adopted', 'the owning loop launched this harvest')
+
+    const scripted = new ScriptedAgentRunner({
+      script: () => defaultTurnResult('done'),
+    })
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'harvest-child',
+      opts: { heartbeatMs: 100_000 },
+      // The owning DispatchLoop holds the repository lease for its lifetime;
+      // the HarvestRunner must adopt it, never contend for it.
+      leaseHolder: 'dispatch-run-1',
+    }).run()
+
+    // The harvest ran to its agent boundary despite the held lease: it
+    // adopted the holder instead of contending (a contender returns 'held'
+    // without launching anything).
+    expect(result.outcome).not.toBe('held')
+    // No claim contended for the holder's lease.
+    expect(claims).toBe(0)
+    // Every beat named the holder, not the harvest's own instance.
+    expect(beats).not.toContain('harvest-child')
+    expect(beats.length).toBeGreaterThan(0)
+    // The holder's lease survives the harvest: held by dispatch-run-1.
+    expect((await store.getRepo('/repo'))?.lease?.holder).toBe('dispatch-run-1')
+  })
+
   test('a rejected heartbeat is contained and a later false beat stops at the next durable boundary', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-heartbeat-loss-'))
     roots.push(workspace)

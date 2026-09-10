@@ -247,4 +247,26 @@ describe('reduceDispatchStatus', () => {
     expect(status.queued).toBe(0)
     expect(status.availableUpgrade).toBe('0.5.0')
   })
+
+  test('a superseded stop is a clean stop that names the takeover', () => {
+    const started = event(1, 'dispatcher.run-started', {
+      run: 'run-a',
+      pid: 100,
+      effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+      roleWarnings: [],
+    })
+    // The payload must validate against the strict run-stopped schema: a
+    // supersession is recorded as a normal exit plus a reason, never as a new
+    // outcome value.
+    const stopped = event(2, 'dispatcher.run-stopped', {
+      run: 'run-a',
+      outcome: 'normal',
+      exitCode: 0,
+      reason: 'superseded',
+    })
+    const status = reduceDispatchStatus([started, stopped], 'run-a')
+    expect(status.health).toBe('stopped')
+    expect(status.notice).toBe('dispatcher superseded by another invocation')
+    expect(status.warningNotice).toBeUndefined()
+  })
 })
