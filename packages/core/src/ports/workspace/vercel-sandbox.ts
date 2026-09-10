@@ -10,6 +10,7 @@ import {
   vercelSandboxConfigSchema,
 } from '../../config/schema'
 import { distributionRoot } from '../../distribution'
+import { defaultDistributionArchive } from './distribution-archive'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -803,7 +804,7 @@ export async function validateVercelSandbox(
     }
     await provisionBun(sandbox, config.image, options.signal)
     const provisioning = await runSystemProvisioning(sandbox, config.provisioning, options.signal)
-    const archive = await (options.packageArchive ?? packageAutobuildDistribution)()
+    const archive = await (options.packageArchive ?? defaultDistributionArchive)()
     checkCancellation()
     await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -941,12 +942,21 @@ export interface VercelSandboxProviderOptions {
   env: Record<string, string | undefined>
   storeRef: string
   storeToken: string
-  /** Dispatcher-local main checkout, used only for origin discovery and verification. */
+  /** Dispatcher-local main checkout, used only for origin discovery and verification.
+   * With the injected `origin`/`remoteBranchHead` seams (checkout-less origin
+   * mode) it is never touched on the host. */
   repo: string
   facade?: VercelSandboxFacade
   exec?: Exec
   packageArchive?: () => Promise<Uint8Array>
   runtimeReferences?: RuntimeReferencesSource
+  /** Checkout-less seam: the repository's HTTPS GitHub origin. Default reads
+   * `git remote get-url origin` from `repo` on the host. */
+  origin?: () => Promise<string>
+  /** Checkout-less seam: the remote branch's current head, `undefined` when
+   * the branch does not exist. Default runs `git ls-remote` from `repo` on
+   * the host. */
+  remoteBranchHead?: (branch: string) => Promise<string | undefined>
 }
 
 /** Vercel-backed working copy and executor. Completed SDK command output is
@@ -1000,33 +1010,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     revision?: string
     generation?: number
   }): Promise<WorkspaceProvisionResult> {
-    const rawOrigin = await execOrThrow(
-      this.exec,
-      ['git', 'remote', 'get-url', 'origin'],
-      opts.repo,
-    )
+    const rawOrigin = await this.origin()
     const origin = cleanGithubOrigin(rawOrigin)
     const name = sandboxName(origin.url, opts.branch, opts.generation)
     let sandbox = await this.facade.get(name, this.operationSignal())
-    const existing = oneSha(
-      await execOrThrow(
-        this.exec,
-        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${opts.branch}`],
-        opts.repo,
-      ),
-      `remote branch ${opts.branch}`,
-    )
+    const existing = await this.remoteBranchHead(opts.branch, `remote branch ${opts.branch}`)
     const base =
       existing ??
       opts.revision ??
-      oneSha(
-        await execOrThrow(
-          this.exec,
-          ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${opts.baseBranch}`],
-          opts.repo,
-        ),
-        `remote base ${opts.baseBranch}`,
-      )
+      (await this.remoteBranchHead(opts.baseBranch, `remote base ${opts.baseBranch}`))
     if (base === null)
       throw new Error(
         `remote branch ${existing === null ? opts.baseBranch : opts.branch} does not exist`,
@@ -1110,7 +1102,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         }
         await provisionBun(sandbox, this.options.config.image)
         await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
-        const archive = await (this.options.packageArchive ?? packageAutobuildDistribution)()
+        const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
         await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
           signal: this.operationSignal(),
         })
@@ -1261,11 +1253,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     origin: ReturnType<typeof cleanGithubOrigin>
     policy: NetworkPolicy
   }> {
-    const origin =
-      this.origins.get(ref) ??
-      cleanGithubOrigin(
-        await execOrThrow(this.exec, ['git', 'remote', 'get-url', 'origin'], this.options.repo),
-      )
+    const origin = this.origins.get(ref) ?? cleanGithubOrigin(await this.origin())
     this.origins.set(ref, origin)
     return {
       origin,
@@ -1438,15 +1426,30 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
   }
 
-  private async isPublished(input: { sha: string; branch: string }): Promise<boolean> {
-    const head = oneSha(
+  /** Host-seam fallbacks: the injected origin/branch-head readers when given
+   * (checkout-less origin mode), otherwise host `git` executed from the
+   * dispatcher-local checkout. */
+  private async origin(): Promise<string> {
+    if (this.options.origin !== undefined) return this.options.origin()
+    return execOrThrow(this.exec, ['git', 'remote', 'get-url', 'origin'], this.options.repo)
+  }
+
+  private async remoteBranchHead(branch: string, label: string): Promise<string | null> {
+    if (this.options.remoteBranchHead !== undefined) {
+      return (await this.options.remoteBranchHead(branch)) ?? null
+    }
+    return oneSha(
       await execOrThrow(
         this.exec,
-        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${input.branch}`],
+        ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${branch}`],
         this.options.repo,
       ),
-      `published branch ${input.branch}`,
+      label,
     )
+  }
+
+  private async isPublished(input: { sha: string; branch: string }): Promise<boolean> {
+    const head = await this.remoteBranchHead(input.branch, `published branch ${input.branch}`)
     return head === input.sha
   }
 
@@ -1504,14 +1507,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         cwd: VERCEL_WORKSPACE_PATH,
       })
       await sandbox.stop({ signal: this.operationSignal() })
-      const published = oneSha(
-        await execOrThrow(
-          this.exec,
-          ['git', 'ls-remote', '--heads', 'origin', `refs/heads/${input.branch}`],
-          this.options.repo,
-        ),
-        'published branch',
-      )
+      // Post-push verification without host git: the injected branch-head
+      // reader (origin mode) or the host ls-remote fallback answers.
+      const published = await this.remoteBranchHead(input.branch, 'published branch')
       if (published !== input.sha)
         throw new Error(`published head ${published ?? '(missing)'} did not match ${input.sha}`)
     } finally {
