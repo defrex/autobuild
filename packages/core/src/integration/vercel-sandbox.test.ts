@@ -44,6 +44,12 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
     readonly name = 'autobuild-composed'
     provisioned = false
     deleted = false
+    /** Exit code of the most recent detached command, for `getCommand`
+     * re-observation (mirrors the SDK: null while running). */
+    lastExitCode: number | null = null
+    getCommand(): Promise<{ exitCode: number | null }> {
+      return Promise.resolve({ exitCode: this.lastExitCode })
+    }
 
     async runCommand(params: Record<string, unknown>) {
       commands.push(params)
@@ -58,6 +64,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
         ) as { slug: string }
         const command: VercelCommand = {
           exitCode: null,
+          cmdId: 'cmd-e2e',
           kill: async () => undefined,
           wait: async () => {
             stage += 1
@@ -162,27 +169,40 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
                 },
               })
             } else {
-              await store.append(launch.slug, {
-                actor: KERNEL,
-                type: 'reconcile.started',
-                payload: { attempt: 1, baseSha: BASE },
-              })
-              const notes = await store.putArtifact(launch.slug, {
-                kind: 'reconcile-notes',
-                content: 'merged updated base',
-              })
-              await store.append(launch.slug, {
-                actor: agentActor('reconcile', 's-reconcile'),
-                type: 'publication.requested',
-                payload: {
-                  operation: 'reconcile',
-                  branch: `ab/${launch.slug}`,
-                  sha: 'c'.repeat(40),
-                  artifact: { kind: notes.kind, rev: notes.revision },
-                },
-              })
+              // Reconcile re-attachment is idempotent: a runner that starts
+              // after the reconcile request already exists appends nothing.
+              const existing = await store.getEvents(launch.slug)
+              if (
+                !existing.some(
+                  (event) =>
+                    event.type === 'publication.requested' &&
+                    event.payload.operation === 'reconcile',
+                )
+              ) {
+                await store.append(launch.slug, {
+                  actor: KERNEL,
+                  type: 'reconcile.started',
+                  payload: { attempt: 1, baseSha: BASE },
+                })
+                const notes = await store.putArtifact(launch.slug, {
+                  kind: 'reconcile-notes',
+                  content: 'merged updated base',
+                })
+                await store.append(launch.slug, {
+                  actor: agentActor('reconcile', 's-reconcile'),
+                  type: 'publication.requested',
+                  payload: {
+                    operation: 'reconcile',
+                    branch: `ab/${launch.slug}`,
+                    sha: 'c'.repeat(40),
+                    artifact: { kind: notes.kind, rev: notes.revision },
+                  },
+                })
+              }
             }
-            return { exitCode: 0 }
+            const result = { exitCode: 0 }
+            this.lastExitCode = result.exitCode
+            return result
           },
         }
         return command
@@ -302,9 +322,32 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
         wire: () => wiring,
       })
 
-    await dispatch() // implementation publication
-    await dispatch() // configured verification + finalize post-step publication
-    await dispatch() // PR publication
+    // Each --once settles the PREVIOUS execution at its settlement stage and
+    // launches the next runner; a launch may land in the kicking invocation's
+    // background continuation or in the next invocation's recovery, so the
+    // sequence waits on durable facts rather than dispatch counts.
+    const requested =
+      (operation: string) =>
+      (events: Awaited<ReturnType<typeof store.getEvents>>): boolean =>
+        events.some(
+          (event) =>
+            event.type === 'publication.requested' && event.payload.operation === operation,
+        )
+    const dispatchUntil = async (
+      predicate: (events: Awaited<ReturnType<typeof store.getEvents>>) => boolean,
+    ): Promise<void> => {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await dispatch()
+        const slug = (await store.listBuilds())[0]?.slug
+        const events = slug === undefined ? [] : await store.getEvents(slug)
+        if (predicate(events)) return
+      }
+      throw new Error('log never reached the expected state')
+    }
+
+    await dispatchUntil(requested('implement')) // provision + implementation publication request
+    await dispatchUntil(requested('finalize-step')) // settles implement; verification request
+    await dispatchUntil(requested('finalize')) // settles the finalize step; PR publication request
 
     const build = (await store.listBuilds())[0]!
     await store.append(build.slug, {
@@ -312,7 +355,8 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
       type: 'pr.conflicted',
       payload: { baseSha: BASE },
     })
-    await dispatch() // reconciliation publication
+    await dispatchUntil((events) => events.some((event) => event.type === 'reconcile.started'))
+    await dispatch() // settles the reconcile publication
 
     const events = await store.getEvents(build.slug)
     expect(events.filter((event) => event.type === 'publication.requested')).toHaveLength(4)
@@ -332,7 +376,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
     expect(forge.opened).toHaveLength(1)
     expect(remote.head).toBe('c'.repeat(40))
     const detached = commands.filter((command) => command.detached === true)
-    expect(detached).toHaveLength(4)
+    expect(detached).toHaveLength(5)
     expect(commands).toContainEqual({
       cmd: 'npm',
       args: ['install', '--prefix', VERCEL_BUN_PREFIX, '--no-save', `bun@${VERCEL_BUN_VERSION}`],
@@ -343,7 +387,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
           command.cmd === VERCEL_BUN_EXECUTABLE &&
           (command.args as string[] | undefined)?.[0] === '--version',
       ),
-    ).toHaveLength(5)
+    ).toHaveLength(6)
     for (const launch of detached) {
       expect(launch).toMatchObject({
         cmd: 'sh',

@@ -17,6 +17,7 @@ import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { Ticket, WorkspaceProvider } from '../ports/types'
+import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -2377,10 +2378,13 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     await seedInterrupted(h, 'provisioning-budget')
 
     for (const attempt of [1, 2]) {
+      // The tick records the durable marker and returns without awaiting the
+      // background continuation; the failure lands durably inside it.
       expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
         ...emptyTickReport(),
-        dispatchFailed: 1,
+        provisioning: 1,
       })
+      await h.dispatcher.drainProvisioning()
       const failures = (await h.store.getEvents('provisioning-budget')).filter(
         (event) => event.type === 'infrastructure.failed',
       )
@@ -3504,7 +3508,10 @@ describe('Dispatcher janitor', () => {
     })
     h.forge.setPrState(1, { state: 'open', mergeable: false })
 
-    expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+    // The janitor kicks the background replacement provisioning and returns;
+    // the provision failure is recorded durably inside the continuation.
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+    await h.dispatcher.drainProvisioning()
 
     const failures = (await h.store.getEvents(slug)).filter(
       (event) => event.type === 'infrastructure.failed' && event.payload.operation === 'provision',
@@ -4310,6 +4317,9 @@ describe('Dispatcher lease sweep', () => {
     h.clock.advance(101)
 
     expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    // The replacement provision runs inside the kicked background continuation,
+    // whose tail re-attaches the runner once the workspace exists.
+    await h.dispatcher.drainProvisioning()
     expect(operations).toEqual(['reap:sandbox-g0', 'provision'])
     expect(recoveredRevision).toBe('fake-base-sha')
     expect(recoveredGeneration).toBe(1)
@@ -4644,5 +4654,354 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
   test('a config with no readyState cannot produce criteria — it fails at the tickets path', () => {
     expect(() => criteria(LINEAR)).toThrow('tickets.readyState')
     expect(() => criteria('')).toThrow('tickets.readyState')
+  })
+})
+
+// ── Durable supervision (AUT-301) ────────────────────────────────────────────
+
+describe('Dispatcher durable supervision', () => {
+  function observingWorkspaceProvider(
+    observation: () => Promise<
+      { state: 'running' } | { state: 'ended'; exitCode?: number } | { state: 'lost' }
+    >,
+    operations: string[] = [],
+  ): { execution: BuildExecution; provider: WorkspaceProvider } {
+    const execution: BuildExecution = {
+      async start() {
+        throw new Error('not used')
+      },
+      async observe() {
+        return observation()
+      },
+    }
+    const provider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      buildExecution: execution,
+      async provision(opts) {
+        operations.push('provision')
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+        }
+      },
+      async release() {},
+    }
+    return { execution, provider }
+  }
+
+  function remoteWorkspaceProvider(operations: string[]): WorkspaceProvider {
+    return {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      async provision(opts) {
+        operations.push('provision')
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+        }
+      },
+      async release() {},
+    }
+  }
+
+  test('settlement stage settles a foreign ended execution, releases its lease, and settles publication', async () => {
+    const { provider } = observingWorkspaceProvider(async () => ({
+      state: 'ended' as const,
+      exitCode: 0,
+    }))
+    const workspaceProvider = provider
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'foreign-1',
+        environmentId: 'sandbox-g0',
+        sessionId: 'session-1',
+        commandId: 'cmd-1',
+      },
+    })
+    expect(await h.store.claimLease(slug, 'foreign-1', 100)).toBe(true)
+    h.clock.advance(101)
+
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.settled).toBe(1)
+    const events = await h.store.getEvents(slug)
+    expect(events.findLast((event) => event.type === 'execution.ended')?.payload).toMatchObject({
+      instance: 'foreign-1',
+      outcome: 'completed',
+      exitCode: 0,
+    })
+    expect((await h.store.getBuild(slug))?.lease).toBeUndefined()
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('the sweep leaves a running foreign guest untouched — no reap, no replacement, no launch', async () => {
+    const operations: string[] = []
+    const { provider } = observingWorkspaceProvider(
+      async () => ({ state: 'running' as const }),
+      operations,
+    )
+    const workspaceProvider = provider
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'foreign-1',
+        commandId: 'cmd-1',
+      },
+    })
+    expect(await h.store.claimLease(slug, 'foreign-1', 100)).toBe(true)
+    h.clock.advance(101)
+
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.swept).toBe(0)
+    expect(report.settled).toBe(0)
+    expect(operations).toEqual([])
+    expect(h.launches).toEqual([])
+    const events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
+    expect(events.some((event) => event.type === 'workspace.provision-started')).toBe(false)
+  })
+
+  test('the sweep re-attaches in the same generation after a recorded end', async () => {
+    const operations: string[] = []
+    const workspaceProvider = remoteWorkspaceProvider(operations)
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'foreign-1',
+        commandId: 'cmd-1',
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'foreign-1',
+        workspaceRef: 'sandbox-g0',
+        outcome: 'completed',
+        exitCode: 0,
+      },
+    })
+    expect(await h.store.claimLease(slug, 'foreign-1', 100)).toBe(true)
+    h.clock.advance(101)
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    await h.dispatcher.drainProvisioning()
+    expect(h.launches).toEqual([slug])
+    // The workspace was never reaped: the recorded end is proof enough.
+    expect((await h.store.getEvents(slug)).some((e) => e.type === 'workspace.released')).toBe(false)
+  })
+
+  test('a provider-proved loss falls through to the stale replacement path', async () => {
+    const operations: string[] = []
+    const { provider } = observingWorkspaceProvider(
+      async () => ({ state: 'lost' as const }),
+      operations,
+    )
+    const workspaceProvider = provider
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'foreign-1',
+        commandId: 'cmd-1',
+      },
+    })
+    expect(await h.store.claimLease(slug, 'foreign-1', 100)).toBe(true)
+    h.clock.advance(101)
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    await h.dispatcher.drainProvisioning()
+    const events = await h.store.getEvents(slug)
+    expect(events.findLast((event) => event.type === 'execution.ended')?.payload).toMatchObject({
+      instance: 'foreign-1',
+      outcome: 'lost',
+    })
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+    expect(operations).toContain('provision')
+  })
+
+  test('remote dispatch appends the durable provision marker; the continuation completes facts and launch', async () => {
+    const operations: string[] = []
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      // The provision resolves on a macrotask, so the tick — which never
+      // awaits the continuation — returns before any provider call runs.
+      async provision(opts) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        operations.push('provision')
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+        }
+      },
+      async release() {},
+    }
+    const h = harness({
+      tickets: [readyTicket('T-remote-dispatch', { title: 'remote dispatch' })],
+      workspaceProvider,
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.provisioning).toBe(1)
+    expect(report.dispatched).toBe(1)
+    expect(operations).toEqual([])
+    // The durable marker precedes any provision.
+    const slug = 'remote-dispatch'
+    const events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'workspace.provision-started')).toBe(true)
+    await h.dispatcher.drainProvisioning()
+    expect(operations).toEqual(['provision'])
+    expect((await h.store.getEvents(slug)).some((e) => e.type === 'workspace.provisioned')).toBe(
+      true,
+    )
+    expect(h.launches).toEqual([slug])
+  })
+
+  test('a foreign provision marker with a live lease defers; an expired lease adopts immediately', async () => {
+    const operations: string[] = []
+    const workspaceProvider = remoteWorkspaceProvider(operations)
+    const h = harness({ workspaceProvider })
+    const slug = 'adopted-provision'
+    const ticket = { source: 'fake' as const, id: 'T-adopt', title: slug }
+    await h.store.createBuild({ slug, repo: REPO, ticket, branch: `ab/${slug}` })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: REPO, baseBranch: 'main' },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provision-started',
+      payload: { provider: 'remote-test', branch: `ab/${slug}`, generation: 0 },
+    })
+    // Live heartbeat from the (foreign) provisioner: defer.
+    expect(await h.store.claimLease(slug, 'foreign-provisioner', 60_000)).toBe(true)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(0)
+    expect(operations).toEqual([])
+
+    // The heartbeat stops: within one lease TTL the marker is adopted.
+    h.clock.advance(61_000)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(1)
+    await h.dispatcher.drainProvisioning()
+    expect(operations).toEqual(['provision'])
+  })
+
+  test('teardown signals live continuations and releases their provisioning leases', async () => {
+    const operations: string[] = []
+    // The provision is held until the test releases it, so the continuation is
+    // provably mid-flight when teardown signals it.
+    type ProvisionResult = {
+      provider: string
+      ref: string
+      path: string
+      branch: string
+      base: { source: 'existing'; sha: string }
+    }
+    let releaseProvision!: (value: ProvisionResult) => void
+    const provisioned = new Promise<ProvisionResult>((resolve) => {
+      releaseProvision = resolve
+    })
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      async provision() {
+        operations.push('provision')
+        return provisioned
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider })
+    const slug = 'torn-down-provision'
+    const ticket = { source: 'fake' as const, id: 'T-teardown', title: slug }
+    await h.store.createBuild({ slug, repo: REPO, ticket, branch: `ab/${slug}` })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: REPO, baseBranch: 'main' },
+    })
+
+    // The tick registers the continuation and its body is parked inside the
+    // provision call; teardown then signals it and releases its lease.
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.stopProvisioning()
+    // A provision call already in flight when the signal landed may complete:
+    // its fact is true and welcome, but the token check prevents the launch.
+    releaseProvision({
+      provider: 'remote-test',
+      ref: 'sandbox-g1',
+      path: '/remote/workspace',
+      branch: `ab/${slug}`,
+      base: { source: 'existing', sha: 'fake-base-sha' },
+    })
+    await h.dispatcher.drainProvisioning()
+    const events = await h.store.getEvents(slug)
+    expect(events.findLast((event) => event.type === 'dispatch.failed')?.payload).toMatchObject({
+      stage: 'workspace',
+      error: expect.stringContaining('teardown'),
+    })
+    expect(events.some((event) => event.type === 'workspace.provisioned')).toBe(true)
+    expect((await h.store.getBuild(slug))?.lease).toBeUndefined()
+    expect(h.launches).toEqual([])
   })
 })

@@ -233,6 +233,15 @@ export const eventPayloadSchemas = {
       reason: z.enum(['completion', 'abort', 'pause', 'blocked', 'replacement', 'discard']),
     }),
   ]),
+  /** Durable marker that background provisioning of this build's remote
+   * workspace has begun. The marker's liveness is the build's execution lease:
+   * a holder heartbeats it while provisioning, so a dead provisioner's marker
+   * is adopted within one lease TTL. */
+  'workspace.provision-started': z.strictObject({
+    provider: z.string().min(1),
+    branch: z.string().min(1),
+    generation: z.number().int().nonnegative(),
+  }),
   /** Dispatcher-owned identity and provider lifecycle evidence. These facts do
    * not carry pipeline progress; they make disposable execution observable. */
   'execution.started': z.strictObject({
@@ -241,12 +250,16 @@ export const eventPayloadSchemas = {
     instance: z.string().min(1),
     environmentId: z.string().min(1).optional(),
     sessionId: z.string().min(1).optional(),
+    /** Provider-native detached command id, recorded at launch so a later
+     * process can re-observe the execution without process memory. Optional
+     * only so historical journals replay without migration. */
+    commandId: z.string().min(1).optional(),
   }),
   /** Confirmed executor completion is the infrastructure retry-epoch boundary. */
   'execution.ended': z.strictObject({
     instance: z.string().min(1),
     workspaceRef: z.string().min(1),
-    outcome: z.enum(['completed', 'stopped']),
+    outcome: z.enum(['completed', 'stopped', 'lost']),
     exitCode: z.number().int().nullable().optional(),
   }),
   'infrastructure.failed': z.strictObject({

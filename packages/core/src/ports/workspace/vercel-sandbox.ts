@@ -20,7 +20,9 @@ import type {
   BuildExecution,
   BuildExecutionExit,
   BuildExecutionHandle,
+  BuildExecutionIdentity,
   BuildExecutionStart,
+  ExecutionObservation,
 } from './build-execution'
 import { BUILD_RUNNER_OPTIONS_ENV } from './local-build-execution'
 import type { Exec } from './git-worktree'
@@ -36,7 +38,12 @@ export const VERCEL_BUN_EXECUTABLE = `${VERCEL_BUN_BIN_PATH}/bun`
 
 export interface VercelCommand {
   readonly exitCode: number | null
-  wait(): Promise<{ exitCode: number }>
+  /** Provider-native command identity, recorded durably at launch so a later
+   * process can re-observe the execution. */
+  readonly cmdId: string
+  /** The optional signal lets a detaching supervisor release a pending
+   * long-poll without killing the remote command. */
+  wait(params?: { signal?: AbortSignal }): Promise<{ exitCode: number }>
   kill(signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }): Promise<void>
   /** Completed-command output is read only for readiness/validation reporting
    * and declared system-provisioning failure diagnostics, including failures
@@ -64,10 +71,11 @@ export function isInterruptedLongPoll(error: unknown): boolean {
 export async function waitForCommandExit(
   command: Pick<VercelCommand, 'wait'>,
   expired: () => boolean,
+  opts?: { signal?: AbortSignal },
 ): Promise<{ exitCode: number }> {
   for (;;) {
     try {
-      return await command.wait()
+      return await command.wait(opts?.signal === undefined ? {} : { signal: opts.signal })
     } catch (error) {
       if (!isInterruptedLongPoll(error) || expired()) throw error
     }
@@ -81,6 +89,19 @@ export interface VercelSandboxHandle {
    * images, `/vercel` on universal), so the checkout is located through it. */
   readonly cwd?: string
   currentSession?(): { sessionId: string }
+  /** Status of the session this handle observed, captured at `facade.get`
+   * time. Optional: facades without session metadata omit it. */
+  readonly sessionStatus?:
+    | 'failed'
+    | 'aborted'
+    | 'pending'
+    | 'running'
+    | 'stopping'
+    | 'stopped'
+    | 'snapshotting'
+  /** Narrowed re-observation of one recorded detached command. A missing
+   * command under a resumed session rejects; callers classify that as `lost`. */
+  getCommand(cmdId: string, opts?: { signal?: AbortSignal }): Promise<{ exitCode: number | null }>
   runCommand(params: {
     cmd: string
     args?: string[]
@@ -186,6 +207,17 @@ function sdkCredentials(env: Record<string, string | undefined>): Record<string,
   return { token, teamId, projectId }
 }
 
+/** The SDK's session metadata is a live getter on the returned object, but the
+ * adapter's handle interface names it `sessionStatus`. Bridge it in place so
+ * every facade-returned handle carries fresh session state for observation. */
+function withSessionMetadata(sandbox: object): VercelSandboxHandle {
+  const status = () => (sandbox as { status?: VercelSandboxHandle['sessionStatus'] }).status
+  if (status() !== undefined && !Object.hasOwn(sandbox, 'sessionStatus')) {
+    Object.defineProperty(sandbox, 'sessionStatus', { get: status, configurable: true })
+  }
+  return sandbox as VercelSandboxHandle
+}
+
 export function isMissingVercelSandbox(error: unknown): boolean {
   if (error === null || typeof error !== 'object') return false
   const candidate = error as {
@@ -205,7 +237,7 @@ export function createVercelSdkFacade(
   return {
     async get(name, signal) {
       try {
-        return await Sandbox.get({ name, signal, ...credentials })
+        return withSessionMetadata(await Sandbox.get({ name, signal, ...credentials }))
       } catch (error) {
         if (isMissingVercelSandbox(error)) return null
         throw error
@@ -215,20 +247,24 @@ export function createVercelSdkFacade(
       // get() returning null includes stale snapshots. getOrCreate performs the
       // SDK's required stale-name deletion before recreating and also closes a
       // concurrent provision race safely.
-      return await Sandbox.getOrCreate({
-        ...input,
-        region: input.region as SandboxRegion | undefined,
-        failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
-        ...credentials,
-      })
+      return withSessionMetadata(
+        await Sandbox.getOrCreate({
+          ...input,
+          region: input.region as SandboxRegion | undefined,
+          failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
+          ...credentials,
+        }),
+      )
     },
     async createFresh(input) {
-      return await Sandbox.create({
-        ...input,
-        region: input.region as SandboxRegion | undefined,
-        failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
-        ...credentials,
-      })
+      return withSessionMetadata(
+        await Sandbox.create({
+          ...input,
+          region: input.region as SandboxRegion | undefined,
+          failoverRegions: input.failoverRegions as SandboxRegion[] | undefined,
+          ...credentials,
+        }),
+      )
     },
     async listSnapshots(name, signal) {
       // The API rejects `limit` above 50; `toArray()` walks every page.
@@ -937,7 +973,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
-    this.buildExecution = { start: (input) => this.start(input) }
+    this.buildExecution = {
+      start: (input) => this.start(input),
+      observe: (identity) => this.observeExecution(identity),
+    }
     this.recovery = {
       reap: (handle: WorkspaceHandle) => {
         if (handle.provider !== this.name) {
@@ -1318,12 +1357,22 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // lifetime (plus a margin for stop/snapshot); past that the command
     // cannot still be running and the failure is real.
     const lifetimeDeadline = Date.now() + this.options.config.timeoutSeconds * 1000 + 5 * 60 * 1000
-    const completion = waitForCommandExit(command, () => Date.now() > lifetimeDeadline).then(
+    // Detach (teardown of the LOCAL supervision only) aborts this wait so the
+    // process can exit while the guest keeps running and heartbeating its
+    // lease. A later invocation settles the execution from the Store plus
+    // provider liveness.
+    const localWait = new AbortController()
+    let detached = false
+    const completion = waitForCommandExit(command, () => Date.now() > lifetimeDeadline, {
+      signal: localWait.signal,
+    }).then(
       async (result): Promise<BuildExecutionExit> => {
+        if (detached) return { exitCode: result.exitCode }
         await stopEnvironment()
         return { exitCode: result.exitCode }
       },
-      async (error) => {
+      async (error): Promise<BuildExecutionExit> => {
+        if (detached) return { exitCode: null }
         await stopEnvironment()
         throw error
       },
@@ -1335,7 +1384,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         workspaceRef: ref,
         environmentId: sandbox.name,
         ...(sessionId !== undefined ? { sessionId } : {}),
+        ...(command.cmdId !== undefined && command.cmdId !== ''
+          ? { commandId: command.cmdId }
+          : {}),
       },
+      supervision: 'environment',
       completion,
       stop: async () => {
         try {
@@ -1348,6 +1401,40 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           }
         }
       },
+      detach: async () => {
+        detached = true
+        localWait.abort()
+      },
+    }
+  }
+
+  /** Liveness of a previously recorded execution, from provider state alone:
+   * one bounded facade.get plus at most one bounded getCommand. A missing
+   * sandbox, a session that is no longer running, or a command the current
+   * (resumed) session no longer knows is `lost`; a non-null command exit code
+   * is `ended`; everything else is `running`. Unknown provider errors
+   * propagate — callers treat an unresolvable observation as running and
+   * never reap on it. */
+  private async observeExecution(identity: BuildExecutionIdentity): Promise<ExecutionObservation> {
+    if (identity.commandId === undefined) {
+      throw new Error(
+        `execution on ${identity.workspaceRef} has no recorded command id and cannot be re-observed`,
+      )
+    }
+    const sandbox = await this.facade.get(identity.workspaceRef, this.operationSignal())
+    if (sandbox === null) return { state: 'lost' }
+    if (sandbox.sessionStatus !== undefined && sandbox.sessionStatus !== 'running') {
+      return { state: 'lost' }
+    }
+    try {
+      const command = await sandbox.getCommand(identity.commandId, {
+        signal: this.operationSignal(),
+      })
+      if (command.exitCode === null) return { state: 'running' }
+      return { state: 'ended', exitCode: command.exitCode }
+    } catch (error) {
+      if (isMissingVercelSandbox(error)) return { state: 'lost' }
+      throw error
     }
   }
 

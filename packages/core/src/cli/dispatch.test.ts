@@ -1703,6 +1703,7 @@ describe('abDispatch watch build-runner coordination', () => {
         startCalls += 1
         startedSlugs.push(input.slug)
         return {
+          supervision: 'local-parent',
           completion: completion.promise.then(() => ({ exitCode: 0 })),
           async stop() {
             stopCalls += 1
@@ -1710,6 +1711,7 @@ describe('abDispatch watch build-runner coordination', () => {
             await releaseStop.promise
             completion.resolve()
           },
+          async detach() {},
         }
       },
     }
@@ -1757,7 +1759,112 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 10_000)
 
-  test('unknown remote stop returns within its bound, records evidence, and retains the lease', async () => {
+  test(`--once returns without draining an environment execution — the guest stays running and a later pass settles it`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const slug = 'remote-once-return'
+    const branch = `ab/${slug}`
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-once-remote', title: 'once remote' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'remote-test',
+        ref: 'sandbox-g0',
+        path: '/remote/workspace',
+        branch,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-once-remote', title: 'once remote' },
+        },
+      }),
+    )
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 1 },
+    })
+
+    const completion = deferred()
+    const execution: BuildExecution = {
+      async start(input) {
+        return {
+          supervision: 'environment',
+          identity: {
+            provider: 'remote-test',
+            workspaceRef: input.workspaceRef,
+            environmentId: 'sandbox-g0',
+            sessionId: 'session-g0',
+          },
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            return { outcome: 'confirmed' }
+          },
+          async detach() {},
+        }
+      },
+    }
+    let generation = 0
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      provision: async (opts) => {
+        generation += 1
+        return {
+          provider: 'remote-test',
+          ref: `sandbox-g${generation}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? 'a'.repeat(40) },
+        }
+      },
+      release: async () => {},
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: () => ({ ...fx.wire(), workspaces: remote, buildExecution: execution }),
+      })
+      const record = await fx.store.getBuild(slug)
+      const events = await fx.store.getEvents(slug)
+      expect(record?.lease).toBeDefined()
+      expect(events.some((event) => event.type === 'execution.ended')).toBe(false)
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
+    } finally {
+      completion.resolve()
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('watch teardown of a remote execution detaches it: no stop, no durable end, lease retained', async () => {
     const fx = await makeFixture(readyTicket('T-unknown-stop'), happyHandlers())
     const stop = new AbortController()
     const completion = deferred()
@@ -1766,6 +1873,7 @@ describe('abDispatch watch build-runner coordination', () => {
       async start(input) {
         slug = input.slug
         return {
+          supervision: 'environment',
           identity: {
             provider: 'remote-test',
             workspaceRef: input.workspaceRef,
@@ -1776,6 +1884,7 @@ describe('abDispatch watch build-runner coordination', () => {
           async stop() {
             return { outcome: 'unknown', error: 'stop acknowledgement timed out' }
           },
+          async detach() {},
         }
       },
     }
@@ -1811,15 +1920,13 @@ describe('abDispatch watch build-runner coordination', () => {
       stop.abort()
       await dispatch
       const record = await fx.store.getBuild(slug!)
+      // The guest outlives the supervisor: no stop was attempted, the exact
+      // lease stays with the recorded instance, and no durable end was
+      // fabricated by the dying process.
       expect(record?.lease).toBeDefined()
-      const failures = (await fx.store.getEvents(slug!)).filter(
-        (event) => event.type === 'infrastructure.failed',
-      )
-      expect(failures.at(-1)?.payload).toMatchObject({
-        operation: 'stop',
-        cleanupPending: true,
-        error: 'stop acknowledgement timed out',
-      })
+      const events = await fx.store.getEvents(slug!)
+      expect(events.some((event) => event.type === 'execution.ended')).toBe(false)
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
     } finally {
       completion.resolve()
       await dispatch.catch(() => {})
@@ -2002,6 +2109,7 @@ describe('abDispatch watch build-runner coordination', () => {
     const execution: BuildExecution = {
       async start(input) {
         return {
+          supervision: 'environment',
           identity: {
             provider: 'remote-test',
             workspaceRef: input.workspaceRef,
@@ -2012,6 +2120,7 @@ describe('abDispatch watch build-runner coordination', () => {
           async stop() {
             return { outcome: 'confirmed' }
           },
+          async detach() {},
         }
       },
     }
@@ -2193,8 +2302,10 @@ describe('abDispatch watch build-runner coordination', () => {
           (event) => event.type === 'implement.completed' && event.payload.commits.head === head,
         )
         return {
+          supervision: 'environment',
           completion: Promise.resolve({ exitCode: 0 }),
           stop: async () => ({ outcome: 'confirmed' }),
+          detach: async () => {},
         }
       },
     }
@@ -2724,7 +2835,7 @@ describe('abDispatch watch harvest coordination', () => {
     const out: string[] = []
     const standingDiagnostic = 'retained ticket-source diagnostic'
     let sleeps = 0
-    let leaseClaims = 0
+    let repoHeartbeats = 0
     let rejectedPayload:
       | Extract<RepositoryEvent, { type: 'dispatcher.tick-completed' }>['payload']
       | undefined
@@ -2736,18 +2847,18 @@ describe('abDispatch watch harvest coordination', () => {
       diagnostics: [standingDiagnostic],
     })
 
-    const originalClaimRepoLease = fx.store.claimRepoLease.bind(fx.store)
-    fx.store.claimRepoLease = async (...args) => {
-      leaseClaims += 1
-      if (leaseClaims === 2) {
+    const originalHeartbeatRepo = fx.store.heartbeatRepo.bind(fx.store)
+    fx.store.heartbeatRepo = async (...args) => {
+      repoHeartbeats += 1
+      if (repoHeartbeats === 2) {
+        // The second heartbeat belongs to the resumed run's replacement; the
+        // adopting runner no longer claims its own lease, so the publication
+        // race is injected at its liveness boundary instead.
         secondLeaseStarted.resolve()
         await secondLeaseGate.promise
         throw new Error('injected Harvest lease publication-race failure')
       }
-      // A later operational tick may try this still-open run again. Returning
-      // held keeps that retry from adding unrelated accounting to the assertion.
-      if (leaseClaims > 2) return false
-      return originalClaimRepoLease(...args)
+      return originalHeartbeatRepo(...args)
     }
 
     const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
@@ -4468,12 +4579,19 @@ describe('abDispatch interactive keyboard controls', () => {
       const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
         event.type.startsWith('dispatcher.'),
       )
+      // The losing invocation records its yield once; the winner performs the
+      // settings actions both operators pressed.
+      const yields = settings.filter((event) => event.type === 'dispatcher.tick-yielded')
+      expect(yields).toHaveLength(1)
+      expect(yields[0]?.actor.kind).toBe('dispatcher')
       expect(
-        settings.map((event) => [
-          event.actor.kind === 'human' ? event.actor.user : event.actor.kind,
-          event.type,
-          event.payload,
-        ]),
+        settings
+          .filter((event) => event.type !== 'dispatcher.tick-yielded')
+          .map((event) => [
+            event.actor.kind === 'human' ? event.actor.user : event.actor.kind,
+            event.type,
+            event.payload,
+          ]),
       ).toEqual([
         ['operator-a', 'dispatcher.intake-set', { enabled: false }],
         ['operator-a', 'dispatcher.auto-merge-default-set', { enabled: true }],
@@ -4578,6 +4696,13 @@ describe('abDispatch interactive keyboard controls', () => {
           payload: event.payload,
         })),
       ).toEqual([
+        // The loop yields the repository lease to the standing holder; the
+        // yield is its only durable tick record.
+        {
+          actor: { kind: 'dispatcher' },
+          type: 'dispatcher.tick-yielded',
+          payload: { holder: 'other-dispatcher' },
+        },
         {
           actor: { kind: 'human', user: 'harvest-op' },
           type: 'dispatcher.auto-merge-default-set',
@@ -4631,14 +4756,27 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(stripAnsi(term.all())).not.toContain('harvest run has no available action')
 
       const repoAdded = (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length)
-      expect(repoAdded.map((event) => event.type)).toEqual([
+      // The staged open run means the loop yields the repository lease to the
+      // standing holder; the yield is its only durable tick record.
+      expect(
+        repoAdded
+          .slice(0, 1)
+          .map((event) => ({ actor: event.actor, type: event.type, payload: event.payload })),
+      ).toEqual([
+        {
+          actor: { kind: 'dispatcher' },
+          type: 'dispatcher.tick-yielded',
+          payload: { holder: 'other-dispatcher' },
+        },
+      ])
+      expect(repoAdded.slice(1).map((event) => event.type)).toEqual([
         'dispatcher.auto-merge-default-set',
         'dispatcher.auto-merge-default-set',
         'harvest.pause-requested',
         'harvest.resume-requested',
         'harvest.resumed',
       ])
-      for (const event of repoAdded.slice(0, 4)) {
+      for (const event of repoAdded.slice(1, 5)) {
         expect(event.actor).toEqual({
           kind: 'human',
           user: 'harvest-op',
@@ -4957,8 +5095,13 @@ describe('abDispatch interactive keyboard controls', () => {
           .some((event) => event.type === 'harvest.resume-requested'),
       )
       const added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
-      expect(added.map((event) => event.type)).toEqual(['harvest.resume-requested'])
-      expect(added[0]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
+      // The loop yields the repository lease to the standing holder; the
+      // yield is its only durable tick record.
+      expect(added.map((event) => event.type)).toEqual([
+        'dispatcher.tick-yielded',
+        'harvest.resume-requested',
+      ])
+      expect(added[1]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
       expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       await fx.store.appendRepo(fx.origin, {

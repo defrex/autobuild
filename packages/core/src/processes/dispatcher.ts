@@ -57,6 +57,7 @@ import {
 import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { ArtifactRef } from '../ontology'
+import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type {
   DependencyState,
   Forge,
@@ -69,6 +70,7 @@ import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/type
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
+import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
@@ -292,7 +294,17 @@ export interface TickReport {
   blockedDiagnostics: string[]
   /** Lease sweep (§15.6-C): runners re-attached to stale builds. */
   swept: number
-  /** Dispatch (§12): builds created and launched. */
+  /** Settlement stage: foreign executions settled from durable facts plus
+   * provider liveness (a recorded completion or provider proof of end). */
+  settled: number
+  /** Builds whose remote workspace provisioning was (re-)kicked as tracked
+   * background work this tick. The tick returns without awaiting it; the
+   * continuation completes the remaining boundaries and the launch. */
+  provisioning: number
+  /** Dispatch (§12): builds created and launched. With durable supervision
+   * this counts ACCEPTED dispatches — durable boundaries recorded — not
+   * awaited launches: a dispatch whose remote provisioning continues in the
+   * background is still accepted. */
   dispatched: number
   /** Of `dispatched`: specs produced via the authorSpec seam (§6.3). */
   authored: number
@@ -344,6 +356,8 @@ export function emptyTickReport(): TickReport {
     resumed: 0,
     blockedDiagnostics: [],
     swept: 0,
+    settled: 0,
+    provisioning: 0,
     dispatched: 0,
     authored: 0,
     bounced: 0,
@@ -366,6 +380,25 @@ export function emptyTickReport(): TickReport {
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
 const DEFAULT_SLUG_NAMING_TIMEOUT_MS = 10_000
+/** Heartbeat cadence of a background provisioning continuation's execution
+ * lease. A dead provisioner is therefore adopted within one lease TTL. */
+const PROVISION_HEARTBEAT_MS = 15_000
+const DEFAULT_PROVISION_STALE_MS = 20 * 60 * 1000
+
+/** Outcome of one attempt to complete an interrupted dispatch. `deferred`
+ * means durable progress was made (background provisioning kicked or already
+ * in flight) and a later tick continues; the launch is never awaited here. */
+export type DispatchOutcome = 'completed' | 'deferred' | 'parked' | 'failed'
+
+/** One tracked background provisioning continuation (process-local). Its
+ * durable residue is the `workspace.provision-started` marker plus the
+ * execution lease it claims and heartbeats. */
+interface ProvisionContinuation {
+  readonly slug: string
+  readonly instance: string
+  readonly controller: AbortController
+  promise: Promise<void>
+}
 
 export interface DispatcherOpts {
   /**
@@ -392,6 +425,12 @@ export interface DispatcherOpts {
   slugNamingTimeoutMs?: number
   /** Must match the HarvestRunner's durable outer recovery budget. */
   maxHarvestRecoveryAttempts?: number
+  /** Backstop for the crash window between a `workspace.provision-started`
+   * append and its owner's lease claim: an open marker with NO lease is
+   * adopted only once it is older than this. The primary adoption gate is the
+   * execution lease itself — a dead heartbeating owner is adopted within one
+   * lease TTL (60 s). Default 20 minutes. */
+  provisionStaleMs?: number
 }
 
 export interface TickOpts {
@@ -463,6 +502,13 @@ export interface DispatcherDeps {
    * supplies cancellation and treats every absence/failure/invalid result as a
    * local deterministic fallback, so naming can never prevent build creation. */
   nameSlug?: (spec: string, signal: AbortSignal) => Promise<string | null>
+  /** Settle pending publication for `slug` after durable proof that the
+   * guest execution ended. Supplied by the DispatchLoop; the settlement stage
+   * invokes it only on a recorded completion. */
+  settlePublication?: (slug: string) => Promise<void>
+  /** Slugs THIS process supervises in memory. The settlement stage skips
+   * them: their completion chain owns the durable facts. */
+  activeExecutions?: () => ReadonlySet<string>
   ids: IdSource
   clock: Clock
   opts?: DispatcherOpts
@@ -529,6 +575,10 @@ export class Dispatcher {
   private readonly doneState: string
   private readonly slugNamingTimeoutMs: number
   private readonly maxHarvestRecoveryAttempts: number
+  private readonly provisionStaleMs: number
+  /** Process-local background provisioning, keyed by slug. A tick that sees a
+   * slug here defers to the continuation; it never blocks on it. */
+  private readonly continuations = new Map<string, ProvisionContinuation>()
 
   constructor(private readonly deps: DispatcherDeps) {
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
@@ -536,6 +586,7 @@ export class Dispatcher {
     this.slugNamingTimeoutMs = deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
     this.maxHarvestRecoveryAttempts =
       deps.opts?.maxHarvestRecoveryAttempts ?? DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+    this.provisionStaleMs = deps.opts?.provisionStaleMs ?? DEFAULT_PROVISION_STALE_MS
   }
 
   /**
@@ -564,6 +615,11 @@ export class Dispatcher {
     // CLI likewise samples before calling `tick`). Neither control pretends to
     // a serialization the store does not offer.
     const paused = await this.repositoryPaused()
+    // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
+    // provider liveness and settle their completion, lease, and publication.
+    // Runs before the janitor so its executionLeaseLive checks see freshly
+    // released or renewed leases.
+    await this.settleForeignExecutions(report)
     await this.janitor(report, launched)
     await this.recoverDispatches(report, launched, paused)
     if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused)
@@ -641,6 +697,328 @@ export class Dispatcher {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
     return this.deps.launchRunner(slug)
+  }
+
+  // ── 0. Settlement stage (durable supervision) ──────────────────────────────
+
+  /** The provider that owns a recorded execution, by the provider name on its
+   * `execution.started` fact. An execution from a provider this process no
+   * longer knows cannot be observed and is left to the stale-lease path. */
+  private executionOwner(provider: string): WorkspaceProvider | null {
+    if (provider === this.deps.workspaces.name) return this.deps.workspaces
+    return this.deps.retiredWorkspaces?.find((candidate) => candidate.name === provider) ?? null
+  }
+
+  /** Observe and settle every foreign open execution of this repo. A build
+   * this process supervises in memory is skipped — its completion chain owns
+   * the durable facts. One listBuilds plus at most two bounded provider round
+   * trips per unsettled build; a failing build is contained so the rest of
+   * the stage still settles. */
+  private async settleForeignExecutions(report: TickReport): Promise<void> {
+    const active = this.deps.activeExecutions?.() ?? new Set<string>()
+    for (const record of await this.deps.store.listBuilds()) {
+      if (record.repo !== this.deps.repo) continue
+      if (active.has(record.slug)) continue
+      try {
+        const events = await this.deps.store.getEvents(record.slug)
+        const open = openExecution(events)
+        if (open === null) continue
+        const owner = this.executionOwner(open.provider)
+        const execution = owner?.buildExecution
+        if (execution?.observe === undefined || open.commandId === undefined) continue
+        const settlement = await settleExecution(
+          {
+            store: this.deps.store,
+            execution,
+            ...(this.deps.settlePublication !== undefined
+              ? { settlePublication: this.deps.settlePublication }
+              : {}),
+          },
+          record.slug,
+          events,
+        )
+        if (settlement === 'settled') report.settled += 1
+      } catch {
+        // An unobservable build must not stall settlement of the rest; the
+        // next tick retries it.
+      }
+    }
+  }
+
+  // ── Background provisioning (durable supervision) ──────────────────────────
+
+  /** The latest `workspace.provision-started` not yet followed by a
+   * provisioned/released fact — an open provisioning marker. */
+  private openProvisionMarker(
+    events: AbEvent[],
+  ): { provider: string; branch: string; generation: number; ts: string; seq: number } | undefined {
+    let marker:
+      | { provider: string; branch: string; generation: number; ts: string; seq: number }
+      | undefined
+    for (const event of events) {
+      if (event.type === 'workspace.provision-started') {
+        marker = { ...event.payload, ts: event.ts, seq: event.seq }
+      } else if (
+        marker !== undefined &&
+        (event.type === 'workspace.provisioned' || event.type === 'workspace.released')
+      ) {
+        marker = undefined
+      }
+    }
+    return marker
+  }
+
+  /** Liveness of the lease behind an open provision marker: `live` means a
+   * fresh heartbeat (someone is provisioning); `expired` means the owner died
+   * within the last TTL and is adopted immediately; `absent` means the owner
+   * may have crashed between marker and claim — adopted only after the
+   * `provisionStaleMs` backstop. */
+  private async provisionMarkerLiveness(slug: string): Promise<'live' | 'expired' | 'absent'> {
+    const record = await this.deps.store.getBuild(slug)
+    if (record?.lease === undefined) return 'absent'
+    return new Date(record.lease.expiresAt).getTime() > this.deps.clock().getTime()
+      ? 'live'
+      : 'expired'
+  }
+
+  /** Kick (or defer to) the background provisioning continuation for a remote
+   * build with no open workspace. Returns what happened so the caller can
+   * report progress without awaiting any of it. */
+  private async ensureProvisionContinuation(
+    record: BuildRecord,
+    events: AbEvent[],
+    tail: 'dispatch' | 'launch',
+    seed?: {
+      ticket: Ticket
+      body: string
+      authoredSession?: string
+      autoMergeUser?: string
+    },
+  ): Promise<'kicked' | 'in-flight' | 'foreign-live'> {
+    const slug = record.slug
+    if (this.continuations.has(slug)) return 'in-flight'
+    const marker = this.openProvisionMarker(events)
+    if (marker !== undefined) {
+      const liveness = await this.provisionMarkerLiveness(slug)
+      const failedAttempt = events.some(
+        (event) =>
+          event.type === 'dispatch.failed' &&
+          event.payload.stage === 'workspace' &&
+          event.seq > marker.seq,
+      )
+      if (liveness === 'live') return 'foreign-live'
+      if (
+        liveness === 'absent' &&
+        !failedAttempt &&
+        this.deps.clock().getTime() - new Date(marker.ts).getTime() < this.provisionStaleMs
+      ) {
+        // A lease-less marker is the crash window this backstop exists for:
+        // the owner may still be between the append and its claim. A failed
+        // attempt (dispatch.failed after the marker) adopts immediately.
+        return 'foreign-live'
+      }
+      // Expired lease, failed attempt, or an old lease-less marker: adopt.
+    }
+    const branch = record.branch ?? `ab/${slug}`
+    const generation = events.filter((event) => event.type === 'workspace.provisioned').length
+    await this.deps.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provision-started',
+      payload: { provider: this.deps.workspaces.name, branch, generation },
+    })
+    const entry: ProvisionContinuation = {
+      slug,
+      instance: `provision-${this.deps.ids('inst')}`,
+      controller: new AbortController(),
+      promise: Promise.resolve(),
+    }
+    // Registered synchronously before any await of the continuation itself so
+    // a concurrent re-entry defers to it instead of double-kicking.
+    this.continuations.set(slug, entry)
+    entry.promise = this.runProvisionContinuation(entry, {
+      branch,
+      generation,
+      seed,
+      tail,
+    })
+    return 'kicked'
+  }
+
+  /** The background continuation: claim and heartbeat the build's execution
+   * lease, provision, append the durable fact, then complete the remaining
+   * boundaries and launch. Every provider call and boundary write is fenced
+   * by the cancellation token, so a superseded supervisor exits without
+   * colliding with its replacement. Failures append
+   * `dispatch.failed {stage: 'workspace'}` (plus the infrastructure failure
+   * when applicable) and stay retryable. */
+  private async runProvisionContinuation(
+    entry: ProvisionContinuation,
+    input: {
+      branch: string
+      generation: number
+      seed?:
+        | {
+            ticket: Ticket
+            body: string
+            authoredSession?: string
+            autoMergeUser?: string
+          }
+        | undefined
+      tail: 'dispatch' | 'launch'
+    },
+  ): Promise<void> {
+    const { store, workspaces, config } = this.deps
+    const slug = entry.slug
+    let leaseClaimed = false
+    let heartbeat: ReturnType<typeof setInterval> | undefined
+    const stage: EventPayload<'dispatch.failed'>['stage'] = 'workspace'
+    try {
+      if (entry.controller.signal.aborted) {
+        // Signalled before the body even started (teardown raced the kick):
+        // exit before claiming anything; stopProvisioning already released
+        // the marker's lease so the next supervisor adopts immediately.
+        return
+      }
+      leaseClaimed = await store.claimLease(slug, entry.instance, BUILD_EXECUTION_LEASE_TTL_MS)
+      if (!leaseClaimed) return // another live holder — the next tick re-evaluates
+      heartbeat = setInterval(() => {
+        void store.claimLease(slug, entry.instance, BUILD_EXECUTION_LEASE_TTL_MS).catch(() => {
+          // Store unreachable: retry on the next beat; expiry fences.
+        })
+      }, PROVISION_HEARTBEAT_MS)
+      heartbeat.unref?.()
+      if (entry.controller.signal.aborted) {
+        // Teardown: exit before provisioning. The finally releases the lease,
+        // so the next supervisor adopts the marker immediately.
+        return
+      }
+      const events = await store.getEvents(slug)
+      const priorGenerations = events.filter(
+        (event) => event.type === 'workspace.provisioned',
+      ).length
+      const handle = await workspaces.provision({
+        repo: this.deps.repo,
+        baseBranch: baseBranchOf(events, config),
+        branch: input.branch,
+        ...(priorGenerations > 0 || input.generation > 0
+          ? {
+              revision: this.recoveryCheckpoint(events),
+              generation: Math.max(priorGenerations, input.generation),
+            }
+          : {}),
+      })
+      // The provisioned fact is true and welcome even when a teardown signal
+      // landed mid-call; the token check below still prevents a superseded
+      // supervisor from launching.
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: handle.provider,
+          ref: handle.ref,
+          path: handle.path,
+          ...(handle.localPath !== undefined ? { localPath: handle.localPath } : {}),
+          branch: handle.branch,
+          base: handle.base,
+        },
+      } satisfies EventWrite<'workspace.provisioned'>)
+      // Release before the launch: the launcher re-claims the lease under the
+      // runner's own instance. The tiny gap is safe because every downstream
+      // action is single-flight in-process and lease-fenced cross-process.
+      if (heartbeat !== undefined) {
+        clearInterval(heartbeat)
+        heartbeat = undefined
+      }
+      await store.releaseLease(slug, entry.instance)
+      leaseClaimed = false
+      if (entry.controller.signal.aborted) return
+      const record = await store.getBuild(slug)
+      if (record === null) return
+      await (input.tail === 'dispatch'
+        ? this.completeDispatchBoundaries(record, input.seed)
+        : this.deps.launchRunner(slug))
+    } catch (error) {
+      const events = await store.getEvents(slug)
+      if (workspaces.recovery !== undefined) {
+        const open = openWorkspace(events)
+        const latestRef = [...events].reverse().find((event) => event.type === 'workspace.released')
+        await this.recordInfrastructureFailure(slug, events, {
+          provider: workspaces.name,
+          workspaceRef:
+            open?.ref ??
+            (latestRef?.type === 'workspace.released' && 'ref' in latestRef.payload
+              ? latestRef.payload.ref
+              : slug),
+          operation: 'provision',
+          error,
+          cleanupPending: true,
+        })
+      }
+      const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+      const message = (error instanceof Error ? error.message : String(error)).trim()
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'dispatch.failed',
+        payload: {
+          stage,
+          attempt,
+          error: message || 'dispatch failed without an error message',
+        },
+      })
+    } finally {
+      if (heartbeat !== undefined) clearInterval(heartbeat)
+      if (leaseClaimed) {
+        try {
+          await store.releaseLease(slug, entry.instance)
+        } catch {
+          // Expiry fences an ambiguous release.
+        }
+      }
+      if (this.continuations.get(slug)?.instance === entry.instance) {
+        this.continuations.delete(slug)
+      }
+    }
+  }
+
+  /** Await every in-flight provisioning continuation. A test/observability
+   * seam — a tick never awaits these; the durable facts remain the contract. */
+  async drainProvisioning(): Promise<void> {
+    await Promise.allSettled([...this.continuations.values()].map((entry) => entry.promise))
+  }
+
+  /** Teardown: signal every live continuation, then record a durable failure
+   * fact for any whose provisioning marker is still open (so the next
+   * supervisor adopts it immediately rather than after the crash backstop),
+   * then release each one's provisioning lease, in that order. Never awaited
+   * by a tick. */
+  async stopProvisioning(): Promise<void> {
+    const entries = [...this.continuations.values()]
+    for (const entry of entries) entry.controller.abort()
+    for (const entry of entries) {
+      try {
+        const events = await this.deps.store.getEvents(entry.slug)
+        if (this.openProvisionMarker(events) !== undefined) {
+          const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+          await this.deps.store.append(entry.slug, {
+            actor: DISPATCHER,
+            type: 'dispatch.failed',
+            payload: {
+              stage: 'workspace',
+              attempt,
+              error:
+                'provisioning abandoned at dispatcher teardown; the next supervisor adopts the open marker',
+            },
+          })
+        }
+      } catch {
+        // The durable marker plus the released lease still gate adoption.
+      }
+      try {
+        await this.deps.store.releaseLease(entry.slug, entry.instance)
+      } catch {
+        // Expiry fences an ambiguous release.
+      }
+    }
   }
 
   // ── a. Janitor (SPEC §15.7, D1) ────────────────────────────────────────────
@@ -945,22 +1323,13 @@ export class Dispatcher {
       } satisfies EventWrite<'pr.conflicted'>)
       events.push(conflicted)
       if (openWorkspace(events) === null && this.deps.workspaces.recovery !== undefined) {
-        try {
-          await this.provisionReplacement(record, events)
-        } catch (error) {
-          const released = events.findLast((event) => event.type === 'workspace.released')
-          await this.recordInfrastructureFailure(record.slug, events, {
-            provider: this.deps.workspaces.name,
-            workspaceRef:
-              released?.type === 'workspace.released' && 'ref' in released.payload
-                ? released.payload.ref
-                : record.slug,
-            operation: 'provision',
-            error,
-            cleanupPending: true,
-          })
-          throw error
-        }
+        // The reconcile workspace is provisioned by the tracked background
+        // continuation, whose tail re-attaches the build-runner; this tick
+        // never blocks on guest bootstrap.
+        const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
+        if (kicked === 'kicked') report.provisioning += 1
+        report.conflicted += 1
+        return
       }
       // The dispatcher never runs agents (§15.7): re-attach a build-runner,
       // which executes the reconcile epilogue phase.
@@ -1257,29 +1626,6 @@ export class Dispatcher {
     }
   }
 
-  private async provisionReplacement(record: BuildRecord, events: AbEvent[]): Promise<void> {
-    const handle = await this.deps.workspaces.provision({
-      repo: this.deps.repo,
-      baseBranch: baseBranchOf(events, this.deps.config),
-      branch: record.branch ?? `ab/${record.slug}`,
-      revision: this.recoveryCheckpoint(events),
-      generation: events.filter((event) => event.type === 'workspace.provisioned').length,
-    })
-    const provisioned = await this.deps.store.append(record.slug, {
-      actor: DISPATCHER,
-      type: 'workspace.provisioned',
-      payload: {
-        provider: handle.provider,
-        ref: handle.ref,
-        path: handle.path,
-        ...(handle.localPath !== undefined ? { localPath: handle.localPath } : {}),
-        branch: handle.branch,
-        base: handle.base,
-      },
-    })
-    events.push(provisioned)
-  }
-
   /** Release the build's workspace if the log shows one still provisioned;
    * append `workspace.released`. Log-deduped, so re-runs are no-ops. */
   private async releaseWorkspace(
@@ -1377,6 +1723,17 @@ export class Dispatcher {
   /** Every boundary before runner attachment is derived from durable facts.
    * Missing facts are the todo list; successful provider calls are followed
    * immediately by their facts, so an ordinary later tick can continue. */
+  // ── b. Interrupted dispatch recovery ─────────────────────────────────────────
+
+  /** Every boundary before runner attachment is derived from durable facts.
+   * Missing facts are the todo list; successful provider calls are followed
+   * immediately by their facts, so an ordinary later tick can continue.
+   *
+   * Remote (recovery-capable) providers never provision inline: the workspace
+   * stage kicks a tracked background continuation and returns `deferred`, so a
+   * tick never blocks on guest bootstrap. The continuation provisions, then
+   * completes the remaining boundaries and the launch. Local providers keep
+   * the original inline provisioning byte-for-byte. */
   private async attemptDispatchCompletion(
     record: BuildRecord,
     launched: Set<string>,
@@ -1387,10 +1744,9 @@ export class Dispatcher {
       authoredSession?: string
       autoMergeUser?: string
     },
-  ): Promise<boolean> {
+  ): Promise<DispatchOutcome> {
     const { store, config } = this.deps
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'create'
-    let authored = false
     try {
       let events = await store.getEvents(record.slug)
       if (!events.some((event) => event.type === 'build.created')) {
@@ -1434,6 +1790,16 @@ export class Dispatcher {
 
       stage = 'workspace'
       if (openWorkspace(events) === null) {
+        if (this.deps.workspaces.recovery !== undefined) {
+          // Recovery-capable provider: durable marker + tracked background
+          // continuation. The tick makes durable progress and returns; the
+          // continuation provisions, then completes the remaining boundaries
+          // and the launch.
+          const kicked = await this.ensureProvisionContinuation(record, events, 'dispatch', seed)
+          if (kicked === 'kicked') report.provisioning += 1
+          launched.add(record.slug)
+          return 'deferred'
+        }
         const priorGenerations = events.filter(
           (event) => event.type === 'workspace.provisioned',
         ).length
@@ -1463,7 +1829,54 @@ export class Dispatcher {
         events = await store.getEvents(record.slug)
       }
 
-      stage = 'spec'
+      return await this.completeDispatchBoundaries(record, seed, report, launched)
+    } catch (error) {
+      const events = await store.getEvents(record.slug)
+      if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
+        const open = openWorkspace(events)
+        await this.recordInfrastructureFailure(record.slug, events, {
+          provider: this.deps.workspaces.name,
+          workspaceRef: open?.ref ?? record.slug,
+          operation: 'provision',
+          error,
+          cleanupPending: true,
+        })
+      }
+      const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
+      const message = (error instanceof Error ? error.message : String(error)).trim()
+      await store.append(record.slug, {
+        actor: DISPATCHER,
+        type: 'dispatch.failed',
+        payload: {
+          stage,
+          attempt,
+          error: message || 'dispatch failed without an error message',
+        },
+      })
+      report.dispatchFailed += 1
+      return 'failed'
+    }
+  }
+
+  /** The post-workspace dispatch boundaries — spec, comment, launch — shared
+   * by the synchronous local path and the background continuation. Stage
+   * failures record their own durable `dispatch.failed` fact. */
+  private async completeDispatchBoundaries(
+    record: BuildRecord,
+    seed?: {
+      ticket: Ticket
+      body: string
+      authoredSession?: string
+      autoMergeUser?: string
+    },
+    report?: TickReport,
+    launched?: Set<string>,
+  ): Promise<Exclude<DispatchOutcome, 'deferred'>> {
+    const { store } = this.deps
+    let stage: EventPayload<'dispatch.failed'>['stage'] = 'spec'
+    let authored = false
+    try {
+      const events = await store.getEvents(record.slug)
       if (
         !events.some((event) => event.type === 'spec.imported' || event.type === 'spec.authored')
       ) {
@@ -1541,22 +1954,15 @@ export class Dispatcher {
       // provider awaits. Re-read immediately before launch so a request made
       // during those boundaries parks cleanly for the next janitor pass.
       const launchState = reduceBuild(await store.getEvents(record.slug))
-      if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) return false
-      await this.launch(record.slug, launched)
-      if (authored) report.authored += 1
-      return true
+      if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) {
+        return 'parked'
+      }
+      if (launched === undefined) await this.deps.launchRunner(record.slug)
+      else await this.launch(record.slug, launched)
+      if (authored && report !== undefined) report.authored += 1
+      return 'completed'
     } catch (error) {
       const events = await store.getEvents(record.slug)
-      if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
-        const open = openWorkspace(events)
-        await this.recordInfrastructureFailure(record.slug, events, {
-          provider: this.deps.workspaces.name,
-          workspaceRef: open?.ref ?? record.slug,
-          operation: 'provision',
-          error,
-          cleanupPending: true,
-        })
-      }
       const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
       const message = (error instanceof Error ? error.message : String(error)).trim()
       await store.append(record.slug, {
@@ -1568,8 +1974,8 @@ export class Dispatcher {
           error: message || 'dispatch failed without an error message',
         },
       })
-      report.dispatchFailed += 1
-      return false
+      if (report !== undefined) report.dispatchFailed += 1
+      return 'failed'
     }
   }
 
@@ -1582,7 +1988,8 @@ export class Dispatcher {
       if (
         record.repo !== this.deps.repo ||
         record.ticket === undefined ||
-        launched.has(record.slug)
+        launched.has(record.slug) ||
+        this.continuations.has(record.slug)
       ) {
         continue
       }
@@ -1598,7 +2005,9 @@ export class Dispatcher {
       // Queued itself means runner attachment is still missing. Always enter
       // the fact-driven helper: it skips every completed boundary and retries
       // only the final launch when setup is already durable.
-      if (await this.attemptDispatchCompletion(record, launched, report)) report.recovered += 1
+      if ((await this.attemptDispatchCompletion(record, launched, report)) === 'completed') {
+        report.recovered += 1
+      }
     }
   }
 
@@ -1703,12 +2112,56 @@ export class Dispatcher {
       }
       const decision = decideNext(events, this.deps.config)
       if (state.status === 'done' || state.status === 'aborted') continue
+      // Liveness gate (durable supervision): a recorded execution the provider
+      // observes as RUNNING is left completely alone — no settle, no reap, no
+      // replacement, no re-attach. This is the change that stops a supervisor
+      // restart from replacing a healthy environment generation. A provider-
+      // proved end settles first (completion facts, lease release, publication)
+      // and then falls through to the normal decision; a provider-proved loss
+      // falls through to the existing stale path below.
+      const foreignExecution = openExecution(events)
+      // A provider- or log-proved end in the same generation re-attaches in
+      // place: the guest finished its work, the workspace is still the
+      // build's, and replacing the environment would discard a healthy
+      // generation. Only an unproven stale lease or a proved loss reaps.
+      const lastExecution = lastExecutionOutcome(events)
+      let endedInPlace = lastExecution === 'completed'
+      if (
+        foreignExecution !== null &&
+        foreignExecution.commandId !== undefined &&
+        !launched.has(record.slug)
+      ) {
+        const owner = this.executionOwner(foreignExecution.provider)
+        const execution = owner?.buildExecution
+        if (execution?.observe !== undefined) {
+          const settlement = await settleExecution(
+            {
+              store: this.deps.store,
+              execution,
+              ...(this.deps.settlePublication !== undefined
+                ? { settlePublication: this.deps.settlePublication }
+                : {}),
+            },
+            record.slug,
+            events,
+          )
+          if (settlement === 'running') continue
+          if (settlement === 'settled') {
+            report.settled += 1
+            endedInPlace = true
+          }
+        }
+      }
       const publicationRecoveryDue =
         state.status !== 'paused' &&
         state.status !== 'blocked' &&
         (publicationPending(events) || abandonedPublicationPending(events))
       const open = openWorkspace(events)
-      if (open !== null && this.workspaceOwner(open)?.recovery !== undefined) {
+      // A provider- or log-proved END in the same generation re-attaches in
+      // place: the guest finished its work, the workspace is still the
+      // build's, and replacing the environment would discard a healthy
+      // generation. Only an unproven stale lease or a proved loss reaps.
+      if (open !== null && this.workspaceOwner(open)?.recovery !== undefined && !endedInPlace) {
         const parked = decision.kind === 'wait' && !publicationRecoveryDue
         const reason =
           state.status === 'paused'
@@ -1719,46 +2172,33 @@ export class Dispatcher {
         const reaped = await this.reapStaleWorkspace(record.slug, events, reason)
         if (!reaped) continue
         if (!parked) {
-          try {
-            await this.provisionReplacement(record, events)
-          } catch (error) {
-            await this.recordInfrastructureFailure(record.slug, events, {
-              provider: this.deps.workspaces.name,
-              workspaceRef: open.ref,
-              operation: 'provision',
-              error,
-              cleanupPending: true,
-            })
-            // Provision remains fact-free and retryable. The deterministic
-            // generation/name adopts an unknown create on the next tick.
-            continue
+          // Recovery-capable provider: reap inline (bounded), then kick the
+          // same background continuation — it provisions and launches without
+          // blocking this tick. Local providers never enter this branch.
+          const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
+          if (kicked === 'kicked') {
+            report.provisioning += 1
+            report.swept += 1
           }
+          continue
         }
       }
+      if (decision.kind === 'wait' && !publicationRecoveryDue) continue
       if (decision.kind === 'wait' && !publicationRecoveryDue) continue
       if (
         openWorkspace(events) === null &&
         this.deps.workspaces.recovery !== undefined &&
         events.some((event) => event.type === 'workspace.provisioned')
       ) {
-        try {
-          await this.provisionReplacement(record, events)
-        } catch (error) {
-          const latestRef = [...events]
-            .reverse()
-            .find((event) => event.type === 'workspace.released')
-          await this.recordInfrastructureFailure(record.slug, events, {
-            provider: this.deps.workspaces.name,
-            workspaceRef:
-              latestRef?.type === 'workspace.released' && 'ref' in latestRef.payload
-                ? latestRef.payload.ref
-                : record.slug,
-            operation: 'provision',
-            error,
-            cleanupPending: true,
-          })
+        const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
+        if (kicked === 'kicked') {
+          report.provisioning += 1
+          report.swept += 1
           continue
         }
+        // In-flight or foreign-live: whoever owns the marker completes the
+        // boundaries and the launch; this tick performs neither.
+        continue
       }
       const result = await this.launch(record.slug, launched)
       if (result === 'scheduled') report.swept += 1
@@ -1913,13 +2353,15 @@ export class Dispatcher {
       })
       report.queued -= 1
       capacity -= 1
-      const completed = await this.attemptDispatchCompletion(record, launched, report, {
+      const outcome = await this.attemptDispatchCompletion(record, launched, report, {
         ticket,
         body,
         ...(authoredSession !== undefined ? { authoredSession } : {}),
         ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
       })
-      if (completed) report.dispatched += 1
+      // Accepted dispatches: durable boundaries recorded. A deferred outcome
+      // means the remote provisioning continuation owns the rest.
+      if (outcome === 'completed' || outcome === 'deferred') report.dispatched += 1
     }
   }
 

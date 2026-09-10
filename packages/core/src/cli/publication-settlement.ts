@@ -2,6 +2,7 @@ import type { IdSource } from '../ids'
 import { DISPATCHER, KERNEL } from '../events/envelope'
 import type { Forge, WorkspacePublication } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
+import { openExecution } from '../processes/execution-settlement'
 import {
   publicationRequestCompleted,
   publicationRequestSettled,
@@ -22,7 +23,12 @@ export interface PublicationSettlementDeps {
 
 /** Settle one durable request after the caller has observed environment
  * completion and released its exact execution lease. External effects precede
- * completion facts, making every crash gap safely retryable. */
+ * completion facts, making every crash gap safely retryable.
+ *
+ * Durable guard: before the publish path, the guest execution must be provably
+ * over — either the log has no open execution, or the build's lease is
+ * absent/expired. Publication is never attempted against a live guest and is
+ * never performed twice for one request; no in-memory set is the sole guard. */
 export async function settlePendingPublication(
   deps: PublicationSettlementDeps,
   slug: string,
@@ -45,6 +51,13 @@ export async function settlePendingPublication(
 
   try {
     if (!alreadyPublished) {
+      // Never publish against a live guest: require durable proof the guest
+      // execution ended (a recorded end or an expired/absent lease). The
+      // adapter's process-local active/uncertain sets remain a second belt.
+      const record = await deps.store.getBuild(slug)
+      const leaseLive =
+        record?.lease !== undefined && new Date(record.lease.expiresAt).getTime() > Date.now()
+      if (openExecution(events) !== null && leaseLive) return
       let ref: string | undefined
       for (const event of events) {
         if (event.type === 'workspace.provisioned') ref = event.payload.ref

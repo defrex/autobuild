@@ -33,6 +33,7 @@ import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import type { Actor } from '../events/envelope'
 import { loadConfig } from '../config/load'
+import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferral } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
 import {
@@ -132,6 +133,10 @@ export interface BuildDetail extends BuildSummary {
   observations: BuildObservation[]
   /** Current setup failure only; a later successful attachment clears it. */
   setupFailure?: SetupFailureDetail
+  /** True when the latest recorded execution has no following
+   * `execution.ended` — the guest may still be running under durable
+   * supervision even with no dispatcher process alive. */
+  executionOpen?: boolean
   /** Latest provider execution and current lifecycle failure. Full history is
    * available with --events. */
   execution?: EventPayload<'execution.started'> & { seq: number }
@@ -287,6 +292,9 @@ export function detail(
         }
       : {}),
     ...(state.executions.at(-1) !== undefined ? { execution: state.executions.at(-1)! } : {}),
+    // Durable supervision: a recorded execution with no following end is the
+    // source of truth for whether a guest may still be running.
+    executionOpen: openExecution(events) !== null,
     ...(state.infrastructureFailure !== undefined
       ? { infrastructureFailure: state.infrastructureFailure }
       : {}),
@@ -478,6 +486,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     } else if (d.decision?.kind === 'unavailable') {
       lines.push(
         '  note:     running with an expired lease — runner actionability could not be determined from the unavailable build config',
+      )
+    } else if (d.executionOpen === true) {
+      lines.push(
+        '  note:     running with an expired lease — the recorded execution is still the\n' +
+          '            source of truth: the guest may keep running and the lease sweep\n' +
+          '            re-attaches only when the guest is actually gone',
       )
     } else {
       lines.push(

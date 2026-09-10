@@ -47,6 +47,13 @@ const tickCountersSchema = z.strictObject({
   /** Added in plugin/API-era 1.4; optional so historical tick facts replay. */
   creationWithheld: z.number().int().nonnegative().optional(),
   dependencyBlocked: z.number().int().nonnegative(),
+  /** Foreign executions settled from durable facts plus provider liveness.
+   * Added with durable supervision; optional so historical tick facts replay. */
+  settled: z.number().int().nonnegative().optional(),
+  /** Builds whose remote workspace provisioning was (re-)kicked as background
+   * work this tick. Added with durable supervision; optional so historical
+   * tick facts replay. */
+  provisioning: z.number().int().nonnegative().optional(),
   harvestStarted: z.number().int().nonnegative(),
   harvestResumed: z.number().int().nonnegative(),
   harvestCompleted: z.number().int().nonnegative(),
@@ -212,6 +219,16 @@ export const dispatcherStatusEventPayloadSchemas = {
     exitCode: z.number().int().nullable().optional(),
     signal: z.string().min(1).optional(),
     error: z.string().min(1).optional(),
+    /** Optional clean-stop reason. Supersession is a normal exit (exit 0)
+     * with this reason — never a new outcome value — so historical consumers
+     * keep reading a clean stop. */
+    reason: z.enum(['superseded']).optional(),
+  }),
+  /** Durable record that this invocation found the repository held by another
+   * supervisor and performed no claims, launches, or publications. */
+  'dispatcher.tick-yielded': z.strictObject({
+    run: dispatchRun.optional(),
+    holder: z.string().min(1),
   }),
   'dispatcher.config-rejected': z.strictObject({ run: dispatchRun, error: z.string().min(1) }),
   'dispatcher.config-publication-failed': z.strictObject({
@@ -350,6 +367,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.failed': ['kernel'],
   'dispatcher.run-started': ['dispatcher'],
   'dispatcher.run-stopped': ['dispatcher'],
+  'dispatcher.tick-yielded': ['dispatcher'],
   'dispatcher.config-rejected': ['dispatcher'],
   'dispatcher.config-publication-failed': ['dispatcher'],
   'dispatcher.tick-started': ['dispatcher'],

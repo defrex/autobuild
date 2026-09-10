@@ -64,6 +64,9 @@ export interface BuildExecutionIdentity {
   environmentId?: string
   /** Provider-native session identity. A resumed persistent VM gets a new one. */
   sessionId?: string
+  /** Provider-native detached command identity, recorded durably at launch so
+   * a later process can re-observe the execution without process memory. */
+  commandId?: string
 }
 
 /** Teardown must distinguish proof from an interrupted/ambiguous acknowledgement. */
@@ -71,16 +74,41 @@ export type BuildExecutionTeardownResult =
   | { outcome: 'confirmed' | 'absent' }
   | { outcome: 'unknown'; error: string }
 
+/** How a handle's lifetime is tied to its supervising process. `local-parent`
+ * means the kernel owns the process tree and must reap it at teardown;
+ * `environment` means the guest environment owns the execution and the kernel
+ * supervises only its local wait — teardown detaches instead of stopping, so
+ * the guest outlives the supervising process and a later invocation settles
+ * the execution from the Store plus provider liveness. */
+export type BuildExecutionSupervision = 'local-parent' | 'environment'
+
 export interface BuildExecutionHandle {
   /** Available for supervision/tests, never used as build state. */
   readonly pid?: number
   readonly identity?: BuildExecutionIdentity
+  /** Explicit supervision kind. Never inferred from `environmentId` — a local
+   * pid and a remote VM id are different namespaces. */
+  readonly supervision: BuildExecutionSupervision
   /** Resolves only after the execution environment has reaped everything the
    * build started. The exit projection still describes the build leader. */
   readonly completion: Promise<BuildExecutionExit>
   /** Idempotent shutdown: graceful, bounded force escalation, then full reap. */
   stop(): Promise<BuildExecutionTeardownResult | void>
+  /** Stop supervising without touching the environment: abort the local wait
+   * only. No command kill, no environment stop, no lease release, no
+   * `execution.ended`, no publication settlement. The teardown mode when the
+   * guest must outlive the supervising process. */
+  detach(): Promise<void>
 }
+
+/** Provider liveness observation of one recorded execution, derived from
+ * provider state rather than process memory. `ended` carries the observed
+ * exit code; `lost` means the provider proved the environment/command no
+ * longer exists without an exit code. */
+export type ExecutionObservation =
+  | { state: 'running' }
+  | { state: 'ended'; exitCode?: number }
+  | { state: 'lost' }
 
 /** The substitutable seam at the workspace boundary. A remote workspace
  * provider may implement this by starting the fixed build process beside its
@@ -88,4 +116,8 @@ export interface BuildExecutionHandle {
  * teardown of the environment and descendants it starts before completion. */
 export interface BuildExecution {
   start(input: BuildExecutionStart): Promise<BuildExecutionHandle>
+  /** Optional liveness observation of a previously recorded execution, from
+   * provider state alone. Absent = this provider cannot observe; callers
+   * supervise exactly as before ("cannot observe" never means "act"). */
+  observe?(identity: BuildExecutionIdentity): Promise<ExecutionObservation>
 }

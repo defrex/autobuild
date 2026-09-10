@@ -119,6 +119,11 @@ import {
 /** Watch-loop default cadence between ticks (§3.3 re-run safety makes this a
  * pure knob — a shorter interval only polls the forge more often). */
 const DEFAULT_INTERVAL_MS = 10_000
+/** Repository supervisor lease (§12 serialization): TTL and heartbeat cadence.
+ * The heartbeat renews at a third of the TTL, so one lost beat still leaves a
+ * full interval of margin before a peer can take over. */
+const REPO_LEASE_TTL_MS = 60_000
+const REPO_LEASE_HEARTBEAT_MS = 20_000
 /** Repository artifact containing the schema-validated composed Config used by
  * one dispatch run. It is the frontend's only config source. */
 export const DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT = 'dispatcher-effective-config'
@@ -418,6 +423,10 @@ interface ActiveBuildExecution {
   handle?: BuildExecutionHandle
   settled?: Promise<void>
   stopping: boolean
+  /** Set at teardown of an environment-supervised execution: the guest keeps
+   * running, so the completion chain must append no `execution.ended`, release
+   * no lease, settle no publication, and record no wait failure. */
+  detaching?: boolean
 }
 
 /** The dispatch loop owns deterministic decisions and supervises one
@@ -428,8 +437,11 @@ class DispatchLoop {
   private readonly host = hostname()
   private readonly maxHarvestRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
-   * `--once` exit so every visible workflow reaches a durable boundary. */
+   * `--once` exit so every visible workflow reaches a durable boundary.
+   * Environment-supervised executions are tagged and deliberately NOT drained:
+   * their guests keep running and the next invocation settles them. */
   private readonly inFlight = new Set<Promise<void>>()
+  private readonly inFlightKinds = new Map<Promise<void>, 'local-parent' | 'environment'>()
   /** One active execution per slug in this kernel. Reservations are acquired
    * before awaits; the durable lease remains the cross-kernel exclusion gate. */
   private readonly activeBuildRuns = new Map<string, ActiveBuildExecution>()
@@ -513,6 +525,22 @@ class DispatchLoop {
   private cleanupInput: (() => void) | undefined
   /** Raw Ctrl-C does not raise SIGINT; this wakes the same watch loop. */
   private readonly inputStop = new AbortController()
+  /** Repository supervisor lease (§12 serialization): this invocation's holder
+   * id while it holds the repo lease, else undefined. A losing invocation
+   * records `dispatcher.tick-yielded` and performs no claims, launches, or
+   * publications. */
+  private repoLeaseHolder: string | undefined
+  private repoLeaseHeartbeat: ReturnType<typeof setInterval> | undefined
+  /** Set when the store reports this supervisor's repo lease was taken over:
+   * stop accepting launches, detach/reap, signal continuations, and exit watch
+   * mode cleanly. */
+  private superseded = false
+  /** Public teardown fact for the durable `dispatcher.run-stopped` reason. */
+  get supersededByPeer(): boolean {
+    return this.superseded
+  }
+  /** The holder id this invocation already recorded a `tick-yielded` for. */
+  private yieldedTo: string | undefined
 
   constructor(
     private readonly liveConfig: LiveConfig,
@@ -566,6 +594,10 @@ class DispatchLoop {
       nameSlug,
       ids: wiring.ids,
       clock: wiring.clock,
+      // Durable supervision: settle publication from the log-backed guard and
+      // skip foreign-execution settlement for builds this process supervises.
+      settlePublication: (slug) => this.settlePendingPublication(slug),
+      activeExecutions: () => new Set(this.activeBuildRuns.keys()),
       opts: {
         maxHarvestRecoveryAttempts: this.maxHarvestRecoveryAttempts,
       },
@@ -655,6 +687,19 @@ class DispatchLoop {
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.refreshConfig()
+      // Every tick first tries the repository supervisor lease. Without it,
+      // this invocation records the yield and performs no claims, launches,
+      // or publications — including no tick-completed status publication.
+      if (
+        !(await this.ensureRepoLease(
+          this.repoLeaseHolder ??
+            this.opts.kernelRunId ??
+            `${this.host}-dispatch-${this.wiring.ids('inst')}`,
+        ))
+      ) {
+        await this.recordTickYielded()
+        return emptyTickReport()
+      }
       await this.appendStatus({
         actor: DISPATCHER,
         type: 'dispatcher.tick-started',
@@ -1590,6 +1635,7 @@ class DispatchLoop {
       uuids,
       clock,
       instance: `${this.host}-harvest-${ids('inst')}`,
+      ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
       sessionEnv: {
         AB_STORE: storeRef,
         ...(token !== undefined ? { AB_TOKEN: token } : {}),
@@ -1873,6 +1919,10 @@ class DispatchLoop {
       tracked = handle.completion
         .then(
           async (exit) => {
+            // A detached execution's guest keeps running: no `execution.ended`,
+            // no lease release, no publication settlement — the next
+            // supervisor settles the execution from the Store.
+            if (active.detaching) return
             try {
               await this.wiring.store.append(slug, {
                 actor: DISPATCHER,
@@ -1927,6 +1977,9 @@ class DispatchLoop {
             }
           },
           async (error) => {
+            // A detached wait is teardown of local supervision, not a guest
+            // failure; the next supervisor re-observes the execution.
+            if (active.detaching) return
             // A rejected executor completion cannot prove the remote VM was
             // stopped. Keep the lease until expiry: recovery fences and reaps
             // the exact recorded identity before authorizing a replacement.
@@ -1942,6 +1995,7 @@ class DispatchLoop {
           },
         )
         .finally(() => {
+          this.inFlightKinds.delete(tracked)
           this.inFlight.delete(tracked)
           if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
             this.activeBuildRuns.delete(slug)
@@ -1949,6 +2003,7 @@ class DispatchLoop {
         })
       active.settled = tracked
       this.inFlight.add(tracked)
+      this.inFlightKinds.set(tracked, handle.supervision)
       return 'scheduled'
     } catch (error) {
       if (this.activeBuildRuns.get(slug)?.reservation === reservation) {
@@ -1995,21 +2050,49 @@ class DispatchLoop {
     return this.opts.signal?.aborted === true || this.inputStop.signal.aborted
   }
 
+  /** `--once` awaits only local-parent executions and harvest: an
+   * environment-supervised execution keeps running in its guest, and a later
+   * invocation settles its completion from the Store alone. */
   private async drainInFlight(): Promise<void> {
-    while (this.inFlight.size > 0) {
-      await Promise.all([...this.inFlight])
+    for (;;) {
+      const pending = [...this.inFlight].filter(
+        (promise) => this.inFlightKinds.get(promise) !== 'environment',
+      )
+      if (pending.length === 0) return
+      await Promise.all(pending)
     }
   }
 
-  /** Ordinary kernel teardown reaps every build process. Deliberate stops are
-   * liveness-only and do not manufacture runner-failure notices; each exact
-   * execution lease is released only after its complete tree has settled. */
+  /** Teardown distinguishes supervision kinds. A local-parent execution is
+   * stopped and reaped exactly as before. An environment-supervised execution
+   * is DETACHED: the guest keeps running and heartbeating its lease; the next
+   * invocation settles the execution from the Store plus provider liveness
+   * (AC: a restarted dispatcher never replaces a healthy environment). */
   private async stopBuildExecutions(): Promise<void> {
     this.acceptingBuildLaunches = false
     const active = [...this.activeBuildRuns.entries()]
-    for (const [, entry] of active) entry.stopping = true
+    for (const [, entry] of active) {
+      if (entry.handle?.supervision === 'environment') entry.detaching = true
+      else entry.stopping = true
+    }
     await Promise.all(
       active.map(async ([slug, entry]) => {
+        if (entry.handle?.supervision === 'environment') {
+          // Abort the local wait only — no command kill, no environment stop,
+          // no lease release, no durable end. Drop the tracking so the
+          // process can exit while the guest outlives it.
+          try {
+            await entry.handle.detach()
+          } catch {
+            // Detach is best-effort: an unresolvable wait still exits.
+          }
+          this.activeBuildRuns.delete(slug)
+          if (entry.settled !== undefined) {
+            this.inFlight.delete(entry.settled)
+            this.inFlightKinds.delete(entry.settled)
+          }
+          return
+        }
         const result = await entry.handle?.stop()
         if (result?.outcome === 'unknown') {
           await this.recordInfrastructureFailure({
@@ -2421,9 +2504,107 @@ class DispatchLoop {
     }
   }
 
+  // ── Repository supervisor lease (§12 serialization) ────────────────────────
+
+  /** Claim (or renew) the repository lease for this invocation and start the
+   * heartbeat timer. False means another supervisor holds it: the caller
+   * yields — no claims, launches, or publications. */
+  private async ensureRepoLease(holder: string): Promise<boolean> {
+    if (this.superseded) return false
+    const claimed = await this.wiring.store
+      .claimRepoLease(this.opts.targetRepo, holder, REPO_LEASE_TTL_MS)
+      .catch(() => false)
+    if (!claimed) {
+      if (this.repoLeaseHolder !== undefined) {
+        // We held the lease and the store says it is gone: a peer took over.
+        this.superseded = true
+      }
+      return false
+    }
+    if (this.repoLeaseHolder === undefined) {
+      this.repoLeaseHolder = holder
+      this.startRepoLeaseHeartbeat(holder)
+    }
+    return true
+  }
+
+  private startRepoLeaseHeartbeat(holder: string): void {
+    if (this.repoLeaseHeartbeat !== undefined) return
+    this.repoLeaseHeartbeat = setInterval(() => {
+      this.wiring.store.heartbeatRepo(this.opts.targetRepo, holder).then(
+        (alive) => {
+          if (alive) return
+          // A peer holds the repository now. Exit watch mode cleanly after
+          // the same teardown every stop takes (detach remote / reap local,
+          // signal continuations, release the lease).
+          this.superseded = true
+          this.inputStop.abort()
+        },
+        () => {
+          // Store unreachable: retry on the next beat; a later false result
+          // proves takeover.
+        },
+      )
+    }, REPO_LEASE_HEARTBEAT_MS)
+    this.repoLeaseHeartbeat.unref?.()
+  }
+
+  private stopRepoLeaseHeartbeat(): void {
+    if (this.repoLeaseHeartbeat !== undefined) clearInterval(this.repoLeaseHeartbeat)
+    this.repoLeaseHeartbeat = undefined
+  }
+
+  /** Durable record that this invocation found the repository held and
+   * performed no claims, launches, or publications. The holder is resolved
+   * from the repository record. Recorded once per yield period, not once per
+   * retrying tick. */
+  private async recordTickYielded(): Promise<void> {
+    try {
+      const record = await this.wiring.store.getRepo(this.opts.targetRepo).catch(() => null)
+      const holder = record?.lease?.holder
+      if (holder === undefined || this.yieldedTo === holder) return
+      this.yieldedTo = holder
+      await this.wiring.store.appendRepo(this.opts.targetRepo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-yielded',
+        payload: {
+          ...(this.opts.kernelRunId !== undefined ? { run: this.opts.kernelRunId } : {}),
+          holder,
+        },
+      })
+    } catch {
+      // Presentation-only durable evidence; the yield behavior is unchanged.
+    }
+  }
+
+  private async releaseRepoLease(): Promise<void> {
+    this.stopRepoLeaseHeartbeat()
+    const holder = this.repoLeaseHolder
+    this.repoLeaseHolder = undefined
+    if (holder === undefined) return
+    try {
+      await this.wiring.store.releaseRepoLease(this.opts.targetRepo, holder)
+    } catch {
+      // Expiry fences an ambiguous release.
+    }
+  }
+
   async run(): Promise<void> {
     // Before the `--once` branch, so both modes report it exactly once.
     this.reportRoleDiagnostics()
+    // Repository supervisor lease (§12): two invocations for one repository
+    // never both act. A losing invocation records the yield and performs no
+    // claims, launches, or publications.
+    const holder = this.opts.kernelRunId ?? `${this.host}-dispatch-${this.wiring.ids('inst')}`
+    if (!(await this.ensureRepoLease(holder))) {
+      await this.recordTickYielded()
+      const peer = (await this.wiring.store.getRepo(this.opts.targetRepo).catch(() => null))?.lease
+        ?.holder
+      const message = `tick yielded: repository held by ${peer ?? 'another invocation'}`
+      this.warn(message)
+      if (this.opts.once === true) return
+      // Watch mode stays alive and retries the claim at every tick.
+    }
     const capacity = this.currentConfig().config.capacity
     if (this.opts.once) {
       if (!this.dashboard) {
@@ -2449,7 +2630,11 @@ class DispatchLoop {
         }
       } finally {
         await this.stopBuildExecutions()
+        // Signal provisioning continuations and release their leases before
+        // the repository lease, so the next supervisor adopts immediately.
+        await this.dispatcher.stopProvisioning()
         await this.finishRendering()
+        await this.releaseRepoLease()
       }
       return
     }
@@ -2469,7 +2654,7 @@ class DispatchLoop {
       this.startRendering()
       this.startUpgradeChecks()
       let startup = true
-      while (!this.stopped) {
+      while (!this.stopped && !this.superseded) {
         try {
           const report = await this.dispatcherTick(startup)
           this.printReport(report, this.harvestInFlight === undefined)
@@ -2483,11 +2668,17 @@ class DispatchLoop {
           })
           this.warn(`tick failed: ${message}`)
         }
-        if (this.stopped) break
+        if (this.stopped || this.superseded) break
         await sleep(intervalMs)
+      }
+      if (this.superseded) {
+        this.warn('dispatcher superseded by another invocation — detaching')
       }
     } finally {
       await this.stopBuildExecutions()
+      // Signal provisioning continuations and release their leases before
+      // the repository lease, so the next supervisor adopts immediately.
+      await this.dispatcher.stopProvisioning()
       // Stop input and join teardown work first so every result that becomes
       // reportable at that boundary is included. Active Harvest work is still
       // deliberately not awaited in watch mode.
@@ -2495,6 +2686,7 @@ class DispatchLoop {
       for (const report of await this.publishSettlementReports()) {
         this.printReport(report, false)
       }
+      await this.releaseRepoLease()
     }
     // The finished interactive frame stays on screen; never append a late line
     // beneath it. Plain mode retains its historical shutdown line.
@@ -2722,7 +2914,12 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
       await wiring.store.appendRepo(resolvedOpts.targetRepo, {
         actor: DISPATCHER,
         type: 'dispatcher.run-stopped',
-        payload: { run: resolvedOpts.kernelRunId, outcome: 'normal', exitCode: 0 },
+        payload: {
+          run: resolvedOpts.kernelRunId,
+          outcome: 'normal',
+          exitCode: 0,
+          ...(loop.supersededByPeer ? { reason: 'superseded' as const } : {}),
+        },
       })
     }
   } catch (error) {
