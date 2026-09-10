@@ -70,7 +70,7 @@ import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/type
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
-import { openExecution, settleExecution } from './execution-settlement'
+import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
@@ -873,6 +873,12 @@ export class Dispatcher {
     let heartbeat: ReturnType<typeof setInterval> | undefined
     const stage: EventPayload<'dispatch.failed'>['stage'] = 'workspace'
     try {
+      if (entry.controller.signal.aborted) {
+        // Signalled before the body even started (teardown raced the kick):
+        // exit before claiming anything; stopProvisioning already released
+        // the marker's lease so the next supervisor adopts immediately.
+        return
+      }
       leaseClaimed = await store.claimLease(slug, entry.instance, BUILD_EXECUTION_LEASE_TTL_MS)
       if (!leaseClaimed) return // another live holder — the next tick re-evaluates
       heartbeat = setInterval(() => {
@@ -2112,6 +2118,12 @@ export class Dispatcher {
       // and then falls through to the normal decision; a provider-proved loss
       // falls through to the existing stale path below.
       const foreignExecution = openExecution(events)
+      // A provider- or log-proved end in the same generation re-attaches in
+      // place: the guest finished its work, the workspace is still the
+      // build's, and replacing the environment would discard a healthy
+      // generation. Only an unproven stale lease or a proved loss reaps.
+      const lastExecution = lastExecutionOutcome(events)
+      let endedInPlace = lastExecution === 'completed'
       if (
         foreignExecution !== null &&
         foreignExecution.commandId !== undefined &&
@@ -2132,7 +2144,10 @@ export class Dispatcher {
             events,
           )
           if (settlement === 'running') continue
-          if (settlement === 'settled') report.settled += 1
+          if (settlement === 'settled') {
+            report.settled += 1
+            endedInPlace = true
+          }
         }
       }
       const publicationRecoveryDue =
@@ -2140,7 +2155,11 @@ export class Dispatcher {
         state.status !== 'blocked' &&
         (publicationPending(events) || abandonedPublicationPending(events))
       const open = openWorkspace(events)
-      if (open !== null && this.workspaceOwner(open)?.recovery !== undefined) {
+      // A provider- or log-proved END in the same generation re-attaches in
+      // place: the guest finished its work, the workspace is still the
+      // build's, and replacing the environment would discard a healthy
+      // generation. Only an unproven stale lease or a proved loss reaps.
+      if (open !== null && this.workspaceOwner(open)?.recovery !== undefined && !endedInPlace) {
         const parked = decision.kind === 'wait' && !publicationRecoveryDue
         const reason =
           state.status === 'paused'

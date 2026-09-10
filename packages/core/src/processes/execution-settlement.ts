@@ -56,6 +56,22 @@ export function openExecution(events: AbEvent[]): {
   return open
 }
 
+/** The lifecycle state of the latest recorded execution: `open` (no matching
+ * end yet), `completed`/`stopped`/`lost` (its recorded end), or `none`. */
+export function lastExecutionOutcome(
+  events: AbEvent[],
+): 'open' | 'completed' | 'stopped' | 'lost' | 'none' {
+  let state: 'open' | 'completed' | 'stopped' | 'lost' | 'none' = 'none'
+  for (const event of events) {
+    if (event.type === 'execution.started') {
+      state = 'open'
+    } else if (event.type === 'execution.ended' && state === 'open') {
+      state = event.payload.outcome
+    }
+  }
+  return state
+}
+
 function observationIdentity(open: {
   instance: string
   workspaceRef: string
