@@ -154,6 +154,8 @@ function harness(
     provisioning?: Array<{ name: string; command: string }>
     /** The session cwd the fake reports; undefined models an SDK without one. */
     cwd?: string
+    /** Overrides the facade's get; e.g. to model an unreachable provider. */
+    facadeGet?: () => Promise<VercelSandboxHandle | null>
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -163,8 +165,10 @@ function harness(
   let created = false
   let creates = 0
   const facade: VercelSandboxFacade = {
-    get: async () =>
-      created && (sandbox.deletes === 0 || sandbox.remainAfterDelete) ? sandbox : null,
+    get:
+      options.facadeGet ??
+      (async () =>
+        created && (sandbox.deletes === 0 || sandbox.remainAfterDelete) ? sandbox : null),
     create: async (input) => {
       created = true
       creates += 1
@@ -945,6 +949,137 @@ describe('VercelSandboxProvider', () => {
 
     expect(await execution.completion).toEqual({ exitCode: 0 })
     expect(waits).toBe(3)
+  })
+
+  test('observes a recorded execution from provider state within two bounded round trips', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // Hold the wait open so the detached command stays provably running.
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-observe',
+      workspaceRef: workspace.ref,
+    })
+    const identity = execution.identity!
+    expect(identity.commandId).toBeDefined()
+
+    // A registered command with a null exit code is still running.
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'running',
+    })
+    expect(h.sandbox.getCommandCalls).toBe(1)
+
+    // A non-null exit code is a proved end carrying that code.
+    h.sandbox.detachedCommands.set(identity.commandId!, { exitCode: 7 })
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'ended',
+      exitCode: 7,
+    })
+    expect(h.sandbox.getCommandCalls).toBe(2)
+  })
+
+  test('observes lost executions: stopped session, a resumed session 404, and an absent sandbox', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-observe-lost',
+      workspaceRef: workspace.ref,
+    })
+    const identity = execution.identity!
+
+    // A session that is no longer running proves the execution cannot be
+    // observed, even before re-fetching the command.
+    h.sandbox.sessionStatus = 'stopped'
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
+    expect(h.sandbox.getCommandCalls).toBe(0)
+    h.sandbox.sessionStatus = 'running'
+
+    // A command the current (resumed) session no longer knows 404s: lost.
+    h.sandbox.detachedCommands.delete(identity.commandId!)
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
+
+    // A sandbox the facade can no longer resolve at all is lost.
+    await h.sandbox.delete()
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
+  })
+
+  test('an execution without a recorded command id cannot be re-observed', async () => {
+    const h = harness()
+    await expect(
+      h.provider.buildExecution.observe!({
+        provider: 'vercel-sandbox',
+        workspaceRef: 'never-provisioned',
+      }),
+    ).rejects.toThrow(/no recorded command id/)
+  })
+
+  test('unresolvable provider errors propagate from observe — callers treat them as running', async () => {
+    const h = harness({
+      facadeGet: async (): Promise<VercelSandboxHandle | null> => {
+        throw new Error('provider unreachable')
+      },
+    })
+    await expect(
+      h.provider.buildExecution.observe!({
+        provider: 'vercel-sandbox',
+        workspaceRef: 'unreachable',
+        commandId: 'cmd-1',
+      }),
+    ).rejects.toThrow('provider unreachable')
+  })
+
+  test('detach resolves the wait without touching the guest and publication still refuses', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The fake long-poll rejects with the abort reason, honouring the widened
+    // wait signature: a detached wait is abort, not failure.
+    h.sandbox.detachedWait = (params?: { signal?: AbortSignal }) =>
+      new Promise<never>((_, reject) => {
+        params?.signal?.addEventListener('abort', () => {
+          reject(params.signal!.reason ?? new Error('aborted'))
+        })
+      })
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-detach',
+      workspaceRef: workspace.ref,
+    })
+    const completion = execution.completion
+    // Provisioning itself stops the setup shell once; only a stop beyond that
+    // baseline would be the completion chain tearing the guest down.
+    const stopsBeforeDetach = h.sandbox.stops
+    const deletesBeforeDetach = h.sandbox.deletes
+    await execution.detach()
+
+    // The abandoned completion chain resolves without an error and never
+    // stops, kills, or deletes the guest the next supervisor is supervising.
+    await expect(completion).resolves.toEqual({ exitCode: null })
+    expect(h.sandbox.killSignals).toHaveLength(0)
+    expect(h.sandbox.stops).toBe(stopsBeforeDetach)
+    expect(h.sandbox.deletes).toBe(deletesBeforeDetach)
+
+    // The execution is still provider-live: publication remains forbidden.
+    await expect(
+      h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: 'ab/remote-build' }),
+    ).rejects.toThrow(/publication is forbidden until sandbox execution teardown is confirmed/)
   })
 
   test('a non-transient wait failure still rejects the completion', async () => {
