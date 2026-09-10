@@ -228,9 +228,10 @@ export function createVercelSdkFacade(
       })
     },
     async listSnapshots(name, signal) {
+      // The API rejects `limit` above 50; `toArray()` walks every page.
       const page = await Snapshot.list({
         name,
-        limit: 100,
+        limit: 50,
         ...(signal === undefined ? {} : { signal }),
         ...credentials,
       })
