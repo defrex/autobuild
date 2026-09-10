@@ -129,6 +129,8 @@ export function reduceDispatchStatus(
             event.payload.error !== undefined ? `: ${event.payload.error}` : ''
           }`
           state.warningNotice = state.notice
+        } else if (event.payload.reason === 'superseded') {
+          state.notice = 'dispatcher superseded by another invocation'
         }
         break
       default:

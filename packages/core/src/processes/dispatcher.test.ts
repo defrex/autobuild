@@ -2375,10 +2375,13 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     await seedInterrupted(h, 'provisioning-budget')
 
     for (const attempt of [1, 2]) {
+      // The tick records the durable marker and returns without awaiting the
+      // background continuation; the failure lands durably inside it.
       expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual({
         ...emptyTickReport(),
-        dispatchFailed: 1,
+        provisioning: 1,
       })
+      await h.dispatcher.drainProvisioning()
       const failures = (await h.store.getEvents('provisioning-budget')).filter(
         (event) => event.type === 'infrastructure.failed',
       )
@@ -3497,7 +3500,10 @@ describe('Dispatcher janitor', () => {
     })
     h.forge.setPrState(1, { state: 'open', mergeable: false })
 
-    expect((await h.dispatcher.tick()).janitorFailed).toBe(1)
+    // The janitor kicks the background replacement provisioning and returns;
+    // the provision failure is recorded durably inside the continuation.
+    expect((await h.dispatcher.tick()).janitorFailed).toBe(0)
+    await h.dispatcher.drainProvisioning()
 
     const failures = (await h.store.getEvents(slug)).filter(
       (event) => event.type === 'infrastructure.failed' && event.payload.operation === 'provision',
@@ -4262,6 +4268,9 @@ describe('Dispatcher lease sweep', () => {
     h.clock.advance(101)
 
     expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+    // The replacement provision runs inside the kicked background continuation,
+    // whose tail re-attaches the runner once the workspace exists.
+    await h.dispatcher.drainProvisioning()
     expect(operations).toEqual(['reap:sandbox-g0', 'provision'])
     expect(recoveredRevision).toBe('fake-base-sha')
     expect(recoveredGeneration).toBe(1)

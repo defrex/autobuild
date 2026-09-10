@@ -81,6 +81,11 @@ export interface HarvestRunnerDeps {
   uuids: UuidSource
   clock: Clock
   instance: string
+  /** Repository-lease holder adopted from the owning DispatchLoop: when
+   * present, the runner skips its own claim, heartbeats with that holder, and
+   * never releases at the end — the owning loop holds the lease for its
+   * lifetime. Absent keeps the standalone self-claiming behavior. */
+  leaseHolder?: string
   sessionEnv?: Record<string, string>
   opts?: HarvestRunnerOpts
 }
@@ -188,7 +193,10 @@ export class HarvestRunner {
   async run(): Promise<HarvestRunnerResult> {
     const { store, repo, instance } = this.deps
     await store.ensureRepo(repo)
-    if (!(await store.claimRepoLease(repo, instance, this.leaseTtlMs))) {
+    if (
+      this.deps.leaseHolder === undefined &&
+      !(await store.claimRepoLease(repo, instance, this.leaseTtlMs))
+    ) {
       return { outcome: 'held' }
     }
     let initial: 'started' | 'resumed' = 'resumed'
@@ -294,7 +302,8 @@ export class HarvestRunner {
         }
         this.producer = undefined
       }
-      await store.releaseRepoLease(repo, instance)
+      // An adopted holder is released by the owning DispatchLoop, never here.
+      if (this.deps.leaseHolder === undefined) await store.releaseRepoLease(repo, instance)
     }
   }
 
@@ -1471,17 +1480,19 @@ export class HarvestRunner {
    * ownership. */
   private async ensureLease(): Promise<void> {
     if (!this.leaseLost) return
-    const { store, repo, instance } = this.deps
-    const reclaimed = await store.claimRepoLease(repo, instance, this.leaseTtlMs)
-    if (!reclaimed) throw new HarvestLeaseLostError(repo, instance)
+    const { store, repo } = this.deps
+    const holder = this.deps.leaseHolder ?? this.deps.instance
+    const reclaimed = await store.claimRepoLease(repo, holder, this.leaseTtlMs)
+    if (!reclaimed) throw new HarvestLeaseLostError(repo, holder)
     this.leaseLost = false
   }
 
   private async startHeartbeat(): Promise<void> {
-    const { store, repo, instance } = this.deps
-    if (!(await store.heartbeatRepo(repo, instance))) this.leaseLost = true
+    const { store, repo } = this.deps
+    const holder = this.deps.leaseHolder ?? this.deps.instance
+    if (!(await store.heartbeatRepo(repo, holder))) this.leaseLost = true
     this.heartbeatTimer = setInterval(() => {
-      store.heartbeatRepo(repo, instance).then(
+      store.heartbeatRepo(repo, holder).then(
         (alive) => {
           if (!alive) this.leaseLost = true
         },

@@ -164,9 +164,9 @@ function sdkCredentials(env: Record<string, string | undefined>): Record<string,
 /** The SDK's session metadata is a live getter on the returned object, but the
  * adapter's handle interface names it `sessionStatus`. Bridge it in place so
  * every facade-returned handle carries fresh session state for observation. */
-function withSessionMetadata(sandbox: unknown): VercelSandboxHandle {
+function withSessionMetadata(sandbox: object): VercelSandboxHandle {
   const status = () => (sandbox as { status?: VercelSandboxHandle['sessionStatus'] }).status
-  if (status() !== undefined && !Object.prototype.hasOwnProperty.call(sandbox, 'sessionStatus')) {
+  if (status() !== undefined && !Object.hasOwn(sandbox, 'sessionStatus')) {
     Object.defineProperty(sandbox, 'sessionStatus', { get: status, configurable: true })
   }
   return sandbox as VercelSandboxHandle

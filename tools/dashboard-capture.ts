@@ -755,6 +755,26 @@ async function capturePaint(
   const sentinelLeaseNotices = new Set(
     HAPPY_BUILDS.map(({ slug }) => `build ${slug} already held by another runner — skipped`),
   )
+  // The supervised kernel claims the repository lease itself, so the sentinel
+  // holder must stand down for the capture. The adopting HarvestRunner is
+  // then held off the seeded open run by failing its adopted-holder liveness
+  // heartbeat (and every later lease claim): the loop's own 20 s heartbeat
+  // timer never fires inside one --once capture.
+  const happyHarness = spec.scenario === 'happy'
+  const originalHeartbeatRepo = harness.store.heartbeatRepo.bind(harness.store)
+  const originalClaimRepoLease = harness.store.claimRepoLease.bind(harness.store)
+  let repoLeaseClaims = 0
+  if (happyHarness) {
+    await harness.store.ensureRepo(harness.origin)
+    await harness.store.releaseRepoLease(harness.origin, 'sentinel-happy-harvest')
+    harness.store.heartbeatRepo = async () => false
+    harness.store.claimRepoLease = async (repo, holder, ttl) => {
+      repoLeaseClaims += 1
+      // The loop's run() claim and its single tick's renewal; any later claim
+      // is the adopting HarvestRunner re-acquiring after its lost heartbeat.
+      return repoLeaseClaims <= 2 ? originalClaimRepoLease(repo, holder, ttl) : false
+    }
+  }
 
   await abDispatch({
     targetRepo: harness.origin,
@@ -819,6 +839,12 @@ async function capturePaint(
       return lines
     },
   })
+
+  if (happyHarness) {
+    harness.store.heartbeatRepo = originalHeartbeatRepo
+    harness.store.claimRepoLease = originalClaimRepoLease
+    await harness.store.claimRepoLease(harness.origin, 'sentinel-happy-harvest', HAPPY_LEASE_TTL_MS)
+  }
 
   if (stderr.length > 0) {
     throw new Error(`dashboard capture ${spec.id}: nested dispatch reported ${stderr.join('; ')}`)
