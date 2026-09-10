@@ -1801,6 +1801,7 @@ class DispatchLoop {
         exec: this.opts.exec,
         ids: this.wiring.ids,
         runId: this.opts.kernelRunId!,
+        clock: this.wiring.clock,
       },
       slug,
     )

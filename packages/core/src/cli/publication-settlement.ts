@@ -7,7 +7,7 @@ import {
   publicationRequestCompleted,
   publicationRequestSettled,
 } from '../processes/publication-state'
-import type { BuildStore } from '../store/types'
+import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { completeFinalizePr } from './terminals'
 
 export interface PublicationSettlementDeps {
@@ -19,6 +19,10 @@ export interface PublicationSettlementDeps {
   exec: Exec
   ids: IdSource
   runId: string
+  /** Time source for the durable lease-liveness guard; defaults to the
+   * system clock. The same injected clock the dispatcher uses for lease
+   * liveness. */
+  clock?: Clock
 }
 
 /** Settle one durable request after the caller has observed environment
@@ -55,8 +59,10 @@ export async function settlePendingPublication(
       // execution ended (a recorded end or an expired/absent lease). The
       // adapter's process-local active/uncertain sets remain a second belt.
       const record = await deps.store.getBuild(slug)
+      const clock = deps.clock ?? systemClock
       const leaseLive =
-        record?.lease !== undefined && new Date(record.lease.expiresAt).getTime() > Date.now()
+        record?.lease !== undefined &&
+        new Date(record.lease.expiresAt).getTime() > clock().getTime()
       if (openExecution(events) !== null && leaseLive) return
       let ref: string | undefined
       for (const event of events) {
