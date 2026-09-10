@@ -127,6 +127,9 @@ alternates = [
 
 [policy]
 stallRounds = 3          # a finding surviving N review rounds escalates
+# Cheaper gateway models need more wall-clock per implement turn; the default
+# 3600 s expired mid-turn on a large ticket (2026-09-10) and discarded the work.
+sessionBudgetSeconds = 10800
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
