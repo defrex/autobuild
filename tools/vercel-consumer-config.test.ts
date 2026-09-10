@@ -20,7 +20,7 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(workspace).toMatchObject({
     image: 'vercel/sandbox/universal:latest',
     vcpus: 4,
-    timeoutSeconds: 2700,
+    timeoutSeconds: 14400,
     operationTimeoutMs: 30_000,
     environmentVariables: ['AI_GATEWAY_API_KEY'],
   })

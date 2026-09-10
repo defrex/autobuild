@@ -15,7 +15,10 @@ provider = "vercel-sandbox"
 [workspace.config]
 image = "vercel/sandbox/universal:latest"
 vcpus = 4
-timeoutSeconds = 2700
+# One execution spans every phase up to a park point, and a single agent turn may
+# use the full policy session budget (3600 s), so the guest lifetime must cover
+# several turns. At 2700 s implement sessions were cut off mid-turn (2026-09-10).
+timeoutSeconds = 14400
 operationTimeoutMs = 30000
 environmentVariables = ["AI_GATEWAY_API_KEY"]
 # The universal image is Ubuntu, where the apt `chromium` package is a snap
