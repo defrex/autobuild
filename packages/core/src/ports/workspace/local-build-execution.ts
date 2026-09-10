@@ -67,6 +67,7 @@ export class LocalBuildExecution implements BuildExecution {
 
     return {
       pid: child.pid,
+      supervision: 'local-parent',
       identity: {
         provider: 'local-process',
         workspaceRef: input.workspaceRef,
@@ -76,6 +77,11 @@ export class LocalBuildExecution implements BuildExecution {
       stop: async () => {
         await Promise.all([reap(), leaderExit])
         return { outcome: 'confirmed' }
+      },
+      // A local execution cannot outlive its parent's teardown: detach is the
+      // same full reap as stop (the kernel reaps local children on teardown).
+      detach: async () => {
+        await Promise.all([reap(), leaderExit])
       },
     }
   }

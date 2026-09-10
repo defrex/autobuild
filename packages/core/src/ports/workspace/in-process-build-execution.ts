@@ -15,11 +15,15 @@ export class InProcessBuildExecution implements BuildExecution {
       )
     return {
       identity: { provider: 'in-process', workspaceRef: input.workspaceRef },
+      supervision: 'local-parent',
       completion,
       async stop() {
         // Scripted test turns are finite. Cancellation behavior belongs to the
         // real local supervisor tests rather than this deterministic double.
         return { outcome: 'confirmed' }
+      },
+      async detach() {
+        // Scripted test turns are finite and leave nothing to reap.
       },
     }
   }

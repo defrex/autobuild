@@ -108,7 +108,12 @@ readyState = "ready"
     const opts = baseOpts()
     const execution: BuildExecution = {
       async start() {
-        return { completion: Promise.resolve({ exitCode: 0 }), async stop() {} }
+        return {
+          supervision: 'local-parent',
+          completion: Promise.resolve({ exitCode: 0 }),
+          async stop() {},
+          async detach() {},
+        }
       },
     }
     const selected = Object.assign(new FakeWorkspaceProvider({ mode: 'logical' }), {

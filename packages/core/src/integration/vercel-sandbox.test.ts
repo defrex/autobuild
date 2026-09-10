@@ -44,6 +44,9 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
     readonly name = 'autobuild-composed'
     provisioned = false
     deleted = false
+    getCommand(): Promise<{ exitCode: number | null }> {
+      return Promise.resolve({ exitCode: null })
+    }
 
     async runCommand(params: Record<string, unknown>) {
       commands.push(params)
@@ -58,6 +61,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
         ) as { slug: string }
         const command: VercelCommand = {
           exitCode: null,
+          cmdId: 'cmd-e2e',
           kill: async () => undefined,
           wait: async () => {
             stage += 1

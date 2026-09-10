@@ -43,10 +43,27 @@ class FakeSandbox implements VercelSandboxHandle {
   failureStdout = ''
   failureStderr = ''
   provisioned = false
-  detachedWait: () => Promise<{ exitCode: number }> = async () => ({ exitCode: 0 })
+  detachedWait: (params?: { signal?: AbortSignal }) => Promise<{ exitCode: number }> =
+    async () => ({
+      exitCode: 0,
+    })
+  /** Session status reported to `observe`; undefined models an SDK without it. */
+  sessionStatus: VercelSandboxHandle['sessionStatus'] = 'running'
+  /** Recorded detached commands by id, for `getCommand` re-observation. */
+  readonly detachedCommands = new Map<string, { exitCode: number | null }>()
+  getCommandCalls = 0
 
   currentSession() {
     return { sessionId: 'session-1' }
+  }
+
+  async getCommand(cmdId: string, _opts?: { signal?: AbortSignal }) {
+    this.getCommandCalls += 1
+    const command = this.detachedCommands.get(cmdId)
+    if (command === undefined) {
+      throw Object.assign(new Error('command not found'), { response: { status: 404 } })
+    }
+    return command
   }
 
   async runCommand(params: Record<string, unknown>) {
@@ -61,9 +78,20 @@ class FakeSandbox implements VercelSandboxHandle {
     if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
     if (params.cmd === 'touch') this.provisioned = true
     if (params.detached === true) {
+      const cmdId = `cmd-${this.commands.length}`
+      this.detachedCommands.set(cmdId, { exitCode: null })
       return {
         exitCode: null,
-        wait: this.detachedWait,
+        cmdId,
+        wait: (waitParams?: { signal?: AbortSignal }) => {
+          if (waitParams?.signal?.aborted === true) {
+            return Promise.reject(waitParams.signal.reason ?? new Error('aborted'))
+          }
+          return this.detachedWait(waitParams).then((result) => {
+            this.detachedCommands.set(cmdId, { exitCode: result.exitCode })
+            return result
+          })
+        },
         kill: async (_signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }) => {
           this.killSignals.push(opts?.abortSignal)
         },
@@ -838,14 +866,15 @@ describe('VercelSandboxProvider', () => {
       instance: 'i-1',
       workspaceRef: workspace.ref,
     })
+    const launch = h.sandbox.commands.find((command) => command.detached === true)!
     expect(handle.identity).toEqual({
       provider: 'vercel-sandbox',
       workspaceRef: workspace.ref,
       environmentId: 'sandbox',
       sessionId: 'session-1',
+      commandId: `cmd-${h.sandbox.commands.indexOf(launch) + 1}`,
     })
     expect(await handle.completion).toEqual({ exitCode: 0 })
-    const launch = h.sandbox.commands.find((command) => command.detached === true)!
     const env = launch.env as Record<string, string>
     expect(env.ANTHROPIC_API_KEY).toBe('runtime-secret')
     expect(env.AB_TOKEN).toBe('scoped-store-token')

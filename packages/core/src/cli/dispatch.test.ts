@@ -1703,6 +1703,7 @@ describe('abDispatch watch build-runner coordination', () => {
         startCalls += 1
         startedSlugs.push(input.slug)
         return {
+          supervision: 'environment',
           completion: completion.promise.then(() => ({ exitCode: 0 })),
           async stop() {
             stopCalls += 1
@@ -1710,6 +1711,7 @@ describe('abDispatch watch build-runner coordination', () => {
             await releaseStop.promise
             completion.resolve()
           },
+          async detach() {},
         }
       },
     }
@@ -1766,6 +1768,7 @@ describe('abDispatch watch build-runner coordination', () => {
       async start(input) {
         slug = input.slug
         return {
+          supervision: 'environment',
           identity: {
             provider: 'remote-test',
             workspaceRef: input.workspaceRef,
@@ -1776,6 +1779,7 @@ describe('abDispatch watch build-runner coordination', () => {
           async stop() {
             return { outcome: 'unknown', error: 'stop acknowledgement timed out' }
           },
+          async detach() {},
         }
       },
     }
@@ -1992,6 +1996,7 @@ describe('abDispatch watch build-runner coordination', () => {
     const execution: BuildExecution = {
       async start(input) {
         return {
+          supervision: 'environment',
           identity: {
             provider: 'remote-test',
             workspaceRef: input.workspaceRef,
@@ -2002,6 +2007,7 @@ describe('abDispatch watch build-runner coordination', () => {
           async stop() {
             return { outcome: 'confirmed' }
           },
+          async detach() {},
         }
       },
     }
@@ -2178,8 +2184,10 @@ describe('abDispatch watch build-runner coordination', () => {
           (event) => event.type === 'implement.completed' && event.payload.commits.head === head,
         )
         return {
+          supervision: 'environment',
           completion: Promise.resolve({ exitCode: 0 }),
           stop: async () => ({ outcome: 'confirmed' }),
+          detach: async () => {},
         }
       },
     }
