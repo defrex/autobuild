@@ -10,7 +10,7 @@ const env = {
   GITHUB_CLIENT_SECRET: 'github-secret-canary',
   AB_WEB_AUTH_PROVIDERS: 'github',
   AB_WEB_ALLOWED_EMAILS: 'ada@example.com',
-  AB_WEB_REPOSITORIES: 'owner/repo',
+  AB_WEB_REPOSITORIES: 'git@github.com:owner/repo.git',
   AB_POSTGRES_URL: 'postgres://database-canary',
   AB_STORE_SECRET: storeSecret,
 }
@@ -32,21 +32,24 @@ describe('web operator gateway', () => {
       },
     })
     const response = await gateway.fetch(
-      new Request('https://operator.example/api/web/repos/owner%2Frepo/builds/demo/control', {
-        method: 'POST',
-        headers: {
-          origin: 'https://operator.example',
-          'content-type': 'application/json',
-          authorization: 'Bearer attacker',
-          'x-autobuild-version': 'attacker',
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/builds/demo/control',
+        {
+          method: 'POST',
+          headers: {
+            origin: 'https://operator.example',
+            'content-type': 'application/json',
+            authorization: 'Bearer attacker',
+            'x-autobuild-version': 'attacker',
+          },
+          body: JSON.stringify({ action: 'pause' }),
         },
-        body: JSON.stringify({ action: 'pause' }),
-      }),
+      ),
     )
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(new URL(delegated!.url).pathname).toBe(
-      '/operator/v1/repos/owner%2Frepo/builds/demo/control',
+      '/operator/v1/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/builds/demo/control',
     )
     const raw = delegated!.headers.get('authorization')!.replace(/^Bearer /, '')
     expect(raw).not.toBe('attacker')
@@ -65,7 +68,9 @@ describe('web operator gateway', () => {
     expect(
       (
         await signedOut.fetch(
-          request('https://operator.example/api/web/repos/owner%2Frepo/dashboard'),
+          request(
+            'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/dashboard',
+          ),
         )
       ).status,
     ).toBe(401)
@@ -77,7 +82,9 @@ describe('web operator gateway', () => {
     expect(
       (
         await removed.fetch(
-          request('https://operator.example/api/web/repos/owner%2Frepo/dashboard'),
+          request(
+            'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/dashboard',
+          ),
         )
       ).status,
     ).toBe(403)
@@ -85,17 +92,25 @@ describe('web operator gateway', () => {
     expect(
       (
         await gateway.fetch(
-          request('https://operator.example/api/web/repos/owner%2Frepo/bulk-control', {
-            method: 'POST',
-            headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
-            body: '{}',
-          }),
+          request(
+            'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/bulk-control',
+            {
+              method: 'POST',
+              headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+              body: '{}',
+            },
+          ),
         )
       ).status,
     ).toBe(403)
     expect(
-      (await gateway.fetch(request('https://operator.example/api/web/repos/other/dashboard')))
-        .status,
+      (
+        await gateway.fetch(
+          request(
+            'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fother%2Frepo/dashboard',
+          ),
+        )
+      ).status,
     ).toBe(404)
   })
 
@@ -112,20 +127,30 @@ describe('web operator gateway', () => {
       body: '{}',
     }
     const requests = [
-      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets?state=Ready'),
-      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets', {
-        method: 'POST',
-        ...writes,
-      }),
-      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1'),
-      new Request('https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1', {
-        method: 'PATCH',
-        ...writes,
-      }),
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets?state=Ready',
+      ),
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets',
+        {
+          method: 'POST',
+          ...writes,
+        },
+      ),
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets/AUT-1',
+      ),
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets/AUT-1',
+        {
+          method: 'PATCH',
+          ...writes,
+        },
+      ),
       ...['move', 'block', 'unblock'].map(
         (action) =>
           new Request(
-            `https://operator.example/api/web/repos/owner%2Frepo/tickets/AUT-1/${action}`,
+            `https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/tickets/AUT-1/${action}`,
             { method: 'POST', ...writes },
           ),
       ),
@@ -147,11 +172,14 @@ describe('web operator gateway', () => {
       },
     })
     const response = await gateway.fetch(
-      new Request('https://operator.example/api/web/repos/owner%2Frepo/bulk-control', {
-        method: 'POST',
-        headers: { origin: 'https://operator.example', 'content-type': 'text/plain' },
-        body: '{}',
-      }),
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/bulk-control',
+        {
+          method: 'POST',
+          headers: { origin: 'https://operator.example', 'content-type': 'text/plain' },
+          body: '{}',
+        },
+      ),
     )
 
     expect(response.status).toBe(400)
@@ -171,7 +199,7 @@ describe('web operator gateway', () => {
     })
     const response = await gateway.fetch(
       new Request(
-        'https://operator.example/api/web/repos/owner%2Frepo/builds/demo/artifacts/transcript?rev=1',
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/builds/demo/artifacts/transcript?rev=1',
       ),
     )
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
