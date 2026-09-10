@@ -957,6 +957,42 @@ describe('renderers', () => {
     expect(detailText).not.toContain('\x1b')
   })
 
+  test('an expired lease under a still-open recorded execution notes durable supervision', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'vercel-sandbox',
+        workspaceRef: 'sandbox-g0',
+        instance: 'i1',
+        environmentId: 'sandbox-g0',
+        sessionId: 'session-1',
+        commandId: 'cmd-1',
+      },
+    })
+    const r = record({
+      slug: 'b1',
+      lease: { holder: 'i1', expiresAt: '2026-07-15T11:00:00.000Z' },
+    })
+
+    // The guest may still be running: the note defers to the recorded
+    // execution, not to the sweep replacing the environment.
+    const openText = renderDetail(detail(r, await store.getEvents('b1'), NOW), NOW).join('\n')
+    expect(openText).toContain('the recorded execution is still the')
+    expect(openText).toContain('re-attaches only when the guest is actually gone')
+
+    // A recorded end restores the historical note: the sweep re-attaches.
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: 'i1', workspaceRef: 'sandbox-g0', outcome: 'lost' },
+    })
+    const closedText = renderDetail(detail(r, await store.getEvents('b1'), NOW), NOW).join('\n')
+    expect(closedText).toContain('the lease sweep will re-attach it')
+  })
+
   test('an awaiting-PR decision renders a bare or provider-qualified wait and accurate lease note', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
