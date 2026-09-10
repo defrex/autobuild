@@ -64,6 +64,11 @@ export function openProductionSessionStore(env: CliEnv | HarvestCliEnv): BuildSt
 export interface OpenedStoreContext extends RepoStatePaths {
   store: BuildStore
   token?: string
+  /** The validated ambient phase/Harvest identity this invocation carries, if
+   * any — the same value that scoped `store` on the local path. Exposed so a
+   * command core can extend own-resource authority to remote handles too,
+   * where no session wrapper exists. */
+  ambient?: AmbientReadSession
 }
 
 export interface OpenStoreForRepoStateOpts {
@@ -108,7 +113,12 @@ export async function openSessionlessStore(
 }
 
 /** Finite command ownership boundary. Opening failures occur before the
- * try/finally, so only a successfully returned handle is ever closed. */
+ * try/finally, so only a successfully returned handle is ever closed.
+ *
+ * Remote store handles do not session-scope (bearer authorization is the
+ * server's concern), so a command core that needs own-build authority must
+ * consume `ambient` from the context directly rather than rely on the handle
+ * enforcing a scope. */
 export async function withSessionlessStore<T>(
   opts: SessionlessStoreOpts,
   use: (context: OpenedStoreContext) => Promise<T> | T,
@@ -139,6 +149,7 @@ export async function openAmbientReadStore(
   if (ambient === undefined) return context
   return {
     ...context,
+    ambient,
     store: scopeSelectedStoreToSession(context.store, state.storeRef, ambient),
   }
 }
