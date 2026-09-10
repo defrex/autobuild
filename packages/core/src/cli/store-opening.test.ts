@@ -160,6 +160,47 @@ describe('ambient-aware finite read opening', () => {
     }
   })
 
+  test('exposes the resolved ambient identity on the opened context', async () => {
+    const root = tempRoot()
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'build-a', repo: root })
+
+    await withAmbientReadStore(
+      {
+        targetRepo: root,
+        env: { AB_STORE: '/operator/override' },
+        exec: spawnExec,
+        openStore: () => store,
+      },
+      async ({ ambient }) => {
+        expect(ambient).toBeUndefined()
+      },
+    )
+
+    await withAmbientReadStore(
+      {
+        targetRepo: root,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_BUILD: 'build-a',
+          AB_PHASE: 'implement@1',
+          AB_SESSION: 's_build',
+        },
+        exec: spawnExec,
+        openStore: () => store,
+      },
+      async ({ ambient }) => {
+        expect(ambient).toEqual({
+          store: '/phase/store',
+          build: 'build-a',
+          phase: 'implement',
+          round: 1,
+          session: 's_build',
+        })
+      },
+    )
+  })
+
   test('rejects invalid identity before repository resolution or Store opening', async () => {
     let execCalls = 0
     let openCalls = 0
