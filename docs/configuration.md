@@ -403,6 +403,7 @@ image = "vercel/sandbox/universal:latest"
 vcpus = 4
 timeoutSeconds = 2700
 operationTimeoutMs = 30000
+snapshotExpirationSeconds = 86400
 region = "iad1"
 failoverRegions = ["sfo1"]
 environmentVariables = ["AI_GATEWAY_API_KEY"]
@@ -426,6 +427,7 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\""
 | `vcpus` | `4` | integer 1–32 (account limits may be lower) |
 | `timeoutSeconds` | — | required, integer 60–86400; VM/session lifetime and abrupt-orphan bound; Hobby currently permits at most 2700 |
 | `operationTimeoutMs` | `30000` | integer 1000–300000; deadline for each provider acknowledgement, not session lifetime |
+| `snapshotExpirationSeconds` | — | optional integer 300–2592000; snapshots created for this environment expire after this duration instead of the provider default (30 days); recommended 86400 (24h) |
 | `region` | Vercel default | nonempty region |
 | `failoverRegions` | `[]` | unique and different from `region` |
 | `environmentVariables` | `[]` | unique API-credential variable names copied into runtime and agent/check commands |
@@ -433,6 +435,14 @@ preflight = "test \"$(pi --version)\" = \"0.84.4\""
 | `runtimeProvisioning` | `{}` | open map keyed by every effective role/alternate runtime; each entry requires `install` and `preflight` |
 | `gitUsernameEnv` | — | optional variable name for the dedicated read-only clone username; requires `gitPasswordEnv` |
 | `gitPasswordEnv` | — | optional variable name for the dedicated read-only clone password; requires `gitUsernameEnv` |
+
+`snapshotExpirationSeconds` is a billing safety net: snapshot cleanup normally
+purges on release, but a crash that loses the workspace before cleanup can
+strand snapshots that hold billed storage until Vercel's 30-day default expiry.
+A configured bound ages those stranded snapshots out instead. Omitting the key
+keeps today's behavior (the provider default), and `0` ("no expiration") is
+rejected because never-expiring snapshots would contradict the setting's
+purpose.
 
 Each `[workspace.config.runtimeProvisioning.<runtime>]` entry is strict:
 

@@ -174,6 +174,55 @@ describe('remote infrastructure lifecycle protocol', () => {
     ).toBe(false)
   })
 
+  test('cleanup facts may carry snapshot purge evidence and stay parseable without it', () => {
+    const base = {
+      provider: 'vercel-sandbox',
+      workspaceRef: 'sandbox-g1',
+      operation: 'delete',
+      attempt: 1,
+      outcome: 'confirmed',
+    }
+    expect(eventPayloadSchemas['infrastructure.cleanup-attempted'].safeParse(base).success).toBe(
+      true,
+    )
+    expect(
+      eventPayloadSchemas['infrastructure.cleanup-attempted'].safeParse({
+        ...base,
+        snapshots: { outcome: 'confirmed', deleted: 3 },
+      }).success,
+    ).toBe(true)
+    expect(
+      eventPayloadSchemas['infrastructure.cleanup-attempted'].safeParse({
+        ...base,
+        snapshots: { outcome: 'unknown', error: 'snapshot delete denied' },
+      }).success,
+    ).toBe(true)
+    expect(
+      eventPayloadSchemas['infrastructure.cleanup-attempted'].safeParse({
+        ...base,
+        snapshots: { outcome: 'confirmed', deleted: -1 },
+      }).success,
+    ).toBe(false)
+    // Snapshot evidence is strict, so historical and non-Vercel emitters
+    // without the field keep parsing unchanged.
+    expect(
+      eventPayloadSchemas['infrastructure.cleanup-attempted'].safeParse({
+        ...base,
+        snapshots: { outcome: 'confirmed', deleted: 1, extra: true },
+      }).success,
+    ).toBe(false)
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'infrastructure.cleanup-attempted',
+        payload: {
+          ...base,
+          snapshots: { outcome: 'confirmed', deleted: 3 },
+        },
+      }).type,
+    ).toBe('infrastructure.cleanup-attempted')
+  })
+
   test('permits only the infrastructure policy cause from a dispatcher', () => {
     expect(
       validateEventWrite({

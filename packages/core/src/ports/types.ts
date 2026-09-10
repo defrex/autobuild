@@ -153,10 +153,24 @@ export interface WorkspacePublication {
   publish(input: { ref: string; sha: string; branch: string }): Promise<void>
 }
 
+/** Snapshot-purge evidence recorded with a workspace cleanup fact. Absence of
+ * leftover snapshots can be proven from these durable events without querying
+ * the provider. */
+export interface WorkspaceReapSnapshots {
+  outcome: 'confirmed' | 'absent' | 'unknown'
+  deleted?: number
+  error?: string
+}
+
+export interface WorkspaceReapOutcome {
+  outcome: 'confirmed' | 'absent'
+  snapshots: WorkspaceReapSnapshots
+}
+
 export interface WorkspaceRecovery {
   /** Fence an unavailable environment. Unknown outcomes must reject so the
    * dispatcher retains the lease/workspace fact and retries after its fence. */
-  reap(handle: WorkspaceHandle): Promise<'confirmed' | 'absent'>
+  reap(handle: WorkspaceHandle): Promise<WorkspaceReapOutcome>
 }
 
 export interface WorkspaceProvider {

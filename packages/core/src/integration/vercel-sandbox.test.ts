@@ -231,6 +231,8 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
       sandbox.deleted = false
       return sandbox
     },
+    listSnapshots: async () => [],
+    deleteSnapshot: async () => {},
   }
   const hostCommands: string[][] = []
   const exec: Exec = async (cmd, options) => {

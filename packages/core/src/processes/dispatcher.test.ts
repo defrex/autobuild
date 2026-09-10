@@ -2361,7 +2361,9 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     let provisions = 0
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'absent' },
+      recovery: {
+        reap: async () => ({ outcome: 'absent', snapshots: { outcome: 'confirmed', deleted: 0 } }),
+      },
       provision: async () => {
         provisions += 1
         throw new Error(diagnostic)
@@ -3482,7 +3484,12 @@ describe('Dispatcher janitor', () => {
   test('conflicted re-entry records replacement provisioning failures durably', async () => {
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'absent' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'absent',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       provision: async () => {
         throw new Error('remote environment no longer exists')
       },
@@ -3549,7 +3556,7 @@ describe('Dispatcher janitor', () => {
       recovery: {
         async reap() {
           if (fail) throw new Error('delete acknowledgement timed out')
-          return 'confirmed'
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 2 } }
         },
       },
       async provision() {
@@ -3577,8 +3584,49 @@ describe('Dispatcher janitor', () => {
     events = await h.store.getEvents(slug)
     expect(
       events.filter((event) => event.type === 'infrastructure.cleanup-attempted').at(-1)?.payload,
-    ).toMatchObject({ operation: 'delete', outcome: 'confirmed', attempt: 2 })
+    ).toMatchObject({
+      operation: 'delete',
+      outcome: 'confirmed',
+      attempt: 2,
+      snapshots: { outcome: 'confirmed', deleted: 2 },
+    })
     expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+  })
+
+  test('remote release records snapshot purge evidence before the durable release fact', async () => {
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap() {
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 3 } }
+        },
+      },
+      async provision() {
+        throw new Error('not used')
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider: remote })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).abandoned).toBe(1)
+    const events = await h.store.getEvents(slug)
+    const cleaned = events.filter((event) => event.type === 'infrastructure.cleanup-attempted')
+    expect(cleaned).toHaveLength(1)
+    expect(cleaned[0]?.payload).toMatchObject({
+      provider: 'remote-test',
+      workspaceRef: 'sandbox-g0',
+      operation: 'delete',
+      attempt: 1,
+      outcome: 'confirmed',
+      snapshots: { outcome: 'confirmed', deleted: 3 },
+    })
+    const releasedIndex = events.findIndex((event) => event.type === 'workspace.released')
+    expect(releasedIndex).toBe(events.indexOf(cleaned[0]!) + 1)
   })
 
   test('aborted build: releases everything, preserves labels, returns to Triage, and second tick no-ops', async () => {
@@ -4155,7 +4203,7 @@ describe('Dispatcher lease sweep', () => {
       recovery: {
         async reap(handle) {
           operations.push(`reap:${handle.provider}:${handle.ref}`)
-          return 'confirmed'
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 1 } }
         },
       },
       async provision(opts) {
@@ -4220,7 +4268,7 @@ describe('Dispatcher lease sweep', () => {
       recovery: {
         async reap(handle) {
           operations.push(`reap:${handle.ref}`)
-          return 'confirmed'
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 1 } }
         },
       },
       async provision(opts) {
@@ -4628,7 +4676,12 @@ describe('Dispatcher durable supervision', () => {
     }
     const provider: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       buildExecution: execution,
       async provision(opts) {
         operations.push('provision')
@@ -4648,7 +4701,12 @@ describe('Dispatcher durable supervision', () => {
   function remoteWorkspaceProvider(operations: string[]): WorkspaceProvider {
     return {
       name: 'remote-test',
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       async provision(opts) {
         operations.push('provision')
         return {
@@ -4814,7 +4872,12 @@ describe('Dispatcher durable supervision', () => {
     const operations: string[] = []
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       // The provision resolves on a macrotask, so the tick — which never
       // awaits the continuation — returns before any provider call runs.
       async provision(opts) {
@@ -4896,7 +4959,12 @@ describe('Dispatcher durable supervision', () => {
     })
     const workspaceProvider: WorkspaceProvider = {
       name: 'remote-test',
-      recovery: { reap: async () => 'confirmed' },
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
       async provision() {
         operations.push('provision')
         return provisioned

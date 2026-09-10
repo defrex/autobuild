@@ -19,6 +19,7 @@ import {
   sourceCheckoutPath,
   type VercelSandboxFacade,
   type VercelSandboxHandle,
+  type VercelSnapshotInfo,
 } from './vercel-sandbox'
 
 const SHA = 'a'.repeat(40)
@@ -52,6 +53,9 @@ class FakeSandbox implements VercelSandboxHandle {
   /** Recorded detached commands by id, for `getCommand` re-observation. */
   readonly detachedCommands = new Map<string, { exitCode: number | null }>()
   getCommandCalls = 0
+  /** Automatic snapshots the environment has accumulated; a session stop
+   * creates one, exactly as the provider's SDK contract describes. */
+  readonly snapshots: VercelSnapshotInfo[] = []
 
   currentSession() {
     return { sessionId: 'session-1' }
@@ -109,12 +113,22 @@ class FakeSandbox implements VercelSandboxHandle {
   async writeFiles(files: Array<{ path: string; content: Uint8Array }>) {
     this.writes.push(...files)
   }
+  stopTimeouts = 0
   async stop() {
     this.stops += 1
+    if (this.stopTimeouts > 0) {
+      this.stopTimeouts -= 1
+      throw Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' })
+    }
     if (this.stopFailures > 0) {
       this.stopFailures -= 1
       throw new Error('sandbox stop failed')
     }
+    this.snapshots.push({
+      id: `snap-${this.stops}`,
+      sourceSessionId: 'session-1',
+      status: 'created',
+    })
   }
   async delete() {
     this.deletes += 1
@@ -156,6 +170,8 @@ function harness(
     cwd?: string
     /** Overrides the facade's get; e.g. to model an unreachable provider. */
     facadeGet?: () => Promise<VercelSandboxHandle | null>
+    /** Optional snapshot-expiry bound threaded to creation. */
+    snapshotExpirationSeconds?: number
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -164,6 +180,8 @@ function harness(
   let createInput: Record<string, unknown> | undefined
   let created = false
   let creates = 0
+  /** Snapshot rows keyed by the exact environment name the purge uses. */
+  const snapshotLists = new Map<string, VercelSnapshotInfo[]>()
   const facade: VercelSandboxFacade = {
     get:
       options.facadeGet ??
@@ -173,7 +191,19 @@ function harness(
       created = true
       creates += 1
       createInput = input
+      snapshotLists.set(input.name, sandbox.snapshots)
       return sandbox
+    },
+    listSnapshots: async (name) => [...(snapshotLists.get(name) ?? [])],
+    deleteSnapshot: async (id) => {
+      for (const list of snapshotLists.values()) {
+        const index = list.findIndex((snapshot) => snapshot.id === id)
+        if (index !== -1) {
+          list.splice(index, 1)
+          return
+        }
+      }
+      throw new Error(`snapshot ${id} not found`)
     },
   }
   const exec: Exec = async (cmd) => {
@@ -206,6 +236,9 @@ function harness(
       image: 'vercel/sandbox/universal:latest',
       vcpus: 4,
       timeoutSeconds: 2700,
+      ...(options.snapshotExpirationSeconds === undefined
+        ? {}
+        : { snapshotExpirationSeconds: options.snapshotExpirationSeconds }),
       failoverRegions: [],
       environmentVariables: ['ANTHROPIC_API_KEY'],
       provisioning: options.provisioning ?? [],
@@ -236,6 +269,7 @@ function harness(
   return {
     provider,
     sandbox,
+    facade,
     get createInput() {
       return createInput
     },
@@ -512,6 +546,8 @@ describe('VercelSandboxProvider', () => {
         creates += 1
         return creates === 1 ? first : second
       },
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
     }
     const exec: Exec = async (cmd) => {
       const ref = cmd.at(-1)
@@ -640,6 +676,8 @@ describe('VercelSandboxProvider', () => {
           created = true
           return replacement
         },
+        listSnapshots: async () => [],
+        deleteSnapshot: async () => {},
       },
       exec: async (cmd) => {
         const ref = cmd.at(-1)
@@ -925,6 +963,18 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.killSignals[0]).toBeInstanceOf(AbortSignal)
   })
 
+  test('release deletes a sandbox whose stop times out and still proves absence', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.stopTimeouts = 1
+    await h.provider.release(workspace)
+    expect(h.sandbox.deletes).toBe(1)
+  })
+
   test('re-issues an interrupted wait long-poll until the detached runner exits', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
@@ -1183,8 +1233,136 @@ describe('VercelSandboxProvider', () => {
       /still exists after delete acknowledgement/,
     )
     h.sandbox.remainAfterDelete = false
-    expect(await h.provider.recovery.reap(workspace)).toBe('absent')
-    expect(await h.provider.recovery.reap(workspace)).toBe('absent')
+    // The rejected reap already purged before its delete was refused; the
+    // absent re-applies stay empty no-ops.
+    expect(await h.provider.recovery.reap(workspace)).toEqual({
+      outcome: 'absent',
+      snapshots: { outcome: 'confirmed', deleted: 0 },
+    })
+    expect(await h.provider.recovery.reap(workspace)).toEqual({
+      outcome: 'absent',
+      snapshots: { outcome: 'confirmed', deleted: 0 },
+    })
+  })
+
+  test('creation binds the one-snapshot retention bound', async () => {
+    const h = harness()
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(h.createInput?.keepLastSnapshots).toEqual({ count: 1, deleteEvicted: true })
+  })
+
+  test('creation maps snapshotExpirationSeconds to SDK milliseconds and omits it when unset', async () => {
+    const set = harness({ snapshotExpirationSeconds: 86_400 })
+    await set.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(set.createInput?.snapshotExpiration).toBe(86_400_000)
+
+    const unset = harness()
+    await unset.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The key must be absent entirely: the SDK reads `0` as "no expiration".
+    expect(unset.createInput?.snapshotExpiration).toBeUndefined()
+    expect('snapshotExpiration' in (unset.createInput ?? {})).toBe(false)
+  })
+
+  test('reap purges every live snapshot under the exact environment name and never touches dead rows', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // Snapshots left by earlier sessions of the same environment, plus dead
+    // rows that hold no storage.
+    h.sandbox.snapshots.push(
+      { id: 'snap-older', sourceSessionId: 'session-0', status: 'created' },
+      { id: 'snap-dead', sourceSessionId: 'session-0', status: 'deleted' },
+      { id: 'snap-failed', sourceSessionId: 'session-0', status: 'failed' },
+    )
+    const stopSnapshots = h.sandbox.snapshots.filter(
+      (snapshot) => snapshot.status === 'created',
+    ).length
+    expect(stopSnapshots).toBe(2)
+
+    const outcome = await h.provider.recovery.reap(workspace)
+    // The reap's own stop also materializes a snapshot; the purge removes
+    // every storage-holding row under the exact name.
+    expect(outcome).toEqual({
+      outcome: 'confirmed',
+      snapshots: { outcome: 'confirmed', deleted: 3 },
+    })
+    // Only the storage-holding rows were purged.
+    expect(h.sandbox.snapshots.map((snapshot) => snapshot.id).sort()).toEqual([
+      'snap-dead',
+      'snap-failed',
+    ])
+  })
+
+  test('reap on an absent environment still purges its leftover snapshots', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // Fence a reap so the provider drops its session handle, then make the
+    // environment vanish out-of-band with snapshots left behind.
+    h.sandbox.remainAfterDelete = true
+    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(
+      /still exists after delete acknowledgement/,
+    )
+    h.sandbox.remainAfterDelete = false
+    h.sandbox.snapshots.push({
+      id: 'snap-orphan',
+      sourceSessionId: 'session-9',
+      status: 'created',
+    })
+
+    const outcome = await h.provider.recovery.reap(workspace)
+    expect(outcome).toEqual({
+      outcome: 'absent',
+      snapshots: { outcome: 'confirmed', deleted: 1 },
+    })
+    // An absent environment is never stopped or deleted again.
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.snapshots).toEqual([])
+  })
+
+  test('a snapshot purge failure rejects reap as retryable and a retry completes', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const originalDelete = h.facade.deleteSnapshot.bind(h.facade)
+    h.facade.deleteSnapshot = async () => {
+      throw new Error('snapshot delete denied')
+    }
+
+    await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(
+      /cleanup outcome is unknown and remains retryable: snapshot purge for .* is unconfirmed: snapshot delete denied/,
+    )
+    // The purge runs before the sandbox delete, so the retry converges.
+    expect(h.sandbox.deletes).toBe(0)
+
+    h.facade.deleteSnapshot = originalDelete
+    const outcome = await h.provider.recovery.reap(workspace)
+    expect(outcome.outcome).toBe('confirmed')
+    expect(outcome.snapshots.outcome).toBe('confirmed')
+    expect(outcome.snapshots.deleted).toBeGreaterThan(0)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.snapshots).toEqual([])
   })
 
   test('reap retains an interrupted stop for a later confirmed retry', async () => {
@@ -1197,7 +1375,9 @@ describe('VercelSandboxProvider', () => {
     h.sandbox.stopFailures = 1
     await expect(h.provider.recovery.reap(workspace)).rejects.toThrow(/outcome is unknown/)
     expect(h.sandbox.deletes).toBe(0)
-    expect(await h.provider.recovery.reap(workspace)).toBe('confirmed')
+    const retry = await h.provider.recovery.reap(workspace)
+    expect(retry.outcome).toBe('confirmed')
+    expect(retry.snapshots.outcome).toBe('confirmed')
     expect(h.sandbox.deletes).toBe(1)
   })
 
@@ -1347,6 +1527,8 @@ describe('VercelSandboxProvider', () => {
             create: async () => {
               throw new Error('unused')
             },
+            listSnapshots: async () => [],
+            deleteSnapshot: async () => {},
           },
         }),
     ).toThrow(/HTTPS BuildStore/)

@@ -282,6 +282,16 @@ export const eventPayloadSchemas = {
     attempt,
     outcome: z.enum(['confirmed', 'absent', 'unknown']),
     error: z.string().min(1).optional(),
+    /** Snapshot-purge evidence for environments whose provider leaves automatic
+     * snapshots behind. Absence is provable from Store events without querying
+     * the provider; emitters without snapshots omit the field. */
+    snapshots: z
+      .strictObject({
+        outcome: z.enum(['confirmed', 'absent', 'unknown']),
+        deleted: z.number().int().min(0).optional(),
+        error: z.string().min(1).optional(),
+      })
+      .optional(),
   }),
   /** Remote phases deposit their output and park before trusted publication.
    * The dispatcher settles the request only after the VM session and execution

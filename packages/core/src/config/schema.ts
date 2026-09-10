@@ -132,6 +132,10 @@ export const vercelSandboxConfigSchema = z
     timeoutSeconds: z.number().int().min(60).max(86_400),
     /** Deadline for each provider acknowledgement; distinct from VM lifetime. */
     operationTimeoutMs: z.number().int().min(1_000).max(300_000).default(30_000),
+    /** Billing safety net: snapshots created for this environment expire after
+     * this duration instead of the provider's 30-day default. Absent means the
+     * provider default. */
+    snapshotExpirationSeconds: z.number().int().min(300).max(2_592_000).optional(),
     region: z.string().min(1).optional(),
     failoverRegions: z.array(z.string().min(1)).default([]),
     environmentVariables: z.array(envNameSchema).default([]),

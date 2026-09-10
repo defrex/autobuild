@@ -393,12 +393,27 @@ ${READY}`).workspace
     expect(workspace.provider).toBe('vercel-sandbox')
     expect(workspace.config.timeoutSeconds).toBe(2700)
     expect(workspace.config.operationTimeoutMs).toBe(30_000)
+    expect(workspace.config.snapshotExpirationSeconds).toBeUndefined()
+    expect(
+      parseConfig(`[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 2700
+snapshotExpirationSeconds = 86400
+${READY}`).workspace.config.snapshotExpirationSeconds,
+    ).toBe(86_400)
 
     for (const table of [
       'timeoutSeconds = 59',
       'timeoutSeconds = 86401',
       'timeoutSeconds = 600\noperationTimeoutMs = 999',
       'timeoutSeconds = 600\noperationTimeoutMs = 300001',
+      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 299',
+      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 2592001',
+      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 86400.5',
+      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 0',
+      'timeoutSeconds = 600\nsnapshotExpirationSeconds = -1',
+      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 86400\nunknown = true',
       'timeoutSeconds = 600\nunknown = true',
       'timeoutSeconds = 600\nenvironmentVariables = ["TOKEN", "TOKEN"]',
       'timeoutSeconds = 600\ngitPasswordEnv = "AB_GIT_READ_TOKEN"',
