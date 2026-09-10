@@ -630,6 +630,7 @@ readyState = "ready"
         image: 'vercel/sandbox/universal:latest',
         vcpus: 2,
         timeoutSeconds: 600,
+        snapshotExpirationSeconds: 86_400,
         failoverRegions: [],
         environmentVariables: ['MODEL_API_KEY'],
         provisioning: [
@@ -679,6 +680,7 @@ readyState = "ready"
     expect(freshInput).toMatchObject({
       image: 'vercel/sandbox/universal:latest',
       resources: { vcpus: 2 },
+      snapshotExpiration: 86_400_000,
       keepLastSnapshots: { count: 1, deleteEvicted: true },
     })
     // Release stopped first (one deterministic snapshot), purged it, deleted,
