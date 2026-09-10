@@ -11,6 +11,7 @@ import {
   VERCEL_BUN_EXECUTABLE,
   VERCEL_BUN_PREFIX,
   VERCEL_BUN_VERSION,
+  VERCEL_LIFETIME_MARGIN_MS,
   VERCEL_PROVISIONED_MARKER,
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
@@ -50,6 +51,9 @@ class FakeSandbox implements VercelSandboxHandle {
     })
   /** Session status reported to `observe`; undefined models an SDK without it. */
   sessionStatus: VercelSandboxHandle['sessionStatus'] = 'running'
+  /** Epoch-ms session expiry reported to `observe`; undefined models a facade
+   * without the getter or with no running session (unbounded behavior). */
+  sessionExpiresAt: number | undefined
   /** Recorded detached commands by id, for `getCommand` re-observation. */
   readonly detachedCommands = new Map<string, { exitCode: number | null }>()
   getCommandCalls = 0
@@ -1064,6 +1068,65 @@ describe('VercelSandboxProvider', () => {
     // A sandbox the facade can no longer resolve at all is lost.
     await h.sandbox.delete()
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
+  })
+
+  test('observe stops re-issuing polls once the environment lifetime plus margin has passed', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-observe-expired',
+      workspaceRef: workspace.ref,
+    })
+    const identity = execution.identity!
+
+    // Past session expiry plus the stop/snapshot margin the environment
+    // itself is gone: the observation fails naming it instead of issuing
+    // another long-poll that would end in a generic transport timeout.
+    const expiredAt = Date.now() - VERCEL_LIFETIME_MARGIN_MS - 1000
+    h.sandbox.sessionExpiresAt = expiredAt
+    await expect(h.provider.buildExecution.observe!(identity)).rejects.toThrow(
+      /cannot still be running[\s\S]*expired[\s\S]*session expiry/s,
+    )
+    await expect(h.provider.buildExecution.observe!(identity)).rejects.toThrow(
+      identity.environmentId!,
+    )
+    expect(h.sandbox.getCommandCalls).toBe(0)
+
+    // Just before the bound the alive normal path is unchanged: the poll is
+    // issued and a null exit code still reports running.
+    h.sandbox.sessionExpiresAt = Date.now() + VERCEL_LIFETIME_MARGIN_MS + 60_000
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'running',
+    })
+    expect(h.sandbox.getCommandCalls).toBe(1)
+  })
+
+  test('observe keeps the unbounded behavior when the facade carries no session expiry', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-observe-no-expiry',
+      workspaceRef: workspace.ref,
+    })
+    expect(h.sandbox.sessionExpiresAt).toBeUndefined()
+    await expect(h.provider.buildExecution.observe!(execution.identity!)).resolves.toEqual({
+      state: 'running',
+    })
+    expect(h.sandbox.getCommandCalls).toBe(1)
   })
 
   test('an execution without a recorded command id cannot be re-observed', async () => {
