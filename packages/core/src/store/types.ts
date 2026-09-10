@@ -28,6 +28,11 @@ export const systemClock: Clock = () => new Date()
 export interface BuildRecord {
   slug: string
   repo: string
+  /** Normalized git origin URL of the build's repository, absent when the
+   * repo had no origin remote at dispatch time. A location-independent
+   * secondary identity: ambient reads may accept a differently located
+   * checkout of the same repository by origin equality (repo stays primary). */
+  repoOrigin?: string
   ticket?: TicketRef
   branch?: string
   createdAt: string
@@ -40,6 +45,8 @@ export interface BuildRecord {
 export interface NewBuildInput {
   slug: string
   repo: string
+  /** See BuildRecord.repoOrigin. */
+  repoOrigin?: string
   ticket?: TicketRef
   branch?: string
 }

@@ -67,6 +67,7 @@ comments for compactness. Actual messages are JSON.
 {
   "slug": "remote-store-protocol",
   "repo": "acme/autobuild",
+  "repoOrigin": "https://github.com/acme/autobuild", // optional
   "ticket": { /* TicketRef */ },   // optional
   "branch": "ab/remote-store-protocol", // optional
   "createdAt": "2026-07-15T12:00:00.000Z",
@@ -94,6 +95,17 @@ comments for compactness. Actual messages are JSON.
 Build records do not contain derived build status. Status is reduced from the
 build event stream. `createdAt`, `updatedAt`, lease expiry, and heartbeat time
 are server-owned.
+
+`repoOrigin` is the build repository's normalized git origin URL (scp-like and
+ssh remotes mapped to their `https://` spelling, host lowercased, trailing
+`.git` and slashes stripped). It is a location-independent secondary identity:
+clients may accept a differently located checkout of the same repository by
+origin equality. It is optional on both create and record shapes, and the
+field is simply absent when the repository has no origin remote. The field is
+an additive, optional member: servers that predate it strip it from create
+requests (clients fall back to path-only identity) and never return it, and
+clients that predate it never send or expect it — so neither side requires a
+protocol-version bump.
 
 ### Actors, event writes, and envelopes
 
@@ -266,7 +278,7 @@ it to exist. An unknown build returns `404 not-found`.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
-| `createBuild` | `POST /builds` | `{"slug": string, "repo": string, "ticket"?: TicketRef, "branch"?: string}`; `slug`, `repo`, and a supplied `branch` are nonempty | `201` + `BuildRecord`; duplicate slug is `409 conflict` |
+| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string}`; `slug`, `repo`, and a supplied `branch` are nonempty | `201` + `BuildRecord`; duplicate slug is `409 conflict` |
 | `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`; list order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |

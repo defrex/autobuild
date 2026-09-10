@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { resolveMainRepo, resolveRepoState, resolveRepoStatePaths } from './repo-state'
+import {
+  buildInRepository,
+  normalizeGitRemoteUrl,
+  resolveMainRepo,
+  resolveRepoOrigin,
+  resolveRepoState,
+  resolveRepoStatePaths,
+} from './repo-state'
 
 const cleanup: string[] = []
 
@@ -139,6 +146,157 @@ describe('resolveRepoStatePaths', () => {
       localStateRoot: '/code/example/.autobuild',
       worktreeRoot: '/code/example/.autobuild/worktrees',
     })
+  })
+})
+
+describe('normalizeGitRemoteUrl', () => {
+  test('reduces spelling variants of one origin to a single form', () => {
+    expect(normalizeGitRemoteUrl('https://github.com/acme/app.git')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('https://github.com/acme/app')).toBe('https://github.com/acme/app')
+    expect(normalizeGitRemoteUrl('https://github.com/acme/app/')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('git@github.com:acme/app.git')).toBe('https://github.com/acme/app')
+    expect(normalizeGitRemoteUrl('github.com:acme/app.git')).toBe('https://github.com/acme/app')
+    expect(normalizeGitRemoteUrl('HTTPS://GitHub.COM/acme/app')).toBe('https://github.com/acme/app')
+    // ssh and git spellings collapse to the https form, matching the scp-like
+    // branch, so an ssh-origin host checkout and a guest's pinned https origin
+    // compare equal.
+    expect(normalizeGitRemoteUrl('ssh://git@github.com/acme/app.git')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('ssh://github.com/acme/app')).toBe('https://github.com/acme/app')
+    expect(normalizeGitRemoteUrl('git://github.com/acme/app.git')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('git+ssh://git@github.com/acme/app')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('SSH://GitHub.COM/acme/app.git')).toBe(
+      'https://github.com/acme/app',
+    )
+  })
+
+  test('passes unparseable and local-path remotes through trimmed', () => {
+    expect(normalizeGitRemoteUrl('/srv/git/acme/app')).toBe('/srv/git/acme/app')
+    expect(normalizeGitRemoteUrl('  /srv/git/acme/app\n')).toBe('/srv/git/acme/app')
+    expect(normalizeGitRemoteUrl('C:\\code\\app')).toBe('C:\\code\\app')
+    expect(normalizeGitRemoteUrl('not a url')).toBe('not a url')
+  })
+})
+
+describe('resolveRepoOrigin', () => {
+  test('normalizes the origin remote URL', async () => {
+    const exec: Exec = async (cmd) => {
+      expect(cmd).toEqual(['git', 'remote', 'get-url', 'origin'])
+      return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+    }
+    expect(await resolveRepoOrigin('/checkout', exec)).toBe('https://github.com/acme/app')
+  })
+
+  test('is undefined with no origin remote and on git failure', async () => {
+    const noRemote: Exec = async () => ({
+      stdout: '',
+      stderr: "error: No such remote 'origin'\n",
+      exitCode: 2,
+    })
+    expect(await resolveRepoOrigin('/checkout', noRemote)).toBeUndefined()
+    const thrown: Exec = async () => {
+      throw new Error('git unavailable')
+    }
+    expect(await resolveRepoOrigin('/checkout', thrown)).toBeUndefined()
+    const blank: Exec = async () => ({ stdout: '\n', stderr: '', exitCode: 0 })
+    expect(await resolveRepoOrigin('/checkout', blank)).toBeUndefined()
+  })
+})
+
+describe('buildInRepository', () => {
+  const ORIGIN = 'https://github.com/acme/app'
+  const failingExec: Exec = async () => {
+    throw new Error('git must not be consulted for a path match')
+  }
+
+  test('path equality is decided without consulting git', async () => {
+    expect(
+      await buildInRepository(
+        { slug: 'b', repo: '/repo', createdAt: '', updatedAt: '' },
+        '/repo',
+        failingExec,
+      ),
+    ).toBe(true)
+  })
+
+  test('a path mismatch is forgiven by origin equality (the differently located checkout)', async () => {
+    const exec: Exec = async (cmd) => {
+      expect(cmd).toEqual(['git', 'remote', 'get-url', 'origin'])
+      return { stdout: 'git@github.com:acme/app\n', stderr: '', exitCode: 0 }
+    }
+    expect(
+      await buildInRepository(
+        { slug: 'b', repo: '/host/checkout', repoOrigin: ORIGIN, createdAt: '', updatedAt: '' },
+        '/guest/checkout',
+        exec,
+      ),
+    ).toBe(true)
+  })
+
+  test('an ssh-spelled checkout matches an https-spelled record (cross-protocol)', async () => {
+    const sshRemote: Exec = async () => ({
+      stdout: 'ssh://git@github.com/acme/app.git\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    expect(
+      await buildInRepository(
+        { slug: 'b', repo: '/host/checkout', repoOrigin: ORIGIN, createdAt: '', updatedAt: '' },
+        '/guest/checkout',
+        sshRemote,
+      ),
+    ).toBe(true)
+    // And the mirror image: the record's origin was normalized from an ssh://
+    // remote while the current checkout pins the https spelling.
+    const httpsRemote: Exec = async () => ({
+      stdout: 'https://github.com/acme/app.git\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    expect(
+      await buildInRepository(
+        {
+          slug: 'b',
+          repo: '/host/checkout',
+          repoOrigin: 'ssh://git@github.com/acme/app',
+          createdAt: '',
+          updatedAt: '',
+        },
+        '/guest/checkout',
+        httpsRemote,
+      ),
+    ).toBe(true)
+  })
+
+  test('a record without a recorded origin, or with a different origin, is foreign', async () => {
+    const otherOrigin: Exec = async () => ({
+      stdout: 'https://github.com/other/app.git\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    expect(
+      await buildInRepository(
+        { slug: 'b', repo: '/host/checkout', createdAt: '', updatedAt: '' },
+        '/guest/checkout',
+        otherOrigin,
+      ),
+    ).toBe(false)
+    expect(
+      await buildInRepository(
+        { slug: 'b', repo: '/host/checkout', repoOrigin: ORIGIN, createdAt: '', updatedAt: '' },
+        '/guest/checkout',
+        otherOrigin,
+      ),
+    ).toBe(false)
   })
 })
 

@@ -16,6 +16,7 @@ import type { TicketRef } from '../../ontology'
 export const builds = sqliteTable('builds', {
   slug: text('slug').primaryKey(),
   repo: text('repo').notNull(),
+  repoOrigin: text('repo_origin'),
   ticket: text('ticket', { mode: 'json' }).$type<TicketRef>(),
   branch: text('branch'),
   createdAt: text('created_at').notNull(),

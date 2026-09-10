@@ -45,6 +45,10 @@ export type ErrorBody = z.infer<typeof errorBodySchema>
 export const newBuildBodySchema = z.object({
   slug: z.string().min(1),
   repo: z.string().min(1),
+  // Additive optional identity: the build repository's normalized git origin.
+  // Old servers strip it on create (path-only fallback) and never return it;
+  // old clients never send it. No protocol-version bump.
+  repoOrigin: z.string().optional(),
   ticket: ticketRefSchema.optional(),
   branch: z.string().min(1).optional(),
 })
@@ -52,6 +56,7 @@ export const newBuildBodySchema = z.object({
 export const buildRecordWireSchema = z.object({
   slug: z.string(),
   repo: z.string(),
+  repoOrigin: z.string().optional(),
   ticket: ticketRefSchema.optional(),
   branch: z.string().optional(),
   createdAt: z.string(),

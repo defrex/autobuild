@@ -65,6 +65,7 @@ const BOOTSTRAP_DDL = [
   `CREATE TABLE IF NOT EXISTS builds (
     slug TEXT PRIMARY KEY,
     repo TEXT NOT NULL,
+    repo_origin TEXT,
     ticket TEXT,
     branch TEXT,
     created_at TEXT NOT NULL,
@@ -153,6 +154,15 @@ export class SqliteBuildStore implements BuildStore {
     this.sqlite.exec('PRAGMA busy_timeout = 5000')
     this.sqlite.exec('PRAGMA journal_mode = WAL')
     for (const ddl of BOOTSTRAP_DDL) this.sqlite.exec(ddl)
+    // Stores created before `repo_origin` existed keep working: add the column
+    // idempotently when a pre-existing table lacks it (the bootstrap DDL above
+    // covers fresh stores). No migration framework — one guarded ALTER at open.
+    const columns = this.sqlite.query("PRAGMA table_info('builds')").all() as Array<{
+      name: string
+    }>
+    if (!columns.some((column) => column.name === 'repo_origin')) {
+      this.sqlite.exec('ALTER TABLE builds ADD COLUMN repo_origin TEXT')
+    }
     this.db = drizzle(this.sqlite)
   }
 
@@ -216,6 +226,7 @@ export class SqliteBuildStore implements BuildStore {
       repo: row.repo,
       ...(row.ticket ? { ticket: row.ticket } : {}),
       ...(row.branch ? { branch: row.branch } : {}),
+      ...(row.repoOrigin ? { repoOrigin: row.repoOrigin } : {}),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       ...(row.heartbeatAt ? { heartbeatAt: row.heartbeatAt } : {}),
@@ -236,6 +247,7 @@ export class SqliteBuildStore implements BuildStore {
         .values({
           slug: input.slug,
           repo: input.repo,
+          repoOrigin: input.repoOrigin ?? null,
           ticket: input.ticket ?? null,
           branch: input.branch ?? null,
           createdAt: ts,

@@ -8,6 +8,7 @@
  * write this file from separate processes (§3.3).
  */
 import { describe, expect, test } from 'bun:test'
+import { Database } from 'bun:sqlite'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -134,6 +135,45 @@ describe('SqliteBuildStore durability', () => {
         expect(next.seq).toBe(2)
       } finally {
         await second.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('opening a pre-origin store adds repo_origin without a migration step and keeps old rows', async () => {
+    const root = await freshRoot()
+    try {
+      const legacy = new Database(join(root, 'autobuild.sqlite'), { create: true })
+      legacy.exec(`CREATE TABLE builds (
+        slug TEXT PRIMARY KEY,
+        repo TEXT NOT NULL,
+        ticket TEXT,
+        branch TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        lease_holder TEXT,
+        lease_expires_at TEXT,
+        lease_ttl_ms INTEGER,
+        heartbeat_at TEXT
+      )`)
+      legacy
+        .prepare(`INSERT INTO builds (slug, repo, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+        .run('legacy', 'acme/legacy', CONTRACT_T0, CONTRACT_T0)
+      legacy.close()
+
+      const store = openLocalStore(root)
+      try {
+        const old = await store.getBuild('legacy')
+        expect(old?.slug).toBe('legacy')
+        expect(old?.repoOrigin).toBeUndefined()
+        const created = await store.createBuild(
+          sampleBuildInput('fresh', { repoOrigin: 'https://github.com/acme/rate-limiter' }),
+        )
+        expect(created.repoOrigin).toBe('https://github.com/acme/rate-limiter')
+        expect((await store.getBuild('legacy'))?.repoOrigin).toBeUndefined()
+      } finally {
+        await store.close()
       }
     } finally {
       await rm(root, { recursive: true, force: true })

@@ -684,6 +684,42 @@ describe('Dispatcher dispatch', () => {
     expect(h.launches).toEqual(['add-rate-limiting'])
   })
 
+  test('created builds record the served repository normalized origin, from one memoized exec call', async () => {
+    let remoteCalls = 0
+    const h = harness({
+      tickets: [readyTicket('T-1'), readyTicket('T-2')],
+      toml: 'capacity = 2\n',
+      exec: async (cmd) => {
+        if (cmd[1] === 'remote') {
+          remoteCalls += 1
+          return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+        }
+        return { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 }
+      },
+    })
+    await h.dispatcher.tick()
+    const builds = await h.store.listBuilds()
+    expect(builds).toHaveLength(2)
+    expect(builds.map((build) => build.repoOrigin)).toEqual([
+      'https://github.com/acme/app',
+      'https://github.com/acme/app',
+    ])
+    expect(remoteCalls).toBe(1)
+  })
+
+  test('a repository without an origin remote creates builds without a recorded origin', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1')],
+      exec: async (cmd) =>
+        cmd[1] === 'remote'
+          ? { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+          : { stdout: `${BASE_SHA}\trefs/heads/main\n`, stderr: '', exitCode: 0 },
+    })
+    await h.dispatcher.tick()
+    const builds = await h.store.listBuilds()
+    expect(builds.map((build) => build.repoOrigin)).toEqual([undefined])
+  })
+
   test('uses the top-level baseBranch for the durable fact and workspace', async () => {
     const h = harness({
       tickets: [readyTicket('T-trunk')],

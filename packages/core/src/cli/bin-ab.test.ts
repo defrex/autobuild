@@ -401,6 +401,58 @@ test('ambient build identity scopes all three production-routed local reads', as
   await reopened.close()
 })
 
+test('ambient reads accept a differently located checkout of the same repository origin', async () => {
+  const host = join(tmp, 'host')
+  const guest = join(tmp, 'guest')
+  for (const checkout of [host, guest]) {
+    await mkdir(checkout, { recursive: true })
+    await git(checkout, 'init', '-q', '-b', 'main')
+    await git(checkout, 'config', 'user.email', 'ab-bin@example.invalid')
+    await git(checkout, 'config', 'user.name', 'ab-bin')
+    await writeFile(
+      join(checkout, 'autobuild.toml'),
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
+    await git(checkout, 'add', 'autobuild.toml')
+    await git(checkout, 'commit', '-q', '-m', 'fixture')
+    await git(checkout, 'remote', 'add', 'origin', 'https://github.com/acme/bin-origin.git')
+  }
+
+  const storeDir = join(tmp, 'store')
+  const local = openLocalStore(storeDir)
+  // The store records the host checkout path — the store-recorded identity
+  // the guest sandbox cannot reproduce — plus the shared normalized origin.
+  await local.createBuild({
+    slug: 'guest-own',
+    repo: host,
+    repoOrigin: 'https://github.com/acme/bin-origin',
+  })
+  await local.createBuild({
+    slug: 'guest-foreign',
+    repo: host,
+    repoOrigin: 'https://github.com/acme/other-repo',
+  })
+  await local.close()
+
+  const env = { AB_STORE: storeDir }
+  const own = await runBinIn(guest, ['build', 'status', 'guest-own', '--json'], {
+    ...env,
+    AB_BUILD: 'guest-own',
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_guest',
+  })
+  expect(own.code).toBe(0)
+  expect(JSON.parse(own.stdout).slug).toBe('guest-own')
+
+  // The guest's own-origin acceptance is proven above; a foreign origin is
+  // still rejected with the exact belongs-to diagnostic.
+  const foreign = await runBinIn(guest, ['build', 'status', 'guest-foreign'], env)
+  expect(foreign.code).toBe(1)
+  expect(foreign.stderr).toContain(
+    `build "guest-foreign" belongs to repository "${host}", not "${guest}"`,
+  )
+})
+
 test('complete remote phase identity has the same query allow/deny matrix', async () => {
   const repo = await realpath(tmp)
   const backing = new MemoryBuildStore()

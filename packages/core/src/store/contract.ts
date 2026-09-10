@@ -50,10 +50,11 @@ export const CONTRACT_T0 = '2026-07-15T12:00:00.000Z'
 /** `Date.toISOString()` shape — what a store-assigned `ts` must look like. */
 export const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
-export function sampleBuildInput(slug: string): NewBuildInput {
+export function sampleBuildInput(slug: string, opts: { repoOrigin?: string } = {}): NewBuildInput {
   return {
     slug,
     repo: 'acme/rate-limiter',
+    ...(opts.repoOrigin !== undefined ? { repoOrigin: opts.repoOrigin } : {}),
     ticket: {
       source: 'linear',
       id: 'TICK-1',
@@ -160,6 +161,23 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           const err = await store.createBuild(sampleBuildInput('dupe')).catch((e: unknown) => e)
           expect(err).toBeInstanceOf(Error)
           expect((await store.listBuilds()).length).toBe(1)
+        })
+      })
+
+      test('createBuild persists repoOrigin; the field stays absent without one', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const origin = 'https://github.com/acme/rate-limiter'
+          const withOrigin = await store.createBuild(
+            sampleBuildInput('origin-set', { repoOrigin: origin }),
+          )
+          expect(withOrigin.repoOrigin).toBe(origin)
+          expect((await store.getBuild('origin-set'))?.repoOrigin).toBe(origin)
+          expect(
+            (await store.listBuilds()).find((build) => build.slug === 'origin-set')?.repoOrigin,
+          ).toBe(origin)
+
+          await store.createBuild(sampleBuildInput('origin-absent'))
+          expect((await store.getBuild('origin-absent'))?.repoOrigin).toBeUndefined()
         })
       })
 
