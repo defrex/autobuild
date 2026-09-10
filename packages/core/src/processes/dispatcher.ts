@@ -1219,7 +1219,8 @@ export class Dispatcher {
           workspaceRef: open.ref,
           operation: 'reconcile',
           attempt,
-          outcome,
+          outcome: outcome.outcome,
+          snapshots: outcome.snapshots,
         },
       })
       events.push(cleaned)
@@ -1316,7 +1317,8 @@ export class Dispatcher {
             workspaceRef: open.ref,
             operation: 'delete',
             attempt,
-            outcome,
+            outcome: outcome.outcome,
+            snapshots: outcome.snapshots,
           },
         })
         events.push(cleaned)
