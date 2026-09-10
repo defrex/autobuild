@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
@@ -8,10 +8,7 @@ import {
   POSTGRES_URL_VARIABLES,
 } from '../packages/postgres-store/src/env'
 import { readWorkspaceManifests } from './workspace-manifest-check'
-import {
-  distributionAssetName,
-  readDistributionIdentity,
-} from '../packages/core/src/ports/workspace/distribution-archive'
+import { distributionAssetName } from '../packages/core/src/ports/workspace/distribution-archive'
 
 export const README_INSTALL_START = '<!-- release-install:start -->'
 export const README_INSTALL_END = '<!-- release-install:end -->'
@@ -783,7 +780,7 @@ export async function runRelease(
   // Pack and upload the guest distribution archive. Checkout-less dispatch
   // installs the guest Autobuild from this release asset, so a release that
   // omits it breaks origin-mode dispatch (see distribution-archive.ts).
-  await uploadDistributionAsset(run, root, tag, output)
+  await uploadDistributionAsset(run, root, tag, version, output)
 
   await ensureClean(run, root)
   output.log(`Released ${tag}: commit and annotated tag pushed; GitHub Release published.`)
@@ -804,9 +801,9 @@ export async function uploadDistributionAsset(
   run: CommandRunner,
   root: string,
   tag: string,
+  version: string,
   output: ReleaseOutput,
 ): Promise<void> {
-  const version = await readDistributionIdentity()
   const expectedAsset = distributionAssetName(version)
   if (!tag.endsWith(version)) {
     throw new Error(
@@ -826,13 +823,16 @@ export async function uploadDistributionAsset(
       },
       'could not pack the guest distribution archive',
     )
+    // The pack derives the archive name from the root manifest's `name`
+    // field, not the version; rename to the published asset layout.
     const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
-    if (archives.length !== 1 || archives[0] !== expectedAsset) {
-      throw new Error(
-        `expected exactly one packed archive named ${expectedAsset}, got ${archives.join(', ') || '(none)'}`,
-      )
+    if (archives.length !== 1) {
+      throw new Error(`expected exactly one packed archive, got ${archives.join(', ') || '(none)'}`)
     }
     const archivePath = join(destination, expectedAsset)
+    if (archives[0] !== expectedAsset) {
+      await rename(join(destination, archives[0]!), archivePath)
+    }
     await checked(
       run,
       { command: 'gh', args: ['release', 'upload', tag, archivePath], cwd: root },
@@ -848,8 +848,17 @@ export async function uploadDistributionAsset(
         `could not verify the uploaded distribution asset: ${view.stderr.trim() || view.stdout.trim()}`,
       )
     }
-    const assets =
-      (JSON.parse(view.stdout) as { assets?: { name?: unknown; size?: unknown }[] }).assets ?? []
+    // A scripted/empty view response cannot confirm the asset: verification
+    // requires the actual listing.
+    let assets: { name?: unknown; size?: unknown }[] = []
+    try {
+      assets =
+        (JSON.parse(view.stdout) as { assets?: { name?: unknown; size?: unknown }[] }).assets ?? []
+    } catch {
+      throw new Error(
+        `could not verify the uploaded distribution asset for ${tag}: the release view returned no parsable asset listing`,
+      )
+    }
     const uploaded = assets.find((asset) => asset.name === expectedAsset)
     if (uploaded === undefined) {
       throw new Error(

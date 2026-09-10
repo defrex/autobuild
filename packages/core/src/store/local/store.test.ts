@@ -75,7 +75,7 @@ describe('SqliteBuildStore durability', () => {
       const second = openLocalStore(root, { clock })
       try {
         const record = await second.getBuild('persist')
-        expect(record?.repo).toBe('acme/rate-limiter')
+        expect(record?.repo).toBe('https://github.com/acme/rate-limiter')
         expect(record?.ticket?.id).toBe('TICK-1')
         expect(record?.lease).toEqual({
           holder: 'runner-a',

@@ -36,6 +36,8 @@ import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeForge } from '../ports/forge/fake'
+import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import type { PluginRegistry } from '../plugins/registry'
 import type { OneShotCompletionInput } from '../ports/runner/one-shot'
 import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../ports/runner/fake'
 import { createTicketSource } from '../ports/tickets/create'
@@ -377,6 +379,156 @@ describe('abDispatch guards', () => {
       await rm(tmp, { recursive: true, force: true })
     }
   })
+
+  test('origin mode: startup config is fetched from the forge, base branch re-fetched, and local plugins rejected', async () => {
+    const baseToml = DISPATCH_CONFIG_TOML
+    const branchToml = baseToml.replace('capacity = 1', 'capacity = 4')
+    const files = new Map<string, string>([['autobuild.toml', baseToml]])
+    const requests: string[] = []
+    const transport = (async (
+      method: string,
+      path: string,
+      opts?: { query?: Record<string, string> },
+    ) => {
+      requests.push(
+        `${method} ${path}${opts?.query?.ref !== undefined ? `?ref=${opts.query.ref}` : ''}`,
+      )
+      if (method === 'GET' && path.includes('/contents/autobuild.toml')) {
+        const content = files.get('autobuild.toml')
+        if (content === undefined) throw new Error('unreachable')
+        return {
+          status: 200,
+          headers: {},
+          bytes: new TextEncoder().encode(opts?.query?.ref === 'main' ? branchToml : content),
+        }
+      }
+      throw new Error(`unexpected GitHub request: ${method} ${path}`)
+    }) as never
+
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const wiredOpts: DispatchOpts[] = []
+    const dispatch = abDispatch({
+      targetRepo: '/this/checkout/does/not/exist',
+      repository: 'git@github.com:acme/checkoutless.git',
+      originConfigTransport: transport,
+      env: {
+        AB_STORE: 'https://store.example.test',
+        AB_TOKEN: 'scoped',
+        GITHUB_TOKEN: 'forge-secret',
+      },
+      exec: (async () => {
+        throw new Error('host exec must not run in origin mode')
+      }) as Exec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      wire: (config, opts, state) => {
+        wiredOpts.push(opts)
+        // Pin the startup config: the FORGE content won (base branch), with
+        // no checkout file ever read and no host exec anywhere.
+        expect(config.capacity).toBe(4)
+        expect(state.repo).toBe('https://github.com/acme/checkoutless')
+        expect(state.checkout).not.toBe('/this/checkout/does/not/exist')
+        return {
+          store,
+          tickets: new FakeTicketSource([]),
+          forge: new FakeForge(),
+          workspaces: new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' }),
+          buildExecution: {
+            start: () => {
+              throw new Error('no builds in origin mode')
+            },
+          },
+          runtimes: {
+            claude: {
+              runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+              servesModels: [],
+            },
+          },
+          storeRef: 'https://store.example.test',
+          ids: sequentialIds(),
+          uuids: randomUuids(),
+          clock,
+          plugins: {
+            forges: new Map(),
+            workspaceProviders: new Map(),
+            runtimes: new Map(),
+            ticketSources: new Map(),
+            agentRuntimes: new Map(),
+            adapters: new Map(),
+            registration: [],
+            register: () => undefined,
+          } as unknown as PluginRegistry,
+        }
+      },
+    })
+    await dispatch
+    // Startup fetch: default branch, then the configured base branch.
+    expect(requests).toEqual([
+      'GET repos/acme/checkoutless/contents/autobuild.toml',
+      'GET repos/acme/checkoutless/contents/autobuild.toml?ref=main',
+    ])
+    expect(wiredOpts[0]?.repo).toBe('https://github.com/acme/checkoutless')
+    expect((await store.getRepo(wiredOpts[0]!.repo!))?.repo).toBe(
+      'https://github.com/acme/checkoutless',
+    )
+  }, 10_000)
+
+  test('origin mode refuses a config declaring local plugins and missing credentials', async () => {
+    const files = new Map<string, string>([
+      [
+        'autobuild.toml',
+        DISPATCH_CONFIG_TOML.replace(
+          '[commands]',
+          'plugins = ["checkoutless-local-plugin"]\n[commands]',
+        ),
+      ],
+    ])
+    const transport = (async () => ({
+      status: 200,
+      headers: {},
+      bytes: new TextEncoder().encode(files.get('autobuild.toml')),
+    })) as never
+    const common = {
+      targetRepo: '/this/checkout/does/not/exist',
+      repository: 'https://github.com/acme/checkoutless',
+      env: {
+        AB_STORE: 'https://store.example.test',
+        AB_TOKEN: 'scoped',
+        GITHUB_TOKEN: 'forge-secret',
+      },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      wire: () => {
+        throw new Error('wire must not run when the config is rejected')
+      },
+    }
+    await expect(
+      abDispatch({ ...common, originConfigTransport: transport } as never),
+    ).rejects.toThrow(/origin-mode dispatch cannot load configured plugins/)
+
+    // Requirements are validated before the forge fetch.
+    await expect(
+      abDispatch({
+        ...common,
+        originConfigTransport: transport,
+        env: { AB_STORE: 'http://insecure' },
+      } as never),
+    ).rejects.toThrow(/origin-mode dispatch requires an HTTPS BuildStore/)
+    await expect(
+      abDispatch({ ...common, originConfigTransport: transport, env: {} } as never),
+    ).rejects.toThrow(/requires an HTTPS BuildStore/)
+    await expect(
+      abDispatch({
+        ...common,
+        originConfigTransport: transport,
+        env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
+      } as never),
+    ).rejects.toThrow(/requires GITHUB_TOKEN or GH_TOKEN/)
+  }, 10_000)
 
   test('plugin bootstrap failures happen before production wiring or a dispatch tick', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-plugin-'))
@@ -1765,7 +1917,7 @@ describe('abDispatch watch build-runner coordination', () => {
     } finally {
       releaseStop.resolve()
       completion.resolve()
-      await dispatch.catch(() => {})
+      await dispatch
       await fx.cleanup()
     }
   }, 10_000)
@@ -1940,7 +2092,7 @@ describe('abDispatch watch build-runner coordination', () => {
       expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
     } finally {
       completion.resolve()
-      await dispatch.catch(() => {})
+      await dispatch
       await fx.cleanup()
     }
   }, 10_000)

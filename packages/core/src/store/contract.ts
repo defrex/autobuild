@@ -50,10 +50,16 @@ export const CONTRACT_T0 = '2026-07-15T12:00:00.000Z'
 /** `Date.toISOString()` shape — what a store-assigned `ts` must look like. */
 export const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
-export function sampleBuildInput(slug: string, opts: { repoOrigin?: string } = {}): NewBuildInput {
+export function sampleBuildInput(
+  slug: string,
+  opts: { repoOrigin?: string; repo?: string } = {},
+): NewBuildInput {
   return {
     slug,
-    repo: 'acme/rate-limiter',
+    // Identity-shaped by default: a normalized origin URL. The store treats
+    // `repo` as an opaque key — path-keyed legacy records round-trip the same
+    // way (see the identity suites below).
+    repo: opts.repo ?? 'https://github.com/acme/rate-limiter',
     ...(opts.repoOrigin !== undefined ? { repoOrigin: opts.repoOrigin } : {}),
     ticket: {
       source: 'linear',

@@ -129,7 +129,20 @@ function harness(
     run: async (request) => {
       requests.push(request)
       if (request.command === 'claude') return claude
-      if (request.command === 'gh') return github
+      if (request.command === 'gh') {
+        // The distribution-asset verification reads the release's assets.
+        if (request.args[0] === 'release' && request.args[1] === 'view') {
+          const tag = request.args[2] ?? ''
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              assets: [{ name: `autobuild-${tag.slice(1)}.tgz`, size: 1234 }],
+            }),
+            stderr: '',
+          }
+        }
+        return github
+      }
       if (request.command === 'bun' && request.args[0] === 'install') {
         return { exitCode: 0, stdout: '', stderr: '' }
       }
@@ -269,8 +282,27 @@ describe('release orchestration', () => {
       expect(clone.args).toContain('v2.0.1')
       expect(existsSync(String(clone.args.at(-1)))).toBe(false)
     }
-    const smokeBunRequests = testHarness.requests.filter((request) => request.command === 'bun')
+    const smokeBunRequests = testHarness.requests.filter(
+      (request) => request.command === 'bun' && request.args[0] !== 'pm',
+    )
     expect(smokeBunRequests).toHaveLength(4)
+    // The guest distribution archive is packed and uploaded after the release.
+    const packRequest = testHarness.requests.find(
+      (request) => request.command === 'bun' && request.args[0] === 'pm',
+    )
+    expect(packRequest?.args).toEqual([
+      'pm',
+      'pack',
+      '--ignore-scripts',
+      '--destination',
+      expect.any(String),
+    ])
+    const uploadRequest = testHarness.requests.find(
+      (request) =>
+        request.command === 'gh' && request.args[0] === 'release' && request.args[1] === 'upload',
+    )
+    expect(uploadRequest?.args[2]).toBe('v2.0.1')
+    expect(String(uploadRequest?.args[3])).toMatch(/autobuild-2\.0\.1\.tgz$/)
     expect(
       smokeBunRequests.filter(
         (request) => request.args.join(' ') === 'run --silent postgres:migrate',

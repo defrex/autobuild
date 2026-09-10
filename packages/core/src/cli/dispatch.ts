@@ -68,7 +68,7 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from '../p
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
-import { GitHubApiError } from '../ports/forge/github-transport'
+import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
 import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -264,6 +264,9 @@ export interface DispatchOpts {
    * path when the checkout has no origin. Set by `abDispatch` from repo
    * state; every Store-keyed key and record write uses it. */
   repo?: string
+  /** Test seam for origin mode: the GitHub transport the startup config
+   * fetch (and the default forge) use instead of real fetch. */
+  originConfigTransport?: GitHubRequest
   /** Process environment: adapter secrets (LINEAR_API_KEY) and AB_TOKEN. */
   env: Record<string, string | undefined>
   exec: Exec
@@ -2772,13 +2775,20 @@ class DispatchLoop {
  * forge — the default branch first (baseBranch is itself config), then the
  * configured base branch when one is set. The final parse is the startup
  * Config; both reads share one memoized GitHubForge. */
-async function fetchOriginModeConfig(opts: DispatchOpts): Promise<{
+async function fetchOriginModeConfig(
+  opts: DispatchOpts,
+  transport?: GitHubRequest,
+): Promise<{
   content: string
   config: Config
 }> {
   const repository = normalizeGitRemoteUrl(opts.repository!)
   const label = `${repository}/autobuild.toml`
-  const forge = new GitHubForge({ env: opts.env, repository })
+  const forge = new GitHubForge({
+    env: opts.env,
+    repository,
+    ...(transport !== undefined ? { transport } : {}),
+  })
   const readFile = forge.readFile
   if (readFile === undefined) {
     throw new Error('the github forge does not implement readFile — this is a wiring bug')
@@ -2932,7 +2942,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (opts.repository !== undefined) {
     // Origin mode startup config: the base branch's autobuild.toml, fetched
     // through the forge (default branch first — baseBranch itself is config).
-    const fetched = await fetchOriginModeConfig(opts)
+    const fetched = await fetchOriginModeConfig(opts, opts.originConfigTransport)
     configContent = fetched.content
     config = fetched.config
     if (config.forge !== 'github') {
