@@ -58,6 +58,15 @@ const fakeExec: Exec = async () => ({
   exitCode: 0,
 })
 
+/** An exec standing in for a differently located checkout (a sandbox guest):
+ * rev-parse resolves to `guestRepo`, and the origin remote answers `origin`. */
+function guestExec(guestRepo: string, origin: string): Exec {
+  return async (cmd) =>
+    cmd[1] === 'remote'
+      ? { stdout: `${origin}\n`, stderr: '', exitCode: 0 }
+      : { stdout: `${guestRepo}/.git\n${guestRepo}/.git\n${guestRepo}\n`, stderr: '', exitCode: 0 }
+}
+
 /** A store seeded with one build per spec; each gets its own event log. */
 async function seedBuild(
   store: MemoryBuildStore,
@@ -1519,6 +1528,51 @@ describe('abBuildStatus', () => {
         slug: 'theirs',
       }),
     ).rejects.toThrow(`build "theirs" belongs to repository "${OTHER_REPO}", not "${REPO}"`)
+  })
+
+  test('accepts a differently located checkout of the same origin (the sandbox guest)', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.createBuild({
+      slug: 'guest',
+      repo: OTHER_REPO,
+      repoOrigin: 'https://github.com/acme/app',
+    })
+    const out: string[] = []
+    await abBuildStatus({
+      targetRepo: '/vercel/sandbox/workspace',
+      env: {},
+      exec: guestExec('/vercel/sandbox/workspace', 'git@github.com:acme/app.git'),
+      stdout: (line) => out.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'guest',
+    })
+    expect(out.join('\n')).toContain('build guest')
+  })
+
+  test('a different origin, or a legacy record without one, is still foreign on path mismatch', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.createBuild({
+      slug: 'foreign-origin',
+      repo: OTHER_REPO,
+      repoOrigin: 'https://github.com/other/app',
+    })
+    await store.createBuild({ slug: 'legacy', repo: OTHER_REPO })
+    for (const slug of ['foreign-origin', 'legacy']) {
+      await expect(
+        abBuildStatus({
+          targetRepo: '/vercel/sandbox/workspace',
+          env: {},
+          exec: guestExec('/vercel/sandbox/workspace', 'https://github.com/acme/app'),
+          stdout: () => {},
+          openStore: () => store,
+          now: () => NOW,
+          slug,
+        }),
+      ).rejects.toThrow(
+        `build "${slug}" belongs to repository "${OTHER_REPO}", not "/vercel/sandbox/workspace"`,
+      )
+    }
   })
 
   test('--json parses and matches the projection', async () => {

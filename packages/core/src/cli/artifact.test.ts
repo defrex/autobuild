@@ -7,7 +7,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import type { MemoryBuildStore } from '../store/memory'
+import type { Exec } from '../ports/workspace/git-worktree'
+import { MemoryBuildStore } from '../store/memory'
 import { SessionScopeError } from '../store/session-scope'
 import { textContent } from '../store/types'
 import { artifactDownload, artifactGet, artifactPut, parseArtifactSpec } from './artifact'
@@ -356,6 +357,61 @@ describe('artifact download', () => {
     ).rejects.toThrow(/no "frame" artifact at rev 7.*available refs: text@0/s)
     expect(await Bun.file(output).exists()).toBe(false)
     expect(closeCount).toBe(3)
+  })
+
+  test('accepts a differently located checkout of the same origin; foreign origins stay rejected', async () => {
+    const exec: Exec = async (cmd) =>
+      cmd[1] === 'remote'
+        ? { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+        : {
+            stdout: '/guest/checkout/.git\n/guest/checkout/.git\n/guest/checkout\n',
+            stderr: '',
+            exitCode: 0,
+          }
+    const guestStore = new MemoryBuildStore()
+    await guestStore.createBuild({
+      slug: 'guest',
+      repo: '/host/checkout',
+      repoOrigin: 'https://github.com/acme/app',
+    })
+    await guestStore.putArtifact('guest', { kind: 'evidence', content: 'from the guest' })
+
+    const output = join(tmp, 'guest.bin')
+    const result = await artifactDownload({
+      targetRepo: '/guest/checkout',
+      env: {},
+      exec,
+      build: 'guest',
+      spec: 'evidence',
+      outputPath: output,
+      openStore: () => guestStore,
+    })
+    expect(result.outputPath).toBe(resolve(output))
+    expect(await Bun.file(output).text()).toBe('from the guest')
+
+    await guestStore.createBuild({
+      slug: 'foreign-origin',
+      repo: '/host/checkout',
+      repoOrigin: 'https://github.com/other/app',
+    })
+    await guestStore.createBuild({ slug: 'legacy', repo: '/host/checkout' })
+    for (const slug of ['foreign-origin', 'legacy']) {
+      const rejected = join(tmp, `${slug}.bin`)
+      await expect(
+        artifactDownload({
+          targetRepo: '/guest/checkout',
+          env: {},
+          exec,
+          build: slug,
+          spec: 'evidence',
+          outputPath: rejected,
+          openStore: () => guestStore,
+        }),
+      ).rejects.toThrow(
+        `build "${slug}" belongs to repository "/host/checkout", not "/guest/checkout"`,
+      )
+      expect(await Bun.file(rejected).exists()).toBe(false)
+    }
   })
 
   test('validates build and artifact arguments before opening a store', async () => {

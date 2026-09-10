@@ -53,7 +53,7 @@ import type {
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
 import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
-import { resolveMainRepo } from './repo-state'
+import { buildInRepository, resolveMainRepo } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
 /** Backward-compatible name for callers/tests; repository resolution is shared. */
@@ -732,7 +732,7 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
           "this repo's builds, or pass --store <ref> if it lives in another store",
       )
     }
-    if (record.repo !== repo) {
+    if (!(await buildInRepository(record, repo, opts.exec))) {
       throw new Error(`build "${opts.slug}" belongs to repository "${record.repo}", not "${repo}"`)
     }
     const events = await store.getEvents(opts.slug)

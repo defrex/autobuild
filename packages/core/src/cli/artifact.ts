@@ -11,6 +11,7 @@ import { prAttachmentSchema } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
 import type { CliEnv } from './env'
+import { buildInRepository } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
 export interface ArtifactDeps {
@@ -158,7 +159,7 @@ export async function artifactDownload(
         `no build "${opts.build}" in this store — run 'ab builds --all' or pass --store <ref>`,
       )
     }
-    if (record.repo !== repo) {
+    if (!(await buildInRepository(record, repo, opts.exec))) {
       throw new Error(`build "${opts.build}" belongs to repository "${record.repo}", not "${repo}"`)
     }
     const artifact = await store.getArtifact(opts.build, kind, rev)
