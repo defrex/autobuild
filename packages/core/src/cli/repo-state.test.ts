@@ -161,8 +161,21 @@ describe('normalizeGitRemoteUrl', () => {
     expect(normalizeGitRemoteUrl('git@github.com:acme/app.git')).toBe('https://github.com/acme/app')
     expect(normalizeGitRemoteUrl('github.com:acme/app.git')).toBe('https://github.com/acme/app')
     expect(normalizeGitRemoteUrl('HTTPS://GitHub.COM/acme/app')).toBe('https://github.com/acme/app')
+    // ssh and git spellings collapse to the https form, matching the scp-like
+    // branch, so an ssh-origin host checkout and a guest's pinned https origin
+    // compare equal.
     expect(normalizeGitRemoteUrl('ssh://git@github.com/acme/app.git')).toBe(
-      'ssh://github.com/acme/app',
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('ssh://github.com/acme/app')).toBe('https://github.com/acme/app')
+    expect(normalizeGitRemoteUrl('git://github.com/acme/app.git')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('git+ssh://git@github.com/acme/app')).toBe(
+      'https://github.com/acme/app',
+    )
+    expect(normalizeGitRemoteUrl('SSH://GitHub.COM/acme/app.git')).toBe(
+      'https://github.com/acme/app',
     )
   })
 
@@ -225,6 +238,41 @@ describe('buildInRepository', () => {
         { slug: 'b', repo: '/host/checkout', repoOrigin: ORIGIN, createdAt: '', updatedAt: '' },
         '/guest/checkout',
         exec,
+      ),
+    ).toBe(true)
+  })
+
+  test('an ssh-spelled checkout matches an https-spelled record (cross-protocol)', async () => {
+    const sshRemote: Exec = async () => ({
+      stdout: 'ssh://git@github.com/acme/app.git\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    expect(
+      await buildInRepository(
+        { slug: 'b', repo: '/host/checkout', repoOrigin: ORIGIN, createdAt: '', updatedAt: '' },
+        '/guest/checkout',
+        sshRemote,
+      ),
+    ).toBe(true)
+    // And the mirror image: the record's origin was normalized from an ssh://
+    // remote while the current checkout pins the https spelling.
+    const httpsRemote: Exec = async () => ({
+      stdout: 'https://github.com/acme/app.git\n',
+      stderr: '',
+      exitCode: 0,
+    })
+    expect(
+      await buildInRepository(
+        {
+          slug: 'b',
+          repo: '/host/checkout',
+          repoOrigin: 'ssh://git@github.com/acme/app',
+          createdAt: '',
+          updatedAt: '',
+        },
+        '/guest/checkout',
+        httpsRemote,
       ),
     ).toBe(true)
   })

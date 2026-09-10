@@ -123,11 +123,11 @@ export function resolveRepoStatePaths(opts: {
 /**
  * Location-independent form of a git remote URL, for comparing a recorded
  * repository origin with the origin of the current checkout. Trims; maps
- * scp-like `git@host:path` (and bare `host:path`) remotes to `https://`;
- * drops credentials; lowercases the host; strips a trailing `.git` and
- * trailing slashes. Anything unparseable — notably a local-path remote — is
- * returned trimmed as-is, so such remotes only ever compare equal to
- * themselves.
+ * scp-like `git@host:path` (and bare `host:path`) remotes and explicit
+ * `ssh://`/`git://` URLs to their `https://` spelling; drops credentials;
+ * lowercases the host; strips a trailing `.git` and trailing slashes.
+ * Anything unparseable — notably a local-path remote — is returned trimmed
+ * as-is, so such remotes only ever compare equal to themselves.
  */
 export function normalizeGitRemoteUrl(raw: string): string {
   const trimmed = raw.trim()
@@ -145,7 +145,14 @@ export function normalizeGitRemoteUrl(raw: string): string {
     // as a scheme-only URL and passes through untouched.
     if (url.hostname === '') return trimmed
     const path = url.pathname.replace(/\.git\/?$/i, '').replace(/\/+$/, '')
-    return `${url.protocol}//${url.host.toLowerCase()}${path}`
+    // ssh and git URLs name the same repository as their https spelling, so
+    // an ssh-origin host checkout and the sandbox guest's pinned https origin
+    // must normalize to one form (the scp-like branch already does).
+    const protocol =
+      url.protocol === 'ssh:' || url.protocol === 'git:' || url.protocol === 'git+ssh:'
+        ? 'https:'
+        : url.protocol
+    return `${protocol}//${url.host.toLowerCase()}${path}`
   } catch {
     return trimmed
   }
@@ -182,7 +189,11 @@ export async function buildInRepository(
   if (record.repo === repo) return true
   if (record.repoOrigin === undefined) return false
   const origin = await resolveRepoOrigin(repo, exec)
-  return origin !== undefined && origin === record.repoOrigin
+  // The recorded side is normalized too (idempotent for records written by
+  // this code) so a guard never depends on the writer's normalizer vintage —
+  // an ssh-spelled recorded origin still equals the https spelling computed
+  // here.
+  return origin !== undefined && normalizeGitRemoteUrl(record.repoOrigin) === origin
 }
 
 /** Resolve repository identity, then select all state paths from it. */
