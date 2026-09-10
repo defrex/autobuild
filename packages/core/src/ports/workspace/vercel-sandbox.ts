@@ -41,6 +41,34 @@ export interface VercelCommand {
   stderr?(): Promise<string>
 }
 
+/**
+ * Bun's native fetch enforces its own request timeout on the SDK's `wait=true`
+ * long-poll and ignores the SDK's undici agent (`bodyTimeout: 0`). A guest
+ * execution routinely outlives that timeout, so an interrupted long-poll is
+ * re-issued until the command reports an exit code or the environment's own
+ * lifetime has passed. Any other failure still propagates: it may mean the
+ * environment is gone.
+ */
+export function isInterruptedLongPoll(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.name === 'TimeoutError') return true
+  const message = error.message.toLowerCase()
+  return message.includes('timed out') || message.includes('socket connection was closed')
+}
+
+export async function waitForCommandExit(
+  command: Pick<VercelCommand, 'wait'>,
+  expired: () => boolean,
+): Promise<{ exitCode: number }> {
+  for (;;) {
+    try {
+      return await command.wait()
+    } catch (error) {
+      if (!isInterruptedLongPoll(error) || expired()) throw error
+    }
+  }
+}
+
 export interface VercelSandboxHandle {
   readonly name: string
   /** The session's default working directory, where the server places a git
@@ -1075,7 +1103,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       })()
       await stopping
     }
-    const completion = command.wait().then(
+    // Retry interrupted long-polls only within the environment's own
+    // lifetime (plus a margin for stop/snapshot); past that the command
+    // cannot still be running and the failure is real.
+    const lifetimeDeadline = Date.now() + this.options.config.timeoutSeconds * 1000 + 5 * 60 * 1000
+    const completion = waitForCommandExit(command, () => Date.now() > lifetimeDeadline).then(
       async (result): Promise<BuildExecutionExit> => {
         await stopEnvironment()
         return { exitCode: result.exitCode }

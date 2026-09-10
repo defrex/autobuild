@@ -892,6 +892,52 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.killSignals[0]).toBeInstanceOf(AbortSignal)
   })
 
+  test('re-issues an interrupted wait long-poll until the detached runner exits', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    let waits = 0
+    h.sandbox.detachedWait = async () => {
+      waits += 1
+      if (waits < 3) {
+        throw Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' })
+      }
+      return { exitCode: 0 }
+    }
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-long-poll',
+      workspaceRef: workspace.ref,
+    })
+
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+    expect(waits).toBe(3)
+  })
+
+  test('a non-transient wait failure still rejects the completion', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = async () => {
+      throw new Error('Status code 404 is not ok: session not found')
+    }
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-real-failure',
+      workspaceRef: workspace.ref,
+    })
+
+    await expect(execution.completion).rejects.toThrow('404')
+  })
+
   test('fails preflight closed when provisioned Bun is missing and does not start a child', async () => {
     const h = harness()
     const workspace = await h.provider.provision({
