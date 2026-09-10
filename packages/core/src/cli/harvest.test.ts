@@ -485,11 +485,15 @@ describe('harvest status', () => {
   test('shares store precedence and uses the main checkout as journal identity', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await store.ensureRepo('/main/repo')
-    const exec = async () => ({
-      stdout: '/main/repo/.git\n/main/repo/.git\n/main/repo\n',
-      stderr: '',
-      exitCode: 0,
-    })
+    const exec = async (cmd: string[]) =>
+      cmd[1] === 'remote'
+        ? // No origin remote: identity falls back to the resolved checkout path.
+          { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+        : {
+            stdout: '/main/repo/.git\n/main/repo/.git\n/main/repo\n',
+            stderr: '',
+            exitCode: 0,
+          }
     const refs: string[] = []
     const outputs: string[] = []
     const common = {

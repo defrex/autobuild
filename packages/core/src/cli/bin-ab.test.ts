@@ -441,7 +441,7 @@ test('ambient reads accept a differently located checkout of the same repository
     AB_PHASE: 'implement@1',
     AB_SESSION: 's_guest',
   })
-  expect(own.code).toBe(0)
+  expect(own.code, own.stderr).toBe(0)
   expect(JSON.parse(own.stdout).slug).toBe('guest-own')
 
   // The guest's own-origin acceptance is proven above; a foreign origin is
@@ -449,7 +449,7 @@ test('ambient reads accept a differently located checkout of the same repository
   const foreign = await runBinIn(guest, ['build', 'status', 'guest-foreign'], env)
   expect(foreign.code).toBe(1)
   expect(foreign.stderr).toContain(
-    `build "guest-foreign" belongs to repository "${host}", not "${guest}"`,
+    `build "guest-foreign" belongs to repository "${host}", not "https://github.com/acme/bin-origin"`,
   )
 })
 

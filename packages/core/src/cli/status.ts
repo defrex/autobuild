@@ -54,6 +54,7 @@ import type {
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
 import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
+import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { buildInRepository, resolveMainRepo } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
@@ -646,10 +647,18 @@ export interface AbBuildsOpts extends StatusOpts {
 export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
   await withAmbientReadStore(opts, async ({ store, repo }) => {
+    // Repository identity is the checkout's normalized origin. Old records
+    // are keyed by checkout path and are not migrated; they stay visible
+    // from any checkout whose origin matches the recorded `repoOrigin`
+    // (read compatibility, not migration). Foreign-origin records are hidden.
+    const identity = normalizeGitRemoteUrl(repo)
+    const mine = (record: BuildRecord): boolean =>
+      record.repo === identity ||
+      (record.repoOrigin !== undefined && normalizeGitRemoteUrl(record.repoOrigin) === identity)
     const wanted = new Set(statusFilter(opts.all, opts.queued))
     // Cross-repo aggregation is out of scope (§12: one dispatcher per repo,
     // one repo's builds per answer).
-    const records = (await store.listBuilds()).filter((record) => record.repo === repo)
+    const records = (await store.listBuilds()).filter(mine)
     const summaries: BuildSummary[] = []
     for (const record of records) {
       const summary = summarize(record, await store.getEvents(record.slug), now)
@@ -738,18 +747,20 @@ async function projectBuildDecision(
 /** `ab build status <slug>` — one build in detail. Read-only. */
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
-  await withAmbientReadStore(opts, async ({ store, repo }) => {
-    const record = await store.getBuild(opts.slug)
+  await withAmbientReadStore(opts, async (context) => {
+    const record = await context.store.getBuild(opts.slug)
     if (record === null) {
       throw new Error(
         `no build "${opts.slug}" in this store — run 'ab builds --all' to list ` +
           "this repo's builds, or pass --store <ref> if it lives in another store",
       )
     }
-    if (!(await buildInRepository(record, repo, opts.exec))) {
-      throw new Error(`build "${opts.slug}" belongs to repository "${record.repo}", not "${repo}"`)
+    if (!(await buildInRepository(record, context.checkout, opts.exec))) {
+      throw new Error(
+        `build "${opts.slug}" belongs to repository "${record.repo}", not "${context.repo}"`,
+      )
     }
-    const events = await store.getEvents(opts.slug)
+    const events = await context.store.getEvents(opts.slug)
     const decision = await projectBuildDecision(events)
     const d = detail(record, events, now, opts.events, decision)
     if (opts.json === true) {

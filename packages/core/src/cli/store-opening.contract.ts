@@ -18,11 +18,15 @@ import type { StoreOpener } from './store-opening'
 const MAIN_REPO = '/main/repo'
 const LINKED_REPO = '/linked/worktree'
 
-const mainRepoExec: Exec = async () => ({
-  stdout: `${MAIN_REPO}/.git\n${MAIN_REPO}/.git\n${MAIN_REPO}\n`,
-  stderr: '',
-  exitCode: 0,
-})
+const mainRepoExec: Exec = async (cmd) =>
+  cmd[1] === 'remote'
+    ? // No origin remote: identity falls back to the resolved checkout path.
+      { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+    : {
+        stdout: `${MAIN_REPO}/.git\n${MAIN_REPO}/.git\n${MAIN_REPO}\n`,
+        stderr: '',
+        exitCode: 0,
+      }
 
 const noGit: Exec = async () => ({
   stdout: '',

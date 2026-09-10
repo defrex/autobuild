@@ -52,11 +52,15 @@ function record(overrides: Partial<BuildRecord> = {}): BuildRecord {
   }
 }
 
-const fakeExec: Exec = async () => ({
-  stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`,
-  stderr: '',
-  exitCode: 0,
-})
+const fakeExec: Exec = async (cmd) =>
+  cmd[1] === 'remote'
+    ? // No origin remote: identity falls back to the resolved checkout path.
+      { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+    : {
+        stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`,
+        stderr: '',
+        exitCode: 0,
+      }
 
 /** An exec standing in for a differently located checkout (a sandbox guest):
  * rev-parse resolves to `guestRepo`, and the origin remote answers `origin`. */
@@ -1606,7 +1610,7 @@ describe('abBuildStatus', () => {
           slug,
         }),
       ).rejects.toThrow(
-        `build "${slug}" belongs to repository "${OTHER_REPO}", not "/vercel/sandbox/workspace"`,
+        `build "${slug}" belongs to repository "${OTHER_REPO}", not "https://github.com/acme/app"`,
       )
     }
   })
