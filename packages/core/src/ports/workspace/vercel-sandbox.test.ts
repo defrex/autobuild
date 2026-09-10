@@ -1534,3 +1534,117 @@ describe('VercelSandboxProvider', () => {
     ).toThrow(/HTTPS BuildStore/)
   })
 })
+
+describe('VercelSandboxProvider origin mode (no checkout)', () => {
+  const SHA = 'a'.repeat(40)
+  const BASE_SHA = 'b'.repeat(40)
+
+  /** Origin-mode harness: injected origin/remoteBranchHead seams and an exec
+   * that THROWS on any host command — proving the provider never shells git
+   * on the host when the seams are present. */
+  function originHarness(
+    options: { remoteBranches?: Record<string, string>; postPushHead?: boolean } = {},
+  ) {
+    const branches = new Map(Object.entries(options.remoteBranches ?? {}))
+    const sandbox = new FakeSandbox()
+    let createInput: Record<string, unknown> | undefined
+    const facade: VercelSandboxFacade = {
+      get: async () => sandbox,
+      create: async (input) => {
+        createInput = input as Record<string, unknown>
+        return sandbox
+      },
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
+    }
+    const throwingExec: Exec = async (cmd) => {
+      throw new Error(`host exec must not run in origin mode: ${cmd.join(' ')}`)
+    }
+    const provider = new VercelSandboxProvider({
+      config: {
+        image: 'vercel/sandbox/universal:latest',
+        vcpus: 4,
+        timeoutSeconds: 2700,
+        failoverRegions: [],
+        environmentVariables: [],
+      },
+      env: { GITHUB_TOKEN: 'forge-secret' },
+      storeRef: 'https://store.example.test',
+      storeToken: 'scoped-store-token',
+      repo: '/this/checkout/does/not/exist',
+      facade,
+      exec: throwingExec,
+      packageArchive: async () => new Uint8Array([1, 2, 3]),
+      origin: async () => 'https://github.com/acme/app',
+      remoteBranchHead: async (branch) =>
+        branches.get(branch) ??
+        (options.postPushHead !== false &&
+        branch === 'ab/remote-build' &&
+        sandbox.commands.some((command) => (command.args as string[])?.includes('push'))
+          ? SHA
+          : undefined),
+    })
+    return {
+      provider,
+      sandbox,
+      createInput: () => createInput as { source: { url: string; revision: string } },
+    }
+  }
+
+  test('provisions from the injected origin and remote branch heads with no host exec', async () => {
+    const h = originHarness({ remoteBranches: { main: BASE_SHA } })
+    const workspace = await h.provider.provision({
+      repo: '/not/a/checkout',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(workspace.provider).toBe('vercel-sandbox')
+    expect(workspace.base).toEqual({ source: 'remote', sha: BASE_SHA })
+    // The sandbox source pins the injected origin's https spelling.
+    expect(h.createInput().source.url).toBe('https://github.com/acme/app.git')
+    expect(h.createInput().source.revision).toBe(BASE_SHA)
+  })
+
+  test('reuses an existing build branch head before falling back to the base branch', async () => {
+    const h = originHarness({ remoteBranches: { main: BASE_SHA, 'ab/remote-build': SHA } })
+    const workspace = await h.provider.provision({
+      repo: '/not/a/checkout',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(workspace.base).toEqual({ source: 'existing', sha: SHA })
+  })
+
+  test('the full publish path, including its post-push verification, runs without host git', async () => {
+    // The seam only starts reporting the build branch after the guest's push
+    // command ran — exactly what the real forge-backed reader observes once
+    // the guest lands the branch.
+    const h = originHarness({ remoteBranches: { main: BASE_SHA } })
+    const workspace = await h.provider.provision({
+      repo: '/not/a/checkout',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(await h.provider.publication.isPublished({ sha: SHA, branch: workspace.branch })).toBe(
+      false,
+    )
+    await h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch })
+    expect(await h.provider.publication.isPublished({ sha: SHA, branch: workspace.branch })).toBe(
+      true,
+    )
+  })
+
+  test('a publication whose seam never shows the head still fails closed', async () => {
+    const h = originHarness({ remoteBranches: { main: BASE_SHA }, postPushHead: false })
+    const workspace = await h.provider.provision({
+      repo: '/not/a/checkout',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The guest push "succeeds" but the seam keeps reporting the branch
+    // absent — the verification must reject, never assume.
+    await expect(
+      h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch }),
+    ).rejects.toThrow(/published head \(missing\) did not match/)
+  })
+})

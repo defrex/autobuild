@@ -1138,6 +1138,12 @@ export class Dispatcher {
   ): Promise<void> {
     const { store, tickets, forge } = this.deps
     const branch = record.branch
+    // Whether this build ever owned a local checkout workspace — captured
+    // BEFORE the workspace release clears the open fact below. Remote
+    // workspaces (vercel-sandbox) never create a local branch in the main
+    // checkout, and origin mode has no checkout at all: the local-branch git
+    // step is skipped, and the saga's later steps tolerate its absence.
+    const hadLocalWorkspace = openWorkspace(events)?.provider !== 'vercel-sandbox'
     const has = (type: AbEvent['type']): boolean => events.some((event) => event.type === type)
     const append = async <T extends EventWrite['type']>(write: EventWrite<T>): Promise<void> => {
       const event = await store.append(record.slug, write)
@@ -1219,14 +1225,7 @@ export class Dispatcher {
       }
     }
 
-    if (
-      branch !== undefined &&
-      !has('abort.local-branch-deleted') &&
-      // Remote workspaces never create a local branch in the main checkout —
-      // there may not even be a checkout (origin mode). Skip the git step and
-      // its fact; the saga's other steps already tolerate absent work.
-      openWorkspace(events)?.provider !== 'vercel-sandbox'
-    ) {
+    if (branch !== undefined && !has('abort.local-branch-deleted') && hadLocalWorkspace) {
       const ref = `refs/heads/${branch}`
       try {
         const valid = await this.deps.exec(['git', 'check-ref-format', ref], {

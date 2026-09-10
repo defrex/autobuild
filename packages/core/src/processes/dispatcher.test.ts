@@ -3585,6 +3585,50 @@ describe('Dispatcher janitor', () => {
     expect(h.launches).toEqual([])
   })
 
+  test('baseSha routes through the forge remoteBranchSha capability when present (no exec)', async () => {
+    // Origin mode: the dispatcher's repo is the normalized origin — there is
+    // no checkout for `git ls-remote` to read, so the forge answers.
+    const forgeWithCapability = new Proxy(harness().forge, {}) as FakeForge & {
+      remoteBranchSha?: (branch: string) => Promise<string>
+    }
+    forgeWithCapability.remoteBranchSha = async (branch) =>
+      branch === 'main' ? 'remote-base-sha' : Promise.reject(new Error('absent'))
+
+    const h = harness({
+      forge: forgeWithCapability,
+      exec: async () => {
+        throw new Error('host exec must not run when the forge answers')
+      },
+    })
+    const slug = await seedBuild(h, { pr: PR })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+
+    await h.dispatcher.tick()
+    const events = await h.store.getEvents(slug)
+    expect(events.at(-1)?.type).toBe('pr.conflicted')
+    expect(events.at(-1)?.payload).toEqual({ baseSha: 'remote-base-sha' })
+  })
+
+  test('abort cleanup skips the local-branch git step for vercel-sandbox builds', async () => {
+    const h = harness({
+      workspaceName: 'vercel-sandbox',
+      tickets: [readyTicket('T-1', { labels: [] })],
+    })
+    const slug = await seedBuild(h, { ticketId: 'T-1', workspaceProvider: 'vercel-sandbox' })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.janitorDiagnostics).toEqual([])
+    expect(report.abandoned).toBe(1)
+    const events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
+    // Remote workspaces never create a local branch; the git steps and their
+    // fact are skipped entirely.
+    expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(false)
+    expect(h.execCalls).toEqual([])
+    expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
+  })
+
   test('abort cleanup records an unknown remote delete and retries it durably', async () => {
     let fail = true
     const remote: WorkspaceProvider = {
