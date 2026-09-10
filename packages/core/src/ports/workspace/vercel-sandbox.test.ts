@@ -135,6 +135,8 @@ function harness(
     provisioning?: Array<{ name: string; command: string }>
     /** The session cwd the fake reports; undefined models an SDK without one. */
     cwd?: string
+    /** Optional snapshot-expiry bound threaded to creation. */
+    snapshotExpirationSeconds?: number
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -197,6 +199,9 @@ function harness(
       image: 'vercel/sandbox/universal:latest',
       vcpus: 4,
       timeoutSeconds: 2700,
+      ...(options.snapshotExpirationSeconds === undefined
+        ? {}
+        : { snapshotExpirationSeconds: options.snapshotExpirationSeconds }),
       failoverRegions: [],
       environmentVariables: ['ANTHROPIC_API_KEY'],
       provisioning: options.provisioning ?? [],
@@ -1067,6 +1072,26 @@ describe('VercelSandboxProvider', () => {
       branch: 'ab/remote-build',
     })
     expect(h.createInput?.keepLastSnapshots).toEqual({ count: 1, deleteEvicted: true })
+  })
+
+  test('creation maps snapshotExpirationSeconds to SDK milliseconds and omits it when unset', async () => {
+    const set = harness({ snapshotExpirationSeconds: 86_400 })
+    await set.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(set.createInput?.snapshotExpiration).toBe(86_400_000)
+
+    const unset = harness()
+    await unset.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The key must be absent entirely: the SDK reads `0` as "no expiration".
+    expect(unset.createInput?.snapshotExpiration).toBeUndefined()
+    expect('snapshotExpiration' in (unset.createInput ?? {})).toBe(false)
   })
 
   test('reap purges every live snapshot under the exact environment name and never touches dead rows', async () => {

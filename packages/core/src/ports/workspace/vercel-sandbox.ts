@@ -120,6 +120,9 @@ export type VercelSandboxCreateInput = {
   failoverRegions?: string[]
   networkPolicy: NetworkPolicy
   signal?: AbortSignal
+  /** Snapshot expiration in milliseconds for this environment's automatic
+   * snapshots (SDK `snapshotExpiration`); absent means the provider default. */
+  snapshotExpiration?: number
   /** Retention bound for this environment's automatic snapshots. Snapshots
    * are created whenever a session stops, and `Sandbox.delete()` never removes
    * them; the bound keeps a live environment at exactly what resuming it
@@ -720,6 +723,9 @@ export async function validateVercelSandbox(
     timeout: config.timeoutSeconds * 1000,
     ...(config.region !== undefined ? { region: config.region } : {}),
     ...(config.failoverRegions.length > 0 ? { failoverRegions: config.failoverRegions } : {}),
+    ...(config.snapshotExpirationSeconds === undefined
+      ? {}
+      : { snapshotExpiration: config.snapshotExpirationSeconds * 1000 }),
     networkPolicy: 'allow-all',
     keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -1031,6 +1037,9 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         ...(this.options.config.failoverRegions.length > 0
           ? { failoverRegions: this.options.config.failoverRegions }
           : {}),
+        ...(this.options.config.snapshotExpirationSeconds === undefined
+          ? {}
+          : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
         networkPolicy: uploadPackPolicy(origin, readAuth),
         keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
         signal: this.operationSignal(),
