@@ -115,7 +115,14 @@ async function initOrigin(dir: string, toml = DISPATCH_CONFIG_TOML): Promise<voi
 
 interface Fixture {
   tmp: string
+  /** Repository identity: the checkout's normalized origin remote. Since the
+   * fixture origin is a local bare repo, this is its path — the store-keyed
+   * key for every journal/build event, exactly what the production
+   * dispatcher serves. */
   origin: string
+  /** The physical main checkout: filesystem consumers (config path, plugin
+   * code, worktree state roots, process cwd). */
+  checkout: string
   store: MemoryBuildStore
   tickets: FakeTicketSource
   forge: FakeForge
@@ -140,7 +147,10 @@ async function makeFixture(
   await initOrigin(originPath, toml)
   // Git reports its common directory canonically (macOS temp paths gain the
   // `/private` prefix), so fixtures use that same repository identity.
-  const origin = await realpath(originPath)
+  const checkout = await realpath(originPath)
+  // Identity is the checkout's normalized origin remote — the bare fixture
+  // remote's path. Store keys and filesystem paths no longer coincide.
+  const origin = await realpath(join(tmp, 'origin.git'))
 
   const ids = sequentialIds()
   const store = new MemoryBuildStore({ clock })
@@ -263,6 +273,7 @@ async function makeFixture(
   return {
     tmp,
     origin,
+    checkout,
     store,
     tickets,
     forge,
@@ -408,7 +419,7 @@ describe('abDispatch guards', () => {
     globals.__abDispatchPluginRunner = fx.agents
     try {
       await writeFile(
-        join(fx.origin, 'runtime-plugin.ts'),
+        join(fx.checkout, 'runtime-plugin.ts'),
         `export default {
           name: 'dispatch-runtime-fixture',
           apiVersion: '^1.0.0',
@@ -432,7 +443,7 @@ describe('abDispatch guards', () => {
       )
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { PLUGIN_TOKEN: 'secret' },
         exec: spawnExec,
         stdout: () => {},
@@ -448,13 +459,13 @@ describe('abDispatch guards', () => {
       }
       expect(context.config).toEqual({})
       expect(context.env.PLUGIN_TOKEN).toBe('secret')
-      expect(context.repoRoot).toBe(fx.origin)
+      expect(context.repoRoot).toBe(fx.checkout)
       const oneShot = globals.__abDispatchPluginOneShot as {
         model?: string
         cwd: string
       }
       expect(oneShot.model).toBe('custom/default')
-      expect(oneShot.cwd).toBe(fx.origin)
+      expect(oneShot.cwd).toBe(fx.checkout)
 
       const events = await fx.store.getEvents('plugin-runtime-build')
       const sessions = events.filter((event) => event.type === 'session.started')
@@ -585,7 +596,7 @@ describe('abDispatch guards', () => {
     try {
       const run = (env: Record<string, string | undefined>, storeRef?: string) =>
         abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env,
           exec: spawnExec,
           stdout: () => {},
@@ -602,9 +613,9 @@ describe('abDispatch guards', () => {
       await run({ AB_STORE: 'environment-state' })
       await run({})
       expect(seen).toEqual([
-        join(fx.origin, 'flag-state'),
-        join(fx.origin, 'environment-state'),
-        join(fx.origin, '.autobuild'),
+        join(fx.checkout, 'flag-state'),
+        join(fx.checkout, 'environment-state'),
+        join(fx.checkout, '.autobuild'),
       ])
       expect(fx.err).toEqual([])
     } finally {
@@ -660,7 +671,7 @@ describe('abDispatch --once', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -722,7 +733,7 @@ triageState = "Triage"
     const fakeModule = pathToFileURL(
       join(import.meta.dir, '..', 'ports', 'tickets', 'fake.ts'),
     ).href
-    const pluginPath = join(fx.origin, 'journal-plugin.ts')
+    const pluginPath = join(fx.checkout, 'journal-plugin.ts')
     try {
       await writeFile(
         pluginPath,
@@ -742,9 +753,9 @@ triageState = "Triage"
           }
         `,
       )
-      await git(['add', 'journal-plugin.ts'], fx.origin)
-      await git([...GIT_ID, 'commit', '-q', '-m', 'add ticket plugin'], fx.origin)
-      await git(['push', '-q'], fx.origin)
+      await git(['add', 'journal-plugin.ts'], fx.checkout)
+      await git([...GIT_ID, 'commit', '-q', '-m', 'add ticket plugin'], fx.checkout)
+      await git(['push', '-q'], fx.checkout)
 
       const pluginWire: NonNullable<DispatchOpts['wire']> = async (
         parsed,
@@ -763,7 +774,7 @@ triageState = "Triage"
       })
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { JOURNAL_TOKEN: 'secret' },
         exec: spawnExec,
         stdout: () => {},
@@ -781,7 +792,7 @@ triageState = "Triage"
         sha: 'plugin-merge-sha',
       })
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { JOURNAL_TOKEN: 'secret' },
         exec: spawnExec,
         stdout: () => {},
@@ -814,7 +825,7 @@ triageState = "Triage"
     const firstTerminal = fakeTerminal(true, { columns: 180 })
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'dispatch-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -848,7 +859,7 @@ triageState = "Triage"
       const beforeRestart = await fx.store.getEvents(record!.slug)
       const restartTerminal = fakeTerminal(true, { columns: 180 })
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'another-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -870,7 +881,7 @@ triageState = "Triage"
 
       const overrideTerminal = fakeTerminal(true, { columns: 180 })
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'override-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -902,7 +913,7 @@ triageState = "Triage"
     )
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -917,7 +928,7 @@ triageState = "Triage"
       fx.forge.setPrState(1, { state: 'merged', sha: 'merged-existing' })
       fx.tickets.add(readyTicket('T-new', { title: 'New work' }))
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'drain-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -938,7 +949,7 @@ triageState = "Triage"
       // Omission reuses the durable OFF setting; the waiting ticket remains
       // unclaimed after a dispatcher restart.
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'restart-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -951,7 +962,7 @@ triageState = "Triage"
       // An explicit opposite flag appends the new repository value and the
       // same tick immediately samples it.
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'resume-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -1013,7 +1024,7 @@ args = ["--naming-style", "concise"]
 
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { NAMING_API_KEY: 'secret' },
         exec: spawnExec,
         stdout: () => {},
@@ -1025,7 +1036,7 @@ args = ["--naming-style", "concise"]
       expect(calls).toHaveLength(1)
       expect(calls[0]?.prompt).toContain(CONFORMING_BODY)
       expect(calls[0]?.prompt).toContain('one to three meaningful words')
-      expect(calls[0]?.cwd).toBe(fx.origin)
+      expect(calls[0]?.cwd).toBe(fx.checkout)
       expect(calls[0]?.env.NAMING_API_KEY).toBe('secret')
       expect(calls[0]?.model).toBe('gpt-slug-name')
       expect(calls[0]?.args).toEqual(['--naming-style', 'concise'])
@@ -1063,7 +1074,7 @@ args = ["--naming-style", "concise"]
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -1121,7 +1132,7 @@ args = ["--naming-style", "concise"]
       await fx.store.appendRepo(fx.origin, { actor: KERNEL, type: 'harvest.paused', payload: {} })
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -1155,7 +1166,7 @@ args = ["--naming-style", "concise"]
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -1179,7 +1190,7 @@ args = ["--naming-style", "concise"]
     const fx = await makeFixture(readyTicket('T-poll'), happyHandlers())
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -1196,7 +1207,7 @@ args = ["--naming-style", "concise"]
       const out: string[] = []
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -1229,7 +1240,7 @@ args = ["--naming-style", "concise"]
     }
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -1248,7 +1259,7 @@ args = ["--naming-style", "concise"]
       ).toBe(true)
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -1280,7 +1291,7 @@ args = ["--naming-style", "concise"]
       // The first invocation exhausts the runner's two-attempt infra budget
       // and parks on a policy escalation.
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => firstOut.push(line),
@@ -1303,7 +1314,7 @@ args = ["--naming-style", "concise"]
       for (let pass = 0; pass < 2; pass += 1) {
         const out: string[] = []
         await abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env: {},
           exec: spawnExec,
           stdout: (line) => out.push(line),
@@ -1319,7 +1330,7 @@ args = ["--naming-style", "concise"]
       const stop = new AbortController()
       const watchOut: string[] = []
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => watchOut.push(line),
@@ -1466,7 +1477,7 @@ args = ["--naming-style", "concise"]
       }
 
       const dispatch = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -1527,7 +1538,7 @@ args = ["--naming-style", "concise"]
 
       const nextOut: string[] = []
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => nextOut.push(line),
@@ -1656,7 +1667,7 @@ args = ["--naming-style", "concise"]
       })
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -1717,7 +1728,7 @@ describe('abDispatch watch build-runner coordination', () => {
     }
     const baseWire = fx.wire()
     const dispatch = abDispatch({
-      targetRepo: fx.origin,
+      targetRepo: fx.checkout,
       env: {},
       exec: spawnExec,
       stdout: () => {},
@@ -1845,7 +1856,7 @@ describe('abDispatch watch build-runner coordination', () => {
     }
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -1906,7 +1917,7 @@ describe('abDispatch watch build-runner coordination', () => {
       release: (handle) => baseWire.workspaces.release(handle),
     }
     const dispatch = abDispatch({
-      targetRepo: fx.origin,
+      targetRepo: fx.checkout,
       env: {},
       exec: spawnExec,
       stdout: () => {},
@@ -1948,7 +1959,7 @@ describe('abDispatch watch build-runner coordination', () => {
         baseBranch: 'main',
       },
     })
-    const worktree = `${fx.origin}/.autobuild/worktrees/ab-${slug}`
+    const worktree = `${fx.checkout}/.autobuild/worktrees/ab-${slug}`
     await fx.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.provisioned',
@@ -2017,7 +2028,7 @@ describe('abDispatch watch build-runner coordination', () => {
 
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -2130,7 +2141,7 @@ describe('abDispatch watch build-runner coordination', () => {
     try {
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         await abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env: {},
           exec: spawnExec,
           stdout: () => {},
@@ -2313,7 +2324,7 @@ describe('abDispatch watch build-runner coordination', () => {
 
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -2342,7 +2353,7 @@ describe('abDispatch watch build-runner coordination', () => {
     let workspaceRuntimeReadyState: string | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -2352,7 +2363,7 @@ describe('abDispatch watch build-runner coordination', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            await unlink(join(fx.origin, 'autobuild.toml'))
+            await unlink(join(fx.checkout, 'autobuild.toml'))
             fx.tickets.add(readyTicket('T-retained-ready', { body: 'not a complete spec' }))
           } else if (sleeps === 2) {
             claimsDuringAbsence = [...fx.tickets.claims]
@@ -2360,7 +2371,7 @@ describe('abDispatch watch build-runner coordination', () => {
               (event) => event.type === 'dispatcher.config-reloaded',
             ).length
           } else if (sleeps === 3) {
-            await writeFile(join(fx.origin, 'autobuild.toml'), restored)
+            await writeFile(join(fx.checkout, 'autobuild.toml'), restored)
             fx.tickets.add(
               readyTicket('T-restored-queued', {
                 body: 'not a complete spec',
@@ -2419,7 +2430,7 @@ describe('abDispatch watch build-runner coordination', () => {
     let sleeps = 0
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -2430,11 +2441,11 @@ describe('abDispatch watch build-runner coordination', () => {
           sleeps += 1
           if (sleeps === 1) {
             await writeFile(
-              join(fx.origin, 'autobuild.toml'),
+              join(fx.checkout, 'autobuild.toml'),
               DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 0'),
             )
           } else if (sleeps === 2) {
-            await writeFile(join(fx.origin, 'autobuild.toml'), valid)
+            await writeFile(join(fx.checkout, 'autobuild.toml'), valid)
           } else {
             stop.abort()
           }
@@ -2511,7 +2522,7 @@ describe('abDispatch watch build-runner coordination', () => {
 
     try {
       dispatch = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -2638,7 +2649,7 @@ describe('abDispatch watch build-runner coordination', () => {
     let dispatch: Promise<void> | undefined
     try {
       dispatch = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -2752,7 +2763,7 @@ describe('abDispatch watch harvest coordination', () => {
       )
 
       const dispatch = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -2894,7 +2905,7 @@ describe('abDispatch watch harvest coordination', () => {
       )
 
       dispatch = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -3048,7 +3059,7 @@ describe('abDispatch watch harvest coordination', () => {
         'a settled shutdown result must reach dispatcher accounting',
       )
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -3306,7 +3317,7 @@ describe('abDispatch interactive upgrade notice', () => {
     let probes = 0
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {
@@ -3356,7 +3367,7 @@ describe('abDispatch interactive upgrade notice', () => {
     let probes = 0
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3398,7 +3409,7 @@ describe('abDispatch interactive upgrade notice', () => {
       for (const mode of ['plain', 'noninteractive'] as const) {
         const stop = new AbortController()
         await abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env: {},
           exec: spawnExec,
           stdout: () => {},
@@ -3412,7 +3423,7 @@ describe('abDispatch interactive upgrade notice', () => {
         })
       }
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3435,7 +3446,7 @@ describe('abDispatch interactive upgrade notice', () => {
     try {
       await Promise.race([
         abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env: {},
           exec: spawnExec,
           stdout: () => {},
@@ -3472,7 +3483,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -3539,7 +3550,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       }
       try {
         await abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env: {},
           exec: spawnExec,
           stdout: () => {},
@@ -3605,7 +3616,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3649,7 +3660,7 @@ describe('abDispatch --once with an interactive terminal', () => {
 
       const claimedTerminal = fakeTerminal()
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3674,7 +3685,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -3692,7 +3703,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(painted).toContain(slug)
       expect(painted).toContain(`build ${slug} parked`)
       expect(painted).not.toContain('tick:')
-      expect(painted).not.toContain(`one pass over ${fx.origin}`)
+      expect(painted).not.toContain(`one pass over ${fx.checkout}`)
       expect(painted).not.toContain('Ctrl-C to stop')
     } finally {
       await fx.cleanup()
@@ -3734,7 +3745,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     let run: Promise<void> | undefined
     try {
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3837,7 +3848,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     let run: Promise<void> | undefined
     try {
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3923,7 +3934,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     let run: Promise<void> | undefined
     try {
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -3991,7 +4002,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const term = fakeTerminal(true, { columns: 80, rows })
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4015,7 +4026,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -4042,7 +4053,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -4075,7 +4086,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const input = fakeInput(['up', 'down', 'intake'])
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4107,7 +4118,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -4117,7 +4128,7 @@ describe('abDispatch --once with an interactive terminal', () => {
         terminal: term,
       })
       expect(term.all()).toBe('')
-      expect(out).toEqual([`ab dispatch — one pass over ${fx.origin} (capacity 1)`, 'tick: idle'])
+      expect(out).toEqual([`ab dispatch — one pass over ${fx.checkout} (capacity 1)`, 'tick: idle'])
       expect(out.join('\n')).not.toContain('\x1b')
       expect(fx.err).toEqual([])
     } finally {
@@ -4150,7 +4161,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -4217,7 +4228,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       })
 
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4274,7 +4285,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -4357,7 +4368,7 @@ describe('abDispatch --once with an interactive terminal', () => {
 
     try {
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4452,7 +4463,7 @@ describe('abDispatch --once with an interactive terminal', () => {
     const fx = await makeFixture(readyTicket('T-tick'), happyHandlers())
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4469,7 +4480,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       // formatted elapsed changes at least once regardless of sub-second phase.
       setTimeout(() => controller.abort(), 1_300).unref?.()
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4504,7 +4515,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let runB: Promise<void> | undefined
     try {
       runA = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'operator-a' },
         exec: spawnExec,
         stdout: () => {},
@@ -4515,7 +4526,7 @@ describe('abDispatch interactive keyboard controls', () => {
         input: inputA,
       })
       runB = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'operator-b' },
         exec: spawnExec,
         stdout: () => {},
@@ -4624,7 +4635,7 @@ describe('abDispatch interactive keyboard controls', () => {
     )
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4662,7 +4673,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const input = fakeInput()
       const out: string[] = []
       const run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'harvest-op' },
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -4848,7 +4859,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const before = (await fx.store.getRepoEvents(fx.origin)).length
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'current-operator' },
         exec: spawnExec,
         stdout: () => {},
@@ -4906,7 +4917,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // Establish an in-flight build before this dispatch process chooses its
       // default. It must remain untouched when global m turns the default on.
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -4918,7 +4929,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       let sleeps = 0
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'default-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5075,7 +5086,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const before = (await fx.store.getRepoEvents(fx.origin)).length
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'failure-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5213,7 +5224,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const before = (await fx.store.getRepoEvents(fx.origin)).length
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'error-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5365,7 +5376,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const before = (await fx.store.getRepoEvents(fx.origin)).length
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'attention-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5444,7 +5455,7 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(await fx.store.claimRepoLease(fx.origin, 'other-dispatcher', 3_600_000)).toBe(true)
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -5506,7 +5517,7 @@ describe('abDispatch interactive keyboard controls', () => {
       // First create two durable, merge-waiting builds. The second invocation
       // is pure dashboard control over those rows.
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -5520,7 +5531,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const term = fakeTerminal()
       const input = fakeInput()
       const run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'dashboard-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5630,7 +5641,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'attaching-operator' },
         exec: spawnExec,
         stdout: () => {},
@@ -5690,7 +5701,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const input = fakeInput()
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -5711,7 +5722,7 @@ describe('abDispatch interactive keyboard controls', () => {
       }
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'bulk-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5820,7 +5831,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'quiet-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -5888,7 +5899,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -5934,7 +5945,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -5943,7 +5954,7 @@ describe('abDispatch interactive keyboard controls', () => {
         wire: fx.wire,
       })
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -5991,7 +6002,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6016,7 +6027,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'detail-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -6120,7 +6131,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6145,7 +6156,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const before = await fx.store.getEvents('resume-clamp')
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'dashboard-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -6267,7 +6278,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const input = fakeInput()
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6278,7 +6289,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       const term = fakeTerminal(true, { columns: 160, rows: 60 })
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'reader' },
         exec: spawnExec,
         stdout: () => {},
@@ -6342,7 +6353,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const input = fakeInput()
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6364,7 +6375,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       const term = fakeTerminal(true, { columns: 160, rows: 16 })
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6501,7 +6512,7 @@ describe('abDispatch interactive keyboard controls', () => {
     )
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6529,7 +6540,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const term = fakeTerminal()
       const input = fakeInput()
       const run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'dashboard-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -6596,7 +6607,7 @@ describe('abDispatch interactive keyboard controls', () => {
     escalationId: string,
   ) {
     await abDispatch({
-      targetRepo: fx.origin,
+      targetRepo: fx.checkout,
       env: {},
       exec: spawnExec,
       stdout: () => {},
@@ -6613,7 +6624,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const term = fakeTerminal()
     const input = fakeInput()
     const run = abDispatch({
-      targetRepo: fx.origin,
+      targetRepo: fx.checkout,
       env: { USER: 'dashboard-op' },
       exec: spawnExec,
       stdout: () => {},
@@ -6772,7 +6783,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const fx = await makeFixture(readyTicket('T-retry', { title: 'Retry work' }), happyHandlers())
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -6812,7 +6823,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const input = fakeInput()
       const term = fakeTerminal()
       const run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {}, // stable fallback user: dashboard
         exec: spawnExec,
         stdout: () => {},
@@ -6912,7 +6923,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'manual-merge-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -7014,7 +7025,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const fx = await makeFixture(readyTicket('T-cancel', { title: 'Cancel work' }), happyHandlers())
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7036,7 +7047,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const term = fakeTerminal()
       const input = fakeInput()
       const run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7074,7 +7085,7 @@ describe('abDispatch interactive keyboard controls', () => {
     const fx = await makeFixture(readyTicket('T-paused', { title: 'Paused work' }), happyHandlers())
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7091,7 +7102,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const input = fakeInput()
       const term = fakeTerminal()
       const run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {}, // stable nonempty fallback actor
         exec: spawnExec,
         stdout: () => {},
@@ -7142,7 +7153,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7154,7 +7165,7 @@ describe('abDispatch interactive keyboard controls', () => {
       await fx.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'abort-list-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -7209,7 +7220,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7219,7 +7230,7 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       const slug = (await fx.store.listBuilds())[0]!.slug
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'abort-detail-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -7267,7 +7278,7 @@ describe('abDispatch interactive keyboard controls', () => {
     let run: Promise<void> | undefined
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7278,7 +7289,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const record = (await fx.store.listBuilds())[0]!
       const slug = record.slug
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'dashboard-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -7376,7 +7387,7 @@ describe('abDispatch interactive keyboard controls', () => {
       }
 
       run = abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'discard-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -7427,7 +7438,7 @@ describe('abDispatch interactive keyboard controls', () => {
       const term = fakeTerminal()
       let sleeps = 0
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: { USER: 'intake-op' },
         exec: spawnExec,
         stdout: () => {},
@@ -7470,7 +7481,7 @@ describe('abDispatch interactive keyboard controls', () => {
       fx.tickets.add(readyTicket('T-fresh', { body: 'still nonconforming' }))
       const freshInput = fakeInput()
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7544,7 +7555,7 @@ runtime = "claude"
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -7571,7 +7582,7 @@ runtime = "claude"
     const fx = await makeFixture([], happyHandlers(), toml)
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},
@@ -7592,7 +7603,7 @@ runtime = "claude"
     const out: string[] = []
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: (line) => out.push(line),
@@ -7622,7 +7633,7 @@ runtime = "claude"
       const term = fakeTerminal(true, size)
       try {
         await abDispatch({
-          targetRepo: fx.origin,
+          targetRepo: fx.checkout,
           env: {},
           exec: spawnExec,
           stdout: () => {},
@@ -7659,7 +7670,7 @@ runtime = "claude"
     const term = fakeTerminal()
     try {
       await abDispatch({
-        targetRepo: fx.origin,
+        targetRepo: fx.checkout,
         env: {},
         exec: spawnExec,
         stdout: () => {},

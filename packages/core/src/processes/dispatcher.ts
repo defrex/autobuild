@@ -479,8 +479,18 @@ export interface DispatcherDeps {
    * Omission preserves the cron/static-config API. */
   getConfig?: () => Config
   /** The repo this dispatcher serves — a local path (§15.7: `git ls-remote`
-   * against it needs no network). One dispatcher per repo (§12). */
+   * against it needs no network) or the repository's normalized origin when
+   * there is no checkout (origin mode; base facts then come from the forge's
+   * `remoteBranchSha`). One dispatcher per repo (§12). */
   repo: string
+  /** Explicit normalized origin for the served repository. When set (origin
+   * mode), the dispatcher never probes the checkout's git for its origin —
+   * there is no checkout — and stamps created builds directly with it. */
+  repoOrigin?: string
+  /** The physical main checkout when one exists (checkout mode). Local
+   * workspace providers (git-worktree) provision FROM it; origin mode has no
+   * checkout, and its remote providers never need one. */
+  checkout?: string
   exec: Exec
   /** Launch (or re-attach — §15.6-C, §15.7) a build-runner for `slug`. The
    * dispatcher never runs pipeline agents itself. The launcher reports local
@@ -574,10 +584,15 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
 export class Dispatcher {
   /** Memoized normalized origin of the served repository (one git call per
    * dispatcher), recorded on created builds so ambient reads can accept a
-   * differently located checkout of the same repository by origin equality. */
+   * differently located checkout of the same repository by origin equality.
+   * Origin mode supplies it explicitly (deps.repoOrigin) and never execs. */
   private repoOrigin?: Promise<string | undefined>
 
   private resolveRepoOriginOnce(): Promise<string | undefined> {
+    if (this.deps.repoOrigin !== undefined) {
+      this.repoOrigin ??= Promise.resolve(this.deps.repoOrigin)
+      return this.repoOrigin
+    }
     this.repoOrigin ??= resolveRepoOrigin(this.deps.repo, this.deps.exec)
     return this.repoOrigin
   }
@@ -907,7 +922,9 @@ export class Dispatcher {
         (event) => event.type === 'workspace.provisioned',
       ).length
       const handle = await workspaces.provision({
-        repo: this.deps.repo,
+        // Local providers provision FROM the physical checkout; remote
+        // providers ignore the value (their host seams are injected).
+        repo: this.deps.checkout ?? this.deps.repo,
         baseBranch: baseBranchOf(events, config),
         branch: input.branch,
         ...(priorGenerations > 0 || input.generation > 0
@@ -1202,7 +1219,14 @@ export class Dispatcher {
       }
     }
 
-    if (branch !== undefined && !has('abort.local-branch-deleted')) {
+    if (
+      branch !== undefined &&
+      !has('abort.local-branch-deleted') &&
+      // Remote workspaces never create a local branch in the main checkout —
+      // there may not even be a checkout (origin mode). Skip the git step and
+      // its fact; the saga's other steps already tolerate absent work.
+      openWorkspace(events)?.provider !== 'vercel-sandbox'
+    ) {
       const ref = `refs/heads/${branch}`
       try {
         const valid = await this.deps.exec(['git', 'check-ref-format', ref], {
@@ -1712,9 +1736,15 @@ export class Dispatcher {
     } satisfies EventWrite<'workspace.released'>)
   }
 
-  /** Current tip of the base branch — `git ls-remote <repo> refs/heads/<b>`
-   * against the dispatcher's local repo path (§15.7: no network). */
+  /** Current tip of the base branch. A forge with the checkout-less
+   * `remoteBranchSha` capability answers from the GitHub API (origin mode);
+   * otherwise `git ls-remote <repo> refs/heads/<b>` against the dispatcher's
+   * local repo path (§15.7: no network). */
   private async baseSha(baseBranch: string): Promise<string> {
+    const remoteBranchSha = this.deps.forge.remoteBranchSha
+    if (remoteBranchSha !== undefined) {
+      return await remoteBranchSha.call(this.deps.forge, baseBranch)
+    }
     const args = ['git', 'ls-remote', this.deps.repo, `refs/heads/${baseBranch}`]
     const result = await this.deps.exec(args, {})
     const sha = result.stdout.trim().split(/\s+/)[0]
@@ -1814,7 +1844,9 @@ export class Dispatcher {
           (event) => event.type === 'workspace.provisioned',
         ).length
         const handle = await this.deps.workspaces.provision({
-          repo: this.deps.repo,
+          // Local providers provision FROM the physical checkout; remote
+          // providers ignore the value (their host seams are injected).
+          repo: this.deps.checkout ?? this.deps.repo,
           baseBranch: baseBranchOf(events, config),
           branch: record.branch ?? `ab/${record.slug}`,
           ...(priorGenerations > 0
