@@ -1759,6 +1759,106 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 10_000)
 
+  test(`--once returns without draining an environment execution — the guest stays running and a later pass settles it`, async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const slug = 'remote-once-return'
+    const branch = `ab/${slug}`
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-once-remote', title: 'once remote' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'remote-test',
+        ref: 'sandbox-g0',
+        path: '/remote/workspace',
+        branch,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-once-remote', title: 'once remote' },
+        },
+      }),
+    )
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 1 },
+    })
+
+    const completion = deferred()
+    const execution: BuildExecution = {
+      async start(input) {
+        return {
+          supervision: 'environment',
+          identity: {
+            provider: 'remote-test',
+            workspaceRef: input.workspaceRef,
+            environmentId: 'sandbox-g0',
+            sessionId: 'session-g0',
+          },
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            return { outcome: 'confirmed' }
+          },
+          async detach() {},
+        }
+      },
+    }
+    let generation = 0
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: { reap: async () => 'confirmed' },
+      provision: async (opts) => {
+        generation += 1
+        return {
+          provider: 'remote-test',
+          ref: `sandbox-g${generation}`,
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? 'a'.repeat(40) },
+        }
+      },
+      release: async () => {},
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: () => ({ ...fx.wire(), workspaces: remote, buildExecution: execution }),
+      })
+      const record = await fx.store.getBuild(slug)
+      const events = await fx.store.getEvents(slug)
+      expect(record?.lease).toBeDefined()
+      expect(events.some((event) => event.type === 'execution.ended')).toBe(false)
+      expect(events.some((event) => event.type === 'infrastructure.failed')).toBe(false)
+    } finally {
+      completion.resolve()
+      await fx.cleanup()
+    }
+  }, 10_000)
+
   test('watch teardown of a remote execution detaches it: no stop, no durable end, lease retained', async () => {
     const fx = await makeFixture(readyTicket('T-unknown-stop'), happyHandlers())
     const stop = new AbortController()
