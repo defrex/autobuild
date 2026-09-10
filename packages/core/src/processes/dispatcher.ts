@@ -66,6 +66,7 @@ import type {
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
+import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
@@ -525,6 +526,15 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
 }
 
 export class Dispatcher {
+  /** Memoized normalized origin of the served repository (one git call per
+   * dispatcher), recorded on created builds so ambient reads can accept a
+   * differently located checkout of the same repository by origin equality. */
+  private repoOrigin?: Promise<string | undefined>
+
+  private resolveRepoOriginOnce(): Promise<string | undefined> {
+    this.repoOrigin ??= resolveRepoOrigin(this.deps.repo, this.deps.exec)
+    return this.repoOrigin
+  }
   private readonly leaseTtlMs: number
   private readonly doneState: string
   private readonly slugNamingTimeoutMs: number
@@ -1905,11 +1915,13 @@ export class Dispatcher {
       const baseSlug = await this.chooseSlugBase(ticket.title, body)
       const slug = await this.uniqueSlug(baseSlug)
       const branch = `ab/${slug}`
+      const repoOrigin = await this.resolveRepoOriginOnce()
       const record = await store.createBuild({
         slug,
         repo: this.deps.repo,
         ticket: ticket.ref,
         branch,
+        ...(repoOrigin !== undefined ? { repoOrigin } : {}),
       })
       report.queued -= 1
       capacity -= 1

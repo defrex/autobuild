@@ -75,6 +75,7 @@ interface BuildState {
   record: {
     slug: string
     repo: string
+    repoOrigin?: NewBuildInput['repoOrigin']
     ticket?: NewBuildInput['ticket']
     branch?: string
     createdAt: string
@@ -119,6 +120,7 @@ export class MemoryBuildStore implements BuildStore {
       repo: record.repo,
       ...(record.ticket ? { ticket: structuredClone(record.ticket) } : {}),
       ...(record.branch ? { branch: record.branch } : {}),
+      ...(record.repoOrigin !== undefined ? { repoOrigin: record.repoOrigin } : {}),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       ...(record.heartbeatAt ? { heartbeatAt: record.heartbeatAt } : {}),
@@ -142,6 +144,7 @@ export class MemoryBuildStore implements BuildStore {
       record: {
         slug: input.slug,
         repo: input.repo,
+        ...(input.repoOrigin !== undefined ? { repoOrigin: input.repoOrigin } : {}),
         ...(input.ticket ? { ticket: structuredClone(input.ticket) } : {}),
         ...(input.branch ? { branch: input.branch } : {}),
         createdAt: ts,
