@@ -11,6 +11,7 @@ import type {
   WorkspaceBase,
 } from '../ontology'
 import type { BuildExecution } from './workspace/build-execution'
+import type { HarvestExecution } from './workspace/harvest-execution'
 
 // ── TicketSource (SPEC §3.2, §13) ────────────────────────────────────────────
 //
@@ -178,6 +179,10 @@ export interface WorkspaceProvider {
   /** Optional workspace-adjacent executor. Remote providers substitute here;
    * locally reachable providers use the shipped subprocess capability. */
   readonly buildExecution?: BuildExecution
+  /** Optional hosted-harvest executor. Present on providers that can
+   * provision a disposable environment for harvest sessions; its absence
+   * keeps harvest running locally in the dispatcher's workspace. */
+  readonly harvestExecution?: HarvestExecution
   /** Trusted dispatcher-only publication capability for remote workspaces. */
   readonly publication?: WorkspacePublication
   /** Optional only for remote/disposable providers. */
