@@ -2345,3 +2345,49 @@ harvestThreshold = 1
     })
   }
 })
+
+describe('HarvestRunner hosted provenance', () => {
+  test('a hosted guest stamps its environment into harvest.started', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-hosted-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    // The adopting dispatch loop holds the repository lease; the guest
+    // heartbeats it and never releases it.
+    await store.ensureRepo('/repo')
+    await store.claimRepoLease('/repo', 'host-dispatch-i0', 60_000)
+    await seedObservation(store, 'hosted', 'hosted provenance boundary')
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('a provenance check must not reach an agent turn')
+      },
+    })
+    const environment = {
+      provider: 'vercel-sandbox',
+      environmentId: 'autobuild-harvest-abc1234567',
+      sessionId: 'session-1',
+    }
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'guest-i1',
+      leaseHolder: 'host-dispatch-i0',
+      environment,
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect(result.outcome).toBe('failed')
+    const started = (await store.getRepoEvents('/repo')).find(
+      (event) => event.type === 'harvest.started',
+    )
+    expect(started?.payload.environment).toEqual(environment)
+    // The adopted lease is deliberately left held for the owning loop.
+    expect((await store.getRepo('/repo'))?.lease?.holder).toBe('host-dispatch-i0')
+  })
+})

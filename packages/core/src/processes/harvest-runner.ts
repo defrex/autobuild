@@ -86,6 +86,10 @@ export interface HarvestRunnerDeps {
    * never releases at the end — the owning loop holds the lease for its
    * lifetime. Absent keeps the standalone self-claiming behavior. */
   leaseHolder?: string
+  /** Provider-native identity of the disposable environment this run
+   * executes in (hosted harvest). Stamped into the run's harvest.started
+   * payload so the journal records where it ran; absent on local runs. */
+  environment?: { provider: string; environmentId: string; sessionId?: string }
   sessionEnv?: Record<string, string>
   opts?: HarvestRunnerOpts
 }
@@ -255,6 +259,9 @@ export class HarvestRunner {
               observations: packet.observations.map((item) => item.occurrence),
               scan: artifactRef(deposited[0]!),
               trigger: pressure.trigger,
+              ...(this.deps.environment !== undefined
+                ? { environment: this.deps.environment }
+                : {}),
             },
           }),
         )
