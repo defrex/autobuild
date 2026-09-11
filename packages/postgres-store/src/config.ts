@@ -19,6 +19,16 @@ const bool = (env: Env, name: string): boolean | undefined => {
   if (value === 'false') return false
   throw new Error(`${name} must be "true" or "false"`)
 }
+/** Optional positive integer. Absent ⇒ undefined (the caller's default applies). */
+const positiveInt = (env: Env, name: string): number | undefined => {
+  const value = optional(env, name)
+  if (value === undefined) return undefined
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer, got ${value}`)
+  }
+  return parsed
+}
 
 export type PostgresStoreConfig =
   | {
@@ -32,6 +42,10 @@ export type PostgresStoreConfig =
       sessionToken?: string
       forcePathStyle?: boolean
       prefix?: string
+      /** Artifact retention bound (store/retention.ts); present only when
+       * AB_ARTIFACT_RETENTION_MAX_REVISIONS is set — absent means the store's
+       * documented default (200) applies. */
+      retention?: { maxRevisions: number }
     }
   | {
       url: string
@@ -41,12 +55,16 @@ export type PostgresStoreConfig =
       token?: string
       oidcToken?: string
       storeId?: string
+      /** See the s3 branch. */
+      retention?: { maxRevisions: number }
     }
 
 export function parsePostgresStoreEnv(env: Env): PostgresStoreConfig {
   const url = resolvePostgresUrl(env)
   const backend = required(env, 'AB_BLOB_BACKEND')
   const prefix = optional(env, 'AB_BLOB_PREFIX')
+  const maxRevisions = positiveInt(env, 'AB_ARTIFACT_RETENTION_MAX_REVISIONS')
+  const retention = maxRevisions === undefined ? undefined : { maxRevisions }
   if (backend === 's3') {
     const endpoint = optional(env, 'AB_S3_ENDPOINT')
     const sessionToken = optional(env, 'AB_S3_SESSION_TOKEN')
@@ -62,6 +80,7 @@ export function parsePostgresStoreEnv(env: Env): PostgresStoreConfig {
       ...(sessionToken ? { sessionToken } : {}),
       ...(forcePathStyle !== undefined ? { forcePathStyle } : {}),
       ...(prefix ? { prefix } : {}),
+      ...(retention ? { retention } : {}),
     }
   }
   if (backend === 'vercel') {
@@ -83,6 +102,7 @@ export function parsePostgresStoreEnv(env: Env): PostgresStoreConfig {
       access,
       ...(prefix ? { prefix } : {}),
       ...(token ? { token } : { oidcToken: oidcToken!, storeId: storeId! }),
+      ...(retention ? { retention } : {}),
     }
   }
   throw new Error('AB_BLOB_BACKEND must be "s3" or "vercel"')
@@ -93,6 +113,10 @@ export async function openPostgresBuildStoreFromEnv(
   options: { clock?: Clock } = {},
 ): Promise<PostgresBuildStore> {
   const config = parsePostgresStoreEnv(env)
+  const storeOptions = {
+    ...options,
+    ...(config.retention ? { retention: config.retention } : {}),
+  }
   if (config.backend === 's3') {
     const client = new S3Client({
       region: config.region,
@@ -111,7 +135,7 @@ export async function openPostgresBuildStoreFromEnv(
         bucket: config.bucket,
         ...(config.prefix ? { prefix: config.prefix } : {}),
       }),
-      options,
+      storeOptions,
     )
   }
   return openPostgresBuildStore(
@@ -123,6 +147,6 @@ export async function openPostgresBuildStoreFromEnv(
         ? { token: config.token }
         : { oidcToken: config.oidcToken!, storeId: config.storeId! }),
     }),
-    options,
+    storeOptions,
   )
 }

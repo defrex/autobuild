@@ -320,7 +320,9 @@ route is `400 validation`.
 
 The artifact-list `kind` is optional and is normally a nonempty stored kind.
 No pagination, deletion, retention, range request, or streaming endpoint is
-part of this protocol.
+part of this protocol. Retention is enforced server-side inside the store at
+deposit time (bounded pruning of dispatcher run/config artifact revisions),
+not through any endpoint.
 
 ## 4. Repository-journal operations
 
