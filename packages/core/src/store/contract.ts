@@ -129,6 +129,24 @@ export function planCompletedWrite(rev: number, round = 1): EventWrite<'plan.com
   }
 }
 
+export function runStartedWrite(
+  run: string,
+  deposited: { kind: string; revision: number }[],
+): RepositoryEventWrite<'dispatcher.run-started'> {
+  const artifact = deposited[0]
+  if (!artifact) throw new Error('run-started deposit returned no artifact')
+  return {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run,
+      pid: 4242,
+      effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+      roleWarnings: [],
+    },
+  }
+}
+
 async function withStore(
   factory: BuildStoreFactory,
   opts: { clock?: Clock; retention?: { maxRevisions: number } } | undefined,
@@ -723,24 +741,6 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('artifact retention (dispatcher run/config family — store/retention.ts)', () => {
-      function runStartedWrite(
-        run: string,
-        deposited: { kind: string; revision: number }[],
-      ): RepositoryEventWrite<'dispatcher.run-started'> {
-        const artifact = deposited[0]
-        if (!artifact) throw new Error('run-started deposit returned no artifact')
-        return {
-          actor: DISPATCHER,
-          type: 'dispatcher.run-started',
-          payload: {
-            run,
-            pid: 4242,
-            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
-            roleWarnings: [],
-          },
-        }
-      }
-
       test('prunes the oldest revisions past maxRevisions for retention-family kinds only', async () => {
         await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
           await store.ensureRepo('acme/retention')
@@ -806,6 +806,117 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(
             (await store.getArtifact('retain-b', 'build-runner-effective-config'))?.meta.revision,
           ).toBe(2)
+        })
+      })
+    })
+
+    describe('validation-before-prune ordering (AUT-322)', () => {
+      test('a same-kind batch larger than the retention bound validates the event before pruning: the newest sibling survives with its event', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.createBuild(sampleBuildInput('vbp-batch'))
+          const { event, artifacts } = await store.appendWithArtifacts(
+            'vbp-batch',
+            [
+              { kind: 'build-runner-effective-config', content: 'cfg-0' },
+              { kind: 'build-runner-effective-config', content: 'cfg-1' },
+              { kind: 'build-runner-effective-config', content: 'cfg-2' },
+            ],
+            // The payload references the batch's last assigned revision;
+            // batch kinds need not appear in the payload.
+            (deposited) => planCompletedWrite(deposited.at(-1)!.revision),
+          )
+          // Validation provably ran: the event was appended and returned.
+          expect(event.seq).toBe(1)
+          expect(artifacts.map((meta) => meta.revision)).toEqual([0, 1, 2])
+
+          // Post-prune state is exactly the retention policy's answer over
+          // the full post-batch revision set: [1, 2] retained, 0 pruned.
+          const revisions = (
+            await store.listArtifacts('vbp-batch', 'build-runner-effective-config')
+          ).map((meta) => meta.revision)
+          expect(revisions).toEqual([1, 2])
+          expect(
+            await store.getArtifact('vbp-batch', 'build-runner-effective-config', 0),
+          ).toBeNull()
+          expect(
+            (await store.getArtifact('vbp-batch', 'build-runner-effective-config', 1))?.meta
+              .revision,
+          ).toBe(1)
+          expect(
+            (await store.getArtifact('vbp-batch', 'build-runner-effective-config'))?.meta.revision,
+          ).toBe(2)
+        })
+      })
+
+      test('repo-side mirror: appendRepoWithArtifacts validates before pruning a same-kind batch', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.ensureRepo('acme/vbp')
+          const { event, artifacts } = await store.appendRepoWithArtifacts(
+            'acme/vbp',
+            [
+              { kind: 'dispatcher-effective-config', content: 'cfg-0' },
+              { kind: 'dispatcher-effective-config', content: 'cfg-1' },
+              { kind: 'dispatcher-effective-config', content: 'cfg-2' },
+            ],
+            (deposited) => runStartedWrite('vbp-run', deposited),
+          )
+          expect(event.seq).toBe(1)
+          expect(artifacts.map((meta) => meta.revision)).toEqual([0, 1, 2])
+          const revisions = (
+            await store.listRepoArtifacts('acme/vbp', 'dispatcher-effective-config')
+          ).map((meta) => meta.revision)
+          expect(revisions).toEqual([1, 2])
+          expect(
+            await store.getRepoArtifact('acme/vbp', 'dispatcher-effective-config', 0),
+          ).toBeNull()
+          const latest = await store.getRepoArtifact('acme/vbp', 'dispatcher-effective-config')
+          expect(latest?.meta.revision).toBe(2)
+          expect(new TextDecoder().decode(latest!.content)).toBe('cfg-2')
+        })
+      })
+
+      test('an invalid batch event leaves exactly the pre-call state — no prune outruns validation', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.createBuild(sampleBuildInput('vbp-invalid'))
+          await store.putArtifact('vbp-invalid', {
+            kind: 'build-runner-effective-config',
+            content: 'pre-existing',
+          })
+
+          const bogus = {
+            actor: KERNEL,
+            type: 'no.such-type',
+            payload: {},
+          } as unknown as EventWrite
+          const err = await store
+            .appendWithArtifacts(
+              'vbp-invalid',
+              [
+                { kind: 'build-runner-effective-config', content: 'cfg-0' },
+                { kind: 'build-runner-effective-config', content: 'cfg-1' },
+                { kind: 'build-runner-effective-config', content: 'cfg-2' },
+              ],
+              () => bogus,
+            )
+            .catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(EventValidationError)
+
+          // Exactly the pre-call state: the pre-existing revision 0 — a
+          // would-be prune victim (the post-batch set [0..3] prunes [0, 1]) —
+          // was NOT deleted before validation failed, no batch deposit
+          // landed, and the event log is empty. An adapter that pruned
+          // before validating and could not roll back loses revision 0 here.
+          const revisions = (
+            await store.listArtifacts('vbp-invalid', 'build-runner-effective-config')
+          ).map((meta) => meta.revision)
+          expect(revisions).toEqual([0])
+          const survivor = await store.getArtifact(
+            'vbp-invalid',
+            'build-runner-effective-config',
+            0,
+          )
+          expect(new TextDecoder().decode(survivor!.content)).toBe('pre-existing')
+          expect(await store.getEvents('vbp-invalid')).toEqual([])
         })
       })
     })

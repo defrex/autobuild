@@ -289,6 +289,12 @@ export class MemoryBuildStore implements BuildStore {
     // deposits landing: "there is no state where an artifact exists without
     // its event or vice versa" (D6, §8.5). Everything is validated before
     // the first mutation, so no rollback path exists to get wrong.
+    //
+    // Ordering invariant (AUT-322): event validation precedes any retention
+    // prune — validation runs before the deposit loop below, and the per-kind
+    // prune happens inside that loop after the deposit, so a same-kind batch
+    // whose prune scope covers a sibling never deletes that sibling before
+    // the batch's event is validated.
     const ts = this.now()
     const nextRev = new Map<string, number>()
     const deposited: ArtifactMeta[] = prepared.map((p) => {
@@ -511,6 +517,10 @@ export class MemoryBuildStore implements BuildStore {
         createdAt: ts,
       }
     })
+    // Ordering invariant (AUT-322): event validation precedes any retention
+    // prune — validation runs before the deposit loop below, and the
+    // per-kind prune happens inside that loop after the deposit (same shape
+    // as `appendWithArtifacts` on the build side).
     const validated = validateRepositoryEventWrite(makeEvent(structuredClone(deposited)))
     for (const meta of deposited) {
       const revisions = state.artifacts.get(meta.kind) ?? []
