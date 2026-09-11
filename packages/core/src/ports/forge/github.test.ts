@@ -17,10 +17,14 @@ interface Scripted {
   status?: number
   json?: unknown
   bytes?: Uint8Array
+  /** Response headers (lowercased keys, e.g. `etag`). */
+  headers?: Record<string, string>
 }
 
 /** Scripted transport: journals every call, replies from a queue (default
- * 200 `{}`), asserting method/path per operation. */
+ * 200 `{}`), asserting method/path per operation. A scripted 304 mirrors the
+ * real transport: the documented success of a conditional request, returned
+ * rather than thrown, with no body. */
 function makeTransport(responses: (Scripted | GitHubResponse)[] = []) {
   const calls: ApiCall[] = []
   const queue = [...responses]
@@ -28,6 +32,10 @@ function makeTransport(responses: (Scripted | GitHubResponse)[] = []) {
     calls.push({ method, path, ...(opts !== undefined ? { opts } : {}) })
     const next = queue.shift() ?? {}
     const status = next.status ?? 200
+    const headers = next.headers ?? {}
+    if (status === 304) {
+      return { status: 304, headers }
+    }
     if (status >= 300) {
       throw new GitHubApiError(
         status,
@@ -37,7 +45,7 @@ function makeTransport(responses: (Scripted | GitHubResponse)[] = []) {
     }
     return {
       status,
-      headers: {},
+      headers,
       ...(next.json !== undefined ? { json: next.json } : {}),
       ...(next.bytes !== undefined ? { bytes: next.bytes } : {}),
     }
@@ -201,6 +209,124 @@ describe('GitHubForge.getPrState', () => {
     const { forge } = makeForge([{ status: 404, json: { message: 'Not Found' } }])
     await expect(forge.getPrState('/ws/build-1', 42)).rejects.toThrow('Not Found')
   })
+
+  test('a cached ETag revalidates: 304 returns the previous poll result unchanged', async () => {
+    const { forge, calls } = makeForge([
+      { json: stateJson('open', true), headers: { etag: '"etag-1"' } },
+      { status: 304 },
+    ])
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'open', mergeable: true })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'open', mergeable: true })
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toEqual({ method: 'GET', path: 'repos/acme/app/pulls/42' })
+    expect(calls[1]).toEqual({
+      method: 'GET',
+      path: 'repos/acme/app/pulls/42',
+      opts: { headers: { 'If-None-Match': '"etag-1"' } },
+    })
+  })
+
+  test('a 200 refreshes the cached ETag and the next poll revalidates with the new one', async () => {
+    const { forge, calls } = makeForge([
+      { json: stateJson('open', true), headers: { etag: '"etag-1"' } },
+      { json: stateJson('closed'), headers: { etag: '"etag-2"' } },
+      { status: 304 },
+    ])
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'open', mergeable: true })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'closed' })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'closed' })
+    expect(calls[2]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-2"' } })
+  })
+
+  test('a 200 without an ETag header never sends a conditional header', async () => {
+    const { forge, calls } = makeForge([
+      { json: stateJson('open', true) },
+      { json: stateJson('open', false) },
+    ])
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'open', mergeable: true })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'open', mergeable: false })
+    expect(calls[0]?.opts).toBeUndefined()
+    expect(calls[1]?.opts).toBeUndefined()
+  })
+
+  test('a 304 on a cached terminal merged result returns it exactly and retains the entry', async () => {
+    const { forge, calls } = makeForge([
+      { json: stateJson('closed', null, 'squash-sha-99', true), headers: { etag: '"etag-m"' } },
+      { status: 304 },
+      { status: 304 },
+    ])
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
+      state: 'merged',
+      sha: 'squash-sha-99',
+    })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
+      state: 'merged',
+      sha: 'squash-sha-99',
+    })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
+      state: 'merged',
+      sha: 'squash-sha-99',
+    })
+    expect(calls[1]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-m"' } })
+    expect(calls[2]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-m"' } })
+  })
+
+  test('a terminal 200 with an ETag refreshes the cached entry like any other 200', async () => {
+    const { forge, calls } = makeForge([
+      { json: stateJson('open', true), headers: { etag: '"etag-open"' } },
+      { json: stateJson('closed', null, 'squash-sha-1', true), headers: { etag: '"etag-merged"' } },
+      { status: 304 },
+    ])
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({ state: 'open', mergeable: true })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
+      state: 'merged',
+      sha: 'squash-sha-1',
+    })
+    expect(await forge.getPrState('/ws/build-1', 42)).toEqual({
+      state: 'merged',
+      sha: 'squash-sha-1',
+    })
+    expect(calls[2]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-merged"' } })
+  })
+
+  test('past the capacity cap the oldest-inserted PR is evicted and polls unconditionally', async () => {
+    const responses: Scripted[] = []
+    for (let n = 1; n <= 513; n++) {
+      responses.push({ json: stateJson('open', true), headers: { etag: `"etag-${n}"` } })
+    }
+    responses.push({ status: 304 }) // re-poll of PR 513 after the eviction
+    const { forge, calls } = makeForge(responses)
+    for (let n = 1; n <= 513; n++) {
+      expect(await forge.getPrState('/ws/build-1', n)).toEqual({ state: 'open', mergeable: true })
+    }
+    // PR 1 was the oldest entry; inserting #513 evicted it, so its re-poll is
+    // an ordinary unconditional poll.
+    const evicted = calls.filter((call) => call.path === 'repos/acme/app/pulls/1')
+    expect(evicted).toHaveLength(1)
+    expect(evicted[0]?.opts).toBeUndefined()
+    // The most recent entry survives and still revalidates.
+    expect(await forge.getPrState('/ws/build-1', 513)).toEqual({ state: 'open', mergeable: true })
+    expect(calls.at(-1)?.opts).toEqual({ headers: { 'If-None-Match': '"etag-513"' } })
+  })
+
+  test('PRs cache independently: alternating polls never send each other\u2019s ETags', async () => {
+    const { forge, calls } = makeForge([
+      { json: stateJson('open', true), headers: { etag: '"etag-a"' } },
+      { json: stateJson('open', false), headers: { etag: '"etag-b"' } },
+      { status: 304 },
+      { status: 304 },
+    ])
+    await forge.getPrState('/ws/build-1', 1)
+    await forge.getPrState('/ws/build-1', 2)
+    await forge.getPrState('/ws/build-1', 1)
+    await forge.getPrState('/ws/build-1', 2)
+    expect(calls.map((call) => call.opts)).toEqual([
+      undefined,
+      undefined,
+      { headers: { 'If-None-Match': '"etag-a"' } },
+      { headers: { 'If-None-Match': '"etag-b"' } },
+    ])
+  })
 })
 
 describe('GitHubForge abort cleanup', () => {
@@ -225,6 +351,41 @@ describe('GitHubForge abort cleanup', () => {
       { json: { state: 'closed', merged: true, mergeable: null, merge_commit_sha: 'landing' } },
     ])
     expect(await forge.closePr('/repo', 42)).toEqual({ state: 'merged', sha: 'landing' })
+  })
+
+  test('closePr re-reads through the ETag cache: 304 before the mutation, 200 after it', async () => {
+    const { forge, calls } = makeForge([
+      // Seeding poll: open, cached under "etag-before".
+      {
+        json: { state: 'open', merged: false, mergeable: null, merge_commit_sha: null },
+        headers: { etag: '"etag-before"' },
+      },
+      // closePr's `before` read revalidates: still open, so 304 reuses the cache.
+      { status: 304 },
+      // The close mutation.
+      {},
+      // closePr's `after` read revalidates the same ETag, but the
+      // representation changed: a 200 reports closed and refreshes the entry.
+      {
+        json: { state: 'closed', merged: false, mergeable: null, merge_commit_sha: null },
+        headers: { etag: '"etag-after"' },
+      },
+      // A follow-up poll revalidates with the refreshed ETag.
+      { status: 304 },
+    ])
+    expect(await forge.getPrState('/repo', 42)).toEqual({ state: 'open', mergeable: null })
+    expect(await forge.closePr('/repo', 42)).toEqual({ state: 'closed' })
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/pulls/42',
+      'GET repos/acme/app/pulls/42',
+      'PATCH repos/acme/app/pulls/42',
+      'GET repos/acme/app/pulls/42',
+    ])
+    expect(calls[0]?.opts).toBeUndefined()
+    expect(calls[1]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-before"' } })
+    expect(calls[3]?.opts).toEqual({ headers: { 'If-None-Match': '"etag-before"' } })
+    expect(await forge.getPrState('/repo', 42)).toEqual({ state: 'closed' })
+    expect(calls.at(-1)?.opts).toEqual({ headers: { 'If-None-Match': '"etag-after"' } })
   })
 
   test('deletes an existing exact branch and treats a missing branch as clean', async () => {
