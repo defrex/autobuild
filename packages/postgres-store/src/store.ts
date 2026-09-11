@@ -31,6 +31,11 @@ import {
   type SubscribeOptions,
   type Unsubscribe,
 } from 'autobuild/store-adapter'
+import {
+  DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
+  isRetentionManagedKind,
+  revisionsToPrune,
+} from 'autobuild/store-adapter'
 import { assertSchema } from './schema'
 
 type Row = Record<string, unknown>
@@ -50,11 +55,15 @@ export interface PostgresBuildStoreOptions {
   sql: SQL
   blobs: BlobStore
   clock?: Clock
+  /** Artifact retention (store/retention.ts): how many newest revisions of
+   * each retention-managed dispatcher kind survive. Default 200. */
+  retention?: { maxRevisions?: number }
 }
 
 export class PostgresBuildStore implements BuildStore {
   readonly blobs: BlobStore
   private readonly clock: Clock
+  private readonly maxRevisions: number
 
   constructor(
     private readonly sql: SQL,
@@ -62,6 +71,7 @@ export class PostgresBuildStore implements BuildStore {
   ) {
     this.blobs = options.blobs
     this.clock = options.clock ?? systemClock
+    this.maxRevisions = options.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
   }
 
   scopeBuild(slug: string): BuildScopedStore {
@@ -200,6 +210,7 @@ export class PostgresBuildStore implements BuildStore {
     const createdAt = this.now()
     await tx`INSERT INTO artifacts (build, kind, revision, blob_ref, metadata, created_at)
       VALUES (${slug}, ${artifact.kind}, ${revision}, ${artifact.blobRef}, ${artifact.metadata}, ${createdAt})`
+    await this.pruneBuildLocked(tx, slug, artifact.kind)
     await tx`UPDATE builds SET updated_at = ${createdAt} WHERE slug = ${slug}`
     return {
       build: slug,
@@ -209,6 +220,41 @@ export class PostgresBuildStore implements BuildStore {
       metadata: artifact.metadata,
       createdAt,
     }
+  }
+
+  /** Deposit-time retention (store/retention.ts), inside the same locked
+   * transaction as the deposit: drop revisions past the bound for
+   * retention-managed kinds. The pruned values are store-assigned nonnegative
+   * integers (re-checked by `revisionsToPrune`), so the IN list expands
+   * safely. Non-family kinds are never touched. */
+  private async pruneBuildLocked(tx: Tx, slug: string, kind: string): Promise<void> {
+    if (!isRetentionManagedKind(kind)) return
+    const rows: Row[] =
+      await tx`SELECT revision FROM artifacts WHERE build = ${slug} AND kind = ${kind}`
+    const pruned = revisionsToPrune(
+      rows.map((row) => num(row.revision)),
+      this.maxRevisions,
+    )
+    if (pruned.length === 0) return
+    await tx.unsafe(
+      `DELETE FROM artifacts WHERE build = $1 AND kind = $2 AND revision IN (${pruned.join(', ')})`,
+      [slug, kind],
+    )
+  }
+
+  private async pruneRepoLocked(tx: Tx, repo: string, kind: string): Promise<void> {
+    if (!isRetentionManagedKind(kind)) return
+    const rows: Row[] =
+      await tx`SELECT revision FROM repo_artifacts WHERE repo = ${repo} AND kind = ${kind}`
+    const pruned = revisionsToPrune(
+      rows.map((row) => num(row.revision)),
+      this.maxRevisions,
+    )
+    if (pruned.length === 0) return
+    await tx.unsafe(
+      `DELETE FROM repo_artifacts WHERE repo = $1 AND kind = $2 AND revision IN (${pruned.join(', ')})`,
+      [repo, kind],
+    )
   }
 
   async appendWithArtifacts<T extends EventType>(
@@ -430,6 +476,7 @@ export class PostgresBuildStore implements BuildStore {
     revisions.set(artifact.kind, revision + 1)
     const createdAt = this.now()
     await tx`INSERT INTO repo_artifacts (repo,kind,revision,blob_ref,metadata,created_at) VALUES (${repo},${artifact.kind},${revision},${artifact.blobRef},${artifact.metadata},${createdAt})`
+    await this.pruneRepoLocked(tx, repo, artifact.kind)
     await tx`UPDATE repo_streams SET updated_at=${createdAt} WHERE repo=${repo}`
     return {
       repo,
@@ -538,7 +585,7 @@ export class PostgresBuildStore implements BuildStore {
 export async function openPostgresBuildStore(
   url: string,
   blobs: BlobStore,
-  options: { clock?: Clock } = {},
+  options: { clock?: Clock; retention?: { maxRevisions?: number } } = {},
 ): Promise<PostgresBuildStore> {
   const sql = new SQL(url)
   try {
@@ -546,6 +593,7 @@ export async function openPostgresBuildStore(
     return new PostgresBuildStore(sql, {
       blobs,
       ...(options.clock ? { clock: options.clock } : {}),
+      ...(options.retention ? { retention: options.retention } : {}),
     })
   } catch (error) {
     await sql.close()

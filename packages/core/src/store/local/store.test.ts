@@ -31,7 +31,10 @@ async function freshRoot(): Promise<string> {
 
 describeBuildStoreContract('SqliteBuildStore', async (opts) => {
   const root = await freshRoot()
-  const store = openLocalStore(root, opts?.clock ? { clock: opts.clock } : {})
+  const store = openLocalStore(root, {
+    ...(opts?.clock ? { clock: opts.clock } : {}),
+    ...(opts?.retention ? { retention: opts.retention } : {}),
+  })
   return {
     store,
     cleanup: () => rm(root, { recursive: true, force: true }),

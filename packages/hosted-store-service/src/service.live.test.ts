@@ -39,7 +39,10 @@ if (!testUrl) {
   describeBuildStoreContract('hosted HTTP → PostgreSQL', async (options) => {
     const database = await isolatedDatabase()
     const clock = options?.clock ?? systemClock
-    const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), { clock })
+    const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), {
+      clock,
+      ...(options?.retention ? { retention: options.retention } : {}),
+    })
     const secret = crypto.randomUUID()
     const service = createHostedStoreService({
       env: {
