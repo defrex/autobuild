@@ -43,7 +43,7 @@ Resume by inverting whichever mechanism was used to pause:
 ## Running a local dispatcher for diagnosis
 
 For a clean diagnostic window, disable the cron first (above). Then run the local kernel
-against the hosted Store: point `AB_STORE` at `https://autobuild-api.defrex.com`, set `AB_TOKEN`
+against the hosted Store: point `AB_STORE` at `https://autobuild.defrex.com`, set `AB_TOKEN`
 to a scoped deployment operator token, and keep the local secrets in the ignored local
 dispatcher environment file. A local dispatcher running while the cron is still enabled is
 still safe — overlapping invocations yield on the repository supervisor lease, and the loser
@@ -81,7 +81,7 @@ secrets, so steps 0–3 are deployment-side.
    `AB_TICKET_BACKEND` must read exactly `linear` — the parser default is `database`, and a
    deployment left at the default never serves the AUT team's Linear tickets; `LINEAR_API_KEY`
    (the Linear credential, already present); `CRON_SECRET`; `AB_DISPATCHER_ORIGIN`
-   (`https://autobuild-api.defrex.com`); `AB_DISPATCHER_TOKEN_TTL_SECONDS` (the default
+   (`https://autobuild.defrex.com`); `AB_DISPATCHER_TOKEN_TTL_SECONDS` (the default
    604800 s must outlive the guest `timeoutSeconds` of 14400 s — it does).
 3. **Pin the repository set to the host-independent identity**: `AB_WEB_REPOSITORIES` must
    contain exactly `https://github.com/defrex/autobuild` — the normalized https origin
@@ -97,7 +97,7 @@ secrets, so steps 0–3 are deployment-side.
 
    ```sh
    curl -H "Authorization: Bearer $CRON_SECRET" \
-     https://autobuild-api.defrex.com/api/dispatch
+     https://autobuild.defrex.com/api/dispatch
    ```
 
    must return
