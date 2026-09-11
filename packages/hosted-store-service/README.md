@@ -134,3 +134,42 @@ machine tokens, and OAuth account tokens are server-only and must never use a
 
 On another Bun-capable host, `bun run dev` or `bun run start` serves the full
 application. `bun run hosted-store` serves machine routes only.
+
+## Hosted dispatcher
+
+The deployment can own the dispatch kernel: a cron-authenticated endpoint —
+`GET /api/dispatch` — runs one bounded dispatcher tick per configured
+repository per invocation. See the [operator procedure](../../docs/hosted-dispatcher.md)
+for the schedule, incident pauses, and behavior details. Dispatcher variables
+(server-only, like every secret above; none reach the browser):
+
+- `AB_DISPATCHER_ORIGIN`: the deployment's public origin, used as `AB_STORE`
+  for the kernel, the hosted ticket source, and guests. Absolute http(s)
+  origin; https required in production.
+- `AB_DISPATCHER_REPOSITORIES`: comma-separated repositories the dispatcher
+  serves, normalized `https://` identities exactly like `AB_WEB_REPOSITORIES`.
+  When unset, the deployment's `AB_WEB_REPOSITORIES` set is used, so a
+  deployment configures its repository set once.
+- `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
+  clamped 10–780); pair it with the route's `maxDuration` as described in the
+  operator procedure.
+- `AB_DISPATCHER_TOKEN_TTL_SECONDS`: the TTL of the per-tick deployment
+  operator token minted for guests (default 604800 — 7 days; minimum 3600).
+  It must outlive your largest guest `timeoutSeconds` (e.g. 14400).
+- `CRON_SECRET`: the cron authorization shared secret. Unset or blank disables
+  the endpoint entirely. It is never a signing input and is unrelated to
+  `AB_STORE_SECRET`.
+- `GITHUB_TOKEN` or `GH_TOKEN`: the forge credentials the kernel (and its
+  publication settlement) use. They stay on the service; guests never receive
+  one.
+- Guest-forwarded variables such as `AI_GATEWAY_API_KEY` flow through from the
+  service environment to the guest session untouched.
+
+The Sandbox SDK authenticates with the deployment's own OIDC identity inside
+Vercel functions (`VERCEL_OIDC_TOKEN` is injected), so **no `VERCEL_TOKEN`
+belongs on the service**. Each invocation deposits a
+`dispatcher-effective-config` repository artifact and durable tick/run facts
+under the `hosted-dispatcher-<uuid>` run id — the web dashboard shows hosted
+activity exactly as it shows a local dispatcher, and the repository journal
+grows by roughly one config artifact per minute per repository (no retention
+yet).
