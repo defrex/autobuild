@@ -25,6 +25,12 @@ import type {
   BuildExecutionStart,
   ExecutionObservation,
 } from './build-execution'
+import {
+  HARVEST_RUNNER_OPTIONS_ENV,
+  type HarvestExecution,
+  type HarvestExecutionStart,
+  type HarvestRunnerLaunch,
+} from './harvest-execution'
 import { BUILD_RUNNER_OPTIONS_ENV } from './local-build-execution'
 import type { Exec } from './git-worktree'
 import { spawnExec } from './git-worktree'
@@ -417,6 +423,14 @@ function sandboxName(origin: string, branch: string, generation = 0): string {
     .digest('hex')
     .slice(0, 10)
   return `autobuild-${readable || 'build'}-g${generation}-${digest}`.slice(0, 63)
+}
+
+/** Deterministic harvest environment name: one per repository origin, with
+ * the same digest slicing and charset discipline as `sandboxName`. The name
+ * is the get-or-create key and the exact snapshot purge key. */
+export function harvestSandboxName(origin: string): string {
+  const digest = createHash('sha256').update(origin).digest('hex').slice(0, 10)
+  return `autobuild-harvest-${digest}`.slice(0, 63)
 }
 
 async function execOrThrow(
@@ -1079,6 +1093,7 @@ export interface VercelSandboxProviderOptions {
 export class VercelSandboxProvider implements WorkspaceProvider {
   readonly name = 'vercel-sandbox'
   readonly buildExecution: BuildExecution
+  readonly harvestExecution: HarvestExecution
   readonly publication
   readonly recovery
   private readonly facade: VercelSandboxFacade
@@ -1097,6 +1112,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.exec = options.exec ?? spawnExec
     this.buildExecution = {
       start: (input) => this.start(input),
+      observe: (identity) => this.observeExecution(identity),
+    }
+    this.harvestExecution = {
+      start: (input) => this.startHarvestExecution(input),
       observe: (identity) => this.observeExecution(identity),
     }
     this.recovery = {
@@ -1441,6 +1460,18 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       detached: true,
       signal: this.operationSignal(),
     })) as VercelCommand
+    return this.environmentSupervisedHandle(ref, sandbox, command)
+  }
+
+  /** Shared post-launch supervision of one detached guest command: command
+   * wait with lifetime-bounded long-poll retries, environment-owned teardown,
+   * and the durable identity a later process re-observes. Used by both the
+   * build path and the hosted harvest path. */
+  private environmentSupervisedHandle(
+    ref: string,
+    sandbox: VercelSandboxHandle,
+    command: VercelCommand,
+  ): BuildExecutionHandle {
     this.active.add(ref)
     let environmentStop: Promise<void> | undefined
     const stopEnvironment = async (): Promise<void> => {
@@ -1525,6 +1556,210 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         localWait.abort()
       },
     }
+  }
+
+  /** Hosted harvest (AUT-305): provision (or reuse) the repository's one
+   * disposable environment from the remote base head, launch the guest
+   * harvest runner as one detached command, and supervise it exactly like a
+   * build execution. Provisioning reuses the module-local build chain so a
+   * harvest guest is identical to a build guest; release is the provider's
+   * existing reap path (stop, snapshot purge, delete). */
+  private async startHarvestExecution(input: HarvestExecutionStart): Promise<BuildExecutionHandle> {
+    const origin = cleanGithubOrigin(await this.origin())
+    const name = harvestSandboxName(origin.url)
+    if (this.active.has(name)) throw new Error(`sandbox ${name} already has a live execution`)
+    // Resolved once, before the create/reuse branch: the version the current
+    // archive source would deliver, against which both a fresh install's
+    // marker and a reused environment's marker are compared.
+    const distributionVersion = await (
+      this.options.distributionVersion ?? readDistributionIdentity
+    )()
+    let sandbox = await this.facade.get(name, this.operationSignal())
+    if (sandbox !== null) {
+      const marker = await sandbox.runCommand({
+        cmd: 'test',
+        args: ['-f', VERCEL_PROVISIONED_MARKER],
+      })
+      if (marker.exitCode !== 0) {
+        // A named VM without the marker is a crashed/legacy provisioning
+        // attempt — e.g. a host that died mid-provision. Never expose its
+        // potentially unscrubbed checkout to agents.
+        await sandbox.delete({ signal: this.operationSignal() })
+        sandbox = null
+      } else {
+        // A completed environment left by an earlier (interrupted) run is
+        // stopped and reused. A reused guest whose installed distribution
+        // disagrees with what the current system would deliver is refreshed
+        // in place, mirroring the build reuse path.
+        const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
+        if (installed !== distributionVersion) {
+          try {
+            const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+            await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+          } catch (error) {
+            try {
+              this.sessions.set(name, sandbox)
+              await this.reap(name)
+            } catch (deleteError) {
+              throw new AggregateError(
+                [error, deleteError],
+                `harvest sandbox ${name} distribution refresh failed and its incomplete environment could not be confirmed deleted`,
+              )
+            }
+            throw error
+          }
+        }
+        await sandbox.stop({ signal: this.operationSignal() })
+      }
+    }
+    if (sandbox === null) {
+      const head = await this.remoteBranchHead(input.baseBranch, `remote base ${input.baseBranch}`)
+      if (head === null) {
+        throw new Error(`remote base ${input.baseBranch} does not exist`)
+      }
+      const username =
+        this.options.config.gitUsernameEnv === undefined
+          ? undefined
+          : requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv)
+      const password =
+        this.options.config.gitPasswordEnv === undefined
+          ? undefined
+          : requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)
+      const readAuth =
+        password === undefined
+          ? undefined
+          : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+      sandbox = await this.facade.create({
+        name,
+        source: {
+          type: 'git',
+          url: origin.url,
+          revision: head,
+          ...(username !== undefined && password !== undefined ? { username, password } : {}),
+        },
+        image: this.options.config.image,
+        resources: { vcpus: this.options.config.vcpus },
+        timeout: this.options.config.timeoutSeconds * 1000,
+        persistent: true,
+        ...(this.options.config.region !== undefined ? { region: this.options.config.region } : {}),
+        ...(this.options.config.failoverRegions.length > 0
+          ? { failoverRegions: this.options.config.failoverRegions }
+          : {}),
+        ...(this.options.config.snapshotExpirationSeconds === undefined
+          ? {}
+          : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
+        networkPolicy: uploadPackPolicy(origin, readAuth),
+        keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
+        signal: this.operationSignal(),
+      })
+      try {
+        await relocateCheckout(sandbox, origin.directory)
+        await commandOrThrow(sandbox, {
+          cmd: 'git',
+          args: ['remote', 'set-url', 'origin', origin.url],
+          cwd: VERCEL_WORKSPACE_PATH,
+        })
+        for (const key of [
+          'credential.helper',
+          'http.extraheader',
+          `http.${origin.url}.extraheader`,
+        ]) {
+          const result = await sandbox.runCommand({
+            cmd: 'git',
+            args: ['config', '--local', '--unset-all', key],
+            cwd: VERCEL_WORKSPACE_PATH,
+          })
+          if (result.exitCode !== 0 && result.exitCode !== 5)
+            throw new Error(`failed to scrub git config ${key}`)
+        }
+        await provisionBun(sandbox, this.options.config.image)
+        await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
+        const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+        await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+        // Repository dependencies precede runtime preflight; the fixed
+        // bootstrap is the same one build provisioning runs.
+        await commandOrThrow(sandbox, {
+          cmd: 'sh',
+          args: [
+            '-c',
+            `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
+          ],
+          cwd: VERCEL_WORKSPACE_PATH,
+        })
+        await bootstrapRuntimes(
+          sandbox,
+          this.options.config,
+          this.options.env,
+          currentRuntimeReferences(this.options.runtimeReferences),
+          true,
+        )
+        await commandOrThrow(sandbox, {
+          cmd: 'touch',
+          args: [VERCEL_PROVISIONED_MARKER],
+        })
+        await sandbox.stop({ signal: this.operationSignal() })
+      } catch (error) {
+        try {
+          this.sessions.set(name, sandbox)
+          await this.reap(name)
+        } catch (deleteError) {
+          throw new AggregateError(
+            [error, deleteError],
+            `harvest sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
+          )
+        }
+        throw error
+      }
+    }
+    this.origins.set(name, origin)
+    // Launch: reassert the normal network policy and preflight exactly as the
+    // build start path does, then one detached guest runner command.
+    const { policy } = await this.normalNetworkPolicy(name)
+    await sandbox.update({ networkPolicy: policy }, { signal: this.operationSignal() })
+    if (this.uncertain.has(name)) {
+      // A prior wait/stop failure may have left agent code alive. Confirm a
+      // stop before starting another runner in the same environment.
+      await sandbox.stop({ signal: this.operationSignal() })
+      this.uncertain.delete(name)
+    }
+    await preflightBun(sandbox, this.options.config.image)
+    await bootstrapRuntimes(
+      sandbox,
+      this.options.config,
+      this.options.env,
+      currentRuntimeReferences(this.options.runtimeReferences),
+      false,
+    )
+    this.sessions.set(name, sandbox)
+    const sessionId = sandbox.currentSession?.().sessionId
+    const envelope: HarvestRunnerLaunch = {
+      ...input,
+      supervision: { kind: 'environment' },
+      environment: {
+        provider: this.name,
+        environmentId: sandbox.name,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      },
+    }
+    const env: Record<string, string> = {
+      AB_STORE: this.options.storeRef,
+      AB_TOKEN: this.options.storeToken,
+      [HARVEST_RUNNER_OPTIONS_ENV]: JSON.stringify(envelope),
+    }
+    for (const envName of this.options.config.environmentVariables)
+      env[envName] = requireVercelEnvironmentValue(this.options.env, envName)
+    const command = (await sandbox.runCommand({
+      cmd: 'sh',
+      args: [
+        '-c',
+        `PATH=${VERCEL_BUN_BIN_PATH}:$PATH exec ${VERCEL_BUN_EXECUTABLE} ${VERCEL_AUTOBUILD_PATH}/bin/ab-harvest-runner.ts`,
+      ],
+      cwd: VERCEL_WORKSPACE_PATH,
+      env,
+      detached: true,
+      signal: this.operationSignal(),
+    })) as VercelCommand
+    return this.environmentSupervisedHandle(name, sandbox, command)
   }
 
   /** Liveness of a previously recorded execution, from provider state alone:

@@ -3,8 +3,10 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
+import { createHash } from 'node:crypto'
 import { parse as parseToml } from 'smol-toml'
 import { spawnExec, type Exec } from './git-worktree'
+import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
 import {
   VERCEL_AUTOBUILD_PATH,
   VERCEL_BUN_BIN_PATH,
@@ -16,6 +18,7 @@ import {
   VERCEL_PROVISIONED_MARKER,
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
+  harvestSandboxName,
   isMissingVercelSandbox,
   packageAutobuildDistribution,
   sourceCheckoutPath,
@@ -1878,5 +1881,257 @@ describe('VercelSandboxProvider origin mode (no checkout)', () => {
     await expect(
       h.provider.publication.publish({ ref: workspace.ref, sha: SHA, branch: workspace.branch }),
     ).rejects.toThrow(/published head \(missing\) did not match/)
+  })
+})
+
+describe('VercelSandboxProvider harvestExecution', () => {
+  const ORIGIN = 'https://github.com/acme/app.git'
+  const HARVEST_NAME = harvestSandboxName(ORIGIN)
+  /** The fake handle's provider-native name, which is what the SDK reports on
+   * the returned sandbox and what identity/envelope stamp. */
+  const LAUNCH_NAME = 'sandbox'
+
+  test('provisions a fresh disposable environment from the remote base head and launches the guest runner', async () => {
+    const h = harness({ provisionRuntimes: true })
+    const handle = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+      leaseHolder: 'host-dispatch-i0',
+      workspaceRef: HARVEST_NAME,
+    })
+
+    // One named disposable environment, provisioned from the remote base head
+    // with the build shape (persistent, same image/resources/timeout/snapshots).
+    expect(h.creates).toBe(1)
+    expect(h.createInput).toMatchObject({
+      name: HARVEST_NAME,
+      source: { type: 'git', url: ORIGIN, revision: SHA },
+      persistent: true,
+      networkPolicy: 'allow-all',
+      keepLastSnapshots: { count: 1, deleteEvicted: true },
+    })
+    expect((h.createInput!.timeout as number) / 1000).toBe(2700)
+
+    // Fresh provisioning chain, in the build order.
+    const commands = h.sandbox.commands
+    const labels = commands.map((command) =>
+      command.cmd === 'sh'
+        ? `sh:${((command.args as string[])[1] ?? '').slice(0, 24)}`
+        : command.cmd,
+    )
+    expect(
+      commands.some(
+        (command) =>
+          command.cmd === 'sh' && String((command.args as string[])[1]).includes('mv "$1" "$2"'),
+      ),
+    ).toBe(true)
+    expect(labels.indexOf('npm')).toBeGreaterThan(
+      commands.findIndex(
+        (command) => command.cmd === 'sh' && (command.args as string[]).includes('relocate'),
+      ),
+    )
+    expect(labels.lastIndexOf('touch')).toBeGreaterThan(labels.indexOf('npm'))
+    expect(h.sandbox.provisioned).toBe(true)
+    // Runtime runtimes were INSTALLED on the fresh path (not preflight only).
+    const runtimeInstalls = commands.filter(
+      (command) =>
+        command.cmd === 'sh' &&
+        ['install-pi@0.84.4', 'install-plugin@abc123'].includes(
+          (command.args as string[])[1] ?? '',
+        ),
+    )
+    expect(runtimeInstalls).toHaveLength(2)
+    expect(commands[commands.indexOf(runtimeInstalls[0]!)].cwd).toBe(VERCEL_WORKSPACE_PATH)
+
+    // Launch: one detached ab-harvest-runner command carrying the envelope.
+    const detached = commands.filter((command) => command.detached === true)
+    expect(detached).toHaveLength(1)
+    expect(String((detached[0]!.args as string[])[1])).toContain('bin/ab-harvest-runner.ts')
+    expect(detached[0]!.cwd).toBe(VERCEL_WORKSPACE_PATH)
+    const env = detached[0]!.env as Record<string, string>
+    expect(env.AB_STORE).toBe('https://store.example.test')
+    expect(env.AB_TOKEN).toBe('scoped-store-token')
+    expect(env.ANTHROPIC_API_KEY).toBe('runtime-secret')
+    expect(JSON.stringify(env)).not.toContain('forge-secret')
+    expect(JSON.stringify(env)).not.toContain('never-copy')
+    expect(JSON.parse(env[HARVEST_RUNNER_OPTIONS_ENV])).toEqual({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+      leaseHolder: 'host-dispatch-i0',
+      workspaceRef: HARVEST_NAME,
+      supervision: { kind: 'environment' },
+      environment: {
+        provider: 'vercel-sandbox',
+        environmentId: LAUNCH_NAME,
+        sessionId: 'session-1',
+      },
+    })
+
+    // Supervision identity mirrors the build path.
+    expect(handle.supervision).toBe('environment')
+    expect(handle.identity).toMatchObject({
+      provider: 'vercel-sandbox',
+      workspaceRef: HARVEST_NAME,
+      environmentId: LAUNCH_NAME,
+      sessionId: 'session-1',
+    })
+    expect(handle.identity?.commandId).toMatch(/^cmd-/)
+
+    // Completion stops the environment; release reaps with a proven snapshot purge.
+    expect(await handle.completion).toEqual({ exitCode: 0 })
+    const reap = await h.provider.recovery.reap({
+      provider: 'vercel-sandbox',
+      ref: HARVEST_NAME,
+      path: VERCEL_WORKSPACE_PATH,
+      branch: 'main',
+    })
+    expect(reap.outcome).toBe('confirmed')
+    expect(reap.snapshots.outcome).toBe('confirmed')
+    expect(reap.snapshots.deleted ?? 0).toBeGreaterThan(0)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(await h.facade.listSnapshots(HARVEST_NAME)).toEqual([])
+  })
+
+  test('stops and reuses a marked harvest environment without re-provisioning', async () => {
+    const h = harness({ provisionRuntimes: true })
+    const first = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    expect(await first.completion).toEqual({ exitCode: 0 })
+
+    const commandsBefore = h.sandbox.commands.length
+    const second = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i2',
+      baseBranch: 'main',
+    })
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
+    expect(h.sandbox.provisioned).toBe(true)
+    const since = h.sandbox.commands.slice(commandsBefore)
+    // Marker read, distribution version read, policy reassert, preflights,
+    // then the launch — no provisioning chain re-ran.
+    expect(since[0]!.cmd).toBe('test')
+    expect(since.some((command) => command.sudo === true)).toBe(false)
+    expect(since.filter((command) => command.detached === true)).toHaveLength(1)
+    expect(await second.completion).toEqual({ exitCode: 0 })
+    const envelope = JSON.parse(
+      (since.find((command) => command.detached === true)!.env as Record<string, string>)[
+        HARVEST_RUNNER_OPTIONS_ENV
+      ] as string,
+    )
+    expect(envelope.instance).toBe('host-harvest-i2')
+    expect(envelope.supervision).toEqual({ kind: 'environment' })
+  })
+
+  test('deletes and recreates an unmarked leftover harvest environment', async () => {
+    const leftover = new FakeSandbox()
+    leftover.cwd = '/vercel/sandbox'
+    const h = harness({ facadeGet: async () => leftover })
+    await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    // The crashed/legacy attempt was deleted before the fresh create.
+    expect(leftover.deletes).toBe(1)
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.provisioned).toBe(true)
+  })
+
+  test('a second start while one harvest execution is live is refused', async () => {
+    const h = harness()
+    let resolveWait: ((result: { exitCode: number }) => void) | undefined
+    h.sandbox.detachedWait = () =>
+      new Promise((resolve) => {
+        resolveWait = resolve
+      })
+    const first = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    await expect(
+      h.provider.harvestExecution.start({
+        storeRef: 'https://store.example.test',
+        repo: ORIGIN,
+        instance: 'host-harvest-i2',
+        baseBranch: 'main',
+      }),
+    ).rejects.toThrow(/already has a live execution/)
+    resolveWait!({ exitCode: 0 })
+    expect(await first.completion).toEqual({ exitCode: 0 })
+  })
+
+  test('observe maps provider state to running, ended, lost, and refuses missing command ids', async () => {
+    const h = harness()
+    let resolveWait: ((result: { exitCode: number }) => void) | undefined
+    h.sandbox.detachedWait = () =>
+      new Promise((resolve) => {
+        resolveWait = resolve
+      })
+    const execution = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    const identity = execution.identity!
+    // A running detached command is running.
+    expect(await h.provider.harvestExecution.observe!(identity)).toEqual({ state: 'running' })
+    // A non-null command exit code is ended with that code.
+    h.sandbox.detachedCommands.set(identity.commandId!, { exitCode: 3 })
+    expect(await h.provider.harvestExecution.observe!(identity)).toEqual({
+      state: 'ended',
+      exitCode: 3,
+    })
+    // A command the session no longer knows is lost.
+    expect(
+      await h.provider.harvestExecution.observe!({ ...identity, commandId: 'cmd-missing' }),
+    ).toEqual({ state: 'lost' })
+    // A stopped session is lost.
+    h.sandbox.sessionStatus = 'stopped'
+    expect(await h.provider.harvestExecution.observe!(identity)).toEqual({ state: 'lost' })
+    // An identity without a command id is refused, never silently skipped.
+    await expect(
+      h.provider.harvestExecution.observe!({ provider: 'vercel-sandbox', workspaceRef: 'x' }),
+    ).rejects.toThrow(/no recorded command id/)
+    resolveWait!({ exitCode: 0 })
+    await execution.completion
+  })
+
+  test('observe reports lost when the harvest environment is gone', async () => {
+    const h = harness({ facadeGet: async () => null })
+    expect(
+      await h.provider.harvestExecution.observe!({
+        provider: 'vercel-sandbox',
+        workspaceRef: HARVEST_NAME,
+        environmentId: HARVEST_NAME,
+        commandId: 'cmd-1',
+      }),
+    ).toEqual({ state: 'lost' })
+  })
+
+  test('a missing remote base branch refuses to provision', async () => {
+    const h = harness()
+    await expect(
+      h.provider.harvestExecution.start({
+        storeRef: 'https://store.example.test',
+        repo: ORIGIN,
+        instance: 'host-harvest-i1',
+        baseBranch: 'nope',
+      }),
+    ).rejects.toThrow(/remote base nope does not exist/)
+    expect(h.creates).toBe(0)
   })
 })
