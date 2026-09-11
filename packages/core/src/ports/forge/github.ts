@@ -11,6 +11,10 @@
  * worktree-side terminals and contract fixtures; `vercel-sandbox` builds
  * publish through the sandbox's receive-pack proxy and the host never pushes.
  *
+ * Native auto-merge is the one operation GitHub exposes only through its
+ * GraphQL schema (no REST route exists), so its enable/disable mutations
+ * travel over the same transport to `POST /graphql`.
+ *
  * Repository coordinates (owner/name) resolve lazily and memoized: explicit
  * constructor option → `AB_REPOSITORY` (normalized) → `git remote get-url
  * origin` in `repoRoot` (checkout mode) → hard error at first use. In origin
@@ -137,11 +141,15 @@ const restPrState = z
   .passthrough()
 
 const restNativeAutoMerge = z
-  .object({ auto_merge: z.object({}).passthrough().nullable() })
+  .object({
+    node_id: z.string().min(1),
+    auto_merge: z.object({}).passthrough().nullable(),
+  })
   .passthrough()
 
 const restAutoMergeView = z
   .object({
+    node_id: z.string().min(1),
     auto_merge: z.object({}).passthrough().nullable(),
     mergeable_state: z.string().min(1),
     head: z.object({ ref: z.string().min(1), sha: z.string().min(1) }).passthrough(),
@@ -302,6 +310,40 @@ export function rulesetsHaveMergeGate(rules: z.infer<typeof restRulesetRules>): 
   }
   return present
 }
+
+// ── Native auto-merge mutations (GraphQL) ────────────────────────────────────
+//
+// GitHub's REST API has no auto-merge route: PUT/DELETE
+// /repos/{o}/{r}/pulls/{n}/auto-merge respond 404 (route-not-found) while
+// adjacent PR routes on the same PR respond 401 without auth. `gh` itself
+// drives native auto-merge through the GraphQL mutations below, so the forge
+// does too — same transport seam, same token.
+
+const ENABLE_AUTO_MERGE_MUTATION = `
+  mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+    enablePullRequestAutoMerge(
+      input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod}
+    ) {
+      pullRequest { id }
+    }
+  }
+`
+
+const DISABLE_AUTO_MERGE_MUTATION = `
+  mutation ($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId}) {
+      pullRequest { id }
+    }
+  }
+`
+
+/** A successful mutation payload: the mutated PR's node id. A null payload
+ * (mutation executed but returned nothing) fails the strict parse. */
+const autoMergeMutationPayload = z.object({
+  pullRequest: z.object({ id: z.string().min(1) }),
+})
+const enableAutoMergeData = z.object({ enablePullRequestAutoMerge: autoMergeMutationPayload })
+const disableAutoMergeData = z.object({ disablePullRequestAutoMerge: autoMergeMutationPayload })
 
 // ── Classic branch protection (REST) ─────────────────────────────────────────
 //
@@ -506,6 +548,43 @@ export class GitHubForge implements Forge {
     return this.parse(schema, await this.request('GET', path, opts), operation)
   }
 
+  /** One GraphQL operation over the shared transport: POST the document,
+   * validate the envelope, and surface the API-level `errors` array as a
+   * thrown error — GitHub answers HTTP 200 even when the mutation failed. */
+  private async graphql<T>(
+    operation: string,
+    schema: z.ZodType<T>,
+    query: string,
+    variables: Record<string, unknown>,
+  ): Promise<T> {
+    const response = await this.request('POST', 'graphql', { body: { query, variables } })
+    const envelope = z
+      .object({
+        data: z.unknown().optional(),
+        errors: z.array(z.object({ message: z.string() }).passthrough()).optional(),
+      })
+      .safeParse(response.json)
+    if (!envelope.success) {
+      throw new Error(
+        `unexpected GitHub GraphQL envelope for ${operation}: ${envelope.error.message}`,
+      )
+    }
+    const errors = envelope.data.errors
+    if (errors !== undefined && errors.length > 0) {
+      throw new Error(
+        `GitHub GraphQL ${operation} failed: ${errors.map((e) => e.message).join('; ')}`,
+      )
+    }
+    if (envelope.data.data === undefined || envelope.data.data === null) {
+      throw new Error(`GitHub GraphQL ${operation} returned no data`)
+    }
+    const parsed = schema.safeParse(envelope.data.data)
+    if (!parsed.success) {
+      throw new Error(`unexpected GitHub GraphQL data for ${operation}: ${parsed.error.message}`)
+    }
+    return parsed.data
+  }
+
   // ── Forge operations ───────────────────────────────────────────────────────
 
   /** [D1]: rebase is banned and branches are never rewritten — never force.
@@ -627,17 +706,18 @@ export class GitHubForge implements Forge {
     }
   }
 
-  /** Read the provider's projected native desired state. Mutations are not
-   * acknowledgements: only this independent follow-up observation can make an
-   * `applied` result durable. */
-  private async nativeAutoMergeEnabled(number: number): Promise<boolean> {
+  /** Read the provider's projected native desired state, plus the PR's node
+   * id — the GraphQL mutations key on the node id, not the PR number.
+   * Mutations are not acknowledgements: only an independent follow-up
+   * observation can make an `applied` result durable. */
+  private async nativeAutoMergeView(number: number): Promise<{ enabled: boolean; nodeId: string }> {
     const { owner, name } = await this.requireCoordinates()
     const view = await this.getJson(
       restNativeAutoMerge,
       `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
       `PR #${number} native auto-merge read`,
     )
-    return view.auto_merge !== null
+    return { enabled: view.auto_merge !== null, nodeId: view.node_id }
   }
 
   /** Probe both GitHub gate systems for the PR's exact base branch. The one
@@ -740,17 +820,22 @@ export class GitHubForge implements Forge {
     enabled: boolean,
   ): Promise<AutoMergeResult> {
     // Cancellation must remain usable when GitHub adds a merge-state enum:
-    // inspect only the one field disabling actually needs.
+    // inspect only the fields disabling actually needs. The mutation itself
+    // sits outside the enable path's catch on purpose — a failed cancellation
+    // is a hard janitor-tick error (as `gh pr merge --disable-auto` was
+    // before), never a silent deferral of live consent revocation.
     if (!enabled) {
-      if (!(await this.nativeAutoMergeEnabled(number))) {
+      const native = await this.nativeAutoMergeView(number)
+      if (!native.enabled) {
         return { kind: 'applied' }
       }
-      const { owner, name } = await this.requireCoordinates()
-      await this.request(
-        'DELETE',
-        `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/auto-merge`,
+      await this.graphql(
+        'disablePullRequestAutoMerge',
+        disableAutoMergeData,
+        DISABLE_AUTO_MERGE_MUTATION,
+        { pullRequestId: native.nodeId },
       )
-      return (await this.nativeAutoMergeEnabled(number))
+      return (await this.nativeAutoMergeView(number)).enabled
         ? { kind: 'deferred' }
         : { kind: 'applied' }
     }
@@ -785,10 +870,13 @@ export class GitHubForge implements Forge {
               },
             }
           }
-          await this.request('PUT', `${repoPath}/pulls/${number}/auto-merge`, {
-            body: { merge_method: 'squash' },
-          })
-          return (await this.nativeAutoMergeEnabled(number))
+          await this.graphql(
+            'enablePullRequestAutoMerge',
+            enableAutoMergeData,
+            ENABLE_AUTO_MERGE_MUTATION,
+            { pullRequestId: view.node_id, mergeMethod: 'SQUASH' },
+          )
+          return (await this.nativeAutoMergeView(number)).enabled
             ? { kind: 'applied' }
             : { kind: 'deferred' }
         }

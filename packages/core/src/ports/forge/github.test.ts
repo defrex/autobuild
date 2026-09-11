@@ -302,8 +302,10 @@ describe('rulesetsHaveMergeGate', () => {
 })
 
 describe('GitHubForge.setAutoMerge', () => {
+  const NODE_ID = 'PR_kwDOABC123'
   const prView = (mergeableState = 'clean', autoMerge: Record<string, unknown> | null = null) => ({
     json: {
+      node_id: NODE_ID,
       auto_merge: autoMerge,
       mergeable_state: mergeableState,
       head: { ref: 'ab/fix-login', sha: 'head-42' },
@@ -311,8 +313,32 @@ describe('GitHubForge.setAutoMerge', () => {
     },
   })
   const nativeState = (enabled: boolean) => ({
-    json: { auto_merge: enabled ? { merge_method: 'squash' } : null },
+    json: {
+      node_id: NODE_ID,
+      auto_merge: enabled ? { merge_method: 'squash' } : null,
+    },
   })
+  /** Successful GraphQL mutation envelope (the mutated PR's node id back). */
+  const graphqlApplied = (field: string) => ({
+    json: { data: { [field]: { pullRequest: { id: NODE_ID } } } },
+  })
+  const graphqlFailed = (message: string) => ({
+    json: { data: null, errors: [{ message }] },
+  })
+  const enableMutation = (calls: ApiCall[]): ApiCall | undefined =>
+    calls.find(
+      (call) =>
+        call.method === 'POST' &&
+        call.path === 'graphql' &&
+        JSON.stringify(call.opts?.body).includes('enablePullRequestAutoMerge'),
+    )
+  const disableMutation = (calls: ApiCall[]): ApiCall | undefined =>
+    calls.find(
+      (call) =>
+        call.method === 'POST' &&
+        call.path === 'graphql' &&
+        JSON.stringify(call.opts?.body).includes('disablePullRequestAutoMerge'),
+    )
   const branchWith = (protection: unknown) => ({ json: { protection } })
   const fullProtection = {
     required_status_checks: null,
@@ -331,7 +357,7 @@ describe('GitHubForge.setAutoMerge', () => {
       }),
       ruleset([]),
       repositoryAutoMerge(true),
-      {},
+      graphqlApplied('enablePullRequestAutoMerge'),
       nativeState(true),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
@@ -340,11 +366,18 @@ describe('GitHubForge.setAutoMerge', () => {
       'GET repos/acme/app/branches/main',
       'GET repos/acme/app/rules/branches/main',
       'GET repos/acme/app',
-      'PUT repos/acme/app/pulls/42/auto-merge',
+      'POST graphql',
       'GET repos/acme/app/pulls/42',
     ])
-    const put = calls[4]!
-    expect(put.opts?.body).toEqual({ merge_method: 'squash' })
+    // Native auto-merge exists only in GitHub's GraphQL schema — the REST
+    // pulls/{n}/auto-merge routes 404 — so the mutation must be the
+    // enablePullRequestAutoMerge mutation with squash and the PR's node id.
+    const mutation = enableMutation(calls)
+    expect(mutation).toBeDefined()
+    const body = mutation!.opts?.body as { query: string; variables: Record<string, unknown> }
+    expect(body.query).toContain('enablePullRequestAutoMerge')
+    expect(body.variables).toEqual({ pullRequestId: NODE_ID, mergeMethod: 'SQUASH' })
+    expect(calls.some((call) => call.path.endsWith('/auto-merge'))).toBe(false)
   })
 
   test('a ruleset gate also retains native ownership', async () => {
@@ -359,12 +392,12 @@ describe('GitHubForge.setAutoMerge', () => {
         },
       ]),
       repositoryAutoMerge(true),
-      {},
+      graphqlApplied('enablePullRequestAutoMerge'),
       nativeState(true),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
-    expect(calls.at(-2)!.method).toBe('PUT')
-    expect(calls.at(-1)!.path).toBe('repos/acme/app/pulls/42')
+    expect(calls.at(-2)!.method).toBe('POST')
+    expect(calls.at(-2)!.path).toBe('graphql')
   })
 
   test('clean or unstable with two successful negative probes returns a guarded direct candidate', async () => {
@@ -398,7 +431,7 @@ describe('GitHubForge.setAutoMerge', () => {
       branchWith(fullProtection),
       ruleset([]),
       repositoryAutoMerge(true),
-      {},
+      graphqlApplied('enablePullRequestAutoMerge'),
       nativeState(true),
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
@@ -413,13 +446,23 @@ describe('GitHubForge.setAutoMerge', () => {
   })
 
   test('disabling inspects only native state, so future merge-state enums cannot block cancellation', async () => {
-    const { forge, calls } = makeForge([nativeState(true), {}, nativeState(false)])
+    const { forge, calls } = makeForge([
+      nativeState(true),
+      graphqlApplied('disablePullRequestAutoMerge'),
+      nativeState(false),
+    ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({ kind: 'applied' })
     expect(paths(calls)).toEqual([
       'GET repos/acme/app/pulls/42',
-      'DELETE repos/acme/app/pulls/42/auto-merge',
+      'POST graphql',
       'GET repos/acme/app/pulls/42',
     ])
+    const mutation = disableMutation(calls)
+    expect(mutation).toBeDefined()
+    const body = mutation!.opts?.body as { query: string; variables: Record<string, unknown> }
+    expect(body.query).toContain('disablePullRequestAutoMerge')
+    expect(body.variables).toEqual({ pullRequestId: NODE_ID })
+    expect(calls.some((call) => call.path.endsWith('/auto-merge'))).toBe(false)
   })
 
   test('a successful mutation without matching native projection stays deferred', async () => {
@@ -431,12 +474,16 @@ describe('GitHubForge.setAutoMerge', () => {
       }),
       ruleset([]),
       repositoryAutoMerge(true),
-      {},
+      graphqlApplied('enablePullRequestAutoMerge'),
       nativeState(false),
     ])
     expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
 
-    const disable = makeForge([nativeState(true), {}, nativeState(true)])
+    const disable = makeForge([
+      nativeState(true),
+      graphqlApplied('disablePullRequestAutoMerge'),
+      nativeState(true),
+    ])
     expect(await disable.forge.setAutoMerge('/ws/build-1', 42, false)).toEqual({ kind: 'deferred' })
   })
 
@@ -524,6 +571,34 @@ describe('GitHubForge.setAutoMerge', () => {
         reason: { code: 'unproven-gate-state' },
       })
     }
+  })
+
+  test('a GraphQL-level mutation failure is not a success: enable defers, disable throws', async () => {
+    // GitHub answers HTTP 200 with an errors array when the mutation itself
+    // failed (e.g. the PR is not in a mergeable state); the envelope must
+    // never be read as an acknowledgement.
+    const enable = makeForge([
+      prView(),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [], contexts: [] },
+      }),
+      ruleset([]),
+      repositoryAutoMerge(true),
+      graphqlFailed('Pull request is not mergeable'),
+    ])
+    expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: {
+        code: 'unproven-gate-state',
+        detail: expect.stringContaining('Pull request is not mergeable'),
+      },
+    })
+
+    const disable = makeForge([nativeState(true), graphqlFailed('Bad credentials')])
+    await expect(disable.forge.setAutoMerge('/ws/build-1', 42, false)).rejects.toThrow(
+      'GitHub GraphQL disablePullRequestAutoMerge failed: Bad credentials',
+    )
   })
 
   test('repository-level auto-merge disablement is classified before mutation', async () => {
