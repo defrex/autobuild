@@ -3815,6 +3815,89 @@ describe('Dispatcher janitor', () => {
     expect(h.execCwds.slice(-2)).toEqual(['/repos/checkout', '/repos/checkout'])
   })
 
+  test('queued vercel-sandbox abort with no open workspace skips the local-branch git step entirely', async () => {
+    // A never-provisioned remote build has no open workspace fact; the
+    // local-branch git step must not run on the strength of `open === null`
+    // implying a local workspace (f_f94f113a). Origin mode has no checkout:
+    // any host exec would cwd into a scratch directory and fail the saga.
+    const h = harness({
+      workspaceName: 'vercel-sandbox',
+      tickets: [readyTicket('T-1', { labels: [] })],
+      repo: 'https://github.com/acme/app',
+      exec: async () => {
+        throw new Error('host exec must not run for a never-provisioned remote abort')
+      },
+    })
+    const slug = await seedBuild(h, {
+      ticketId: 'T-1',
+      repo: 'https://github.com/acme/app',
+      workspace: false,
+      attached: false,
+    })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.janitorFailed).toBe(0)
+    expect(report.abandoned).toBe(1)
+    const events = await h.store.getEvents(slug)
+    expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
+    expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(false)
+    expect(h.execCalls).toEqual([])
+    expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
+  })
+
+  test('abort cleanup hands local forges the physical checkout, never the origin-URL identity', async () => {
+    // LocalGitForge treats workspacePath as a git cwd; the store identity is
+    // an origin URL in checkout mode (f_c0437741). The remote-branch delete,
+    // the PR close fallback with no open workspace, and PR-attachment
+    // reclamation all carry the checkout instead.
+    const h = harness({
+      tickets: [readyTicket('T-1', { labels: [] })],
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+    })
+    const slug = await seedBuild(h, {
+      ticketId: 'T-1',
+      repo: 'https://github.com/acme/app',
+      pr: PR,
+      workspace: false,
+    })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    h.forge.setPrState(PR.number, { state: 'open', mergeable: null })
+
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.janitorFailed).toBe(0)
+    expect(report.abandoned).toBe(1)
+    const branch = `ab/${slug}`
+    // PR close ran with no open workspace → the checkout fallback.
+    expect(h.forge.closePrCalls).toEqual([{ workspacePath: '/repos/checkout', number: PR.number }])
+    expect(h.forge.deleteBranchCalls).toEqual([{ workspacePath: '/repos/checkout', branch }])
+  })
+
+  test('PR-attachment reclamation runs from the physical checkout, not the origin-URL identity', async () => {
+    const h = harness({
+      prAttachments: true,
+      repo: 'https://github.com/acme/app',
+      checkout: '/repos/checkout',
+    })
+    const slug = await seedBuild(h, {
+      slug: 'reclaim-checkout',
+      repo: 'https://github.com/acme/app',
+      workspace: false,
+    })
+    const hosted = await seedHostedPrAttachment(h, slug)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.forge.prAttachmentReclaims).toEqual([
+      { workspacePath: '/repos/checkout', asset: hosted.payload.asset },
+    ])
+  })
+
   test('queued abort is dispatcher-acknowledged before the complete cleanup saga', async () => {
     const h = harness({ tickets: [readyTicket('T-queued-abort', { labels: [] })] })
     const slug = await seedBuild(h, {

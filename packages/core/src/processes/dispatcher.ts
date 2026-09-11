@@ -1120,9 +1120,11 @@ export class Dispatcher {
 
   private forgeWorkspacePath(events: AbEvent[]): string {
     const open = openWorkspace(events)
-    return open?.provider === 'vercel-sandbox'
-      ? this.deps.repo
-      : (open?.localPath ?? open?.path ?? open?.ref ?? this.deps.repo)
+    if (open?.provider === 'vercel-sandbox') return this.deps.repo
+    // Local forges run git with cwd = workspacePath: it must be the physical
+    // checkout, never the store identity (an origin URL since the identity
+    // change; a path only for origin-less fixtures).
+    return open?.localPath ?? open?.path ?? open?.ref ?? this.deps.checkout ?? this.deps.repo
   }
 
   private hasLiveExecutionLease(record: BuildRecord): boolean {
@@ -1142,12 +1144,18 @@ export class Dispatcher {
   ): Promise<void> {
     const { store, tickets, forge } = this.deps
     const branch = record.branch
-    // Whether this build ever owned a local checkout workspace — captured
-    // BEFORE the workspace release clears the open fact below. Remote
-    // workspaces (vercel-sandbox) never create a local branch in the main
-    // checkout, and origin mode has no checkout at all: the local-branch git
-    // step is skipped, and the saga's later steps tolerate its absence.
-    const hadLocalWorkspace = openWorkspace(events)?.provider !== 'vercel-sandbox'
+    // Whether this build ever owned a local checkout workspace, judged on the
+    // provisioned facts (not the open one, which is null when the build never
+    // provisioned or already released — only the former must skip the
+    // local-branch git step; a released local workspace may still have left a
+    // branch in the checkout). Remote workspaces (vercel-sandbox) never create
+    // a local branch in the main checkout, and origin mode has no checkout at
+    // all: the local-branch git step is skipped, and the saga's later steps
+    // tolerate its absence.
+    const hadLocalWorkspace = events.some(
+      (event) =>
+        event.type === 'workspace.provisioned' && event.payload.provider !== 'vercel-sandbox',
+    )
     const has = (type: AbEvent['type']): boolean => events.some((event) => event.type === type)
     const append = async <T extends EventWrite['type']>(write: EventWrite<T>): Promise<void> => {
       const event = await store.append(record.slug, write)
@@ -1218,7 +1226,10 @@ export class Dispatcher {
         )
       }
       try {
-        await deleteBranch!.call(forge, this.deps.repo, branch)
+        // Local forges treat workspacePath as a git cwd: pass the physical
+        // checkout, not the store identity (an origin URL in checkout mode).
+        // API forges ignore the argument.
+        await deleteBranch!.call(forge, this.deps.checkout ?? this.deps.repo, branch)
         await append({
           actor: DISPATCHER,
           type: 'abort.remote-branch-deleted',
@@ -1499,7 +1510,9 @@ export class Dispatcher {
           )
         }
         await capability.reclaim({
-          workspacePath: this.deps.repo,
+          // Physical checkout for cwd-style reclaimers (local git), not the
+          // store identity; API-based reclaimers ignore it.
+          workspacePath: this.deps.checkout ?? this.deps.repo,
           asset: hosted.payload.asset,
         })
         await this.deps.store.append(slug, {
