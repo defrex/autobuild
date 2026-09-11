@@ -441,6 +441,13 @@ function restMergeState(raw: string): MergeStateStatus {
   return mapped
 }
 
+// ── Forge adapter ────────────────────────────────────────────────────────────
+
+/** Hard cap on the janitor poll's per-PR ETag cache. One small entry per PR
+ * ever polled in a dispatcher process lifetime makes hitting this in practice
+ * implausible; the cap is hygiene, not a load-bearing bound. */
+const PR_STATE_CACHE_CAP = 512
+
 export class GitHubForge implements Forge {
   readonly name = 'github'
   readonly prAttachments: PrAttachmentHosting
@@ -453,6 +460,17 @@ export class GitHubForge implements Forge {
   private readonly repoRoot?: string
   private readonly env: Readonly<Record<string, string | undefined>>
   private coordinates?: RepoCoordinates | null
+  /** Per-PR ETag cache for the janitor poll, keyed `owner/name#number`.
+   * Conditional revalidation per GitHub's documented best practices: every
+   * REST response carries an `ETag`, and re-GETting with `If-None-Match`
+   * answers 304 Not Modified — which does not count against the primary rate
+   * limit — whenever the representation is unchanged. The cache lives only
+   * for this adapter instance (the dispatcher constructs one forge and holds
+   * it across janitor ticks), so a process restart is cache loss: exactly
+   * today's first-poll behavior. Capped with oldest-inserted eviction; a miss
+   * is an ordinary unconditional poll, so eviction is harmless by
+   * construction. */
+  private readonly prStateCache = new Map<string, { etag: string; state: PrState }>()
 
   constructor(
     opts: {
@@ -640,28 +658,60 @@ export class GitHubForge implements Forge {
     return { number: created.number, url: created.html_url, headSha: created.head.sha }
   }
 
-  /** Janitor poll (SPEC §15.7): merged / closed / mergeability for one PR. */
+  /** Janitor poll (SPEC §15.7): merged / closed / mergeability for one PR.
+   * With a cached ETag the read revalidates via `If-None-Match`: a 304 Not
+   * Modified returns the cached previous result — the same result the previous
+   * poll produced — and a 200 refreshes the cached ETag alongside the parsed
+   * state (terminal `merged`/`closed` results included, uniformly). Without a
+   * cached ETag (first poll, cache loss) or when the provider omits an `ETag`
+   * response header, this is byte-for-byte the unconditional poll: 304
+   * handling only ever applies to requests that carry conditional headers. */
   async getPrState(_workspacePath: string, number: number): Promise<PrState> {
     const { owner, name } = await this.requireCoordinates()
-    const view = await this.getJson(
-      restPrState,
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
-      `PR #${number} poll`,
-    )
+    const prPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
+    const cacheKey = `${owner}/${name}#${number}`
+    const cached = this.prStateCache.get(cacheKey)
+    const response =
+      cached !== undefined
+        ? await this.request('GET', prPath, { headers: { 'If-None-Match': cached.etag } })
+        : await this.request('GET', prPath)
+    if (response.status === 304 && cached !== undefined) {
+      return cached.state
+    }
+    const view = this.parse(restPrState, response, `PR #${number} poll`)
+    let state: PrState
     if (view.merged) {
       // §15.7 [D1]: pr.merged records the squash commit as the landing
       // point — a merged PR without one is unusable, not mappable.
       if (view.merge_commit_sha === null) {
         throw new Error(`GitHub reports PR #${number} merged with no merge_commit_sha`)
       }
-      return { state: 'merged', sha: view.merge_commit_sha }
+      state = { state: 'merged', sha: view.merge_commit_sha }
+    } else {
+      switch (view.state) {
+        case 'closed':
+          state = { state: 'closed' }
+          break
+        case 'open':
+          state = { state: 'open', mergeable: view.mergeable }
+      }
     }
-    switch (view.state) {
-      case 'closed':
-        return { state: 'closed' }
-      case 'open':
-        return { state: 'open', mergeable: view.mergeable }
+    const etag = response.headers.etag
+    if (etag === undefined || etag === '') {
+      // No revalidation token on this 200: drop any stale entry so a future
+      // poll can never replay it against a changed representation.
+      this.prStateCache.delete(cacheKey)
+    } else {
+      this.prStateCache.set(cacheKey, { etag, state })
+      // Hard capacity cap with oldest-inserted eviction (JS Map iteration
+      // order). The just-inserted entry is newest, so it survives.
+      while (this.prStateCache.size > PR_STATE_CACHE_CAP) {
+        const oldest = this.prStateCache.keys().next()
+        if (oldest.done === true) break
+        this.prStateCache.delete(oldest.value)
+      }
     }
+    return state
   }
 
   async closePr(workspacePath: string, number: number): Promise<ClosePrResult> {
