@@ -199,6 +199,7 @@ export class PostgresBuildStore implements BuildStore {
     slug: string,
     artifact: PreparedArtifact,
     lockedKinds: Map<string, number>,
+    opts: { prune?: boolean } = { prune: true },
   ): Promise<ArtifactMeta> {
     let revision = lockedKinds.get(artifact.kind)
     if (revision === undefined) {
@@ -210,7 +211,7 @@ export class PostgresBuildStore implements BuildStore {
     const createdAt = this.now()
     await tx`INSERT INTO artifacts (build, kind, revision, blob_ref, metadata, created_at)
       VALUES (${slug}, ${artifact.kind}, ${revision}, ${artifact.blobRef}, ${artifact.metadata}, ${createdAt})`
-    await this.pruneBuildLocked(tx, slug, artifact.kind)
+    if (opts.prune) await this.pruneBuildLocked(tx, slug, artifact.kind)
     await tx`UPDATE builds SET updated_at = ${createdAt} WHERE slug = ${slug}`
     return {
       build: slug,
@@ -266,12 +267,25 @@ export class PostgresBuildStore implements BuildStore {
     for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
     return this.sql.begin(async (tx) => {
       await this.lockBuild(tx, slug)
+      // Ordering invariant (AUT-322): the batch event is validated BEFORE
+      // any retention prune runs. Deposits land unpruned, validation gates
+      // the whole batch, and only then does one prune per distinct batch
+      // kind execute — still inside this locked transaction. A same-kind
+      // batch whose prune scope covers a sibling therefore never deletes
+      // that sibling before the batch's event is validated. Pruning once
+      // per kind (not per deposit) is equivalent: `revisionsToPrune` is a
+      // pure function of the full post-batch revision set.
       const revisions = new Map<string, number>()
       const deposited: ArtifactMeta[] = []
       for (const artifact of prepared) {
-        deposited.push(await this.depositBuildLocked(tx, slug, artifact, revisions))
+        deposited.push(
+          await this.depositBuildLocked(tx, slug, artifact, revisions, { prune: false }),
+        )
       }
       const validated = validateEventWrite(makeEvent(structuredClone(deposited)))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        await this.pruneBuildLocked(tx, slug, kind)
+      }
       const event = (await this.appendLocked(tx, slug, validated, true)) as EventEnvelope<T>
       return { event, artifacts: deposited }
     })
@@ -466,6 +480,7 @@ export class PostgresBuildStore implements BuildStore {
     repo: string,
     artifact: PreparedArtifact,
     revisions: Map<string, number>,
+    opts: { prune?: boolean } = { prune: true },
   ): Promise<RepositoryArtifactMeta> {
     let revision = revisions.get(artifact.kind)
     if (revision === undefined) {
@@ -476,7 +491,7 @@ export class PostgresBuildStore implements BuildStore {
     revisions.set(artifact.kind, revision + 1)
     const createdAt = this.now()
     await tx`INSERT INTO repo_artifacts (repo,kind,revision,blob_ref,metadata,created_at) VALUES (${repo},${artifact.kind},${revision},${artifact.blobRef},${artifact.metadata},${createdAt})`
-    await this.pruneRepoLocked(tx, repo, artifact.kind)
+    if (opts.prune) await this.pruneRepoLocked(tx, repo, artifact.kind)
     await tx`UPDATE repo_streams SET updated_at=${createdAt} WHERE repo=${repo}`
     return {
       repo,
@@ -497,11 +512,20 @@ export class PostgresBuildStore implements BuildStore {
     for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
     return this.sql.begin(async (tx) => {
       await this.lockRepo(tx, repo)
+      // Ordering invariant (AUT-322): same shape as `appendWithArtifacts` —
+      // deposit unpruned, validate the batch event, then prune once per
+      // distinct batch kind, all inside this locked transaction. Validation
+      // provably precedes any retention deletion.
       const revisions = new Map<string, number>()
       const deposited: RepositoryArtifactMeta[] = []
       for (const artifact of prepared)
-        deposited.push(await this.depositRepoLocked(tx, repo, artifact, revisions))
+        deposited.push(
+          await this.depositRepoLocked(tx, repo, artifact, revisions, { prune: false }),
+        )
       const validated = validateRepositoryEventWrite(makeEvent(structuredClone(deposited)))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        await this.pruneRepoLocked(tx, repo, kind)
+      }
       const event = (await this.appendRepoLocked(
         tx,
         repo,
