@@ -23,6 +23,7 @@ import {
   sampleEventWrite,
 } from '../contract'
 import { textContent } from '../types'
+import { builds, repoStreams } from './schema'
 import { openLocalStore } from './store'
 
 async function freshRoot(): Promise<string> {
@@ -209,7 +210,136 @@ describe('SqliteBuildStore durability', () => {
   })
 })
 
-// ── Cross-process contention ([D2], §3.3, §7.2.1, §7.4) ──────────────────────
+describe('SqliteBuildStore write pattern', () => {
+  /**
+   * Counting spy on the store's private drizzle instance. `depositInTx` /
+   * `depositRepoInTx` read `this.db.update` at call time, so replacing the
+   * method intercepts updates inside the transaction while still dispatching
+   * to the real drizzle — the tests observe the actual SQLite write path.
+   */
+  function spyUpdates(store: unknown): { count(table: unknown): number; restore(): void } {
+    const db = (store as { db: { update: (table: unknown) => unknown } }).db
+    if (!db) throw new Error('store has no private `db` field — spy setup is stale')
+    const original = db.update.bind(db)
+    const counts = new Map<unknown, number>()
+    db.update = (table: unknown) => {
+      counts.set(table, (counts.get(table) ?? 0) + 1)
+      return original(table)
+    }
+    return {
+      count: (table) => counts.get(table) ?? 0,
+      restore: () => {
+        db.update = original
+      },
+    }
+  }
+
+  test('putArtifact issues exactly one builds update per deposit', async () => {
+    const root = await freshRoot()
+    try {
+      const clock = manualClock(CONTRACT_T0)
+      const store = openLocalStore(root, { clock })
+      try {
+        await store.createBuild(sampleBuildInput('spy'))
+        clock.advance(1000)
+        const spy = spyUpdates(store)
+        const meta = await store.putArtifact('spy', { kind: 'spec', content: 'the spec body' })
+        expect(spy.count(builds)).toBe(1)
+        spy.restore()
+        // Observable state unchanged: one idempotent write at the deposit ts.
+        expect((await store.getBuild('spy'))?.updatedAt).toBe(meta.createdAt)
+        expect(meta.createdAt).toBe(new Date(Date.parse(CONTRACT_T0) + 1000).toISOString())
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a deposit that prunes still issues exactly one builds update (regression guard)', async () => {
+    const root = await freshRoot()
+    try {
+      const clock = manualClock(CONTRACT_T0)
+      const store = openLocalStore(root, { clock, retention: { maxRevisions: 1 } })
+      try {
+        await store.createBuild(sampleBuildInput('pruned'))
+        await store.putArtifact('pruned', {
+          kind: 'build-runner-effective-config',
+          content: 'cfg-0',
+        })
+        clock.advance(1000)
+        const spy = spyUpdates(store)
+        await store.putArtifact('pruned', {
+          kind: 'build-runner-effective-config',
+          content: 'cfg-1',
+        })
+        expect(spy.count(builds)).toBe(1)
+        spy.restore()
+        // Prune behavior unchanged: only the newest revision survives.
+        expect(
+          (await store.listArtifacts('pruned', 'build-runner-effective-config')).map(
+            (m) => m.revision,
+          ),
+        ).toEqual([1])
+        expect(await store.getArtifact('pruned', 'build-runner-effective-config', 0)).toBeNull()
+        expect(
+          new TextDecoder().decode(
+            (await store.getArtifact('pruned', 'build-runner-effective-config'))!.content,
+          ),
+        ).toBe('cfg-1')
+        // updatedAt advanced exactly once — to the second deposit's ts.
+        expect((await store.getBuild('pruned'))?.updatedAt).toBe(
+          new Date(Date.parse(CONTRACT_T0) + 1000).toISOString(),
+        )
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('putRepoArtifact issues exactly one repoStreams update per deposit, including the prune case', async () => {
+    const root = await freshRoot()
+    try {
+      const clock = manualClock(CONTRACT_T0)
+      const store = openLocalStore(root, { clock, retention: { maxRevisions: 1 } })
+      try {
+        await store.ensureRepo('acme/spied')
+        await store.putRepoArtifact('acme/spied', {
+          kind: 'dispatcher-effective-config',
+          content: 'cfg-0',
+        })
+        clock.advance(1000)
+        const spy = spyUpdates(store)
+        await store.putRepoArtifact('acme/spied', {
+          kind: 'dispatcher-effective-config',
+          content: 'cfg-1',
+        })
+        expect(spy.count(repoStreams)).toBe(1)
+        spy.restore()
+        expect(
+          (await store.listRepoArtifacts('acme/spied', 'dispatcher-effective-config')).map(
+            (m) => m.revision,
+          ),
+        ).toEqual([1])
+        expect(
+          await store.getRepoArtifact('acme/spied', 'dispatcher-effective-config', 0),
+        ).toBeNull()
+        expect((await store.getRepo('acme/spied'))?.updatedAt).toBe(
+          new Date(Date.parse(CONTRACT_T0) + 1000).toISOString(),
+        )
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── Cross-process contention ([D2], §3.3, §7.2.1, §7.4) ─────────────────────
 //
 // bun:sqlite transactions are synchronous, so two connections inside ONE
 // process can never interleave mid-transaction — real contention needs real

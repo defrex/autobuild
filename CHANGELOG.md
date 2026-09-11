@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#312](https://github.com/defrex/autobuild/pull/312) — Drop duplicate idempotent updatedAt writes in the SQLite deposit path
 - [#311](https://github.com/defrex/autobuild/pull/311) — Bound dispatcher run/config artifacts with a retention policy
 - [#310](https://github.com/defrex/autobuild/pull/310) — Host the dispatcher: add per-minute cron and rewrite the runbook
 - [#309](https://github.com/defrex/autobuild/pull/309) — Make the cron invocation bound exact: fix timer race and overrun
