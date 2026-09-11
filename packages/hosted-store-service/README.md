@@ -170,6 +170,8 @@ Vercel functions (`VERCEL_OIDC_TOKEN` is injected), so **no `VERCEL_TOKEN`
 belongs on the service**. Each invocation deposits a
 `dispatcher-effective-config` repository artifact and durable tick/run facts
 under the `hosted-dispatcher-<uuid>` run id — the web dashboard shows hosted
-activity exactly as it shows a local dispatcher, and the repository journal
-grows by roughly one config artifact per minute per repository (no retention
-yet).
+activity exactly as it shows a local dispatcher. The repository journal's
+events keep growing by roughly one tick per minute per repository (intentional);
+the run/config artifacts themselves are retention-bounded — the store keeps the
+latest 200 revisions per dispatcher artifact kind and prunes older revisions at
+deposit time, overridable with `AB_ARTIFACT_RETENTION_MAX_REVISIONS`.

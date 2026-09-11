@@ -79,7 +79,26 @@ Every invocation is durable: tick reports
 `hosted-dispatcher-<uuid>` run id, so the web dashboard's repository journal
 and the operator API show hosted activity exactly as they show a local
 dispatcher. Expect the repository journal to grow by roughly one config
-artifact per minute per repository; retention/pruning is not yet implemented.
+artifact per minute per repository; the dispatcher run/config artifacts
+themselves are retention-bounded (see below), while the journal's events keep
+accumulating by design.
+
+## Artifact retention
+
+Dispatcher-generated run/config artifacts — the repository-scoped
+`dispatcher-effective-config` and `dispatcher-config` kinds and the
+build-scoped `build-runner-effective-config` kind — keep the **latest 200
+revisions per kind** (per repository, respectively per build). When a new
+revision of one of these kinds is deposited, the store prunes the older
+revisions past the bound at deposit time, inside the same transaction.
+Events and journal entries are never pruned, so historical event payloads may
+reference a pruned revision; the current run's snapshot is always among the
+newest deposits and stays retrievable, and every existing read surface
+(latest-by-default artifact reads, listings) works unchanged. The bound is
+overridable per deployment with `AB_ARTIFACT_RETENTION_MAX_REVISIONS` (a
+positive integer; see the store environment documentation). All other
+artifact kinds (build logs, `pr-description`, phase artifacts) are not
+subject to retention.
 
 ## Sandbox authentication
 
