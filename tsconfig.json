@@ -28,6 +28,9 @@
       "autobuild/git-worktree": ["./packages/core/src/ports/workspace/git-worktree.ts"],
       "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"],
       "@autobuild/hosted-store-service/service": ["./packages/hosted-store-service/src/service.ts"],
+      "@autobuild/hosted-store-service/dispatcher": [
+        "./packages/hosted-store-service/src/dispatcher.ts"
+      ],
       "@autobuild/hosted-store-service/web/auth": [
         "./packages/hosted-store-service/src/web/auth.ts"
       ],

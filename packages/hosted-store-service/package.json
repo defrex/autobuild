@@ -15,6 +15,10 @@
       "types": "./src/service.ts",
       "import": "./src/service.ts"
     },
+    "./dispatcher": {
+      "types": "./src/dispatcher.ts",
+      "import": "./src/dispatcher.ts"
+    },
     "./web/auth": {
       "types": "./src/web/auth.ts",
       "import": "./src/web/auth.ts"
