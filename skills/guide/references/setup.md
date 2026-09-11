@@ -173,16 +173,20 @@ serverless function or any host with only network access:
 ```sh
 ab dispatch --repository https://github.com/owner/repository \\
   --plain --store https://hosted-store.example \\
-  # environment: AB_TOKEN (store), GITHUB_TOKEN or GH_TOKEN (GitHub API)
+  # environment: AB_TOKEN (store); GITHUB_TOKEN or GH_TOKEN (GitHub API),
+  # or an authenticated gh CLI on the host
 ```
 
 `--repository` (or `AB_REPOSITORY`) is the normalized origin. Origin mode
 requires an HTTPS `AB_STORE` plus `AB_TOKEN`, a GitHub credential, and `forge =
 "github"`; the interactive dashboard is unavailable (`--plain` or no TTY). The
 GitHub credential is `GITHUB_TOKEN`, then `GH_TOKEN`, then — on a host with
-the gh CLI — the login stored by `gh auth login`, read through `gh auth token`.
-A hosted or sandboxed dispatcher has no gh and must export a token; a local
-operator needs nothing beyond `gh auth login`. The
+the gh CLI — the login stored by `gh auth login`, read through `gh auth token`
+once at startup. A hosted or sandboxed dispatcher has no gh and must export a
+token. A local operator needs nothing beyond `gh auth login` for the forge
+itself, but a `vercel-sandbox` workspace still requires an exported token
+because publication injects the credential into the sandbox (see the
+provider's prerequisites above). The
 startup configuration — and every per-tick reload — is `autobuild.toml` read
 from the forge at the current `baseBranch` (the first read resolves against the
 repository's default branch), so a push to the base branch is honored by a

@@ -310,6 +310,12 @@ export interface DispatchOpts {
   /** Test seam for origin mode: the GitHub transport the startup config
    * fetch (and the default forge) use instead of real fetch. */
   originConfigTransport?: GitHubRequest
+  /** GitHub API credential for the builtin forge. Origin mode resolves it
+   * once at startup (`GITHUB_TOKEN`, `GH_TOKEN`, then the gh CLI login) and
+   * threads that single answer through the config fetch and the wired forge,
+   * so the startup guard is authoritative and `gh auth token` runs at most
+   * once. An explicit value skips the resolution. */
+  githubToken?: string
   /** Process environment: adapter secrets (LINEAR_API_KEY) and AB_TOKEN. */
   env: Record<string, string | undefined>
   exec: Exec
@@ -444,6 +450,7 @@ async function defaultWire(
     env: opts.env,
     repoRoot: state.checkout,
     ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
+    ...(opts.githubToken !== undefined ? { githubToken: opts.githubToken } : {}),
   })
   // Checkout-less provider seams: the sandbox provider derives its origin and
   // remote branch heads from these instead of host `git` — every host-exec
@@ -3154,6 +3161,7 @@ async function fetchOriginModeConfig(
     env: opts.env,
     repository,
     ...(transport !== undefined ? { transport } : {}),
+    ...(opts.githubToken !== undefined ? { token: opts.githubToken } : {}),
   })
   const readFile = forge.readFile
   if (readFile === undefined) {
@@ -3208,7 +3216,9 @@ function acceptableOriginModeStore(storeRef: string): boolean {
  * names the operator's own machine (local development, integration harnesses).
  * Requirements are validated here so a misconfigured origin-mode launch fails
  * before any side effect. */
-async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePaths> {
+async function resolveOriginModeState(
+  opts: DispatchOpts,
+): Promise<{ paths: RepoStatePaths; githubToken: string }> {
   const identity = normalizeGitRemoteUrl(opts.repository!)
   const selectedStore = opts.storeRef ?? opts.env.AB_STORE
   if (selectedStore === undefined || !acceptableOriginModeStore(selectedStore)) {
@@ -3219,13 +3229,20 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
   if (opts.env.AB_TOKEN === undefined || opts.env.AB_TOKEN === '') {
     throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
   }
-  // The forge resolves the same credential lazily; probing here keeps the
-  // fail-before-side-effects contract for a launch with no credential at all.
-  const githubToken = await resolveGitHubToken(opts.env, (cmd) => opts.exec(cmd, { cwd: tmpdir() }))
+  // Resolved once, before any side effect, and threaded to every forge this
+  // launch constructs: the guard is authoritative, not a lookalike probe.
+  let githubToken = opts.githubToken
   if (githubToken === undefined) {
-    throw new Error(
-      'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN (or an authenticated gh CLI) for the GitHub API',
+    const credential = await resolveGitHubToken(opts.env, (cmd, probe) =>
+      opts.exec(cmd, { cwd: tmpdir(), signal: probe.signal }),
     )
+    if (credential.token === undefined) {
+      throw new Error(
+        'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN (or an authenticated gh CLI) ' +
+          `for the GitHub API: ${credential.reason}`,
+      )
+    }
+    githubToken = credential.token
   }
   const scratch = join(
     tmpdir(),
@@ -3233,12 +3250,15 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
     createHash('sha256').update(identity).digest('hex').slice(0, 16),
   )
   await mkdir(scratch, { recursive: true })
-  return resolveRepoStatePaths({
-    repo: identity,
-    checkout: scratch,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
-  })
+  return {
+    paths: resolveRepoStatePaths({
+      repo: identity,
+      checkout: scratch,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
+    }),
+    githubToken,
+  }
 }
 
 /**
@@ -3257,15 +3277,20 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (opts.wire !== undefined && opts.nonStoreWire !== undefined) {
     throw new Error('dispatch wire and nonStoreWire are mutually exclusive')
   }
-  const state =
-    opts.repository !== undefined
-      ? await resolveOriginModeState(opts)
-      : await resolveRepoState({
-          targetRepo: opts.targetRepo,
-          exec: opts.exec,
-          ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-          ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
-        })
+  let state: RepoStatePaths
+  let githubToken = opts.githubToken
+  if (opts.repository !== undefined) {
+    const origin = await resolveOriginModeState(opts)
+    state = origin.paths
+    githubToken = origin.githubToken
+  } else {
+    state = await resolveRepoState({
+      targetRepo: opts.targetRepo,
+      exec: opts.exec,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
+    })
+  }
   // Normalize once, then use these exact values for config/tickets/repository
   // identity, store wiring, worktrees, and every session's AB_STORE.
   // `targetRepo` stays the FILESYSTEM checkout (or origin-mode scratch root);
@@ -3275,6 +3300,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     targetRepo: state.checkout,
     storeRef: state.storeRef,
     repo: opts.repo ?? state.repo,
+    ...(githubToken !== undefined ? { githubToken } : {}),
   }
 
   // Interactive production dispatch is two programs. Resolve/open only the
@@ -3330,7 +3356,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (opts.repository !== undefined) {
     // Origin mode startup config: the base branch's autobuild.toml, fetched
     // through the forge (default branch first — baseBranch itself is config).
-    const fetched = await fetchOriginModeConfig(opts, opts.originConfigTransport)
+    const fetched = await fetchOriginModeConfig(resolvedOpts, resolvedOpts.originConfigTransport)
     configContent = fetched.content
     config = fetched.config
     if (config.forge !== 'github') {

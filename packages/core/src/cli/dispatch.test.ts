@@ -532,21 +532,34 @@ describe('abDispatch guards', () => {
         env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
         exec: async (cmd: string[]) => {
           ghProbes.push([...cmd])
-          return { stdout: '', stderr: 'not logged in', exitCode: 1 }
+          return { stdout: '', stderr: 'no oauth token found for github.com\n', exitCode: 1 }
         },
       } as never),
-    ).rejects.toThrow(/requires GITHUB_TOKEN or GH_TOKEN \(or an authenticated gh CLI\)/)
+    ).rejects.toThrow(
+      'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN (or an authenticated gh CLI) for ' +
+        'the GitHub API: GITHUB_TOKEN and GH_TOKEN are unset and `gh auth token --hostname ' +
+        'github.com` exited 1: no oauth token found for github.com',
+    )
     expect(ghProbes).toEqual([['gh', 'auth', 'token', '--hostname', 'github.com']])
 
-    // An authenticated gh CLI satisfies the requirement without any env token.
-    await expect(
-      abDispatch({
-        ...common,
-        originConfigTransport: transport,
-        env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
-        exec: async () => ({ stdout: 'gho_from_keyring\n', stderr: '', exitCode: 0 }),
-      } as never),
-    ).rejects.toThrow(/origin-mode dispatch cannot load configured plugins/)
+    // An authenticated gh CLI satisfies the requirement without any env token:
+    // the probe runs exactly once and its answer is what the launch fails on
+    // later (the plugin rejection), never the credential guard.
+    ghProbes.length = 0
+    const keyringLaunch = abDispatch({
+      ...common,
+      originConfigTransport: transport,
+      env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
+      exec: async (cmd: string[]) => {
+        ghProbes.push([...cmd])
+        return { stdout: 'gho_from_keyring\n', stderr: '', exitCode: 0 }
+      },
+    } as never)
+    await expect(keyringLaunch).rejects.not.toThrow(/requires GITHUB_TOKEN/)
+    await expect(keyringLaunch).rejects.toThrow(
+      /origin-mode dispatch cannot load configured plugins/,
+    )
+    expect(ghProbes).toEqual([['gh', 'auth', 'token', '--hostname', 'github.com']])
   }, 10_000)
 
   test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {

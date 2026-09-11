@@ -24,6 +24,9 @@ const baseEnv = {
   AB_DISPATCHER_ORIGIN: 'https://hosted.example.test',
   AB_DISPATCHER_REPOSITORIES: 'https://github.com/acme/one,git@github.com:acme/two.git',
   CRON_SECRET: 'cron-secret',
+  // Every served repository must authenticate with an explicit token: the
+  // hosted dispatcher never falls back to a gh CLI login.
+  GITHUB_TOKEN: 'shared-forge-token',
 }
 
 const at = new Date('2026-09-10T00:00:00.000Z')
@@ -267,20 +270,29 @@ describe('createHostedDispatcher', () => {
     expect(calls[1]!.env?.GH_TOKEN).toBeUndefined()
   })
 
-  test('an override works with no shared forge credential in the environment at all', async () => {
+  test('with no shared forge credential, only overridden repositories tick; the rest fail before the kernel', async () => {
     const { calls, tick } = dispatcher(
       {
         ...baseEnv,
+        GITHUB_TOKEN: undefined,
         AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({
           'https://github.com/acme/two': 'override-forge-token',
         }),
       },
       ['ok', 'ok'],
     )
-    await tick()
-    expect(calls[0]!.env?.GITHUB_TOKEN).toBeUndefined()
-    expect(calls[1]!.env?.GITHUB_TOKEN).toBe('override-forge-token')
-    expect(calls[1]!.env?.GH_TOKEN).toBe('override-forge-token')
+    const summary = await tick()
+    // The un-overridden repository never reaches dispatch: the kernel would
+    // resolve the gh CLI login of whoever runs the service, and a served
+    // repository must never be operated as an ambient personal identity.
+    expect(calls.map((call) => call.repository)).toEqual(['https://github.com/acme/two'])
+    expect(calls[0]!.env?.GITHUB_TOKEN).toBe('override-forge-token')
+    expect(calls[0]!.env?.GH_TOKEN).toBe('override-forge-token')
+    expect(summary.repositories.map((entry) => entry.outcome)).toEqual(['failed', 'ticked'])
+    expect(summary.repositories[0]!.error).toContain(
+      'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API',
+    )
+    expect(summary.repositories[0]!.error).toContain('never uses a gh CLI login')
   })
 
   test('token material never appears in the tick summary or a failed outcome', async () => {

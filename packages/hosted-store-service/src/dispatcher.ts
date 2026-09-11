@@ -373,7 +373,7 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           childEnv.VERCEL_OIDC_TOKEN = credentials.oidcToken
         }
         // Per-repository forge identity: both variables are set to the
-        // override so no reader (`githubTokenFromEnv` prefers GITHUB_TOKEN,
+        // override so no reader (`resolveGitHubToken` prefers GITHUB_TOKEN,
         // the publication path and init-validation accept either) can straddle
         // the override and the shared credential within one tick. Repositories
         // without an override keep the shared credential untouched.
@@ -383,6 +383,18 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           childEnv.GH_TOKEN = forgeOverride
         }
         try {
+          // The kernel would otherwise fall back to the gh CLI login of
+          // whoever runs this service (a maintainer's laptop, per the README's
+          // local-run section), and a multi-tenant dispatcher must never act
+          // on a served repository as an ambient personal identity. Every
+          // served repository authenticates with an explicit token, or fails.
+          if (!childEnv.GITHUB_TOKEN && !childEnv.GH_TOKEN) {
+            throw new Error(
+              'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API: ' +
+                `the hosted dispatcher has no per-repository override for ${repository} and ` +
+                'no shared token, and never uses a gh CLI login',
+            )
+          }
           await dispatch({
             targetRepo: '<hosted-dispatcher>',
             repository,

@@ -363,6 +363,16 @@ receive-pack-free network policy, so even a failed publication-policy restore
 fails closed before setup or plugin code runs. Normal VM sessions never receive
 Forge credentials.
 
+**Forge credentials.** `packages/core/src/ports/forge/github-transport.ts` owns the
+REST transport seam and credential resolution for the builtin GitHub forge:
+`GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login read through
+`gh auth token --hostname github.com` under a bounded deadline. A checkout-mode
+dispatcher probes lazily on the transport's first request (a miss is retried on the
+next request, never frozen into anonymous access); origin-mode dispatch resolves once
+before any side effect and threads that single answer through the startup config fetch
+and the wired forge. The hosted dispatcher never uses the gh fallback: every served
+repository authenticates with an explicit token or its tick fails.
+
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
 `production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct
@@ -567,10 +577,6 @@ behavioral assertions against every implementation:
 - `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`;
 - `packages/core/src/ports/tickets/contract.ts` — `TicketSource`;
 - `packages/core/src/ports/workspace/contract.ts` — `WorkspaceProvider`;
-- `packages/core/src/ports/forge/github-transport.ts` — the REST transport seam and
-  credential resolution: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login
-  (`gh auth token`), probed lazily on the first request so a checkout-mode dispatcher
-  works from `gh auth login` alone while hosted dispatchers export a token.
 - `packages/core/src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
   branch deletion with merged-race preservation;
 - `packages/core/src/ports/runner/contract.ts` — `AgentRunner` session/continuation,

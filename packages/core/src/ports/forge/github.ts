@@ -522,10 +522,12 @@ export class GitHubForge implements Forge {
         token:
           opts.token !== undefined
             ? opts.token
-            : () =>
-                resolveGitHubToken(this.env, (cmd) =>
-                  this.exec(cmd, { cwd: opts.repoRoot ?? process.cwd() }),
-                ),
+            : async () =>
+                (
+                  await resolveGitHubToken(this.env, (cmd, probe) =>
+                    this.exec(cmd, { cwd: opts.repoRoot ?? process.cwd(), signal: probe.signal }),
+                  )
+                ).token,
       })
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository

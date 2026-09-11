@@ -79,15 +79,18 @@ export const restPlanLimitation = z
   .passthrough()
 
 /** Where a transport's bearer token comes from: a literal, nothing (anonymous
- * requests), or a resolver the transport invokes once, on its first request,
- * and memoizes — so a credential probe that shells out (the gh CLI fallback in
- * {@link resolveGitHubToken}) never runs at construction time and never runs
- * more than once per transport. */
+ * requests), or a resolver the transport invokes on its first request. A
+ * resolved token is memoized for the transport's lifetime; a resolver that
+ * yields nothing is asked again on the next request, so a transient probe
+ * failure (a momentarily locked keyring) is not frozen into anonymous access
+ * until the process restarts. Shells out at most once per request, never at
+ * construction time. */
 export type GitHubTokenSource = string | undefined | (() => Promise<string | undefined>)
 
 /** Production transport: token-authenticated fetch against api.github.com.
- * Callers pass {@link resolveGitHubToken} (env token, then gh CLI login) or a
- * literal token; no `Authorization` header is sent when neither yields one. */
+ * Callers pass a resolver over {@link resolveGitHubToken} (env token, then gh
+ * CLI login) or a literal token; no `Authorization` header is sent when
+ * neither yields one. */
 export function createGitHubFetchTransport(opts: {
   token?: GitHubTokenSource
   apiBase?: string
@@ -96,11 +99,18 @@ export function createGitHubFetchTransport(opts: {
   let resolved: Promise<string | undefined> | undefined
   const resolveToken = (): Promise<string | undefined> => {
     if (resolved === undefined) {
-      resolved = typeof source === 'function' ? source() : Promise.resolve(source)
-      // A rejected probe is not a cached answer — the next request retries.
-      resolved.catch(() => {
-        resolved = undefined
-      })
+      const attempt = typeof source === 'function' ? source() : Promise.resolve(source)
+      resolved = attempt
+      // Only a found token is a durable answer; a miss or a rejection leaves
+      // the next request free to probe again.
+      attempt.then(
+        (token) => {
+          if (token === undefined && resolved === attempt) resolved = undefined
+        },
+        () => {
+          if (resolved === attempt) resolved = undefined
+        },
+      )
     }
     return resolved
   }
@@ -177,29 +187,46 @@ export function createGitHubFetchTransport(opts: {
 export function githubTokenFromEnv(
   env: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
-  const token = env.GITHUB_TOKEN ?? env.GH_TOKEN
+  // `||`, not `??`: an exported-but-empty GITHUB_TOKEN (a templated .env or
+  // unit file) must not mask a valid GH_TOKEN.
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN
   return token !== undefined && token !== '' ? token : undefined
 }
 
-/** Minimal subprocess seam for the gh CLI credential probe: argv in, exit
- * code and stdout out. Callers that already own an exec seam adapt it here so
- * tests never reach a real `gh`. */
-export type GitHubCliExec = (cmd: string[]) => Promise<{ exitCode: number; stdout: string }>
+/** Minimal subprocess seam for the gh CLI credential probe: argv and an abort
+ * signal in; exit code, stdout, and stderr out. Callers that already own an
+ * exec seam adapt it here so tests never reach a real `gh`; the signal is the
+ * probe's deadline and every production seam (`bunExec`, `spawnExec`) honors
+ * it. */
+export type GitHubCliExec = (
+  cmd: string[],
+  opts: { signal: AbortSignal },
+) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
 /** How long the gh probe may take before it is treated as "no credential".
  * `gh auth token` never prompts, so anything this slow is a wedged keyring. */
-const GH_CLI_TOKEN_TIMEOUT_MS = 10_000
+export const GH_CLI_TOKEN_TIMEOUT_MS = 10_000
 
-const bunGitHubCliExec: GitHubCliExec = async (cmd) => {
-  const proc = Bun.spawn(cmd, {
-    stdin: 'ignore',
-    stdout: 'pipe',
-    stderr: 'ignore',
-    timeout: GH_CLI_TOKEN_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
-  })
-  const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-  return { exitCode, stdout }
+const bunGitHubCliExec: GitHubCliExec = async (cmd, opts) => {
+  const proc = Bun.spawn(cmd, { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+  const abort = (): void => {
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      // Already exited.
+    }
+  }
+  opts.signal.addEventListener('abort', abort, { once: true })
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { exitCode, stdout, stderr }
+  } finally {
+    opts.signal.removeEventListener('abort', abort)
+  }
 }
 
 /** The argv of the gh CLI credential probe. Exported so exec seams in tests
@@ -214,19 +241,60 @@ export const GH_CLI_TOKEN_COMMAND: readonly string[] = [
   'github.com',
 ]
 
+/** Outcome of one credential lookup. A miss carries the reason so a
+ * fail-fast caller can say *why* (gh not installed, not logged in to
+ * github.com, timed out) instead of a generic "no token". */
+export type GitHubCredential =
+  | { token: string; source: 'GITHUB_TOKEN' | 'GH_TOKEN' | 'gh' }
+  | { token: undefined; reason: string }
+
 /** The credential the operator stored with `gh auth login`, read through
- * `gh auth token`. Resolves to `undefined` — never throws — when gh is not
- * installed, not authenticated, times out, or prints nothing. */
+ * `gh auth token`. Never throws: gh missing, unauthenticated, silent, or
+ * slower than the deadline all resolve to a miss with its reason. The
+ * deadline is enforced here — not only in the default spawner — so it holds
+ * for every injected exec seam, and a probe whose pipes stay open past the
+ * deadline (a wrapper script that forked the real gh) is abandoned rather
+ * than awaited. */
 export async function githubTokenFromGhCli(
   exec: GitHubCliExec = bunGitHubCliExec,
-): Promise<string | undefined> {
+  timeoutMs: number = GH_CLI_TOKEN_TIMEOUT_MS,
+): Promise<GitHubCredential> {
+  const command = GH_CLI_TOKEN_COMMAND.join(' ')
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const deadline = new Promise<GitHubCredential>((resolve) => {
+    controller.signal.addEventListener(
+      'abort',
+      () =>
+        resolve({
+          token: undefined,
+          reason: `\`${command}\` did not answer within ${timeoutMs} ms`,
+        }),
+      { once: true },
+    )
+  })
+  const probe = (async (): Promise<GitHubCredential> => {
+    try {
+      const result = await exec([...GH_CLI_TOKEN_COMMAND], { signal: controller.signal })
+      if (result.exitCode !== 0) {
+        const detail = result.stderr.trim() || result.stdout.trim()
+        return {
+          token: undefined,
+          reason: `\`${command}\` exited ${result.exitCode}${detail === '' ? '' : `: ${detail}`}`,
+        }
+      }
+      const token = result.stdout.trim()
+      if (token === '') return { token: undefined, reason: `\`${command}\` printed no token` }
+      return { token, source: 'gh' }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return { token: undefined, reason: `\`${command}\` could not run: ${detail}` }
+    }
+  })()
   try {
-    const result = await exec([...GH_CLI_TOKEN_COMMAND])
-    if (result.exitCode !== 0) return undefined
-    const token = result.stdout.trim()
-    return token === '' ? undefined : token
-  } catch {
-    return undefined
+    return await Promise.race([probe, deadline])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -235,10 +303,17 @@ export async function githubTokenFromGhCli(
  * serve hosted and sandboxed dispatchers, which have no gh and no keyring; the
  * gh fallback keeps a local checkout-mode dispatcher working with nothing more
  * than `gh auth login`, as it did before the adapter moved off gh subprocesses.
- * `undefined` means no credential was found anywhere. */
+ * A miss names what was tried. */
 export async function resolveGitHubToken(
   env: Readonly<Record<string, string | undefined>>,
   exec?: GitHubCliExec,
-): Promise<string | undefined> {
-  return githubTokenFromEnv(env) ?? (await githubTokenFromGhCli(exec))
+): Promise<GitHubCredential> {
+  if (env.GITHUB_TOKEN) return { token: env.GITHUB_TOKEN, source: 'GITHUB_TOKEN' }
+  if (env.GH_TOKEN) return { token: env.GH_TOKEN, source: 'GH_TOKEN' }
+  const probe = await githubTokenFromGhCli(exec)
+  if (probe.token !== undefined) return probe
+  return {
+    token: undefined,
+    reason: `GITHUB_TOKEN and GH_TOKEN are unset and ${probe.reason}`,
+  }
 }

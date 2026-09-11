@@ -83,7 +83,7 @@ export async function fetchDistributionReleaseAsset(
   version: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
   transport: GitHubRequest = createGitHubFetchTransport({
-    token: () => resolveGitHubToken(env),
+    token: async () => (await resolveGitHubToken(env)).token,
   }),
 ): Promise<Uint8Array> {
   const coordinates = parseRepoCoordinates(CANONICAL_REPOSITORY_URL)

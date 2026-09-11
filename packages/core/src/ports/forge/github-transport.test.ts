@@ -3,6 +3,7 @@ import {
   createGitHubFetchTransport,
   GH_CLI_TOKEN_COMMAND,
   GitHubApiError,
+  githubTokenFromEnv,
   githubTokenFromGhCli,
   resolveGitHubToken,
   type GitHubCliExec,
@@ -122,39 +123,103 @@ describe('createGitHubFetchTransport', () => {
 })
 
 describe('resolveGitHubToken', () => {
+  const answering =
+    (stdout: string, probes: string[][] = []): GitHubCliExec =>
+    async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout, stderr: '' }
+    }
+
   test('prefers GITHUB_TOKEN, then GH_TOKEN, without touching the gh CLI', async () => {
     const probes: string[][] = []
-    const exec: GitHubCliExec = async (cmd) => {
-      probes.push([...cmd])
-      return { exitCode: 0, stdout: 'gho_keyring\n' }
-    }
-    expect(await resolveGitHubToken({ GITHUB_TOKEN: 'env-a', GH_TOKEN: 'env-b' }, exec)).toBe(
-      'env-a',
-    )
-    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toBe('env-b')
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: 'env-a', GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-a',
+      source: 'GITHUB_TOKEN',
+    })
+    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-b',
+      source: 'GH_TOKEN',
+    })
+    expect(probes).toEqual([])
+  })
+
+  test('an exported-but-empty GITHUB_TOKEN does not mask GH_TOKEN', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-b',
+      source: 'GH_TOKEN',
+    })
+    expect(githubTokenFromEnv({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' })).toBe('env-b')
     expect(probes).toEqual([])
   })
 
   test('falls back to the gh CLI login when the environment carries no token', async () => {
     const probes: string[][] = []
-    const exec: GitHubCliExec = async (cmd) => {
-      probes.push([...cmd])
-      return { exitCode: 0, stdout: 'gho_keyring\n' }
-    }
-    expect(await resolveGitHubToken({ GITHUB_TOKEN: '' }, exec)).toBe('gho_keyring')
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: '' }, exec)).toEqual({
+      token: 'gho_keyring',
+      source: 'gh',
+    })
     expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
   })
 
-  test('yields no credential when gh is missing, unauthenticated, or silent', async () => {
-    expect(await githubTokenFromGhCli(async () => ({ exitCode: 1, stdout: '' }))).toBeUndefined()
-    expect(
-      await githubTokenFromGhCli(async () => ({ exitCode: 0, stdout: '  \n' })),
-    ).toBeUndefined()
-    expect(
-      await githubTokenFromGhCli(async () => {
-        throw new Error('spawn gh ENOENT')
-      }),
-    ).toBeUndefined()
+  test('a miss names what was tried: gh unauthenticated, silent, or missing', async () => {
+    const unauthenticated = await githubTokenFromGhCli(async () => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'no oauth token found for github.com\n',
+    }))
+    expect(unauthenticated.token).toBeUndefined()
+    expect(unauthenticated).toMatchObject({
+      reason: '`gh auth token --hostname github.com` exited 1: no oauth token found for github.com',
+    })
+
+    const silent = await githubTokenFromGhCli(async () => ({
+      exitCode: 0,
+      stdout: '  \n',
+      stderr: '',
+    }))
+    expect(silent).toMatchObject({
+      reason: '`gh auth token --hostname github.com` printed no token',
+    })
+
+    const missing = await githubTokenFromGhCli(async () => {
+      throw new Error('spawn gh ENOENT')
+    })
+    expect(missing).toMatchObject({
+      reason: '`gh auth token --hostname github.com` could not run: spawn gh ENOENT',
+    })
+
+    const resolved = await resolveGitHubToken({}, async () => {
+      throw new Error('spawn gh ENOENT')
+    })
+    expect(resolved).toEqual({
+      token: undefined,
+      reason:
+        'GITHUB_TOKEN and GH_TOKEN are unset and `gh auth token --hostname github.com` could not run: spawn gh ENOENT',
+    })
+  })
+
+  test('abandons a probe that outlives its deadline and aborts it through the seam', async () => {
+    let aborted = false
+    const started = Date.now()
+    const wedged: GitHubCliExec = (_cmd, opts) =>
+      new Promise(() => {
+        // Never settles — a locked keyring, or a wrapper that forked the real
+        // gh and left the pipes open past the kill.
+        opts.signal.addEventListener('abort', () => {
+          aborted = true
+        })
+      })
+    const result = await githubTokenFromGhCli(wedged, 50)
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(aborted).toBe(true)
+    expect(result).toEqual({
+      token: undefined,
+      reason: '`gh auth token --hostname github.com` did not answer within 50 ms',
+    })
   })
 })
 
@@ -181,12 +246,28 @@ describe('createGitHubFetchTransport token resolution', () => {
     }
   })
 
-  test('sends no Authorization header when the source yields nothing', async () => {
+  test('sends no Authorization header when the source yields nothing, and asks again next time', async () => {
     const stub = stubFetch(() => new Response('', { status: 204 }))
+    let attempts = 0
     try {
-      const transport = createGitHubFetchTransport({ token: async () => undefined })
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          attempts += 1
+          // The keyring was locked for the first request only.
+          return attempts === 1 ? undefined : 'gho_unlocked'
+        },
+      })
       await transport('GET', 'user')
       expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBeUndefined()
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(attempts).toBe(2)
+      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_unlocked',
+      )
+      expect((stub.calls[2]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_unlocked',
+      )
     } finally {
       stub.restore()
     }

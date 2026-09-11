@@ -169,7 +169,10 @@ for the schedule, incident pauses, and behavior details. Dispatcher variables
   Keys accept the same spellings as the repository set and must name a served
   repository; a repository with an override authenticates its dispatcher tick
   with that token (both `GITHUB_TOKEN` and `GH_TOKEN`), every other repository
-  keeps the shared `GITHUB_TOKEN`/`GH_TOKEN`. Unset means shared-only. Tokens
+  keeps the shared `GITHUB_TOKEN`/`GH_TOKEN`. Unset means shared-only, and a
+  repository with neither fails its tick — the hosted dispatcher never uses the
+  gh CLI login of whoever runs the service, unlike a local checkout-mode
+  dispatcher. Tokens
   never appear in logs, responses, or artifacts; server-only like every secret
   above.
 - Guest-forwarded variables such as `AI_GATEWAY_API_KEY` flow through from the

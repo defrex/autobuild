@@ -37,6 +37,10 @@ export async function createForge(opts: {
   /** Explicit repository identity (normalized origin). Origin-mode dispatch
    * passes it so the builtin GitHub forge never probes a local checkout. */
   repository?: string
+  /** GitHub credential already resolved by the caller (origin-mode startup
+   * resolves it once, before any side effect). Absent: the builtin forge
+   * resolves `GITHUB_TOKEN`, `GH_TOKEN`, then the gh CLI login itself. */
+  githubToken?: string
 }): Promise<Forge> {
   const registration = resolveForgeRegistration(opts.name, opts.registry)
   if (registration.owner.kind === 'builtin') {
@@ -45,6 +49,7 @@ export async function createForge(opts: {
         env: opts.env,
         repoRoot: opts.repoRoot,
         ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
+        ...(opts.githubToken !== undefined ? { token: opts.githubToken } : {}),
       })
     }
     if (opts.name === 'local-git') return new LocalGitForge()
