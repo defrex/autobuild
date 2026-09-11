@@ -100,6 +100,9 @@ export interface HarvestRunState {
     error: string
     willRetry: boolean
   }
+  /** Repo seq of the failure fact that set `failure`; deleted with it, so it
+   * marks the recency of the currently unresolved failure. */
+  failureSeq?: number
   /** Durable outer recoveries, independent of within-step attempt facts. */
   recoveryRequests: HarvestRecoveryRequest[]
   /** Present after the automatic recovery budget is atomically exhausted. */
@@ -255,6 +258,7 @@ export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState 
           if (hadHumanResume || automatic !== undefined) {
             run.status = 'running'
             delete run.failure
+            delete run.failureSeq
             delete run.terminalSeq
             delete run.terminalAt
           }
@@ -613,6 +617,7 @@ export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState 
           error: event.payload.error,
           willRetry: event.payload.willRetry,
         }
+        run.failureSeq = event.seq
         if (!event.payload.willRetry) {
           // Failed is a parked infrastructure stop, not a completed outcome.
           // The claim and every workflow artifact remain owned by this run

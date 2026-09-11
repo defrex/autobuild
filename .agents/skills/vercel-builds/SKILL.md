@@ -125,6 +125,43 @@ secrets, so steps 0–3 are deployment-side.
 enforces this: the dispatcher's harvest trigger parks while the gate is paused
 (`decideHarvestControl` → `park`), so the hosted cron never starts a harvest either.
 
+## Harvest
+
+Observation harvest is operational again in hosted mode (AUT-305): a threshold-triggered
+harvest runs exactly like a build — the dispatcher provisions one disposable sandbox from the
+remote base head through the same provisioning chain, the guest runs the unchanged harvest
+kernel (scan → synthesize → review → file) with the configured role routing, and the
+environment is released when the run completes, escalates, or exhausts recovery. No runtime is
+invoked on the dispatcher host. Repositories on `git-worktree` keep running harvest locally and
+are unaffected.
+
+- Execution identity lives in repository events: `harvest.execution.started` records the
+  provider, environment, session, and detached command; `harvest.execution.released` closes it
+  with the snapshot purge outcome, and `harvest.started.environment` records where the run
+  itself executed. The released fact's snapshot purge outcome proves the environment's absence
+  from the Store without querying Vercel.
+- Supervision is durable in the same way as builds: if the dispatcher invocation ends mid-run,
+  the guest finishes its journal work, and a later invocation settles the environment from the
+  execution facts plus provider liveness while the run resumes under the repository lease at
+  the next threshold trigger.
+- Filed proposals are identical in shape and idempotency to a locally run harvest — same
+  creation keys, same reservations, same blocker provenance — because the guest runs the same
+  kernel code.
+- Observations queued during the hosted gap **are** processed by the first hosted harvest: the
+  scan claims every unclaimed observation regardless of when it was queued, and a pre-gap open
+  or parked run is resumed by the same resumed-execution path.
+
+Inspect a hosted harvest with the repository journal:
+
+```sh
+ab repository status --json
+ab harvest status --json
+```
+
+Compare `harvest.execution.started`/`.released` identities the same way build identities are
+compared above; a started fact without a matching release means the environment still owes a
+settlement pass (or the purge is retrying with `snapshots.outcome: "unknown"`).
+
 ## Non-secret prerequisites
 
 Before starting intake or readiness validation, confirm all of the following without printing any

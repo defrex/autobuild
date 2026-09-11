@@ -72,6 +72,8 @@ import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
 import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
+import { openHarvestExecutions } from './harvest-execution-state'
+import type { RepositoryEvent } from '../events/repository'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
@@ -531,6 +533,10 @@ export interface DispatcherDeps {
   /** Slugs THIS process supervises in memory. The settlement stage skips
    * them: their completion chain owns the durable facts. */
   activeExecutions?: () => ReadonlySet<string>
+  /** Hosted-harvest execution ids THIS process supervises in memory. The
+   * harvest settlement stage skips them: their completion chain owns the
+   * durable facts. */
+  activeHarvestExecutions?: () => ReadonlySet<string>
   ids: IdSource
   clock: Clock
   opts?: DispatcherOpts
@@ -673,6 +679,8 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     await this.settleForeignExecutions(report, opts)
     if (this.outOfBudget(opts)) return report
+    await this.settleHarvestExecutions(opts)
+    if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     await this.recoverDispatches(report, launched, paused, opts)
@@ -800,6 +808,90 @@ export class Dispatcher {
       } catch {
         // An unobservable build must not stall settlement of the rest; the
         // next tick retries it.
+      }
+    }
+  }
+
+  /** Durable settlement for hosted-harvest executions (AUT-305), next to the
+   * build pass above and run in the same settlement stage: every
+   * `harvest.execution.started` without a matching released fact whose
+   * execution is not supervised by this process is observed through the
+   * owning provider. `lost`/`ended` reaps the disposable environment and
+   * journals the close fact with the snapshot purge outcome; `running`
+   * leaves it — the guest is the live supervisor and holds the adopted
+   * repository lease, and the next pass reaps it after it ends. The run
+   * itself needs no settlement here: an interrupted run stays open in the
+   * journal and the next threshold-triggered harvest resumes it under the
+   * repository lease. */
+  private async settleHarvestExecutions(opts: TickOpts = {}): Promise<void> {
+    const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
+    let events: RepositoryEvent[]
+    try {
+      events = await this.repositoryEvents()
+    } catch {
+      // A repository with no journal yet has nothing to settle.
+      return
+    }
+    for (const execution of openHarvestExecutions(events)) {
+      if (active.has(execution.execution)) continue
+      // Budget gate: once spent, stop settling further harvest executions;
+      // the next tick retries what remains.
+      if (this.outOfBudget(opts)) break
+      try {
+        const owner = this.executionOwner(execution.provider)
+        const capability = owner?.harvestExecution
+        if (
+          owner === null ||
+          capability?.observe === undefined ||
+          execution.commandId === undefined
+        )
+          continue
+        const observation = await capability.observe({
+          provider: execution.provider,
+          workspaceRef: execution.environmentId,
+          environmentId: execution.environmentId,
+          ...(execution.sessionId !== undefined ? { sessionId: execution.sessionId } : {}),
+          commandId: execution.commandId,
+        })
+        // Conservatism: an unresolvable observation (provider error) throws
+        // and is contained below — it never reaps.
+        if (observation.state === 'running') continue
+        let snapshots: { outcome: 'confirmed' | 'unknown'; deleted?: number; error?: string } = {
+          outcome: 'unknown',
+          error: 'provider did not report the snapshot purge',
+        }
+        if (owner.recovery !== undefined) {
+          const reap = await owner.recovery.reap({
+            provider: owner.name,
+            ref: execution.environmentId,
+            path: execution.environmentId,
+            branch: '',
+          })
+          snapshots = {
+            outcome: reap.snapshots.outcome === 'unknown' ? 'unknown' : 'confirmed',
+            ...(reap.snapshots.deleted !== undefined ? { deleted: reap.snapshots.deleted } : {}),
+            ...(reap.snapshots.error !== undefined ? { error: reap.snapshots.error } : {}),
+          }
+        } else {
+          await owner.release({
+            provider: owner.name,
+            ref: execution.environmentId,
+            path: execution.environmentId,
+            branch: '',
+          })
+        }
+        await this.deps.store.appendRepo(this.deps.repo, {
+          actor: DISPATCHER,
+          type: 'harvest.execution.released',
+          payload: {
+            execution: execution.execution,
+            environmentId: execution.environmentId,
+            snapshots,
+          },
+        })
+      } catch {
+        // An unobservable harvest execution must not stall the rest of the
+        // settlement stage; the next tick retries it.
       }
     }
   }

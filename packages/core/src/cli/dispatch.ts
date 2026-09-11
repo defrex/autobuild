@@ -38,7 +38,12 @@ import { DISPATCHER, humanActor } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
-import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS, reduceHarvest } from '../kernel/harvest'
+import {
+  DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
+  actionableHarvestRun,
+  decideHarvestControl,
+  reduceHarvest,
+} from '../kernel/harvest'
 import { reduceBuild } from '../kernel/reducer'
 import { dashboardBuildControl } from './dashboard/actions'
 import {
@@ -73,7 +78,13 @@ import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
-import type { Forge, TicketSource, WorkspaceProvider } from '../ports/types'
+import type {
+  Forge,
+  TicketSource,
+  WorkspaceHandle,
+  WorkspaceProvider,
+  WorkspaceReapOutcome,
+} from '../ports/types'
 import { createWorkspaceRuntime, type WorkspaceRuntime } from '../ports/workspace/create'
 import { GitWorktreeProvider } from '../ports/workspace/git-worktree'
 import { LocalBuildExecution } from '../ports/workspace/local-build-execution'
@@ -91,7 +102,9 @@ import {
   parseDiagnostic,
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
-import { scanUnclaimedObservations } from '../processes/harvest'
+import { scanUnclaimedObservations, evaluateHarvestPressure } from '../processes/harvest'
+import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
+import type { HarvestExecution } from '../ports/workspace/harvest-execution'
 import {
   controlHarvestRun as applyHarvestRunControl,
   toggleHarvestGate as applyHarvestGateToggle,
@@ -538,6 +551,18 @@ class DispatchLoop {
   private acceptingBuildLaunches = true
   /** Process-local fast path; the repository lease is the cross-process gate. */
   private harvestInFlight: Promise<void> | undefined
+  /** Live hosted-harvest execution: the environment-supervised handle whose
+   * completion chain classifies, releases, and journals the close fact.
+   * Teardown detaches it — the guest keeps running and the next invocation
+   * settles the execution from the Store plus provider liveness. The detach
+   * flag is a shared cell also closed over by the completion chain, so the
+   * chain still observes the detach after this field is cleared. */
+  private hostedHarvest:
+    | { execution: string; handle: BuildExecutionHandle; detached: { value: boolean } }
+    | undefined
+  /** Execution ids THIS process supervises; the dispatcher's harvest
+   * settlement stage skips them (their completion chain owns the facts). */
+  private readonly hostedHarvestExecutions = new Set<string>()
   /** Outcomes settle outside Dispatcher.tick(), then merge into the next
    * report publication (or a settlement-only publication during teardown). */
   private pendingHarvest = {
@@ -704,6 +729,7 @@ class DispatchLoop {
       nameSlug,
       ids: wiring.ids,
       clock: wiring.clock,
+      activeHarvestExecutions: () => this.hostedHarvestExecutions,
       // Durable supervision: settle publication from the log-backed guard and
       // skip foreign-execution settlement for builds this process supervises.
       settlePublication: (slug) => this.settlePendingPublication(slug),
@@ -1744,11 +1770,33 @@ class DispatchLoop {
 
   /** Start one repository workflow without blocking the dispatcher tick.
    * Process-local tracking prevents redundant contenders and lets `--once`
-   * drain it; the repository lease excludes other dispatch processes. */
+   * drain it; the repository lease excludes other dispatch processes.
+   * With a provider `harvestExecution` capability the same workflow is
+   * launched in a disposable guest environment instead: still fire-and-forget
+   * within the tick and single-flight, and still drained by `--once` (the
+   * existing drain semantics), so one invocation reaches a durable boundary.
+   * Watch teardown detaches the local wait — the guest keeps running and a
+   * later invocation settles the execution from the Store plus provider
+   * liveness. */
   private launchHarvest(): void {
     // Do not even start a second local contender while one is active. A second
     // dispatch process is independently excluded by the repository lease.
     if (this.harvestInFlight !== undefined) return
+
+    const hosted = this.wiring.workspaces.harvestExecution
+    if (hosted !== undefined) {
+      const execution = `${this.host}-harvest-${this.wiring.ids('inst')}`
+      this.hostedHarvestExecutions.add(execution)
+      let tracked: Promise<void>
+      tracked = this.launchHostedHarvest(hosted, execution).finally(() => {
+        this.hostedHarvestExecutions.delete(execution)
+        this.inFlight.delete(tracked)
+        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
+      })
+      this.harvestInFlight = tracked
+      this.inFlight.add(tracked)
+      return
+    }
 
     const { store, tickets, runtimes, ids, uuids, clock, storeRef, token } = this.wiring
     const runner = new HarvestRunner({
@@ -1813,6 +1861,226 @@ class DispatchLoop {
       })
     this.harvestInFlight = tracked
     this.inFlight.add(tracked)
+  }
+
+  /** Hosted harvest lifecycle: threshold gate → provision + launch in the
+   * guest → durable execution identity → supervise → classify from the
+   * journal → release the environment → durable close. Fire-and-forget by
+   * contract: provisioning takes minutes and must never stall a tick; the
+   * single-flight guard covers the whole span. Every failure is contained
+   * and retried on a later threshold tick. */
+  private async launchHostedHarvest(
+    harvestExecution: HarvestExecution,
+    execution: string,
+  ): Promise<void> {
+    const { store, storeRef } = this.wiring
+    const repo = this.repoIdentity
+    let handle: BuildExecutionHandle | undefined
+    let startedSeq: number | undefined
+    // Shared with `stopHostedHarvest` through the `hostedHarvest` entry: a
+    // detach must stay observable to the completion chain even after the
+    // entry is cleared, or the chain would classify and reap a live guest.
+    const detached = { value: false }
+    try {
+      // Threshold gate before any provisioning — with resume precedence. The
+      // runner's real check runs in the guest after a full provisioning
+      // chain, and its order is resume-first, pressure-second: it settles
+      // control and resumes an actionable/open run before any pressure
+      // check. The host gate replicates that order, or an interrupted run
+      // whose unclaimed pressure reads below threshold would never
+      // re-provision (durable recovery). Only the no-open-run case pays for
+      // the pure Store-read pressure check; the guest rescans authoritatively
+      // once provisioned, so a threshold crossing between gate and guest scan
+      // is never suppressed by this check.
+      const record = await store.getRepo(repo)
+      const events = record === null ? [] : await store.getRepoEvents(repo)
+      const state = reduceHarvest(events)
+      const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
+      const resumePending =
+        actionableHarvestRun(state) !== undefined ||
+        state.pendingCommands.length > 0 ||
+        control.kind === 'acknowledge' ||
+        control.kind === 'request-recovery' ||
+        control.kind === 'exhaust-recovery'
+      if (!resumePending) {
+        const scan = await scanUnclaimedObservations(store, repo)
+        const pressure = evaluateHarvestPressure(scan, this.currentConfig().config.policy)
+        if (pressure.trigger === undefined) return
+      }
+
+      handle = await harvestExecution.start({
+        storeRef,
+        repo,
+        instance: execution,
+        baseBranch: this.currentConfig().config.baseBranch,
+        ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
+      })
+      const identity = handle.identity
+      if (
+        identity === undefined ||
+        identity.provider === undefined ||
+        identity.environmentId === undefined ||
+        identity.commandId === undefined
+      ) {
+        throw new Error(
+          'harvest execution launch returned no durable identity; refusing to supervise an unobservable execution',
+        )
+      }
+      this.hostedHarvest = { execution, handle, detached }
+      const started = await store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.started',
+        payload: {
+          execution,
+          provider: identity.provider,
+          environmentId: identity.environmentId,
+          ...(identity.sessionId !== undefined ? { sessionId: identity.sessionId } : {}),
+          commandId: identity.commandId,
+        },
+      })
+      startedSeq = started.seq
+
+      await handle.completion
+      if (detached.value) {
+        // Teardown detached the local wait; the guest keeps running and the
+        // execution stays open for durable settlement by a later invocation.
+        return
+      }
+      // The guest exit code carries no pipeline outcome: classify from the
+      // repository journal, feed the same counters a local run reports, then
+      // release the environment and journal the close with the snapshot
+      // purge outcome. Releasing on every guest exit also covers parked runs
+      // — a paused run resumes later in a fresh environment.
+      const result = await this.classifyHostedHarvestOutcome(repo, startedSeq!)
+      this.recordHarvestResult(result)
+      if (
+        !this.stopped &&
+        (result.outcome === 'completed' ||
+          result.outcome === 'escalated' ||
+          result.outcome === 'failed')
+      ) {
+        const line = `harvest ${result.run} ${result.outcome}`
+        if (result.outcome === 'failed') this.failureNotice(line)
+        else this.say(line)
+      }
+      await this.releaseHostedHarvest(repo, execution, handle)
+    } catch (error) {
+      // Launch or wait failure: best-effort release attempt, the existing
+      // durable failure event + warn path, retried on a later threshold tick.
+      // An unmarked leftover from a mid-provision death is deleted by the
+      // next run's get-or-create; a marked-but-unlaunched one is reused.
+      if (handle !== undefined) {
+        try {
+          await this.releaseHostedHarvest(repo, execution, handle)
+        } catch {
+          // Left open: durable settlement re-proves and reaps it later.
+        }
+      }
+      this.pendingHarvest.harvestFailed += 1
+      if (this.opts.kernelRunId !== undefined) {
+        await this.appendStatus({
+          actor: DISPATCHER,
+          type: 'dispatcher.harvest-runner-failed',
+          payload: {
+            run: this.opts.kernelRunId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        })
+      }
+      if (!this.stopped) {
+        this.warn(
+          `harvest runner failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    } finally {
+      this.hostedHarvest = undefined
+    }
+  }
+
+  /** Classify the outcome of one finished hosted execution from the
+   * repository journal. */
+  private async classifyHostedHarvestOutcome(
+    repo: string,
+    startedSeq: number,
+  ): Promise<HarvestRunnerResult> {
+    const { store } = this.wiring
+    const events = await store.getRepoEvents(repo)
+    const record = await store.getRepo(repo)
+    return classifyHarvestOutcome(events, {
+      executionStartedSeq: startedSeq,
+      adoptedHolder: this.repoLeaseHolder,
+      leaseHolder: record?.lease?.holder,
+      maxRecoveryAttempts: this.maxHarvestRecoveryAttempts,
+    })
+  }
+
+  /** Release the disposable environment through the owning provider's reap
+   * path and journal the close fact with the snapshot purge outcome. */
+  private async releaseHostedHarvest(
+    repo: string,
+    execution: string,
+    handle: BuildExecutionHandle,
+  ): Promise<void> {
+    const identity = handle.identity
+    if (identity === undefined || identity.environmentId === undefined) return
+    const workspaceHandle: WorkspaceHandle = {
+      provider: identity.provider,
+      ref: identity.environmentId,
+      path: identity.environmentId,
+      branch: '',
+    }
+    const reap = await this.reapHostedWorkspace(workspaceHandle)
+    await this.wiring.store.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'harvest.execution.released',
+      payload: {
+        execution,
+        environmentId: identity.environmentId,
+        snapshots: {
+          outcome: reap.snapshots.outcome === 'unknown' ? 'unknown' : 'confirmed',
+          ...(reap.snapshots.deleted !== undefined ? { deleted: reap.snapshots.deleted } : {}),
+          ...(reap.snapshots.error !== undefined ? { error: reap.snapshots.error } : {}),
+        },
+      },
+    })
+  }
+
+  /** Reap through the provider's recovery capability when it reports the
+   * snapshot purge outcome; fall back to plain release otherwise (the close
+   * fact then carries an unconfirmed purge). */
+  private async reapHostedWorkspace(handle: WorkspaceHandle): Promise<WorkspaceReapOutcome> {
+    const provider = this.wiring.workspaces
+    if (provider.name !== handle.provider) {
+      const retired = this.wiring.retiredWorkspaces?.find(
+        (candidate) => candidate.provider.name === handle.provider,
+      )?.provider
+      if (retired === undefined) throw new Error(`no provider owns harvest workspace ${handle.ref}`)
+      if (retired.recovery !== undefined) return retired.recovery.reap(handle)
+      await retired.release(handle)
+    } else if (provider.recovery !== undefined) {
+      return provider.recovery.reap(handle)
+    } else {
+      await provider.release(handle)
+    }
+    return {
+      outcome: 'confirmed',
+      snapshots: { outcome: 'unknown', error: 'provider did not report the snapshot purge' },
+    }
+  }
+
+  /** Teardown: detach the local wait only. The guest keeps running and
+   * heartbeating its adopted repository lease; the execution stays open and
+   * a later invocation settles it from the Store plus provider liveness. */
+  private async stopHostedHarvest(): Promise<void> {
+    const entry = this.hostedHarvest
+    if (entry === undefined) return
+    entry.detached.value = true
+    this.hostedHarvest = undefined
+    try {
+      await entry.handle.detach()
+    } catch {
+      // Detach is best-effort: an unresolvable wait still exits.
+    }
   }
 
   private recordHarvestResult(result: HarvestRunnerResult): void {
@@ -2179,12 +2447,13 @@ class DispatchLoop {
     return this.opts.signal?.aborted === true || this.inputStop.signal.aborted
   }
 
-  /** `--once` awaits only local-parent executions and harvest: an
-   * environment-supervised execution keeps running in its guest, and a later
-   * invocation settles its completion from the Store alone. An invocation
-   * deadline stops the await loop; the remaining `local-parent` executions
-   * are then stopped and reaped by the `stopBuildExecutions()` teardown,
-   * exactly as a deliberately stopped watch run. */
+  /** `--once` awaits only local-parent executions and locally run harvest: an
+   * environment-supervised execution (remote build or hosted harvest) keeps
+   * running in its guest, and a later invocation settles it from the Store
+   * alone. An invocation deadline stops the await loop; the remaining
+   * `local-parent` executions are then stopped and reaped by the
+   * `stopBuildExecutions()` teardown, exactly as a deliberately stopped watch
+   * run. */
   private async drainInFlight(): Promise<void> {
     for (;;) {
       const pending = [...this.inFlight].filter(
@@ -2791,6 +3060,7 @@ class DispatchLoop {
         }
       } finally {
         await this.stopBuildExecutions()
+        await this.stopHostedHarvest()
         // Signal provisioning continuations and release their leases before
         // the repository lease, so the next supervisor adopts immediately.
         await this.dispatcher.stopProvisioning()
@@ -2837,6 +3107,7 @@ class DispatchLoop {
       }
     } finally {
       await this.stopBuildExecutions()
+      await this.stopHostedHarvest()
       // Signal provisioning continuations and release their leases before
       // the repository lease, so the next supervisor adopts immediately.
       await this.dispatcher.stopProvisioning()
