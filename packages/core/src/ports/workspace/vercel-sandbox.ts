@@ -221,8 +221,38 @@ export interface VercelSandboxFacade {
   deleteSnapshot(snapshotId: string, signal?: AbortSignal): Promise<void>
 }
 
-function sdkCredentials(env: Record<string, string | undefined>): Record<string, string> {
-  if (env.VERCEL_OIDC_TOKEN) return {}
+/** The team and project a Vercel OIDC token was issued for, read from its
+ * unverified payload exactly as the Sandbox SDK does (`owner_id`,
+ * `project_id`). Null when the value is not a decodable JWT carrying both. */
+export function vercelOidcTokenScope(token: string): { teamId: string; projectId: string } | null {
+  const payload = token.split('.')[1]
+  if (payload === undefined || payload === '') return null
+  try {
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+      owner_id?: unknown
+      project_id?: unknown
+    }
+    if (typeof claims.owner_id !== 'string' || typeof claims.project_id !== 'string') return null
+    return { teamId: claims.owner_id, projectId: claims.project_id }
+  } catch {
+    return null
+  }
+}
+
+/** Credentials handed to every Sandbox SDK call. An OIDC token in the
+ * dispatcher environment is passed explicitly with the team and project from
+ * its claims — the SDK's own `VERCEL_OIDC_TOKEN` lookup reads the process
+ * environment, which is not where a hosted invocation carries its token (a
+ * Vercel Function receives it as a request header). A token whose claims
+ * cannot be read is left to the SDK's own resolution. */
+export function vercelSdkCredentials(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const oidcToken = env.VERCEL_OIDC_TOKEN
+  if (oidcToken) {
+    const scope = vercelOidcTokenScope(oidcToken)
+    return scope === null ? {} : { token: oidcToken, ...scope }
+  }
   const token = env.VERCEL_TOKEN
   const teamId = env.VERCEL_TEAM_ID
   const projectId = env.VERCEL_PROJECT_ID
@@ -267,7 +297,7 @@ export function isMissingVercelSandbox(error: unknown): boolean {
 export function createVercelSdkFacade(
   env: Record<string, string | undefined>,
 ): VercelSandboxFacade {
-  const credentials = sdkCredentials(env)
+  const credentials = vercelSdkCredentials(env)
   return {
     async get(name, signal) {
       try {

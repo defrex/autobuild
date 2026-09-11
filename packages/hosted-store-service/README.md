@@ -176,7 +176,8 @@ for the schedule, incident pauses, and behavior details. Dispatcher variables
   service environment to the guest session untouched.
 
 The Sandbox SDK authenticates with the deployment's own OIDC identity inside
-Vercel functions (`VERCEL_OIDC_TOKEN` is injected), so **no `VERCEL_TOKEN`
+Vercel functions (the `x-vercel-oidc-token` request header, forwarded to the
+kernel as `VERCEL_OIDC_TOKEN` for the tick), so **no `VERCEL_TOKEN`
 belongs on the service**. Each invocation deposits a
 `dispatcher-effective-config` repository artifact and durable tick/run facts
 under the `hosted-dispatcher-<uuid>` run id — the web dashboard shows hosted

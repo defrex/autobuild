@@ -127,8 +127,13 @@ subject to retention.
 
 ## Sandbox authentication
 
-Inside a Vercel function the Sandbox SDK authenticates with the deployment's
-own OIDC identity (`VERCEL_OIDC_TOKEN` is injected automatically). No
+Inside a Vercel Function the Sandbox SDK authenticates with the deployment's
+own OIDC identity: Vercel hands each invocation its token on the
+`x-vercel-oidc-token` request header (not as a `VERCEL_OIDC_TOKEN` environment
+variable), and the endpoint passes it to the kernel under that name for the
+duration of the tick. The tick log line reports which credential the kernel
+presents (`sandboxAuth=oidc-header`, `oidc-env`, `token`, or `none`); `none`
+means the project has OIDC federation disabled (Settings → Security). No
 long-lived `VERCEL_TOKEN` belongs on the service. Guests never receive a Vercel
 token or forge credential; they authenticate to the Store with the short-TTL
 deployment operator token the dispatcher mints for the tick

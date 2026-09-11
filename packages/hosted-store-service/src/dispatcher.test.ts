@@ -570,3 +570,63 @@ describe('hosted dispatcher runtime logging', () => {
     }
   })
 })
+
+describe('hosted dispatcher sandbox credentials', () => {
+  const url = 'https://hosted.example.test/api/dispatch'
+  const authorized = { authorization: 'Bearer cron-secret' }
+  const headerToken = 'header.oidc.token'
+
+  function capture() {
+    const envs: Array<Record<string, string | undefined> | undefined> = []
+    const lines: string[] = []
+    const errors: string[] = []
+    const options: HostedDispatcherOptions = {
+      clock,
+      log: (line) => lines.push(line),
+      logError: (line) => errors.push(line),
+      dispatch: async (opts) => {
+        envs.push(opts.env)
+      },
+    }
+    return { envs, lines, errors, options }
+  }
+
+  test('the x-vercel-oidc-token request header becomes the kernel VERCEL_OIDC_TOKEN', async () => {
+    const { envs, lines, errors, options } = capture()
+    const response = await createDispatcherEndpoint({ ...options, env: baseEnv }).fetch(
+      new Request(url, { headers: { ...authorized, 'x-vercel-oidc-token': ` ${headerToken} ` } }),
+    )
+    expect(response.status).toBe(200)
+    expect(envs).toHaveLength(2)
+    for (const env of envs) expect(env?.VERCEL_OIDC_TOKEN).toBe(headerToken)
+    expect(lines).toContainEqual(expect.stringContaining('sandboxAuth=oidc-header'))
+    // The token itself never reaches a log line or the response body.
+    expect([...lines, ...errors].join('\n')).not.toContain(headerToken)
+    expect(await response.text()).not.toContain(headerToken)
+  })
+
+  test('an environment VERCEL_OIDC_TOKEN keeps precedence over the header', async () => {
+    const { envs, lines, options } = capture()
+    await createDispatcherEndpoint({
+      ...options,
+      env: { ...baseEnv, VERCEL_OIDC_TOKEN: 'env.oidc.token' },
+    }).fetch(new Request(url, { headers: { ...authorized, 'x-vercel-oidc-token': headerToken } }))
+    expect(envs[0]?.VERCEL_OIDC_TOKEN).toBe('env.oidc.token')
+    expect(lines).toContainEqual(expect.stringContaining('sandboxAuth=oidc-env'))
+  })
+
+  test('without a header or environment token the kernel env carries none and the log says so', async () => {
+    const { envs, lines, options } = capture()
+    await createDispatcherEndpoint({ ...options, env: baseEnv }).fetch(
+      new Request(url, { headers: authorized }),
+    )
+    expect(envs[0]?.VERCEL_OIDC_TOKEN).toBeUndefined()
+    expect(lines).toContainEqual(expect.stringContaining('sandboxAuth=none'))
+    const { lines: durable, options: durableOptions } = capture()
+    await createDispatcherEndpoint({
+      ...durableOptions,
+      env: { ...baseEnv, VERCEL_TOKEN: 't', VERCEL_TEAM_ID: 'team', VERCEL_PROJECT_ID: 'prj' },
+    }).fetch(new Request(url, { headers: authorized }))
+    expect(durable).toContainEqual(expect.stringContaining('sandboxAuth=token'))
+  })
+})

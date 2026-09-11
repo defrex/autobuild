@@ -19,6 +19,8 @@ import {
   VercelSandboxProvider,
   harvestSandboxName,
   isMissingVercelSandbox,
+  vercelOidcTokenScope,
+  vercelSdkCredentials,
   packageAutobuildDistribution,
   sourceCheckoutPath,
   type VercelSandboxFacade,
@@ -2133,5 +2135,43 @@ describe('VercelSandboxProvider harvestExecution', () => {
       }),
     ).rejects.toThrow(/remote base nope does not exist/)
     expect(h.creates).toBe(0)
+  })
+})
+
+describe('vercelSdkCredentials', () => {
+  const oidc = (claims: Record<string, unknown>): string =>
+    `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`
+
+  test('an OIDC token is passed explicitly with the team and project from its claims', () => {
+    const token = oidc({ owner_id: 'team_123', project_id: 'prj_456', exp: 1 })
+    expect(vercelOidcTokenScope(token)).toEqual({ teamId: 'team_123', projectId: 'prj_456' })
+    // The token wins over a durable token in the same environment, and the
+    // SDK receives all three fields so it never consults the process env.
+    expect(
+      vercelSdkCredentials({
+        VERCEL_OIDC_TOKEN: token,
+        VERCEL_TOKEN: 'durable',
+        VERCEL_TEAM_ID: 'other-team',
+        VERCEL_PROJECT_ID: 'other-project',
+      }),
+    ).toEqual({ token, teamId: 'team_123', projectId: 'prj_456' })
+  })
+
+  test('an OIDC token whose claims cannot be read is left to the SDK', () => {
+    expect(vercelOidcTokenScope('not-a-jwt')).toBeNull()
+    expect(
+      vercelOidcTokenScope(`a.${Buffer.from('{"sub":"x"}').toString('base64url')}.c`),
+    ).toBeNull()
+    expect(vercelOidcTokenScope('a.!!!.c')).toBeNull()
+    expect(vercelSdkCredentials({ VERCEL_OIDC_TOKEN: 'not-a-jwt' })).toEqual({})
+  })
+
+  test('durable credentials require all three variables', () => {
+    expect(
+      vercelSdkCredentials({ VERCEL_TOKEN: 't', VERCEL_TEAM_ID: 'team', VERCEL_PROJECT_ID: 'prj' }),
+    ).toEqual({ token: 't', teamId: 'team', projectId: 'prj' })
+    expect(() => vercelSdkCredentials({ VERCEL_TOKEN: 't', VERCEL_TEAM_ID: 'team' })).toThrow(
+      /requires VERCEL_OIDC_TOKEN or VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID/,
+    )
   })
 })

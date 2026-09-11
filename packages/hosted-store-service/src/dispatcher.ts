@@ -294,8 +294,32 @@ function errorDetail(error: unknown): string {
  * another. Overlap correctness lives in the durable journal: the repository
  * supervisor lease makes a loser record `dispatcher.tick-yielded`; the
  * response does not re-derive it. */
+/** Per-invocation credentials that arrive with the request rather than the
+ * environment. */
+export interface HostedDispatcherInvocation {
+  /** The Vercel OIDC token a Vercel Function receives on the
+   * `x-vercel-oidc-token` request header. It becomes the kernel's
+   * `VERCEL_OIDC_TOKEN` when the environment carries none, so the Sandbox SDK
+   * authenticates as the deployment. Never logged. */
+  oidcToken?: string
+}
+
+/** Which Sandbox credential the kernel will present, for the tick log line. */
+function sandboxAuthSource(
+  env: HostedDispatcherEnv,
+  invocation: HostedDispatcherInvocation,
+): 'oidc-env' | 'oidc-header' | 'token' | 'none' {
+  if (env.VERCEL_OIDC_TOKEN) return 'oidc-env'
+  if (invocation.oidcToken) return 'oidc-header'
+  if (env.VERCEL_TOKEN && env.VERCEL_TEAM_ID && env.VERCEL_PROJECT_ID) return 'token'
+  return 'none'
+}
+
 export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
-  tick(invocation?: string): Promise<HostedDispatcherTickSummary>
+  tick(
+    invocation?: string,
+    credentials?: HostedDispatcherInvocation,
+  ): Promise<HostedDispatcherTickSummary>
 } {
   const env = options.env ?? process.env
   const clock: Clock = options.clock ?? (() => new Date())
@@ -303,12 +327,16 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
   const log = options.log ?? ((line: string) => console.log(line))
   const logError = options.logError ?? ((line: string) => console.error(line))
   return {
-    async tick(invocation = invocationId()): Promise<HostedDispatcherTickSummary> {
+    async tick(
+      invocation = invocationId(),
+      credentials: HostedDispatcherInvocation = {},
+    ): Promise<HostedDispatcherTickSummary> {
       const config = parseHostedDispatcherEnv(env)
       const now = clock().getTime()
       const deadlineAt = now + config.budgetSeconds * 1000
+      const sandboxAuth = sandboxAuthSource(env, credentials)
       log(
-        `${LOG_PREFIX} ${invocation}: tick start repositories=${config.repositories.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin}`,
+        `${LOG_PREFIX} ${invocation}: tick start repositories=${config.repositories.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin} sandboxAuth=${sandboxAuth}`,
       )
       const repositories: HostedDispatcherRepositoryOutcome[] = []
       for (const repository of config.repositories) {
@@ -336,6 +364,13 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           ...env,
           AB_STORE: config.origin,
           AB_TOKEN: token,
+        }
+        // A Vercel Function receives the deployment's OIDC token as a request
+        // header, not as VERCEL_OIDC_TOKEN; hand it to the kernel under that
+        // name so the Sandbox SDK authenticates as the deployment. An explicit
+        // environment token keeps precedence.
+        if (!childEnv.VERCEL_OIDC_TOKEN && credentials.oidcToken) {
+          childEnv.VERCEL_OIDC_TOKEN = credentials.oidcToken
         }
         // Per-repository forge identity: both variables are set to the
         // override so no reader (`githubTokenFromEnv` prefers GITHUB_TOKEN,
@@ -438,7 +473,11 @@ export function createDispatcherEndpoint(options: HostedDispatcherOptions = {}):
         )
       }
       try {
-        const summary = await dispatcher.tick(invocation)
+        const oidcToken = request.headers.get('x-vercel-oidc-token')?.trim()
+        const summary = await dispatcher.tick(
+          invocation,
+          oidcToken !== undefined && oidcToken !== '' ? { oidcToken } : {},
+        )
         log(`${LOG_PREFIX} ${invocation}: 200 ok ms=${Date.now() - startedAt}`)
         return Response.json(
           { ok: true, repositories: summary.repositories },
