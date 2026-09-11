@@ -28,9 +28,10 @@ import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin
 import {
   GitHubApiError,
   createGitHubFetchTransport,
-  resolveGitHubToken,
+  githubTokenSource,
   restPlanLimitation,
   type GitHubRequest,
+  type GitHubTokenSource,
   type GitHubRequestOpts,
   type GitHubResponse,
 } from './github-transport'
@@ -57,10 +58,11 @@ export interface ExecResult {
   exitCode: number
 }
 
-/** Same seam shape as the workspace module: argv array, cwd, no shell. */
+/** Same seam shape as the workspace module: argv array, optional cwd, no
+ * shell. Git commands name their cwd; the gh credential probe needs none. */
 export type Exec = (
   cmd: string[],
-  opts: { cwd: string; signal?: AbortSignal },
+  opts: { cwd?: string; signal?: AbortSignal },
 ) => Promise<ExecResult>
 
 export const bunExec: Exec = async (cmd, opts) => {
@@ -505,7 +507,10 @@ export class GitHubForge implements Forge {
     opts: {
       transport?: GitHubRequest
       exec?: Exec
-      token?: string
+      /** Literal token, or a resolver (see `githubTokenSource`). Absent: the
+       * adapter resolves `GITHUB_TOKEN`, `GH_TOKEN`, then the gh CLI login
+       * lazily through its own exec seam. */
+      token?: GitHubTokenSource
       repository?: string
       repoRoot?: string
       env?: Readonly<Record<string, string | undefined>>
@@ -515,20 +520,12 @@ export class GitHubForge implements Forge {
     this.env = opts.env ?? {}
     // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
     // stored login, probed lazily through this adapter's exec seam. The
-    // dispatcher resolves once at wiring and passes a literal; this lazy path
-    // serves the other constructors (build child, CLI commands).
+    // dispatcher resolves once at wiring and seeds a source with that answer;
+    // this default serves the other constructors (build child, CLI commands).
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({
-        token:
-          opts.token !== undefined
-            ? opts.token
-            : async () =>
-                (
-                  await resolveGitHubToken(this.env, (cmd, probe) =>
-                    this.exec(cmd, { cwd: opts.repoRoot ?? process.cwd(), signal: probe.signal }),
-                  )
-                ).token,
+        token: opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec),
       })
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository

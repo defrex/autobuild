@@ -6,6 +6,7 @@ import {
   GitHubApiError,
   githubTokenFromEnv,
   githubTokenFromGhCli,
+  githubTokenSource,
   resolveGitHubToken,
   type GitHubCliExec,
 } from './github-transport'
@@ -270,7 +271,7 @@ describe('createGitHubFetchTransport token resolution', () => {
     }
   })
 
-  test('forgets a memoized token after 401 Unauthorized so a re-login is picked up', async () => {
+  test('re-resolves after 401 Unauthorized at most once per interval, so a re-login is picked up without a spawn per request', async () => {
     let status = 401
     const stub = stubFetch(
       () =>
@@ -279,21 +280,51 @@ describe('createGitHubFetchTransport token resolution', () => {
           headers: { 'Content-Type': 'application/json' },
         }),
     )
-    const tokens = ['gho_revoked', 'gho_fresh']
+    let clock = 5_000_000
+    let resolutions = 0
     try {
-      const transport = createGitHubFetchTransport({ token: async () => tokens.shift() })
+      const transport = createGitHubFetchTransport({
+        now: () => clock,
+        token: async () => {
+          resolutions += 1
+          return resolutions === 1 ? 'gho_revoked' : 'gho_fresh'
+        },
+      })
+      // Inside the interval the stale token keeps failing without re-resolving.
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      expect(resolutions).toBe(1)
+      // Past the interval, the next 401 drops it and the following request resolves afresh.
+      clock += CREDENTIAL_MISS_TTL_MS
       await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
       status = 204
       await transport('GET', 'user')
-      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+      expect(resolutions).toBe(2)
+      expect((stub.calls[2]!.init.headers as Record<string, string>).Authorization).toBe(
         'Bearer gho_revoked',
       )
-      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBe(
+      expect((stub.calls[3]!.init.headers as Record<string, string>).Authorization).toBe(
         'Bearer gho_fresh',
       )
     } finally {
       stub.restore()
     }
+  })
+
+  test('githubTokenSource hands out its seed once, then resolves afresh', async () => {
+    const probes: string[][] = []
+    const exec: GitHubCliExec = async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout: 'gho_later\n', stderr: '' }
+    }
+    const source = githubTokenSource({}, exec, { token: 'gho_seed' })
+    expect(await source()).toBe('gho_seed')
+    expect(probes).toEqual([])
+    expect(await source()).toBe('gho_later')
+    expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
+    const missSeeded = githubTokenSource({}, exec, { token: undefined, reason: 'nothing yet' })
+    expect(await missSeeded()).toBeUndefined()
+    expect(await missSeeded()).toBe('gho_later')
   })
 
   test('retries a source whose probe rejected instead of caching the failure', async () => {

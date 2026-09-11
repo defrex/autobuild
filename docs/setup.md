@@ -183,7 +183,9 @@ requires an HTTPS `AB_STORE` plus `AB_TOKEN`, an exported `GITHUB_TOKEN` or
 host has no gh and no keyring, and the only workspace provider it can run,
 `vercel-sandbox`, injects that same exported token for publication. The gh CLI
 fallback (`GITHUB_TOKEN`, then `GH_TOKEN`, then the login stored by `gh auth
-login`) is a checkout-mode convenience for a local dispatcher. The
+login`) is a checkout-mode convenience for a local dispatcher whose workspace
+provider is not `vercel-sandbox`; that provider requires the exported token in
+every mode. The
 startup configuration — and every per-tick reload — is `autobuild.toml` read
 from the forge at the current `baseBranch` (the first read resolves against the
 repository's default branch), so a push to the base branch is honored by a

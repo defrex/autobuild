@@ -1,7 +1,10 @@
 /**
  * GitHub REST transport seam, shared by the forge adapter and its PR
- * attachment hosting. Kept dependency-free so both can import it without a
- * cycle, and so tests inject a fake transport instead of shelling `gh`.
+ * attachment hosting, plus the credential resolution every GitHub caller
+ * shares. Imports nothing from the forge module so both can import it
+ * without a cycle (the workspace module's `spawnExec` is the only production
+ * dependency), and tests inject a fake transport or exec seam instead of
+ * shelling `gh`.
  */
 import { z } from 'zod'
 import { spawnExec } from '../workspace/git-worktree'
@@ -80,22 +83,22 @@ export const restPlanLimitation = z
   .passthrough()
 
 /** Where a transport's bearer token comes from: a literal, nothing (anonymous
- * requests), or a resolver the transport invokes lazily. A resolved token is
- * memoized until a request answers `401 Unauthorized` (a rotated or revoked
- * `gh auth login`), after which the next request resolves again. A miss is
- * memoized for {@link CREDENTIAL_MISS_TTL_MS} so a transient failure (a
- * momentarily locked keyring) is neither frozen into anonymous access for the
- * process lifetime nor re-probed on every single request. */
+ * requests), or a resolver the transport invokes lazily. The transport asks a
+ * resolver again at most once per {@link CREDENTIAL_MISS_TTL_MS}: after a miss
+ * (a momentarily locked keyring is neither frozen into anonymous access for
+ * the process lifetime nor re-probed on every request), and after a request
+ * answers `401 Unauthorized` (a rotated or revoked `gh auth login` is picked
+ * up without a restart, while a revoked-but-still-stored login cannot drive
+ * a gh spawn per request). */
 export type GitHubTokenSource = string | undefined | (() => Promise<string | undefined>)
 
-/** How long a credential miss stays memoized before the resolver is asked
- * again. Bounds the gh probe rate for a transport that never finds a token. */
+/** Minimum interval between two invocations of a token resolver. */
 export const CREDENTIAL_MISS_TTL_MS = 60_000
 
 /** Production transport: token-authenticated fetch against api.github.com.
- * Callers pass a literal token or a resolver over {@link resolveGitHubToken}
- * (env token, then gh CLI login); no `Authorization` header is sent when
- * neither yields one. */
+ * Callers pass a literal token or a resolver such as
+ * {@link githubTokenSource}; no `Authorization` header is sent when neither
+ * yields one. */
 export function createGitHubFetchTransport(opts: {
   token?: GitHubTokenSource
   apiBase?: string
@@ -104,22 +107,23 @@ export function createGitHubFetchTransport(opts: {
   const source = opts.token
   const now = opts.now ?? Date.now
   let resolved: Promise<string | undefined> | undefined
-  let missedAt: number | undefined
+  /** When the current answer arrived; `undefined` while one is in flight. */
+  let resolvedAt: number | undefined
+  let missed = false
+  const stale = (): boolean =>
+    resolvedAt !== undefined && now() - resolvedAt >= CREDENTIAL_MISS_TTL_MS
   const resolveToken = (): Promise<string | undefined> => {
-    if (
-      resolved !== undefined &&
-      missedAt !== undefined &&
-      now() - missedAt >= CREDENTIAL_MISS_TTL_MS
-    ) {
-      resolved = undefined
-    }
+    if (missed && stale()) resolved = undefined
     if (resolved === undefined) {
-      missedAt = undefined
+      resolvedAt = undefined
+      missed = false
       const attempt = typeof source === 'function' ? source() : Promise.resolve(source)
       resolved = attempt
       attempt.then(
         (token) => {
-          if (resolved === attempt && token === undefined) missedAt = now()
+          if (resolved !== attempt) return
+          resolvedAt = now()
+          missed = token === undefined
         },
         () => {
           // A rejected probe is not an answer at all — ask again next time.
@@ -129,11 +133,11 @@ export function createGitHubFetchTransport(opts: {
     }
     return resolved
   }
+  /** 401: the memoized token is no longer accepted. Drop it once the interval
+   * has passed so the next request resolves again; inside the interval the
+   * stale token keeps failing without spawning anything. */
   const forgetToken = (): void => {
-    if (typeof source === 'function') {
-      resolved = undefined
-      missedAt = undefined
-    }
+    if (typeof source === 'function' && stale()) resolved = undefined
   }
   const base = opts.apiBase ?? GITHUB_API_BASE
   return async (method, path, request = {}) => {
@@ -252,7 +256,7 @@ export type GitHubCredential = { token: string } | { token: undefined; reason: s
  * injected exec seam: the probe is aborted through the signal and its result
  * abandoned, so a wrapper script that forked the real gh and left the pipes
  * open cannot hold the caller. The probe inherits this process's environment
- * (gh reads its own keyring), so pass the process environment as `env`. */
+ * (gh reads its own keyring) and needs no working directory. */
 export async function githubTokenFromGhCli(
   exec: GitHubCliExec = spawnExec,
   timeoutMs: number = GH_CLI_TOKEN_TIMEOUT_MS,
@@ -314,5 +318,26 @@ export async function resolveGitHubToken(
   return {
     token: undefined,
     reason: `GITHUB_TOKEN and GH_TOKEN are unset and ${probe.reason}`,
+  }
+}
+
+/** A transport token source over {@link resolveGitHubToken}. A caller that
+ * already resolved the credential once (to warn or fail at startup) passes
+ * that answer as `seed`: the source hands it out first instead of running the
+ * gh probe a second time, then resolves afresh whenever the transport asks
+ * again (after a miss interval or a 401). */
+export function githubTokenSource(
+  env: Readonly<Record<string, string | undefined>>,
+  exec?: GitHubCliExec,
+  seed?: GitHubCredential,
+): () => Promise<string | undefined> {
+  let pending = seed
+  return async () => {
+    if (pending !== undefined) {
+      const first = pending
+      pending = undefined
+      return first.token
+    }
+    return (await resolveGitHubToken(env, exec)).token
   }
 }

@@ -369,8 +369,9 @@ REST transport seam and credential resolution for the builtin GitHub forge:
 `gh auth token --hostname github.com` under a bounded deadline. A transport resolves
 lazily on its first request and memoizes a found token until a `401` (a rotated
 login) and a miss for a bounded window (never frozen into anonymous access, never
-re-probed per request). Checkout-mode dispatch probes once at wiring and warns with
-the reason when nothing answers. Origin-mode dispatch — and therefore the hosted
+re-probed per request). Checkout-mode dispatch resolves once at wiring, seeds the
+forge with that answer, and records a startup warning with the reason when nothing
+answered — surfaced like role warnings on every operator surface. Origin-mode dispatch — and therefore the hosted
 dispatcher — requires an exported token before any side effect and never consults gh:
 a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
 injects that same token.

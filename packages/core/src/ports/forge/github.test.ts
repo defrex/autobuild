@@ -71,7 +71,7 @@ const PR_REF = {
 
 describe('GitHubForge.pushBranch', () => {
   test('publishes HEAD to an explicit destination ref with no rewrite bypass (D1)', async () => {
-    const calls: { cmd: string[]; cwd: string }[] = []
+    const calls: { cmd: string[]; cwd: string | undefined }[] = []
     const forge = new GitHubForge({
       transport: async () => ({ status: 200, headers: {} }),
       exec: async (cmd, opts) => {
