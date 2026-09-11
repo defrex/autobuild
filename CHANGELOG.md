@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#319](https://github.com/defrex/autobuild/pull/319) — Compose the guest harvest ticket source like a local harvest
 - [#315](https://github.com/defrex/autobuild/pull/315) — Run harvest in a disposable sandbox on hosted dispatchers
 - [#314](https://github.com/defrex/autobuild/pull/314) — Prove auto-merge gate presence from the mechanism actually in effect
 - [#313](https://github.com/defrex/autobuild/pull/313) — Enforce event validation before prune in all store implementations
