@@ -82,6 +82,128 @@ describe('repository event catalog', () => {
     ).toThrow(/invalid payload/)
   })
 
+  test('harvest execution facts are dispatcher-authored and the started environment is optional', () => {
+    const base = {
+      run: 'h_1',
+      observations: [{ build: 'a', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    }
+    // Historical journals without the optional environment replay unchanged.
+    expect(
+      validateRepositoryEventWrite({ actor: KERNEL, type: 'harvest.started', payload: base })
+        .payload,
+    ).toEqual(base)
+    const hosted = {
+      ...base,
+      environment: { provider: 'vercel-sandbox', environmentId: 'autobuild-harvest-abc1234567' },
+    }
+    expect(
+      validateRepositoryEventWrite({ actor: KERNEL, type: 'harvest.started', payload: hosted })
+        .payload,
+    ).toEqual(hosted)
+    expect(
+      validateRepositoryEventWrite({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          ...base,
+          environment: {
+            provider: 'vercel-sandbox',
+            environmentId: 'autobuild-harvest-abc1234567',
+            sessionId: 'session-9',
+          },
+        },
+      }).payload,
+    ).toEqual({
+      ...base,
+      environment: {
+        provider: 'vercel-sandbox',
+        environmentId: 'autobuild-harvest-abc1234567',
+        sessionId: 'session-9',
+      },
+    })
+
+    const started = {
+      execution: 'host-harvest-i1',
+      provider: 'vercel-sandbox',
+      environmentId: 'autobuild-harvest-abc1234567',
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'harvest.execution.started',
+        payload: started,
+      }).payload,
+    ).toEqual(started)
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'harvest.execution.started',
+        payload: { ...started, sessionId: 'session-9', commandId: 'cmd-9' },
+      }).payload,
+    ).toEqual({ ...started, sessionId: 'session-9', commandId: 'cmd-9' })
+    for (const actor of [KERNEL, humanActor('operator')]) {
+      expect(() =>
+        validateRepositoryEventWrite({
+          actor,
+          type: 'harvest.execution.started',
+          payload: started,
+        }),
+      ).toThrow(/may not emit/)
+    }
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'harvest.execution.started',
+        payload: { ...started, extra: true },
+      }),
+    ).toThrow(/invalid payload/)
+
+    const released = {
+      execution: 'host-harvest-i1',
+      environmentId: 'autobuild-harvest-abc1234567',
+      snapshots: { outcome: 'confirmed' as const, deleted: 2 },
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'harvest.execution.released',
+        payload: released,
+      }).payload,
+    ).toEqual(released)
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'harvest.execution.released',
+        payload: {
+          execution: 'host-harvest-i1',
+          environmentId: 'autobuild-harvest-abc1234567',
+          snapshots: { outcome: 'unknown', error: 'provider unreachable' },
+        },
+      }).payload,
+    ).toEqual({
+      execution: 'host-harvest-i1',
+      environmentId: 'autobuild-harvest-abc1234567',
+      snapshots: { outcome: 'unknown', error: 'provider unreachable' },
+    })
+    for (const actor of [KERNEL, humanActor('operator')]) {
+      expect(() =>
+        validateRepositoryEventWrite({
+          actor,
+          type: 'harvest.execution.released',
+          payload: released,
+        }),
+      ).toThrow(/may not emit/)
+    }
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'harvest.execution.released',
+        payload: { ...released, snapshots: { outcome: 'absent' } },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
   test('harvest automatic request and exhaustion facts are kernel-only', () => {
     expect(
       validateRepositoryEventWrite({

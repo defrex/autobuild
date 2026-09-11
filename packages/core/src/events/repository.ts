@@ -24,6 +24,12 @@ import { providerAttemptsSchema, providerSubstitutionSchema } from './payloads'
 
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
+/** Provider-native identity of the environment one harvest run executed in. */
+const harvestEnvironmentSchema = z.strictObject({
+  provider: z.string().min(1),
+  environmentId: z.string().min(1),
+  sessionId: z.string().min(1).optional(),
+})
 const empty = z.strictObject({})
 const setting = z.strictObject({ enabled: z.boolean() })
 const dispatchRun = z.string().min(1)
@@ -116,6 +122,34 @@ export const harvestEventPayloadSchemas = {
     scan: artifactRefSchema,
     /** Optional only so historical repository journals replay without migration. */
     trigger: harvestTriggerSchema.optional(),
+    /** Where this run's sessions executed. Present on hosted harvest runs;
+     * absent on locally run ones. Optional only so historical journals replay
+     * without migration. */
+    environment: harvestEnvironmentSchema.optional(),
+  }),
+  /** Dispatcher-authored durable identity of one hosted harvest execution:
+   * the disposable environment the provider provisioned and the detached
+   * command supervising the guest runner. Written as soon as the launch
+   * succeeds so a later process can re-observe the execution without
+   * process memory. */
+  'harvest.execution.started': z.strictObject({
+    execution: z.string().min(1),
+    provider: z.string().min(1),
+    environmentId: z.string().min(1),
+    sessionId: z.string().min(1).optional(),
+    commandId: z.string().min(1).optional(),
+  }),
+  /** Dispatcher-authored close of one hosted harvest execution. Absence of a
+   * matching released fact keeps the execution open for durable settlement;
+   * the snapshot purge outcome proves absence from the provider. */
+  'harvest.execution.released': z.strictObject({
+    execution: z.string().min(1),
+    environmentId: z.string().min(1),
+    snapshots: z.strictObject({
+      outcome: z.enum(['confirmed', 'unknown']),
+      deleted: z.number().int().nonnegative().optional(),
+      error: z.string().min(1).optional(),
+    }),
   }),
   'harvest.step.started': z.strictObject({
     run: z.string().min(1),
@@ -354,6 +388,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.recovery-requested': ['kernel'],
   'harvest.recovery-exhausted': ['kernel'],
   'harvest.started': ['dispatcher', 'kernel'],
+  'harvest.execution.started': ['dispatcher'],
+  'harvest.execution.released': ['dispatcher'],
   'harvest.step.started': ['kernel'],
   'harvest.step.completed': ['kernel'],
   'harvest.session.started': ['kernel'],
