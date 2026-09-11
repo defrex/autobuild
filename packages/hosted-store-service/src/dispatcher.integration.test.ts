@@ -504,6 +504,10 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       // Forge credentials flow through from the service environment, exactly
       // as a real deployment configures them — guests never receive one.
       GITHUB_TOKEN: 'forge-token',
+      // Per-repository override (AUT-317): the served repository's credential
+      // comes from its own variable, referenced by name only.
+      HOSTED_FORGE_TOKEN: 'hosted-override-token',
+      AB_DISPATCHER_FORGE_CREDENTIALS: JSON.stringify({ [REPO]: 'HOSTED_FORGE_TOKEN' }),
     },
     clock,
     dispatch,
@@ -794,6 +798,14 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       expect(mintedTokens).toContain(token!)
     }
     expect(kernelErrors.filter((line) => line.includes('cron-secret'))).toEqual([])
+
+    // ── Per-repository forge credential override: the kernel ticked to ─────
+    // ── completion with the override in force, and neither the override ───
+    // ── value nor its variable name leaked into the journal or kernel ─────
+    // ── diagnostics. ─────────────────────────────────────────────────
+    expect(kernelErrors.join('\n')).not.toContain('hosted-override-token')
+    expect(JSON.stringify(await journal())).not.toContain('hosted-override-token')
+    expect(kernelErrors.filter((line) => line.includes('HOSTED_FORGE_TOKEN'))).toEqual([])
   } finally {
     server.stop(true)
     await backing.close()
