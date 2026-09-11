@@ -687,7 +687,13 @@ describe('GitHubForge.setAutoMerge', () => {
   test('ungated transient/conflict states defer, while an unexplained blocker fails closed with a reason', async () => {
     for (const state of ['unknown', 'dirty'] as const) {
       const { forge } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
-      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
+      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+        kind: 'deferred',
+        reason: {
+          code: 'unproven-gate-state',
+          detail: expect.stringContaining(state.toUpperCase()),
+        },
+      })
     }
     const blocked = makeForge([prView('blocked'), branchWith(fullProtection), ruleset([])])
     expect(await blocked.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
@@ -748,7 +754,13 @@ describe('GitHubForge.setAutoMerge', () => {
       graphqlApplied('enablePullRequestAutoMerge'),
       nativeState(false),
     ])
-    expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
+    expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: {
+        code: 'unproven-gate-state',
+        detail: expect.stringContaining('follow-up native read reports auto_merge unset'),
+      },
+    })
 
     const disable = makeForge([
       nativeState(true),

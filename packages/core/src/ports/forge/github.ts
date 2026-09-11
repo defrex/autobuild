@@ -880,8 +880,15 @@ export class GitHubForge implements Forge {
     }
 
     if (classicGate === undefined) {
+      // The classic response was incomplete, but a ruleset probe that
+      // succeeded and found merge-blocking rules proves the branch is gated
+      // no matter what the classic response hid — native auto-merge is the
+      // correct application either way.
+      if (rulesetGate) return { kind: 'proved', presence: 'present' }
       return unproven(
-        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}`,
+        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}; ` +
+          `the ruleset probe for branch '${baseRefName}' found no merge-blocking rules, ` +
+          'so a classic reviews requirement could not be ruled out',
       )
     }
     return {
@@ -961,12 +968,26 @@ export class GitHubForge implements Forge {
           )
           return (await this.nativeAutoMergeView(number)).enabled
             ? { kind: 'applied' }
-            : { kind: 'deferred' }
+            : {
+                kind: 'deferred',
+                reason: {
+                  code: 'unproven-gate-state',
+                  detail:
+                    'enablePullRequestAutoMerge was accepted but the follow-up native read ' +
+                    `reports auto_merge unset for PR #${number}`,
+                },
+              }
         }
         case 'direct':
           return { kind: 'ungated', headSha: view.head.sha }
         case 'deferred':
-          return { kind: 'deferred' }
+          return {
+            kind: 'deferred',
+            reason: {
+              code: 'unproven-gate-state',
+              detail: `GitHub reports mergeable_state '${mergeState}' for PR #${number}; native auto-merge was not enabled`,
+            },
+          }
         case 'error':
           throw new Error(disposition.reason)
       }
