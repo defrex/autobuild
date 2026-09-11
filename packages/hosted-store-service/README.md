@@ -156,6 +156,16 @@ for the schedule, incident pauses, and behavior details. Dispatcher variables
 - `AB_DISPATCHER_TOKEN_TTL_SECONDS`: the TTL of the per-tick deployment
   operator token minted for guests (default 604800 — 7 days; minimum 3600).
   It must outlive your largest guest `timeoutSeconds` (e.g. 14400).
+- `AB_DISPATCHER_FORGE_CREDENTIALS`: optional per-repository forge credential
+  overrides — a JSON object mapping a normalized `https://` repository identity
+  to the **name** of the environment variable holding that repository's GitHub
+  token, e.g.
+  `{"https://github.com/acme/app":"APP_FORGE_TOKEN"}`. Token values live only
+  in their own variables; the mapping carries names only, so it never carries
+  credential material into logs, errors, or artifacts. A repository with an
+  override authenticates with its own token; one without keeps using the shared
+  `GITHUB_TOKEN`/`GH_TOKEN`. A referenced variable that is unset or blank fails
+  only that repository's tick — it never falls back to the shared credential.
 - `CRON_SECRET`: the cron authorization shared secret. Unset or blank disables
   the endpoint entirely. It is never a signing input and is unrelated to
   `AB_STORE_SECRET`.

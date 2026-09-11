@@ -16,8 +16,7 @@ machine.
    [its README](../packages/hosted-store-service/README.md#hosted-dispatcher)
    — `AB_DISPATCHER_ORIGIN`, the repository set, `CRON_SECRET`, and the forge
    credentials the kernel needs (`GITHUB_TOKEN` or `GH_TOKEN`, plus any
-   guest-forwarded variables such as `AI_GATEWAY_API_KEY`).
-2. Schedule the route by adding a `crons` entry to the deployment's
+   guest-forwarded variables such as `AI_GATEWAY_API_KEY`).2. Schedule the route by adding a `crons` entry to the deployment's
    `vercel.json` and redeploying. Vercel issues a plain GET with
    `Authorization: Bearer <CRON_SECRET>` once per minute:
 
@@ -32,6 +31,34 @@ machine.
    Unauthenticated or wrongly authorized calls are rejected (401) and do no
    work; a deployment without `CRON_SECRET` answers 403 with the endpoint
    disabled. One repository's failure never prevents another's tick.
+
+## Per-repository forge credentials
+
+When the served repositories span GitHub identities, one shared forge token is
+an access mismatch at best and a cross-identity leak at worst. Set
+`AB_DISPATCHER_FORGE_CREDENTIALS` to a JSON object mapping a normalized
+`https://` repository identity to the **name** of the environment variable
+holding that repository's GitHub token:
+
+```
+AB_DISPATCHER_FORGE_CREDENTIALS={"https://github.com/acme/app":"APP_FORGE_TOKEN","https://github.com/acme/web":"WEB_FORGE_TOKEN"}
+```
+
+- **Shape**: names only. Token values live in their own environment variables
+  (`APP_FORGE_TOKEN=…`), so the mapping itself carries no credential material —
+  parse errors, tick failures, and diagnostics name variables, never values —
+  and rotation is an ordinary env-var update.
+- **Fallback**: a repository absent from the mapping uses the shared
+  `GITHUB_TOKEN`/`GH_TOKEN` exactly as before.
+- **Fail-closed**: a referenced variable that is unset or blank at tick time
+  fails only that repository's tick with an error naming the variable — it
+  never silently falls back to the shared credential, which would cross
+  identities. Mapping keys must be repositories in the configured set; a key
+  outside it fails the whole invocation loudly (a quiet drop would recreate
+  the mismatch).
+- **Redaction**: override values are never logged, echoed in responses or
+  artifacts (including the `dispatcher-effective-config` deposit), or surfaced
+  in operator-facing diagnostics.
 
 ## Bounding the invocation
 
