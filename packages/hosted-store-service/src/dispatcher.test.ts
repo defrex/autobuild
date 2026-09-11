@@ -171,7 +171,13 @@ describe('createHostedDispatcher', () => {
 
   function dispatcher(env: Record<string, string | undefined>, outcomes: Array<'ok' | 'throw'>) {
     const { calls, dispatch } = recordingDispatch(outcomes)
-    const options: HostedDispatcherOptions = { env, clock, dispatch }
+    const options: HostedDispatcherOptions = {
+      env,
+      clock,
+      dispatch,
+      log: () => {},
+      logError: () => {},
+    }
     return { calls, ...createHostedDispatcher(options) }
   }
 
@@ -229,6 +235,8 @@ describe('createHostedDispatcher', () => {
     const summary = await createHostedDispatcher({
       env: baseEnv,
       clock: advancingClock,
+      log: () => {},
+      logError: () => {},
       dispatch,
     }).tick()
     expect(dispatchCalls).toHaveLength(1)
@@ -298,7 +306,7 @@ describe('createHostedDispatcher', () => {
 
 describe('createDispatcherEndpoint', () => {
   function endpoint(options: HostedDispatcherOptions = {}) {
-    return createDispatcherEndpoint({ clock, ...options })
+    return createDispatcherEndpoint({ clock, log: () => {}, logError: () => {}, ...options })
   }
   const url = 'https://hosted.example.test/api/dispatch'
   const authorized = { authorization: 'Bearer cron-secret' }
@@ -381,5 +389,184 @@ describe('createDispatcherEndpoint', () => {
     const body = (await response.json()) as { error: string }
     expect(body.error).toContain('AB_STORE_SECRET')
     expect(body.error).not.toContain('cron-secret')
+  })
+})
+
+describe('hosted dispatcher runtime logging', () => {
+  const url = 'https://hosted.example.test/api/dispatch'
+  const authorized = { authorization: 'Bearer cron-secret', 'user-agent': 'vercel-cron/1.0' }
+
+  function sinks() {
+    const lines: string[] = []
+    const errors: string[] = []
+    return {
+      lines,
+      errors,
+      log: (line: string) => lines.push(line),
+      logError: (line: string) => errors.push(line),
+    }
+  }
+
+  test('an authorized invocation logs the request, every repository outcome, and completion', async () => {
+    const { lines, errors, log, logError } = sinks()
+    const response = await createDispatcherEndpoint({
+      env: baseEnv,
+      clock,
+      log,
+      logError,
+      dispatch: async (opts) => {
+        opts.stdout?.('tick: idle')
+        opts.stderr?.('tick failed: something transient')
+      },
+    }).fetch(new Request(url, { headers: authorized }))
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      repositories: Array<{ repository: string; runId: string }>
+    }
+    const invocation = lines[0]!.match(/^hosted-dispatcher (inv_[0-9a-f]{8}): /)?.[1]
+    expect(invocation).toBeDefined()
+    // Every line of one invocation carries the same correlation id.
+    for (const line of [...lines, ...errors])
+      expect(line).toContain(`hosted-dispatcher ${invocation}:`)
+    expect(lines[0]).toContain('GET /api/dispatch agent="vercel-cron/1.0"')
+    expect(lines).toContainEqual(
+      expect.stringContaining(
+        'tick start repositories=2 budgetSeconds=240 origin=https://hosted.example.test',
+      ),
+    )
+    for (const entry of body.repositories) {
+      expect(lines).toContainEqual(
+        expect.stringContaining(`${entry.repository} tick run=${entry.runId}`),
+      )
+      expect(lines).toContainEqual(
+        expect.stringMatching(new RegExp(`${entry.repository} ticked run=${entry.runId} ms=\\d+`)),
+      )
+      // The kernel's own report lines are forwarded, attributed to the repository.
+      expect(lines).toContainEqual(
+        expect.stringContaining(`${entry.repository} [kernel] tick: idle`),
+      )
+      expect(errors).toContainEqual(
+        expect.stringContaining(`${entry.repository} [kernel] tick failed: something transient`),
+      )
+    }
+    expect(lines).toContainEqual(
+      expect.stringContaining('tick complete ticked=2 failed=0 skipped=0'),
+    )
+    expect(lines.at(-1)).toMatch(/200 ok ms=\d+$/)
+  })
+
+  test('a caller-provided stdout keeps kernel lines out of the operational log', async () => {
+    const { lines, log, logError } = sinks()
+    const out: string[] = []
+    await createHostedDispatcher({
+      env: baseEnv,
+      clock,
+      log,
+      logError,
+      stdout: (line) => out.push(line),
+      dispatch: async (opts) => {
+        opts.stdout?.('tick: idle')
+      },
+    }).tick()
+    expect(out).toEqual(['tick: idle', 'tick: idle'])
+    expect(lines.some((line) => line.includes('[kernel]'))).toBe(false)
+  })
+
+  test('a failed repository tick logs the kernel error with its stack at error level', async () => {
+    const { lines, errors, log, logError } = sinks()
+    await createHostedDispatcher({
+      env: baseEnv,
+      clock,
+      log,
+      logError,
+      dispatch: async (opts) => {
+        if (opts.repository === 'https://github.com/acme/one') {
+          throw new Error(
+            'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API',
+            {
+              cause: new Error('underlying transport refused'),
+            },
+          )
+        }
+      },
+    }).tick()
+    const failure = errors.find((line) =>
+      line.includes('https://github.com/acme/one failed run=hosted-dispatcher-'),
+    )
+    expect(failure).toBeDefined()
+    expect(failure).toContain('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN')
+    expect(failure).toContain('    at ')
+    expect(failure).toContain('caused by: Error: underlying transport refused')
+    expect(lines).toContainEqual(
+      expect.stringContaining('tick complete ticked=1 failed=1 skipped=0'),
+    )
+  })
+
+  test('rejections and configuration failures are logged with their reason', async () => {
+    const { errors, log, logError } = sinks()
+    const endpoint = (env: Record<string, string | undefined>) =>
+      createDispatcherEndpoint({ env, clock, log, logError, dispatch: async () => {} })
+    await endpoint(baseEnv).fetch(new Request(url, { method: 'POST', body: '{}' }))
+    await endpoint({ ...baseEnv, CRON_SECRET: undefined }).fetch(new Request(url))
+    await endpoint(baseEnv).fetch(new Request(url))
+    await endpoint(baseEnv).fetch(new Request(url, { headers: { authorization: 'Bearer nope' } }))
+    await endpoint({
+      ...baseEnv,
+      AB_WEB_REPOSITORIES: '/home/someone/checkout',
+      AB_DISPATCHER_REPOSITORIES: undefined,
+    }).fetch(new Request(url, { headers: authorized }))
+    expect(errors).toEqual([
+      expect.stringContaining('rejected 405 method-not-allowed'),
+      expect.stringContaining(
+        'rejected 403 disabled: the dispatcher endpoint is disabled: CRON_SECRET is not configured',
+      ),
+      expect.stringContaining(
+        'rejected 401 unauthorized: dispatcher endpoint requires the cron bearer token (authorization header absent)',
+      ),
+      expect.stringContaining(
+        'rejected 401 unauthorized: dispatcher endpoint requires the cron bearer token (authorization header present but wrong)',
+      ),
+      expect.stringMatching(
+        /500 configuration invalid ms=\d+: Error: AB_WEB_REPOSITORIES contains an unsafe repository name: "\/home\/someone\/checkout"/,
+      ),
+    ])
+  })
+
+  test('no log line ever carries the cron secret, the store secret, a forge token, or a minted token', async () => {
+    const { lines, errors, log, logError } = sinks()
+    const override = 'override-forge-token'
+    const minted: string[] = []
+    await createDispatcherEndpoint({
+      env: {
+        ...baseEnv,
+        GITHUB_TOKEN: 'shared-forge-token',
+        AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'https://github.com/acme/one': override }),
+      },
+      clock,
+      log,
+      logError,
+      dispatch: async (opts) => {
+        minted.push(opts.env?.AB_TOKEN ?? '')
+        opts.stdout?.('tick: idle')
+        throw new Error('kernel failure that names AB_TOKEN but never its value')
+      },
+    }).fetch(new Request(url, { headers: authorized }))
+    // Also the wrong-bearer path: the presented header value is never echoed.
+    await createDispatcherEndpoint({ env: baseEnv, clock, log, logError }).fetch(
+      new Request(url, { headers: { authorization: 'Bearer attacker-guess' } }),
+    )
+    expect(minted.every((token) => token.length > 20)).toBe(true)
+    const everything = [...lines, ...errors].join('\n')
+    expect(everything.length).toBeGreaterThan(0)
+    for (const secret of [
+      'cron-secret',
+      'test-signing-secret',
+      'shared-forge-token',
+      override,
+      'attacker-guess',
+      ...minted,
+    ]) {
+      expect(everything).not.toContain(secret)
+    }
   })
 })

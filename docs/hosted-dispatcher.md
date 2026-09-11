@@ -86,6 +86,28 @@ artifact per minute per repository; the dispatcher run/config artifacts
 themselves are retention-bounded (see below), while the journal's events keep
 accumulating by design.
 
+### Runtime logs
+
+Every invocation also writes to the deployment's runtime logs (Vercel's
+**Logs** tab, or `vercel logs`), which is where to look first when the journal
+shows no hosted activity at all — a rejected or misconfigured invocation never
+reaches the journal. Every line starts with `hosted-dispatcher <invocation id>`
+so one invocation's lines can be filtered together:
+
+- the request line (`GET /api/dispatch agent="vercel-cron/1.0"`) — the user
+  agent tells a cron call apart from an operator's curl;
+- `rejected 401|403|405 <kind>: <reason>` at error level, with whether the
+  authorization header was absent or present-but-wrong (never its value);
+- `500 configuration invalid: <error>` naming the offending variable;
+- `tick start repositories=N budgetSeconds=S origin=…`, then per repository
+  `tick run=hosted-dispatcher-…`, `ticked … ms=…`, `skipped`, or
+  `failed … : <error with stack>` at error level, then
+  `tick complete ticked=… failed=… skipped=…` and `200 ok ms=…`;
+- the kernel's own report lines (the same lines `ab dispatch --plain` prints
+  locally) prefixed `<repository> [kernel]`, warnings at error level.
+
+Secrets, forge tokens, and minted guest tokens never appear in any line.
+
 ## Artifact retention
 
 Dispatcher-generated run/config artifacts — the repository-scoped

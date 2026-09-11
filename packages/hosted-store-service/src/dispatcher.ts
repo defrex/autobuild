@@ -250,8 +250,19 @@ export interface HostedDispatcherOptions {
   /** The kernel entry. Defaults to the real `abDispatch`; integration tests
    * wrap it with `wire`/`nonStoreWire` fakes and `originConfigTransport`. */
   dispatch?: (opts: DispatchOpts) => Promise<void>
+  /** Where the kernel's own report lines go. Unset, they are forwarded to
+   * `log`/`logError` prefixed with the repository so a deployment's runtime
+   * logs carry every tick report and warning the kernel prints locally. */
   stdout?: (line: string) => void
   stderr?: (line: string) => void
+  /** Operational log sink for the endpoint and per-repository outcomes
+   * (default `console.log`). Every line starts with `hosted-dispatcher` and
+   * carries the invocation id; secrets and minted tokens never reach it. */
+  log?: (line: string) => void
+  /** Error-level sink (default `console.error`): rejected invocations,
+   * configuration failures with the offending variable, and failed repository
+   * ticks with the kernel error's stack. */
+  logError?: (line: string) => void
 }
 
 /** Below this much remaining budget a further repository is recorded as
@@ -259,7 +270,24 @@ export interface HostedDispatcherOptions {
  * unfinished repository resumes on the next one. */
 const MIN_REMAINING_MS = 20_000
 
-function noop(): void {}
+const LOG_PREFIX = 'hosted-dispatcher'
+
+function invocationId(): string {
+  return `inv_${randomUUID().slice(0, 8)}`
+}
+
+function errorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    const cause =
+      error.cause instanceof Error
+        ? `\n  caused by: ${error.cause.stack ?? error.cause.message}`
+        : error.cause !== undefined
+          ? `\n  caused by: ${String(error.cause)}`
+          : ''
+    return `${error.stack ?? `${error.name}: ${error.message}`}${cause}`
+  }
+  return String(error)
+}
 
 /** The kernel owner. One `tick()` per authorized invocation; repositories run
  * sequentially and fully isolated — one repository's failure never stops
@@ -267,25 +295,34 @@ function noop(): void {}
  * supervisor lease makes a loser record `dispatcher.tick-yielded`; the
  * response does not re-derive it. */
 export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
-  tick(): Promise<HostedDispatcherTickSummary>
+  tick(invocation?: string): Promise<HostedDispatcherTickSummary>
 } {
   const env = options.env ?? process.env
   const clock: Clock = options.clock ?? (() => new Date())
   const dispatch = options.dispatch ?? ((opts: DispatchOpts) => abDispatch(opts))
-  const stdout = options.stdout ?? noop
-  const stderr = options.stderr ?? noop
+  const log = options.log ?? ((line: string) => console.log(line))
+  const logError = options.logError ?? ((line: string) => console.error(line))
   return {
-    async tick(): Promise<HostedDispatcherTickSummary> {
+    async tick(invocation = invocationId()): Promise<HostedDispatcherTickSummary> {
       const config = parseHostedDispatcherEnv(env)
       const now = clock().getTime()
       const deadlineAt = now + config.budgetSeconds * 1000
+      log(
+        `${LOG_PREFIX} ${invocation}: tick start repositories=${config.repositories.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin}`,
+      )
       const repositories: HostedDispatcherRepositoryOutcome[] = []
       for (const repository of config.repositories) {
         if (clock().getTime() + MIN_REMAINING_MS > deadlineAt) {
           repositories.push({ repository, outcome: 'skipped' })
+          log(`${LOG_PREFIX} ${invocation}: ${repository} skipped (invocation budget exhausted)`)
           continue
         }
         const runId = `hosted-dispatcher-${randomUUID()}`
+        const kernelPrefix = `${LOG_PREFIX} ${invocation}: ${repository} [kernel]`
+        const stdout = options.stdout ?? ((line: string) => log(`${kernelPrefix} ${line}`))
+        const stderr = options.stderr ?? ((line: string) => logError(`${kernelPrefix} ${line}`))
+        const startedAt = Date.now()
+        log(`${LOG_PREFIX} ${invocation}: ${repository} tick run=${runId}`)
         // Unattributed deployment operator credential: it covers store and
         // ticket operations (attributed operator tokens are operator-API-only
         // and cannot write store events). It names nothing because store
@@ -324,15 +361,22 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
             deadlineAt,
           })
           repositories.push({ repository, outcome: 'ticked', runId })
+          log(
+            `${LOG_PREFIX} ${invocation}: ${repository} ticked run=${runId} ms=${Date.now() - startedAt}`,
+          )
         } catch (error) {
-          repositories.push({
-            repository,
-            outcome: 'failed',
-            runId,
-            error: error instanceof Error ? error.message : String(error),
-          })
+          const message = error instanceof Error ? error.message : String(error)
+          repositories.push({ repository, outcome: 'failed', runId, error: message })
+          logError(
+            `${LOG_PREFIX} ${invocation}: ${repository} failed run=${runId} ms=${Date.now() - startedAt}: ${errorDetail(error)}`,
+          )
         }
       }
+      const counts = { ticked: 0, failed: 0, skipped: 0 }
+      for (const entry of repositories) counts[entry.outcome] += 1
+      log(
+        `${LOG_PREFIX} ${invocation}: tick complete ticked=${counts.ticked} failed=${counts.failed} skipped=${counts.skipped}`,
+      )
       return { deadlineAt, repositories }
     },
   }
@@ -357,15 +401,29 @@ export function createDispatcherEndpoint(options: HostedDispatcherOptions = {}):
 } {
   const dispatcher = createHostedDispatcher(options)
   const env = options.env ?? process.env
+  const log = options.log ?? ((line: string) => console.log(line))
+  const logError = options.logError ?? ((line: string) => console.error(line))
   return {
     async fetch(request: Request): Promise<Response> {
+      const invocation = invocationId()
+      const startedAt = Date.now()
+      // The user agent tells a Vercel Cron invocation (`vercel-cron/1.0`)
+      // apart from an operator's curl in the runtime logs; it is not trusted.
+      const agent = request.headers.get('user-agent') ?? '-'
+      log(
+        `${LOG_PREFIX} ${invocation}: ${request.method} ${new URL(request.url).pathname} agent=${JSON.stringify(agent)}`,
+      )
+      const reject = (status: number, kind: string, error: string): Response => {
+        logError(`${LOG_PREFIX} ${invocation}: rejected ${status} ${kind}: ${error}`)
+        return jsonError(status, kind, error)
+      }
       if (request.method !== 'GET') {
-        return jsonError(405, 'method-not-allowed', 'the dispatcher endpoint answers GET only')
+        return reject(405, 'method-not-allowed', 'the dispatcher endpoint answers GET only')
       }
       // Endpoint disabled: never run work without authorization configured.
       const cronSecret = env.CRON_SECRET?.trim()
       if (cronSecret === undefined || cronSecret === '') {
-        return jsonError(
+        return reject(
           403,
           'disabled',
           'the dispatcher endpoint is disabled: CRON_SECRET is not configured',
@@ -373,10 +431,15 @@ export function createDispatcherEndpoint(options: HostedDispatcherOptions = {}):
       }
       const authorization = request.headers.get('authorization') ?? ''
       if (!timingSafeStringEqual(authorization, `Bearer ${cronSecret}`)) {
-        return jsonError(401, 'unauthorized', 'dispatcher endpoint requires the cron bearer token')
+        return reject(
+          401,
+          'unauthorized',
+          `dispatcher endpoint requires the cron bearer token (authorization header ${authorization === '' ? 'absent' : 'present but wrong'})`,
+        )
       }
       try {
-        const summary = await dispatcher.tick()
+        const summary = await dispatcher.tick(invocation)
+        log(`${LOG_PREFIX} ${invocation}: 200 ok ms=${Date.now() - startedAt}`)
         return Response.json(
           { ok: true, repositories: summary.repositories },
           { headers: { 'cache-control': 'private, no-store' } },
@@ -384,6 +447,9 @@ export function createDispatcherEndpoint(options: HostedDispatcherOptions = {}):
       } catch (error) {
         // A misconfigured deployment names the offending variable, never a
         // value: every parser error is written that way.
+        logError(
+          `${LOG_PREFIX} ${invocation}: 500 configuration invalid ms=${Date.now() - startedAt}: ${errorDetail(error)}`,
+        )
         return jsonError(
           500,
           'internal',
