@@ -82,10 +82,13 @@ export function distributionAssetName(version: string): string {
 export async function fetchDistributionReleaseAsset(
   version: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
-  transport: GitHubRequest = createGitHubFetchTransport({
-    token: async () => (await resolveGitHubToken(env)).token,
-  }),
+  injectedTransport?: GitHubRequest,
 ): Promise<Uint8Array> {
+  // One credential resolution per fetch (release lookup + asset download),
+  // not one per request.
+  const transport =
+    injectedTransport ??
+    createGitHubFetchTransport({ token: (await resolveGitHubToken(env)).token })
   const coordinates = parseRepoCoordinates(CANONICAL_REPOSITORY_URL)
   if (coordinates === null) {
     throw new Error(`the canonical repository URL is not parseable: ${CANONICAL_REPOSITORY_URL}`)

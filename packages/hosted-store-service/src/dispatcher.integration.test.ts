@@ -763,7 +763,6 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
         AB_DISPATCHER_REPOSITORIES: 'https://github.com/acme/one,https://github.com/acme/two',
         AB_DISPATCHER_BUDGET_SECONDS: '25',
         CRON_SECRET: 'cron-secret',
-        GITHUB_TOKEN: 'forge-token',
       },
       clock: boundedClock,
       dispatch: async (opts) => {

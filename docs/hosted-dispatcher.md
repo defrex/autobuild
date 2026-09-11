@@ -20,8 +20,8 @@ machine.
    serving repositories across GitHub identities configures per-repository
    tokens with `AB_DISPATCHER_GITHUB_TOKENS`; repositories without an
    override keep using the shared credential. A served repository with
-   neither fails its tick: the hosted dispatcher never falls back to the gh
-   CLI login of whoever runs the service.
+   neither fails its tick: origin-mode dispatch requires an exported token
+   and never falls back to the gh CLI login of whoever runs the service.
 2. Schedule the route by adding a `crons` entry to the deployment's
    `vercel.json` and redeploying. Vercel issues a plain GET with
    `Authorization: Bearer <CRON_SECRET>` once per minute:

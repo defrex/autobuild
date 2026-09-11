@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  CREDENTIAL_MISS_TTL_MS,
   createGitHubFetchTransport,
   GH_CLI_TOKEN_COMMAND,
   GitHubApiError,
@@ -135,12 +136,8 @@ describe('resolveGitHubToken', () => {
     const exec = answering('gho_keyring\n', probes)
     expect(await resolveGitHubToken({ GITHUB_TOKEN: 'env-a', GH_TOKEN: 'env-b' }, exec)).toEqual({
       token: 'env-a',
-      source: 'GITHUB_TOKEN',
     })
-    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toEqual({
-      token: 'env-b',
-      source: 'GH_TOKEN',
-    })
+    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toEqual({ token: 'env-b' })
     expect(probes).toEqual([])
   })
 
@@ -149,7 +146,6 @@ describe('resolveGitHubToken', () => {
     const exec = answering('gho_keyring\n', probes)
     expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' }, exec)).toEqual({
       token: 'env-b',
-      source: 'GH_TOKEN',
     })
     expect(githubTokenFromEnv({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' })).toBe('env-b')
     expect(probes).toEqual([])
@@ -160,7 +156,6 @@ describe('resolveGitHubToken', () => {
     const exec = answering('gho_keyring\n', probes)
     expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: '' }, exec)).toEqual({
       token: 'gho_keyring',
-      source: 'gh',
     })
     expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
   })
@@ -246,27 +241,55 @@ describe('createGitHubFetchTransport token resolution', () => {
     }
   })
 
-  test('sends no Authorization header when the source yields nothing, and asks again next time', async () => {
+  test('memoizes a miss for the TTL, then asks the source again', async () => {
     const stub = stubFetch(() => new Response('', { status: 204 }))
     let attempts = 0
+    let clock = 1_000_000
     try {
       const transport = createGitHubFetchTransport({
+        now: () => clock,
         token: async () => {
           attempts += 1
-          // The keyring was locked for the first request only.
+          // The keyring is locked for the first window only.
           return attempts === 1 ? undefined : 'gho_unlocked'
         },
       })
       await transport('GET', 'user')
-      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBeUndefined()
+      await transport('GET', 'user')
+      expect(attempts).toBe(1)
+      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBeUndefined()
+      clock += CREDENTIAL_MISS_TTL_MS
       await transport('GET', 'user')
       await transport('GET', 'user')
       expect(attempts).toBe(2)
-      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBe(
+      expect((stub.calls[3]!.init.headers as Record<string, string>).Authorization).toBe(
         'Bearer gho_unlocked',
       )
-      expect((stub.calls[2]!.init.headers as Record<string, string>).Authorization).toBe(
-        'Bearer gho_unlocked',
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('forgets a memoized token after 401 Unauthorized so a re-login is picked up', async () => {
+    let status = 401
+    const stub = stubFetch(
+      () =>
+        new Response(JSON.stringify({ message: 'Bad credentials' }), {
+          status,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    const tokens = ['gho_revoked', 'gho_fresh']
+    try {
+      const transport = createGitHubFetchTransport({ token: async () => tokens.shift() })
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      status = 204
+      await transport('GET', 'user')
+      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_revoked',
+      )
+      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_fresh',
       )
     } finally {
       stub.restore()

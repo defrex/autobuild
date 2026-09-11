@@ -366,12 +366,14 @@ Forge credentials.
 **Forge credentials.** `packages/core/src/ports/forge/github-transport.ts` owns the
 REST transport seam and credential resolution for the builtin GitHub forge:
 `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login read through
-`gh auth token --hostname github.com` under a bounded deadline. A checkout-mode
-dispatcher probes lazily on the transport's first request (a miss is retried on the
-next request, never frozen into anonymous access); origin-mode dispatch resolves once
-before any side effect and threads that single answer through the startup config fetch
-and the wired forge. The hosted dispatcher never uses the gh fallback: every served
-repository authenticates with an explicit token or its tick fails.
+`gh auth token --hostname github.com` under a bounded deadline. A transport resolves
+lazily on its first request and memoizes a found token until a `401` (a rotated
+login) and a miss for a bounded window (never frozen into anonymous access, never
+re-probed per request). Checkout-mode dispatch probes once at wiring and warns with
+the reason when nothing answers. Origin-mode dispatch — and therefore the hosted
+dispatcher — requires an exported token before any side effect and never consults gh:
+a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
+injects that same token.
 
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),

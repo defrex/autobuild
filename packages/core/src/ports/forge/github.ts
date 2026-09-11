@@ -514,8 +514,9 @@ export class GitHubForge implements Forge {
     this.exec = opts.exec ?? bunExec
     this.env = opts.env ?? {}
     // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
-    // stored login (probed lazily through this adapter's exec seam, so a
-    // checkout-mode dispatcher needs only `gh auth login`).
+    // stored login, probed lazily through this adapter's exec seam. The
+    // dispatcher resolves once at wiring and passes a literal; this lazy path
+    // serves the other constructors (build child, CLI commands).
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({
