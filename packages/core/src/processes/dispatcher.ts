@@ -457,6 +457,17 @@ export interface TickOpts {
   /** Human attribution for a claim-time auto-merge request. Required when
    * `defaultAutoMerge` is true; the CLI resolves USER/USERNAME/fallback. */
   autoMergeUser?: string
+  /** Invocation bound in epoch ms against `deps.clock`. Once the clock reads
+   * at or past it, no additional forge/store transport call is STARTED inside
+   * the tick: per-item loops gate each new unit of work on the remaining
+   * budget, so the tick's overrun past the bound is bounded to the single
+   * transport call already in flight when the deadline passed. In-flight
+   * calls are deliberately not cancelled — aborting mid-write risks tearing
+   * durable store state. Skipped work is simply left un-attempted: ticks are
+   * idempotent (§3.3 re-run safety) and the next invocation picks it up,
+   * exactly as capacity exhaustion already defers tickets. Absent ⇒ unbounded
+   * (today's exact behavior). */
+  deadlineAt?: number
 }
 
 /** Process-local launch coordination result. Durable lease acquisition remains
@@ -624,6 +635,14 @@ export class Dispatcher {
    * because the CLI invokes it
    * once per command, while ordinary watch ticks must preserve policy parks.
    */
+  /** Invocation-budget gate: true when a `deadlineAt` was supplied and the
+   * clock already reads at or past it. Pure clock arithmetic — the per-item
+   * loops consult this before starting each new forge/store transport call,
+   * bounding the tick's overrun to the one call already in flight. */
+  private outOfBudget(opts: TickOpts): boolean {
+    return opts.deadlineAt !== undefined && this.deps.clock().getTime() >= opts.deadlineAt
+  }
+
   async tick(opts: TickOpts = {}): Promise<TickReport> {
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
@@ -648,13 +667,22 @@ export class Dispatcher {
     // provider liveness and settle their completion, lease, and publication.
     // Runs before the janitor so its executionLeaseLive checks see freshly
     // released or renewed leases.
-    await this.settleForeignExecutions(report)
-    await this.janitor(report, launched)
-    await this.recoverDispatches(report, launched, paused)
-    if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused)
-    await this.leaseSweep(report, launched, paused)
+    // Stage entries are budget-gated so an already-spent budget does not even
+    // open the first record listing of the next stage; each stage's own
+    // per-iteration gate (below) covers a deadline that passes mid-stage.
+    if (this.outOfBudget(opts)) return report
+    await this.settleForeignExecutions(report, opts)
+    if (this.outOfBudget(opts)) return report
+    await this.janitor(report, launched, opts)
+    if (this.outOfBudget(opts)) return report
+    await this.recoverDispatches(report, launched, paused, opts)
+    if (this.outOfBudget(opts)) return report
+    if (opts.resumeCurrent === true) await this.resumeCurrent(report, launched, paused, opts)
+    if (this.outOfBudget(opts)) return report
+    await this.leaseSweep(report, launched, paused, opts)
+    if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
-      await this.dispatch(report, launched, autoMergeUser, paused)
+      await this.dispatch(report, launched, autoMergeUser, paused, opts)
     }
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
@@ -743,11 +771,13 @@ export class Dispatcher {
    * the durable facts. One listBuilds plus at most two bounded provider round
    * trips per unsettled build; a failing build is contained so the rest of
    * the stage still settles. */
-  private async settleForeignExecutions(report: TickReport): Promise<void> {
+  private async settleForeignExecutions(report: TickReport, opts: TickOpts = {}): Promise<void> {
     const active = this.deps.activeExecutions?.() ?? new Set<string>()
     for (const record of await this.deps.store.listBuilds()) {
       if (record.repo !== this.deps.repo) continue
       if (active.has(record.slug)) continue
+      // Budget gate: once spent, stop settling further foreign executions.
+      if (this.outOfBudget(opts)) break
       try {
         const events = await this.deps.store.getEvents(record.slug)
         const open = openExecution(events)
@@ -1054,7 +1084,11 @@ export class Dispatcher {
 
   // ── a. Janitor (SPEC §15.7, D1) ────────────────────────────────────────────
 
-  private async janitor(report: TickReport, launched: Set<string>): Promise<void> {
+  private async janitor(
+    report: TickReport,
+    launched: Set<string>,
+    opts: TickOpts = {},
+  ): Promise<void> {
     // Listing is repository-wide work: if it fails there is no individual
     // build to attribute, so the caller's existing top-level boundary owns it.
     const records = await this.deps.store.listBuilds()
@@ -1063,6 +1097,11 @@ export class Dispatcher {
       // (§7.2) — another repo's builds are another dispatcher's duty. Acting
       // on them would poll foreign PRs and break single-writer discipline.
       if (record.repo !== this.deps.repo) continue
+      // Budget gate: the janitor's per-build path issues forge/store transport
+      // calls (PR probes, closePr, deleteBranch); once the budget is spent,
+      // stop starting new ones. The remaining builds stay janitor due — the
+      // next invocation re-runs them (§3.3 idempotency).
+      if (this.outOfBudget(opts)) break
       try {
         // Once a record is known, contain its complete janitor path: loading
         // and reducing facts, cleanup, forge/ticket calls, and store writes.
@@ -2054,6 +2093,7 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     paused: boolean,
+    opts: TickOpts = {},
   ): Promise<void> {
     for (const record of await this.deps.store.listBuilds()) {
       if (
@@ -2064,6 +2104,8 @@ export class Dispatcher {
       ) {
         continue
       }
+      // Budget gate: recovery issues store transport calls per build.
+      if (this.outOfBudget(opts)) break
       const events = await this.deps.store.getEvents(record.slug)
       const state = reduceBuild(events)
       if (
@@ -2099,10 +2141,13 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     paused: boolean,
+    opts: TickOpts = {},
   ): Promise<void> {
     const { store, config } = this.deps
     for (const record of await store.listBuilds()) {
       if (record.repo !== this.deps.repo || launched.has(record.slug)) continue
+      // Budget gate: resume launches runners (transport-backed work).
+      if (this.outOfBudget(opts)) break
 
       const events = await store.getEvents(record.slug)
       const state = reduceBuild(events)
@@ -2163,11 +2208,14 @@ export class Dispatcher {
     report: TickReport,
     launched: Set<string>,
     paused: boolean,
+    opts: TickOpts = {},
   ): Promise<void> {
     const now = this.deps.clock().getTime()
     for (const record of await this.deps.store.listBuilds()) {
       if (record.repo !== this.deps.repo) continue // §12: not this dispatcher's build
       if (launched.has(record.slug)) continue
+      // Budget gate: the sweep re-attaches runners per expired build.
+      if (this.outOfBudget(opts)) break
       if (record.lease) {
         if (new Date(record.lease.expiresAt).getTime() > now) continue // healthy
       } else if (now - new Date(record.updatedAt).getTime() < this.leaseTtlMs) {
@@ -2289,6 +2337,7 @@ export class Dispatcher {
     launched: Set<string>,
     autoMergeUser: string | undefined,
     paused: boolean,
+    opts: TickOpts = {},
   ): Promise<void> {
     const { store, tickets, config } = this.deps
     // Blocked and paused builds still occupy a slot: their workspaces and
@@ -2352,6 +2401,11 @@ export class Dispatcher {
 
     for (const ticket of ready) {
       if (capacity <= 0) break
+      // Budget gate before the dependency fetch / claim / createBuild: the
+      // first ready read above stays (it is the standing queue-depth report);
+      // once the budget is spent no additional transport call is started, so
+      // the remaining tickets are left un-attempted for the next invocation.
+      if (this.outOfBudget(opts)) break
 
       // Autobuild's own in-flight create gate precedes even dependency reads:
       // the ready projection may have been captured before blocker recording.
