@@ -328,6 +328,13 @@ export interface DispatchOpts {
   /** Private child mode: preserve kernel behavior while routing no legacy
    * line output into the terminal-owning parent. */
   silent?: boolean
+  /** Invocation bound (epoch ms, measured against `wiring.clock`). `--once`
+   * only: an already-passed deadline skips the tick and the drain entirely
+   * (teardown still runs), and a deadline reached mid-drain stops awaiting
+   * `local-parent` executions, which teardown then stops and reaps — so one
+   * invocation always returns and unfinished work resumes next invocation.
+   * Watch mode is unaffected; absent ⇒ unbounded (today's exact behavior). */
+  deadlineAt?: number
   /** Interactive-watch-only release courtesy seams. The supervised kernel
    * publishes results durably; direct plain/noninteractive and one-pass
    * dispatch never consult them. */
@@ -593,6 +600,14 @@ class DispatchLoop {
   /** Public teardown fact for the durable `dispatcher.run-stopped` reason. */
   get supersededByPeer(): boolean {
     return this.superseded
+  }
+
+  /** Invocation bound (hosted cron): true once `deadlineAt` has passed. An
+   * absent deadline is never past, so every existing caller is unchanged. */
+  private pastDeadline(): boolean {
+    return (
+      this.opts.deadlineAt !== undefined && this.wiring.clock().getTime() >= this.opts.deadlineAt
+    )
   }
   /** The holder id this invocation already recorded a `tick-yielded` for. */
   private yieldedTo: string | undefined
@@ -2133,14 +2148,35 @@ class DispatchLoop {
 
   /** `--once` awaits only local-parent executions and harvest: an
    * environment-supervised execution keeps running in its guest, and a later
-   * invocation settles its completion from the Store alone. */
+   * invocation settles its completion from the Store alone. An invocation
+   * deadline stops the await loop; the remaining `local-parent` executions
+   * are then stopped and reaped by the `stopBuildExecutions()` teardown,
+   * exactly as a deliberately stopped watch run. */
   private async drainInFlight(): Promise<void> {
     for (;;) {
       const pending = [...this.inFlight].filter(
         (promise) => this.inFlightKinds.get(promise) !== 'environment',
       )
       if (pending.length === 0) return
-      await Promise.all(pending)
+      const deadline = this.opts.deadlineAt
+      if (deadline === undefined) {
+        await Promise.all(pending)
+        continue
+      }
+      if (this.pastDeadline()) return
+      const remainingMs = Math.max(0, deadline - this.wiring.clock().getTime())
+      let expired = false
+      await Promise.race([
+        Promise.all(pending),
+        new Promise<void>((resolveRace) => {
+          const timer = setTimeout(() => {
+            expired = true
+            resolveRace()
+          }, remainingMs)
+          timer.unref?.()
+        }),
+      ])
+      if (expired) return
     }
   }
 
@@ -2698,6 +2734,11 @@ class DispatchLoop {
       try {
         this.startInput()
         this.startRendering()
+        // Invocation bound: an already-passed deadline skips the tick and the
+        // drain entirely — teardown in `finally` still runs, so the repository
+        // lease and any provisioning state are released for the next
+        // invocation.
+        if (this.pastDeadline()) return
         const initial = await this.dispatcherTick(true)
         const initialPrinted = this.printReport(initial, false)
         await this.drainInFlight()
@@ -2825,14 +2866,31 @@ async function fetchOriginModeConfig(
   return { content: branchContent, config: parseConfig(branchContent, branchLabel) }
 }
 
+/** Loopback hosts where a plain-http store origin is accepted: it names the
+ * operator's own machine (local development, integration harnesses), never a
+ * network hop that would carry the bearer token in the clear. */
+const LOOPBACK_STORE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+function acceptableOriginModeStore(storeRef: string): boolean {
+  if (/^https:\/\//i.test(storeRef)) return true
+  if (!/^http:\/\//i.test(storeRef)) return false
+  try {
+    return LOOPBACK_STORE_HOSTS.has(new URL(storeRef).hostname)
+  } catch {
+    return false
+  }
+}
+
 /** Origin-mode repo state: the identity is the normalized origin; local
  * scratch (state root, worktree root) lives under a per-origin temp directory
- * and the store MUST be remote HTTPS. Requirements are validated here so a
- * misconfigured origin-mode launch fails before any side effect. */
+ * and the store MUST be remote HTTPS — except a loopback http origin, which
+ * names the operator's own machine (local development, integration harnesses).
+ * Requirements are validated here so a misconfigured origin-mode launch fails
+ * before any side effect. */
 async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePaths> {
   const identity = normalizeGitRemoteUrl(opts.repository!)
   const selectedStore = opts.storeRef ?? opts.env.AB_STORE
-  if (selectedStore === undefined || !/^https:\/\//i.test(selectedStore)) {
+  if (selectedStore === undefined || !acceptableOriginModeStore(selectedStore)) {
     throw new Error(
       'origin-mode dispatch requires an HTTPS BuildStore — set AB_STORE (or --store) to the hosted Store URL',
     )

@@ -530,6 +530,176 @@ describe('abDispatch guards', () => {
     ).rejects.toThrow(/requires GITHUB_TOKEN or GH_TOKEN/)
   }, 10_000)
 
+  test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        kernelRunId: 'hosted-dispatcher-expired',
+        deadlineAt: clock().getTime() - 1000,
+        wire: fx.wire,
+      })
+      const repoEvents = await fx.store.getRepoEvents(fx.origin)
+      const types = repoEvents.map((event) => event.type)
+      expect(types).toContain('dispatcher.run-started')
+      expect(types).toContain('dispatcher.run-stopped')
+      expect(types).not.toContain('dispatcher.tick-started')
+      expect(types).not.toContain('dispatcher.tick-completed')
+      const stopped = repoEvents.find((event) => event.type === 'dispatcher.run-stopped')
+      expect(stopped).toMatchObject({ payload: { outcome: 'normal', exitCode: 0 } })
+      // Teardown released the repository lease for the next invocation.
+      expect((await fx.store.getRepo(fx.origin))?.lease).toBeUndefined()
+    } finally {
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('--once deadline reached mid-drain stops awaiting a slow local-parent execution, which teardown stops', async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const slug = 'deadline-drain'
+    const branch = `ab/${slug}`
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-deadline', title: 'deadline drain' },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: 'ws-g0',
+        path: '/deadline/workspace',
+        branch,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: 'T-deadline', title: 'deadline drain' },
+        },
+      }),
+    )
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 1 },
+    })
+
+    const completion = deferred()
+    let stopCalls = 0
+    const execution: BuildExecution = {
+      async start(input) {
+        return {
+          supervision: 'local-parent',
+          identity: { provider: 'fake', workspaceRef: input.workspaceRef },
+          // Resolves only via stop(): if the drain still awaited it past the
+          // deadline, this invocation would never return and the test would
+          // time out — the deadline is what lets teardown cut it short.
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            stopCalls += 1
+            completion.resolve()
+            return { outcome: 'confirmed' }
+          },
+          async detach() {},
+        }
+      },
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        deadlineAt: clock().getTime() + 150,
+        wire: () => ({ ...fx.wire(), buildExecution: execution }),
+      })
+      expect(stopCalls).toBe(1)
+      const events = await fx.store.getEvents(slug)
+      const ended = events.filter((event) => event.type === 'execution.ended')
+      expect(ended).toHaveLength(1)
+      expect(ended[0]).toMatchObject({ payload: { outcome: 'stopped' } })
+      // The stopped execution's lease was released for the next invocation.
+      expect((await fx.store.getBuild(slug))?.lease).toBeUndefined()
+    } finally {
+      completion.resolve()
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('origin mode accepts loopback http store origins and still rejects other http origins', async () => {
+    const transportCalls: string[] = []
+    const transport = (async (method: string, path: string) => {
+      transportCalls.push(`${method} ${path}`)
+      if (method === 'GET' && path.includes('/contents/autobuild.toml')) {
+        return {
+          status: 200,
+          headers: {},
+          bytes: new TextEncoder().encode(DISPATCH_CONFIG_TOML),
+        }
+      }
+      throw new Error(`unexpected GitHub request: ${method} ${path}`)
+    }) as never
+    const common = {
+      targetRepo: '/this/checkout/does/not/exist',
+      repository: 'https://github.com/acme/checkoutless',
+      originConfigTransport: transport,
+      env: {
+        AB_TOKEN: 'scoped',
+        GITHUB_TOKEN: 'forge-secret',
+      },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+      plain: true,
+      wire: () => {
+        throw new Error('loopback wire seam reached: origin-mode validation passed')
+      },
+    }
+    // Loopback http origins pass store validation and reach the wiring seam.
+    for (const store of ['http://127.0.0.1:8123', 'http://localhost:8123', 'http://[::1]:8123']) {
+      await expect(
+        abDispatch({ ...common, env: { ...common.env, AB_STORE: store } } as never),
+      ).rejects.toThrow(/loopback wire seam reached/)
+    }
+    expect(transportCalls.length).toBeGreaterThan(0)
+
+    // Every other non-https origin keeps the existing error, before any
+    // config fetch or side effect.
+    transportCalls.length = 0
+    await expect(
+      abDispatch({
+        ...common,
+        env: { ...common.env, AB_STORE: 'http://insecure.example.test' },
+      } as never),
+    ).rejects.toThrow(/origin-mode dispatch requires an HTTPS BuildStore/)
+    expect(transportCalls).toEqual([])
+  }, 10_000)
+
   test('plugin bootstrap failures happen before production wiring or a dispatch tick', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-plugin-'))
     try {

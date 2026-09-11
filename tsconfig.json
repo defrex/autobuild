@@ -24,6 +24,8 @@
       "autobuild/remote-tickets": ["./packages/core/src/ports/tickets/remote-index.ts"],
       "autobuild/ticket-update": ["./packages/core/src/ports/tickets/update.ts"],
       "autobuild/origin": ["./packages/core/src/kernel/origin.ts"],
+      "autobuild/cli": ["./packages/core/src/cli/dispatch.ts"],
+      "autobuild/git-worktree": ["./packages/core/src/ports/workspace/git-worktree.ts"],
       "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"],
       "@autobuild/hosted-store-service/service": ["./packages/hosted-store-service/src/service.ts"],
       "@autobuild/hosted-store-service/web/auth": [

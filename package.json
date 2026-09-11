@@ -54,6 +54,16 @@
       "types": "./packages/core/src/kernel/origin.ts",
       "import": "./packages/core/src/kernel/origin.ts",
       "default": "./packages/core/src/kernel/origin.ts"
+    },
+    "./cli": {
+      "types": "./packages/core/src/cli/dispatch.ts",
+      "import": "./packages/core/src/cli/dispatch.ts",
+      "default": "./packages/core/src/cli/dispatch.ts"
+    },
+    "./git-worktree": {
+      "types": "./packages/core/src/ports/workspace/git-worktree.ts",
+      "import": "./packages/core/src/ports/workspace/git-worktree.ts",
+      "default": "./packages/core/src/ports/workspace/git-worktree.ts"
     }
   },
   "files": [
