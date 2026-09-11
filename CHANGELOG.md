@@ -3,6 +3,13 @@
 ## Unreleased
 
 - [#315](https://github.com/defrex/autobuild/pull/315) — Run harvest in a disposable sandbox on hosted dispatchers
+- [#314](https://github.com/defrex/autobuild/pull/314) — Prove auto-merge gate presence from the mechanism actually in effect
+- [#313](https://github.com/defrex/autobuild/pull/313) — Enforce event validation before prune in all store implementations
+- [#312](https://github.com/defrex/autobuild/pull/312) — Drop duplicate idempotent updatedAt writes in the SQLite deposit path
+- [#311](https://github.com/defrex/autobuild/pull/311) — Bound dispatcher run/config artifacts with a retention policy
+- [#310](https://github.com/defrex/autobuild/pull/310) — Host the dispatcher: add per-minute cron and rewrite the runbook
+- [#309](https://github.com/defrex/autobuild/pull/309) — Make the cron invocation bound exact: fix timer race and overrun
+- [#308](https://github.com/defrex/autobuild/pull/308) — Support per-repository forge credentials in the hosted dispatcher
 - [#303](https://github.com/defrex/autobuild/pull/303) — Let ambient build status succeed from a differently located checkout
 - [#291](https://github.com/defrex/autobuild/pull/291) — Run this repository's builds in Vercel Sandbox
 - [#289](https://github.com/defrex/autobuild/pull/289) — Prove runtime provisioning diagnostics redact secrets

@@ -1607,7 +1607,11 @@ account-plan refusal for the branch-rulesets endpoint proves that no ruleset
 can exist only when the independent classic-protection probe also
 successfully reports no protection. Every near miss, generic authorization
 failure, malformed or unknown response, and tooling failure remains unknown
-and fails closed.
+and fails closed. Gate presence is decided by the mechanism actually in
+effect: a ruleset probe that proves merge-blocking rules settles presence even
+when the classic protection response is incomplete, while an incomplete classic
+response with no proven ruleset gate still fails closed with a reason naming
+the missing subsection.
 
 Inability to prove or apply auto-merge is nonfatal pipeline plumbing, not a PR
 creation failure: finalize still records the open PR and completes, consent

@@ -561,6 +561,116 @@ describe('GitHubForge.setAutoMerge', () => {
     expect(calls.at(-2)!.path).toBe('graphql')
   })
 
+  test('a classic response lacking required_pull_request_reviews with a checks gate applies native auto-merge', async () => {
+    // The evidence signature from PRs #308–#311: the aggregate branch-protection
+    // response omits the reviews subsection entirely while a status-checks
+    // requirement is present. Presence proof from the subsection that IS
+    // rendered routes to native auto-merge instead of a generic deferral.
+    const { forge, calls } = makeForge([
+      prView(),
+      branchWith({
+        required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+        restrictions: null,
+        // required_pull_request_reviews omitted entirely.
+      }),
+      ruleset([]),
+      repositoryAutoMerge(true),
+      graphqlApplied('enablePullRequestAutoMerge'),
+      nativeState(true),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    expect(enableMutation(calls)).toBeDefined()
+  })
+
+  test('a proven ruleset gate settles presence when the classic response omits the reviews subsection', async () => {
+    // The four-evidence case: the repository is governed by rulesets, GitHub
+    // omits the classic reviews subsection in exactly that situation, and the
+    // ruleset probe — the mechanism actually in effect — finds merge-blocking
+    // rules. The gate must apply native auto-merge, not defer.
+    const { forge, calls } = makeForge([
+      prView(),
+      branchWith({
+        required_status_checks: null,
+        restrictions: null,
+        // required_pull_request_reviews omitted entirely.
+      }),
+      ruleset([
+        {
+          type: 'required_status_checks',
+          parameters: { required_status_checks: [{ context: 'ci' }] },
+        },
+      ]),
+      repositoryAutoMerge(true),
+      graphqlApplied('enablePullRequestAutoMerge'),
+      nativeState(true),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    expect(enableMutation(calls)).toBeDefined()
+  })
+
+  test('an incomplete classic response with no ruleset gate defers with a reason naming both facts', async () => {
+    const { forge } = makeForge([
+      prView(),
+      branchWith({
+        required_status_checks: null,
+        restrictions: null,
+        // required_pull_request_reviews omitted entirely.
+      }),
+      ruleset([]),
+    ])
+    const result = await forge.setAutoMerge('/ws/build-1', 42, true)
+    expect(result).toMatchObject({ kind: 'deferred', reason: { code: 'unproven-gate-state' } })
+    if (result.kind !== 'deferred') return
+    // The generic 'could not be proven' summary must not stand alone: the
+    // detail names the missing subsection AND what the ruleset probe saw.
+    expect(result.reason?.detail).toMatch(/required_pull_request_reviews missing from response/)
+    expect(result.reason?.detail).toContain("branch 'main' found no merge-blocking rules")
+  })
+
+  test('a classic response with only a rendered checks subsection proves gate presence', async () => {
+    // Presence proof from one rendered subsection must not require the other
+    // subsections to exist: reviews and restrictions are omitted entirely.
+    const { forge } = makeForge([
+      prView(),
+      branchWith({
+        required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+      }),
+      ruleset([]),
+      repositoryAutoMerge(true),
+      graphqlApplied('enablePullRequestAutoMerge'),
+      nativeState(true),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+  })
+
+  test('an unprotected branch as GitHub really renders it proves the classic gate absent', async () => {
+    // GET /branches/{b} on an unprotected branch does not carry `protection: null`;
+    // it carries `protected: false` plus a stub protection object.
+    const unprotected = {
+      json: {
+        protected: false,
+        protection: {
+          enabled: false,
+          required_status_checks: { checks: [], contexts: [], enforcement_level: 'off' },
+        },
+      },
+    }
+    const { forge } = makeForge([prView('clean'), unprotected, ruleset([])])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+    const stubOnly = makeForge([
+      prView('clean'),
+      branchWith({ enabled: false, required_status_checks: { enforcement_level: 'off' } }),
+      ruleset([]),
+    ])
+    expect(await stubOnly.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+  })
+
   test('clean or unstable with two successful negative probes returns a guarded direct candidate', async () => {
     for (const state of ['clean', 'unstable'] as const) {
       const { forge, calls } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
@@ -577,7 +687,13 @@ describe('GitHubForge.setAutoMerge', () => {
   test('ungated transient/conflict states defer, while an unexplained blocker fails closed with a reason', async () => {
     for (const state of ['unknown', 'dirty'] as const) {
       const { forge } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
-      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
+      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+        kind: 'deferred',
+        reason: {
+          code: 'unproven-gate-state',
+          detail: expect.stringContaining(state.toUpperCase()),
+        },
+      })
     }
     const blocked = makeForge([prView('blocked'), branchWith(fullProtection), ruleset([])])
     expect(await blocked.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
@@ -638,7 +754,13 @@ describe('GitHubForge.setAutoMerge', () => {
       graphqlApplied('enablePullRequestAutoMerge'),
       nativeState(false),
     ])
-    expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'deferred' })
+    expect(await enable.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+      kind: 'deferred',
+      reason: {
+        code: 'unproven-gate-state',
+        detail: expect.stringContaining('follow-up native read reports auto_merge unset'),
+      },
+    })
 
     const disable = makeForge([
       nativeState(true),

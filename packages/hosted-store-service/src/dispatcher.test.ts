@@ -98,6 +98,65 @@ describe('parseHostedDispatcherEnv', () => {
     // Blank CRON_SECRET means the endpoint is disabled, not a missing variable.
     expect(parseHostedDispatcherEnv({ ...baseEnv, CRON_SECRET: '  ' }).cronSecret).toBeUndefined()
   })
+
+  test('parses per-repository forge credential overrides, normalized to served identities', () => {
+    const config = parseHostedDispatcherEnv({
+      ...baseEnv,
+      AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({
+        'git@github.com:acme/one.git': 'override-one',
+        'https://github.com/acme/two': 'override-two',
+      }),
+    })
+    expect([...config.githubTokenOverrides.entries()]).toEqual([
+      ['https://github.com/acme/one', 'override-one'],
+      ['https://github.com/acme/two', 'override-two'],
+    ])
+  })
+
+  test('unset or blank AB_DISPATCHER_GITHUB_TOKENS means no overrides', () => {
+    expect(parseHostedDispatcherEnv(baseEnv).githubTokenOverrides.size).toBe(0)
+    expect(
+      parseHostedDispatcherEnv({ ...baseEnv, AB_DISPATCHER_GITHUB_TOKENS: '  ' })
+        .githubTokenOverrides.size,
+    ).toBe(0)
+  })
+
+  test('rejects malformed AB_DISPATCHER_GITHUB_TOKENS without echoing values', () => {
+    const token = 'secret-forge-token'
+    const cases: Array<Record<string, string | undefined>> = [
+      // Malformed JSON — JSON.parse error text can embed input fragments, so
+      // the rethrown message is fixed and never contains the input.
+      { AB_DISPATCHER_GITHUB_TOKENS: `{"https://github.com/acme/one": "${token}"` },
+      // Not a JSON object.
+      { AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify([token]) },
+      { AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify(token) },
+      // Blank value.
+      { AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'https://github.com/acme/one': '  ' }) },
+      // Non-string value.
+      { AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'https://github.com/acme/one': 42 }) },
+      // Key outside the resolved served set (and an unsafe spelling).
+      { AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'https://github.com/acme/other': token }) },
+      { AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'file:///etc/repo': token }) },
+      // Two spellings normalizing to the same served identity.
+      {
+        AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({
+          'https://github.com/acme/one': token,
+          'git@github.com:acme/one.git': 'other-token',
+        }),
+      },
+    ]
+    for (const env of cases) {
+      let message = ''
+      try {
+        parseHostedDispatcherEnv({ ...baseEnv, ...env })
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain('AB_DISPATCHER_GITHUB_TOKENS')
+      expect(message).not.toContain(token)
+      expect(message).not.toContain('other-token')
+    }
+  })
 })
 
 describe('createHostedDispatcher', () => {
@@ -179,6 +238,58 @@ describe('createHostedDispatcher', () => {
     ])
   })
 
+  test('an override authenticates one repository while the other keeps the shared credential', async () => {
+    const env = {
+      ...baseEnv,
+      GITHUB_TOKEN: 'shared-forge-token',
+      AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({
+        'https://github.com/acme/one': 'override-forge-token',
+      }),
+    }
+    const { calls, tick } = dispatcher(env, ['ok', 'ok'])
+    const summary = await tick()
+    expect(summary.repositories.every((entry) => entry.outcome === 'ticked')).toBe(true)
+    // The overridden repository's kernel env carries the override on BOTH
+    // variables, so no reader can straddle two identities within one tick.
+    expect(calls[0]!.env?.GITHUB_TOKEN).toBe('override-forge-token')
+    expect(calls[0]!.env?.GH_TOKEN).toBe('override-forge-token')
+    // The non-overridden repository's env keeps the shared credential
+    // unchanged — the fallback path.
+    expect(calls[1]!.env?.GITHUB_TOKEN).toBe('shared-forge-token')
+    expect(calls[1]!.env?.GH_TOKEN).toBeUndefined()
+  })
+
+  test('an override works with no shared forge credential in the environment at all', async () => {
+    const { calls, tick } = dispatcher(
+      {
+        ...baseEnv,
+        AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({
+          'https://github.com/acme/two': 'override-forge-token',
+        }),
+      },
+      ['ok', 'ok'],
+    )
+    await tick()
+    expect(calls[0]!.env?.GITHUB_TOKEN).toBeUndefined()
+    expect(calls[1]!.env?.GITHUB_TOKEN).toBe('override-forge-token')
+    expect(calls[1]!.env?.GH_TOKEN).toBe('override-forge-token')
+  })
+
+  test('token material never appears in the tick summary or a failed outcome', async () => {
+    const override = 'override-forge-token'
+    const { tick } = dispatcher(
+      {
+        ...baseEnv,
+        GITHUB_TOKEN: 'shared-forge-token',
+        AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'https://github.com/acme/one': override }),
+      },
+      ['throw', 'ok'],
+    )
+    const summary = await tick()
+    expect(JSON.stringify(summary)).not.toContain(override)
+    expect(JSON.stringify(summary)).not.toContain('shared-forge-token')
+  })
+
   test('a misconfigured deployment fails loudly per invocation, naming the variable', async () => {
     const { tick } = dispatcher({ ...baseEnv, AB_DISPATCHER_ORIGIN: undefined }, [])
     expect(tick()).rejects.toThrow(/AB_DISPATCHER_ORIGIN/)
@@ -244,6 +355,22 @@ describe('createDispatcherEndpoint', () => {
         { repository: 'https://github.com/acme/two', outcome: 'ticked', runId: expect.any(String) },
       ],
     })
+  })
+
+  test('the authorized response body never carries forge credential material', async () => {
+    const override = 'override-forge-token'
+    const response = await endpoint({
+      env: {
+        ...baseEnv,
+        GITHUB_TOKEN: 'shared-forge-token',
+        AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ 'https://github.com/acme/one': override }),
+      },
+      dispatch: async () => {},
+    }).fetch(new Request(url, { headers: authorized }))
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).not.toContain(override)
+    expect(body).not.toContain('shared-forge-token')
   })
 
   test('a misconfigured deployment surfaces as a 500 naming the variable, never a value', async () => {

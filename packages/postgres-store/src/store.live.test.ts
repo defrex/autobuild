@@ -63,7 +63,10 @@ async function runWorker(
 if (testUrl) {
   describeBuildStoreContract('PostgreSQL', async (options) => {
     const database = await isolatedDatabase()
-    const store = await openPostgresBuildStore(database.url, new MemoryBlobStore(), options)
+    const store = await openPostgresBuildStore(database.url, new MemoryBlobStore(), {
+      ...(options?.clock ? { clock: options.clock } : {}),
+      ...(options?.retention ? { retention: options.retention } : {}),
+    })
     return { store, cleanup: database.cleanup }
   })
 

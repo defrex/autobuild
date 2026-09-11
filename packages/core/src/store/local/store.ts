@@ -11,7 +11,7 @@
  * content-addressed.
  */
 import { Database } from 'bun:sqlite'
-import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite'
 import { mkdirSync } from 'node:fs'
 import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
@@ -32,6 +32,11 @@ import {
   type RepositoryEventWrite,
 } from '../../events/repository'
 import { createBuildScopedStore } from '../build-scope'
+import {
+  DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
+  isRetentionManagedKind,
+  revisionsToPrune,
+} from '../retention'
 import { pollingSubscribe } from '../subscribe'
 import {
   contentHash,
@@ -135,18 +140,23 @@ export interface SqliteBuildStoreOptions {
   database: Database
   blobs: BlobStore
   clock?: Clock
+  /** Artifact retention (store/retention.ts): how many newest revisions of
+   * each retention-managed dispatcher kind survive. Default 200. */
+  retention?: { maxRevisions?: number }
 }
 
 export class SqliteBuildStore implements BuildStore {
   private readonly sqlite: Database
   private readonly db: BunSQLiteDatabase
   private readonly clock: Clock
+  private readonly maxRevisions: number
   readonly blobs: BlobStore
 
   constructor(opts: SqliteBuildStoreOptions) {
     this.sqlite = opts.database
     this.blobs = opts.blobs
     this.clock = opts.clock ?? systemClock
+    this.maxRevisions = opts.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
     // busy_timeout first so even the WAL switch below waits out a concurrent
     // opener instead of failing fast; WAL so connections on the same file see
     // each other's writes (§7.2.1). Cross-process write serialization comes
@@ -342,8 +352,21 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  /** Runs inside an open transaction — see `appendInTx`. */
-  private depositInTx(slug: string, prepared: PreparedArtifact): ArtifactMeta {
+  /**
+   * Runs inside an open transaction — see `appendInTx`.
+   *
+   * `prune: false` defers deposit-time retention to the batch caller (the
+   * atomic `appendWithArtifacts` path), which prunes once per distinct kind
+   * *after* the batch event is validated — see the invariant documented on
+   * `appendWithArtifacts`. Single-deposit paths keep the default
+   * `prune: true` (deposit and prune in one step; no event is appended, so
+   * the validation-before-prune invariant does not apply).
+   */
+  private depositInTx(
+    slug: string,
+    prepared: PreparedArtifact,
+    opts: { prune?: boolean } = { prune: true },
+  ): ArtifactMeta {
     this.requireBuild(slug)
     const createdAt = this.now()
     const row = this.db
@@ -363,6 +386,7 @@ export class SqliteBuildStore implements BuildStore {
         createdAt,
       })
       .run()
+    if (opts.prune) this.pruneBuildInTx(slug, prepared.kind)
     this.db.update(builds).set({ updatedAt: createdAt }).where(eq(builds.slug, slug)).run()
     return {
       build: slug,
@@ -372,6 +396,60 @@ export class SqliteBuildStore implements BuildStore {
       metadata: prepared.metadata,
       createdAt,
     }
+  }
+
+  /**
+   * Deposit-time retention (store/retention.ts): inside the same transaction
+   * as the deposit, drop revisions past the bound for retention-managed
+   * kinds. Revision assignment reads MAX(revision)+1, so pruning never
+   * collides with it. Non-family kinds are never touched.
+   */
+  private pruneBuildInTx(slug: string, kind: string): void {
+    if (!isRetentionManagedKind(kind)) return
+    const rows = this.db
+      .select({ revision: artifacts.revision })
+      .from(artifacts)
+      .where(and(eq(artifacts.build, slug), eq(artifacts.kind, kind)))
+      .all()
+    const pruned = revisionsToPrune(
+      rows.map((row) => row.revision),
+      this.maxRevisions,
+    )
+    if (pruned.length === 0) return
+    this.db
+      .delete(artifacts)
+      .where(
+        and(
+          eq(artifacts.build, slug),
+          eq(artifacts.kind, kind),
+          inArray(artifacts.revision, pruned),
+        ),
+      )
+      .run()
+  }
+
+  private pruneRepoInTx(repo: string, kind: string): void {
+    if (!isRetentionManagedKind(kind)) return
+    const rows = this.db
+      .select({ revision: repoArtifacts.revision })
+      .from(repoArtifacts)
+      .where(and(eq(repoArtifacts.repo, repo), eq(repoArtifacts.kind, kind)))
+      .all()
+    const pruned = revisionsToPrune(
+      rows.map((row) => row.revision),
+      this.maxRevisions,
+    )
+    if (pruned.length === 0) return
+    this.db
+      .delete(repoArtifacts)
+      .where(
+        and(
+          eq(repoArtifacts.repo, repo),
+          eq(repoArtifacts.kind, kind),
+          inArray(repoArtifacts.revision, pruned),
+        ),
+      )
+      .run()
   }
 
   async appendWithArtifacts<T extends EventType>(
@@ -385,9 +463,22 @@ export class SqliteBuildStore implements BuildStore {
     }
     // One synchronous transaction: deposits + event append commit together;
     // an invalid event throws, rolling back every deposit (D6).
+    //
+    // Ordering invariant (AUT-322): the batch event is validated BEFORE any
+    // retention prune runs. Deposits land unpruned, validation gates the
+    // whole batch, and only then does one prune per distinct batch kind
+    // execute — still inside this transaction. A same-kind batch whose prune
+    // scope covers a sibling therefore never deletes that sibling before the
+    // batch's event is validated. Pruning once per kind (not per deposit) is
+    // equivalent: `revisionsToPrune` is a pure function of the full
+    // post-batch revision set, and pruned revisions are always older than
+    // the current MAX, so revision assignment is unaffected.
     return this.writeTx(() => {
-      const deposited = prepared.map((p) => this.depositInTx(slug, p))
+      const deposited = prepared.map((p) => this.depositInTx(slug, p, { prune: false }))
       const validated = validateEventWrite(makeEvent(deposited))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        this.pruneBuildInTx(slug, kind)
+      }
       const event = this.appendInTx(slug, validated) as EventEnvelope<T>
       return { event, artifacts: deposited }
     })
@@ -586,7 +677,12 @@ export class SqliteBuildStore implements BuildStore {
     return this.writeTx(() => this.appendRepoInTx(repo, validated)) as RepositoryEventEnvelope<T>
   }
 
-  private depositRepoInTx(repo: string, prepared: PreparedArtifact): RepositoryArtifactMeta {
+  /** See `depositInTx` for the `prune` option's meaning. */
+  private depositRepoInTx(
+    repo: string,
+    prepared: PreparedArtifact,
+    opts: { prune?: boolean } = { prune: true },
+  ): RepositoryArtifactMeta {
     this.requireRepo(repo)
     const createdAt = this.now()
     const row = this.db
@@ -606,6 +702,7 @@ export class SqliteBuildStore implements BuildStore {
         createdAt,
       })
       .run()
+    if (opts.prune) this.pruneRepoInTx(repo, prepared.kind)
     this.db
       .update(repoStreams)
       .set({ updatedAt: createdAt })
@@ -633,9 +730,16 @@ export class SqliteBuildStore implements BuildStore {
     for (const input of artifactInputs) {
       prepared.push(await this.prepareArtifact(input))
     }
+    // Ordering invariant (AUT-322): same shape as `appendWithArtifacts` —
+    // deposit unpruned, validate the batch event, then prune once per
+    // distinct batch kind, all inside this transaction. Validation
+    // provably precedes any retention deletion.
     return this.writeTx(() => {
-      const deposited = prepared.map((item) => this.depositRepoInTx(repo, item))
+      const deposited = prepared.map((item) => this.depositRepoInTx(repo, item, { prune: false }))
       const validated = validateRepositoryEventWrite(makeEvent(deposited))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        this.pruneRepoInTx(repo, kind)
+      }
       const event = this.appendRepoInTx(repo, validated) as RepositoryEventEnvelope<T>
       return { event, artifacts: deposited }
     })
@@ -867,7 +971,10 @@ export async function inspectLocalStoreSnapshot(rootDir: string): Promise<LocalS
  * Open the local store (SPEC §7.2.1): `<root>/autobuild.sqlite` plus a
  * content-addressed blob directory at `<root>/blobs`.
  */
-export function openLocalStore(rootDir: string, opts: { clock?: Clock } = {}): SqliteBuildStore {
+export function openLocalStore(
+  rootDir: string,
+  opts: { clock?: Clock; retention?: { maxRevisions?: number } } = {},
+): SqliteBuildStore {
   mkdirSync(rootDir, { recursive: true })
   const database = new Database(join(rootDir, 'autobuild.sqlite'), { create: true })
   const blobs = new DirBlobStore(join(rootDir, 'blobs'))
@@ -875,5 +982,6 @@ export function openLocalStore(rootDir: string, opts: { clock?: Clock } = {}): S
     database,
     blobs,
     ...(opts.clock ? { clock: opts.clock } : {}),
+    ...(opts.retention ? { retention: opts.retention } : {}),
   })
 }

@@ -36,7 +36,10 @@ import {
 // store so the suite's store-assigned-ts and lease-expiry assertions hold.
 
 describeBuildStoreContract('remote (HTTP → MemoryBuildStore)', async (opts) => {
-  const backing = new MemoryBuildStore(opts?.clock ? { clock: opts.clock } : {})
+  const backing = new MemoryBuildStore({
+    ...(opts?.clock ? { clock: opts.clock } : {}),
+    ...(opts?.retention ? { retention: opts.retention } : {}),
+  })
   const server = startStoreServer({ store: backing })
   const store = new RemoteBuildStore({ url: server.url })
   return { store, cleanup: server.stop }

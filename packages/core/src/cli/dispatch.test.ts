@@ -651,6 +651,199 @@ describe('abDispatch guards', () => {
     }
   }, 10_000)
 
+  /** Pump the event loop with macrotask turns (no timers, no real-time waits)
+   * until the predicate holds — lets the drain reach its expiry race before
+   * the fake scheduler's handle is fired or the build set is released. */
+  async function pumpUntil(predicate: () => boolean, what: string): Promise<void> {
+    for (let i = 0; i < 10_000; i++) {
+      if (predicate()) return
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    throw new Error(`timed out pumping the event loop waiting for ${what}`)
+  }
+
+  /** Fake scheduler over the `timers` seam: handles are recorded, never fire
+   * on their own, and can be fired manually — both drain-race outcomes are
+   * then deterministic, with `manualClock` supplying `remainingMs`. */
+  class ManualTimers {
+    readonly pending = new Map<unknown, () => void>()
+    setTimeoutCalls = 0
+    setTimeout(handler: () => void, _ms: number): unknown {
+      this.setTimeoutCalls += 1
+      const handle = { id: this.setTimeoutCalls }
+      this.pending.set(handle, handler)
+      return handle
+    }
+
+    clearTimeout(handle: unknown): void {
+      this.pending.delete(handle)
+    }
+
+    fireAll(): void {
+      for (const [handle, handler] of [...this.pending]) {
+        this.pending.delete(handle)
+        handler()
+      }
+    }
+  }
+
+  /** Seed the mid-drain fixture build: created → provisioned → spec imported
+   * → plan started, enough log for startup resume to attach a runner. */
+  async function seedDrainBuild(fx: Fixture, slug: string): Promise<void> {
+    const branch = `ab/${slug}`
+    await fx.store.createBuild({ slug, repo: fx.origin, branch })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: `T-${slug}`, title: slug },
+        repo: fx.origin,
+        baseBranch: 'main',
+      },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        ref: 'ws-g0',
+        path: '/deadline/workspace',
+        branch,
+        base: { source: 'remote', sha: 'a'.repeat(40) },
+      },
+    })
+    await fx.store.appendWithArtifacts(
+      slug,
+      [{ kind: 'spec', content: '# Spec' }],
+      (deposited) => ({
+        actor: DISPATCHER,
+        type: 'spec.imported',
+        payload: {
+          artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          ticket: { source: 'fake', id: `T-${slug}`, title: slug },
+        },
+      }),
+    )
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'plan.started',
+      payload: { round: 1 },
+    })
+  }
+
+  test('drain race, build set wins: the expiry timer is cleared, no handle outlives the invocation', async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const timers = new ManualTimers()
+    await seedDrainBuild(fx, 'drain-winner')
+
+    const release = deferred()
+    const execution: BuildExecution = {
+      async start(input) {
+        return {
+          supervision: 'local-parent',
+          identity: { provider: 'fake', workspaceRef: input.workspaceRef },
+          completion: release.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            return { outcome: 'confirmed' }
+          },
+          async detach() {},
+        }
+      },
+    }
+    try {
+      const dispatch = abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        deadlineAt: clock().getTime() + 60_000,
+        timers,
+        wire: () => ({ ...fx.wire(), buildExecution: execution }),
+      })
+      // The drain is racing the in-flight build set against the expiry timer.
+      await pumpUntil(() => timers.pending.size === 1, 'the expiry timer')
+      expect(timers.setTimeoutCalls).toBe(1)
+      // The build set wins the race — well before the (never self-firing)
+      // expiry deadline.
+      release.resolve()
+      await dispatch
+
+      // obs_e7fb42f0: the winning branch must clear the expiry handle, so the
+      // scheduler holds zero pending timers once the invocation resolves.
+      expect(timers.pending.size).toBe(0)
+      // The build reached its natural durable boundary (no teardown stop).
+      const events = await fx.store.getEvents('drain-winner')
+      expect(events.filter((event) => event.type === 'execution.ended')).toHaveLength(1)
+      expect((await fx.store.getBuild('drain-winner'))?.lease).toBeUndefined()
+    } finally {
+      release.resolve()
+      await fx.cleanup()
+    }
+  }, 10_000)
+
+  test('drain race, deadline fires: firing the injected expiry handle ends the drain, teardown stops the runner', async () => {
+    const clock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+    const timers = new ManualTimers()
+    await seedDrainBuild(fx, 'drain-expiry')
+
+    const completion = deferred()
+    let stopCalls = 0
+    const execution: BuildExecution = {
+      async start(input) {
+        return {
+          supervision: 'local-parent',
+          identity: { provider: 'fake', workspaceRef: input.workspaceRef },
+          // Resolves only via stop(): firing the injected expiry handle is
+          // what ends the drain — no real-time sleep drives this test.
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            stopCalls += 1
+            completion.resolve()
+            return { outcome: 'confirmed' }
+          },
+          async detach() {},
+        }
+      },
+    }
+    try {
+      const dispatch = abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        deadlineAt: clock().getTime() + 60_000,
+        timers,
+        wire: () => ({ ...fx.wire(), buildExecution: execution }),
+      })
+      await pumpUntil(() => timers.pending.size === 1, 'the expiry timer')
+      // The deadline fires: resolve the expiry timer manually.
+      timers.fireAll()
+      await dispatch
+
+      // Established timeout outcome unchanged: teardown stopped and reaped
+      // the local-parent execution exactly as with real timers.
+      expect(stopCalls).toBe(1)
+      const events = await fx.store.getEvents('drain-expiry')
+      const ended = events.filter((event) => event.type === 'execution.ended')
+      expect(ended).toHaveLength(1)
+      expect(ended[0]).toMatchObject({ payload: { outcome: 'stopped' } })
+      expect((await fx.store.getBuild('drain-expiry'))?.lease).toBeUndefined()
+      // The fired handle was consumed; nothing remains pending.
+      expect(timers.pending.size).toBe(0)
+    } finally {
+      completion.resolve()
+      await fx.cleanup()
+    }
+  }, 10_000)
+
   test('origin mode accepts loopback http store origins and still rejects other http origins', async () => {
     const transportCalls: string[] = []
     const transport = (async (method: string, path: string) => {
