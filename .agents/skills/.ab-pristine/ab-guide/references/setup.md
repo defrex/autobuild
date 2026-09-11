@@ -177,8 +177,12 @@ ab dispatch --repository https://github.com/owner/repository \\
 ```
 
 `--repository` (or `AB_REPOSITORY`) is the normalized origin. Origin mode
-requires an HTTPS `AB_STORE` plus `AB_TOKEN`, a GitHub token, and `forge =
+requires an HTTPS `AB_STORE` plus `AB_TOKEN`, a GitHub credential, and `forge =
 "github"`; the interactive dashboard is unavailable (`--plain` or no TTY). The
+GitHub credential is `GITHUB_TOKEN`, then `GH_TOKEN`, then — on a host with
+the gh CLI — the login stored by `gh auth login`, read through `gh auth token`.
+A hosted or sandboxed dispatcher has no gh and must export a token; a local
+operator needs nothing beyond `gh auth login`. The
 startup configuration — and every per-tick reload — is `autobuild.toml` read
 from the forge at the current `baseBranch` (the first read resolves against the
 repository's default branch), so a push to the base branch is honored by a

@@ -31,7 +31,7 @@ import { parseRepoCoordinates } from '../forge/github'
 import {
   createGitHubFetchTransport,
   GitHubApiError,
-  githubTokenFromEnv,
+  resolveGitHubToken,
   type GitHubRequest,
 } from '../forge/github-transport'
 import { packageAutobuildDistribution } from './vercel-sandbox'
@@ -83,7 +83,7 @@ export async function fetchDistributionReleaseAsset(
   version: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
   transport: GitHubRequest = createGitHubFetchTransport({
-    token: githubTokenFromEnv(env),
+    token: () => resolveGitHubToken(env),
   }),
 ): Promise<Uint8Array> {
   const coordinates = parseRepoCoordinates(CANONICAL_REPOSITORY_URL)

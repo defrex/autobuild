@@ -73,7 +73,11 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from '../p
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
-import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
+import {
+  GitHubApiError,
+  resolveGitHubToken,
+  type GitHubRequest,
+} from '../ports/forge/github-transport'
 import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -3215,8 +3219,13 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
   if (opts.env.AB_TOKEN === undefined || opts.env.AB_TOKEN === '') {
     throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
   }
-  if (opts.env.GITHUB_TOKEN === undefined && opts.env.GH_TOKEN === undefined) {
-    throw new Error('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
+  // The forge resolves the same credential lazily; probing here keeps the
+  // fail-before-side-effects contract for a launch with no credential at all.
+  const githubToken = await resolveGitHubToken(opts.env, (cmd) => opts.exec(cmd, { cwd: tmpdir() }))
+  if (githubToken === undefined) {
+    throw new Error(
+      'origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN (or an authenticated gh CLI) for the GitHub API',
+    )
   }
   const scratch = join(
     tmpdir(),

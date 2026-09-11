@@ -567,6 +567,10 @@ behavioral assertions against every implementation:
 - `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`;
 - `packages/core/src/ports/tickets/contract.ts` — `TicketSource`;
 - `packages/core/src/ports/workspace/contract.ts` — `WorkspaceProvider`;
+- `packages/core/src/ports/forge/github-transport.ts` — the REST transport seam and
+  credential resolution: `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login
+  (`gh auth token`), probed lazily on the first request so a checkout-mode dispatcher
+  works from `gh auth login` alone while hosted dispatchers export a token.
 - `packages/core/src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
   branch deletion with merged-race preservation;
 - `packages/core/src/ports/runner/contract.ts` — `AgentRunner` session/continuation,

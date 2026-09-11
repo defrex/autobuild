@@ -4,12 +4,15 @@
  * kernel-side plumbing (SPEC §8.6 [D7]) — agents never touch the remote, so
  * forge credentials never enter the sandbox.
  *
- * The adapter never shells `gh` or reads a local checkout for its API calls:
- * the same adapter serves a checkout-bound dispatcher and a checkout-less
- * (`--repository`) one. The one deliberate exception is `pushBranch`, which
- * remains `git push` from the workspace — it is only ever called from
- * worktree-side terminals and contract fixtures; `vercel-sandbox` builds
- * publish through the sandbox's receive-pack proxy and the host never pushes.
+ * The adapter never routes API calls through `gh` or reads a local checkout
+ * for them: the same adapter serves a checkout-bound dispatcher and a
+ * checkout-less (`--repository`) one. Credentials come from `GITHUB_TOKEN` /
+ * `GH_TOKEN`, falling back to the gh CLI's stored login (`gh auth token`) so
+ * a local operator needs only `gh auth login`. The one deliberate subprocess
+ * exception on the API side is that probe; `pushBranch` remains `git push`
+ * from the workspace — it is only ever called from worktree-side terminals
+ * and contract fixtures; `vercel-sandbox` builds publish through the
+ * sandbox's receive-pack proxy and the host never pushes.
  *
  * Native auto-merge is the one operation GitHub exposes only through its
  * GraphQL schema (no REST route exists), so its enable/disable mutations
@@ -25,7 +28,7 @@ import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin
 import {
   GitHubApiError,
   createGitHubFetchTransport,
-  githubTokenFromEnv,
+  resolveGitHubToken,
   restPlanLimitation,
   type GitHubRequest,
   type GitHubRequestOpts,
@@ -509,14 +512,21 @@ export class GitHubForge implements Forge {
     } = {},
   ) {
     this.exec = opts.exec ?? bunExec
+    this.env = opts.env ?? {}
+    // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
+    // stored login (probed lazily through this adapter's exec seam, so a
+    // checkout-mode dispatcher needs only `gh auth login`).
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({
-        ...(opts.token !== undefined
-          ? { token: opts.token }
-          : { token: githubTokenFromEnv(opts.env ?? {}) }),
+        token:
+          opts.token !== undefined
+            ? opts.token
+            : () =>
+                resolveGitHubToken(this.env, (cmd) =>
+                  this.exec(cmd, { cwd: opts.repoRoot ?? process.cwd() }),
+                ),
       })
-    this.env = opts.env ?? {}
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository
     } else if (this.env.AB_REPOSITORY !== undefined && this.env.AB_REPOSITORY !== '') {

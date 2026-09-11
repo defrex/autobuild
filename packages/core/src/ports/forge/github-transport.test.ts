@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { createGitHubFetchTransport, GitHubApiError } from './github-transport'
+import {
+  createGitHubFetchTransport,
+  GH_CLI_TOKEN_COMMAND,
+  GitHubApiError,
+  githubTokenFromGhCli,
+  resolveGitHubToken,
+  type GitHubCliExec,
+} from './github-transport'
 
 /** A request recorder standing in for global fetch, answering from a
  * scripted response. Returns the captured URL/headers for assertions. */
@@ -108,6 +115,100 @@ describe('createGitHubFetchTransport', () => {
       expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28')
       expect(headers['Content-Type']).toBe('application/json')
       expect(init.body).toBe(JSON.stringify({ title: 'hi' }))
+    } finally {
+      stub.restore()
+    }
+  })
+})
+
+describe('resolveGitHubToken', () => {
+  test('prefers GITHUB_TOKEN, then GH_TOKEN, without touching the gh CLI', async () => {
+    const probes: string[][] = []
+    const exec: GitHubCliExec = async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout: 'gho_keyring\n' }
+    }
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: 'env-a', GH_TOKEN: 'env-b' }, exec)).toBe(
+      'env-a',
+    )
+    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toBe('env-b')
+    expect(probes).toEqual([])
+  })
+
+  test('falls back to the gh CLI login when the environment carries no token', async () => {
+    const probes: string[][] = []
+    const exec: GitHubCliExec = async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout: 'gho_keyring\n' }
+    }
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '' }, exec)).toBe('gho_keyring')
+    expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
+  })
+
+  test('yields no credential when gh is missing, unauthenticated, or silent', async () => {
+    expect(await githubTokenFromGhCli(async () => ({ exitCode: 1, stdout: '' }))).toBeUndefined()
+    expect(
+      await githubTokenFromGhCli(async () => ({ exitCode: 0, stdout: '  \n' })),
+    ).toBeUndefined()
+    expect(
+      await githubTokenFromGhCli(async () => {
+        throw new Error('spawn gh ENOENT')
+      }),
+    ).toBeUndefined()
+  })
+})
+
+describe('createGitHubFetchTransport token resolution', () => {
+  test('resolves a token source once, on the first request, and reuses it', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let resolutions = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          resolutions += 1
+          return 'gho_lazy'
+        },
+      })
+      expect(resolutions).toBe(0)
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(resolutions).toBe(1)
+      for (const call of stub.calls) {
+        expect((call.init.headers as Record<string, string>).Authorization).toBe('Bearer gho_lazy')
+      }
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('sends no Authorization header when the source yields nothing', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    try {
+      const transport = createGitHubFetchTransport({ token: async () => undefined })
+      await transport('GET', 'user')
+      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBeUndefined()
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('retries a source whose probe rejected instead of caching the failure', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let attempts = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          attempts += 1
+          if (attempts === 1) throw new Error('keyring locked')
+          return 'gho_second'
+        },
+      })
+      await expect(transport('GET', 'user')).rejects.toThrow('keyring locked')
+      await transport('GET', 'user')
+      expect(attempts).toBe(2)
+      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_second',
+      )
     } finally {
       stub.restore()
     }

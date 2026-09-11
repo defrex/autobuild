@@ -522,13 +522,31 @@ describe('abDispatch guards', () => {
     await expect(
       abDispatch({ ...common, originConfigTransport: transport, env: {} } as never),
     ).rejects.toThrow(/requires an HTTPS BuildStore/)
+    // No env token and no gh login: the gh probe runs through the exec seam
+    // (never a real `gh`) and its failure is the missing-credential error.
+    const ghProbes: string[][] = []
     await expect(
       abDispatch({
         ...common,
         originConfigTransport: transport,
         env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
+        exec: async (cmd: string[]) => {
+          ghProbes.push([...cmd])
+          return { stdout: '', stderr: 'not logged in', exitCode: 1 }
+        },
       } as never),
-    ).rejects.toThrow(/requires GITHUB_TOKEN or GH_TOKEN/)
+    ).rejects.toThrow(/requires GITHUB_TOKEN or GH_TOKEN \(or an authenticated gh CLI\)/)
+    expect(ghProbes).toEqual([['gh', 'auth', 'token', '--hostname', 'github.com']])
+
+    // An authenticated gh CLI satisfies the requirement without any env token.
+    await expect(
+      abDispatch({
+        ...common,
+        originConfigTransport: transport,
+        env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
+        exec: async () => ({ stdout: 'gho_from_keyring\n', stderr: '', exitCode: 0 }),
+      } as never),
+    ).rejects.toThrow(/origin-mode dispatch cannot load configured plugins/)
   }, 10_000)
 
   test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {

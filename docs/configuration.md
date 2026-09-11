@@ -1464,8 +1464,11 @@ Autobuild never mutates that work. Inspect an open local change with `git diff
 main...ab/<slug>`. It has no review web UI and no image-hosting capability; attached artifacts use
 the existing text-download projection.
 
-- for `forge = "github"`, authenticate GitHub CLI operations with `gh auth login`, and separately make
-  sure the Git remote can fetch/push with the process's Git credentials;
+- for `forge = "github"`, either export a `GITHUB_TOKEN` or `GH_TOKEN` or run `gh auth login`:
+  the kernel speaks the GitHub REST API directly, taking `GITHUB_TOKEN`, then `GH_TOKEN`, then the
+  gh CLI's stored login (`gh auth token`) — so a local dispatcher needs only the gh login, while a
+  host without gh (hosted or sandboxed dispatchers) must export a token. Separately make sure the
+  Git remote can fetch/push with the process's Git credentials;
 - Claude sessions invoke the local `claude` CLI and use its configured login;
   install Claude Code, launch `claude`, and complete login before dispatching;
 - Codex sessions invoke the local `codex` CLI and use its configured login;
