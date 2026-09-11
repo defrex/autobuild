@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#311](https://github.com/defrex/autobuild/pull/311) — Bound dispatcher run/config artifacts with a retention policy
+- [#310](https://github.com/defrex/autobuild/pull/310) — Host the dispatcher: add per-minute cron and rewrite the runbook
 - [#303](https://github.com/defrex/autobuild/pull/303) — Let ambient build status succeed from a differently located checkout
 - [#291](https://github.com/defrex/autobuild/pull/291) — Run this repository's builds in Vercel Sandbox
 - [#289](https://github.com/defrex/autobuild/pull/289) — Prove runtime provisioning diagnostics redact secrets

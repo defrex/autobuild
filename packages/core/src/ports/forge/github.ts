@@ -360,6 +360,11 @@ function classifyClassicProtection(protection: unknown): ClassicGateResult {
     return { kind: 'unproven', detail: `protection is ${JSON.stringify(protection)}` }
   }
   const raw = protection as Record<string, unknown>
+  // An unprotected branch is not rendered as `protection: null`: GitHub
+  // answers `{ enabled: false, required_status_checks: { enforcement_level:
+  // "off", ... } }` with the other subsections omitted. `enabled: false` is
+  // the documented proof that classic protection is absent.
+  if (raw.enabled === false) return { kind: 'proved', gate: false }
   // Every subsection this classifier reads must EXIST in the response, even
   // when unset (GitHub renders unset subsections as null). A response that
   // omits one is auth- or plan-scoped in a way we cannot prove.
@@ -803,13 +808,20 @@ export class GitHubForge implements Forge {
     let classicError: string | undefined
     try {
       const branch = await this.request('GET', branchPath)
-      const protection = (branch.json as Record<string, unknown> | undefined)?.protection
-      if (protection === undefined) {
-        throw new Error('branch response carries no protection object')
+      const view = branch.json as Record<string, unknown> | undefined
+      if (view?.protected === false) {
+        // The branch view's own flag proves classic protection absent even
+        // when the nested protection object is the unprotected stub.
+        classicGate = false
+      } else {
+        const protection = view?.protection
+        if (protection === undefined) {
+          throw new Error('branch response carries no protection object')
+        }
+        const classic = classifyClassicProtection(protection)
+        if (classic.kind === 'unproven') throw new Error(classic.detail)
+        classicGate = classic.gate
       }
-      const classic = classifyClassicProtection(protection)
-      if (classic.kind === 'unproven') throw new Error(classic.detail)
-      classicGate = classic.gate
     } catch (error) {
       classicError = errorMessage(error)
     }
