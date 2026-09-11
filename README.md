@@ -45,8 +45,8 @@ The default remains a local Git worktree. See the [workspace configuration and
 security contract](docs/configuration.md#vercel-sandbox).
 Teams that need one durable store across hosts
 can deploy the optional [hosted service](packages/hosted-store-service/README.md),
-which also serves a GitHub-authenticated browser dashboard and can own ticket
-persistence and external tracker credentials. Repository identity across the
+which also serves a GitHub-authenticated browser dashboard, can own ticket
+persistence and external tracker credentials, and can run the dispatcher itself on a schedule (see [the hosted dispatcher](docs/hosted-dispatcher.md)). Repository identity across the
 Store, dispatcher, query commands, and that dashboard is the repository's
 normalized origin URL (e.g. `https://github.com/defrex/autobuild`), never a
 checkout path; pre-origin records are not migrated. The web UI uses a server-managed

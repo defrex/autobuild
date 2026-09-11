@@ -2,6 +2,18 @@ export { HOSTED_ARTIFACT_MAX_BYTES, parseHostedStoreEnv } from './config'
 export type { HostedStoreConfig, HostedStoreEnv } from './config'
 export { createHostedStoreService } from './service'
 export type { HostedStoreServiceOptions } from './service'
+export {
+  createDispatcherEndpoint,
+  createHostedDispatcher,
+  parseHostedDispatcherEnv,
+} from './dispatcher'
+export type {
+  HostedDispatcherConfig,
+  HostedDispatcherEnv,
+  HostedDispatcherOptions,
+  HostedDispatcherRepositoryOutcome,
+  HostedDispatcherTickSummary,
+} from './dispatcher'
 export { admittedUser, createWebAuth, webAuth } from './web/auth'
 export type { WebAuth } from './web/auth'
 export {
