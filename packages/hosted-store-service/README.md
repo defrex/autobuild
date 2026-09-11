@@ -174,6 +174,11 @@ for the schedule, incident pauses, and behavior details. Dispatcher variables
   above.
 - Guest-forwarded variables such as `AI_GATEWAY_API_KEY` flow through from the
   service environment to the guest session untouched.
+- `AB_DISTRIBUTION_ARCHIVE`: optional explicit path to the guest distribution
+  archive. Unset, the kernel uses the archive `ab-hosted-store pack-distribution`
+  wrote to `.autobuild-dist/` during the deployment build (required for a
+  bundled deployment, which has no `bun` to pack with at runtime — see the
+  operator procedure).
 
 The Sandbox SDK authenticates with the deployment's own OIDC identity inside
 Vercel functions (the `x-vercel-oidc-token` request header, forwarded to the

@@ -2447,18 +2447,25 @@ class DispatchLoop {
     return this.opts.signal?.aborted === true || this.inputStop.signal.aborted
   }
 
-  /** `--once` awaits only local-parent executions and locally run harvest: an
+  /** `--once` awaits local-parent executions, locally run harvest, and any
+   * remote provisioning continuation this invocation kicked (a sandbox is
+   * created, bootstrapped, and launched by the host, so leaving early would
+   * abandon it at teardown and the next invocation would start over). An
    * environment-supervised execution (remote build or hosted harvest) keeps
    * running in its guest, and a later invocation settles it from the Store
    * alone. An invocation deadline stops the await loop; the remaining
    * `local-parent` executions are then stopped and reaped by the
    * `stopBuildExecutions()` teardown, exactly as a deliberately stopped watch
-   * run. */
+   * run, and an unfinished provisioning is recorded as abandoned for the next
+   * supervisor to adopt. */
   private async drainInFlight(): Promise<void> {
     for (;;) {
-      const pending = [...this.inFlight].filter(
+      const pending: Promise<unknown>[] = [...this.inFlight].filter(
         (promise) => this.inFlightKinds.get(promise) !== 'environment',
       )
+      if (this.dispatcher.provisioningInFlight()) {
+        pending.push(this.dispatcher.drainProvisioning())
+      }
       if (pending.length === 0) return
       const deadline = this.opts.deadlineAt
       if (deadline === undefined) {

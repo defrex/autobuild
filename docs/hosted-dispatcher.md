@@ -36,6 +36,29 @@ machine.
    work; a deployment without `CRON_SECRET` answers 403 with the endpoint
    disabled. One repository's failure never prevents another's tick.
 
+## Shipping the guest distribution
+
+Every sandbox installs the Autobuild distribution the launching dispatcher
+runs. A local dispatcher packs it from its source checkout with `bun pm pack`;
+a bundled deployment has neither `bun` nor a source tree at runtime, so it
+must pack the archive while both exist — in its build step — and carry it into
+the function bundle:
+
+```json
+{ "scripts": { "deploy:build": "bun packages/hosted-store-service/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build" } }
+```
+
+`pack-distribution` writes `.autobuild-dist/autobuild-<version>.tgz` under the
+distribution root (`--root DIR` overrides), and the Next.js config includes
+that directory in the cron route's bundle
+(`outputFileTracingIncludes: { '/api/dispatch': ['./.autobuild-dist/**'] }`).
+At runtime the kernel takes, in order: `AB_DISTRIBUTION_ARCHIVE` (an explicit
+archive path), the single archive under `.autobuild-dist/` of the
+distribution root or working directory, a source checkout packed on the spot,
+and finally the running version's published GitHub release asset. A tick that
+reports `Executable not found in $PATH: "bun"` during `provision` is a
+deployment that skipped this step.
+
 ## Bounding the invocation
 
 The endpoint is pinned to `maxDuration = 300` seconds (Vercel Pro's default

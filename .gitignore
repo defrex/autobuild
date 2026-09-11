@@ -6,6 +6,8 @@ node_modules/
 # repository-local autobuild state (store, worktrees, and file tickets)
 .autobuild/
 *.local.db
+# distribution archive packed for a deployment (bin.ts pack-distribution)
+.autobuild-dist/
 
 # local secrets
 .env

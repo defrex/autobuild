@@ -1139,6 +1139,13 @@ export class Dispatcher {
     await Promise.allSettled([...this.continuations.values()].map((entry) => entry.promise))
   }
 
+  /** Whether any provisioning continuation is still running in this process.
+   * A one-shot invocation consults it to keep awaiting (within its deadline)
+   * instead of tearing the continuation down as abandoned. */
+  provisioningInFlight(): boolean {
+    return this.continuations.size > 0
+  }
+
   /** Teardown: signal every live continuation, then record a durable failure
    * fact for any whose provisioning marker is still open (so the next
    * supervisor adopts it immediately rather than after the crash backstop),

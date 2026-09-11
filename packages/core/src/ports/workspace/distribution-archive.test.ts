@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { afterEach } from 'bun:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   CANONICAL_REPOSITORY_URL,
   defaultDistributionArchive,
+  findPrebuiltDistributionArchive,
+  PREBUILT_DISTRIBUTION_DIR,
+  writePrebuiltDistributionArchive,
   distributionAssetName,
   fetchDistributionReleaseAsset,
   readDistributionIdentity,
@@ -131,5 +134,51 @@ describe('defaultDistributionArchive', () => {
     const archive = fetched
     expect(archive).toEqual(new Uint8Array([9, 9]))
     expect(calls.some((call) => call.endsWith('/releases/tags/v5.4.3'))).toBe(true)
+  })
+})
+
+describe('findPrebuiltDistributionArchive', () => {
+  test('an explicit AB_DISTRIBUTION_ARCHIVE wins and must exist', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-dist-explicit-'))
+    cleanups.push(dir)
+    const explicit = join(dir, 'autobuild-9.9.9.tgz')
+    await writeFile(explicit, new Uint8Array([1, 2, 3]))
+    expect(
+      await findPrebuiltDistributionArchive({ AB_DISTRIBUTION_ARCHIVE: explicit }, [dir]),
+    ).toBe(explicit)
+    await expect(
+      findPrebuiltDistributionArchive({ AB_DISTRIBUTION_ARCHIVE: join(dir, 'missing.tgz') }, [dir]),
+    ).rejects.toThrow(/AB_DISTRIBUTION_ARCHIVE names a file that does not exist/)
+    // An explicit archive is what defaultDistributionArchive returns, byte for byte.
+    expect(await defaultDistributionArchive({ AB_DISTRIBUTION_ARCHIVE: explicit })).toEqual(
+      new Uint8Array([1, 2, 3]),
+    )
+  })
+
+  test('finds the single archive under .autobuild-dist of the first root that has one', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'ab-dist-empty-'))
+    const root = await mkdtemp(join(tmpdir(), 'ab-dist-root-'))
+    cleanups.push(empty, root)
+    expect(await findPrebuiltDistributionArchive({}, [empty])).toBeNull()
+    await mkdir(join(root, PREBUILT_DISTRIBUTION_DIR), { recursive: true })
+    await writeFile(join(root, PREBUILT_DISTRIBUTION_DIR, 'autobuild-1.2.3.tgz'), 'x')
+    await writeFile(join(root, PREBUILT_DISTRIBUTION_DIR, 'notes.txt'), 'ignored')
+    expect(await findPrebuiltDistributionArchive({}, [empty, root])).toBe(
+      join(root, PREBUILT_DISTRIBUTION_DIR, 'autobuild-1.2.3.tgz'),
+    )
+    await writeFile(join(root, PREBUILT_DISTRIBUTION_DIR, 'autobuild-1.2.4.tgz'), 'y')
+    await expect(findPrebuiltDistributionArchive({}, [root])).rejects.toThrow(
+      /more than one distribution archive \(autobuild-1\.2\.3\.tgz, autobuild-1\.2\.4\.tgz\)/,
+    )
+  })
+
+  test('writePrebuiltDistributionArchive packs the running version into the root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ab-dist-write-'))
+    cleanups.push(root)
+    const path = await writePrebuiltDistributionArchive(root)
+    const version = await readDistributionIdentity()
+    expect(path).toBe(join(root, PREBUILT_DISTRIBUTION_DIR, distributionAssetName(version)))
+    expect((await readFile(path)).byteLength).toBeGreaterThan(0)
+    expect(await findPrebuiltDistributionArchive({}, [root])).toBe(path)
   })
 })

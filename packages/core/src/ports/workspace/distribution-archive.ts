@@ -24,8 +24,8 @@
  * a later mismatch, so an upgraded dispatcher retrofits its persistent guests
  * (see `vercel-sandbox.ts`).
  */
-import { access } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { distributionRoot, distributionPath } from '../../distribution'
 import { parseRepoCoordinates } from '../forge/github'
 import {
@@ -124,15 +124,83 @@ export async function fetchDistributionReleaseAsset(
   return download.bytes
 }
 
+/** Directory, relative to a distribution root, where a deployment ships the
+ * archive it packed at build time (`ab-hosted-store pack-distribution`). A
+ * bundled deployment — the hosted service on Vercel — has neither `bun` nor a
+ * source tree at runtime, so the archive must be produced while both exist
+ * and carried into the function bundle. */
+export const PREBUILT_DISTRIBUTION_DIR = '.autobuild-dist'
+
+/** The environment variable naming an explicit archive file, for deployments
+ * that place it somewhere other than `PREBUILT_DISTRIBUTION_DIR`. */
+export const DISTRIBUTION_ARCHIVE_ENV = 'AB_DISTRIBUTION_ARCHIVE'
+
+/** Pack the running distribution into `<root>/.autobuild-dist/autobuild-<version>.tgz`
+ * (the same bytes `bun pm pack` produces) and return the archive path. Meant
+ * for a deployment's build step, where `bun` and the source tree exist. */
+export async function writePrebuiltDistributionArchive(
+  root: string = distributionRoot(),
+): Promise<string> {
+  const version = await readDistributionIdentity()
+  const archive = await packageAutobuildDistribution()
+  const dir = join(root, PREBUILT_DISTRIBUTION_DIR)
+  await mkdir(dir, { recursive: true })
+  const path = join(dir, distributionAssetName(version))
+  await writeFile(path, archive)
+  return path
+}
+
+/** Locate a prebuilt archive: `AB_DISTRIBUTION_ARCHIVE` when set, else the
+ * single `autobuild-*.tgz` under `.autobuild-dist/` of the distribution root
+ * or the working directory (a bundled function's root). Null when none. */
+export async function findPrebuiltDistributionArchive(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  roots: readonly string[] = [distributionRoot(), process.cwd()],
+): Promise<string | null> {
+  const explicit = env[DISTRIBUTION_ARCHIVE_ENV]?.trim()
+  if (explicit) {
+    const path = resolve(explicit)
+    if (!(await fileExists(path))) {
+      throw new Error(`${DISTRIBUTION_ARCHIVE_ENV} names a file that does not exist: ${path}`)
+    }
+    return path
+  }
+  for (const root of [...new Set(roots)]) {
+    const dir = join(root, PREBUILT_DISTRIBUTION_DIR)
+    let names: string[]
+    try {
+      names = (await readdir(dir)).filter(
+        (name) => name.startsWith('autobuild-') && name.endsWith('.tgz'),
+      )
+    } catch {
+      continue
+    }
+    if (names.length === 0) continue
+    if (names.length > 1) {
+      throw new Error(
+        `${dir} holds more than one distribution archive (${names.sort().join(', ')}); ` +
+          'a deployment ships exactly one',
+      )
+    }
+    return join(dir, names[0]!)
+  }
+  return null
+}
+
 /**
- * The default guest distribution source. A source checkout packs from the
- * host tree; a checkout-less dispatcher fetches its own published release
- * asset (see module docs).
+ * The default guest distribution source, in precedence order: an archive
+ * prebuilt for this deployment (`AB_DISTRIBUTION_ARCHIVE` or
+ * `.autobuild-dist/`), then a source checkout packed from the host tree, then
+ * the running version's published release asset (see module docs). The
+ * prebuilt archive comes first because a bundled deployment can carry a
+ * vestigial `.git` directory without a `bun` executable to pack with.
  */
 export async function defaultDistributionArchive(
   env: Readonly<Record<string, string | undefined>> = process.env,
   transport?: GitHubRequest,
 ): Promise<Uint8Array> {
+  const prebuilt = await findPrebuiltDistributionArchive(env)
+  if (prebuilt !== null) return new Uint8Array(await readFile(prebuilt))
   if (await fileExists(join(distributionRoot(), '.git'))) {
     return packageAutobuildDistribution()
   }

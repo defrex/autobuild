@@ -2391,6 +2391,81 @@ describe('abDispatch watch build-runner coordination', () => {
     }
   }, 10_000)
 
+  test('--once awaits a remote provisioning continuation instead of abandoning it at teardown', async () => {
+    const fx = await makeFixture(readyTicket('T-once-provision'), happyHandlers())
+    const completion = deferred()
+    let slug: string | undefined
+    const execution: BuildExecution = {
+      async start(input) {
+        slug = input.slug
+        return {
+          supervision: 'environment',
+          identity: {
+            provider: 'remote-test',
+            workspaceRef: input.workspaceRef,
+            environmentId: 'sandbox-g0',
+            sessionId: 'session-g0',
+          },
+          completion: completion.promise.then(() => ({ exitCode: 0 })),
+          async stop() {
+            return { outcome: 'confirmed' }
+          },
+          async detach() {},
+        }
+      },
+    }
+    let provisions = 0
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      provision: async (opts) => {
+        provisions += 1
+        // A real sandbox takes a while to create and bootstrap; the one-shot
+        // invocation must still be here when it finishes.
+        await new Promise<void>((resolve) => setTimeout(resolve, 25))
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g0',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: 'a'.repeat(40) },
+        }
+      },
+      release: async () => {},
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: () => ({ ...fx.wire(), workspaces: remote, buildExecution: execution }),
+      })
+      expect(provisions).toBe(1)
+      expect(slug).toBeDefined()
+      const events = await fx.store.getEvents(slug!)
+      const types = events.map((event) => event.type)
+      expect(types).toContain('workspace.provision-started')
+      expect(types).toContain('workspace.provisioned')
+      expect(types).toContain('execution.started')
+      // Nothing was abandoned at teardown: the continuation ran to its launch.
+      expect(events.some((event) => event.type === 'dispatch.failed')).toBe(false)
+      // The guest keeps running past the invocation, lease retained for it.
+      expect(events.some((event) => event.type === 'execution.ended')).toBe(false)
+    } finally {
+      completion.resolve()
+      await fx.cleanup()
+    }
+  }, 15_000)
+
   test('watch teardown of a remote execution detaches it: no stop, no durable end, lease retained', async () => {
     const fx = await makeFixture(readyTicket('T-unknown-stop'), happyHandlers())
     const stop = new AbortController()

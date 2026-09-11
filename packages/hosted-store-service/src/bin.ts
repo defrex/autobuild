@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 import { mintToken } from 'autobuild/remote-store'
+import { writePrebuiltDistributionArchive } from 'autobuild/distribution'
 
 const USAGE = `Usage:
   ab-hosted-store mint operator (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint operator --user IDENTITY (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)
-  ab-hosted-store mint build --build SLUG --session SESSION (--ttl-seconds N | --expires-at ISO-8601)`
+  ab-hosted-store mint build --build SLUG --session SESSION (--ttl-seconds N | --expires-at ISO-8601)
+  ab-hosted-store pack-distribution [--root DIR]`
 
 type Env = Record<string, string | undefined>
 
@@ -103,4 +105,33 @@ export function runTokenCli(
   }
 }
 
-if (import.meta.main) process.exitCode = runTokenCli()
+/** `pack-distribution`: pack the running distribution into
+ * `<root>/.autobuild-dist/autobuild-<version>.tgz` for a deployment whose
+ * runtime has neither `bun` nor a source tree (the hosted service on Vercel).
+ * Run it in the deployment's build step; the archive is what guests install. */
+export async function runPackDistribution(
+  args: string[],
+  write: (text: string) => void = (text) => console.log(text),
+  writeError: (text: string) => void = (text) => console.error(text),
+): Promise<number> {
+  try {
+    const root = option(args, '--root')
+    const allowed = new Set(['pack-distribution', '--root', root])
+    for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
+    const path = await writePrebuiltDistributionArchive(root)
+    write(path)
+    return 0
+  } catch (error) {
+    writeError(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`)
+    return 2
+  }
+}
+
+if (import.meta.main) {
+  const args = process.argv.slice(2)
+  if (args[0] === 'pack-distribution') {
+    process.exitCode = await runPackDistribution(args)
+  } else {
+    process.exitCode = runTokenCli(args)
+  }
+}
