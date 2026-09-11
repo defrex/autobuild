@@ -106,6 +106,7 @@ describe('resolveRepoStatePaths', () => {
   test('defaults every local path beneath the repository state root', () => {
     expect(resolveRepoStatePaths({ repo })).toEqual({
       repo,
+      checkout: repo,
       defaultLocalRoot: '/code/example/.autobuild',
       storeRef: '/code/example/.autobuild',
       localStateRoot: '/code/example/.autobuild',
@@ -301,27 +302,76 @@ describe('buildInRepository', () => {
 })
 
 test('resolveRepoState selects paths after resolving repository identity', async () => {
-  const exec: Exec = async (cmd) =>
-    cmd[1] === 'rev-parse'
-      ? {
-          stdout: '/main/repo/.git/worktrees/linked\n/main/repo/.git\n/linked\n',
-          stderr: '',
-          exitCode: 0,
-        }
-      : {
-          stdout: 'worktree /main/repo\0HEAD abc\0branch refs/heads/main\0\0',
-          stderr: '',
-          exitCode: 0,
-        }
-  expect(
-    await resolveRepoState({
-      targetRepo: '/linked',
-      exec,
-      envStore: 'shared-state',
-    }),
-  ).toMatchObject({
-    repo: '/main/repo',
+  const exec: Exec = async (cmd) => {
+    if (cmd[1] === 'rev-parse') {
+      return {
+        stdout: '/main/repo/.git/worktrees/linked\n/main/repo/.git\n/linked\n',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    if (cmd[1] === 'worktree') {
+      return {
+        stdout: 'worktree /main/repo\0HEAD abc\0branch refs/heads/main\0\0',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    expect(cmd).toEqual(['git', 'remote', 'get-url', 'origin'])
+    return { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+  }
+  const state = await resolveRepoState({
+    targetRepo: '/linked',
+    exec,
+    envStore: 'shared-state',
+  })
+  expect(state).toMatchObject({
+    // Identity is the normalized origin, not the checkout path.
+    repo: 'https://github.com/acme/app',
+    checkout: '/main/repo',
     storeRef: '/main/repo/shared-state',
     worktreeRoot: '/main/repo/shared-state/worktrees',
   })
+})
+
+test('resolveRepoState falls back to the resolved checkout path when the checkout has no origin', async () => {
+  const exec: Exec = async (cmd) => {
+    if (cmd[1] === 'rev-parse') {
+      return {
+        stdout: '/main/repo/.git\n/main/repo/.git\n/main/repo\n',
+        stderr: '',
+        exitCode: 0,
+      }
+    }
+    // `git remote get-url origin` fails: no origin remote.
+    return { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+  }
+  const state = await resolveRepoState({ targetRepo: '/main/repo', exec })
+  expect(state.repo).toBe('/main/repo')
+  expect(state.checkout).toBe('/main/repo')
+})
+
+test('resolveRepoState resolves one identity for two checkouts of one repository', async () => {
+  const origins: Record<string, string> = {
+    '/host/checkout': 'git@github.com:acme/app.git\n',
+    '/guest/checkout': 'https://github.com/acme/app\n',
+  }
+  const exec: Exec = async (cmd, opts) => {
+    if (cmd[1] === 'rev-parse') {
+      const cwd = opts.cwd
+      return { stdout: `${cwd}/.git\n${cwd}/.git\n${cwd}\n`, stderr: '', exitCode: 0 }
+    }
+    const origin: string | undefined = origins[opts.cwd ?? '']
+    return {
+      stdout: origin ?? '',
+      stderr: '',
+      exitCode: origin !== undefined ? 0 : 2,
+    }
+  }
+  const host = await resolveRepoState({ targetRepo: '/host/checkout', exec })
+  const guest = await resolveRepoState({ targetRepo: '/guest/checkout', exec })
+  expect(host.repo).toBe('https://github.com/acme/app')
+  expect(guest.repo).toBe('https://github.com/acme/app')
+  expect(host.checkout).toBe('/host/checkout')
+  expect(guest.checkout).toBe('/guest/checkout')
 })

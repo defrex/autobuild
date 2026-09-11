@@ -1,7 +1,4 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { z } from 'zod'
 import {
   hostedPrAttachmentAssetSchema,
@@ -14,41 +11,7 @@ import type {
   PrAttachmentReclaimRequest,
   PrAttachmentUploadRequest,
 } from '../types'
-
-export interface PrAttachmentExecResult {
-  stdout: string
-  stderr: string
-  exitCode: number
-}
-
-/** The production GitHub exec seam accepts cancellation; existing test seams
- * may ignore the optional signal without changing their shape. */
-export type PrAttachmentExec = (
-  cmd: string[],
-  opts: { cwd: string; signal?: AbortSignal },
-) => Promise<PrAttachmentExecResult>
-
-export interface PrAttachmentTempFile {
-  path: string
-  cleanup(): Promise<void>
-}
-
-export type PrAttachmentTempFileWriter = (content: Uint8Array) => Promise<PrAttachmentTempFile>
-
-export const defaultPrAttachmentTempFileWriter: PrAttachmentTempFileWriter = async (content) => {
-  const dir = await mkdtemp(join(tmpdir(), 'ab-pr-attachment-'))
-  const path = join(dir, 'attachment.bin')
-  try {
-    await writeFile(path, content)
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true })
-    throw error
-  }
-  return {
-    path,
-    cleanup: () => rm(dir, { recursive: true, force: true }),
-  }
-}
+import { GitHubApiError, type GitHubRequest } from './github-transport'
 
 const repositoryJson = z
   .object({
@@ -79,10 +42,11 @@ const releaseAssetJson = z.object({
 })
 type ReleaseAsset = z.infer<typeof releaseAssetJson>
 
-const pagedAssetsJson = z.union([z.array(releaseAssetJson), z.array(z.array(releaseAssetJson))])
-
 const SHA256 = /^[0-9a-f]{64}$/
-const DEFAULT_COMMAND_TIMEOUT_MS = 15_000
+/** Bounded page walk for the release-asset listing. */
+const ASSET_PAGE_SIZE = 100
+const MAX_ASSET_PAGES = 20
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -126,78 +90,47 @@ function uploadEndpoint(uploadUrl: string, name: string): string {
   return `${base}${base.includes('?') ? '&' : '?'}name=${encodeURIComponent(name)}`
 }
 
-function flattenAssets(value: z.infer<typeof pagedAssetsJson>): ReleaseAsset[] {
-  if (value.length === 0) return []
-  return Array.isArray(value[0]) ? (value as ReleaseAsset[][]).flat() : (value as ReleaseAsset[])
-}
-
-function isNotFound(result: PrAttachmentExecResult): boolean {
-  return (
-    result.exitCode !== 0 &&
-    /(?:HTTP\s*404|status(?: code)?\s*[:=]?\s*404|\b404\s+Not Found\b|Not Found\s*\(HTTP 404\))/i.test(
-      `${result.stderr}\n${result.stdout}`,
-    )
-  )
-}
-
 export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
-  private readonly exec: PrAttachmentExec
-  private readonly writeTempFile: PrAttachmentTempFileWriter
-  private readonly commandTimeoutMs: number
+  private readonly transport: GitHubRequest
+  private readonly requestTimeoutMs: number
   /** One GitHubForge instance serves one plumbing operation in production;
    * share the target probe across that operation's attachment uploads. */
   private readonly targetValidations = new Map<string, Promise<z.infer<typeof releaseJson>>>()
 
-  constructor(opts: {
-    exec: PrAttachmentExec
-    writeTempFile?: PrAttachmentTempFileWriter
-    commandTimeoutMs?: number
-  }) {
-    this.exec = opts.exec
-    this.writeTempFile = opts.writeTempFile ?? defaultPrAttachmentTempFileWriter
-    this.commandTimeoutMs = opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
+  constructor(opts: { transport: GitHubRequest; requestTimeoutMs?: number }) {
+    this.transport = opts.transport
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
-  private async execute(cmd: string[], cwd: string): Promise<PrAttachmentExecResult> {
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(
-        () => {
-          controller.abort()
-          reject(
-            new Error(
-              `PR attachment GitHub command timed out after ${this.commandTimeoutMs}ms: ${cmd.join(' ')}`,
-            ),
-          )
-        },
-        Math.max(0, this.commandTimeoutMs),
-      )
+  /** One bounded transport call with the class's request timeout applied. */
+  private call(
+    method: string,
+    path: string,
+    opts?: { headers?: Record<string, string>; raw?: Uint8Array },
+  ): Promise<{
+    status: number
+    headers: Record<string, string>
+    json?: unknown
+    bytes?: Uint8Array
+  }> {
+    const signal = AbortSignal.timeout(this.requestTimeoutMs)
+    return this.transport(method, path, {
+      ...(opts?.headers !== undefined ? { headers: opts.headers } : {}),
+      ...(opts?.raw !== undefined ? { raw: opts.raw } : {}),
+      signal,
     })
-    try {
-      return await Promise.race([this.exec(cmd, { cwd, signal: controller.signal }), timeout])
-    } finally {
-      if (timer !== undefined) clearTimeout(timer)
-    }
   }
 
-  private async run(cmd: string[], cwd: string): Promise<string> {
-    const result = await this.execute(cmd, cwd)
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `PR attachment forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
-          (result.stderr.trim() || result.stdout.trim()),
-      )
+  private parseJson<S extends z.ZodType>(
+    schema: S,
+    response: { json?: unknown },
+    what: string,
+  ): z.infer<S> {
+    const parsed = schema.safeParse(response.json)
+    if (!parsed.success) {
+      throw new Error(`unexpected GitHub response for ${what}: ${parsed.error.message}`)
     }
-    return result.stdout
-  }
-
-  private parseJson<S extends z.ZodType>(schema: S, stdout: string, cmd: string[]): z.infer<S> {
-    try {
-      return schema.parse(JSON.parse(stdout))
-    } catch (error) {
-      throw new Error(`unexpected output from \`${cmd.join(' ')}\`: ${errorMessage(error)}`)
-    }
+    return parsed.data
   }
 
   private async validateTarget(
@@ -205,11 +138,10 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
   ): Promise<z.infer<typeof releaseJson>> {
     const target = prImageHostSchema.parse(request.target)
     const root = repositoryEndpoint(target.repository)
-    const repoCmd = ['gh', 'api', root]
     const repository = this.parseJson(
       repositoryJson,
-      await this.run(repoCmd, request.workspacePath),
-      repoCmd,
+      await this.call('GET', root),
+      `repository read of ${target.repository}`,
     )
     if (
       repository.private === true ||
@@ -220,11 +152,10 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
       )
     }
 
-    const releaseCmd = ['gh', 'api', `${root}/releases/${target.releaseId}`]
     const release = this.parseJson(
       releaseJson,
-      await this.run(releaseCmd, request.workspacePath),
-      releaseCmd,
+      await this.call('GET', `${root}/releases/${target.releaseId}`),
+      `release read of ${target.repository}#${target.releaseId}`,
     )
     if (release.id !== target.releaseId) {
       throw new Error(
@@ -260,15 +191,23 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
 
   private async listAssets(request: PrAttachmentUploadRequest): Promise<ReleaseAsset[]> {
     const root = repositoryEndpoint(request.target.repository)
-    const cmd = [
-      'gh',
-      'api',
-      '--paginate',
-      '--slurp',
-      `${root}/releases/${request.target.releaseId}/assets?per_page=100`,
-    ]
-    const parsed = this.parseJson(pagedAssetsJson, await this.run(cmd, request.workspacePath), cmd)
-    return flattenAssets(parsed)
+    const assets: ReleaseAsset[] = []
+    for (let page = 1; page <= MAX_ASSET_PAGES; page += 1) {
+      const response = await this.call(
+        'GET',
+        `${root}/releases/${request.target.releaseId}/assets?per_page=${ASSET_PAGE_SIZE}&page=${page}`,
+      )
+      const batch = this.parseJson(
+        z.array(releaseAssetJson),
+        response,
+        `asset listing of ${request.target.repository}#${request.target.releaseId}`,
+      )
+      assets.push(...batch)
+      if (batch.length < ASSET_PAGE_SIZE) return assets
+    }
+    throw new Error(
+      `asset listing of ${request.target.repository}#${request.target.releaseId} exceeded ${MAX_ASSET_PAGES} pages`,
+    )
   }
 
   private assertCompatibleAsset(
@@ -345,92 +284,68 @@ export class GitHubPrAttachmentHosting implements PrAttachmentHosting {
       // It is safe to remove because its deterministic name belongs to this
       // exact PR/attachment/blob identity; an uploaded mismatch is never clobbered.
       if (existing.state === 'starter' || existing.state === 'open') {
-        await this.deleteAsset(normalized.workspacePath, target.repository, existing.id)
+        await this.deleteAsset(target.repository, existing.id)
       } else {
         return this.assertCompatibleAsset(existing, expected, target)
       }
     }
 
-    const temp = await this.writeTempFile(normalized.content)
     try {
-      const cmd = [
-        'gh',
-        'api',
-        '--method',
-        'POST',
-        uploadEndpoint(release.upload_url, filename),
-        '--header',
-        `Content-Type: ${normalized.attachment.mediaType}`,
-        '--input',
-        temp.path,
-      ]
-      try {
-        const uploaded = this.parseJson(
-          releaseAssetJson,
-          await this.run(cmd, normalized.workspacePath),
-          cmd,
+      const uploaded = this.parseJson(
+        releaseAssetJson,
+        await this.call('POST', uploadEndpoint(release.upload_url, filename), {
+          headers: { 'Content-Type': normalized.attachment.mediaType },
+          raw: normalized.content,
+        }),
+        'PR attachment upload',
+      )
+      if (uploaded.name !== filename) {
+        throw new Error(
+          `PR attachment upload returned name ${JSON.stringify(uploaded.name)}, expected ${JSON.stringify(filename)}`,
         )
-        if (uploaded.name !== filename) {
-          throw new Error(
-            `PR attachment upload returned name ${JSON.stringify(uploaded.name)}, expected ${JSON.stringify(filename)}`,
-          )
-        }
-        return this.assertCompatibleAsset(uploaded, expected, target)
-      } catch (uploadError) {
-        // A killed gh process or lost response may still have committed the
-        // external write. Reconcile once before degrading finalize: adopt a
-        // compatible upload, or remove the incomplete starter/open remnant so
-        // failed attempts cannot accumulate untracked release storage.
-        let candidate: ReleaseAsset | undefined
-        try {
-          candidate = (await this.listAssets(normalized)).find((asset) => asset.name === filename)
-        } catch {
-          throw uploadError
-        }
-        if (candidate === undefined) throw uploadError
-        if (candidate.state === 'starter' || candidate.state === 'open') {
-          try {
-            await this.deleteAsset(normalized.workspacePath, target.repository, candidate.id)
-          } catch {
-            // Preserve the primary upload error; its deterministic name keeps
-            // the remnant identifiable to a later explicit retry or cleanup.
-          }
-          throw uploadError
-        }
-        return this.assertCompatibleAsset(candidate, expected, target)
       }
-    } finally {
+      return this.assertCompatibleAsset(uploaded, expected, target)
+    } catch (uploadError) {
+      // A lost response may still have committed the external write.
+      // Reconcile once before degrading finalize: adopt a compatible upload,
+      // or remove the incomplete starter/open remnant so failed attempts
+      // cannot accumulate untracked release storage.
+      let candidate: ReleaseAsset | undefined
       try {
-        await temp.cleanup()
+        candidate = (await this.listAssets(normalized)).find((asset) => asset.name === filename)
       } catch {
-        // Never turn a successful external upload into an untracked asset by
-        // masking its deletion handle with an OS-temp cleanup error.
+        throw uploadError
       }
+      if (candidate === undefined) throw uploadError
+      if (candidate.state === 'starter' || candidate.state === 'open') {
+        try {
+          await this.deleteAsset(target.repository, candidate.id)
+        } catch {
+          // Preserve the primary upload error; its deterministic name keeps
+          // the remnant identifiable to a later explicit retry or cleanup.
+        }
+        throw uploadError
+      }
+      return this.assertCompatibleAsset(candidate, expected, target)
     }
   }
 
-  private async deleteAsset(
-    workspacePath: string,
-    repository: string,
-    assetId: number,
-  ): Promise<void> {
-    const cmd = [
-      'gh',
-      'api',
-      '--method',
-      'DELETE',
-      `${repositoryEndpoint(repository)}/releases/assets/${assetId}`,
-    ]
-    const result = await this.execute(cmd, workspacePath)
-    if (result.exitCode === 0 || isNotFound(result)) return
-    throw new Error(
-      `PR attachment forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n` +
-        (result.stderr.trim() || result.stdout.trim()),
-    )
+  private async deleteAsset(repository: string, assetId: number): Promise<void> {
+    try {
+      await this.call('DELETE', `${repositoryEndpoint(repository)}/releases/assets/${assetId}`)
+    } catch (error) {
+      // Absent (already deleted) is the reclaim goal met; anything else is a
+      // real failure.
+      if (error instanceof GitHubApiError && error.status === 404) return
+      throw new Error(
+        `PR attachment asset delete failed for ${repository}#${assetId}: ${errorMessage(error)}`,
+        { cause: error },
+      )
+    }
   }
 
   async reclaim(request: PrAttachmentReclaimRequest): Promise<void> {
     const asset = hostedPrAttachmentAssetSchema.parse(request.asset)
-    await this.deleteAsset(request.workspacePath, asset.repository, asset.assetId)
+    await this.deleteAsset(asset.repository, asset.assetId)
   }
 }

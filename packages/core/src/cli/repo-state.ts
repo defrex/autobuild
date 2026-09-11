@@ -1,6 +1,19 @@
 /**
  * Repository identity and sessionless local-state resolution.
  *
+ * Repository identity (SPEC §7.2, §12) is the checkout's normalized origin
+ * URL (`normalizeGitRemoteUrl`), not the checkout path: a path-based identity
+ * makes two hosts disagree about which repository they operate. A checkout
+ * with no `origin` remote falls back to its resolved path, so origin-less
+ * local fixtures keep today's behavior. `RepoStatePaths` therefore carries
+ * BOTH: `repo` is the store-keyed identity, `checkout` is the physical main
+ * checkout every filesystem consumer (config path, plugin loading, forge
+ * `repoRoot`, worktree root, live-reload source) keeps using.
+ *
+ * Records written before the identity change are keyed by checkout path and
+ * are NOT migrated; they remain visible where their recorded `repoOrigin`
+ * matches the querying checkout (see `buildInRepository`).
+ *
  * One resolver owns both concepts because they must agree in linked worktrees:
  * Git's repository/worktree metadata identifies the main checkout, whose
  * `.autobuild/` directory is the implicit state root. Local overrides are
@@ -10,6 +23,9 @@
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
+import { normalizeGitRemoteUrl } from '../kernel/origin'
+
+export { normalizeGitRemoteUrl } from '../kernel/origin'
 
 export const LOCAL_STATE_DIR = '.autobuild'
 
@@ -76,8 +92,14 @@ export async function resolveMainRepo(targetRepo: string, exec: Exec): Promise<s
 }
 
 export interface RepoStatePaths {
-  /** Main checkout used as repository identity in BuildStore records/journals. */
+  /** Repository identity in BuildStore records/journals: the checkout's
+   * normalized origin URL, falling back to the resolved checkout path only
+   * when the checkout has no origin remote. Opaque to the store schema. */
   repo: string
+  /** The physical main checkout — the value `repo` held before the origin
+   * identity. Every filesystem consumer (config path, plugin loading, forge
+   * `repoRoot`, worktree root, live-reload source) uses this. */
+  checkout: string
   /** The only implicit local state root. */
   defaultLocalRoot: string
   /** Normalized local path, or an unchanged HTTP(S) URL. */
@@ -101,60 +123,27 @@ function nonBlank(value: string | undefined): string | undefined {
  * the repository's implicit state root.
  */
 export function resolveRepoStatePaths(opts: {
+  /** Repository identity: a normalized origin URL, or a local checkout path. */
   repo: string
+  /** The physical checkout. Defaults to `repo` so origin-less fixtures —
+   * where identity IS the path — need no extra argument. */
+  checkout?: string
   storeRef?: string
   envStore?: string
 }): RepoStatePaths {
-  const repo = resolve(opts.repo)
-  const defaultLocalRoot = join(repo, LOCAL_STATE_DIR)
+  const checkout = resolve(opts.checkout ?? opts.repo)
+  const defaultLocalRoot = join(checkout, LOCAL_STATE_DIR)
   const selected = nonBlank(opts.storeRef) ?? nonBlank(opts.envStore) ?? defaultLocalRoot
   const remote = isRemoteStoreRef(selected)
-  const storeRef = remote ? selected : resolve(repo, selected)
+  const storeRef = remote ? selected : resolve(checkout, selected)
   const localStateRoot = remote ? defaultLocalRoot : storeRef
   return {
-    repo,
+    repo: opts.repo,
+    checkout,
     defaultLocalRoot,
     storeRef,
     localStateRoot,
     worktreeRoot: join(localStateRoot, 'worktrees'),
-  }
-}
-
-/**
- * Location-independent form of a git remote URL, for comparing a recorded
- * repository origin with the origin of the current checkout. Trims; maps
- * scp-like `git@host:path` (and bare `host:path`) remotes and explicit
- * `ssh://`/`git://` URLs to their `https://` spelling; drops credentials;
- * lowercases the host; strips a trailing `.git` and trailing slashes.
- * Anything unparseable — notably a local-path remote — is returned trimmed
- * as-is, so such remotes only ever compare equal to themselves.
- */
-export function normalizeGitRemoteUrl(raw: string): string {
-  const trimmed = raw.trim()
-  // scp-like syntax: `[user@]host:relative/path`. A colon followed by an
-  // absolute path (or a Windows drive letter) is not scp-like — leave it for
-  // URL parsing, which fails and falls through to the trimmed passthrough.
-  const scp =
-    trimmed.includes('://') || /^[A-Za-z]:/.test(trimmed)
-      ? null
-      : /^(?:[^@/]+@)?([^/:]+):([^/].*)$/.exec(trimmed)
-  const candidate = scp !== null ? `https://${scp[1]}/${scp[2]}` : trimmed
-  try {
-    const url = new URL(candidate)
-    // Only network URLs carry a host; a Windows drive or relative path parses
-    // as a scheme-only URL and passes through untouched.
-    if (url.hostname === '') return trimmed
-    const path = url.pathname.replace(/\.git\/?$/i, '').replace(/\/+$/, '')
-    // ssh and git URLs name the same repository as their https spelling, so
-    // an ssh-origin host checkout and the sandbox guest's pinned https origin
-    // must normalize to one form (the scp-like branch already does).
-    const protocol =
-      url.protocol === 'ssh:' || url.protocol === 'git:' || url.protocol === 'git+ssh:'
-        ? 'https:'
-        : url.protocol
-    return `${protocol}//${url.host.toLowerCase()}${path}`
-  } catch {
-    return trimmed
   }
 }
 
@@ -174,38 +163,50 @@ export async function resolveRepoOrigin(repo: string, exec: Exec): Promise<strin
 }
 
 /**
- * Whether a build record belongs to the repository at `repo`. The recorded
- * checkout path stays the primary identity; a mismatch is forgiven only when
- * the record carries a normalized origin and the current checkout resolves to
- * the same origin — a differently located checkout of the same repository
- * (a sandbox guest, a second host clone) is the same repository, while a
- * different origin (or an origin-less record) is foreign.
+ * Whether a build record belongs to the repository checked out at `checkout`.
+ * Identity is the checkout's normalized origin (falling back to the checkout
+ * path when there is no origin remote); for new records `record.repo` IS that
+ * origin, so equality is the whole test. Records written before the origin
+ * identity are keyed by checkout path and are NOT migrated (decision
+ * 2026-09-10); a mismatch is forgiven only when the record carries a
+ * normalized origin equal to the checkout's identity — a differently located
+ * checkout of the same repository (a sandbox guest, a second host clone) is
+ * the same repository, while a different origin (or an origin-less record)
+ * is foreign.
  */
 export async function buildInRepository(
   record: BuildRecord,
-  repo: string,
+  checkout: string,
   exec: Exec,
 ): Promise<boolean> {
-  if (record.repo === repo) return true
+  const origin = await resolveRepoOrigin(checkout, exec)
+  const identity = origin ?? resolve(checkout)
+  if (record.repo === identity) return true
   if (record.repoOrigin === undefined) return false
-  const origin = await resolveRepoOrigin(repo, exec)
   // The recorded side is normalized too (idempotent for records written by
   // this code) so a guard never depends on the writer's normalizer vintage —
   // an ssh-spelled recorded origin still equals the https spelling computed
   // here.
-  return origin !== undefined && normalizeGitRemoteUrl(record.repoOrigin) === origin
+  return normalizeGitRemoteUrl(record.repoOrigin) === identity
 }
 
-/** Resolve repository identity, then select all state paths from it. */
+/** Resolve repository identity, then select all state paths from it.
+ *
+ * Identity is the resolved main checkout's normalized origin remote, falling
+ * back to the checkout path when the checkout has no origin (local fixtures,
+ * tests). `checkout` carries the resolved path for every filesystem
+ * consumer. */
 export async function resolveRepoState(opts: {
   targetRepo: string
   exec: Exec
   storeRef?: string
   envStore?: string
 }): Promise<RepoStatePaths> {
-  const repo = await resolveMainRepo(opts.targetRepo, opts.exec)
+  const checkout = await resolveMainRepo(opts.targetRepo, opts.exec)
+  const origin = await resolveRepoOrigin(checkout, opts.exec)
   return resolveRepoStatePaths({
-    repo,
+    repo: origin ?? checkout,
+    checkout,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
     ...(opts.envStore !== undefined ? { envStore: opts.envStore } : {}),
   })

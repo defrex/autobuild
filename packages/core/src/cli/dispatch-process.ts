@@ -115,7 +115,10 @@ export function watchDispatchParent(
 
 export interface DispatchChildSupervisorDeps {
   store: BuildStore
+  /** Repository identity (§12) — the Store journal key. */
   repo: string
+  /** Process cwd for the spawned kernel; defaults to `repo` (checkout mode). */
+  cwd?: string
   run: string
   env: Record<string, string | undefined>
   options: DispatchChildOptions
@@ -163,7 +166,7 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(deps.env)) if (value !== undefined) env[key] = value
   env[DISPATCH_CHILD_OPTIONS_ENV] = JSON.stringify(deps.options)
-  const child = (deps.spawn ?? defaultSpawn)({ entrypoint, cwd: deps.repo, env })
+  const child = (deps.spawn ?? defaultSpawn)({ entrypoint, cwd: deps.cwd ?? deps.repo, env })
 
   let stopping = false
   let forced = false

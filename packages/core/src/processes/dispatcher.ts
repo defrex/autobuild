@@ -479,8 +479,18 @@ export interface DispatcherDeps {
    * Omission preserves the cron/static-config API. */
   getConfig?: () => Config
   /** The repo this dispatcher serves — a local path (§15.7: `git ls-remote`
-   * against it needs no network). One dispatcher per repo (§12). */
+   * against it needs no network) or the repository's normalized origin when
+   * there is no checkout (origin mode; base facts then come from the forge's
+   * `remoteBranchSha`). One dispatcher per repo (§12). */
   repo: string
+  /** Explicit normalized origin for the served repository. When set (origin
+   * mode), the dispatcher never probes the checkout's git for its origin —
+   * there is no checkout — and stamps created builds directly with it. */
+  repoOrigin?: string
+  /** The physical main checkout when one exists (checkout mode). Local
+   * workspace providers (git-worktree) provision FROM it; origin mode has no
+   * checkout, and its remote providers never need one. */
+  checkout?: string
   exec: Exec
   /** Launch (or re-attach — §15.6-C, §15.7) a build-runner for `slug`. The
    * dispatcher never runs pipeline agents itself. The launcher reports local
@@ -574,11 +584,20 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
 export class Dispatcher {
   /** Memoized normalized origin of the served repository (one git call per
    * dispatcher), recorded on created builds so ambient reads can accept a
-   * differently located checkout of the same repository by origin equality. */
+   * differently located checkout of the same repository by origin equality.
+   * Origin mode supplies it explicitly (deps.repoOrigin) and never execs. */
   private repoOrigin?: Promise<string | undefined>
 
   private resolveRepoOriginOnce(): Promise<string | undefined> {
-    this.repoOrigin ??= resolveRepoOrigin(this.deps.repo, this.deps.exec)
+    if (this.deps.repoOrigin !== undefined) {
+      this.repoOrigin ??= Promise.resolve(this.deps.repoOrigin)
+      return this.repoOrigin
+    }
+    // Probe the physical checkout, not the store identity: since the identity
+    // change `deps.repo` is the normalized origin (or a path only for
+    // origin-less fixtures), and `git remote get-url` in a URL cwd silently
+    // loses the origin. Origin mode returns above and never execs.
+    this.repoOrigin ??= resolveRepoOrigin(this.deps.checkout ?? this.deps.repo, this.deps.exec)
     return this.repoOrigin
   }
   private readonly leaseTtlMs: number
@@ -907,7 +926,9 @@ export class Dispatcher {
         (event) => event.type === 'workspace.provisioned',
       ).length
       const handle = await workspaces.provision({
-        repo: this.deps.repo,
+        // Local providers provision FROM the physical checkout; remote
+        // providers ignore the value (their host seams are injected).
+        repo: this.deps.checkout ?? this.deps.repo,
         baseBranch: baseBranchOf(events, config),
         branch: input.branch,
         ...(priorGenerations > 0 || input.generation > 0
@@ -1099,9 +1120,11 @@ export class Dispatcher {
 
   private forgeWorkspacePath(events: AbEvent[]): string {
     const open = openWorkspace(events)
-    return open?.provider === 'vercel-sandbox'
-      ? this.deps.repo
-      : (open?.localPath ?? open?.path ?? open?.ref ?? this.deps.repo)
+    if (open?.provider === 'vercel-sandbox') return this.deps.repo
+    // Local forges run git with cwd = workspacePath: it must be the physical
+    // checkout, never the store identity (an origin URL since the identity
+    // change; a path only for origin-less fixtures).
+    return open?.localPath ?? open?.path ?? open?.ref ?? this.deps.checkout ?? this.deps.repo
   }
 
   private hasLiveExecutionLease(record: BuildRecord): boolean {
@@ -1121,6 +1144,18 @@ export class Dispatcher {
   ): Promise<void> {
     const { store, tickets, forge } = this.deps
     const branch = record.branch
+    // Whether this build ever owned a local checkout workspace, judged on the
+    // provisioned facts (not the open one, which is null when the build never
+    // provisioned or already released — only the former must skip the
+    // local-branch git step; a released local workspace may still have left a
+    // branch in the checkout). Remote workspaces (vercel-sandbox) never create
+    // a local branch in the main checkout, and origin mode has no checkout at
+    // all: the local-branch git step is skipped, and the saga's later steps
+    // tolerate its absence.
+    const hadLocalWorkspace = events.some(
+      (event) =>
+        event.type === 'workspace.provisioned' && event.payload.provider !== 'vercel-sandbox',
+    )
     const has = (type: AbEvent['type']): boolean => events.some((event) => event.type === type)
     const append = async <T extends EventWrite['type']>(write: EventWrite<T>): Promise<void> => {
       const event = await store.append(record.slug, write)
@@ -1191,7 +1226,10 @@ export class Dispatcher {
         )
       }
       try {
-        await deleteBranch!.call(forge, this.deps.repo, branch)
+        // Local forges treat workspacePath as a git cwd: pass the physical
+        // checkout, not the store identity (an origin URL in checkout mode).
+        // API forges ignore the argument.
+        await deleteBranch!.call(forge, this.deps.checkout ?? this.deps.repo, branch)
         await append({
           actor: DISPATCHER,
           type: 'abort.remote-branch-deleted',
@@ -1202,15 +1240,19 @@ export class Dispatcher {
       }
     }
 
-    if (branch !== undefined && !has('abort.local-branch-deleted')) {
+    if (branch !== undefined && !has('abort.local-branch-deleted') && hadLocalWorkspace) {
       const ref = `refs/heads/${branch}`
       try {
+        // Local-branch cleanup runs in the physical checkout — the store
+        // identity is an origin URL (or a path only for origin-less fixtures),
+        // and git with cwd = a URL fails the whole saga.
+        const cwd = this.deps.checkout ?? this.deps.repo
         const valid = await this.deps.exec(['git', 'check-ref-format', ref], {
-          cwd: this.deps.repo,
+          cwd,
         })
         if (valid.exitCode !== 0) throw new Error(`invalid exact build ref ${ref}`)
         const deleted = await this.deps.exec(['git', 'update-ref', '-d', ref], {
-          cwd: this.deps.repo,
+          cwd,
         })
         if (deleted.exitCode !== 0) {
           throw new Error(
@@ -1468,7 +1510,9 @@ export class Dispatcher {
           )
         }
         await capability.reclaim({
-          workspacePath: this.deps.repo,
+          // Physical checkout for cwd-style reclaimers (local git), not the
+          // store identity; API-based reclaimers ignore it.
+          workspacePath: this.deps.checkout ?? this.deps.repo,
           asset: hosted.payload.asset,
         })
         await this.deps.store.append(slug, {
@@ -1712,10 +1756,25 @@ export class Dispatcher {
     } satisfies EventWrite<'workspace.released'>)
   }
 
-  /** Current tip of the base branch — `git ls-remote <repo> refs/heads/<b>`
-   * against the dispatcher's local repo path (§15.7: no network). */
+  /** Current tip of the base branch. A forge with the checkout-less
+   * `remoteBranchSha` capability answers from the GitHub API (origin mode);
+   * otherwise `git ls-remote <path> refs/heads/<b>` against the dispatcher's
+   * physical checkout (§15.7: no network). The checkout, not the store
+   * identity — `deps.repo` is the normalized origin since the identity
+   * change, and ls-remote against it would hit the network from a URL.
+   * Origin-less fixtures whose identity is a path keep working through the
+   * fallback. */
   private async baseSha(baseBranch: string): Promise<string> {
-    const args = ['git', 'ls-remote', this.deps.repo, `refs/heads/${baseBranch}`]
+    const remoteBranchSha = this.deps.forge.remoteBranchSha
+    if (remoteBranchSha !== undefined) {
+      return await remoteBranchSha.call(this.deps.forge, baseBranch)
+    }
+    const args = [
+      'git',
+      'ls-remote',
+      this.deps.checkout ?? this.deps.repo,
+      `refs/heads/${baseBranch}`,
+    ]
     const result = await this.deps.exec(args, {})
     const sha = result.stdout.trim().split(/\s+/)[0]
     if (result.exitCode !== 0 || !sha) {
@@ -1814,7 +1873,9 @@ export class Dispatcher {
           (event) => event.type === 'workspace.provisioned',
         ).length
         const handle = await this.deps.workspaces.provision({
-          repo: this.deps.repo,
+          // Local providers provision FROM the physical checkout; remote
+          // providers ignore the value (their host seams are injected).
+          repo: this.deps.checkout ?? this.deps.repo,
           baseBranch: baseBranchOf(events, config),
           branch: record.branch ?? `ab/${record.slug}`,
           ...(priorGenerations > 0

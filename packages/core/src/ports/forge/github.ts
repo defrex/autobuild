@@ -1,23 +1,41 @@
 /**
- * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, shelling out to
- * `git` and `gh` through an injectable exec seam. All remote access is
- * kernel-side plumbing (SPEC §8.6 [D7]) — agents never touch the remote,
- * so forge credentials never enter the sandbox.
+ * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, speaking the GitHub
+ * REST API through an injectable transport seam. All remote access is
+ * kernel-side plumbing (SPEC §8.6 [D7]) — agents never touch the remote, so
+ * forge credentials never enter the sandbox.
  *
- * Body delivery: the exec seam is argv + cwd only (no stdin channel), so PR
- * and comment bodies are written to a temp file and passed with
- * `--body-file <path>` — a file survives arbitrary quoting and newlines in
- * the body. The temp-file writer is itself a seam so tests assert exact
- * argv arrays and the delivered content.
+ * The adapter never shells `gh` or reads a local checkout for its API calls:
+ * the same adapter serves a checkout-bound dispatcher and a checkout-less
+ * (`--repository`) one. The one deliberate exception is `pushBranch`, which
+ * remains `git push` from the workspace — it is only ever called from
+ * worktree-side terminals and contract fixtures; `vercel-sandbox` builds
+ * publish through the sandbox's receive-pack proxy and the host never pushes.
+ *
+ * Native auto-merge is the one operation GitHub exposes only through its
+ * GraphQL schema (no REST route exists), so its enable/disable mutations
+ * travel over the same transport to `POST /graphql`.
+ *
+ * Repository coordinates (owner/name) resolve lazily and memoized: explicit
+ * constructor option → `AB_REPOSITORY` (normalized) → `git remote get-url
+ * origin` in `repoRoot` (checkout mode) → hard error at first use. In origin
+ * mode the dispatcher exports `AB_REPOSITORY`, so no git call ever runs.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { z } from 'zod'
+import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin'
+import {
+  GitHubApiError,
+  createGitHubFetchTransport,
+  githubTokenFromEnv,
+  restPlanLimitation,
+  type GitHubRequest,
+  type GitHubRequestOpts,
+  type GitHubResponse,
+} from './github-transport'
 import {
   classifyAutoMergeEnable,
   mergeStateStatuses,
   type MergeGatePresence,
+  type MergeStateStatus,
 } from '../../kernel/auto-merge'
 import type {
   AutoMergeDeferralReason,
@@ -28,7 +46,7 @@ import type {
   PrRef,
   PrState,
 } from '../types'
-import { GitHubPrAttachmentHosting, type PrAttachmentTempFileWriter } from './github-pr-attachments'
+import { GitHubPrAttachmentHosting } from './github-pr-attachments'
 
 export interface ExecResult {
   stdout: string
@@ -72,88 +90,80 @@ export const bunExec: Exec = async (cmd, opts) => {
   }
 }
 
-/** Writes `content` somewhere on disk and returns the path. */
-export type TempFileWriter = (content: string) => Promise<string>
+// ── Repository coordinates ───────────────────────────────────────────────────
 
-export const defaultTempFileWriter: TempFileWriter = async (content) => {
-  const dir = await mkdtemp(join(tmpdir(), 'ab-forge-'))
-  const path = join(dir, 'body.md')
-  await writeFile(path, content, 'utf8')
-  return path
+export interface RepoCoordinates {
+  owner: string
+  name: string
 }
 
-// `gh --json` returns exactly the requested fields, so shapes are closed.
-const prViewJson = z.strictObject({
-  number: z.number().int().positive(),
-  url: z.string().min(1),
-  headRefOid: z.string().min(1),
-})
+/** Owner/name from an `owner/name` slug or any remote URL spelling. */
+export function parseRepoCoordinates(input: string): RepoCoordinates | null {
+  const normalized = normalizeGitRemoteUrl(input)
+  try {
+    const url = new URL(normalized)
+    if (url.hostname !== '') {
+      const parts = url.pathname.split('/').filter((part) => part !== '')
+      if (parts.length === 2) return { owner: parts[0]!, name: parts[1]! }
+      return null
+    }
+  } catch {
+    // Slug fallback below.
+  }
+  const parts = normalized.split('/')
+  if (parts.length === 2 && parts[0] !== '' && parts[1] !== '') {
+    return { owner: parts[0]!, name: parts[1]! }
+  }
+  return null
+}
 
-const prStateJson = z.strictObject({
-  state: z.enum(['OPEN', 'MERGED', 'CLOSED']),
-  mergeable: z.enum(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']),
-  mergeCommit: z.strictObject({ oid: z.string().min(1) }).nullable(),
-})
+// ── Response shapes ──────────────────────────────────────────────────────────
+//
+// REST responses are the forge's full objects, so shapes validate every field
+// these methods rely on and pass unknown fields through — an added GitHub
+// field cannot break a poll, but a changed relied-on field still fails loudly.
 
-// Disabling needs only native desired state. Keep this schema separate from
-// enable-only routing facts so a future mergeStateStatus cannot prevent an
-// operator from revoking consent.
-const nativeAutoMergeJson = z.strictObject({
-  autoMergeRequest: z.object({}).passthrough().nullable(),
-})
+const restPrRef = z
+  .object({
+    number: z.number().int().positive(),
+    html_url: z.string().min(1),
+    head: z.object({ sha: z.string().min(1) }).passthrough(),
+  })
+  .passthrough()
 
-// Enabling additionally needs the two independent routing facts. `gh --json`
-// returns exactly these requested fields, so an unknown merge-state enum or a
-// missing head/base is a hard parse failure rather than fallback eligibility.
-const autoMergeJson = z.strictObject({
-  ...nativeAutoMergeJson.shape,
-  mergeStateStatus: z.enum(mergeStateStatuses),
-  headRefOid: z.string().min(1),
-  baseRefName: z.string().min(1),
-})
+const restPrState = z
+  .object({
+    state: z.enum(['open', 'closed']),
+    merged: z.boolean(),
+    mergeable: z.boolean().nullable(),
+    merge_commit_sha: z.string().min(1).nullable(),
+  })
+  .passthrough()
 
-const repoIdentityJson = z.strictObject({
-  nameWithOwner: z.string().min(3),
-})
+const restNativeAutoMerge = z
+  .object({
+    node_id: z.string().min(1),
+    auto_merge: z.object({}).passthrough().nullable(),
+  })
+  .passthrough()
 
-const repositoryAutoMergeJson = z.strictObject({
-  allow_auto_merge: z.boolean(),
-})
+const restAutoMergeView = z
+  .object({
+    node_id: z.string().min(1),
+    auto_merge: z.object({}).passthrough().nullable(),
+    mergeable_state: z.string().min(1),
+    head: z.object({ ref: z.string().min(1), sha: z.string().min(1) }).passthrough(),
+    base: z.object({ ref: z.string().min(1) }).passthrough(),
+  })
+  .passthrough()
 
-const rulesetPlanLimitationJson = z.strictObject({
-  message: z.literal(
-    'Upgrade to GitHub Pro or make this repository public to enable this feature.',
-  ),
-  documentation_url: z.literal('https://docs.github.com/rest/repos/rules#get-rules-for-a-branch'),
-  status: z.union([z.literal('403'), z.literal(403)]),
-})
+const restRepositoryAutoMerge = z.object({ allow_auto_merge: z.boolean() }).passthrough()
 
-const classicProtectionJson = z.strictObject({
-  data: z.strictObject({
-    repository: z
-      .strictObject({
-        ref: z
-          .strictObject({
-            branchProtectionRule: z
-              .strictObject({
-                requiresStatusChecks: z.boolean(),
-                requiresApprovingReviews: z.boolean(),
-                requiredApprovingReviewCount: z.number().int().nonnegative(),
-                requiresCodeOwnerReviews: z.boolean(),
-                requireLastPushApproval: z.boolean(),
-                requiresConversationResolution: z.boolean(),
-                requiresDeployments: z.boolean(),
-                requiresCommitSignatures: z.boolean(),
-              })
-              .nullable(),
-          })
-          .nullable(),
-      })
-      .nullable(),
-  }),
-})
+const restBranchHead = z
+  .object({ commit: z.object({ sha: z.string().min(1) }).passthrough() })
+  .passthrough()
 
-const rulesetRulesJson = z.array(
+const restRulesetRules = z.array(
   z
     .object({
       type: z.string().min(1),
@@ -161,6 +171,8 @@ const rulesetRulesJson = z.array(
     })
     .passthrough(),
 )
+
+// ── Ruleset gate classification (unchanged from the gh implementation) ───────
 
 const pullRequestRuleParameters = z
   .object({
@@ -190,23 +202,6 @@ const requiredCodeScanningRuleParameters = z
   )
   .passthrough()
 const mergeQueueRuleParameters = z.object({}).passthrough()
-
-/** Exact-ref classic protection query. A rule may exist yet contain only
- * structural restrictions; only requirements that can block landing count as
- * a merge gate. */
-const CLASSIC_PROTECTION_QUERY = [
-  'query($owner:String!,$name:String!,$qualifiedRef:String!){',
-  'repository(owner:$owner,name:$name){',
-  'ref(qualifiedName:$qualifiedRef){',
-  'branchProtectionRule{',
-  'requiresStatusChecks requiresApprovingReviews requiredApprovingReviewCount',
-  'requiresCodeOwnerReviews requireLastPushApproval',
-  'requiresConversationResolution requiresDeployments requiresCommitSignatures',
-  '}',
-  '}',
-  '}',
-  '}',
-].join(' ')
 
 const STRUCTURAL_RULE_TYPES = new Set([
   'creation',
@@ -239,7 +234,7 @@ function parseRuleParameters<S extends z.ZodType>(
 
 /** Whether any active repository/organization rule matching one branch
  * carries a real merge-blocking requirement. Unknown future types fail closed. */
-export function rulesetsHaveMergeGate(rules: z.infer<typeof rulesetRulesJson>): boolean {
+export function rulesetsHaveMergeGate(rules: z.infer<typeof restRulesetRules>): boolean {
   let present = false
   for (const rule of rules) {
     switch (rule.type) {
@@ -316,202 +311,294 @@ export function rulesetsHaveMergeGate(rules: z.infer<typeof rulesetRulesJson>): 
   return present
 }
 
-/** §15.7: mergeable false is what makes the janitor emit `pr.conflicted`. */
-const MERGEABLE_MAP = {
-  MERGEABLE: true,
-  CONFLICTING: false,
-  UNKNOWN: null,
-} as const
+// ── Native auto-merge mutations (GraphQL) ────────────────────────────────────
+//
+// GitHub's REST API has no auto-merge route: PUT/DELETE
+// /repos/{o}/{r}/pulls/{n}/auto-merge respond 404 (route-not-found) while
+// adjacent PR routes on the same PR respond 401 without auth. `gh` itself
+// drives native auto-merge through the GraphQL mutations below, so the forge
+// does too — same transport seam, same token.
+
+const ENABLE_AUTO_MERGE_MUTATION = `
+  mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+    enablePullRequestAutoMerge(
+      input: {pullRequestId: $pullRequestId, mergeMethod: $mergeMethod}
+    ) {
+      pullRequest { id }
+    }
+  }
+`
+
+const DISABLE_AUTO_MERGE_MUTATION = `
+  mutation ($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId}) {
+      pullRequest { id }
+    }
+  }
+`
+
+/** A successful mutation payload: the mutated PR's node id. A null payload
+ * (mutation executed but returned nothing) fails the strict parse. */
+const autoMergeMutationPayload = z.object({
+  pullRequest: z.object({ id: z.string().min(1) }),
+})
+const enableAutoMergeData = z.object({ enablePullRequestAutoMerge: autoMergeMutationPayload })
+const disableAutoMergeData = z.object({ disablePullRequestAutoMerge: autoMergeMutationPayload })
+
+// ── Classic branch protection (REST) ─────────────────────────────────────────
+//
+// The documented Branch-protection `protection` object (GET
+// /repos/{o}/{r}/branches/{b}). Subsections are present-or-null; a subsection
+// missing entirely from the response is UNPROVEN, not absent — the fail-closed
+// posture the GraphQL probe had via its hard parse errors.
+
+type ClassicGateResult = { kind: 'proved'; gate: boolean } | { kind: 'unproven'; detail: string }
+
+function classifyClassicProtection(protection: unknown): ClassicGateResult {
+  if (protection === null) return { kind: 'proved', gate: false }
+  if (typeof protection !== 'object') {
+    return { kind: 'unproven', detail: `protection is ${JSON.stringify(protection)}` }
+  }
+  const raw = protection as Record<string, unknown>
+  // Every subsection this classifier reads must EXIST in the response, even
+  // when unset (GitHub renders unset subsections as null). A response that
+  // omits one is auth- or plan-scoped in a way we cannot prove.
+  for (const subsection of [
+    'required_status_checks',
+    'required_pull_request_reviews',
+    'restrictions',
+  ] as const) {
+    if (!(subsection in raw)) {
+      return { kind: 'unproven', detail: `protection.${subsection} missing from response` }
+    }
+  }
+  const statusChecks = raw.required_status_checks
+  const reviews = raw.required_pull_request_reviews
+  const restrictions = raw.restrictions
+  if (statusChecks !== null && typeof statusChecks !== 'object') {
+    return { kind: 'unproven', detail: 'required_status_checks is neither null nor an object' }
+  }
+  if (restrictions !== null && typeof restrictions !== 'object') {
+    return { kind: 'unproven', detail: 'restrictions is neither null nor an object' }
+  }
+  if (statusChecks !== null) return { kind: 'proved', gate: true }
+  if (restrictions !== null) return { kind: 'proved', gate: true }
+  if (reviews === null) return { kind: 'proved', gate: false }
+  if (typeof reviews !== 'object') {
+    return {
+      kind: 'unproven',
+      detail: 'required_pull_request_reviews is neither null nor an object',
+    }
+  }
+  const reviewFields = reviews as Record<string, unknown>
+  for (const field of [
+    'required_approving_review_count',
+    'require_code_owner_reviews',
+    'require_last_push_approval',
+  ] as const) {
+    if (!(field in reviewFields)) {
+      return { kind: 'unproven', detail: `required_pull_request_reviews.${field} missing` }
+    }
+  }
+  const count = reviewFields.required_approving_review_count
+  const codeOwners = reviewFields.require_code_owner_reviews
+  const lastPush = reviewFields.require_last_push_approval
+  if (
+    typeof count !== 'number' ||
+    typeof codeOwners !== 'boolean' ||
+    typeof lastPush !== 'boolean'
+  ) {
+    return {
+      kind: 'unproven',
+      detail: 'required_pull_request_reviews fields have unexpected types',
+    }
+  }
+  return { kind: 'proved', gate: count > 0 || codeOwners || lastPush }
+}
+
+/** REST `mergeable_state` → the kernel's canonical GraphQL-spelling enum.
+ * The value sets differ in spelling only; unrecognized values throw so the
+ * caller's fail-closed handling defers instead of ever mapping to DIRECT. */
+function restMergeState(raw: string): MergeStateStatus {
+  const mapped = (
+    {
+      behind: 'BEHIND',
+      blocked: 'BLOCKED',
+      clean: 'CLEAN',
+      dirty: 'DIRTY',
+      draft: 'DRAFT',
+      has_hooks: 'HAS_HOOKS',
+      unknown: 'UNKNOWN',
+      unstable: 'UNSTABLE',
+    } as Record<string, MergeStateStatus>
+  )[raw]
+  if (mapped === undefined) {
+    throw new Error(
+      `unknown GitHub mergeable_state ${JSON.stringify(raw)}; ` +
+        `known states: ${mergeStateStatuses.join(', ')}`,
+    )
+  }
+  return mapped
+}
 
 export class GitHubForge implements Forge {
   readonly name = 'github'
   readonly prAttachments: PrAttachmentHosting
 
+  private readonly transport: GitHubRequest
+  /** Only `pushBranch` still runs a local command (`git push` from the
+   * workspace); every API operation goes through the transport. */
   private readonly exec: Exec
-  private readonly writeTempFile: TempFileWriter
+  private readonly explicitRepository?: string
+  private readonly repoRoot?: string
+  private readonly env: Readonly<Record<string, string | undefined>>
+  private coordinates?: RepoCoordinates | null
 
   constructor(
     opts: {
+      transport?: GitHubRequest
       exec?: Exec
-      writeTempFile?: TempFileWriter
-      writePrAttachmentTempFile?: PrAttachmentTempFileWriter
-      prAttachmentTimeoutMs?: number
+      token?: string
+      repository?: string
+      repoRoot?: string
+      env?: Readonly<Record<string, string | undefined>>
     } = {},
   ) {
     this.exec = opts.exec ?? bunExec
-    this.writeTempFile = opts.writeTempFile ?? defaultTempFileWriter
-    this.prAttachments = new GitHubPrAttachmentHosting({
-      exec: this.exec,
-      ...(opts.writePrAttachmentTempFile !== undefined
-        ? { writeTempFile: opts.writePrAttachmentTempFile }
-        : {}),
-      ...(opts.prAttachmentTimeoutMs !== undefined
-        ? { commandTimeoutMs: opts.prAttachmentTimeoutMs }
-        : {}),
+    this.transport =
+      opts.transport ??
+      createGitHubFetchTransport({
+        ...(opts.token !== undefined
+          ? { token: opts.token }
+          : { token: githubTokenFromEnv(opts.env ?? {}) }),
+      })
+    this.env = opts.env ?? {}
+    if (opts.repository !== undefined && opts.repository !== '') {
+      this.explicitRepository = opts.repository
+    } else if (this.env.AB_REPOSITORY !== undefined && this.env.AB_REPOSITORY !== '') {
+      this.explicitRepository = this.env.AB_REPOSITORY
+    }
+    this.repoRoot = opts.repoRoot
+    this.prAttachments = new GitHubPrAttachmentHosting({ transport: this.transport })
+  }
+
+  /** Memoized owner/name. `null` means "could not prove coordinates" — the
+   * caller decides whether that is fatal (direct calls) or a deferral
+   * (auto-merge gate probes). */
+  private async repoCoordinates(): Promise<RepoCoordinates | null> {
+    this.coordinates ??= await this.resolveCoordinates()
+    return this.coordinates
+  }
+
+  private async resolveCoordinates(): Promise<RepoCoordinates | null> {
+    if (this.explicitRepository !== undefined) return parseRepoCoordinates(this.explicitRepository)
+    // Worktree/checkout mode only: the last-resort probe reads the checkout's
+    // origin. Origin mode always exports AB_REPOSITORY, so this never runs.
+    if (this.repoRoot !== undefined) {
+      try {
+        const result = await this.exec(['git', 'remote', 'get-url', 'origin'], {
+          cwd: this.repoRoot,
+          signal: undefined,
+        })
+        if (result.exitCode === 0) {
+          const raw = result.stdout.trim()
+          if (raw !== '') return parseRepoCoordinates(raw)
+        }
+      } catch {
+        // Fall through to the error.
+      }
+    }
+    return null
+  }
+
+  private requireCoordinates(): Promise<RepoCoordinates> {
+    return this.repoCoordinates().then((coordinates) => {
+      if (coordinates === null) {
+        throw new Error(
+          'GitHub forge could not resolve the repository owner/name — pass ' +
+            "--repository <origin>, export AB_REPOSITORY, or set the checkout's origin remote",
+        )
+      }
+      return coordinates
     })
   }
 
-  private async run(cmd: string[], cwd: string): Promise<string> {
-    const result = await this.exec(cmd, { cwd })
+  private async request(
+    method: string,
+    path: string,
+    opts?: GitHubRequestOpts,
+  ): Promise<GitHubResponse> {
+    return this.transport(method, path, opts)
+  }
+
+  private parse<T>(schema: z.ZodType<T>, response: GitHubResponse, operation: string): T {
+    const parsed = schema.safeParse(response.json)
+    if (!parsed.success) {
+      throw new Error(`unexpected GitHub response for ${operation}: ${parsed.error.message}`)
+    }
+    return parsed.data
+  }
+
+  private async getJson<T>(
+    schema: z.ZodType<T>,
+    path: string,
+    operation: string,
+    opts?: GitHubRequestOpts,
+  ): Promise<T> {
+    return this.parse(schema, await this.request('GET', path, opts), operation)
+  }
+
+  /** One GraphQL operation over the shared transport: POST the document,
+   * validate the envelope, and surface the API-level `errors` array as a
+   * thrown error — GitHub answers HTTP 200 even when the mutation failed. */
+  private async graphql<T>(
+    operation: string,
+    schema: z.ZodType<T>,
+    query: string,
+    variables: Record<string, unknown>,
+  ): Promise<T> {
+    const response = await this.request('POST', 'graphql', { body: { query, variables } })
+    const envelope = z
+      .object({
+        data: z.unknown().optional(),
+        errors: z.array(z.object({ message: z.string() }).passthrough()).optional(),
+      })
+      .safeParse(response.json)
+    if (!envelope.success) {
+      throw new Error(
+        `unexpected GitHub GraphQL envelope for ${operation}: ${envelope.error.message}`,
+      )
+    }
+    const errors = envelope.data.errors
+    if (errors !== undefined && errors.length > 0) {
+      throw new Error(
+        `GitHub GraphQL ${operation} failed: ${errors.map((e) => e.message).join('; ')}`,
+      )
+    }
+    if (envelope.data.data === undefined || envelope.data.data === null) {
+      throw new Error(`GitHub GraphQL ${operation} returned no data`)
+    }
+    const parsed = schema.safeParse(envelope.data.data)
+    if (!parsed.success) {
+      throw new Error(`unexpected GitHub GraphQL data for ${operation}: ${parsed.error.message}`)
+    }
+    return parsed.data
+  }
+
+  // ── Forge operations ───────────────────────────────────────────────────────
+
+  /** [D1]: rebase is banned and branches are never rewritten — never force.
+   * Only ever called from worktree-side terminals and contract fixtures. */
+  async pushBranch(workspacePath: string, branch: string): Promise<void> {
+    const result = await this.exec(['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`], {
+      cwd: workspacePath,
+      signal: undefined,
+    })
     if (result.exitCode !== 0) {
       throw new Error(
-        `forge command failed (exit ${result.exitCode}): ${cmd.join(' ')}\n${result.stderr.trim()}`,
+        `forge command failed (exit ${result.exitCode}): git push -u origin HEAD:refs/heads/${branch}\n${result.stderr.trim()}`,
       )
     }
-    return result.stdout
-  }
-
-  private parseJson<S extends z.ZodType>(schema: S, stdout: string, cmd: string[]): z.infer<S> {
-    try {
-      return schema.parse(JSON.parse(stdout))
-    } catch (error) {
-      throw new Error(`unexpected output from \`${cmd.join(' ')}\`: ${String(error)}`)
-    }
-  }
-
-  /** Probe both GitHub gate systems for the PR's exact base branch. The one
-   * non-success ruleset response that proves absence is GitHub's documented
-   * account-plan limitation; even then classic protection must independently
-   * parse successfully. Every other uncertainty is returned as a typed,
-   * fail-closed deferral rather than escaping into finalize or the janitor. */
-  private async mergeGatePresence(
-    workspacePath: string,
-    baseRefName: string,
-  ): Promise<
-    | { kind: 'proved'; presence: MergeGatePresence; owner: string; name: string }
-    | { kind: 'deferred'; reason: AutoMergeDeferralReason }
-  > {
-    const unproven = (detail: string) =>
-      ({
-        kind: 'deferred',
-        reason: { code: 'unproven-gate-state', detail },
-      }) as const
-    const errorMessage = (error: unknown): string =>
-      error instanceof Error ? error.message : String(error)
-
-    const repoCmd = ['gh', 'repo', 'view', '--json', 'nameWithOwner']
-    let identity: z.infer<typeof repoIdentityJson>
-    try {
-      identity = this.parseJson(repoIdentityJson, await this.run(repoCmd, workspacePath), repoCmd)
-    } catch (error) {
-      return unproven(`GitHub auto-merge gate repository inspection failed: ${errorMessage(error)}`)
-    }
-    const parts = identity.nameWithOwner.split('/')
-    if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
-      return unproven(
-        `GitHub auto-merge gate returned unexpected repository identity ${JSON.stringify(identity.nameWithOwner)}`,
-      )
-    }
-    const [owner, name] = parts as [string, string]
-
-    const classicCmd = [
-      'gh',
-      'api',
-      'graphql',
-      '-f',
-      `query=${CLASSIC_PROTECTION_QUERY}`,
-      '-F',
-      `owner=${owner}`,
-      '-F',
-      `name=${name}`,
-      '-F',
-      `qualifiedRef=refs/heads/${baseRefName}`,
-    ]
-    let classicGate: boolean | undefined
-    let classicError: string | undefined
-    try {
-      const classic = this.parseJson(
-        classicProtectionJson,
-        await this.run(classicCmd, workspacePath),
-        classicCmd,
-      )
-      if (classic.data.repository === null) {
-        throw new Error(`GitHub gate probe could not resolve repository ${identity.nameWithOwner}`)
-      }
-      if (classic.data.repository.ref === null) {
-        throw new Error(
-          `GitHub gate probe could not resolve base branch ${JSON.stringify(baseRefName)}`,
-        )
-      }
-      const protection = classic.data.repository.ref.branchProtectionRule
-      classicGate =
-        protection !== null &&
-        (protection.requiresStatusChecks ||
-          protection.requiresApprovingReviews ||
-          protection.requiredApprovingReviewCount > 0 ||
-          protection.requiresCodeOwnerReviews ||
-          protection.requireLastPushApproval ||
-          protection.requiresConversationResolution ||
-          protection.requiresDeployments ||
-          protection.requiresCommitSignatures)
-    } catch (error) {
-      classicError = errorMessage(error)
-    }
-
-    const rulesCmd = [
-      'gh',
-      'api',
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/rules/branches/${encodeURIComponent(baseRefName)}`,
-    ]
-    let rulesResult: ExecResult
-    try {
-      rulesResult = await this.exec(rulesCmd, { cwd: workspacePath })
-    } catch (error) {
-      return unproven(`GitHub auto-merge ruleset probe failed: ${errorMessage(error)}`)
-    }
-
-    if (rulesResult.exitCode !== 0) {
-      let planLimited = false
-      try {
-        planLimited =
-          rulesetPlanLimitationJson.safeParse(JSON.parse(rulesResult.stdout)).success &&
-          rulesResult.stderr.trim() ===
-            'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)'
-      } catch {
-        // Non-JSON command output is ordinary unproven gate state.
-      }
-      if (!planLimited) {
-        return unproven(
-          `GitHub auto-merge ruleset probe failed (exit ${rulesResult.exitCode}): ${rulesResult.stderr.trim()}`,
-        )
-      }
-      if (classicGate === undefined) {
-        return {
-          kind: 'deferred',
-          reason: {
-            code: 'github-plan-limitation',
-            detail:
-              'GitHub returned its documented rulesets plan-limitation response, but classic ' +
-              `branch protection could not be proven absent: ${classicError ?? 'unknown failure'}`,
-          },
-        }
-      }
-      return { kind: 'proved', presence: classicGate ? 'present' : 'absent', owner, name }
-    }
-
-    let rulesetGate: boolean
-    try {
-      const rules = this.parseJson(rulesetRulesJson, rulesResult.stdout, rulesCmd)
-      rulesetGate = rulesetsHaveMergeGate(rules)
-    } catch (error) {
-      return unproven(`GitHub auto-merge ruleset classification failed: ${errorMessage(error)}`)
-    }
-    if (classicGate === undefined) {
-      return unproven(
-        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}`,
-      )
-    }
-    return {
-      kind: 'proved',
-      presence: classicGate || rulesetGate ? 'present' : 'absent',
-      owner,
-      name,
-    }
-  }
-
-  /** [D1]: rebase is banned and branches are never rewritten — never force. */
-  async pushBranch(workspacePath: string, branch: string): Promise<void> {
-    await this.run(['git', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`], workspacePath)
   }
 
   async openPr(opts: {
@@ -524,77 +611,56 @@ export class GitHubForge implements Forge {
   }): Promise<PrRef> {
     // Idempotent by head branch (SPEC §8.7 crash paths): finalize's `ab done`
     // opens the PR BEFORE appending finalize.completed, so a crash or store
-    // failure between the two makes the retry call openPr again. `gh pr
-    // create` errors on an existing PR for the head branch; adopting the open
-    // PR instead makes the re-run a harmless retry — the same rationale that
-    // makes push-before-event safe for implement.
-    const listCmd = [
-      'gh',
-      'pr',
-      'list',
-      '--head',
-      opts.head,
-      '--state',
-      'open',
-      '--json',
-      'number,url,headRefOid',
-    ]
-    const listed = this.parseJson(
-      z.array(prViewJson),
-      await this.run(listCmd, opts.workspacePath),
-      listCmd,
+    // failure between the two makes the retry call openPr again. Adopting the
+    // open PR instead of erroring on the duplicate makes the re-run a
+    // harmless retry — the same rationale that makes push-before-event safe
+    // for implement.
+    const { owner, name } = await this.requireCoordinates()
+    const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    const listed = await this.getJson(
+      z.array(restPrRef),
+      `${repoPath}/pulls?head=${encodeURIComponent(`${owner}:${opts.head}`)}&state=open`,
+      'open PR probe',
     )
     const existing = listed[0]
     if (existing !== undefined) {
       return {
         number: existing.number,
-        url: existing.url,
-        headSha: existing.headRefOid,
+        url: existing.html_url,
+        headSha: existing.head.sha,
       }
     }
-    const bodyPath = await this.writeTempFile(opts.body)
-    await this.run(
-      [
-        'gh',
-        'pr',
-        'create',
-        '--head',
-        opts.head,
-        '--base',
-        opts.base,
-        '--title',
-        opts.title,
-        '--body-file',
-        bodyPath,
-      ],
-      opts.workspacePath,
+    const created = this.parse(
+      restPrRef,
+      await this.request('POST', `${repoPath}/pulls`, {
+        body: { title: opts.title, head: opts.head, base: opts.base, body: opts.body },
+      }),
+      'PR create',
     )
-    // The number is unknown until the PR exists, so the follow-up view
-    // selects by head branch — gh resolves an open PR from its head ref.
-    const viewCmd = ['gh', 'pr', 'view', opts.head, '--json', 'number,url,headRefOid']
-    const stdout = await this.run(viewCmd, opts.workspacePath)
-    const view = this.parseJson(prViewJson, stdout, viewCmd)
-    return { number: view.number, url: view.url, headSha: view.headRefOid }
+    return { number: created.number, url: created.html_url, headSha: created.head.sha }
   }
 
   /** Janitor poll (SPEC §15.7): merged / closed / mergeability for one PR. */
-  async getPrState(workspacePath: string, number: number): Promise<PrState> {
-    const cmd = ['gh', 'pr', 'view', String(number), '--json', 'state,mergeable,mergeCommit']
-    const stdout = await this.run(cmd, workspacePath)
-    const view = this.parseJson(prStateJson, stdout, cmd)
-    switch (view.state) {
-      case 'MERGED': {
-        // §15.7 [D1]: pr.merged records the squash commit as the landing
-        // point — a merged PR without one is unusable, not mappable.
-        if (!view.mergeCommit) {
-          throw new Error(`gh reports PR #${number} merged with no mergeCommit`)
-        }
-        return { state: 'merged', sha: view.mergeCommit.oid }
+  async getPrState(_workspacePath: string, number: number): Promise<PrState> {
+    const { owner, name } = await this.requireCoordinates()
+    const view = await this.getJson(
+      restPrState,
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
+      `PR #${number} poll`,
+    )
+    if (view.merged) {
+      // §15.7 [D1]: pr.merged records the squash commit as the landing
+      // point — a merged PR without one is unusable, not mappable.
+      if (view.merge_commit_sha === null) {
+        throw new Error(`GitHub reports PR #${number} merged with no merge_commit_sha`)
       }
-      case 'CLOSED':
+      return { state: 'merged', sha: view.merge_commit_sha }
+    }
+    switch (view.state) {
+      case 'closed':
         return { state: 'closed' }
-      case 'OPEN':
-        return { state: 'open', mergeable: MERGEABLE_MAP[view.mergeable] }
+      case 'open':
+        return { state: 'open', mergeable: view.mergeable }
     }
   }
 
@@ -602,9 +668,11 @@ export class GitHubForge implements Forge {
     const before = await this.getPrState(workspacePath, number)
     if (before.state === 'merged' || before.state === 'closed') return before
 
+    const { owner, name } = await this.requireCoordinates()
+    const prPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`
     let closeError: unknown
     try {
-      await this.run(['gh', 'pr', 'close', String(number)], workspacePath)
+      await this.request('PATCH', prPath, { body: { state: 'closed' } })
     } catch (error) {
       closeError = error
     }
@@ -613,33 +681,130 @@ export class GitHubForge implements Forge {
     const after = await this.getPrState(workspacePath, number)
     if (after.state === 'merged' || after.state === 'closed') return after
     if (closeError !== undefined) throw closeError
-    throw new Error(`GitHub PR #${number} remained open after gh pr close`)
+    throw new Error(`GitHub PR #${number} remained open after the close request`)
   }
 
-  async deleteBranch(workspacePath: string, branch: string): Promise<void> {
+  async deleteBranch(_workspacePath: string, branch: string): Promise<void> {
     const ref = `refs/heads/${branch}`
-    const valid = await this.exec(['git', 'check-ref-format', ref], { cwd: workspacePath })
-    if (valid.exitCode !== 0) throw new Error(`GitHub branch cleanup rejected invalid ref ${ref}`)
-    const probe = await this.exec(['git', 'ls-remote', '--exit-code', '--heads', 'origin', ref], {
-      cwd: workspacePath,
-    })
-    if (probe.exitCode === 2) return
-    if (probe.exitCode !== 0) {
-      throw new Error(
-        `forge command failed while checking remote branch ${ref} (exit ${probe.exitCode}): ` +
-          (probe.stderr.trim() || probe.stdout.trim() || '(no output)'),
+    if (!isValidGitBranchName(branch)) {
+      throw new Error(`GitHub branch cleanup rejected invalid ref ${ref}`)
+    }
+    const { owner, name } = await this.requireCoordinates()
+    const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    try {
+      await this.request('GET', `${repoPath}/git/ref/heads/${branch}`)
+    } catch (error) {
+      if (error instanceof GitHubApiError && error.status === 404) return // idempotent
+      throw error
+    }
+    try {
+      await this.request('DELETE', `${repoPath}/git/refs/heads/${branch}`)
+    } catch (error) {
+      // A probe/delete race (branch deleted elsewhere) is still a success.
+      if (error instanceof GitHubApiError && error.status === 404) return
+      throw error
+    }
+  }
+
+  /** Read the provider's projected native desired state, plus the PR's node
+   * id — the GraphQL mutations key on the node id, not the PR number.
+   * Mutations are not acknowledgements: only an independent follow-up
+   * observation can make an `applied` result durable. */
+  private async nativeAutoMergeView(number: number): Promise<{ enabled: boolean; nodeId: string }> {
+    const { owner, name } = await this.requireCoordinates()
+    const view = await this.getJson(
+      restNativeAutoMerge,
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
+      `PR #${number} native auto-merge read`,
+    )
+    return { enabled: view.auto_merge !== null, nodeId: view.node_id }
+  }
+
+  /** Probe both GitHub gate systems for the PR's exact base branch. The one
+   * non-success ruleset response that proves absence is GitHub's documented
+   * account-plan limitation; even then classic protection must independently
+   * parse successfully. Every other uncertainty is returned as a typed,
+   * fail-closed deferral rather than escaping into finalize or the janitor. */
+  private async mergeGatePresence(
+    baseRefName: string,
+  ): Promise<
+    | { kind: 'proved'; presence: MergeGatePresence }
+    | { kind: 'deferred'; reason: AutoMergeDeferralReason }
+  > {
+    const unproven = (detail: string) =>
+      ({
+        kind: 'deferred',
+        reason: { code: 'unproven-gate-state', detail },
+      }) as const
+    const errorMessage = (error: unknown): string =>
+      error instanceof Error ? error.message : String(error)
+
+    const coordinates = await this.repoCoordinates()
+    if (coordinates === null) {
+      return unproven(
+        'GitHub auto-merge gate repository inspection failed: could not resolve the repository owner/name',
       )
     }
-    await this.run(['git', 'push', 'origin', '--delete', branch], workspacePath)
-  }
+    const { owner, name } = coordinates
+    const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    const branchPath = `${repoPath}/branches/${baseRefName}`
 
-  /** Read the provider's projected native desired state. Mutations are not
-   * acknowledgements: only this independent follow-up observation can make an
-   * `applied` result durable. */
-  private async nativeAutoMergeEnabled(workspacePath: string, number: number): Promise<boolean> {
-    const cmd = ['gh', 'pr', 'view', String(number), '--json', 'autoMergeRequest']
-    const view = this.parseJson(nativeAutoMergeJson, await this.run(cmd, workspacePath), cmd)
-    return view.autoMergeRequest !== null
+    let classicGate: boolean | undefined
+    let classicError: string | undefined
+    try {
+      const branch = await this.request('GET', branchPath)
+      const protection = (branch.json as Record<string, unknown> | undefined)?.protection
+      if (protection === undefined) {
+        throw new Error('branch response carries no protection object')
+      }
+      const classic = classifyClassicProtection(protection)
+      if (classic.kind === 'unproven') throw new Error(classic.detail)
+      classicGate = classic.gate
+    } catch (error) {
+      classicError = errorMessage(error)
+    }
+
+    let rulesetGate = false
+    let planLimited = false
+    try {
+      const rules = await this.request('GET', `${repoPath}/rules/branches/${baseRefName}`)
+      rulesetGate = rulesetsHaveMergeGate(this.parse(restRulesetRules, rules, 'ruleset probe'))
+    } catch (error) {
+      if (
+        error instanceof GitHubApiError &&
+        error.status === 403 &&
+        restPlanLimitation.safeParse(error.body).success
+      ) {
+        planLimited = true
+      } else {
+        return unproven(`GitHub auto-merge ruleset probe failed: ${errorMessage(error)}`)
+      }
+    }
+
+    if (planLimited) {
+      if (classicGate === undefined) {
+        return {
+          kind: 'deferred',
+          reason: {
+            code: 'github-plan-limitation',
+            detail:
+              'GitHub returned its documented rulesets plan-limitation response, but classic ' +
+              `branch protection could not be proven absent: ${classicError ?? 'unknown failure'}`,
+          },
+        }
+      }
+      return { kind: 'proved', presence: classicGate ? 'present' : 'absent' }
+    }
+
+    if (classicGate === undefined) {
+      return unproven(
+        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}`,
+      )
+    }
+    return {
+      kind: 'proved',
+      presence: classicGate || rulesetGate ? 'present' : 'absent',
+    }
   }
 
   /**
@@ -650,50 +815,51 @@ export class GitHubForge implements Forge {
    * is confirmed with a second native-state read before returning `applied`.
    */
   async setAutoMerge(
-    workspacePath: string,
+    _workspacePath: string,
     number: number,
     enabled: boolean,
   ): Promise<AutoMergeResult> {
     // Cancellation must remain usable when GitHub adds a merge-state enum:
-    // inspect only the one field disabling actually needs.
+    // inspect only the fields disabling actually needs. The mutation itself
+    // sits outside the enable path's catch on purpose — a failed cancellation
+    // is a hard janitor-tick error (as `gh pr merge --disable-auto` was
+    // before), never a silent deferral of live consent revocation.
     if (!enabled) {
-      if (!(await this.nativeAutoMergeEnabled(workspacePath, number))) {
+      const native = await this.nativeAutoMergeView(number)
+      if (!native.enabled) {
         return { kind: 'applied' }
       }
-      await this.run(['gh', 'pr', 'merge', String(number), '--disable-auto'], workspacePath)
-      return (await this.nativeAutoMergeEnabled(workspacePath, number))
+      await this.graphql(
+        'disablePullRequestAutoMerge',
+        disableAutoMergeData,
+        DISABLE_AUTO_MERGE_MUTATION,
+        { pullRequestId: native.nodeId },
+      )
+      return (await this.nativeAutoMergeView(number)).enabled
         ? { kind: 'deferred' }
         : { kind: 'applied' }
     }
 
     try {
-      const viewCmd = [
-        'gh',
-        'pr',
-        'view',
-        String(number),
-        '--json',
-        'autoMergeRequest,mergeStateStatus,headRefOid,baseRefName',
-      ]
-      const view = this.parseJson(autoMergeJson, await this.run(viewCmd, workspacePath), viewCmd)
-      if (view.autoMergeRequest !== null) return { kind: 'applied' }
+      const { owner, name } = await this.requireCoordinates()
+      const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+      const view = await this.getJson(
+        restAutoMergeView,
+        `${repoPath}/pulls/${number}`,
+        `PR #${number} auto-merge inspection`,
+      )
+      if (view.auto_merge !== null) return { kind: 'applied' }
 
-      const gate = await this.mergeGatePresence(workspacePath, view.baseRefName)
+      const mergeState = restMergeState(view.mergeable_state)
+      const gate = await this.mergeGatePresence(view.base.ref)
       if (gate.kind === 'deferred') return gate
-      const disposition = classifyAutoMergeEnable(view.mergeStateStatus, gate.presence)
+      const disposition = classifyAutoMergeEnable(mergeState, gate.presence)
       switch (disposition.kind) {
         case 'native': {
-          const repoCmd = [
-            'gh',
-            'api',
-            `repos/${encodeURIComponent(gate.owner)}/${encodeURIComponent(gate.name)}`,
-            '--jq',
-            '{allow_auto_merge: .allow_auto_merge}',
-          ]
-          const repository = this.parseJson(
-            repositoryAutoMergeJson,
-            await this.run(repoCmd, workspacePath),
-            repoCmd,
+          const repository = await this.getJson(
+            restRepositoryAutoMerge,
+            repoPath,
+            'repository auto-merge read',
           )
           if (!repository.allow_auto_merge) {
             return {
@@ -704,13 +870,18 @@ export class GitHubForge implements Forge {
               },
             }
           }
-          await this.run(['gh', 'pr', 'merge', String(number), '--auto', '--squash'], workspacePath)
-          return (await this.nativeAutoMergeEnabled(workspacePath, number))
+          await this.graphql(
+            'enablePullRequestAutoMerge',
+            enableAutoMergeData,
+            ENABLE_AUTO_MERGE_MUTATION,
+            { pullRequestId: view.node_id, mergeMethod: 'SQUASH' },
+          )
+          return (await this.nativeAutoMergeView(number)).enabled
             ? { kind: 'applied' }
             : { kind: 'deferred' }
         }
         case 'direct':
-          return { kind: 'ungated', headSha: view.headRefOid }
+          return { kind: 'ungated', headSha: view.head.sha }
         case 'deferred':
           return { kind: 'deferred' }
         case 'error':
@@ -729,17 +900,64 @@ export class GitHubForge implements Forge {
     }
   }
 
-  /** Normal guarded squash — no admin, force, rebase, or native-auto flag. */
-  async squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void> {
-    await this.run(
-      ['gh', 'pr', 'merge', String(number), '--squash', '--match-head-commit', expectedHeadSha],
-      workspacePath,
+  /** Normal guarded squash — no admin, force, rebase, or native-auto flag.
+   * A 409 (head moved) surfaces as a hard error, preserving the contract's
+   * moved-head rejection. */
+  async squashMerge(
+    _workspacePath: string,
+    number: number,
+    expectedHeadSha: string,
+  ): Promise<void> {
+    const { owner, name } = await this.requireCoordinates()
+    await this.request(
+      'PUT',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/merge`,
+      {
+        body: { merge_method: 'squash', sha: expectedHeadSha },
+      },
     )
   }
 
   /** The build's summary comment (SPEC §7.5) — links into the store. */
-  async commentOnPr(workspacePath: string, number: number, body: string): Promise<void> {
-    const bodyPath = await this.writeTempFile(body)
-    await this.run(['gh', 'pr', 'comment', String(number), '--body-file', bodyPath], workspacePath)
+  async commentOnPr(_workspacePath: string, number: number, body: string): Promise<void> {
+    const { owner, name } = await this.requireCoordinates()
+    await this.request(
+      'POST',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${number}/comments`,
+      { body: { body } },
+    )
+  }
+
+  // ── Optional capabilities (checkout-less dispatcher) ──────────────────────
+
+  /** Current tip of a remote branch. Throws (including 404) when the branch
+   * does not exist; the provider seam maps that to `undefined`. */
+  async remoteBranchSha(branch: string): Promise<string> {
+    const { owner, name } = await this.requireCoordinates()
+    const branchHead = await this.getJson(
+      restBranchHead,
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${branch}`,
+      `remote branch ${branch}`,
+    )
+    return branchHead.commit.sha
+  }
+
+  /** Raw file bytes from the repository. Ref omitted → the repository's
+   * default branch. Throws (including 404) when the path does not exist. */
+  async readFile(path: string, ref?: string): Promise<string> {
+    const { owner, name } = await this.requireCoordinates()
+    const query = ref !== undefined ? { ref } : undefined
+    const response = await this.request(
+      'GET',
+      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${path}`,
+      {
+        headers: { Accept: 'application/vnd.github.raw' },
+        ...(query !== undefined ? { query } : {}),
+      },
+    )
+    if (response.bytes === undefined) {
+      throw new Error(`GitHub contents read of ${path} returned no raw bytes`)
+    }
+    return new TextDecoder().decode(response.bytes)
   }
 }

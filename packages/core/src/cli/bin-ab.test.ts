@@ -445,7 +445,7 @@ test('ambient reads accept a differently located checkout of the same repository
     AB_PHASE: 'implement@1',
     AB_SESSION: 's_guest',
   })
-  expect(own.code).toBe(0)
+  expect(own.code, own.stderr).toBe(0)
   expect(JSON.parse(own.stdout).slug).toBe('guest-own')
 
   // The guest's own-origin acceptance is proven above; a foreign origin is
@@ -453,11 +453,13 @@ test('ambient reads accept a differently located checkout of the same repository
   const foreign = await runBinIn(guest, ['build', 'status', 'guest-foreign'], env)
   expect(foreign.code).toBe(1)
   expect(foreign.stderr).toContain(
-    `build "guest-foreign" belongs to repository "${host}", not "${guest}"`,
+    `build "guest-foreign" belongs to repository "${host}", not "https://github.com/acme/bin-origin"`,
   )
 
   // The legacy no-origin record is exactly the case the origin gate cannot
-  // forgive: the identical sessionless invocation still fails.
+  // forgive: the identical sessionless invocation still fails. The diagnostic
+  // names the repository identity — the guest checkout's normalized origin —
+  // not its path.
   const legacySessionless = await runBinIn(
     guest,
     ['build', 'status', 'guest-legacy', '--json'],
@@ -465,7 +467,7 @@ test('ambient reads accept a differently located checkout of the same repository
   )
   expect(legacySessionless.code).toBe(1)
   expect(legacySessionless.stderr).toContain(
-    `build "guest-legacy" belongs to repository "${host}", not "${guest}"`,
+    `build "guest-legacy" belongs to repository "${host}", not "https://github.com/acme/bin-origin"`,
   )
 
   // The build's own ambient session authorizes the read through the real CLI

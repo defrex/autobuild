@@ -229,6 +229,11 @@ function asInvocations(
 
 // ── Scenarios ────────────────────────────────────────────────────────────────
 
+// These scenarios drive the REAL `abDispatch` entry, so the store is keyed by
+// the resolved repository identity (§12): the checkout's normalized origin
+// remote — here the harness's bare `origin` remote, `h.remote` — not the
+// checkout path (`h.origin`, which only direct-dispatcher scenarios key by).
+
 describe('concurrent-pair overlap lease fencing', () => {
   test('two overlapping once invocations: exactly one owns the work, the other yields fenced', async () => {
     const h = await makeHarness({
@@ -243,7 +248,7 @@ describe('concurrent-pair overlap lease fencing', () => {
       // Winner starts first; its startup lease claim is the gate for the
       // loser's start — observable store state, never a delay.
       const winner = startOnce(h, { store: winnerStore.store, execution: winnerExec.execution })
-      await waitFor(async () => (await h.store.getRepo(h.origin))?.lease !== undefined)
+      await waitFor(async () => (await h.store.getRepo(h.remote))?.lease !== undefined)
       const loser = startOnce(h, { store: loserStore.store, execution: loserExec.execution })
 
       await loser.promise
@@ -271,13 +276,13 @@ describe('concurrent-pair overlap lease fencing', () => {
 
       // The yield is durable evidence naming the winner as holder, with no
       // run-surprise payload (no kernelRunId ⇒ no `run` key).
-      const repoEvents = await h.store.getRepoEvents(h.origin)
+      const repoEvents = await h.store.getRepoEvents(h.remote)
       const yields = repoEvents.filter((event) => event.type === 'dispatcher.tick-yielded')
       expect(yields).toHaveLength(1)
       expect(yields[0]!.payload).toEqual({ holder })
 
       // The lease is released after the owner's once-pass.
-      expect((await h.store.getRepo(h.origin))?.lease).toBeUndefined()
+      expect((await h.store.getRepo(h.remote))?.lease).toBeUndefined()
 
       // The loser yielded before its tick, so the single ready ticket was
       // claimed exactly once (sound here: no claim race ever happened).
@@ -318,7 +323,7 @@ describe('concurrent-pair overlap lease fencing', () => {
     const loserExec = recordingBuildExecution(h.wiring.buildExecution)
     try {
       const winner = startOnce(h, { store: winnerStore.store, execution: winnerExec.execution })
-      await waitFor(async () => (await h.store.getRepo(h.origin))?.lease !== undefined)
+      await waitFor(async () => (await h.store.getRepo(h.remote))?.lease !== undefined)
       const loser = startOnce(h, { store: loserStore.store, execution: loserExec.execution })
 
       // The injected builds' terminal states are deliberately not asserted;
@@ -348,7 +353,7 @@ describe('concurrent-pair overlap lease fencing', () => {
       expect(loserClaims.length).toBeGreaterThan(0)
       expect(loserClaims.every((call) => call.result === true)).toBe(true)
 
-      const repoEvents = await h.store.getRepoEvents(h.origin)
+      const repoEvents = await h.store.getRepoEvents(h.remote)
 
       // The required AC-4 evidence: the same invariant check that passed the
       // fenced scenario detects the lost fencing and throws.

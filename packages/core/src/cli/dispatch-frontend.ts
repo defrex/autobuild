@@ -82,7 +82,11 @@ interface ResumePrompt {
 }
 
 export interface DispatchFrontendOptions {
+  /** Repository identity (§12): the normalized origin, or the checkout path
+   * when there is no origin. Every Store key uses this. */
   repo: string
+  /** The physical main checkout — the supervised kernel's process cwd. */
+  checkout?: string
   storeRef: string
   store: BuildStore
   env: Record<string, string | undefined>
@@ -98,6 +102,7 @@ export interface DispatchFrontendOptions {
   launchChild?: (input: {
     store: BuildStore
     repo: string
+    cwd?: string
     run: string
     env: Record<string, string | undefined>
     options: DispatchChildOptions
@@ -871,7 +876,7 @@ export class DispatchFrontend {
     }
 
     const options: DispatchChildOptions = {
-      targetRepo: this.opts.repo,
+      targetRepo: this.opts.checkout ?? this.opts.repo,
       storeRef: this.opts.storeRef,
       run: this.runId,
       once: this.opts.once,
@@ -880,6 +885,7 @@ export class DispatchFrontend {
     this.child = (this.opts.launchChild ?? ((input) => superviseDispatchChild(input)))({
       store: this.opts.store,
       repo: this.opts.repo,
+      cwd: this.opts.checkout,
       run: this.runId,
       env: this.opts.env,
       options,

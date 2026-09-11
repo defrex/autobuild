@@ -19,6 +19,11 @@ export interface CreateWorkspaceProviderOptions {
   storeToken?: string
   /** Host-derived effective routes; consumed only by the built-in sandbox. */
   runtimeReferences?: RuntimeReferencesSource
+  /** Checkout-less seams for the built-in sandbox: the repository's HTTPS
+   * origin, and a remote branch-head reader returning `undefined` for an
+   * absent branch. Absent seams fall back to host `git` from `repoRoot`. */
+  origin?: () => Promise<string>
+  remoteBranchHead?: (branch: string) => Promise<string | undefined>
 }
 
 export interface WorkspaceRuntime {
@@ -63,6 +68,8 @@ export async function createWorkspaceProvider(
         storeToken: opts.storeToken,
         repo: resolve(opts.repoRoot),
         runtimeReferences: opts.runtimeReferences ?? [],
+        ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
+        ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
       })
     }
     throw new Error(

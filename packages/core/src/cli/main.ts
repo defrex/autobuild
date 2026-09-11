@@ -611,13 +611,14 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     // heavy wiring (like ticket create). One dispatcher per repo (§12).
     case 'dispatch': {
       const usage =
-        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] (§3.3)'
+        'usage: ab dispatch [--once] [--interval <seconds>] [--store <ref>] [--repository <origin>] [--plain] [--intake | --no-intake] [--auto-merge | --no-auto-merge] (§3.3)'
       const parsed = parseArgs(
         rest,
         {
           once: 'boolean',
           interval: 'value',
           store: 'value',
+          repository: 'value',
           plain: 'boolean',
           intake: 'boolean',
           'no-intake': 'boolean',
@@ -651,6 +652,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         intervalMs = Math.round(seconds * 1000)
       }
       const storeRef = stringFlag(parsed, 'store')
+      const repository = stringFlag(parsed, 'repository') ?? deps.processEnv?.AB_REPOSITORY
       const intake = sawIntake ? true : sawNoIntake ? false : undefined
       const defaultAutoMerge = sawAutoMerge ? true : sawNoAutoMerge ? false : undefined
       if (deps.exec === undefined) {
@@ -668,6 +670,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(defaultAutoMerge !== undefined ? { defaultAutoMerge } : {}),
         ...(intervalMs !== undefined ? { intervalMs } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(repository !== undefined && repository !== '' ? { repository } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
         ...(deps.terminal !== undefined ? { terminal: deps.terminal } : {}),
         ...(deps.input !== undefined ? { input: deps.input } : {}),

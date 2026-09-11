@@ -22,6 +22,9 @@
  * next tick advances the post-PR epilogue (§15.7).
  */
 import { hostname } from 'node:os'
+import { mkdir } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import semver from 'semver'
 import { parseConfig } from '../config/load'
@@ -65,6 +68,8 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from '../p
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
+import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
+import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { createTicketSource } from '../ports/tickets/create'
@@ -105,7 +110,12 @@ import {
   type BuildControlResult,
 } from './build-control'
 import { bulkControlReport, bulkControlRepository, type BulkDirection } from './bulk-control'
-import { resolveRepoState, type RepoStatePaths } from './repo-state'
+import {
+  normalizeGitRemoteUrl,
+  resolveRepoState,
+  resolveRepoStatePaths,
+  type RepoStatePaths,
+} from './repo-state'
 import { openStoreForRepoState } from './store-opening'
 import { DispatchFrontend } from './dispatch-frontend'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
@@ -242,8 +252,24 @@ export interface DispatchWiring {
 export type DispatchNonStoreWiring = Omit<DispatchWiring, 'store' | 'storeRef' | 'token'>
 
 export interface DispatchOpts {
-  /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd. */
+  /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd, or
+   * in origin mode a private scratch root. Filesystem consumers only. */
   targetRepo: string
+  /** Checkout-less origin mode (AUT-302): serve the repository at this origin
+   * with no local checkout. CLI `--repository <origin>`, env `AB_REPOSITORY`.
+   * Requires an HTTPS AB_STORE + AB_TOKEN, GitHub credentials, and the
+   * builtin github forge (from the fetched config). */
+  repository?: string
+  /** Resolved repository identity — the normalized origin, or the checkout
+   * path when the checkout has no origin. Derived from repo state by
+   * `abDispatch`; an explicitly supplied value WINS, letting an embedding
+   * that already resolved the identity (and keyed its store by it) pin the
+   * dispatcher to the same key. Every Store-keyed key and record write uses
+   * it. */
+  repo?: string
+  /** Test seam for origin mode: the GitHub transport the startup config
+   * fetch (and the default forge) use instead of real fetch. */
+  originConfigTransport?: GitHubRequest
   /** Process environment: adapter secrets (LINEAR_API_KEY) and AB_TOKEN. */
   env: Record<string, string | undefined>
   exec: Exec
@@ -340,13 +366,20 @@ async function defaultWire(
   state: RepoStatePaths,
   plugins: PluginRegistry,
 ): Promise<DispatchWiring> {
+  // Origin mode: no checkout exists, so the provider's host git seams are
+  // replaced by the injected origin and the forge's remote reads.
+  const originMode = opts.repository !== undefined
   if (config.workspace.provider === 'vercel-sandbox') {
     if (config.forge !== 'github') {
       throw new Error('vercel-sandbox requires the builtin github forge')
     }
-    const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], { cwd: opts.targetRepo })
-    if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
-    validateVercelGithubOrigin(origin.stdout.trim())
+    if (!originMode) {
+      const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], {
+        cwd: opts.targetRepo,
+      })
+      if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
+      validateVercelGithubOrigin(origin.stdout.trim())
+    }
     if (!opts.env.GITHUB_TOKEN && !opts.env.GH_TOKEN) {
       throw new Error(
         'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment',
@@ -357,14 +390,33 @@ async function defaultWire(
     name: config.forge,
     registry: plugins,
     env: opts.env,
-    repoRoot: opts.targetRepo,
+    repoRoot: state.checkout,
+    ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
   })
+  // Checkout-less provider seams: the sandbox provider derives its origin and
+  // remote branch heads from these instead of host `git` — every host-exec
+  // call site in the provider is bypassed in origin mode.
+  const providerSeams = originMode
+    ? {
+        origin: async (): Promise<string> => opts.repository!,
+        remoteBranchHead: async (branch: string): Promise<string | undefined> => {
+          const remoteBranchSha = forge.remoteBranchSha
+          if (remoteBranchSha === undefined) return undefined
+          try {
+            return await remoteBranchSha.call(forge, branch)
+          } catch (error) {
+            if (error instanceof GitHubApiError && error.status === 404) return undefined
+            throw error
+          }
+        },
+      }
+    : {}
   const opened = openStoreForRepoState(state, { env: opts.env })
 
   const tickets = await createTicketSource(
     config.tickets,
     opts.env,
-    opened.repo,
+    state.repo,
     opened.localStateRoot,
     plugins,
   )
@@ -376,10 +428,13 @@ async function defaultWire(
   const workspaceRuntime = await createWorkspaceRuntime(config.workspace, {
     registry: plugins,
     worktreeRoot: opened.worktreeRoot,
-    repoRoot: opened.repo,
+    // Plugin factories always get the filesystem checkout (the physical path
+    // or the origin-mode scratch root) — never the store identity.
+    repoRoot: state.checkout,
     env: opts.env,
     storeRef: opened.storeRef,
     runtimeReferences: () => runtimeReferences,
+    ...providerSeams,
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
 
@@ -541,6 +596,12 @@ class DispatchLoop {
   }
   /** The holder id this invocation already recorded a `tick-yielded` for. */
   private yieldedTo: string | undefined
+  /** Repository identity (§12): the normalized origin, or the checkout path
+   * when there is no origin. Every Store-keyed key uses this; filesystem
+   * consumers keep using `opts.targetRepo` (the checkout or scratch root). */
+  private get repoIdentity(): string {
+    return this.opts.repo ?? this.opts.targetRepo
+  }
 
   constructor(
     private readonly liveConfig: LiveConfig,
@@ -557,7 +618,7 @@ class DispatchLoop {
       this.dashboard && opts.terminal !== undefined
         ? new LiveRegion(opts.terminal, this.keyboard)
         : undefined
-    this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, opts.targetRepo, config)
+    this.dashboardBuilds = new DashboardBuildPollCache(wiring.store, this.repoIdentity, config)
 
     // `slug` is an internal pre-build role on the same runtime/model resolver. A
     // runtime without the optional capability is normal: omit the seam and let
@@ -587,7 +648,13 @@ class DispatchLoop {
       forge: wiring.forge,
       config,
       getConfig: () => this.liveConfig.current().config,
-      repo: opts.targetRepo,
+      repo: this.repoIdentity,
+      // Origin mode: the forge answers remote base-branch questions; no
+      // checkout git is probed for the served repository's origin.
+      ...(opts.repository !== undefined
+        ? { repoOrigin: normalizeGitRemoteUrl(opts.repository) }
+        : {}),
+      checkout: opts.targetRepo,
       exec: opts.exec,
       launchRunner: (slug) => this.launchRunner(slug),
       startHarvest: () => this.launchHarvest(),
@@ -629,12 +696,25 @@ class DispatchLoop {
 
   private async appendStatus(event: RepositoryEventWrite): Promise<void> {
     if (this.opts.kernelRunId === undefined) return
-    await this.wiring.store.appendRepo(this.opts.targetRepo, event)
+    await this.wiring.store.appendRepo(this.repoIdentity, event)
   }
 
   private async refreshConfig(): Promise<void> {
     if (this.opts.once === true) return
-    const outcome = await this.liveConfig.refreshFromDisk()
+    // Origin mode reloads from the forge: autobuild.toml at the CURRENT
+    // effective base branch (hot — a rename converges within two ticks).
+    // Restart-required changes keep startup-built adapters and file the
+    // existing restart-required observation (LiveConfig semantics).
+    const outcome =
+      this.opts.repository !== undefined && typeof this.wiring.forge.readFile === 'function'
+        ? await this.liveConfig.refreshFrom(async () => {
+            const baseBranch = this.liveConfig.current().config.baseBranch
+            return await this.wiring.forge.readFile!(
+              'autobuild.toml',
+              baseBranch !== undefined && baseBranch !== '' ? baseBranch : undefined,
+            )
+          })
+        : await this.liveConfig.refreshFromDisk()
     if (outcome.kind === 'unchanged') return
     if (outcome.kind === 'rejected') {
       if (outcome.notify) {
@@ -678,7 +758,7 @@ class DispatchLoop {
   }
 
   private async readDispatchSettings(): Promise<ReturnType<typeof reduceDispatchSettings>> {
-    const events = await this.wiring.store.getRepoEvents(this.opts.targetRepo)
+    const events = await this.wiring.store.getRepoEvents(this.repoIdentity)
     return reduceDispatchSettings(events)
   }
 
@@ -711,7 +791,7 @@ class DispatchLoop {
       // the last complete measurement with a fabricated zero.
       if (this.dashboard) {
         try {
-          const scan = await scanUnclaimedObservations(this.wiring.store, this.opts.targetRepo)
+          const scan = await scanUnclaimedObservations(this.wiring.store, this.repoIdentity)
           this.observationCount = scan.observations.length
         } catch {
           // Display-only sampling failures retain the last factual count and
@@ -901,7 +981,7 @@ class DispatchLoop {
 
     const event = await toggleRepositorySetting({
       store: this.wiring.store,
-      repo: this.opts.targetRepo,
+      repo: this.repoIdentity,
       user: buildControlUser(this.opts.env),
       setting: 'intake',
     })
@@ -921,7 +1001,7 @@ class DispatchLoop {
 
     const summary = await bulkControlRepository({
       store: this.wiring.store,
-      repo: this.opts.targetRepo,
+      repo: this.repoIdentity,
       env: this.opts.env,
       direction,
     })
@@ -947,7 +1027,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         slug,
         env: this.opts.env,
         action: { kind: 'dashboard-pause' },
@@ -976,7 +1056,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         slug,
         env: this.opts.env,
         action: { kind: 'dashboard-resume' },
@@ -1012,7 +1092,7 @@ class DispatchLoop {
     try {
       const result = await controlBuild({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         slug: confirmation.slug,
         env: this.opts.env,
         action: { kind: 'abort' },
@@ -1034,7 +1114,7 @@ class DispatchLoop {
     try {
       const result = await controlBuild({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         slug,
         env: this.opts.env,
         action: { kind: 'discard' },
@@ -1062,7 +1142,7 @@ class DispatchLoop {
 
     const result = await applyHarvestGateToggle({
       store: this.wiring.store,
-      repo: this.opts.targetRepo,
+      repo: this.repoIdentity,
       user: buildControlUser(this.opts.env),
     })
     this.say(`harvest gate: ${result.command} requested`)
@@ -1074,7 +1154,7 @@ class DispatchLoop {
    * that appeared while the action waited in the serialized queue. */
   private async controlHarvestRun(expectedRun: string | undefined): Promise<void> {
     const { store } = this.wiring
-    const repo = this.opts.targetRepo
+    const repo = this.repoIdentity
     await store.ensureRepo(repo)
     const events = await store.getRepoEvents(repo)
     const state = reduceHarvest(events)
@@ -1132,7 +1212,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         slug: prompt.slug,
         env: this.opts.env,
         action: {
@@ -1165,7 +1245,7 @@ class DispatchLoop {
     if (this.view === undefined && this.selection?.kind === 'global') {
       const event = await toggleRepositorySetting({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         user: buildControlUser(this.opts.env),
         setting: 'auto-merge-default',
       })
@@ -1180,7 +1260,7 @@ class DispatchLoop {
     try {
       result = await controlBuild({
         store: this.wiring.store,
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         slug,
         env: this.opts.env,
         action: { kind: 'toggle-auto-merge' },
@@ -1629,7 +1709,7 @@ class DispatchLoop {
       config: this.currentConfig().config,
       getConfig: () => this.currentConfig().config,
       runtimes,
-      repo: this.opts.targetRepo,
+      repo: this.repoIdentity,
       workspacePath: this.opts.targetRepo,
       ids,
       uuids,
@@ -2243,9 +2323,9 @@ class DispatchLoop {
       configSnapshot.config,
       configSnapshot.revision,
     )
-    const repoRecord = await this.wiring.store.getRepo(this.opts.targetRepo)
+    const repoRecord = await this.wiring.store.getRepo(this.repoIdentity)
     const repositoryEvents =
-      repoRecord === null ? [] : await this.wiring.store.getRepoEvents(this.opts.targetRepo)
+      repoRecord === null ? [] : await this.wiring.store.getRepoEvents(this.repoIdentity)
 
     // Action-triggered and timer refreshes share the cache but may finish their
     // repository reads out of order. Never let an older build snapshot replace
@@ -2284,7 +2364,7 @@ class DispatchLoop {
     const projected = buildDashboardFromProjected(
       buildSnapshot.builds,
       {
-        repo: this.opts.targetRepo,
+        repo: this.repoIdentity,
         queued: this.queuedCount,
         activeCount: [...buildSnapshot.states.values()].filter(
           (state) => state.status !== 'done' && state.status !== 'aborted',
@@ -2513,7 +2593,7 @@ class DispatchLoop {
   private async ensureRepoLease(holder: string): Promise<boolean> {
     if (this.superseded) return false
     const claimed = await this.wiring.store
-      .claimRepoLease(this.opts.targetRepo, holder, REPO_LEASE_TTL_MS)
+      .claimRepoLease(this.repoIdentity, holder, REPO_LEASE_TTL_MS)
       .catch(() => false)
     if (!claimed) {
       if (this.repoLeaseHolder !== undefined) {
@@ -2532,7 +2612,7 @@ class DispatchLoop {
   private startRepoLeaseHeartbeat(holder: string): void {
     if (this.repoLeaseHeartbeat !== undefined) return
     this.repoLeaseHeartbeat = setInterval(() => {
-      this.wiring.store.heartbeatRepo(this.opts.targetRepo, holder).then(
+      this.wiring.store.heartbeatRepo(this.repoIdentity, holder).then(
         (alive) => {
           if (alive) return
           // A peer holds the repository now. Exit watch mode cleanly after
@@ -2561,11 +2641,11 @@ class DispatchLoop {
    * retrying tick. */
   private async recordTickYielded(): Promise<void> {
     try {
-      const record = await this.wiring.store.getRepo(this.opts.targetRepo).catch(() => null)
+      const record = await this.wiring.store.getRepo(this.repoIdentity).catch(() => null)
       const holder = record?.lease?.holder
       if (holder === undefined || this.yieldedTo === holder) return
       this.yieldedTo = holder
-      await this.wiring.store.appendRepo(this.opts.targetRepo, {
+      await this.wiring.store.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
         type: 'dispatcher.tick-yielded',
         payload: {
@@ -2584,7 +2664,7 @@ class DispatchLoop {
     this.repoLeaseHolder = undefined
     if (holder === undefined) return
     try {
-      await this.wiring.store.releaseRepoLease(this.opts.targetRepo, holder)
+      await this.wiring.store.releaseRepoLease(this.repoIdentity, holder)
     } catch {
       // Expiry fences an ambiguous release.
     }
@@ -2599,7 +2679,7 @@ class DispatchLoop {
     const holder = this.opts.kernelRunId ?? `${this.host}-dispatch-${this.wiring.ids('inst')}`
     if (!(await this.ensureRepoLease(holder))) {
       await this.recordTickYielded()
-      const peer = (await this.wiring.store.getRepo(this.opts.targetRepo).catch(() => null))?.lease
+      const peer = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))?.lease
         ?.holder
       const message = `tick yielded: repository held by ${peer ?? 'another invocation'}`
       this.warn(message)
@@ -2695,28 +2775,122 @@ class DispatchLoop {
   }
 }
 
+/** Origin-mode startup: fetch autobuild.toml from the repository through the
+ * forge — the default branch first (baseBranch is itself config), then the
+ * configured base branch when one is set. The final parse is the startup
+ * Config; both reads share one memoized GitHubForge. */
+async function fetchOriginModeConfig(
+  opts: DispatchOpts,
+  transport?: GitHubRequest,
+): Promise<{
+  content: string
+  config: Config
+}> {
+  const repository = normalizeGitRemoteUrl(opts.repository!)
+  const label = `${repository}/autobuild.toml`
+  const forge = new GitHubForge({
+    env: opts.env,
+    repository,
+    ...(transport !== undefined ? { transport } : {}),
+  })
+  const readFile = forge.readFile
+  if (readFile === undefined) {
+    throw new Error('the github forge does not implement readFile — this is a wiring bug')
+  }
+  const content = await readFile.call(forge, 'autobuild.toml').catch((error: unknown) => {
+    if (error instanceof GitHubApiError && error.status === 404) {
+      throw new Error(
+        `${label}: not found on the repository's default branch — origin-mode dispatch ` +
+          'reads autobuild.toml from the forge (SPEC §8.2, §16.1)',
+      )
+    }
+    throw error
+  })
+  const parsed = parseConfig(content, label)
+  if (parsed.baseBranch === undefined || parsed.baseBranch === '') {
+    return { content, config: parsed }
+  }
+  const branchContent = await readFile
+    .call(forge, 'autobuild.toml', parsed.baseBranch)
+    .catch((error: unknown) => {
+      if (error instanceof GitHubApiError && error.status === 404) {
+        throw new Error(
+          `${label}: not found at configured baseBranch ${JSON.stringify(parsed.baseBranch)} — ` +
+            'commit autobuild.toml to the base branch before dispatching in origin mode',
+        )
+      }
+      throw error
+    })
+  const branchLabel = `${label}@${parsed.baseBranch}`
+  return { content: branchContent, config: parseConfig(branchContent, branchLabel) }
+}
+
+/** Origin-mode repo state: the identity is the normalized origin; local
+ * scratch (state root, worktree root) lives under a per-origin temp directory
+ * and the store MUST be remote HTTPS. Requirements are validated here so a
+ * misconfigured origin-mode launch fails before any side effect. */
+async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePaths> {
+  const identity = normalizeGitRemoteUrl(opts.repository!)
+  const selectedStore = opts.storeRef ?? opts.env.AB_STORE
+  if (selectedStore === undefined || !/^https:\/\//i.test(selectedStore)) {
+    throw new Error(
+      'origin-mode dispatch requires an HTTPS BuildStore — set AB_STORE (or --store) to the hosted Store URL',
+    )
+  }
+  if (opts.env.AB_TOKEN === undefined || opts.env.AB_TOKEN === '') {
+    throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
+  }
+  if (opts.env.GITHUB_TOKEN === undefined && opts.env.GH_TOKEN === undefined) {
+    throw new Error('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
+  }
+  const scratch = join(
+    tmpdir(),
+    'autobuild',
+    createHash('sha256').update(identity).digest('hex').slice(0, 16),
+  )
+  await mkdir(scratch, { recursive: true })
+  return resolveRepoStatePaths({
+    repo: identity,
+    checkout: scratch,
+    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
+  })
+}
+
 /**
  * Entry point (§8.2). Loads the repo's config — whose required [tickets]
  * table selects the TicketSource and names its ready state. A file source with
  * no `dir` still defaults to `.autobuild/tickets` (§13). Then wires the ports
  * and runs until one pass finishes (`--once`) or `opts.signal` aborts (SIGINT).
+ *
+ * Origin mode (AUT-302): `opts.repository` (CLI `--repository`, env
+ * `AB_REPOSITORY`) serves a repository with NO local checkout. The startup
+ * config is fetched from the forge (default branch, then the configured
+ * `baseBranch`), the store must be remote HTTPS, and the identity — not a
+ * path — is the served repository.
  */
 export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (opts.wire !== undefined && opts.nonStoreWire !== undefined) {
     throw new Error('dispatch wire and nonStoreWire are mutually exclusive')
   }
-  const state = await resolveRepoState({
-    targetRepo: opts.targetRepo,
-    exec: opts.exec,
-    ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-    ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
-  })
+  const state =
+    opts.repository !== undefined
+      ? await resolveOriginModeState(opts)
+      : await resolveRepoState({
+          targetRepo: opts.targetRepo,
+          exec: opts.exec,
+          ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+          ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
+        })
   // Normalize once, then use these exact values for config/tickets/repository
   // identity, store wiring, worktrees, and every session's AB_STORE.
+  // `targetRepo` stays the FILESYSTEM checkout (or origin-mode scratch root);
+  // `repo` is the store-keyed identity.
   const resolvedOpts: DispatchOpts = {
     ...opts,
-    targetRepo: state.repo,
+    targetRepo: state.checkout,
     storeRef: state.storeRef,
+    repo: opts.repo ?? state.repo,
   }
 
   // Interactive production dispatch is two programs. Resolve/open only the
@@ -2732,10 +2906,17 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     resolvedOpts.terminal?.interactive === true &&
     resolvedOpts.input !== undefined
   ) {
+    if (opts.repository !== undefined) {
+      throw new Error(
+        'origin-mode dispatch (--repository) is a serverless workhorse and cannot run the ' +
+          'interactive dashboard: pass --plain or run it without a TTY',
+      )
+    }
     const opened = openStoreForRepoState(state, { env: resolvedOpts.env })
     try {
       const frontend = new DispatchFrontend({
         repo: state.repo,
+        checkout: state.checkout,
         storeRef: opened.storeRef,
         store: opened.store,
         env: resolvedOpts.env,
@@ -2762,17 +2943,36 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const configPath = join(resolvedOpts.targetRepo, 'autobuild.toml')
   let configContent: string
   let config: Config
-  try {
-    configContent = await Bun.file(configPath).text()
-    config = parseConfig(configContent, configPath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+  if (opts.repository !== undefined) {
+    // Origin mode startup config: the base branch's autobuild.toml, fetched
+    // through the forge (default branch first — baseBranch itself is config).
+    const fetched = await fetchOriginModeConfig(opts, opts.originConfigTransport)
+    configContent = fetched.content
+    config = fetched.config
+    if (config.forge !== 'github') {
       throw new Error(
-        `${configPath}: not found — 'ab dispatch' reads autobuild.toml from ` +
-          'the resolved Git main checkout (SPEC §8.2, §16.1)',
+        `origin-mode dispatch requires the builtin github forge, but the fetched autobuild.toml selects ${JSON.stringify(config.forge)}`,
       )
     }
-    throw error
+    if (config.plugins !== undefined && config.plugins.length > 0) {
+      throw new Error(
+        'origin-mode dispatch cannot load configured plugins: plugin code is checkout-relative ' +
+          'and there is no checkout. Remove [plugins] from the base branch autobuild.toml or run from a checkout',
+      )
+    }
+  } else {
+    try {
+      configContent = await Bun.file(configPath).text()
+      config = parseConfig(configContent, configPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(
+          `${configPath}: not found — 'ab dispatch' reads autobuild.toml from ` +
+            'the resolved Git main checkout (SPEC §8.2, §16.1)',
+        )
+      }
+      throw error
+    }
   }
   // Configured plugin code is trusted like configured shell commands, but it
   // must resolve, evaluate, validate, and register before production wiring
@@ -2796,7 +2996,8 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     wired = await wire(config, resolvedOpts, state, plugins)
   }
   const runtimes = await materializePluginRuntimes(wired.runtimes, plugins, {
-    repoRoot: resolvedOpts.targetRepo,
+    // Filesystem root for plugin runtime code — never the store identity.
+    repoRoot: state.checkout,
     env: resolvedOpts.env,
   })
   const wiring: DispatchWiring = {
@@ -2814,7 +3015,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     wiring.runtimes,
     async ({ content, effectiveConfig, restartRequired, effectiveChanged }) => {
       await wiring.store.appendRepoWithArtifacts(
-        resolvedOpts.targetRepo,
+        state.repo,
         [
           {
             kind: DISPATCHER_CONFIG_ARTIFACT,
@@ -2864,17 +3065,17 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // Launch flags are durable repository setters. Omission writes nothing, so
   // another dispatcher cannot clobber the latest operator choice with a value
   // it inferred at startup. Fresh-repository fallbacks live in the reducer.
-  await wiring.store.ensureRepo(resolvedOpts.targetRepo)
+  await wiring.store.ensureRepo(state.repo)
   const actor = humanActor(buildControlUser(resolvedOpts.env))
   if (resolvedOpts.intake !== undefined) {
-    await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+    await wiring.store.appendRepo(state.repo, {
       actor,
       type: 'dispatcher.intake-set',
       payload: { enabled: resolvedOpts.intake },
     })
   }
   if (resolvedOpts.defaultAutoMerge !== undefined) {
-    await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+    await wiring.store.appendRepo(state.repo, {
       actor,
       type: 'dispatcher.auto-merge-default-set',
       payload: { enabled: resolvedOpts.defaultAutoMerge },
@@ -2883,7 +3084,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
 
   if (resolvedOpts.kernelRunId !== undefined) {
     await wiring.store.appendRepoWithArtifacts(
-      resolvedOpts.targetRepo,
+      state.repo,
       [
         {
           kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
@@ -2912,7 +3113,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   try {
     await loop.run()
     if (resolvedOpts.kernelRunId !== undefined) {
-      await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+      await wiring.store.appendRepo(state.repo, {
         actor: DISPATCHER,
         type: 'dispatcher.run-stopped',
         payload: {
@@ -2926,7 +3127,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   } catch (error) {
     if (resolvedOpts.kernelRunId !== undefined) {
       try {
-        await wiring.store.appendRepo(resolvedOpts.targetRepo, {
+        await wiring.store.appendRepo(state.repo, {
           actor: DISPATCHER,
           type: 'dispatcher.run-stopped',
           payload: {

@@ -126,6 +126,59 @@ describe('live dispatcher config', () => {
     }
   })
 
+  test('refreshFrom adopts hot changes from a non-disk source and holds restart-required fields', async () => {
+    // Origin mode: the dispatcher reads autobuild.toml from the forge. A hot
+    // change (capacity) adopts immediately; a restart-classified change
+    // (forge) keeps the startup adapter and is reported as restart-required.
+    const published: string[] = []
+    const live = new LiveConfig(
+      'https://github.com/acme/app/autobuild.toml@main',
+      parseConfig(base),
+      base,
+      runtimes,
+      async ({ content, restartRequired }) => {
+        published.push(content)
+        expect(restartRequired).toBeDefined()
+      },
+    )
+    const forge = { content: base }
+    const read = async (): Promise<string> => forge.content
+
+    const hot = base.replace('capacity = 1', 'capacity = 3')
+    forge.content = hot
+    const adopted = await live.refreshFrom(read)
+    expect(adopted).toMatchObject({
+      kind: 'adopted',
+      snapshot: { revision: 1, config: { capacity: 3 } },
+    })
+    expect((adopted as { restartRequired?: string[] }).restartRequired).toEqual([])
+    expect(published).toEqual([hot])
+
+    // A read failure keeps the last valid snapshot and is reported once.
+    const failing = async (): Promise<string> => {
+      throw new Error('GitHub API rate limited')
+    }
+    const rejected = await live.refreshFrom(failing)
+    expect(rejected).toMatchObject({
+      kind: 'rejected',
+      error: expect.stringContaining(
+        'could not be read during live reload: GitHub API rate limited',
+      ),
+      notify: true,
+    })
+    expect(await live.refreshFrom(failing)).toMatchObject({ kind: 'rejected', notify: false })
+    expect(live.current().config.capacity).toBe(3)
+
+    // Restart-classified changes hold the startup-built adapter fields.
+    const restart = hot.replace('capacity = 3', 'capacity = 3\nforge = "local-git"')
+    forge.content = restart
+    const outcome = await live.refreshFrom(read)
+    expect(outcome).toMatchObject({ kind: 'adopted', restartRequired: ['forge'] })
+    expect(live.current().config.forge).toBe('github')
+    expect(live.current().config.capacity).toBe(3)
+    expect(live.current().revision).toBe(2)
+  })
+
   test('exact restoration resets missing-file notice deduplication without a new revision', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-live-config-'))
     const source = join(dir, 'autobuild.toml')

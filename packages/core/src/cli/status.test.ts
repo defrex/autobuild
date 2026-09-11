@@ -52,11 +52,15 @@ function record(overrides: Partial<BuildRecord> = {}): BuildRecord {
   }
 }
 
-const fakeExec: Exec = async () => ({
-  stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`,
-  stderr: '',
-  exitCode: 0,
-})
+const fakeExec: Exec = async (cmd) =>
+  cmd[1] === 'remote'
+    ? // No origin remote: identity falls back to the resolved checkout path.
+      { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+    : {
+        stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`,
+        stderr: '',
+        exitCode: 0,
+      }
 
 /** An exec standing in for a differently located checkout (a sandbox guest):
  * rev-parse resolves to `guestRepo`, and the origin remote answers `origin`. */
@@ -1606,7 +1610,7 @@ describe('abBuildStatus', () => {
           slug,
         }),
       ).rejects.toThrow(
-        `build "${slug}" belongs to repository "${OTHER_REPO}", not "/vercel/sandbox/workspace"`,
+        `build "${slug}" belongs to repository "${OTHER_REPO}", not "https://github.com/acme/app"`,
       )
     }
   })
@@ -1722,6 +1726,10 @@ describe('ambient read authority', () => {
 
 describe('own-session ambient authority over a relocated checkout', () => {
   const GUEST = '/vercel/sandbox/workspace'
+  // The guest checkout's normalized origin — the repository identity the
+  // belongs-to diagnostic names (the identity change; the path is no longer
+  // the identity).
+  const GUEST_ORIGIN = 'https://github.com/unrelated/guest-origin'
   // A remote-looking store ref: no local session scoping wraps the handle, so
   // what is under test is the command core's own-session gate itself.
   const guestEnv = (build: string) => ({
@@ -1777,7 +1785,7 @@ describe('own-session ambient authority over a relocated checkout', () => {
         now: () => NOW,
         slug: 'theirs',
       }),
-    ).rejects.toThrow(`build "theirs" belongs to repository "${OTHER_REPO}", not "${GUEST}"`)
+    ).rejects.toThrow(`build "theirs" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
   })
 
   test('an explicit --store other than the session store does not authorize the bypass', async () => {
@@ -1794,7 +1802,7 @@ describe('own-session ambient authority over a relocated checkout', () => {
         slug: 'legacy',
         storeRef: 'https://other-store.example',
       }),
-    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST}"`)
+    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
   })
 
   test('a Harvest identity never authorizes the bypass, even on slug-shaped matches', async () => {
@@ -1816,7 +1824,7 @@ describe('own-session ambient authority over a relocated checkout', () => {
         now: () => NOW,
         slug: 'legacy',
       }),
-    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST}"`)
+    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
   })
 })
 

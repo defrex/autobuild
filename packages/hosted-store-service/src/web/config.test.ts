@@ -8,7 +8,8 @@ const env = {
   GITHUB_CLIENT_SECRET: 'github-secret',
   AB_WEB_AUTH_PROVIDERS: 'github',
   AB_WEB_ALLOWED_EMAILS: ' Ada@Example.com,grace@example.com,ada@example.com ',
-  AB_WEB_REPOSITORIES: 'owner/one, owner/two',
+  // Entries are repository identities; ssh spellings normalize to https.
+  AB_WEB_REPOSITORIES: 'https://github.com/owner/one, git@github.com:owner/two.git',
   AB_POSTGRES_URL: 'postgres://secret',
 }
 
@@ -19,7 +20,7 @@ describe('web auth configuration', () => {
     expect(isAllowedEmail(config.allowedEmails, 'ADA@example.COM')).toBe(true)
     expect(safeWebConfig(config)).toEqual({
       providers: ['github'],
-      repositories: ['owner/one', 'owner/two'],
+      repositories: ['https://github.com/owner/one', 'https://github.com/owner/two'],
     })
     expect(JSON.stringify(safeWebConfig(config))).not.toContain('secret')
   })
@@ -29,6 +30,8 @@ describe('web auth configuration', () => {
     ['weak secret', { BETTER_AUTH_SECRET: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
     ['URL path', { BETTER_AUTH_URL: 'https://operator.example/path' }],
     ['blank allowlist entry', { AB_WEB_ALLOWED_EMAILS: 'ada@example.com,' }],
+    ['non-origin repository', { AB_WEB_REPOSITORIES: '/srv/git/one' }],
+    ['blank repository entry', { AB_WEB_REPOSITORIES: 'https://github.com/owner/one,' }],
   ])('rejects %s', (_name, patch) => {
     expect(() => parseWebAuthEnv({ ...env, ...patch })).toThrow()
   })

@@ -778,6 +778,9 @@ async function capturePaint(
 
   await abDispatch({
     targetRepo: harness.origin,
+    // The capture harness keys its store by the checkout path; pin the same
+    // identity so the dispatch loop serves the seeded journals.
+    repo: harness.origin,
     env: { USER: 'dashboard-capture' },
     exec: spawnExec,
     stdout: () => {},

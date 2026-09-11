@@ -161,9 +161,18 @@ export class LiveConfig {
   }
 
   async refreshFromDisk(): Promise<ConfigReloadOutcome> {
+    return this.refreshFrom(() => Bun.file(this.source).text())
+  }
+
+  /** Reload from any content source — the startup file (refreshFromDisk) or,
+   * in checkout-less origin mode, the base branch's autobuild.toml fetched
+   * through the forge. Read failures take the same rejected-read path: the
+   * last valid snapshot remains active and the error is reported once per
+   * distinct failure. */
+  async refreshFrom(read: () => Promise<string>): Promise<ConfigReloadOutcome> {
     let content: string
     try {
-      content = await Bun.file(this.source).text()
+      content = await read()
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       const detail =

@@ -408,7 +408,7 @@ describe('artifact download', () => {
           openStore: () => guestStore,
         }),
       ).rejects.toThrow(
-        `build "${slug}" belongs to repository "/host/checkout", not "/guest/checkout"`,
+        `build "${slug}" belongs to repository "/host/checkout", not "https://github.com/acme/app"`,
       )
       expect(await Bun.file(rejected).exists()).toBe(false)
     }

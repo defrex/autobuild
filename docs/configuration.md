@@ -56,7 +56,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
 | `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
 | `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated operator email allowlist; matching is case-insensitive. |
-| `AB_WEB_REPOSITORIES` | Web dashboard | Nonempty comma-separated repository allowlist exposed to signed-in operators. |
+| `AB_WEB_REPOSITORIES` | Web dashboard | Nonempty comma-separated repository allowlist exposed to signed-in operators. Entries are repository identities — normalized `https://` origins (ssh-like spellings such as `git@github.com:owner/repo.git` are accepted and normalized); they must match the Store's identity for the repository. |
 
 GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
 the `user:email` scope (or GitHub App read-only email permission). Sessions are
@@ -128,6 +128,13 @@ field in whichever table precedes it.
 
 A long-running `ab dispatch` watches the main checkout's `autobuild.toml` and
 checks it before every dispatch tick. A valid save is adopted within that tick.
+In origin mode (`ab dispatch --repository <origin>`, no checkout) the same
+cadence reads `autobuild.toml` from the forge at the current `baseBranch`
+instead: a push to the base branch is honored by a later tick without
+restarting anything. Hot fields apply immediately; restart-classified fields
+keep the startup-built adapters and file the existing restart-required notice
+(a long-lived origin-mode watch picks them up on its next process restart;
+the hosted cron entry point re-reads them on every invocation).
 Each dispatch, build, check, or agent action captures the accepted configuration
 snapshot at its start boundary: work already running is not interrupted, while
 the next setup or pipeline step of the same in-flight build uses the new

@@ -152,6 +152,44 @@ Vercel team/project credential set; provide separate private-clone credentials;
 use an HTTPS GitHub origin and hosted Store; authorize the Store token; or commit
 and push the selected base branch.
 
+## Repository identity is the origin, not a checkout path
+
+Repository identity in the Store, dispatcher, `ab builds`, `ab build status`,
+`ab repository status`, and the web app is the repository's **normalized origin
+URL** (`https://github.com/owner/repository`), not a checkout's absolute path.
+Two checkouts of the same repository — on different hosts, or a dispatcher and
+its sandboxes — agree on one identity.
+
+Records written before this change are keyed by checkout path and are **not
+migrated**. They remain visible only where their recorded `repoOrigin` matches
+the querying checkout's origin; dropping the old identity's history is an
+accepted trade for path-free operation.
+
+## Running the dispatcher without a checkout (origin mode)
+
+A dispatcher can operate a repository with no local checkout at all — from a
+serverless function or any host with only network access:
+
+```sh
+ab dispatch --repository https://github.com/owner/repository \\
+  --plain --store https://hosted-store.example \\
+  # environment: AB_TOKEN (store), GITHUB_TOKEN or GH_TOKEN (GitHub API)
+```
+
+`--repository` (or `AB_REPOSITORY`) is the normalized origin. Origin mode
+requires an HTTPS `AB_STORE` plus `AB_TOKEN`, a GitHub token, and `forge =
+"github"`; the interactive dashboard is unavailable (`--plain` or no TTY). The
+startup configuration — and every per-tick reload — is `autobuild.toml` read
+from the forge at the current `baseBranch` (the first read resolves against the
+repository's default branch), so a push to the base branch is honored by a
+later tick without restarting anything. Configs declaring local `plugins` are
+rejected: plugin code is checkout-relative. The guest installs the Autobuild
+distribution published with its version's GitHub release, so origin-mode
+dispatch requires a cut release carrying `autobuild-<version>.tgz`.
+
+Local `git-worktree` dispatch keeps working from a checkout exactly as before;
+apart from the identity change, `ab dispatch` behaves as it did.
+
 ## Authoring an agent verifier
 
 A repository-owned agent-verify skill is a verifier, not a reviewer: it drives

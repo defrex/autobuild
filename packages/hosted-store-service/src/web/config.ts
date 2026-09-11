@@ -1,4 +1,5 @@
 import { resolvePostgresUrl } from '@autobuild/postgres-store/env'
+import { normalizeGitRemoteUrl } from 'autobuild/origin'
 
 export type WebAuthProvider = 'github'
 export type WebEnv = Record<string, string | undefined>
@@ -73,10 +74,16 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
   if (emails.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
     throw new Error('AB_WEB_ALLOWED_EMAILS contains an invalid email address')
   }
-  const repositories = csv(env, 'AB_WEB_REPOSITORIES')
-  if (repositories.some((repo) => /[\0\r\n]/.test(repo))) {
-    throw new Error('AB_WEB_REPOSITORIES contains an unsafe repository name')
-  }
+  const repositories = csv(env, 'AB_WEB_REPOSITORIES').map((repo) => {
+    // Entries are repository identities — normalized https origins — so an
+    // operator-spelled `git@github.com:defrex/autobuild.git` still matches
+    // the Store's identity for this repository.
+    const normalized = normalizeGitRemoteUrl(repo)
+    if (!/^https:\/\/[^\s]+$/.test(normalized)) {
+      throw new Error('AB_WEB_REPOSITORIES contains an unsafe repository name')
+    }
+    return normalized
+  })
   return {
     secret,
     baseURL: url.origin,

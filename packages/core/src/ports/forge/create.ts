@@ -34,10 +34,19 @@ export async function createForge(opts: {
   registry: PluginRegistry
   env: Readonly<Record<string, string | undefined>>
   repoRoot: string
+  /** Explicit repository identity (normalized origin). Origin-mode dispatch
+   * passes it so the builtin GitHub forge never probes a local checkout. */
+  repository?: string
 }): Promise<Forge> {
   const registration = resolveForgeRegistration(opts.name, opts.registry)
   if (registration.owner.kind === 'builtin') {
-    if (opts.name === 'github') return new GitHubForge()
+    if (opts.name === 'github') {
+      return new GitHubForge({
+        env: opts.env,
+        repoRoot: opts.repoRoot,
+        ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
+      })
+    }
     if (opts.name === 'local-git') return new LocalGitForge()
     throw new Error(`builtin forge adapter ${JSON.stringify(opts.name)} has no constructor`)
   }

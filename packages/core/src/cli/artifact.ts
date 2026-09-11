@@ -152,19 +152,21 @@ export async function artifactDownload(
   if (kind.trim() === '') {
     throw new Error("'ab artifact download' requires a non-empty <kind>[@rev]")
   }
-  return withAmbientReadStore(opts, async ({ store, repo }) => {
-    const record = await store.getBuild(opts.build)
+  return withAmbientReadStore(opts, async (context) => {
+    const record = await context.store.getBuild(opts.build)
     if (record === null) {
       throw new Error(
         `no build "${opts.build}" in this store — run 'ab builds --all' or pass --store <ref>`,
       )
     }
-    if (!(await buildInRepository(record, repo, opts.exec))) {
-      throw new Error(`build "${opts.build}" belongs to repository "${record.repo}", not "${repo}"`)
+    if (!(await buildInRepository(record, context.checkout, opts.exec))) {
+      throw new Error(
+        `build "${opts.build}" belongs to repository "${record.repo}", not "${context.repo}"`,
+      )
     }
-    const artifact = await store.getArtifact(opts.build, kind, rev)
+    const artifact = await context.store.getArtifact(opts.build, kind, rev)
     if (artifact === null) {
-      const available = await store.listArtifacts(opts.build)
+      const available = await context.store.listArtifacts(opts.build)
       const refs = available.map((meta) => `${meta.kind}@${meta.revision}`)
       throw new Error(
         `no "${kind}" artifact${rev !== undefined ? ` at rev ${rev}` : ''} in ` +
