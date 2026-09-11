@@ -16,7 +16,10 @@ machine.
    [its README](../packages/hosted-store-service/README.md#hosted-dispatcher)
    — `AB_DISPATCHER_ORIGIN`, the repository set, `CRON_SECRET`, and the forge
    credentials the kernel needs (`GITHUB_TOKEN` or `GH_TOKEN`, plus any
-   guest-forwarded variables such as `AI_GATEWAY_API_KEY`).
+   guest-forwarded variables such as `AI_GATEWAY_API_KEY`). A deployment
+   serving repositories across GitHub identities configures per-repository
+   tokens with `AB_DISPATCHER_GITHUB_TOKENS`; repositories without an
+   override keep using the shared credential.
 2. Schedule the route by adding a `crons` entry to the deployment's
    `vercel.json` and redeploying. Vercel issues a plain GET with
    `Authorization: Bearer <CRON_SECRET>` once per minute:
