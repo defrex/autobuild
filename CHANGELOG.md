@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#309](https://github.com/defrex/autobuild/pull/309) — Make the cron invocation bound exact: fix timer race and overrun
 - [#303](https://github.com/defrex/autobuild/pull/303) — Let ambient build status succeed from a differently located checkout
 - [#291](https://github.com/defrex/autobuild/pull/291) — Run this repository's builds in Vercel Sandbox
 - [#289](https://github.com/defrex/autobuild/pull/289) — Prove runtime provisioning diagnostics redact secrets
