@@ -29,7 +29,12 @@ export interface GitHubResponse {
 /**
  * One authenticated GitHub REST call. `path` is API-relative
  * (`repos/{owner}/{repo}/pulls/42`) or an absolute URL (release-asset
- * `upload_url`). Non-2xx responses throw {@link GitHubApiError}.
+ * `upload_url`). Non-2xx responses throw {@link GitHubApiError} — except
+ * `304 Not Modified`, which is returned (never thrown) because it is a
+ * documented *success* for a conditional request: callers that send
+ * revalidation headers such as `If-None-Match` read the 304 as "the cached
+ * representation is still current". A 304 carries no body, so the response
+ * has no `json` and no `bytes`.
  */
 export type GitHubRequest = (
   method: string,
@@ -109,6 +114,12 @@ export function createGitHubFetchTransport(opts: {
     response.headers.forEach((value, key) => {
       headerMap[key.toLowerCase()] = value
     })
+    // A 304 Not Modified answers a conditional request (If-None-Match) and
+    // always carries an empty body — return it before the non-2xx throw so
+    // callers can treat revalidation success as success, not an error.
+    if (response.status === 304) {
+      return { status: 304, headers: headerMap }
+    }
     const contentType = headerMap['content-type'] ?? ''
     let text = ''
     let json: unknown
