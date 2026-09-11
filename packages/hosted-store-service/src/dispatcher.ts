@@ -48,6 +48,12 @@ export interface HostedDispatcherConfig {
   origin: string
   /** Normalized https repository identities, configured order preserved. */
   repositories: readonly string[]
+  /** Optional per-repository GitHub token overrides (`AB_DISPATCHER_GITHUB_TOKENS`),
+   * keyed by the same normalized https identities as `repositories`. A
+   * repository with an override authenticates its forge operations with it;
+   * every other repository keeps the shared service-environment credential.
+   * Values are never logged, echoed, or deposited. */
+  githubTokenOverrides: ReadonlyMap<string, string>
   /** Tick budget per invocation in seconds (default 240, inside Vercel's
    * 300 s default function duration). */
   budgetSeconds: number
@@ -96,6 +102,63 @@ function repositoryList(raw: string, name: string): string[] {
     if (!repositories.includes(normalized)) repositories.push(normalized)
   }
   return repositories
+}
+
+/** Parse the optional per-repository forge-credential override map
+ * (`AB_DISPATCHER_GITHUB_TOKENS`): a JSON object mapping repository identities
+ * (same normalization as the repository set, so an operator may spell either
+ * form) to GitHub token material. Unset or blank means no overrides —
+ * behavior is byte-identical to the shared-credential-only deployment. Every
+ * key must name a repository in the resolved served set, so a typo fails
+ * loudly instead of silently leaving a repository on the shared identity.
+ * Error messages name the variable and the offending identity — never a value. */
+function githubTokenOverrides(
+  env: HostedDispatcherEnv,
+  repositories: readonly string[],
+): Map<string, string> {
+  const raw = env.AB_DISPATCHER_GITHUB_TOKENS?.trim()
+  if (raw === undefined || raw === '') return new Map()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // JSON.parse error text can embed fragments of its input; rethrow a fixed
+    // message so token material never reaches a log or response.
+    throw new Error(
+      'AB_DISPATCHER_GITHUB_TOKENS must be a JSON object mapping repository identities to GitHub tokens',
+    )
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      'AB_DISPATCHER_GITHUB_TOKENS must be a JSON object mapping repository identities to GitHub tokens',
+    )
+  }
+  const overrides = new Map<string, string>()
+  for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+    // Entries are repository identities — normalized https origins, exactly
+    // like the repository set — so an operator-spelled
+    // `git@github.com:acme/app.git` matches the served `https://` identity.
+    const identity = normalizeGitRemoteUrl(rawKey)
+    if (!/^https:\/\/[^\s]+$/.test(identity) || !repositories.includes(identity)) {
+      throw new Error(
+        `AB_DISPATCHER_GITHUB_TOKENS contains a key that is not a served repository: ${JSON.stringify(rawKey)}`,
+      )
+    }
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error(
+        `AB_DISPATCHER_GITHUB_TOKENS contains a blank value for repository ${JSON.stringify(identity)}`,
+      )
+    }
+    // Two spellings can normalize to one identity; a duplicate would make the
+    // effective credential depend on JSON key order, so it is rejected.
+    if (overrides.has(identity)) {
+      throw new Error(
+        `AB_DISPATCHER_GITHUB_TOKENS names repository ${JSON.stringify(identity)} more than once`,
+      )
+    }
+    overrides.set(identity, value.trim())
+  }
+  return overrides
 }
 
 /** Parse the dispatcher configuration from the service environment. Called per
@@ -148,11 +211,13 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
         'credential must outlive a guest build lifetime',
     )
   }
+  const githubTokenOverridesMap = githubTokenOverrides(env, repositories)
   const cronSecret = env.CRON_SECRET?.trim()
   return {
     secret,
     origin: origin.origin,
     repositories,
+    githubTokenOverrides: githubTokenOverridesMap,
     budgetSeconds,
     tokenTtlSeconds,
     ...(cronSecret !== undefined && cronSecret !== '' ? { cronSecret } : {}),
@@ -234,6 +299,16 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           ...env,
           AB_STORE: config.origin,
           AB_TOKEN: token,
+        }
+        // Per-repository forge identity: both variables are set to the
+        // override so no reader (`githubTokenFromEnv` prefers GITHUB_TOKEN,
+        // the publication path and init-validation accept either) can straddle
+        // the override and the shared credential within one tick. Repositories
+        // without an override keep the shared credential untouched.
+        const forgeOverride = config.githubTokenOverrides.get(repository)
+        if (forgeOverride !== undefined) {
+          childEnv.GITHUB_TOKEN = forgeOverride
+          childEnv.GH_TOKEN = forgeOverride
         }
         try {
           await dispatch({

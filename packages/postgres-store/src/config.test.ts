@@ -109,6 +109,54 @@ describe('PostgreSQL store environment', () => {
     )
   })
 
+  test('AB_ARTIFACT_RETENTION_MAX_REVISIONS: absent means default, valid flows through, invalid rejected', () => {
+    // Absent ⇒ no retention override; the store's documented default applies.
+    expect(
+      parsePostgresStoreEnv({
+        ...base,
+        AB_BLOB_BACKEND: 'vercel',
+        AB_VERCEL_BLOB_ACCESS: 'private',
+        BLOB_READ_WRITE_TOKEN: 'rw',
+      }).retention,
+    ).toBeUndefined()
+
+    // A valid value flows through to the retention option on either backend.
+    expect(
+      parsePostgresStoreEnv({
+        ...base,
+        AB_BLOB_BACKEND: 's3',
+        AB_S3_BUCKET: 'bucket',
+        AB_S3_REGION: 'region',
+        AB_S3_ACCESS_KEY_ID: 'key',
+        AB_S3_SECRET_ACCESS_KEY: 'secret',
+        AB_ARTIFACT_RETENTION_MAX_REVISIONS: ' 50 ',
+      }).retention,
+    ).toEqual({ maxRevisions: 50 })
+    expect(
+      parsePostgresStoreEnv({
+        ...base,
+        AB_BLOB_BACKEND: 'vercel',
+        AB_VERCEL_BLOB_ACCESS: 'private',
+        BLOB_READ_WRITE_TOKEN: 'rw',
+        AB_ARTIFACT_RETENTION_MAX_REVISIONS: '1',
+      }).retention,
+    ).toEqual({ maxRevisions: 1 })
+
+    // Non-integer, zero, and negative values are rejected with the variable named.
+    // (A blank value is treated as absent, matching this file's optional() convention.)
+    for (const bad of ['zero', '0', '-5', '2.5']) {
+      expect(() =>
+        parsePostgresStoreEnv({
+          ...base,
+          AB_BLOB_BACKEND: 'vercel',
+          AB_VERCEL_BLOB_ACCESS: 'private',
+          BLOB_READ_WRITE_TOKEN: 'rw',
+          AB_ARTIFACT_RETENTION_MAX_REVISIONS: bad,
+        }),
+      ).toThrow('AB_ARTIFACT_RETENTION_MAX_REVISIONS')
+    }
+  })
+
   test('root full-stack manifest has no blob provider SDK dependency', async () => {
     const manifest = (await Bun.file('package.json').json()) as {
       dependencies?: Record<string, string>

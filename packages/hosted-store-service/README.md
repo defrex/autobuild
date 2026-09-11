@@ -159,9 +159,19 @@ for the schedule, incident pauses, and behavior details. Dispatcher variables
 - `CRON_SECRET`: the cron authorization shared secret. Unset or blank disables
   the endpoint entirely. It is never a signing input and is unrelated to
   `AB_STORE_SECRET`.
-- `GITHUB_TOKEN` or `GH_TOKEN`: the forge credentials the kernel (and its
-  publication settlement) use. They stay on the service; guests never receive
-  one.
+- `GITHUB_TOKEN` or `GH_TOKEN`: the shared forge credentials the kernel (and
+  its publication settlement) use. They stay on the service; guests never
+  receive one.
+- `AB_DISPATCHER_GITHUB_TOKENS`: optional per-repository forge credential
+  overrides — a JSON object mapping repository identities to GitHub token
+  material, e.g.
+  `{"https://github.com/acme/one":"github_pat_…","git@github.com:acme/two.git":"ghp_…"}`.
+  Keys accept the same spellings as the repository set and must name a served
+  repository; a repository with an override authenticates its dispatcher tick
+  with that token (both `GITHUB_TOKEN` and `GH_TOKEN`), every other repository
+  keeps the shared `GITHUB_TOKEN`/`GH_TOKEN`. Unset means shared-only. Tokens
+  never appear in logs, responses, or artifacts; server-only like every secret
+  above.
 - Guest-forwarded variables such as `AI_GATEWAY_API_KEY` flow through from the
   service environment to the guest session untouched.
 
@@ -170,6 +180,8 @@ Vercel functions (`VERCEL_OIDC_TOKEN` is injected), so **no `VERCEL_TOKEN`
 belongs on the service**. Each invocation deposits a
 `dispatcher-effective-config` repository artifact and durable tick/run facts
 under the `hosted-dispatcher-<uuid>` run id — the web dashboard shows hosted
-activity exactly as it shows a local dispatcher, and the repository journal
-grows by roughly one config artifact per minute per repository (no retention
-yet).
+activity exactly as it shows a local dispatcher. The repository journal's
+events keep growing by roughly one tick per minute per repository (intentional);
+the run/config artifacts themselves are retention-bounded — the store keeps the
+latest 200 revisions per dispatcher artifact kind and prunes older revisions at
+deposit time, overridable with `AB_ARTIFACT_RETENTION_MAX_REVISIONS`.

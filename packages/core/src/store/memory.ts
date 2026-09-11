@@ -18,6 +18,11 @@ import {
   type RepositoryEventWrite,
 } from '../events/repository'
 import { createBuildScopedStore } from './build-scope'
+import {
+  DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
+  isRetentionManagedKind,
+  revisionsToPrune,
+} from './retention'
 import { pollingSubscribe } from './subscribe'
 import {
   contentHash,
@@ -92,11 +97,60 @@ export class MemoryBuildStore implements BuildStore {
   private readonly builds = new Map<string, BuildState>()
   private readonly repos = new Map<string, RepoState>()
   private readonly clock: Clock
+  private readonly maxRevisions: number
   readonly blobs: BlobStore
 
-  constructor(opts: { clock?: Clock; blobs?: BlobStore } = {}) {
+  constructor(
+    opts: {
+      clock?: Clock
+      blobs?: BlobStore
+      retention?: { maxRevisions?: number }
+    } = {},
+  ) {
     this.clock = opts.clock ?? systemClock
     this.blobs = opts.blobs ?? new MemoryBlobStore()
+    this.maxRevisions = opts.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
+  }
+
+  /** Newest surviving revision of one kind — revisions prune from the front,
+   * so the array length is no longer the next revision (retention policy). */
+  private static nextRevision(revs: { revision: number }[] | undefined): number {
+    return (revs?.at(-1)?.revision ?? -1) + 1
+  }
+
+  /** Deposit-time pruning (store/retention.ts): drop revisions past the bound
+   * for retention-managed kinds, inside the same critical section as the
+   * deposit itself. Non-family kinds are never touched. */
+  private pruneBuildKind(state: BuildState, kind: string): void {
+    if (!isRetentionManagedKind(kind)) return
+    const revs = state.artifacts.get(kind)
+    if (!revs) return
+    const pruned = revisionsToPrune(
+      revs.map((meta) => meta.revision),
+      this.maxRevisions,
+    )
+    if (pruned.length === 0) return
+    const drop = new Set(pruned)
+    state.artifacts.set(
+      kind,
+      revs.filter((meta) => !drop.has(meta.revision)),
+    )
+  }
+
+  private pruneRepoKind(state: RepoState, kind: string): void {
+    if (!isRetentionManagedKind(kind)) return
+    const revisions = state.artifacts.get(kind)
+    if (!revisions) return
+    const pruned = revisionsToPrune(
+      revisions.map((meta) => meta.revision),
+      this.maxRevisions,
+    )
+    if (pruned.length === 0) return
+    const drop = new Set(pruned)
+    state.artifacts.set(
+      kind,
+      revisions.filter((meta) => !drop.has(meta.revision)),
+    )
   }
 
   scopeBuild(slug: string): BuildScopedStore {
@@ -238,7 +292,8 @@ export class MemoryBuildStore implements BuildStore {
     const ts = this.now()
     const nextRev = new Map<string, number>()
     const deposited: ArtifactMeta[] = prepared.map((p) => {
-      const revision = nextRev.get(p.kind) ?? state.artifacts.get(p.kind)?.length ?? 0
+      const revision =
+        nextRev.get(p.kind) ?? MemoryBuildStore.nextRevision(state.artifacts.get(p.kind))
       nextRev.set(p.kind, revision + 1)
       return {
         build: slug,
@@ -254,6 +309,7 @@ export class MemoryBuildStore implements BuildStore {
       const revs = state.artifacts.get(meta.kind) ?? []
       revs.push(meta)
       state.artifacts.set(meta.kind, revs)
+      this.pruneBuildKind(state, meta.kind)
     }
     const envelope = {
       build: slug,
@@ -283,13 +339,14 @@ export class MemoryBuildStore implements BuildStore {
     const meta: ArtifactMeta = {
       build: slug,
       kind: artifact.kind,
-      revision: revs.length,
+      revision: MemoryBuildStore.nextRevision(revs),
       blobRef,
       metadata: structuredClone(artifact.metadata ?? {}),
       createdAt: this.now(),
     }
     revs.push(meta)
     state.artifacts.set(artifact.kind, revs)
+    this.pruneBuildKind(state, artifact.kind)
     state.record.updatedAt = meta.createdAt
     return structuredClone(meta)
   }
@@ -298,7 +355,8 @@ export class MemoryBuildStore implements BuildStore {
     const state = this.state(slug)
     const revs = state.artifacts.get(kind)
     if (!revs || revs.length === 0) return null
-    const meta = rev === undefined ? revs[revs.length - 1] : revs[rev]
+    const meta =
+      rev === undefined ? revs.at(-1) : revs.find((candidate) => candidate.revision === rev)
     if (!meta) return null
     const content = await this.blobs.get(meta.blobRef)
     if (!content) return null
@@ -441,7 +499,8 @@ export class MemoryBuildStore implements BuildStore {
     const ts = this.now()
     const nextRev = new Map<string, number>()
     const deposited = prepared.map((item): RepositoryArtifactMeta => {
-      const revision = nextRev.get(item.kind) ?? state.artifacts.get(item.kind)?.length ?? 0
+      const revision =
+        nextRev.get(item.kind) ?? MemoryBuildStore.nextRevision(state.artifacts.get(item.kind))
       nextRev.set(item.kind, revision + 1)
       return {
         repo,
@@ -457,6 +516,7 @@ export class MemoryBuildStore implements BuildStore {
       const revisions = state.artifacts.get(meta.kind) ?? []
       revisions.push(meta)
       state.artifacts.set(meta.kind, revisions)
+      this.pruneRepoKind(state, meta.kind)
     }
     const envelope = {
       repo,
@@ -485,13 +545,14 @@ export class MemoryBuildStore implements BuildStore {
     const meta: RepositoryArtifactMeta = {
       repo,
       kind: artifact.kind,
-      revision: revisions.length,
+      revision: MemoryBuildStore.nextRevision(revisions),
       blobRef,
       metadata: structuredClone(artifact.metadata ?? {}),
       createdAt: this.now(),
     }
     revisions.push(meta)
     state.artifacts.set(artifact.kind, revisions)
+    this.pruneRepoKind(state, artifact.kind)
     state.record.updatedAt = meta.createdAt
     return structuredClone(meta)
   }
@@ -503,7 +564,10 @@ export class MemoryBuildStore implements BuildStore {
   ): Promise<RepositoryArtifact | null> {
     const revisions = this.repoState(repo).artifacts.get(kind)
     if (!revisions || revisions.length === 0) return null
-    const meta = rev === undefined ? revisions.at(-1) : revisions[rev]
+    const meta =
+      rev === undefined
+        ? revisions.at(-1)
+        : revisions.find((candidate) => candidate.revision === rev)
     if (!meta) return null
     const content = await this.blobs.get(meta.blobRef)
     return content ? { meta: structuredClone(meta), content } : null

@@ -18,7 +18,10 @@ import { MemoryBlobStore, MemoryBuildStore } from './memory'
 import { textContent, type BlobStore } from './types'
 
 describeBuildStoreContract('MemoryBuildStore', async (opts) => ({
-  store: new MemoryBuildStore(opts?.clock ? { clock: opts.clock } : {}),
+  store: new MemoryBuildStore({
+    ...(opts?.clock ? { clock: opts.clock } : {}),
+    ...(opts?.retention ? { retention: opts.retention } : {}),
+  }),
 }))
 
 describeBlobStoreContract('MemoryBlobStore', async () => ({

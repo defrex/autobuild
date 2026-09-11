@@ -6,6 +6,9 @@
  * Factories receive an optional injectable clock (mirroring the adapters'
  * constructors) because lease expiry (§15.2.6, §7.4) and store-assigned
  * timestamps (§15.1) are only testable deterministically with time control.
+ * The retention option drives the artifact-retention suite (store/retention.ts);
+ * factories must wire it into the adapter so the suite runs identically
+ * against every adapter.
  */
 import { describe, expect, test } from 'bun:test'
 import { EventValidationError, type EventWrite } from '../events/catalog'
@@ -33,7 +36,10 @@ export interface BuildStoreHarness {
  * Adapters are constructed with an injectable clock (see MemoryBuildStore's
  * constructor); the factory passes it through so the suite controls time.
  */
-export type BuildStoreFactory = (opts?: { clock?: Clock }) => Promise<BuildStoreHarness>
+export type BuildStoreFactory = (opts?: {
+  clock?: Clock
+  retention?: { maxRevisions: number }
+}) => Promise<BuildStoreHarness>
 
 export interface BlobStoreHarness {
   blobs: BlobStore
@@ -125,7 +131,7 @@ export function planCompletedWrite(rev: number, round = 1): EventWrite<'plan.com
 
 async function withStore(
   factory: BuildStoreFactory,
-  opts: { clock?: Clock } | undefined,
+  opts: { clock?: Clock; retention?: { maxRevisions: number } } | undefined,
   run: (store: BuildStore) => Promise<void>,
 ): Promise<void> {
   const { store, cleanup } = await factory(opts)
@@ -712,6 +718,94 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             ['plan', 0],
             ['plan', 1],
           ])
+        })
+      })
+    })
+
+    describe('artifact retention (dispatcher run/config family — store/retention.ts)', () => {
+      function runStartedWrite(
+        run: string,
+        deposited: { kind: string; revision: number }[],
+      ): RepositoryEventWrite<'dispatcher.run-started'> {
+        const artifact = deposited[0]
+        if (!artifact) throw new Error('run-started deposit returned no artifact')
+        return {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run,
+            pid: 4242,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: [],
+          },
+        }
+      }
+
+      test('prunes the oldest revisions past maxRevisions for retention-family kinds only', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.ensureRepo('acme/retention')
+
+          // Repo side, family kind, through the atomic deposit path the
+          // dispatcher cron uses (appendRepoWithArtifacts @ run-started).
+          for (const run of ['run-0', 'run-1', 'run-2']) {
+            const { artifacts } = await store.appendRepoWithArtifacts(
+              'acme/retention',
+              [{ kind: 'dispatcher-effective-config', content: `cfg-${run}` }],
+              (deposited) => runStartedWrite(run, deposited),
+            )
+            expect(artifacts.map((a) => a.revision)).toEqual([Number(run.slice(-1))])
+          }
+          const revisions = (
+            await store.listRepoArtifacts('acme/retention', 'dispatcher-effective-config')
+          ).map((meta) => meta.revision)
+          // Pruned side: revision 0 is gone entirely…
+          expect(revisions).toEqual([1, 2])
+          expect(
+            await store.getRepoArtifact('acme/retention', 'dispatcher-effective-config', 0),
+          ).toBeNull()
+          // …preserved side: the surviving revisions still read, and the
+          // latest-by-default read (the current run's snapshot) still works.
+          expect(
+            (await store.getRepoArtifact('acme/retention', 'dispatcher-effective-config', 1))?.meta
+              .revision,
+          ).toBe(1)
+          const latest = await store.getRepoArtifact(
+            'acme/retention',
+            'dispatcher-effective-config',
+          )
+          expect(latest?.meta.revision).toBe(2)
+          expect(new TextDecoder().decode(latest!.content)).toBe('cfg-run-2')
+
+          // A non-family kind deposited by the same activity is never pruned.
+          for (let i = 0; i < 3; i++) {
+            await store.putRepoArtifact('acme/retention', {
+              kind: 'harvest-scan',
+              content: `s${i}`,
+            })
+          }
+          expect(
+            (await store.listRepoArtifacts('acme/retention', 'harvest-scan')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([0, 1, 2])
+
+          // Build side, family kind (per-build snapshots).
+          await store.createBuild(sampleBuildInput('retain-b'))
+          for (let i = 0; i < 3; i++) {
+            await store.putArtifact('retain-b', {
+              kind: 'build-runner-effective-config',
+              content: `bcfg-${i}`,
+            })
+          }
+          expect(
+            (await store.listArtifacts('retain-b', 'build-runner-effective-config')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([1, 2])
+          expect(await store.getArtifact('retain-b', 'build-runner-effective-config', 0)).toBeNull()
+          expect(
+            (await store.getArtifact('retain-b', 'build-runner-effective-config'))?.meta.revision,
+          ).toBe(2)
         })
       })
     })

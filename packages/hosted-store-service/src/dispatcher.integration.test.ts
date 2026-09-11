@@ -447,6 +447,12 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   const kernelErrors: string[] = []
   const dispatch = async (opts: DispatchOpts): Promise<void> => {
     mintedTokens.push(opts.env!.AB_TOKEN!)
+    // The per-repository forge credential override flows through the real
+    // parse → compose path onto the kernel env, set on BOTH variables so no
+    // reader straddles two identities — while the minted AB_TOKEN above stays
+    // the deployment operator credential.
+    expect(opts.env!.GITHUB_TOKEN).toBe('override-forge-token')
+    expect(opts.env!.GH_TOKEN).toBe('override-forge-token')
     const guestExecution = new GuestExecution(
       guestRuns,
       new RemoteBuildStore({ url: opts.env!.AB_STORE!, token: opts.env!.AB_TOKEN }),
@@ -504,6 +510,9 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       // Forge credentials flow through from the service environment, exactly
       // as a real deployment configures them — guests never receive one.
       GITHUB_TOKEN: 'forge-token',
+      // The per-repository override for this deployment's single repository:
+      // its kernel env must see it, not the shared GITHUB_TOKEN.
+      AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ [REPO]: 'override-forge-token' }),
     },
     clock,
     dispatch,
@@ -794,6 +803,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       expect(mintedTokens).toContain(token!)
     }
     expect(kernelErrors.filter((line) => line.includes('cron-secret'))).toEqual([])
+    expect(kernelErrors.filter((line) => line.includes('override-forge-token'))).toEqual([])
   } finally {
     server.stop(true)
     await backing.close()
