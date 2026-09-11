@@ -151,6 +151,15 @@ export interface BuildStore {
    * metas (with assigned revisions) so the payload can carry `{kind, rev}`
    * refs. If the event fails validation, the artifact deposit is rolled
    * back (orphaned blobs are harmless — they are content-addressed).
+   *
+   * Ordering invariant (AUT-322): the adapter must run `validateEventWrite`
+   * on the batch event *before* any retention prune (store/retention.ts) of
+   * artifacts in the same deposit batch, so a same-kind batch larger than
+   * the retention bound never loses a sibling to a prune that outran
+   * validation; on validation failure the batch — deposits and prunes —
+   * must leave no trace. `revisionsToPrune` is a pure function of the full
+   * post-batch revision set, so pruning once per distinct batch kind after
+   * validation is equivalent to per-deposit pruning.
    */
   appendWithArtifacts<T extends EventType>(
     slug: string,
@@ -199,6 +208,9 @@ export interface BuildStore {
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }>
+  /** Same atomic-deposit and ordering contracts as `appendWithArtifacts`:
+   * the batch event is validated before any retention prune of artifacts in
+   * the same deposit batch (AUT-322), and an invalid event leaves no trace. */
   getRepoEvents(repo: string, sinceSeq?: number): Promise<RepositoryEvent[]>
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>

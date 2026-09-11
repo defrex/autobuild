@@ -352,8 +352,21 @@ export class SqliteBuildStore implements BuildStore {
     }
   }
 
-  /** Runs inside an open transaction — see `appendInTx`. */
-  private depositInTx(slug: string, prepared: PreparedArtifact): ArtifactMeta {
+  /**
+   * Runs inside an open transaction — see `appendInTx`.
+   *
+   * `prune: false` defers deposit-time retention to the batch caller (the
+   * atomic `appendWithArtifacts` path), which prunes once per distinct kind
+   * *after* the batch event is validated — see the invariant documented on
+   * `appendWithArtifacts`. Single-deposit paths keep the default
+   * `prune: true` (deposit and prune in one step; no event is appended, so
+   * the validation-before-prune invariant does not apply).
+   */
+  private depositInTx(
+    slug: string,
+    prepared: PreparedArtifact,
+    opts: { prune?: boolean } = { prune: true },
+  ): ArtifactMeta {
     this.requireBuild(slug)
     const createdAt = this.now()
     const row = this.db
@@ -373,7 +386,7 @@ export class SqliteBuildStore implements BuildStore {
         createdAt,
       })
       .run()
-    this.pruneBuildInTx(slug, prepared.kind)
+    if (opts.prune) this.pruneBuildInTx(slug, prepared.kind)
     this.db.update(builds).set({ updatedAt: createdAt }).where(eq(builds.slug, slug)).run()
     return {
       build: slug,
@@ -450,9 +463,22 @@ export class SqliteBuildStore implements BuildStore {
     }
     // One synchronous transaction: deposits + event append commit together;
     // an invalid event throws, rolling back every deposit (D6).
+    //
+    // Ordering invariant (AUT-322): the batch event is validated BEFORE any
+    // retention prune runs. Deposits land unpruned, validation gates the
+    // whole batch, and only then does one prune per distinct batch kind
+    // execute — still inside this transaction. A same-kind batch whose prune
+    // scope covers a sibling therefore never deletes that sibling before the
+    // batch's event is validated. Pruning once per kind (not per deposit) is
+    // equivalent: `revisionsToPrune` is a pure function of the full
+    // post-batch revision set, and pruned revisions are always older than
+    // the current MAX, so revision assignment is unaffected.
     return this.writeTx(() => {
-      const deposited = prepared.map((p) => this.depositInTx(slug, p))
+      const deposited = prepared.map((p) => this.depositInTx(slug, p, { prune: false }))
       const validated = validateEventWrite(makeEvent(deposited))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        this.pruneBuildInTx(slug, kind)
+      }
       const event = this.appendInTx(slug, validated) as EventEnvelope<T>
       return { event, artifacts: deposited }
     })
@@ -651,7 +677,12 @@ export class SqliteBuildStore implements BuildStore {
     return this.writeTx(() => this.appendRepoInTx(repo, validated)) as RepositoryEventEnvelope<T>
   }
 
-  private depositRepoInTx(repo: string, prepared: PreparedArtifact): RepositoryArtifactMeta {
+  /** See `depositInTx` for the `prune` option's meaning. */
+  private depositRepoInTx(
+    repo: string,
+    prepared: PreparedArtifact,
+    opts: { prune?: boolean } = { prune: true },
+  ): RepositoryArtifactMeta {
     this.requireRepo(repo)
     const createdAt = this.now()
     const row = this.db
@@ -671,7 +702,7 @@ export class SqliteBuildStore implements BuildStore {
         createdAt,
       })
       .run()
-    this.pruneRepoInTx(repo, prepared.kind)
+    if (opts.prune) this.pruneRepoInTx(repo, prepared.kind)
     this.db
       .update(repoStreams)
       .set({ updatedAt: createdAt })
@@ -699,9 +730,16 @@ export class SqliteBuildStore implements BuildStore {
     for (const input of artifactInputs) {
       prepared.push(await this.prepareArtifact(input))
     }
+    // Ordering invariant (AUT-322): same shape as `appendWithArtifacts` —
+    // deposit unpruned, validate the batch event, then prune once per
+    // distinct batch kind, all inside this transaction. Validation
+    // provably precedes any retention deletion.
     return this.writeTx(() => {
-      const deposited = prepared.map((item) => this.depositRepoInTx(repo, item))
+      const deposited = prepared.map((item) => this.depositRepoInTx(repo, item, { prune: false }))
       const validated = validateRepositoryEventWrite(makeEvent(deposited))
+      for (const kind of new Set(deposited.map((meta) => meta.kind))) {
+        this.pruneRepoInTx(repo, kind)
+      }
       const event = this.appendRepoInTx(repo, validated) as RepositoryEventEnvelope<T>
       return { event, artifacts: deposited }
     })
