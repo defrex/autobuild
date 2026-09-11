@@ -10,6 +10,19 @@
  *   fetched from GitHub by the running version, so the guest installs exactly
  *   the version the launching dispatcher reports even when no source tree
  *   exists on disk.
+ *
+ * The guest's installed version therefore equals the running distribution's
+ * version in both modes: origin mode's release-asset tag is the running
+ * version by construction, and source mode packs `distributionRoot()`, whose
+ * package.json is the same file `readDistributionIdentity()` reads. The hosted
+ * remote store enforces exact version lockstep — a client whose
+ * `x-autobuild-version` differs from the server's is rejected (409) — so
+ * guest, store, and dispatcher versions must move together through a release
+ * cut (`tools/release.ts`) plus store/dispatcher upgrades; there is no code
+ * path that safely mixes versions. Provisioning records the installed version
+ * in the guest's `.distribution-version` marker and reinstalls the archive on
+ * a later mismatch, so an upgraded dispatcher retrofits its persistent guests
+ * (see `vercel-sandbox.ts`).
  */
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'

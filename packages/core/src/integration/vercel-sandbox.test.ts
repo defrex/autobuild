@@ -16,6 +16,7 @@ import {
   VERCEL_BUN_EXECUTABLE,
   VERCEL_BUN_PREFIX,
   VERCEL_BUN_VERSION,
+  VERCEL_DISTRIBUTION_VERSION_MARKER,
   VercelSandboxProvider,
   type VercelCommand,
   type VercelSandboxFacade,
@@ -44,6 +45,8 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
     readonly name = 'autobuild-composed'
     provisioned = false
     deleted = false
+    /** Simulated `/opt/autobuild/.distribution-version` marker content. */
+    distributionVersion: string | undefined
     /** Exit code of the most recent detached command, for `getCommand`
      * re-observation (mirrors the SDK: null while running). */
     lastExitCode: number | null = null
@@ -55,6 +58,21 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
       commands.push(params)
       if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
       if (params.cmd === 'touch') this.provisioned = true
+      if (
+        params.cmd === 'cat' &&
+        (params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER
+      ) {
+        if (this.distributionVersion === undefined) return { exitCode: 1 }
+        return { exitCode: 0, stdout: async () => this.distributionVersion }
+      }
+      if (
+        params.cmd === 'sh' &&
+        (params.args as string[])?.[1] === 'printf %s "$1" > "$2"' &&
+        (params.args as string[])?.[4] === VERCEL_DISTRIBUTION_VERSION_MARKER
+      ) {
+        this.distributionVersion = (params.args as string[])![3] as string
+        return { exitCode: 0 }
+      }
       if (params.cmd === 'git' && (params.args as string[] | undefined)?.includes('push')) {
         remote.head = (params.args as string[]).at(-1)!.split(':')[0]!
       }

@@ -505,7 +505,14 @@ checkout-only hooks such as Husky are not provisioning dependencies. A Bun
 install or verification failure identifies the configured image and expected
 universal-image capabilities, deletes the partial environment, and leaves no
 readiness marker. A retry also deletes any named sandbox without that marker
-instead of adopting partial setup. Immediately before every build-child launch, the adapter verifies the
+instead of adopting partial setup. The installed distribution's version is
+recorded in the guest's `/opt/autobuild/.distribution-version` marker; a
+reused sandbox whose marker no longer matches the version the current system
+would deliver is refreshed by reinstalling the archive before reuse, so an
+upgraded dispatcher retrofits its persistent guests (see "Guest distribution
+version selection and delivery" in docs/setup.md for the release-and-upgrade
+delivery path and the hosted store's version-lockstep gate). Immediately
+before every build-child launch, the adapter verifies the
 provisioned absolute Bun executable and every referenced runtime again. A
 failure names the runtime, selecting role/alternate, stage, and provisioning
 field, launches no child, and instructs the operator to fix/reprovision. This

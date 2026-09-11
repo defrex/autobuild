@@ -11,6 +11,7 @@ import {
   VERCEL_BUN_EXECUTABLE,
   VERCEL_BUN_PREFIX,
   VERCEL_BUN_VERSION,
+  VERCEL_DISTRIBUTION_VERSION_MARKER,
   VERCEL_LIFETIME_MARGIN_MS,
   VERCEL_PROVISIONED_MARKER,
   VERCEL_WORKSPACE_PATH,
@@ -45,6 +46,12 @@ class FakeSandbox implements VercelSandboxHandle {
   failureStdout = ''
   failureStderr = ''
   provisioned = false
+  /** Simulated content of the guest's `.distribution-version` marker;
+   * `undefined` models an unreadable or absent marker (legacy guest). */
+  distributionVersion: string | undefined
+  /** When set, reading the marker returns this instead of the written value,
+   * modeling a silent write/extraction failure. */
+  markerReadback: string | undefined
   detachedWait: (params?: { signal?: AbortSignal }) => Promise<{ exitCode: number }> =
     async () => ({
       exitCode: 0,
@@ -82,6 +89,21 @@ class FakeSandbox implements VercelSandboxHandle {
         stdout: async () => this.failureStdout,
         stderr: async () => this.failureStderr,
       }
+    if (params.cmd === 'cat') {
+      const content = this.markerReadback ?? this.distributionVersion
+      if ((params.args as string[])?.[0] === VERCEL_DISTRIBUTION_VERSION_MARKER) {
+        if (content === undefined) return { exitCode: 1 }
+        return { exitCode: 0, stdout: async () => content }
+      }
+    }
+    if (
+      params.cmd === 'sh' &&
+      (params.args as string[])?.[1] === 'printf %s "$1" > "$2"' &&
+      (params.args as string[])?.[4] === VERCEL_DISTRIBUTION_VERSION_MARKER
+    ) {
+      this.distributionVersion = (params.args as string[])![3] as string
+      return { exitCode: 0 }
+    }
     if (params.cmd === 'test') return { exitCode: this.provisioned ? 0 : 1 }
     if (params.cmd === this.failSetupCommand) return { exitCode: 1 }
     if (params.cmd === 'touch') this.provisioned = true
@@ -174,12 +196,19 @@ function harness(
     cwd?: string
     /** Overrides the facade's get; e.g. to model an unreachable provider. */
     facadeGet?: () => Promise<VercelSandboxHandle | null>
+    /** The archive fetch rejects after its first success (models an origin-mode
+     * release fetch failing during a reuse-path refresh). */
+    failArchiveAfterFirst?: boolean
+    /** Forces the guest's version-marker readback to return this value. */
+    markerReadback?: string
     /** Optional snapshot-expiry bound threaded to creation. */
     snapshotExpirationSeconds?: number
   } = {},
 ) {
   const sandbox = new FakeSandbox()
   sandbox.cwd = options.cwd
+  if (options.markerReadback !== undefined) sandbox.markerReadback = options.markerReadback
+  let archiveFetches = 0
   let buildBranchLookups = 0
   let createInput: Record<string, unknown> | undefined
   let created = false
@@ -266,7 +295,14 @@ function harness(
     repo: '/repo',
     facade,
     exec,
-    packageArchive: async () => new Uint8Array([1, 2, 3]),
+    packageArchive: async () => {
+      archiveFetches += 1
+      if (options.failArchiveAfterFirst === true && archiveFetches > 1) {
+        throw new Error('archive fetch failed')
+      }
+      return new Uint8Array([1, 2, 3])
+    },
+    distributionVersion: async () => '1.2.3',
     runtimeReferences:
       options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
   })
@@ -427,9 +463,17 @@ describe('VercelSandboxProvider', () => {
     expect(reused.ref).toBe(first.ref)
     expect(h.creates).toBe(1)
     expect(h.sandbox.writes).toHaveLength(1)
+    // The matching version marker is read and nothing else runs: no archive
+    // fetch, no reinstall, no declared provisioning.
     expect(h.sandbox.commands.slice(commandCount)).toEqual([
       { cmd: 'test', args: ['-f', VERCEL_PROVISIONED_MARKER] },
+      {
+        cmd: 'cat',
+        args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
+        signal: expect.any(AbortSignal),
+      },
     ])
+    expect(h.sandbox.distributionVersion).toBe('1.2.3')
     expect(
       h.sandbox.commands.filter((command) => command.cmd === 'sh' && command.sudo === true),
     ).toHaveLength(provisioningCount)
@@ -443,6 +487,129 @@ describe('VercelSandboxProvider', () => {
     expect(await execution.completion).toEqual({ exitCode: 0 })
     await h.provider.release(reused)
     expect(h.sandbox.deletes).toBe(1)
+  })
+
+  test('reinstalls the distribution on a reused sandbox whose marker version is older', async () => {
+    const h = harness()
+    const first = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The resumed guest predates the current distribution (e.g. legacy 0.6.0
+    // guest vs an upgraded dispatcher's 1.2.3).
+    h.sandbox.distributionVersion = '0.6.0'
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const reused = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+
+    expect(reused.ref).toBe(first.ref)
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    const refreshed = h.sandbox.commands.slice(commandsBefore)
+    expect(refreshed.map((command) => command.cmd)).toEqual([
+      'test',
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+    ])
+    expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
+    // No declared provisioning and no runtime work re-ran for the refresh.
+    expect(h.sandbox.commands.slice(commandsBefore).some((command) => command.sudo === true)).toBe(
+      false,
+    )
+  })
+
+  test('reinstalls the distribution on a legacy reused sandbox without a version marker', async () => {
+    const h = harness()
+    const first = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // Model a guest provisioned before the marker existed.
+    h.sandbox.distributionVersion = undefined
+    const commandsBefore = h.sandbox.commands.length
+
+    const reused = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+
+    expect(reused.ref).toBe(first.ref)
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.deletes).toBe(0)
+    expect(h.sandbox.writes).toHaveLength(2)
+    expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
+      'test',
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+    ])
+    expect(h.sandbox.distributionVersion as string | undefined).toBe('1.2.3')
+  })
+
+  test('a failed distribution refresh deletes the reused sandbox and launches no execution', async () => {
+    const h = harness({ failArchiveAfterFirst: true })
+    const first = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.distributionVersion = '0.6.0'
+
+    await expect(
+      h.provider.provision({ repo: '/repo', baseBranch: 'main', branch: 'ab/remote-build' }),
+    ).rejects.toThrow(/archive fetch failed/)
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+
+    // The deleted environment is not adopted by a later execution start.
+    await expect(
+      h.provider.buildExecution.start({
+        slug: 'remote-build',
+        storeRef: 'https://store.example.test',
+        instance: 'i-refresh-failed',
+        workspaceRef: first.ref,
+      }),
+    ).rejects.toThrow(/no longer exists/)
+  })
+
+  test('fresh provisioning records the resolved version and a readback mismatch deletes the sandbox', async () => {
+    const mismatch = harness({ markerReadback: 'corrupted' })
+    await expect(
+      mismatch.provider.provision({
+        repo: '/repo',
+        baseBranch: 'main',
+        branch: 'ab/remote-build',
+      }),
+    ).rejects.toThrow(
+      /distribution version marker readback mismatch.*wrote "1\.2\.3" but read "corrupted"/s,
+    )
+    expect(mismatch.sandbox.deletes).toBe(1)
+    expect(mismatch.sandbox.provisioned).toBe(false)
+    expect(mismatch.sandbox.commands.some((command) => command.detached === true)).toBe(false)
+
+    const h = harness()
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    expect(h.sandbox.distributionVersion).toBe('1.2.3')
   })
 
   test('retains provisioning output and remediation while deleting an unready sandbox', async () => {
@@ -609,6 +776,8 @@ describe('VercelSandboxProvider', () => {
       'mkdir',
       'tar',
       VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
       'sh',
       'touch',
     ])

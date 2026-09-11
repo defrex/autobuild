@@ -10,7 +10,7 @@ import {
   vercelSandboxConfigSchema,
 } from '../../config/schema'
 import { distributionRoot } from '../../distribution'
-import { defaultDistributionArchive } from './distribution-archive'
+import { defaultDistributionArchive, readDistributionIdentity } from './distribution-archive'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -32,6 +32,12 @@ import { spawnExec } from './git-worktree'
 export const VERCEL_WORKSPACE_PATH = '/vercel/sandbox/workspace'
 export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
 export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
+/** Records the installed distribution's version. A reused sandbox whose marker
+ * disagrees with the version the current system would deliver is refreshed by
+ * reinstalling the archive, so an upgraded dispatcher retrofits its persistent
+ * guests (including legacy guests predating this marker) instead of resuming a
+ * stale distribution that the hosted store would reject. */
+export const VERCEL_DISTRIBUTION_VERSION_MARKER = `${VERCEL_AUTOBUILD_PATH}/.distribution-version`
 export const VERCEL_BUN_VERSION = '1.4.0'
 export const VERCEL_BUN_PREFIX = '/opt/autobuild-runtime'
 export const VERCEL_BUN_BIN_PATH = `${VERCEL_BUN_PREFIX}/node_modules/.bin`
@@ -958,6 +964,86 @@ function currentRuntimeReferences(
   return typeof source === 'function' ? source() : source
 }
 
+/** Install the distribution archive into `/opt/autobuild` and record its
+ * version marker. Shared by fresh provisioning and reuse-path refreshes; the
+ * readback comparison guards a silently failed write or extraction. */
+async function installDistribution(
+  sandbox: VercelSandboxHandle,
+  archive: Uint8Array,
+  version: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
+    ...(signal === undefined ? {} : { signal }),
+  })
+  await commandOrThrow(sandbox, {
+    cmd: 'mkdir',
+    args: ['-p', VERCEL_AUTOBUILD_PATH],
+    ...(signal === undefined ? {} : { signal }),
+  })
+  await commandOrThrow(sandbox, {
+    cmd: 'tar',
+    args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
+    ...(signal === undefined ? {} : { signal }),
+  })
+  await commandOrThrow(sandbox, {
+    cmd: VERCEL_BUN_EXECUTABLE,
+    args: ['install', '--production', '--ignore-scripts'],
+    cwd: VERCEL_AUTOBUILD_PATH,
+    ...(signal === undefined ? {} : { signal }),
+  })
+  await writeDistributionVersionMarker(sandbox, version, signal)
+}
+
+async function writeDistributionVersionMarker(
+  sandbox: VercelSandboxHandle,
+  version: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await commandOrThrow(sandbox, {
+    cmd: 'sh',
+    args: [
+      '-c',
+      'printf %s "$1" > "$2"',
+      'distribution-version',
+      version,
+      VERCEL_DISTRIBUTION_VERSION_MARKER,
+    ],
+    ...(signal === undefined ? {} : { signal }),
+  })
+  const readback = await readableCommand(sandbox, {
+    cmd: 'cat',
+    args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
+    ...(signal === undefined ? {} : { signal }),
+  })
+  if (readback.trim() !== version) {
+    throw new Error(
+      `distribution version marker readback mismatch in ${VERCEL_DISTRIBUTION_VERSION_MARKER}: ` +
+        `wrote ${JSON.stringify(version)} but read ${JSON.stringify(readback.trim())}`,
+    )
+  }
+}
+
+/** The installed distribution's version, or `undefined` when the marker is
+ * unreadable — which includes every guest provisioned before the marker
+ * existed and is treated as a version mismatch by the reuse path. */
+async function readDistributionVersionMarker(
+  sandbox: VercelSandboxHandle,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    const content = await readableCommand(sandbox, {
+      cmd: 'cat',
+      args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
+      ...(signal === undefined ? {} : { signal }),
+    })
+    const trimmed = content.trim()
+    return trimmed === '' ? undefined : trimmed
+  } catch {
+    return undefined
+  }
+}
+
 export interface VercelSandboxProviderOptions {
   config: VercelSandboxConfig
   env: Record<string, string | undefined>
@@ -978,6 +1064,11 @@ export interface VercelSandboxProviderOptions {
    * the branch does not exist. Default runs `git ls-remote` from `repo` on
    * the host. */
   remoteBranchHead?: (branch: string) => Promise<string | undefined>
+  /** Test seam: the distribution version the current archive source delivers.
+   * Default reads the running distribution's package.json (origin mode keys
+   * the guest archive to that same version; source mode packs the same tree
+   * readDistributionIdentity reads), so the two agree by construction. */
+  distributionVersion?: () => Promise<string>
 }
 
 /** Vercel-backed working copy and executor. Completed SDK command output is
@@ -1034,6 +1125,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const rawOrigin = await this.origin()
     const origin = cleanGithubOrigin(rawOrigin)
     const name = sandboxName(origin.url, opts.branch, opts.generation)
+    // Resolved once, before the create/reuse branch: the version the current
+    // archive source would deliver, against which both a fresh install's
+    // marker and a reused sandbox's marker are compared.
+    const distributionVersion = await (
+      this.options.distributionVersion ?? readDistributionIdentity
+    )()
     let sandbox = await this.facade.get(name, this.operationSignal())
     const existing = await this.remoteBranchHead(opts.branch, `remote branch ${opts.branch}`)
     const base =
@@ -1051,7 +1148,31 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         args: ['-f', VERCEL_PROVISIONED_MARKER],
       })
       if (marker.exitCode === 0) {
-        await sandbox.stop({ signal: this.operationSignal() })
+        const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
+        if (installed === distributionVersion) {
+          await sandbox.stop({ signal: this.operationSignal() })
+        } else {
+          // A completed sandbox whose installed distribution disagrees with
+          // what the current system would deliver — including legacy guests
+          // without a marker — is refreshed in place. Any refresh failure
+          // deletes the sandbox so the next pass rematerializes cleanly.
+          try {
+            const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+            await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+          } catch (error) {
+            try {
+              this.sessions.set(name, sandbox)
+              await this.reap(name)
+            } catch (deleteError) {
+              throw new AggregateError(
+                [error, deleteError],
+                `sandbox ${name} distribution refresh failed and its incomplete environment could not be confirmed deleted`,
+              )
+            }
+            throw error
+          }
+          await sandbox.stop({ signal: this.operationSignal() })
+        }
       } else {
         // A named VM without the marker is a crashed/legacy provisioning
         // attempt. Never expose its potentially unscrubbed checkout to agents.
@@ -1124,19 +1245,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await provisionBun(sandbox, this.options.config.image)
         await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
         const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-        await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
-          signal: this.operationSignal(),
-        })
-        await commandOrThrow(sandbox, { cmd: 'mkdir', args: ['-p', VERCEL_AUTOBUILD_PATH] })
-        await commandOrThrow(sandbox, {
-          cmd: 'tar',
-          args: ['-xzf', '/tmp/autobuild.tgz', '--strip-components=1', '-C', VERCEL_AUTOBUILD_PATH],
-        })
-        await commandOrThrow(sandbox, {
-          cmd: VERCEL_BUN_EXECUTABLE,
-          args: ['install', '--production', '--ignore-scripts'],
-          cwd: VERCEL_AUTOBUILD_PATH,
-        })
+        await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
         // Repository dependencies precede branch-owned package plugin loading.
         // The fixed bootstrap supports the consuming repository's lockfile; its
         // configured setup command still runs at every runner attachment.
