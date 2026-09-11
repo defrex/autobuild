@@ -526,9 +526,11 @@ class DispatchLoop {
   /** Live hosted-harvest execution: the environment-supervised handle whose
    * completion chain classifies, releases, and journals the close fact.
    * Teardown detaches it — the guest keeps running and the next invocation
-   * settles the execution from the Store plus provider liveness. */
+   * settles the execution from the Store plus provider liveness. The detach
+   * flag is a shared cell also closed over by the completion chain, so the
+   * chain still observes the detach after this field is cleared. */
   private hostedHarvest:
-    | { execution: string; handle: BuildExecutionHandle; detached: boolean }
+    | { execution: string; handle: BuildExecutionHandle; detached: { value: boolean } }
     | undefined
   /** Execution ids THIS process supervises; the dispatcher's harvest
    * settlement stage skips them (their completion chain owns the facts). */
@@ -1756,6 +1758,7 @@ class DispatchLoop {
       tracked = this.launchHostedHarvest(hosted, execution).finally(() => {
         this.hostedHarvestExecutions.delete(execution)
         this.inFlight.delete(tracked)
+        if (this.harvestInFlight === tracked) this.harvestInFlight = undefined
       })
       this.harvestInFlight = tracked
       this.inFlight.add(tracked)
@@ -1841,6 +1844,10 @@ class DispatchLoop {
     const repo = this.repoIdentity
     let handle: BuildExecutionHandle | undefined
     let startedSeq: number | undefined
+    // Shared with `stopHostedHarvest` through the `hostedHarvest` entry: a
+    // detach must stay observable to the completion chain even after the
+    // entry is cleared, or the chain would classify and reap a live guest.
+    const detached = { value: false }
     try {
       // Threshold gate before any provisioning — with resume precedence. The
       // runner's real check runs in the guest after a full provisioning
@@ -1886,7 +1893,7 @@ class DispatchLoop {
           'harvest execution launch returned no durable identity; refusing to supervise an unobservable execution',
         )
       }
-      this.hostedHarvest = { execution, handle, detached: false }
+      this.hostedHarvest = { execution, handle, detached }
       const started = await store.appendRepo(repo, {
         actor: DISPATCHER,
         type: 'harvest.execution.started',
@@ -1901,7 +1908,7 @@ class DispatchLoop {
       startedSeq = started.seq
 
       await handle.completion
-      if (this.hostedHarvest?.detached === true) {
+      if (detached.value) {
         // Teardown detached the local wait; the guest keeps running and the
         // execution stays open for durable settlement by a later invocation.
         return
@@ -2034,7 +2041,7 @@ class DispatchLoop {
   private async stopHostedHarvest(): Promise<void> {
     const entry = this.hostedHarvest
     if (entry === undefined) return
-    entry.detached = true
+    entry.detached.value = true
     this.hostedHarvest = undefined
     try {
       await entry.handle.detach()

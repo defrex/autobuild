@@ -8431,4 +8431,71 @@ describe('abDispatch hosted harvest execution', () => {
       await fx.cleanup()
     }
   })
+
+  test('watch mode re-launches hosted harvest and teardown detaches a live guest', async () => {
+    const fake = fakeHarvestExecution('git-worktree', { deferred: true })
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    const out: string[] = []
+    const stop = new AbortController()
+    let sleeps = 0
+    try {
+      await seedObservation(fx, 'watch-source', 'obs-watch-hosted')
+      const dispatch = abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            // The first tick launched the hosted harvest: let the guest exit
+            // and the completion chain settle fully — release, close fact,
+            // and the single-flight clear — before the next tick.
+            await waitFor(() => fake.starts.length === 1)
+            fake.settle(0)
+            await waitFor(async () =>
+              (await fx.store.getRepoEvents(fx.origin)).some(
+                (event) => event.type === 'harvest.execution.released',
+              ),
+            )
+            await new Promise((resolve) => setTimeout(resolve, 20))
+          } else {
+            // Wait until the second execution is durably launched, then tear
+            // down while its guest is still live.
+            await waitFor(
+              async () =>
+                (await fx.store.getRepoEvents(fx.origin)).filter(
+                  (event) => event.type === 'harvest.execution.started',
+                ).length === 2,
+            )
+            stop.abort()
+          }
+        },
+        wire: hostedWire(fx, fake),
+      })
+      await dispatch
+      // The single-flight guard must have cleared after the first execution
+      // or the second tick would never have re-launched.
+      expect(fake.starts).toHaveLength(2)
+      // Teardown detached a live guest: the completion chain must recognize
+      // the detach and leave the execution open — no classification, no
+      // release, no reap for the second environment.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const released = events.filter((event) => event.type === 'harvest.execution.released')
+      expect(released).toHaveLength(1)
+      expect(released[0]).toMatchObject({ payload: { environmentId: 'harvest-env-1' } })
+      expect(fake.reapCalls).toHaveLength(1)
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
 })
