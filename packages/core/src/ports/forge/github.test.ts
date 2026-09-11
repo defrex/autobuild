@@ -561,6 +561,34 @@ describe('GitHubForge.setAutoMerge', () => {
     expect(calls.at(-2)!.path).toBe('graphql')
   })
 
+  test('an unprotected branch as GitHub really renders it proves the classic gate absent', async () => {
+    // GET /branches/{b} on an unprotected branch does not carry `protection: null`;
+    // it carries `protected: false` plus a stub protection object.
+    const unprotected = {
+      json: {
+        protected: false,
+        protection: {
+          enabled: false,
+          required_status_checks: { checks: [], contexts: [], enforcement_level: 'off' },
+        },
+      },
+    }
+    const { forge } = makeForge([prView('clean'), unprotected, ruleset([])])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+    const stubOnly = makeForge([
+      prView('clean'),
+      branchWith({ enabled: false, required_status_checks: { enforcement_level: 'off' } }),
+      ruleset([]),
+    ])
+    expect(await stubOnly.forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+  })
+
   test('clean or unstable with two successful negative probes returns a guarded direct candidate', async () => {
     for (const state of ['clean', 'unstable'] as const) {
       const { forge, calls } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])

@@ -5,9 +5,125 @@ description: Operate, diagnose, prove, or roll back this repository's remote Aut
 
 # Vercel builds
 
-Use this runbook for this repository's Vercel Sandbox consumer configuration. The dispatcher,
-kernel, hosted Store, ticket authority, Vercel authority, and GitHub publication authority stay
-on the maintainer machine. Only build execution runs in the disposable guest.
+Use this runbook for this repository's Vercel Sandbox consumer configuration. The hosted Store
+(`autobuild-api`) runs the dispatch kernel: a once-per-minute Vercel Cron schedule invokes
+`GET /api/dispatch` on the production deployment, and that endpoint runs one bounded dispatcher
+tick per configured repository (claim, launch, observe, settle, PR open/merge, janitor) exactly
+like a local `ab dispatch --once --repository <origin>` pass. Only build execution runs in the
+disposable guest. The schedule requires the team's Pro plan or better — Hobby deployments
+reject sub-daily cron expressions — and each invocation is a production-deployment GET
+authenticated by the project's `CRON_SECRET`.
+
+## Hosted dispatcher
+
+One invocation runs one bounded dispatcher tick per configured repository. Invocations are
+serialized by the durable repository supervisor lease, and every tick is durable under a
+`hosted-dispatcher-<uuid>` run id, visible in the web dashboard's repository journal and the
+operator API — exactly as a local dispatcher's activity is. Expect the journal to grow by
+roughly one `dispatcher-effective-config` artifact per minute per repository; retention is not
+yet implemented, so that growth is a documented property, not a fault. The full contract —
+bounding, overlap, missed ticks, sandbox authentication — is documented in
+[the hosted dispatcher procedure](../../../docs/hosted-dispatcher.md) and
+[the hosted service README](../../../packages/hosted-store-service/README.md).
+
+## Pausing and resuming
+
+Resume by inverting whichever mechanism was used to pause:
+
+1. **Disable the schedule.** Use the Vercel dashboard's "Disable Cron Jobs" button for the
+   project, or remove the `crons` entry from `vercel.json` and redeploy. Vercel documents that
+   instant rollbacks do **not** update active cron jobs — a rolled-back deployment keeps firing.
+2. **Rotate `CRON_SECRET`.** Every scheduled call is rejected immediately (401) and does no
+   work. Rotating the value requires a fresh deployment for the endpoint to accept the new
+   secret.
+3. **Soft stop.** Turn intake OFF through the operator API (`PUT
+   /operator/v1/repos/{repo}/settings/intake` with `{"enabled": false}`) or the web dashboard.
+   Running builds finish their current phases; no new ticket is claimed.
+
+## Running a local dispatcher for diagnosis
+
+For a clean diagnostic window, disable the cron first (above). Then run the local kernel
+against the hosted Store: point `AB_STORE` at `https://autobuild-api.defrex.com`, set `AB_TOKEN`
+to a scoped deployment operator token, and keep the local secrets in the ignored local
+dispatcher environment file. A local dispatcher running while the cron is still enabled is
+still safe — overlapping invocations yield on the repository supervisor lease, and the loser
+records `dispatcher.tick-yielded` naming the holder. That event in the repository journal is
+the tell that the hosted tick stood down. No second writer is possible.
+
+Two operational facts carry over: changed secrets require a fresh deployment (hosted) or a
+full local process restart (local) — existing processes never acquire changed values; and
+never migrate a running build between workspace providers. Guests never receive Store, Vercel,
+GitHub, or local OAuth secrets.
+
+## Cutover (maintainer-owned)
+
+One-time checklist for moving this repository's dispatcher to the hosted deployment, in this
+order. Variable **names and required non-secret values** are given; every credential value is
+maintainer-owned and never recorded here. Guests never receive `VERCEL_TOKEN` or machine
+secrets, so steps 0–3 are deployment-side.
+
+0. **Ground the plan tier — before merging the PR that carries `crons`.** With the maintainer's
+   `VERCEL_TOKEN`, check the team's actual plan:
+
+   ```sh
+   curl -H "Authorization: Bearer $VERCEL_TOKEN" \
+     "https://api.vercel.com/v2/teams?slug=<team-slug>"
+   ```
+
+   Read the documented `billing.plan` response property (`GET /v2/teams/<teamId>` works too),
+   or read the team's plan on the dashboard's Billing page. It must read `pro` or
+   `enterprise`; `hobby` rejects sub-daily cron expressions at deploy time. If it reads
+   `hobby`, stop and escalate (or upgrade the plan) rather than merge a known-failing deploy.
+1. **Set the missing project environment variables** on `autobuild-api` (production scope):
+   `GITHUB_TOKEN` (or `GH_TOKEN`) and `AI_GATEWAY_API_KEY` are still only in the maintainer's
+   local environment.
+2. **Confirm the present ones, by name and required value**: `AB_STORE_SECRET` (set);
+   `AB_TICKET_BACKEND` must read exactly `linear` — the parser default is `database`, and a
+   deployment left at the default never serves the AUT team's Linear tickets; `LINEAR_API_KEY`
+   (the Linear credential, already present); `CRON_SECRET`; `AB_DISPATCHER_ORIGIN`
+   (`https://autobuild-api.defrex.com`); `AB_DISPATCHER_TOKEN_TTL_SECONDS` (the default
+   604800 s must outlive the guest `timeoutSeconds` of 14400 s — it does).
+3. **Pin the repository set to the host-independent identity**: `AB_WEB_REPOSITORIES` must
+   contain exactly `https://github.com/defrex/autobuild` — the normalized https origin
+   (`normalizeGitRemoteUrl` strips `.git`, lowercases the host, and maps ssh spellings to
+   https), which is the Store's key for this repository and what the web dashboard lists.
+   `AB_DISPATCHER_REPOSITORIES`, if set, must carry the same entry; unset, it inherits
+   `AB_WEB_REPOSITORIES`. A stale checkout-path or ssh-spelled entry here is what would leave
+   the dashboard listing the wrong identity. No `VERCEL_TOKEN` belongs on the service (the
+   Sandbox SDK uses the deployment's OIDC identity).
+4. **Merge → production deploy.** The deploy carries `crons`; the variables land before it, so
+   the first scheduled ticks never answer 403-disabled.
+5. **Verify the tick with the endpoint's real response shape**:
+
+   ```sh
+   curl -H "Authorization: Bearer $CRON_SECRET" \
+     https://autobuild-api.defrex.com/api/dispatch
+   ```
+
+   must return
+   `200 {"ok":true,"repositories":[{"repository":"https://github.com/defrex/autobuild","outcome":"ticked","runId":"hosted-dispatcher-…"}]}`
+   — `outcome` is a per-repository field inside `repositories`; there is no top-level
+   `outcome`. A per-repository `"outcome":"failed"` carries an `error` message that names
+   variables, never values.
+6. **Verify the dashboard identity (AC4)**: the web dashboard's repository list shows this
+   repository under `https://github.com/defrex/autobuild`, and the repository journal shows
+   `hosted-dispatcher-*` run ids.
+7. **Harvest off — read before toggling** (the gate endpoint *flips*, it does not set):
+   `GET /operator/v1/repos/{repo}/harvest/status` first; only if `paused` is `false` (the
+   endpoint returns `HarvestStatusView`, whose pause field is `paused: boolean`, also surfaced
+   as `status: 'paused'`), send `POST /operator/v1/repos/{repo}/harvest/control` with
+   `{"action":"toggle-gate"}`; re-GET and confirm `paused: true`. If the status already reads
+   `paused: true`, do nothing — an unconditional toggle would switch harvest ON, the exact
+   state AC6 forbids.
+8. **Stop the local dispatcher**: stop the local `ab-dispatch-kernel` and confirm with
+   `ab builds --all --json` that nothing active remains local.
+9. **Evidence run (AC2)**: move a ticket to Todo and watch it claim, build, publish, and merge
+   in the dashboard with no `ab dispatch` process running anywhere; attach the build's event
+   log and PR as the acceptance evidence.
+
+**Harvest is off for this repository until harvest runs in a sandbox.** The paused gate is what
+enforces this: the dispatcher's harvest trigger parks while the gate is paused
+(`decideHarvestControl` → `park`), so the hosted cron never starts a harvest either.
 
 ## Non-secret prerequisites
 
@@ -28,10 +144,12 @@ credential value:
   variables through `gitUsernameEnv` and `gitPasswordEnv`. They must not reuse publication or
   provider credentials. This public repository does not need them.
 
-Put credentials in the ignored dispatcher environment file or the maintainer's secret source,
-never in tracked files. After changing that source, fully stop and restart the long-running
-`ab dispatch` process (or refresh its service environment and restart it). Existing processes do
-not acquire changed values. Never copy `~/.pi`, Claude login state, OAuth files, or secret values
+Hosted credentials live in the Vercel project's environment variables (production scope,
+server-only, never in tracked files, never under a `NEXT_PUBLIC_` name). The ignored local
+dispatcher environment file applies only to locally-run dispatchers. A redeploy publishes
+changed values to the hosted path — each cron invocation re-reads them, so no process restart
+is needed there; a locally-run dispatcher still requires a full process restart after changing
+its environment file. Never copy `~/.pi`, Claude login state, OAuth files, or secret values
 into a sandbox.
 
 ## Preflight and diagnostics
@@ -114,21 +232,6 @@ curl -X DELETE "https://api.vercel.com/v2/sandboxes/snapshots/<snapshotId>?teamI
 Once the sandbox itself is deleted its name may no longer filter the listing. Then match each
 snapshot's `sourceSessionId` against the session ids in `execution.started` events
 (`ab build status <slug> --events 200 --json`) to attribute storage to a build before deleting it.
-
-## Return future builds to local execution
-
-1. Stop ticket intake and stop the dispatcher. Let active remote builds settle, or explicitly
-   abort them and wait for publication/cleanup; do not create competing local ownership.
-2. Change `[workspace].provider` to `git-worktree` and remove only the Vercel-specific
-   `[workspace.config]` and `[workspace.config.runtimeProvisioning.pi]` configuration.
-3. Restore the prior subscription-backed routes: Pi OpenAI primary, Pi Kimi fallback, and the
-   approved Claude Code runtime alternate, preserving each role's current preference order.
-4. Run the focused config test after updating its intended local invariants, then `bun run check`,
-   `bun run typecheck`, `bun run test`, and `ab init --validate` in the local environment.
-5. Fully restart the dispatcher and verify repository status before resuming intake.
-
-This rollback affects newly provisioned work only. Never migrate an already-running build between
-workspace providers.
 
 ## Rollout evidence
 

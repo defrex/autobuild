@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#310](https://github.com/defrex/autobuild/pull/310) — Host the dispatcher: add per-minute cron and rewrite the runbook
 - [#308](https://github.com/defrex/autobuild/pull/308) — Support per-repository forge credentials in the hosted dispatcher
 - [#303](https://github.com/defrex/autobuild/pull/303) — Let ambient build status succeed from a differently located checkout
 - [#291](https://github.com/defrex/autobuild/pull/291) — Run this repository's builds in Vercel Sandbox
