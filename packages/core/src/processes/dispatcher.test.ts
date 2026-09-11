@@ -4563,6 +4563,52 @@ describe('Dispatcher lease sweep', () => {
     ).toBe('sandbox-g1')
   })
 
+  test('parked build with a reaped recovery-capable workspace: reap only — the surviving wait guard keeps it out of launch', async () => {
+    // Regression for the dead duplicate of the top-level wait guard in
+    // leaseSweep: the duplicate was removed, but the first guard is
+    // load-bearing — a parked build (wait decision, no publication recovery
+    // due) whose stale workspace was successfully reaped falls through the
+    // reap block's `if (!parked)` arm and would otherwise reach the
+    // unconditional `launch` below, starting a fresh runner for a paused or
+    // blocked build.
+    const operations: string[] = []
+    const workspaceProvider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap(handle) {
+          operations.push(`reap:${handle.ref}`)
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 1 } }
+        },
+      },
+      async provision() {
+        operations.push('provision')
+        throw new Error('a parked build must never re-provision or launch')
+      },
+      async release() {},
+    }
+    const h = harness({ workspaceProvider })
+    const slug = await seedBuild(h, {
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id: 'e_1', phase: 'implement', source: 'agent', question: 'which path?' },
+    })
+    expect(await h.store.claimLease(slug, 'runner-1', 1000)).toBe(true)
+    h.clock.advance(2000)
+
+    // Parked path: neither swept nor provisioning increments; the reap runs,
+    // but the tick must not launch a runner for a blocked build.
+    expect(await h.dispatcher.tick({ acceptNewWork: false })).toEqual(emptyTickReport())
+    expect(operations).toEqual(['reap:sandbox-g0'])
+    expect(h.launches).toEqual([])
+    const events = await h.store.getEvents(slug)
+    const released = events.find((event) => event.type === 'workspace.released')
+    expect(released?.payload).toMatchObject({ reason: 'blocked' })
+  })
+
   test('expired lease + running: relaunch', async () => {
     const h = harness()
     const slug = await seedBuild(h)

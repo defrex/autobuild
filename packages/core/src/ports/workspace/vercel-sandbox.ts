@@ -100,6 +100,13 @@ export interface VercelSandboxHandle {
     | 'stopping'
     | 'stopped'
     | 'snapshotting'
+  /** The provider-computed moment the running session times out (epoch ms;
+   * the SDK Sandbox's `expiresAt` getter, session start plus configured
+   * timeout). Optional: facades without session metadata omit it, and it is
+   * `undefined` while no session is running. Read live so a refreshed handle
+   * — including one carrying a resumed session's new expiry — reports fresh
+   * values on every observation. */
+  readonly sessionExpiresAt?: number
   /** Narrowed re-observation of one recorded detached command. A missing
    * command under a resumed session rejects; callers classify that as `lost`. */
   getCommand(cmdId: string, opts?: { signal?: AbortSignal }): Promise<{ exitCode: number | null }>
@@ -156,6 +163,13 @@ export type VercelSandboxCreateInput = {
  * needs. Each session stop supersedes the previous snapshot, so stops along
  * the build never accumulate one snapshot per stop. */
 export const VERCEL_KEEP_LAST_SNAPSHOTS = 1
+
+/** The stop/snapshot margin added to the environment's configured lifetime by
+ * every VM-lifetime deadline: a command or observation may legitimately still
+ * resolve while the environment is being stopped or snapshotted, but past
+ * session expiry plus this margin it cannot still be running. Shared by the
+ * command path and the observation path so the two bounds cannot drift. */
+export const VERCEL_LIFETIME_MARGIN_MS = 5 * 60 * 1000
 
 /** The snapshot rows that hold billed storage. `deleted`/`failed` rows hold
  * none and are never purge targets. */
@@ -215,6 +229,13 @@ function withSessionMetadata(sandbox: object): VercelSandboxHandle {
   const status = () => (sandbox as { status?: VercelSandboxHandle['sessionStatus'] }).status
   if (status() !== undefined && !Object.hasOwn(sandbox, 'sessionStatus')) {
     Object.defineProperty(sandbox, 'sessionStatus', { get: status, configurable: true })
+  }
+  // The SDK computes `expiresAt` itself from the authoritative session fields
+  // (`(startedAt ?? createdAt) + timeout` while a session is running); bridge
+  // it as a live getter so observations never see a stale lifetime.
+  const expiresAt = () => (sandbox as { expiresAt?: Date | undefined }).expiresAt?.getTime()
+  if (expiresAt() !== undefined && !Object.hasOwn(sandbox, 'sessionExpiresAt')) {
+    Object.defineProperty(sandbox, 'sessionExpiresAt', { get: expiresAt, configurable: true })
   }
   return sandbox as VercelSandboxHandle
 }
@@ -1344,7 +1365,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // Retry interrupted long-polls only within the environment's own
     // lifetime (plus a margin for stop/snapshot); past that the command
     // cannot still be running and the failure is real.
-    const lifetimeDeadline = Date.now() + this.options.config.timeoutSeconds * 1000 + 5 * 60 * 1000
+    const lifetimeDeadline =
+      Date.now() + this.options.config.timeoutSeconds * 1000 + VERCEL_LIFETIME_MARGIN_MS
     // Detach (teardown of the LOCAL supervision only) aborts this wait so the
     // process can exit while the guest keeps running and heartbeating its
     // lease. A later invocation settles the execution from the Store plus
@@ -1413,6 +1435,20 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     if (sandbox === null) return { state: 'lost' }
     if (sandbox.sessionStatus !== undefined && sandbox.sessionStatus !== 'running') {
       return { state: 'lost' }
+    }
+    // Mirrors the command path's VM-lifetime bound: past the environment's
+    // session expiry (plus the shared stop/snapshot margin) the execution
+    // cannot still be running, so re-issuing the long-poll would only end in
+    // a generic transport failure. Fail with the environment named instead.
+    if (sandbox.sessionExpiresAt !== undefined) {
+      const deadline = sandbox.sessionExpiresAt + VERCEL_LIFETIME_MARGIN_MS
+      if (Date.now() > deadline) {
+        throw new Error(
+          `execution on sandbox ${identity.environmentId ?? identity.workspaceRef} cannot still be running: ` +
+            `the environment expired — its session expiry (${new Date(sandbox.sessionExpiresAt).toISOString()}) plus ` +
+            `the ${VERCEL_LIFETIME_MARGIN_MS} ms stop/snapshot margin passed at ${new Date(deadline).toISOString()}`,
+        )
+      }
     }
     try {
       const command = await sandbox.getCommand(identity.commandId, {

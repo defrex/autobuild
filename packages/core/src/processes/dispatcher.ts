@@ -2254,7 +2254,13 @@ export class Dispatcher {
           continue
         }
       }
-      if (decision.kind === 'wait' && !publicationRecoveryDue) continue
+      // Reachable via the reap block above: when the wait decision is parked
+      // (no publication recovery due) the `if (!parked)` arm continues, but the
+      // parked arm falls through here after a successful reap. Without this
+      // guard the tick would reach the unconditional `launch` below and start a
+      // fresh runner for a paused or blocked build whose workspace was just
+      // reaped. Every other path that reaches this line with a wait decision
+      // already continued earlier.
       if (decision.kind === 'wait' && !publicationRecoveryDue) continue
       if (
         openWorkspace(events) === null &&

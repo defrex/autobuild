@@ -432,6 +432,10 @@ test('ambient reads accept a differently located checkout of the same repository
     repo: host,
     repoOrigin: 'https://github.com/acme/other-repo',
   })
+  // A legacy record written before origin recording: no repoOrigin at all, so
+  // even a same-origin guest cannot satisfy the sessionless origin gate. Only
+  // the build's own ambient session authorizes reading it from the guest.
+  await local.createBuild({ slug: 'guest-legacy', repo: host })
   await local.close()
 
   const env = { AB_STORE: storeDir }
@@ -451,6 +455,42 @@ test('ambient reads accept a differently located checkout of the same repository
   expect(foreign.stderr).toContain(
     `build "guest-foreign" belongs to repository "${host}", not "https://github.com/acme/bin-origin"`,
   )
+
+  // The legacy no-origin record is exactly the case the origin gate cannot
+  // forgive: the identical sessionless invocation still fails. The diagnostic
+  // names the repository identity — the guest checkout's normalized origin —
+  // not its path.
+  const legacySessionless = await runBinIn(
+    guest,
+    ['build', 'status', 'guest-legacy', '--json'],
+    env,
+  )
+  expect(legacySessionless.code).toBe(1)
+  expect(legacySessionless.stderr).toContain(
+    `build "guest-legacy" belongs to repository "${host}", not "https://github.com/acme/bin-origin"`,
+  )
+
+  // The build's own ambient session authorizes the read through the real CLI
+  // routing and production store opening.
+  const legacyOwn = await runBinIn(guest, ['build', 'status', 'guest-legacy', '--json'], {
+    ...env,
+    AB_BUILD: 'guest-legacy',
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_guest',
+  })
+  expect(legacyOwn.code).toBe(0)
+  expect(JSON.parse(legacyOwn.stdout).slug).toBe('guest-legacy')
+
+  // With a session present, a slug other than AB_BUILD still fails (the local
+  // handle is scoped to the session's own build).
+  const legacyForeignSlug = await runBinIn(guest, ['build', 'status', 'guest-foreign'], {
+    ...env,
+    AB_BUILD: 'guest-legacy',
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_guest',
+  })
+  expect(legacyForeignSlug.code).toBe(1)
+  expect(legacyForeignSlug.stderr).toContain('local session store scoped to build "guest-legacy"')
 })
 
 test('complete remote phase identity has the same query allow/deny matrix', async () => {

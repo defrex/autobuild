@@ -1724,6 +1724,110 @@ describe('ambient read authority', () => {
   })
 })
 
+describe('own-session ambient authority over a relocated checkout', () => {
+  const GUEST = '/vercel/sandbox/workspace'
+  // The guest checkout's normalized origin — the repository identity the
+  // belongs-to diagnostic names (the identity change; the path is no longer
+  // the identity).
+  const GUEST_ORIGIN = 'https://github.com/unrelated/guest-origin'
+  // A remote-looking store ref: no local session scoping wraps the handle, so
+  // what is under test is the command core's own-session gate itself.
+  const guestEnv = (build: string) => ({
+    AB_STORE: 'https://store.example',
+    AB_BUILD: build,
+    AB_PHASE: 'implement@1',
+    AB_SESSION: 's_guest',
+  })
+
+  test('a legacy record without repoOrigin is readable by its own build session', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.createBuild({ slug: 'legacy', repo: OTHER_REPO })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: {
+        pr: { number: 7, url: 'https://github.com/acme/app/pull/7', headSha: 'abc1234' },
+      },
+    })
+    const out: string[] = []
+    await abBuildStatus({
+      targetRepo: GUEST,
+      env: guestEnv('legacy'),
+      exec: guestExec(GUEST, 'https://github.com/unrelated/guest-origin'),
+      stdout: (line) => out.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'legacy',
+      json: true,
+    })
+    const parsed = JSON.parse(out.join('\n')) as {
+      slug: string
+      pr?: { number: number; url: string; state?: string }
+    }
+    expect(parsed.slug).toBe('legacy')
+    expect(parsed.pr).toEqual({
+      number: 7,
+      url: 'https://github.com/acme/app/pull/7',
+      state: 'open',
+    })
+  })
+
+  test('a session cannot read a foreign slug from a foreign-repository record', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.createBuild({ slug: 'theirs', repo: OTHER_REPO })
+    await expect(
+      abBuildStatus({
+        targetRepo: GUEST,
+        env: guestEnv('mine'),
+        exec: guestExec(GUEST, 'https://github.com/unrelated/guest-origin'),
+        stdout: () => {},
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'theirs',
+      }),
+    ).rejects.toThrow(`build "theirs" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
+  })
+
+  test('an explicit --store other than the session store does not authorize the bypass', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.createBuild({ slug: 'legacy', repo: OTHER_REPO })
+    await expect(
+      abBuildStatus({
+        targetRepo: GUEST,
+        env: guestEnv('legacy'),
+        exec: guestExec(GUEST, 'https://github.com/unrelated/guest-origin'),
+        stdout: () => {},
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'legacy',
+        storeRef: 'https://other-store.example',
+      }),
+    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
+  })
+
+  test('a Harvest identity never authorizes the bypass, even on slug-shaped matches', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.createBuild({ slug: 'legacy', repo: OTHER_REPO })
+    await expect(
+      abBuildStatus({
+        targetRepo: GUEST,
+        env: {
+          AB_STORE: 'https://store.example',
+          AB_REPO: OTHER_REPO,
+          AB_HARVEST: 'h_1',
+          AB_PHASE: 'review@1',
+          AB_SESSION: 's_harvest',
+        },
+        exec: guestExec(GUEST, 'https://github.com/unrelated/guest-origin'),
+        stdout: () => {},
+        openStore: () => store,
+        now: () => NOW,
+        slug: 'legacy',
+      }),
+    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
+  })
+})
+
 describe('store selection', () => {
   test('--store wins over AB_STORE, which wins over the default', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })

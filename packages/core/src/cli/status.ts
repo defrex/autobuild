@@ -1,7 +1,10 @@
 /**
  * `ab builds` and `ab build status <slug>` — the read-only query surface on
  * build state (SPEC §8.2, §15.5). Their invocation forms require no session,
- * while a complete ambient phase identity narrows Store authority.
+ * while a complete ambient phase identity narrows Store authority; `ab build
+ * status` additionally extends that identity to authorize reading the
+ * session's OWN build from a differently located checkout (see the gate
+ * comment on `abBuildStatus`).
  *
  * The shape is one decision: **the projection is pure, the IO is a thin
  * shell.** The functions below map build facts plus an optional build-config
@@ -744,7 +747,22 @@ async function projectBuildDecision(
   }
 }
 
-/** `ab build status <slug>` — one build in detail. Read-only. */
+/** `ab build status <slug>` — one build in detail. Read-only.
+ *
+ * Repository authority mirrors the other ambient reads: an operator invocation
+ * (no ambient identity) must match the store-recorded repository by path, or
+ * by normalized origin for a differently located checkout of the same
+ * repository. A validated ambient *build* session additionally authorizes
+ * reading its OWN build — `AB_BUILD` equal to the requested slug, from the
+ * session's own store — the same trust basis as the phase-scoped
+ * `ab artifact get` (AUT-312): the runner-injected tuple validated by
+ * `resolveCliEnv` is the authority, so a guest checkout of the same
+ * repository at a different path can read its build's status projection even
+ * when the record predates origin recording. The bypass is bounded by slug
+ * equality and store-ref equality, never a general relaxation; a sessionless
+ * relocated-checkout read of a record without `repoOrigin` remains foreign by
+ * design (the documented AUT-314 limitation).
+ */
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
   await withAmbientReadStore(opts, async (context) => {
@@ -755,7 +773,18 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
           "this repo's builds, or pass --store <ref> if it lives in another store",
       )
     }
-    if (!(await buildInRepository(record, context.checkout, opts.exec))) {
+    // Own-session authority: slug equality bounds the read to the session's
+    // own build, and an explicit --store must name the session's own store for
+    // the bypass to apply. Every other combination falls through to the
+    // ordinary repository gate, unchanged — which now keys on the checkout's
+    // normalized origin identity (`context.checkout` is the physical path;
+    // `buildInRepository` derives the identity from it).
+    const ownSession =
+      context.ambient !== undefined &&
+      'build' in context.ambient &&
+      context.ambient.build === opts.slug &&
+      (opts.storeRef === undefined || opts.storeRef === context.ambient.store)
+    if (!(ownSession || (await buildInRepository(record, context.checkout, opts.exec)))) {
       throw new Error(
         `build "${opts.slug}" belongs to repository "${record.repo}", not "${context.repo}"`,
       )

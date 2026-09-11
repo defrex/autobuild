@@ -24,6 +24,11 @@ import {
 } from './init-validation'
 import { runCli } from './main'
 
+// The test file lives at packages/core/src/cli/, so four levels up is the
+// repository root — resolving the real probe from here keeps the suite
+// runnable from any working directory (see bin-ab.test.ts for the same idiom).
+const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..')
+
 const roots: string[] = []
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
@@ -533,12 +538,22 @@ readyState = "ready"
     const repo = await mkdtemp(join(tmpdir(), 'ab-probe-crash-'))
     roots.push(repo)
     await writeFile(join(repo, 'autobuild.toml'), 'not valid toml =')
-    const result = await spawnExec(['bun', join(process.cwd(), 'bin', 'ab-init-probe.ts')], {
+    const result = await spawnExec(['bun', join(REPO_ROOT, 'bin', 'ab-init-probe.ts')], {
       cwd: repo,
     })
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain('AB_INIT_READINESS_V1=')
     expect(result.stdout).toContain('"status":"fail"')
+  })
+
+  test('a missing probe path fails the spawn diagnosably', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-probe-missing-'))
+    roots.push(repo)
+    const result = await spawnExec(['bun', join(REPO_ROOT, 'bin', 'does-not-exist.ts')], {
+      cwd: repo,
+    })
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr.trim()).not.toBe('')
   })
 
   test('redacts nested error causes without hiding non-secret configuration', () => {
