@@ -854,6 +854,11 @@ class DispatchLoop {
         acceptNewWork: settings.intake,
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
+        // Invocation bound forwarded into the tick: per-item loops inside the
+        // dispatcher stop starting new forge/store transport calls once the
+        // remaining budget cannot cover them (bounded overrun, one in-flight
+        // transport call). Watch mode has no deadline ⇒ absent ⇒ unbounded.
+        ...(this.opts.deadlineAt !== undefined ? { deadlineAt: this.opts.deadlineAt } : {}),
       })
       const publishedReport: TickReport = {
         ...report,
