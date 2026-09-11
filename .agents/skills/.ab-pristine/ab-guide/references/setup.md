@@ -187,6 +187,50 @@ rejected: plugin code is checkout-relative. The guest installs the Autobuild
 distribution published with its version's GitHub release, so origin-mode
 dispatch requires a cut release carrying `autobuild-<version>.tgz`.
 
+### Guest distribution version selection and delivery
+
+The guest's distribution version is selected by the archive source, and both
+sources agree with the running system by construction:
+
+- **Source checkout** (dispatcher running from a repository checkout): the
+  guest archive is packed from the host tree with `bun pm pack`, so the guest
+  runs the dispatcher's own code.
+- **Origin mode** (checkout-less dispatcher): the guest archive is the release
+  asset `autobuild-<version>.tgz` fetched from the canonical repository at the
+  **running dispatcher's version** (read from the deployed distribution's
+  `package.json`), so the guest runs the dispatcher's own release.
+
+The hosted remote store enforces exact **version lockstep**: every client
+request must carry an `x-autobuild-version` equal to the server's, and any
+mismatch — a guest older *or* newer than the store — is rejected with a 409
+`remote store version mismatch`. Guest, store, and dispatcher versions
+therefore cannot be mixed: a distribution fix reaches guests only after
+`tools/release.ts` cuts a release (credential-gated; requires GitHub
+credentials — a documented delivery dependency, not an automatic propagation)
+**and** the hosted store and dispatcher are upgraded to that release in the
+same lockstep window. If the release is cut but the store upgrade lags, guests
+carrying the new distribution fail loudly against the old store (409) rather
+than running silently stale.
+
+Provisioning records the installed distribution's version in the guest's
+`/opt/autobuild/.distribution-version` marker. A reused persistent sandbox
+whose marker disagrees with the version the current system would deliver —
+which includes every guest provisioned before the marker existed — is
+refreshed in place (archive re-fetched, extracted, and production-installed)
+before being reused, so an upgraded dispatcher retrofits its existing guests
+instead of resuming a stale distribution. A refresh failure deletes the
+sandbox so the next provisioning pass rematerializes it from scratch.
+
+After a lockstep upgrade, confirm a fix-bearing guest from the guest
+perspective:
+
+1. `ab build status <slug> --json` with the ambient build identity for a
+   build whose record carries `repoOrigin` succeeds and exposes `.pr.number`
+   and `.pr.url` even though the guest's checkout path differs from the path
+   recorded at build creation (post-#297 origin-equality behavior).
+2. The same command for a genuinely foreign repository's slug still fails
+   with the `belongs to repository … not …` rejection.
+
 Local `git-worktree` dispatch keeps working from a checkout exactly as before;
 apart from the identity change, `ab dispatch` behaves as it did.
 
