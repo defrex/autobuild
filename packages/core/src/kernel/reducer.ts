@@ -348,6 +348,11 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       case 'workspace.provisioned':
       case 'workspace.released':
       case 'publication.requested':
+      // Inert loss fact (AUT-328): the dispatcher released a workspace with a
+      // pending publication. Recovery runs through the existing
+      // abandoned-publication flow (abandonedPublicationPending), which re-runs
+      // the phase — the reducer needs no state from it.
+      case 'publication.lost':
       case 'dispatch.comment-posted':
       case 'pr-attachment.designated':
       case 'pr-attachment.hosted':
