@@ -375,7 +375,6 @@ export class SqliteBuildStore implements BuildStore {
       .run()
     this.pruneBuildInTx(slug, prepared.kind)
     this.db.update(builds).set({ updatedAt: createdAt }).where(eq(builds.slug, slug)).run()
-    this.db.update(builds).set({ updatedAt: createdAt }).where(eq(builds.slug, slug)).run()
     return {
       build: slug,
       kind: prepared.kind,
@@ -673,11 +672,6 @@ export class SqliteBuildStore implements BuildStore {
       })
       .run()
     this.pruneRepoInTx(repo, prepared.kind)
-    this.db
-      .update(repoStreams)
-      .set({ updatedAt: createdAt })
-      .where(eq(repoStreams.repo, repo))
-      .run()
     this.db
       .update(repoStreams)
       .set({ updatedAt: createdAt })
