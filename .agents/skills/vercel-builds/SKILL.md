@@ -109,10 +109,12 @@ secrets, so steps 0–3 are deployment-side.
    repository under `https://github.com/defrex/autobuild`, and the repository journal shows
    `hosted-dispatcher-*` run ids.
 7. **Harvest off — read before toggling** (the gate endpoint *flips*, it does not set):
-   `GET /operator/v1/repos/{repo}/harvest/status` first; only if `harvestPaused` is `false`,
-   send `POST /operator/v1/repos/{repo}/harvest/control` with `{"action":"toggle-gate"}`;
-   re-GET and confirm `harvestPaused: true`. If the status already reads `harvestPaused: true`,
-   do nothing — an unconditional toggle would switch harvest ON, the exact state AC6 forbids.
+   `GET /operator/v1/repos/{repo}/harvest/status` first; only if `paused` is `false` (the
+   endpoint returns `HarvestStatusView`, whose pause field is `paused: boolean`, also surfaced
+   as `status: 'paused'`), send `POST /operator/v1/repos/{repo}/harvest/control` with
+   `{"action":"toggle-gate"}`; re-GET and confirm `paused: true`. If the status already reads
+   `paused: true`, do nothing — an unconditional toggle would switch harvest ON, the exact
+   state AC6 forbids.
 8. **Stop the local dispatcher**: stop the local `ab-dispatch-kernel` and confirm with
    `ab builds --all --json` that nothing active remains local.
 9. **Evidence run (AC2)**: move a ticket to Todo and watch it claim, build, publish, and merge
