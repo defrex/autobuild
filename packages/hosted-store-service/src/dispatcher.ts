@@ -48,6 +48,13 @@ export interface HostedDispatcherConfig {
   origin: string
   /** Normalized https repository identities, configured order preserved. */
   repositories: readonly string[]
+  /** Per-repository forge credential overrides (AUT-317): normalized https
+   * repository identity → the NAME of the service environment variable holding
+   * that repository's GitHub token. The mapping carries variable names only —
+   * never token values — so it is log-safe by construction. A repository
+   * absent from the mapping uses the shared `GITHUB_TOKEN`/`GH_TOKEN`
+   * environment credential unchanged. */
+  forgeCredentials: Readonly<Record<string, string>>
   /** Tick budget per invocation in seconds (default 240, inside Vercel's
    * 300 s default function duration). */
   budgetSeconds: number
@@ -98,6 +105,50 @@ function repositoryList(raw: string, name: string): string[] {
   return repositories
 }
 
+/** Plausible environment variable name for a credential override reference.
+ * Values are names only; a parse error names `AB_DISPATCHER_FORGE_CREDENTIALS`,
+ * never a mapping key or value. */
+const CREDENTIAL_VAR_NAME = /^[A-Z_][A-Z0-9_]*$/i
+
+/** Parse `AB_DISPATCHER_FORGE_CREDENTIALS` — a JSON object mapping repository
+ * identity → the name of the environment variable holding that repository's
+ * GitHub token. Unset/blank ⇒ empty mapping (behavior unchanged). Syntax
+ * errors fail the whole invocation (like every other dispatcher variable);
+ * a referenced variable that is blank at tick time fails only that repository
+ * (see `createHostedDispatcher`). Errors name the variable, never a value. */
+function forgeCredentials(
+  raw: string | undefined,
+  repositories: readonly string[],
+): Readonly<Record<string, string>> {
+  if (raw === undefined || raw.trim() === '') return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('AB_DISPATCHER_FORGE_CREDENTIALS must be valid JSON')
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('AB_DISPATCHER_FORGE_CREDENTIALS must be a JSON object')
+  }
+  const mapping: Record<string, string> = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    const normalized = normalizeGitRemoteUrl(key)
+    if (!/^https:\/\/[^\s]+$/.test(normalized)) {
+      throw new Error('AB_DISPATCHER_FORGE_CREDENTIALS contains an unsafe repository name')
+    }
+    if (!repositories.includes(normalized)) {
+      throw new Error(
+        'AB_DISPATCHER_FORGE_CREDENTIALS names a repository outside AB_DISPATCHER_REPOSITORIES',
+      )
+    }
+    if (typeof value !== 'string' || !CREDENTIAL_VAR_NAME.test(value)) {
+      throw new Error('AB_DISPATCHER_FORGE_CREDENTIALS values must be environment variable names')
+    }
+    mapping[normalized] = value
+  }
+  return mapping
+}
+
 /** Parse the dispatcher configuration from the service environment. Called per
  * tick, so a misconfigured deployment fails loudly per invocation (naming the
  * offending variable, never a value) rather than at module load. */
@@ -135,6 +186,10 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
         // repository set once.
         repositoryList(required(env, 'AB_WEB_REPOSITORIES'), 'AB_WEB_REPOSITORIES')
       : repositoryList(rawRepositories, 'AB_DISPATCHER_REPOSITORIES')
+  const forgeCredentialsOverride = forgeCredentials(
+    env.AB_DISPATCHER_FORGE_CREDENTIALS,
+    repositories,
+  )
   const rawBudget = integerSetting(env, 'AB_DISPATCHER_BUDGET_SECONDS', DEFAULT_BUDGET_SECONDS)
   const budgetSeconds = Math.min(MAX_BUDGET_SECONDS, Math.max(MIN_BUDGET_SECONDS, rawBudget))
   const tokenTtlSeconds = integerSetting(
@@ -153,6 +208,7 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
     secret,
     origin: origin.origin,
     repositories,
+    forgeCredentials: forgeCredentialsOverride,
     budgetSeconds,
     tokenTtlSeconds,
     ...(cronSecret !== undefined && cronSecret !== '' ? { cronSecret } : {}),
@@ -234,6 +290,29 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
           ...env,
           AB_STORE: config.origin,
           AB_TOKEN: token,
+        }
+        // Per-repository forge credential override (AUT-317): the mapping
+        // carries variable NAMES only; override values are never logged,
+        // echoed, or deposited. A blank override variable fails ONLY this
+        // repository — it must never silently fall back to the shared
+        // credential, which would cross identities.
+        const overrideVar = config.forgeCredentials[repository]
+        if (overrideVar !== undefined) {
+          const overrideToken = env[overrideVar]?.trim()
+          if (overrideToken === undefined || overrideToken === '') {
+            repositories.push({
+              repository,
+              outcome: 'failed',
+              error:
+                `${overrideVar} is configured as this repository's forge credential override ` +
+                '(AB_DISPATCHER_FORGE_CREDENTIALS) but is not set or blank',
+            })
+            continue
+          }
+          // Inject as GITHUB_TOKEN and drop the shared GH_TOKEN fallback so
+          // every kernel consumer reads exactly this repository's credential.
+          childEnv.GITHUB_TOKEN = overrideToken
+          delete childEnv.GH_TOKEN
         }
         try {
           await dispatch({

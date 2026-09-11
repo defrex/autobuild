@@ -78,6 +78,67 @@ describe('parseHostedDispatcherEnv', () => {
     ).toThrow(/must use https in production/)
   })
 
+  test('parses AB_DISPATCHER_FORGE_CREDENTIALS into a name-only mapping with normalized keys', () => {
+    const config = parseHostedDispatcherEnv({
+      ...baseEnv,
+      AB_DISPATCHER_FORGE_CREDENTIALS: JSON.stringify({
+        'git@github.com:acme/one.git': 'ONE_FORGE_TOKEN',
+        'https://github.com/acme/two': 'two_forge_token',
+      }),
+    })
+    expect(config.forgeCredentials).toEqual({
+      'https://github.com/acme/one': 'ONE_FORGE_TOKEN',
+      'https://github.com/acme/two': 'two_forge_token',
+    })
+  })
+
+  test('AB_DISPATCHER_FORGE_CREDENTIALS unset or blank means no overrides', () => {
+    expect(parseHostedDispatcherEnv(baseEnv).forgeCredentials).toEqual({})
+    expect(
+      parseHostedDispatcherEnv({ ...baseEnv, AB_DISPATCHER_FORGE_CREDENTIALS: '  ' })
+        .forgeCredentials,
+    ).toEqual({})
+  })
+
+  test('invalid AB_DISPATCHER_FORGE_CREDENTIALS fails the invocation, naming the variable only', () => {
+    const value = 'token-value-never-echoed'
+    const envWithMapping = (mapping: string) => ({
+      ...baseEnv,
+      AB_DISPATCHER_FORGE_CREDENTIALS: mapping,
+    })
+    for (const mapping of ['not json', '["https://github.com/acme/one"]', '5', '"str"']) {
+      try {
+        parseHostedDispatcherEnv(envWithMapping(mapping))
+        throw new Error(`expected ${mapping} to be rejected`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        expect(message).toContain('AB_DISPATCHER_FORGE_CREDENTIALS')
+        expect(message).not.toContain(value)
+      }
+    }
+    // A key outside the repository set fails loudly instead of quietly
+    // dropping the override (a quiet drop would cross identities).
+    expect(() =>
+      parseHostedDispatcherEnv(
+        envWithMapping(JSON.stringify({ 'https://github.com/acme/other': 'OTHER_TOKEN' })),
+      ),
+    ).toThrow(/outside AB_DISPATCHER_REPOSITORIES/)
+    expect(() =>
+      parseHostedDispatcherEnv(envWithMapping(JSON.stringify({ 'file:///etc/repo': 'TOKEN' }))),
+    ).toThrow(/unsafe repository name/)
+    // Values must be plausible environment variable names.
+    expect(() =>
+      parseHostedDispatcherEnv(
+        envWithMapping(JSON.stringify({ 'https://github.com/acme/one': 'not a var name' })),
+      ),
+    ).toThrow(/environment variable names/)
+    expect(() =>
+      parseHostedDispatcherEnv(
+        envWithMapping(JSON.stringify({ 'https://github.com/acme/one': '9BAD' })),
+      ),
+    ).toThrow(/environment variable names/)
+  })
+
   test('clamps the budget and enforces the token TTL minimum', () => {
     expect(
       parseHostedDispatcherEnv({ ...baseEnv, AB_DISPATCHER_BUDGET_SECONDS: '99999' }).budgetSeconds,
@@ -183,6 +244,81 @@ describe('createHostedDispatcher', () => {
     const { tick } = dispatcher({ ...baseEnv, AB_DISPATCHER_ORIGIN: undefined }, [])
     expect(tick()).rejects.toThrow(/AB_DISPATCHER_ORIGIN/)
   })
+
+  test('an overridden repository injects its own GITHUB_TOKEN and drops the shared GH_TOKEN', async () => {
+    const env = {
+      ...baseEnv,
+      GITHUB_TOKEN: 'shared-forge-token',
+      GH_TOKEN: 'shared-gh-token',
+      APP_FORGE_TOKEN: 'app-override-token',
+      AB_DISPATCHER_FORGE_CREDENTIALS: JSON.stringify({
+        'https://github.com/acme/one': 'APP_FORGE_TOKEN',
+      }),
+    }
+    const { calls, tick } = dispatcher(env, ['ok', 'ok'])
+    const summary = await tick()
+    expect(summary.repositories.map((r) => r.outcome)).toEqual(['ticked', 'ticked'])
+    // Overridden: the referenced variable's value is injected as GITHUB_TOKEN
+    // and the shared GH_TOKEN fallback must not survive into the tick, so
+    // cross-identity selection is unambiguous.
+    expect(calls[0]!.env?.GITHUB_TOKEN).toBe('app-override-token')
+    expect(calls[0]!.env).not.toHaveProperty('GH_TOKEN')
+    // Non-overridden: the shared credential flows through verbatim, unchanged.
+    expect(calls[1]!.env?.GITHUB_TOKEN).toBe('shared-forge-token')
+    expect(calls[1]!.env?.GH_TOKEN).toBe('shared-gh-token')
+    // Redaction: the summary never carries credential material.
+    expect(JSON.stringify(summary)).not.toContain('app-override-token')
+  })
+
+  test('a blank override variable fails only that repository and never falls back', async () => {
+    const env = {
+      ...baseEnv,
+      GITHUB_TOKEN: 'shared-forge-token',
+      APP_FORGE_TOKEN: '   ',
+      AB_DISPATCHER_FORGE_CREDENTIALS: JSON.stringify({
+        'https://github.com/acme/one': 'APP_FORGE_TOKEN',
+      }),
+    }
+    const { calls, tick } = dispatcher(env, ['ok'])
+    const summary = await tick()
+    expect(summary.repositories[0]).toMatchObject({
+      repository: 'https://github.com/acme/one',
+      outcome: 'failed',
+      error: expect.stringContaining('APP_FORGE_TOKEN'),
+    })
+    // Fail closed: no dispatch call was made for the failed repository and
+    // the shared credential was not substituted for the missing override.
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.repository).toBe('https://github.com/acme/two')
+    expect(calls[0]!.env?.GITHUB_TOKEN).toBe('shared-forge-token')
+    // The failure never echoes a value — only the variable name.
+    expect(JSON.stringify(summary)).not.toContain('shared-forge-token')
+  })
+
+  test('captured stdout/stderr passthrough never carries an override value', async () => {
+    const env = {
+      ...baseEnv,
+      GITHUB_TOKEN: 'shared-forge-token',
+      APP_FORGE_TOKEN: 'app-override-token',
+      AB_DISPATCHER_FORGE_CREDENTIALS: JSON.stringify({
+        'https://github.com/acme/one': 'APP_FORGE_TOKEN',
+      }),
+    }
+    const outLines: string[] = []
+    const errLines: string[] = []
+    await createHostedDispatcher({
+      env,
+      clock,
+      dispatch: async (opts) => {
+        opts.stdout?.('tick line')
+        opts.stderr?.('kernel error line')
+      },
+      stdout: (line) => outLines.push(line),
+      stderr: (line) => errLines.push(line),
+    }).tick()
+    expect(outLines.join('\n')).not.toContain('app-override-token')
+    expect(errLines.join('\n')).not.toContain('app-override-token')
+  })
 })
 
 describe('createDispatcherEndpoint', () => {
@@ -254,5 +390,26 @@ describe('createDispatcherEndpoint', () => {
     const body = (await response.json()) as { error: string }
     expect(body.error).toContain('AB_STORE_SECRET')
     expect(body.error).not.toContain('cron-secret')
+  })
+
+  test('an authorized GET with a credential mapping answers the unchanged shape, no credential material', async () => {
+    const response = await endpoint({
+      env: {
+        ...baseEnv,
+        GITHUB_TOKEN: 'shared-forge-token',
+        APP_FORGE_TOKEN: 'app-override-token',
+        AB_DISPATCHER_FORGE_CREDENTIALS: JSON.stringify({
+          'https://github.com/acme/one': 'APP_FORGE_TOKEN',
+        }),
+      },
+      dispatch: async () => {},
+    }).fetch(new Request(url, { headers: authorized }))
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { ok: boolean; repositories: unknown[]; error?: string }
+    expect(body.ok).toBe(true)
+    expect(body.repositories).toHaveLength(2)
+    expect(body.error).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('app-override-token')
+    expect(JSON.stringify(body)).not.toContain('APP_FORGE_TOKEN')
   })
 })
