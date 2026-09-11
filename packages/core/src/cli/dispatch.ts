@@ -73,7 +73,13 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from '../p
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
-import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
+import {
+  GitHubApiError,
+  githubTokenFromEnv,
+  githubTokenSource,
+  resolveGitHubToken,
+  type GitHubRequest,
+} from '../ports/forge/github-transport'
 import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -252,6 +258,11 @@ export interface DispatchWiring {
   storeRef: string
   /** Scoped token for a remote store (D8, `AB_TOKEN`); passed to sessions. */
   token?: string
+  /** Startup, configuration-level notices produced while wiring adapters
+   * (e.g. the GitHub forge found no credential). Surfaced exactly like role
+   * warnings: stderr lines in plain mode, the dashboard's warning region on a
+   * TTY, and the durable `run-started` payload for a supervised kernel. */
+  startupWarnings?: readonly string[]
   ids: IdSource
   uuids: UuidSource
   clock: Clock
@@ -428,18 +439,40 @@ async function defaultWire(
       if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
       validateVercelGithubOrigin(origin.stdout.trim())
     }
-    if (!opts.env.GITHUB_TOKEN && !opts.env.GH_TOKEN) {
+    if (githubTokenFromEnv(opts.env) === undefined) {
       throw new Error(
         'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment',
       )
     }
+  }
+  // Checkout mode with the builtin GitHub forge: resolve the credential once
+  // at wiring — GITHUB_TOKEN, GH_TOKEN, then the gh CLI login — seed the
+  // forge with that answer (so `gh auth token` runs once per launch, and a
+  // later `gh auth login` is still picked up without a restart), and record
+  // why when nothing answered, so a credential-less launch names its cause as
+  // a startup warning rather than as an anonymous 404 deep inside a build.
+  // Launch continues: a dispatcher that never publishes still runs. Origin
+  // mode already required an exported token above.
+  const startupWarnings: string[] = []
+  let githubToken: ReturnType<typeof githubTokenSource> | undefined
+  if (config.forge === 'github' && !originMode) {
+    const credential = await resolveGitHubToken(opts.env, opts.exec)
+    if (credential.token === undefined) {
+      startupWarnings.push(
+        'warning: the github forge has no credential — export GITHUB_TOKEN or GH_TOKEN, or run ' +
+          `gh auth login — PR operations will fail until one exists: ${credential.reason}`,
+      )
+    }
+    githubToken = githubTokenSource(opts.env, opts.exec, credential)
   }
   const forge = await createForge({
     name: config.forge,
     registry: plugins,
     env: opts.env,
     repoRoot: state.checkout,
+    exec: opts.exec,
     ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
+    ...(githubToken !== undefined ? { githubToken } : {}),
   })
   // Checkout-less provider seams: the sandbox provider derives its origin and
   // remote branch heads from these instead of host `git` — every host-exec
@@ -514,6 +547,7 @@ async function defaultWire(
     uuids: randomUuids(),
     clock: systemClock,
     plugins,
+    ...(startupWarnings.length > 0 ? { startupWarnings } : {}),
     updateRuntimeReferences: (effectiveConfig) => {
       runtimeReferences = effectiveRuntimeReferences(effectiveConfig)
     },
@@ -2601,13 +2635,17 @@ class DispatchLoop {
    * interactive chatter disappears.
    */
   /**
-   * A startup, configuration-level notice (§9 role-key consumability) — never a
-   * tick outcome, never blocking. Both surfaces get the SAME strings in full:
+   * A startup, configuration-level notice (§9 role-key consumability, or a
+   * wiring-time notice such as a credential-less GitHub forge) — never a tick
+   * outcome, never blocking. Both surfaces get the SAME strings in full:
    * stderr writes each one, the dashboard wraps them into its warning region.
    * No surface gets a digest, a cap, or a truncated tail.
    */
   private reportRoleDiagnostics(): void {
-    const lines = roleKeyWarnings(this.currentConfig().config)
+    const lines = [
+      ...roleKeyWarnings(this.currentConfig().config),
+      ...(this.wiring.startupWarnings ?? []),
+    ]
     if (this.dashboard) {
       this.configWarnings = lines
       this.syncModelControls()
@@ -3149,6 +3187,7 @@ async function fetchOriginModeConfig(
   const forge = new GitHubForge({
     env: opts.env,
     repository,
+    exec: opts.exec,
     ...(transport !== undefined ? { transport } : {}),
   })
   const readFile = forge.readFile
@@ -3215,7 +3254,12 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
   if (opts.env.AB_TOKEN === undefined || opts.env.AB_TOKEN === '') {
     throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
   }
-  if (opts.env.GITHUB_TOKEN === undefined && opts.env.GH_TOKEN === undefined) {
+  // Checkout-less hosts (serverless functions, sandboxes) have no gh CLI and
+  // no keyring, and the only workspace provider origin mode can run —
+  // vercel-sandbox — injects this same credential for publication, so origin
+  // mode requires an exported token: the gh fallback is a checkout-mode
+  // convenience only.
+  if (githubTokenFromEnv(opts.env) === undefined) {
     throw new Error('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
   }
   const scratch = join(
@@ -3426,7 +3470,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
                       kind: effectiveArtifact.kind,
                       rev: effectiveArtifact.revision,
                     },
-                    roleWarnings: roleKeyWarnings(effectiveConfig),
+                    roleWarnings: [
+                      ...roleKeyWarnings(effectiveConfig),
+                      ...(wiring.startupWarnings ?? []),
+                    ],
                   }
                 : {}),
             },
@@ -3477,7 +3524,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
             run: resolvedOpts.kernelRunId!,
             pid: process.pid,
             effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
-            roleWarnings: roleKeyWarnings(config),
+            roleWarnings: [...roleKeyWarnings(config), ...(wiring.startupWarnings ?? [])],
           },
         }
       },

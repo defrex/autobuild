@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { createGitHubFetchTransport, GitHubApiError } from './github-transport'
+import {
+  CREDENTIAL_MISS_TTL_MS,
+  createGitHubFetchTransport,
+  GH_CLI_TOKEN_COMMAND,
+  GitHubApiError,
+  githubTokenFromEnv,
+  githubTokenFromGhCli,
+  githubTokenSource,
+  resolveGitHubToken,
+  type GitHubCliExec,
+} from './github-transport'
 
 /** A request recorder standing in for global fetch, answering from a
  * scripted response. Returns the captured URL/headers for assertions. */
@@ -108,6 +118,232 @@ describe('createGitHubFetchTransport', () => {
       expect(headers['X-GitHub-Api-Version']).toBe('2022-11-28')
       expect(headers['Content-Type']).toBe('application/json')
       expect(init.body).toBe(JSON.stringify({ title: 'hi' }))
+    } finally {
+      stub.restore()
+    }
+  })
+})
+
+describe('resolveGitHubToken', () => {
+  const answering =
+    (stdout: string, probes: string[][] = []): GitHubCliExec =>
+    async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout, stderr: '' }
+    }
+
+  test('prefers GITHUB_TOKEN, then GH_TOKEN, without touching the gh CLI', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: 'env-a', GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-a',
+    })
+    expect(await resolveGitHubToken({ GH_TOKEN: 'env-b' }, exec)).toEqual({ token: 'env-b' })
+    expect(probes).toEqual([])
+  })
+
+  test('an exported-but-empty GITHUB_TOKEN does not mask GH_TOKEN', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' }, exec)).toEqual({
+      token: 'env-b',
+    })
+    expect(githubTokenFromEnv({ GITHUB_TOKEN: '', GH_TOKEN: 'env-b' })).toBe('env-b')
+    expect(probes).toEqual([])
+  })
+
+  test('falls back to the gh CLI login when the environment carries no token', async () => {
+    const probes: string[][] = []
+    const exec = answering('gho_keyring\n', probes)
+    expect(await resolveGitHubToken({ GITHUB_TOKEN: '', GH_TOKEN: '' }, exec)).toEqual({
+      token: 'gho_keyring',
+    })
+    expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
+  })
+
+  test('a miss names what was tried: gh unauthenticated, silent, or missing', async () => {
+    const unauthenticated = await githubTokenFromGhCli(async () => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'no oauth token found for github.com\n',
+    }))
+    expect(unauthenticated.token).toBeUndefined()
+    expect(unauthenticated).toMatchObject({
+      reason: '`gh auth token --hostname github.com` exited 1: no oauth token found for github.com',
+    })
+
+    const silent = await githubTokenFromGhCli(async () => ({
+      exitCode: 0,
+      stdout: '  \n',
+      stderr: '',
+    }))
+    expect(silent).toMatchObject({
+      reason: '`gh auth token --hostname github.com` printed no token',
+    })
+
+    const missing = await githubTokenFromGhCli(async () => {
+      throw new Error('spawn gh ENOENT')
+    })
+    expect(missing).toMatchObject({
+      reason: '`gh auth token --hostname github.com` could not run: spawn gh ENOENT',
+    })
+
+    const resolved = await resolveGitHubToken({}, async () => {
+      throw new Error('spawn gh ENOENT')
+    })
+    expect(resolved).toEqual({
+      token: undefined,
+      reason:
+        'GITHUB_TOKEN and GH_TOKEN are unset and `gh auth token --hostname github.com` could not run: spawn gh ENOENT',
+    })
+  })
+
+  test('abandons a probe that outlives its deadline and aborts it through the seam', async () => {
+    let aborted = false
+    const started = Date.now()
+    const wedged: GitHubCliExec = (_cmd, opts) =>
+      new Promise(() => {
+        // Never settles — a locked keyring, or a wrapper that forked the real
+        // gh and left the pipes open past the kill.
+        opts.signal.addEventListener('abort', () => {
+          aborted = true
+        })
+      })
+    const result = await githubTokenFromGhCli(wedged, 50)
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(aborted).toBe(true)
+    expect(result).toEqual({
+      token: undefined,
+      reason: '`gh auth token --hostname github.com` did not answer within 50 ms',
+    })
+  })
+})
+
+describe('createGitHubFetchTransport token resolution', () => {
+  test('resolves a token source once, on the first request, and reuses it', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let resolutions = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          resolutions += 1
+          return 'gho_lazy'
+        },
+      })
+      expect(resolutions).toBe(0)
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(resolutions).toBe(1)
+      for (const call of stub.calls) {
+        expect((call.init.headers as Record<string, string>).Authorization).toBe('Bearer gho_lazy')
+      }
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('memoizes a miss for the TTL, then asks the source again', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let attempts = 0
+    let clock = 1_000_000
+    try {
+      const transport = createGitHubFetchTransport({
+        now: () => clock,
+        token: async () => {
+          attempts += 1
+          // The keyring is locked for the first window only.
+          return attempts === 1 ? undefined : 'gho_unlocked'
+        },
+      })
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(attempts).toBe(1)
+      expect((stub.calls[1]!.init.headers as Record<string, string>).Authorization).toBeUndefined()
+      clock += CREDENTIAL_MISS_TTL_MS
+      await transport('GET', 'user')
+      await transport('GET', 'user')
+      expect(attempts).toBe(2)
+      expect((stub.calls[3]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_unlocked',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('re-resolves after 401 Unauthorized at most once per interval, so a re-login is picked up without a spawn per request', async () => {
+    let status = 401
+    const stub = stubFetch(
+      () =>
+        new Response(JSON.stringify({ message: 'Bad credentials' }), {
+          status,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    let clock = 5_000_000
+    let resolutions = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        now: () => clock,
+        token: async () => {
+          resolutions += 1
+          return resolutions === 1 ? 'gho_revoked' : 'gho_fresh'
+        },
+      })
+      // Inside the interval the stale token keeps failing without re-resolving.
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      expect(resolutions).toBe(1)
+      // Past the interval, the next 401 drops it and the following request resolves afresh.
+      clock += CREDENTIAL_MISS_TTL_MS
+      await expect(transport('GET', 'user')).rejects.toThrow('Bad credentials')
+      status = 204
+      await transport('GET', 'user')
+      expect(resolutions).toBe(2)
+      expect((stub.calls[2]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_revoked',
+      )
+      expect((stub.calls[3]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_fresh',
+      )
+    } finally {
+      stub.restore()
+    }
+  })
+
+  test('githubTokenSource hands out its seed once, then resolves afresh', async () => {
+    const probes: string[][] = []
+    const exec: GitHubCliExec = async (cmd) => {
+      probes.push([...cmd])
+      return { exitCode: 0, stdout: 'gho_later\n', stderr: '' }
+    }
+    const source = githubTokenSource({}, exec, { token: 'gho_seed' })
+    expect(await source()).toBe('gho_seed')
+    expect(probes).toEqual([])
+    expect(await source()).toBe('gho_later')
+    expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
+    const missSeeded = githubTokenSource({}, exec, { token: undefined, reason: 'nothing yet' })
+    expect(await missSeeded()).toBeUndefined()
+    expect(await missSeeded()).toBe('gho_later')
+  })
+
+  test('retries a source whose probe rejected instead of caching the failure', async () => {
+    const stub = stubFetch(() => new Response('', { status: 204 }))
+    let attempts = 0
+    try {
+      const transport = createGitHubFetchTransport({
+        token: async () => {
+          attempts += 1
+          if (attempts === 1) throw new Error('keyring locked')
+          return 'gho_second'
+        },
+      })
+      await expect(transport('GET', 'user')).rejects.toThrow('keyring locked')
+      await transport('GET', 'user')
+      expect(attempts).toBe(2)
+      expect((stub.calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+        'Bearer gho_second',
+      )
     } finally {
       stub.restore()
     }

@@ -58,7 +58,7 @@ for the same controls and projections without exposing service credentials.
 You need [Bun](https://bun.sh), `git`, and the local prerequisites for the
 agent runtime you select: Claude Code, Codex CLI, or Pi. Choosing the GitHub
 forge also requires an authenticated [`gh` CLI](https://cli.github.com)
-(`gh auth login`); the local-git forge needs no account or remote.
+(`gh auth login`) or a `GITHUB_TOKEN`; the local-git forge needs no account or remote.
 Init suggests only runtimes whose executable and/or provider authentication is
 usable on your machine.
 
