@@ -97,6 +97,7 @@ function harness(
     /** Wrap the fake ticket source — e.g. to make dependencyStates throw. */
     wrapTickets?: (source: FakeTicketSource) => FakeTicketSource
     startHarvest?: () => void
+    activeHarvestExecutions?: () => ReadonlySet<string>
     launchResult?: LaunchRunnerResult
     onLaunch?: (slug: string, store: BuildStore) => Promise<void> | void
     workspaceBase?: WorkspaceBase
@@ -176,6 +177,9 @@ function harness(
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
     ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
     ...(opts.startHarvest ? { startHarvest: opts.startHarvest } : {}),
+    ...(opts.activeHarvestExecutions !== undefined
+      ? { activeHarvestExecutions: opts.activeHarvestExecutions }
+      : {}),
     ids: sequentialIds(),
     clock,
     ...(opts.opts ? { opts: opts.opts } : {}),
@@ -5281,5 +5285,122 @@ describe('Dispatcher durable supervision', () => {
     expect(events.some((event) => event.type === 'workspace.provisioned')).toBe(true)
     expect((await h.store.getBuild(slug))?.lease).toBeUndefined()
     expect(h.launches).toEqual([])
+  })
+})
+
+// ── Durable hosted-harvest settlement (AUT-305) ─────────────────────────────
+
+describe('Dispatcher harvest execution settlement', () => {
+  function harvestProvider(
+    observe: (identity: {
+      provider: string
+      workspaceRef: string
+      environmentId?: string
+      sessionId?: string
+      commandId?: string
+    }) => Promise<{ state: 'running' } | { state: 'ended'; exitCode?: number } | { state: 'lost' }>,
+  ) {
+    const reapCalls: Array<{ provider: string; ref: string }> = []
+    const provider = {
+      name: 'fake-harvest',
+      provision: async () => {
+        throw new Error('not used in settlement tests')
+      },
+      release: async () => {},
+      recovery: {
+        reap: async (handle: { provider: string; ref: string }) => {
+          reapCalls.push({ provider: handle.provider, ref: handle.ref })
+          return {
+            outcome: 'confirmed' as const,
+            snapshots: { outcome: 'confirmed' as const, deleted: 3 },
+          }
+        },
+      },
+      harvestExecution: { observe },
+    }
+    return { provider: provider as unknown as WorkspaceProvider, reapCalls }
+  }
+
+  async function seedExecution(h: Harness, opts: { commandId?: string | null } = {}) {
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'harvest.execution.started',
+      payload: {
+        execution: 'host-harvest-i1',
+        provider: 'fake-harvest',
+        environmentId: 'autobuild-harvest-abc1234567',
+        ...(opts.commandId === null ? {} : { commandId: 'cmd-1' }),
+      },
+    })
+  }
+
+  test('a provider-proved lost execution is reaped and closed with the snapshot outcome', async () => {
+    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
+    const h = harness({ workspaceProvider: provider })
+    await seedExecution(h)
+    const report = await h.dispatcher.tick()
+    expect(report.settled).toBe(0)
+    expect(reapCalls).toEqual([{ provider: 'fake-harvest', ref: 'autobuild-harvest-abc1234567' }])
+    const events = await h.store.getRepoEvents(REPO)
+    const released = events.find((event) => event.type === 'harvest.execution.released')
+    expect(released).toMatchObject({
+      actor: DISPATCHER,
+      payload: {
+        execution: 'host-harvest-i1',
+        environmentId: 'autobuild-harvest-abc1234567',
+        snapshots: { outcome: 'confirmed', deleted: 3 },
+      },
+    })
+  })
+
+  test('a provider-proved ended execution is reaped and closed identically', async () => {
+    const { provider, reapCalls } = harvestProvider(async () => ({
+      state: 'ended',
+      exitCode: 0,
+    }))
+    const h = harness({ workspaceProvider: provider })
+    await seedExecution(h)
+    await h.dispatcher.tick()
+    expect(reapCalls).toHaveLength(1)
+    const events = await h.store.getRepoEvents(REPO)
+    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(true)
+    // Settled once: a second tick finds no open execution and reaps nothing.
+    await h.dispatcher.tick()
+    expect(reapCalls).toHaveLength(1)
+  })
+
+  test('a running guest is left alone — no reap, no close fact', async () => {
+    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'running' }))
+    const h = harness({ workspaceProvider: provider })
+    await seedExecution(h)
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    const events = await h.store.getRepoEvents(REPO)
+    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
+  })
+
+  test('an execution this process supervises is skipped', async () => {
+    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
+    const h = harness({
+      workspaceProvider: provider,
+      activeHarvestExecutions: () => new Set(['host-harvest-i1']),
+    })
+    await seedExecution(h)
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    const events = await h.store.getRepoEvents(REPO)
+    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
+  })
+
+  test('an execution without a recorded command id cannot be observed and is left alone', async () => {
+    const { provider, reapCalls } = harvestProvider(async () => ({ state: 'lost' }))
+    const h = harness({ workspaceProvider: provider })
+    await seedExecution(h, { commandId: null })
+    await h.dispatcher.tick()
+    expect(reapCalls).toEqual([])
+    // The fact remains open for a later, better-informed settlement.
+    const events = await h.store.getRepoEvents(REPO)
+    expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
   })
 })

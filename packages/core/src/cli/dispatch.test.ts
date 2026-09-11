@@ -42,7 +42,7 @@ import type { OneShotCompletionInput } from '../ports/runner/one-shot'
 import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../ports/runner/fake'
 import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
-import type { Ticket, WorkspaceProvider } from '../ports/types'
+import type { Ticket, WorkspaceHandle, WorkspaceProvider } from '../ports/types'
 import {
   BUILD_EXECUTION_LEASE_TTL_MS,
   type BuildExecution,
@@ -58,6 +58,7 @@ import {
   selectOpenWorkspace,
 } from '../processes/build-execution-state'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
+import type { HarvestExecution, HarvestExecutionStart } from '../ports/workspace/harvest-execution'
 import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock, steppingClock } from '../testing/fixed'
 import {
@@ -8009,4 +8010,312 @@ runtime = "claude"
       await fx.cleanup()
     }
   }, 60_000)
+})
+
+// ── Hosted harvest (AUT-305): the dispatch loop launches harvest through a
+// provider `harvestExecution` capability instead of a local runner. ──────────
+
+describe('abDispatch hosted harvest execution', () => {
+  interface FakeHarvest {
+    execution: HarvestExecution
+    starts: HarvestExecutionStart[]
+    reapCalls: WorkspaceHandle[]
+    /** Resolve the next (or every) guest completion. */
+    settle: (exitCode?: number) => void
+  }
+
+  function fakeHarvestExecution(providerName: string): FakeHarvest {
+    const starts: HarvestExecutionStart[] = []
+    const reapCalls: WorkspaceHandle[] = []
+    const execution: HarvestExecution = {
+      start: async (input) => {
+        starts.push(input)
+        return {
+          supervision: 'environment',
+          identity: {
+            provider: providerName,
+            workspaceRef: 'harvest-env-1',
+            environmentId: 'harvest-env-1',
+            sessionId: 'session-1',
+            commandId: 'cmd-1',
+          },
+          completion: Promise.resolve({ exitCode: 0 }),
+          stop: async () => ({ outcome: 'confirmed' as const }),
+          detach: async () => {},
+        }
+      },
+    }
+    return {
+      execution,
+      starts,
+      reapCalls,
+      settle: () => {},
+    }
+  }
+
+  /** The fixture wire with a hosted-harvest capability layered over the
+   * real git-worktree provider. The fake identity names the fixture
+   * provider so release routes through the fake recovery seam. */
+  function hostedWire(
+    fx: Awaited<ReturnType<typeof makeFixture>>,
+    fake: FakeHarvest,
+  ): () => DispatchWiring {
+    const base = fx.wire()
+    const providerName = base.workspaces.name
+    const workspaces = new Proxy(base.workspaces, {
+      get(target, key, receiver) {
+        if (key === 'harvestExecution') return fake.execution
+        if (key === 'recovery') {
+          return {
+            reap: async (handle: WorkspaceHandle) => {
+              fake.reapCalls.push(handle)
+              return {
+                outcome: 'confirmed' as const,
+                snapshots: { outcome: 'confirmed' as const, deleted: 2 },
+              }
+            },
+          }
+        }
+        return Reflect.get(target, key, receiver)
+      },
+    })
+    void providerName
+    return () => ({ ...base, workspaces })
+  }
+
+  async function seedObservation(
+    fx: Awaited<ReturnType<typeof makeFixture>>,
+    build: string,
+    id: string,
+  ): Promise<void> {
+    await fx.store.createBuild({ slug: build, repo: fx.origin })
+    await fx.store.append(build, {
+      actor: agentActor('implement', `s-${build}`),
+      type: 'observation.recorded',
+      payload: { id, kind: 'latent-bug', summary: `hosted harvest gate: ${id}` },
+    })
+  }
+
+  test('below-threshold unclaimed pressure never provisions', async () => {
+    const fake = fakeHarvestExecution('git-worktree')
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
+    const out: string[] = []
+    try {
+      await seedObservation(fx, 'gate-source', 'obs-below')
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: hostedWire(fx, fake),
+      })
+      expect(fake.starts).toEqual([])
+      const events = await fx.store.getRepoEvents(fx.origin)
+      expect(events.some((event) => event.type === 'harvest.execution.started')).toBe(false)
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('at threshold it provisions, journals execution identity, and releases with snapshot proof', async () => {
+    const fake = fakeHarvestExecution('git-worktree')
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    const out: string[] = []
+    try {
+      await seedObservation(fx, 'gate-source', 'obs-at-threshold')
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: hostedWire(fx, fake),
+      })
+      // Let the completion chain settle before asserting.
+      for (let i = 0; i < 50; i += 1) {
+        const events = await fx.store.getRepoEvents(fx.origin)
+        if (events.some((event) => event.type === 'harvest.execution.released')) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(fake.starts).toHaveLength(1)
+      expect(fake.starts[0]).toMatchObject({ repo: fx.origin, baseBranch: 'main' })
+      expect(fake.starts[0]!.instance).toMatch(/-harvest-/)
+      const events = await fx.store.getRepoEvents(fx.origin)
+      const started = events.find((event) => event.type === 'harvest.execution.started')
+      const released = events.find((event) => event.type === 'harvest.execution.released')
+      expect(started).toMatchObject({
+        actor: DISPATCHER,
+        payload: {
+          execution: fake.starts[0]!.instance,
+          provider: 'git-worktree',
+          environmentId: 'harvest-env-1',
+          sessionId: 'session-1',
+          commandId: 'cmd-1',
+        },
+      })
+      expect(released).toMatchObject({
+        actor: DISPATCHER,
+        payload: {
+          execution: fake.starts[0]!.instance,
+          environmentId: 'harvest-env-1',
+          snapshots: { outcome: 'confirmed', deleted: 2 },
+        },
+      })
+      expect(fake.reapCalls).toHaveLength(1)
+      expect(fake.reapCalls[0]).toMatchObject({ ref: 'harvest-env-1' })
+      // The guest exited without writing any run fact: classified idle —
+      // no terminal outcome line, no failure warning.
+      expect(fx.err).toEqual([])
+      expect(out.some((line) => line.startsWith('harvest '))).toBe(false)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('an open run below threshold bypasses the pressure gate to resume', async () => {
+    const fake = fakeHarvestExecution('git-worktree')
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 5'),
+    )
+    try {
+      await seedObservation(fx, 'resume-source', 'obs-open-run')
+      const scan = await scanUnclaimedObservations(fx.store, fx.origin)
+      const packet = await makeHarvestScanPacket({
+        store: fx.store,
+        tickets: fx.tickets,
+        repo: fx.origin,
+        run: 'h_open',
+        observations: scan.observations,
+        state: scan.state,
+      })
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run: 'h_open',
+            observations: scan.observations.map((item) => item.occurrence),
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: hostedWire(fx, fake),
+      })
+      // Below-threshold unclaimed pressure (1 < 5), but the open run forces
+      // provisioning so the guest can resume it under the repository lease.
+      expect(fake.starts).toHaveLength(1)
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('a resumed completed run reports through the local-run counters and line', async () => {
+    const fake = fakeHarvestExecution('git-worktree')
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    const out: string[] = []
+    try {
+      await seedObservation(fx, 'done-source', 'obs-completed-run')
+      const scan = await scanUnclaimedObservations(fx.store, fx.origin)
+      const packet = await makeHarvestScanPacket({
+        store: fx.store,
+        tickets: fx.tickets,
+        repo: fx.origin,
+        run: 'h_done',
+        observations: scan.observations,
+        state: scan.state,
+      })
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run: 'h_done',
+            observations: scan.observations.map((item) => item.occurrence),
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [
+          {
+            kind: 'harvest-report',
+            content: JSON.stringify({
+              run: 'h_done',
+              dispositions: scan.observations.map((observation) => ({
+                occurrence: observation.occurrence,
+                action: 'suppressed',
+                proposalKey: 'k',
+                reason: 'already tracked',
+              })),
+              proposals: [],
+            }),
+          },
+        ],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.completed',
+          payload: {
+            run: 'h_done',
+            dispositions: scan.observations.map((observation) => ({
+              occurrence: observation.occurrence,
+              action: 'suppressed' as const,
+              proposalKey: 'k',
+              reason: 'already tracked',
+            })),
+            report: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      // A second, unclaimed observation keeps the threshold gate open even
+      // though the completed run predates this execution.
+      await seedObservation(fx, 'fresh-source', 'obs-after-completion')
+
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: hostedWire(fx, fake),
+      })
+      for (let i = 0; i < 50; i += 1) {
+        if (out.some((line) => line === 'harvest h_done completed')) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(fake.starts).toHaveLength(1)
+      expect(out).toContain('harvest h_done completed')
+      expect(out.some((line) => line.includes('harvestResumed=1 harvestCompleted=1'))).toBe(true)
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
 })
