@@ -1378,6 +1378,89 @@ readyState = "Ready"
   })
 })
 
+// ── Invocation budget (deadlineAt, AUT-319) ──────────────────────────────────
+
+describe('Dispatcher invocation budget', () => {
+  test('a tick whose budget is already spent performs no stage work and returns the empty report', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+
+    const report = await h.dispatcher.tick({ deadlineAt: h.clock().getTime() - 1000 })
+
+    // No fabricated counts, no stage entry: no ticket claim, no launch, no
+    // forge probe, no build created — the whole pass is deferred.
+    expect(report).toEqual(emptyTickReport())
+    expect(h.tickets.claims).toEqual([])
+    expect(h.launches).toEqual([])
+    expect(h.forge.getPrStateCalls).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
+  test('a slow claim that spends the budget mid-dispatch stops the ready loop before the next ticket claim', async () => {
+    let h!: Harness
+    // The claim transport call for the first ticket overruns the invocation
+    // bound (one slow forge/store round trip). The gate is per ticket, so the
+    // first ticket still dispatches completely; the second is left
+    // un-attempted for the next invocation.
+    h = harness({
+      tickets: [readyTicket('T-1'), readyTicket('T-2', { title: 'Add retry budget' })],
+      toml: 'capacity = 2\n',
+      wrapTickets: (source) =>
+        new Proxy(source, {
+          get(target, property, receiver) {
+            if (property === 'claim') {
+              return async (id: string): Promise<boolean> => {
+                h.clock.advance(60_000)
+                return target.claim(id)
+              }
+            }
+            return Reflect.get(target, property, receiver)
+          },
+        }) as FakeTicketSource,
+    })
+
+    const deadline = h.clock().getTime() + 1000
+    const report = await h.dispatcher.tick({ deadlineAt: deadline })
+
+    // Ticket 1 dispatched; ticket 2's claim (a transport call) never started.
+    expect(report.dispatched).toBe(1)
+    expect(h.tickets.claims).toEqual(['T-1'])
+    expect(h.launches).toEqual(['add-rate-limiting'])
+    const builds = await h.store.listBuilds()
+    expect(builds.map((build) => build.slug)).toEqual(['add-rate-limiting'])
+  })
+
+  test('a slow forge probe that spends the budget mid-janitor stops the record loop before the next PR probe', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1', { labels: [] })],
+      toml: 'capacity = 10\n',
+    })
+    await seedBuild(h, { slug: 'pr-probe-first', pr: { ...PR, number: 11 } })
+    await seedBuild(h, { slug: 'pr-probe-second', pr: { ...PR, number: 12 } })
+    h.forge.setPrState(11, { state: 'merged', sha: 'squash-11' })
+    h.forge.setPrState(12, { state: 'merged', sha: 'squash-12' })
+    // The first PR probe overruns the invocation bound; the second build's
+    // probe must never start.
+    const getPrState = h.forge.getPrState.bind(h.forge)
+    h.forge.getPrState = async (workspacePath, number) => {
+      h.clock.advance(60_000)
+      return getPrState(workspacePath, number)
+    }
+
+    const deadline = h.clock().getTime() + 1000
+    const report = await h.dispatcher.tick({ deadlineAt: deadline })
+
+    // Only the first build was probed (and settled — merged is its durable
+    // boundary); the second build's forge probe was never started, and no
+    // later stage (recovery, resume, sweep, dispatch) ran either.
+    expect(report).toEqual({ ...emptyTickReport(), merged: 1 })
+    expect(h.forge.getPrStateCalls).toEqual([
+      { workspacePath: '/ws/ab/pr-probe-first', number: 11 },
+    ])
+    expect(h.launches).toEqual([])
+    expect(h.tickets.claims).toEqual([])
+  })
+})
+
 // ── Harvest coordination (§12) ───────────────────────────────────────────────
 
 describe('Dispatcher harvest coordination', () => {

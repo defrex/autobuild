@@ -251,6 +251,29 @@ export interface DispatchWiring {
 
 export type DispatchNonStoreWiring = Omit<DispatchWiring, 'store' | 'storeRef' | 'token'>
 
+/** Timer seam for the invocation bound (hosted cron): the drain races the
+ * in-flight build set against a `deadlineAt` expiry timer. Production uses
+ * `DEFAULT_TIMERS`; tests inject a fake whose pending handles are inspectable
+ * and fireable, so both race outcomes are deterministic — no real-time sleeps.
+ * Handles are opaque (`unknown`) so the interface stays runtime-agnostic. */
+export interface TimerScheduler {
+  setTimeout(handler: () => void, ms: number): unknown
+  clearTimeout(handle: unknown): void
+}
+
+/** Production scheduler: real global timers, preserving the existing
+ * `unref()` courtesy so a pending expiry never holds the process open. */
+const DEFAULT_TIMERS: TimerScheduler = {
+  setTimeout(handler, ms) {
+    const timer = setTimeout(handler, ms)
+    ;(timer as { unref?: () => void }).unref?.()
+    return timer
+  },
+  clearTimeout(handle) {
+    clearTimeout(handle as ReturnType<typeof setTimeout>)
+  },
+}
+
 export interface DispatchOpts {
   /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd, or
    * in origin mode a private scratch root. Filesystem consumers only. */
@@ -335,6 +358,11 @@ export interface DispatchOpts {
    * invocation always returns and unfinished work resumes next invocation.
    * Watch mode is unaffected; absent ⇒ unbounded (today's exact behavior). */
   deadlineAt?: number
+  /** Timer seam for the `deadlineAt` drain race. Absent ⇒ `DEFAULT_TIMERS`
+   * (real, unref'd timers); tests inject a manual scheduler to drive both
+   * race outcomes deterministically and to assert no expiry handle outlives
+   * the invocation. */
+  timers?: TimerScheduler
   /** Interactive-watch-only release courtesy seams. The supervised kernel
    * publishes results durably; direct plain/noninteractive and one-pass
    * dispatch never consult them. */
@@ -826,6 +854,11 @@ class DispatchLoop {
         acceptNewWork: settings.intake,
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
+        // Invocation bound forwarded into the tick: per-item loops inside the
+        // dispatcher stop starting new forge/store transport calls once the
+        // remaining budget cannot cover them (bounded overrun, one in-flight
+        // transport call). Watch mode has no deadline ⇒ absent ⇒ unbounded.
+        ...(this.opts.deadlineAt !== undefined ? { deadlineAt: this.opts.deadlineAt } : {}),
       })
       const publishedReport: TickReport = {
         ...report,
@@ -2165,17 +2198,23 @@ class DispatchLoop {
       }
       if (this.pastDeadline()) return
       const remainingMs = Math.max(0, deadline - this.wiring.clock().getTime())
+      const timers = this.opts.timers ?? DEFAULT_TIMERS
       let expired = false
+      // The expiry handle is captured and cleared on BOTH race outcomes: when
+      // the build set wins, `clearTimeout` runs here too, so no pending expiry
+      // handle outlives the invocation (obs_e7fb42f0). When the timer wins, it
+      // has already fired and the clear is a no-op.
+      let expiryHandle: unknown
       await Promise.race([
         Promise.all(pending),
         new Promise<void>((resolveRace) => {
-          const timer = setTimeout(() => {
+          expiryHandle = timers.setTimeout(() => {
             expired = true
             resolveRace()
           }, remainingMs)
-          timer.unref?.()
         }),
       ])
+      timers.clearTimeout(expiryHandle)
       if (expired) return
     }
   }
