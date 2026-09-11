@@ -67,11 +67,14 @@ export interface HarvestExecutionClassificationInput {
 
 /** Classify one finished hosted harvest execution from the repository journal
  * alone — the guest's exit code carries no pipeline outcome. The latest run's
- * terminal fact wins (`completed`/`escalated`/unresolved `failed`), with
- * launch attribution by whether the run started inside this execution; a run
- * still open under a parked/paused control decision is `parked`; a lease
- * held by someone else is `held`; anything else is `idle`. The result feeds
- * the same counters a locally run harvest reports. */
+ * terminal fact wins (`completed`/`escalated`/unresolved `failed`) — but only
+ * when that terminal fact postdates this execution's start: a stale terminal
+ * fact was already counted and announced by the execution that produced it,
+ * and re-reporting it would double-count. Launch attribution is by whether
+ * the run started inside this execution; a run still open under a
+ * parked/paused control decision is `parked`; a lease held by someone else is
+ * `held`; anything else is `idle`. The result feeds the same counters a
+ * locally run harvest reports. */
 export function classifyHarvestOutcome(
   events: readonly RepositoryEvent[],
   input: HarvestExecutionClassificationInput,
@@ -80,16 +83,23 @@ export function classifyHarvestOutcome(
   const latestRun = state.runs.at(-1)
   if (latestRun !== undefined) {
     const launch = latestRun.startedSeq > input.executionStartedSeq ? 'started' : 'resumed'
-    if (latestRun.status === 'completed') {
-      return { outcome: 'completed', launch, run: latestRun.run }
-    }
-    if (latestRun.status === 'escalated') {
-      return { outcome: 'escalated', launch, run: latestRun.run }
-    }
-    // An unresolved harvest.failed — including recovery exhaustion — is a
-    // durable stop, not an idle exit.
-    if (latestRun.failure !== undefined) {
-      return { outcome: 'failed', launch, run: latestRun.run }
+    // Recency gate: a terminal outcome counts only if its fact — the run's
+    // terminal fact, or for an unresolved failure the failure fact itself
+    // (`failureSeq`), which also covers exhaustion via `terminalSeq` —
+    // postdates this execution's `harvest.execution.started`.
+    const outcomeSeq = Math.max(latestRun.terminalSeq ?? 0, latestRun.failureSeq ?? 0)
+    if (outcomeSeq > input.executionStartedSeq) {
+      if (latestRun.status === 'completed') {
+        return { outcome: 'completed', launch, run: latestRun.run }
+      }
+      if (latestRun.status === 'escalated') {
+        return { outcome: 'escalated', launch, run: latestRun.run }
+      }
+      // An unresolved harvest.failed — including recovery exhaustion — is a
+      // durable stop, not an idle exit.
+      if (latestRun.failure !== undefined) {
+        return { outcome: 'failed', launch, run: latestRun.run }
+      }
     }
   }
   const decision = decideHarvestControl(

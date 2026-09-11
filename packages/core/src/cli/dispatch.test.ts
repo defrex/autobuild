@@ -8024,12 +8024,22 @@ describe('abDispatch hosted harvest execution', () => {
     settle: (exitCode?: number) => void
   }
 
-  function fakeHarvestExecution(providerName: string): FakeHarvest {
+  function fakeHarvestExecution(
+    providerName: string,
+    options: { deferred?: boolean } = {},
+  ): FakeHarvest {
     const starts: HarvestExecutionStart[] = []
     const reapCalls: WorkspaceHandle[] = []
+    const pending: Array<(value: { exitCode: number }) => void> = []
     const execution: HarvestExecution = {
       start: async (input) => {
         starts.push(input)
+        const completion =
+          options.deferred === true
+            ? new Promise<{ exitCode: number }>((resolve) => {
+                pending.push(resolve)
+              })
+            : Promise.resolve({ exitCode: 0 })
         return {
           supervision: 'environment',
           identity: {
@@ -8039,9 +8049,15 @@ describe('abDispatch hosted harvest execution', () => {
             sessionId: 'session-1',
             commandId: 'cmd-1',
           },
-          completion: Promise.resolve({ exitCode: 0 }),
+          completion,
           stop: async () => ({ outcome: 'confirmed' as const }),
-          detach: async () => {},
+          detach: async () => {
+            // Detach hands the wait back: the pending completion resolves
+            // while the guest keeps running — exactly the shape the
+            // completion chain must recognize through the shared detach
+            // flag instead of classifying and reaping a live guest.
+            for (const resolve of pending.splice(0)) resolve({ exitCode: 0 })
+          },
         }
       },
     }
@@ -8049,7 +8065,9 @@ describe('abDispatch hosted harvest execution', () => {
       execution,
       starts,
       reapCalls,
-      settle: () => {},
+      settle: (exitCode = 0) => {
+        for (const resolve of pending.splice(0)) resolve({ exitCode })
+      },
     }
   }
 
@@ -8229,7 +8247,7 @@ describe('abDispatch hosted harvest execution', () => {
     }
   })
 
-  test('a resumed completed run reports through the local-run counters and line', async () => {
+  test('a completed run predating this execution is not re-reported by an idle guest', async () => {
     const fake = fakeHarvestExecution('git-worktree')
     const fx = await makeFixture(
       [],
@@ -8307,11 +8325,106 @@ describe('abDispatch hosted harvest execution', () => {
         wire: hostedWire(fx, fake),
       })
       for (let i = 0; i < 50; i += 1) {
-        if (out.some((line) => line === 'harvest h_done completed')) break
+        const events = await fx.store.getRepoEvents(fx.origin)
+        if (events.some((event) => event.type === 'harvest.execution.released')) break
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
       expect(fake.starts).toHaveLength(1)
-      expect(out).toContain('harvest h_done completed')
+      // The completed fact predates this execution's started fact: the
+      // execution that produced it already counted and announced it, so an
+      // idle guest must not re-report it.
+      expect(out.some((line) => line === 'harvest h_done completed')).toBe(false)
+      expect(
+        out.some((line) => line.includes('harvestResumed=') || line.includes('harvestCompleted=')),
+      ).toBe(false)
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('a run resumed and completed during this execution reports through the counters and line', async () => {
+    const fake = fakeHarvestExecution('git-worktree', { deferred: true })
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('stallRounds = 3', 'stallRounds = 3\nharvestThreshold = 1'),
+    )
+    const out: string[] = []
+    try {
+      await seedObservation(fx, 'resume-source', 'obs-resumed-complete')
+      const scan = await scanUnclaimedObservations(fx.store, fx.origin)
+      const packet = await makeHarvestScanPacket({
+        store: fx.store,
+        tickets: fx.tickets,
+        repo: fx.origin,
+        run: 'h_resumed',
+        observations: scan.observations,
+        state: scan.state,
+      })
+      await fx.store.appendRepoWithArtifacts(
+        fx.origin,
+        [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+        (deposited) => ({
+          actor: KERNEL,
+          type: 'harvest.started',
+          payload: {
+            run: 'h_resumed',
+            observations: scan.observations.map((item) => item.occurrence),
+            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+          },
+        }),
+      )
+      // The guest completes the pre-existing run only once it is live: the
+      // completion fact must postdate this execution's started fact.
+      const background = (async () => {
+        await waitFor(() => fake.starts.length === 1)
+        await fx.store.appendRepoWithArtifacts(
+          fx.origin,
+          [
+            {
+              kind: 'harvest-report',
+              content: JSON.stringify({
+                run: 'h_resumed',
+                dispositions: scan.observations.map((observation) => ({
+                  occurrence: observation.occurrence,
+                  action: 'suppressed',
+                  proposalKey: 'k',
+                  reason: 'already tracked',
+                })),
+                proposals: [],
+              }),
+            },
+          ],
+          (deposited) => ({
+            actor: KERNEL,
+            type: 'harvest.completed',
+            payload: {
+              run: 'h_resumed',
+              dispositions: scan.observations.map((observation) => ({
+                occurrence: observation.occurrence,
+                action: 'suppressed' as const,
+                proposalKey: 'k',
+                reason: 'already tracked',
+              })),
+              report: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
+            },
+          }),
+        )
+        fake.settle(0)
+      })()
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => out.push(line),
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: hostedWire(fx, fake),
+      })
+      await background
+      expect(fake.starts).toHaveLength(1)
+      expect(out).toContain('harvest h_resumed completed')
       expect(out.some((line) => line.includes('harvestResumed=1 harvestCompleted=1'))).toBe(true)
       expect(fx.err).toEqual([])
     } finally {

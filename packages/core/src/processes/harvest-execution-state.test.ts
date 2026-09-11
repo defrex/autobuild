@@ -127,6 +127,80 @@ describe('hosted harvest outcome classification', () => {
     })
   })
 
+  test('a terminal fact predating this execution is not re-reported', () => {
+    const completed = [
+      startedRun('h_old'),
+      repoEvent('harvest.completed', {
+        run: 'h_old',
+        dispositions: [
+          {
+            occurrence: { build: 'b1', seq: 1 },
+            action: 'suppressed',
+            proposalKey: 'k',
+            reason: 'r',
+          },
+        ],
+        report: { kind: 'harvest-report', rev: 0 },
+      }),
+      executionStarted('e1'),
+    ]
+    // The run started AND terminated before this execution: the producing
+    // execution already counted and announced it, so this one is idle.
+    expect(classifyHarvestOutcome(completed, input(completed, 'host-dispatch-i0'))).toEqual({
+      outcome: 'idle',
+    })
+
+    const escalated = [
+      startedRun('h_old'),
+      repoEvent('harvest.escalated', {
+        run: 'h_old',
+        source: 'stall',
+        reason: 'chain persisted',
+        observations: [{ build: 'b1', seq: 1 }],
+      }),
+      executionStarted('e1'),
+    ]
+    expect(classifyHarvestOutcome(escalated, input(escalated, 'host-dispatch-i0'))).toEqual({
+      outcome: 'idle',
+    })
+  })
+
+  test('an unresolved failure predating this execution is not re-reported', () => {
+    const events = [
+      startedRun('h_old'),
+      repoEvent('harvest.failed', {
+        run: 'h_old',
+        step: 'synthesize',
+        attempt: 1,
+        error: 'no-terminal',
+        willRetry: false,
+      }),
+      executionStarted('e1'),
+    ]
+    expect(classifyHarvestOutcome(events, input(events, 'host-dispatch-i0'))).toEqual({
+      outcome: 'idle',
+    })
+  })
+
+  test('a failure borne by this execution still classifies failed', () => {
+    const events = [
+      startedRun('h_old'),
+      executionStarted('e1'),
+      repoEvent('harvest.failed', {
+        run: 'h_old',
+        step: 'synthesize',
+        attempt: 1,
+        error: 'no-terminal',
+        willRetry: true,
+      }),
+    ]
+    expect(classifyHarvestOutcome(events, input(events))).toEqual({
+      outcome: 'failed',
+      launch: 'resumed',
+      run: 'h_old',
+    })
+  })
+
   test('a run predating this execution is attributed resumed', () => {
     const events = [
       startedRun('h_old'),
