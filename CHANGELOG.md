@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#313](https://github.com/defrex/autobuild/pull/313) — Enforce event validation before prune in all store implementations
 - [#311](https://github.com/defrex/autobuild/pull/311) — Bound dispatcher run/config artifacts with a retention policy
 - [#310](https://github.com/defrex/autobuild/pull/310) — Host the dispatcher: add per-minute cron and rewrite the runbook
 - [#308](https://github.com/defrex/autobuild/pull/308) — Support per-repository forge credentials in the hosted dispatcher
