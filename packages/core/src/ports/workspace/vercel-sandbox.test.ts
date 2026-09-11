@@ -3,7 +3,6 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
-import { createHash } from 'node:crypto'
 import { parse as parseToml } from 'smol-toml'
 import { spawnExec, type Exec } from './git-worktree'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
@@ -1943,7 +1942,7 @@ describe('VercelSandboxProvider harvestExecution', () => {
         ),
     )
     expect(runtimeInstalls).toHaveLength(2)
-    expect(commands[commands.indexOf(runtimeInstalls[0]!)].cwd).toBe(VERCEL_WORKSPACE_PATH)
+    expect(runtimeInstalls[0]!.cwd).toBe(VERCEL_WORKSPACE_PATH)
 
     // Launch: one detached ab-harvest-runner command carrying the envelope.
     const detached = commands.filter((command) => command.detached === true)
@@ -1956,7 +1955,8 @@ describe('VercelSandboxProvider harvestExecution', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('runtime-secret')
     expect(JSON.stringify(env)).not.toContain('forge-secret')
     expect(JSON.stringify(env)).not.toContain('never-copy')
-    expect(JSON.parse(env[HARVEST_RUNNER_OPTIONS_ENV])).toEqual({
+    expect(env[HARVEST_RUNNER_OPTIONS_ENV]).toBeDefined()
+    expect(JSON.parse(env[HARVEST_RUNNER_OPTIONS_ENV]!)).toEqual({
       storeRef: 'https://store.example.test',
       repo: ORIGIN,
       instance: 'host-harvest-i1',
