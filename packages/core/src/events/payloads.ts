@@ -339,7 +339,7 @@ export const eventPayloadSchemas = {
     operation: z.enum(['implement', 'reconcile', 'finalize', 'finalize-step']),
     branch: z.string().min(1),
     sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
-    reason: z.string().min(1),
+    reason: z.string().trim().min(1),
   }),
   /** Checkpoints in the dispatcher-owned, retry-safe abort cleanup saga. */
   'abort.remote-branch-deleted': z.strictObject({ branch: z.string().min(1) }),

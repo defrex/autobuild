@@ -9,6 +9,8 @@ import { join } from 'node:path'
 import { bulkControlRepository } from '../cli/bulk-control'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
+import type { EventEnvelope, EventWrite } from '../events/catalog'
+import type { EventType } from '../events/payloads'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
@@ -121,6 +123,8 @@ function harness(
     /** Store identity override — an origin URL for the identity-split
      * tests; defaults to the origin-less path fixture. */
     repo?: string
+    /** Trusted publication settlement seam (AUT-328 release guard). */
+    settlePublication?: (slug: string) => Promise<void>
   } = {},
 ) {
   const clock = manualClock()
@@ -177,6 +181,7 @@ function harness(
     ...(opts.authorSpec ? { authorSpec: opts.authorSpec } : {}),
     ...(opts.nameSlug ? { nameSlug: opts.nameSlug } : {}),
     ...(opts.startHarvest ? { startHarvest: opts.startHarvest } : {}),
+    ...(opts.settlePublication ? { settlePublication: opts.settlePublication } : {}),
     ...(opts.activeHarvestExecutions !== undefined
       ? { activeHarvestExecutions: opts.activeHarvestExecutions }
       : {}),
@@ -5485,5 +5490,263 @@ describe('Dispatcher harvest execution settlement', () => {
     // The fact remains open for a later, better-informed settlement.
     const events = await h.store.getRepoEvents(REPO)
     expect(events.some((event) => event.type === 'harvest.execution.released')).toBe(false)
+  })
+})
+
+// ── AUT-328: publication requests must complete or be recorded lost before a
+// workspace is released ────────────────────────────────────────────────────────
+
+describe('publication loss before workspace release', () => {
+  const SHA = 'f'.repeat(40)
+  const BASE = 'e'.repeat(40)
+
+  interface LossFixture {
+    h: ReturnType<typeof harness>
+    slug: string
+    requestSeq: number
+    reapCalls: string[]
+    settleCalls: string[]
+  }
+
+  /** A build whose guest requested publication and then died: the log carries
+   * publication.requested → execution.started → execution.ended (outcome
+   * lost), the workspace is still open, and the provider is recovery-capable
+   * (its reap destroys the only copy of the un-pushed commits). */
+  async function seedLostGuest(
+    options: { settlePublication?: (slug: string) => Promise<void>; store?: BuildStore } = {},
+  ): Promise<LossFixture> {
+    const reapCalls: string[] = []
+    const settleCalls: string[] = []
+    const remote: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        async reap(handle) {
+          reapCalls.push(handle.ref)
+          return { outcome: 'confirmed', snapshots: { outcome: 'confirmed', deleted: 0 } }
+        },
+      },
+      async provision(opts) {
+        return {
+          provider: 'remote-test',
+          ref: 'sandbox-g1',
+          path: '/remote/workspace',
+          branch: opts.branch,
+          base: { source: 'existing', sha: opts.revision ?? BASE },
+        }
+      },
+      async release() {},
+    }
+    const h = harness({
+      workspaceProvider: remote,
+      ...(options.store !== undefined ? { store: options.store } : {}),
+      ...(options.settlePublication !== undefined
+        ? { settlePublication: options.settlePublication }
+        : {}),
+    })
+    const slug = await seedBuild(h, {
+      slug: 'lost-publication',
+      workspaceRef: 'sandbox-g0',
+      workspaceProvider: 'remote-test',
+      attached: false,
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: `ab/${slug}`,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    const events = await h.store.getEvents(slug)
+    const requestSeq = events.findLast((event) => event.type === 'publication.requested')!.seq
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'guest-1',
+      },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: 'guest-1', workspaceRef: 'sandbox-g0', outcome: 'lost' },
+    })
+    return { h, slug, requestSeq, reapCalls, settleCalls }
+  }
+
+  test('the loss shape (spec AC2): the reaped stale workspace records publication.lost first', async () => {
+    const fixture = await seedLostGuest({
+      settlePublication: async () => {
+        fixture.settleCalls.push(fixture.slug)
+        throw new Error('settlement cannot complete — the guest is gone')
+      },
+    })
+
+    const report = await fixture.h.dispatcher.tick({ acceptNewWork: false })
+    await fixture.h.dispatcher.drainProvisioning()
+    expect(report.swept).toBe(1)
+
+    // The trusted settlement was attempted first, while the workspace still
+    // existed, and its failure did not block the durable loss record.
+    expect(fixture.settleCalls).toEqual([fixture.slug])
+    const events = await fixture.h.store.getEvents(fixture.slug)
+    const lost = events.find((event) => event.type === 'publication.lost')
+    const cleanup = events.find((event) => event.type === 'infrastructure.cleanup-attempted')
+    const released = events.find((event) => event.type === 'workspace.released')
+    expect(lost).toBeDefined()
+    expect(released).toBeDefined()
+    // Exact ordering: the loss record precedes the provider cleanup and the
+    // release fact — the reaped workspace can never be the first notice.
+    expect(lost!.seq).toBeGreaterThan(fixture.requestSeq)
+    expect(cleanup !== undefined && lost!.seq < cleanup.seq).toBe(true)
+    expect(released!.seq).toBeGreaterThan(lost!.seq)
+    expect(lost!.payload).toEqual({
+      request: fixture.requestSeq,
+      operation: 'implement',
+      branch: `ab/${fixture.slug}`,
+      sha: SHA,
+      reason: 'replacement',
+    })
+    // The reap destroyed the workspace only after the record was durable.
+    expect(fixture.reapCalls).toEqual(['sandbox-g0'])
+    // Recovery proceeds through the existing abandoned-publication flow: the
+    // replacement environment is provisioned and the phase re-attached.
+    expect(fixture.h.launches).toContain(fixture.slug)
+    const provisioned = events.filter((event) => event.type === 'workspace.provisioned')
+    expect(provisioned.at(-1)?.payload.ref).toBe('sandbox-g1')
+  })
+
+  test('a completed publication lets the release proceed without a loss record', async () => {
+    const fixture = await seedLostGuest({
+      settlePublication: async (slug) => {
+        fixture.settleCalls.push(slug)
+        await fixture.h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'implement.completed',
+          payload: {
+            round: 1,
+            commits: { base: BASE, head: SHA },
+            artifact: { kind: 'implement-notes', rev: 0 },
+          },
+        })
+      },
+    })
+
+    await fixture.h.dispatcher.tick({ acceptNewWork: false })
+    await fixture.h.dispatcher.drainProvisioning()
+
+    expect(fixture.settleCalls).toEqual([fixture.slug])
+    const events = await fixture.h.store.getEvents(fixture.slug)
+    expect(events.some((event) => event.type === 'publication.lost')).toBe(false)
+    expect(
+      events.some(
+        (event) => event.type === 'implement.completed' && event.payload.commits.head === SHA,
+      ),
+    ).toBe(true)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+  })
+
+  test('a failed reap that retries appends no duplicate loss record', async () => {
+    const fixture = await seedLostGuest({
+      settlePublication: async () => {
+        throw new Error('settlement cannot complete — the guest is gone')
+      },
+    })
+    // First reap fails after the loss record is durable (a crash between the
+    // record and the release); the next tick must retry the release without
+    // recording the loss a second time.
+    const store = fixture.h.store as MemoryBuildStore
+    const originalAppend = store.append.bind(store)
+    let reapFailed = false
+    store.append = async (slug, event) => {
+      if (event.type === 'infrastructure.cleanup-attempted' && !reapFailed) {
+        reapFailed = true
+        throw new Error('injected reap failure')
+      }
+      return originalAppend(slug, event)
+    }
+
+    await fixture.h.dispatcher.tick({ acceptNewWork: false })
+    let events = await fixture.h.store.getEvents(fixture.slug)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
+    expect(events.filter((event) => event.type === 'publication.lost')).toHaveLength(1)
+
+    await fixture.h.dispatcher.tick({ acceptNewWork: false })
+    await fixture.h.dispatcher.drainProvisioning()
+    events = await fixture.h.store.getEvents(fixture.slug)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(true)
+    expect(events.filter((event) => event.type === 'publication.lost')).toHaveLength(1)
+  })
+
+  test('an abort release records the loss with the abort reason before workspace.released', async () => {
+    const h = harness()
+    const slug = await seedBuild(h, { slug: 'abort-loss', attached: false })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: `ab/${slug}`,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: 'implement-notes', rev: 0 },
+      },
+    })
+    await h.store.append(slug, {
+      actor: humanActor('aron'),
+      type: 'build.abort-requested',
+      payload: { reason: 'wrong direction' },
+    })
+
+    const report = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(report.abandoned).toBe(1)
+    const events = await h.store.getEvents(slug)
+    const lost = events.find((event) => event.type === 'publication.lost')
+    const released = events.find((event) => event.type === 'workspace.released')
+    expect(lost).toBeDefined()
+    expect(released?.payload).toMatchObject({ reason: 'abort' })
+    expect(released!.seq).toBeGreaterThan(lost!.seq)
+    expect(lost!.payload).toMatchObject({ operation: 'implement', sha: SHA, reason: 'abort' })
+  })
+
+  test('a failing loss record blocks the release: no reap, no workspace.released', async () => {
+    class OutageStore extends MemoryBuildStore {
+      constructor() {
+        super({ clock: manualClock() })
+      }
+
+      override async append<T extends EventType>(
+        slug: string,
+        event: EventWrite<T>,
+      ): Promise<EventEnvelope<T>> {
+        if (event.type === 'publication.lost') {
+          throw new Error('injected store outage on publication.lost')
+        }
+        return super.append(slug, event)
+      }
+    }
+    const fixture = await seedLostGuest({
+      store: new OutageStore(),
+      settlePublication: async () => {
+        throw new Error('settlement cannot complete — the guest is gone')
+      },
+    })
+
+    // The guard's append failure propagates: the sweep (and with it the
+    // release) never proceeds past an unrecorded pending request.
+    await expect(fixture.h.dispatcher.tick({ acceptNewWork: false })).rejects.toThrow(
+      /injected store outage on publication\.lost/,
+    )
+    expect(fixture.reapCalls).toEqual([])
+    const events = await fixture.h.store.getEvents(fixture.slug)
+    expect(events.some((event) => event.type === 'workspace.released')).toBe(false)
+    expect(events.some((event) => event.type === 'infrastructure.cleanup-attempted')).toBe(false)
   })
 })
