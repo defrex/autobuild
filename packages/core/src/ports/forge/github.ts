@@ -354,6 +354,10 @@ const disableAutoMergeData = z.object({ disablePullRequestAutoMerge: autoMergeMu
 
 type ClassicGateResult = { kind: 'proved'; gate: boolean } | { kind: 'unproven'; detail: string }
 
+const requiredStatusChecksKey = 'required_status_checks'
+const reviewsKey = 'required_pull_request_reviews'
+const restrictionsKey = 'restrictions'
+
 function classifyClassicProtection(protection: unknown): ClassicGateResult {
   if (protection === null) return { kind: 'proved', gate: false }
   if (typeof protection !== 'object') {
@@ -365,36 +369,53 @@ function classifyClassicProtection(protection: unknown): ClassicGateResult {
   // "off", ... } }` with the other subsections omitted. `enabled: false` is
   // the documented proof that classic protection is absent.
   if (raw.enabled === false) return { kind: 'proved', gate: false }
-  // Every subsection this classifier reads must EXIST in the response, even
-  // when unset (GitHub renders unset subsections as null). A response that
-  // omits one is auth- or plan-scoped in a way we cannot prove.
-  for (const subsection of [
-    'required_status_checks',
-    'required_pull_request_reviews',
-    'restrictions',
-  ] as const) {
-    if (!(subsection in raw)) {
-      return { kind: 'unproven', detail: `protection.${subsection} missing from response` }
-    }
-  }
   const statusChecks = raw.required_status_checks
   const reviews = raw.required_pull_request_reviews
   const restrictions = raw.restrictions
-  if (statusChecks !== null && typeof statusChecks !== 'object') {
+  // Type-validate every subsection that IS present: GitHub renders unset
+  // subsections as null, so anything else here is a shape this classifier
+  // cannot read. Malformed-but-present never proves presence or absence.
+  if (statusChecks !== undefined && statusChecks !== null && typeof statusChecks !== 'object') {
     return { kind: 'unproven', detail: 'required_status_checks is neither null nor an object' }
   }
-  if (restrictions !== null && typeof restrictions !== 'object') {
+  if (restrictions !== undefined && restrictions !== null && typeof restrictions !== 'object') {
     return { kind: 'unproven', detail: 'restrictions is neither null nor an object' }
   }
-  if (statusChecks !== null) return { kind: 'proved', gate: true }
-  if (restrictions !== null) return { kind: 'proved', gate: true }
-  if (reviews === null) return { kind: 'proved', gate: false }
-  if (typeof reviews !== 'object') {
+  if (reviews !== undefined && reviews !== null && typeof reviews !== 'object') {
     return {
       kind: 'unproven',
       detail: 'required_pull_request_reviews is neither null nor an object',
     }
   }
+  // Presence proofs — one subsection that demonstrably carries a requirement
+  // settles presence regardless of what the response did with the others.
+  if (statusChecks !== undefined && statusChecks !== null) {
+    return { kind: 'proved', gate: true }
+  }
+  if (restrictions !== undefined && restrictions !== null) {
+    return { kind: 'proved', gate: true }
+  }
+  // Absence proofs — to conclude "no gate" every subsection that could carry
+  // one must have been rendered; a missing subsection is auth- or plan-scoped
+  // in a way we cannot prove, so each names itself precisely.
+  if (!(requiredStatusChecksKey in raw)) {
+    return {
+      kind: 'unproven',
+      detail: 'protection.required_status_checks missing from response',
+    }
+  }
+  if (!(restrictionsKey in raw)) {
+    return { kind: 'unproven', detail: 'protection.restrictions missing from response' }
+  }
+  if (!(reviewsKey in raw)) {
+    return {
+      kind: 'unproven',
+      detail:
+        'protection.required_pull_request_reviews missing from response; ' +
+        'a classic reviews requirement could not be ruled out',
+    }
+  }
+  if (reviews === null) return { kind: 'proved', gate: false }
   const reviewFields = reviews as Record<string, unknown>
   for (const field of [
     'required_approving_review_count',
@@ -859,8 +880,15 @@ export class GitHubForge implements Forge {
     }
 
     if (classicGate === undefined) {
+      // The classic response was incomplete, but a ruleset probe that
+      // succeeded and found merge-blocking rules proves the branch is gated
+      // no matter what the classic response hid — native auto-merge is the
+      // correct application either way.
+      if (rulesetGate) return { kind: 'proved', presence: 'present' }
       return unproven(
-        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}`,
+        `GitHub auto-merge classic branch-protection probe failed: ${classicError ?? 'unknown failure'}; ` +
+          `the ruleset probe for branch '${baseRefName}' found no merge-blocking rules, ` +
+          'so a classic reviews requirement could not be ruled out',
       )
     }
     return {
@@ -940,12 +968,26 @@ export class GitHubForge implements Forge {
           )
           return (await this.nativeAutoMergeView(number)).enabled
             ? { kind: 'applied' }
-            : { kind: 'deferred' }
+            : {
+                kind: 'deferred',
+                reason: {
+                  code: 'unproven-gate-state',
+                  detail:
+                    'enablePullRequestAutoMerge was accepted but the follow-up native read ' +
+                    `reports auto_merge unset for PR #${number}`,
+                },
+              }
         }
         case 'direct':
           return { kind: 'ungated', headSha: view.head.sha }
         case 'deferred':
-          return { kind: 'deferred' }
+          return {
+            kind: 'deferred',
+            reason: {
+              code: 'unproven-gate-state',
+              detail: `GitHub reports mergeable_state '${mergeState}' for PR #${number}; native auto-merge was not enabled`,
+            },
+          }
         case 'error':
           throw new Error(disposition.reason)
       }

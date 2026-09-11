@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#314](https://github.com/defrex/autobuild/pull/314) — Prove auto-merge gate presence from the mechanism actually in effect
 - [#313](https://github.com/defrex/autobuild/pull/313) — Enforce event validation before prune in all store implementations
 - [#312](https://github.com/defrex/autobuild/pull/312) — Drop duplicate idempotent updatedAt writes in the SQLite deposit path
 - [#311](https://github.com/defrex/autobuild/pull/311) — Bound dispatcher run/config artifacts with a retention policy
