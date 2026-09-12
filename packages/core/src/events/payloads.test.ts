@@ -845,3 +845,43 @@ describe('verify.completed payload compatibility', () => {
     })
   })
 })
+
+describe('publication.lost loss-record protocol', () => {
+  const base = {
+    request: 12,
+    operation: 'implement' as const,
+    branch: 'ab/rate-limit',
+    sha: 'a'.repeat(40),
+    reason: 'replacement',
+  }
+
+  test('accepts a valid dispatcher loss record naming the lost request', () => {
+    expect(
+      validateEventWrite({ actor: DISPATCHER, type: 'publication.lost', payload: base }),
+    ).toMatchObject({ type: 'publication.lost', payload: base })
+  })
+
+  test('only the dispatcher may record a loss', () => {
+    for (const actor of [KERNEL, agentActor('implement', 's_1'), humanActor('aron')]) {
+      expect(() => validateEventWrite({ actor, type: 'publication.lost', payload: base })).toThrow(
+        /may not emit/,
+      )
+    }
+  })
+
+  test('rejects blank reasons, unknown operations, and non-positive request seqs', () => {
+    for (const payload of [
+      { ...base, reason: '' },
+      { ...base, reason: '   ' },
+      { ...base, operation: 'plan' },
+      { ...base, request: 0 },
+      { ...base, request: -1 },
+      { ...base, sha: 'a'.repeat(39) },
+      { ...base, extra: true },
+    ]) {
+      expect(() =>
+        validateEventWrite({ actor: DISPATCHER, type: 'publication.lost', payload }),
+      ).toThrow(/invalid payload for "publication\.lost"/)
+    }
+  })
+})

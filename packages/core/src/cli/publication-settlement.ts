@@ -4,6 +4,8 @@ import type { Forge, WorkspacePublication } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { openExecution } from '../processes/execution-settlement'
 import {
+  latestUncompletedPublicationRequest,
+  publicationLostRecorded,
   publicationRequestCompleted,
   publicationRequestSettled,
 } from '../processes/publication-state'
@@ -40,18 +42,38 @@ export async function settlePendingPublication(
   const publication = deps.publication
   if (publication === undefined) return
   let events = await deps.store.getEvents(slug)
-  const request = events.findLast(
-    (event) =>
-      event.type === 'publication.requested' && !publicationRequestCompleted(events, event),
-  )
-  if (request?.type !== 'publication.requested') return
+  const request = latestUncompletedPublicationRequest(events)
+  if (request === undefined) return
 
   const abandoned = publicationRequestSettled(events, request)
+  // Consulted for every uncompleted request, not only abandoned ones: a guest
+  // that pushed its branch before dying is owed its completion fact, not a
+  // re-push or a loss record.
   const alreadyPublished =
-    abandoned && publication.isPublished !== undefined
+    publication.isPublished !== undefined
       ? await publication.isPublished({ sha: request.payload.sha, branch: request.payload.branch })
       : false
-  if (abandoned && !alreadyPublished) return
+  if (abandoned && !alreadyPublished) {
+    // Last-chance backstop (AUT-328): the workspace is gone with this request
+    // uncompleted. Record the loss durably (deduped per request) instead of
+    // returning silently — the exact drop that lost the validate-hosted-
+    // dispatcher generation-1 work. The finalize-step publish-failure path
+    // below is unchanged: it already settles loudly via its failed outcome.
+    if (!publicationLostRecorded(events, request)) {
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'publication.lost',
+        payload: {
+          request: request.seq,
+          operation: request.payload.operation,
+          branch: request.payload.branch,
+          sha: request.payload.sha,
+          reason: 'workspace released with the publication uncompleted',
+        },
+      })
+    }
+    return
+  }
 
   try {
     if (!alreadyPublished) {

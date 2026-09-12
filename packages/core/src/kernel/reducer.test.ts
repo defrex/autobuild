@@ -1634,3 +1634,49 @@ describe('reduceBuild: the verify cycle boundary (§15.6-A)', () => {
     expect(state.verify.cycleSince).toBe(12) // …but the boundary held
   })
 })
+
+describe('reduceBuild: publication loss record (AUT-328)', () => {
+  test('publication.lost is an inert fact: the state only advances its sequence', () => {
+    const before = toLog([
+      ev('runner.attached', { instance: 'runner-1', host: 'local' }),
+      ev('publication.requested', {
+        operation: 'implement',
+        branch: 'ab/rate-limit',
+        sha: 'a'.repeat(40),
+        round: 1,
+        base: 'b'.repeat(40),
+        artifact: { kind: 'implement-notes', rev: 0 },
+      }),
+    ])
+    const state = reduceBuild(before)
+    const after = toLog([
+      ev('runner.attached', { instance: 'runner-1', host: 'local' }),
+      ev('publication.requested', {
+        operation: 'implement',
+        branch: 'ab/rate-limit',
+        sha: 'a'.repeat(40),
+        round: 1,
+        base: 'b'.repeat(40),
+        artifact: { kind: 'implement-notes', rev: 0 },
+      }),
+      // The dispatcher recorded the loss ahead of a workspace release.
+      ev('publication.lost', {
+        request: 2,
+        operation: 'implement',
+        branch: 'ab/rate-limit',
+        sha: 'a'.repeat(40),
+        reason: 'replacement',
+      }),
+    ])
+    const next = reduceBuild(after)
+    // Same projection as before the loss fact, apart from the seq advance —
+    // recovery runs through the abandoned-publication flow, not the reducer.
+    expect({ ...next, lastSeq: 0, lastEvent: undefined }).toEqual({
+      ...state,
+      lastSeq: 0,
+      lastEvent: undefined,
+    })
+    expect(next.lastSeq).toBe(state.lastSeq + 1)
+    expect(next.lastEvent?.type).toBe('publication.lost')
+  })
+})

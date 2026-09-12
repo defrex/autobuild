@@ -324,6 +324,23 @@ export const eventPayloadSchemas = {
       step: z.string().min(1),
     }),
   ]),
+  /** Durable loss record: the dispatcher released (or is about to release) the
+   * workspace while the referenced `publication.requested` (named by `request`,
+   * its seq) could not be completed. Appended by the last-chance release guard
+   * (settlePublicationBeforeRelease) BEFORE `workspace.released`, so an
+   * operator reading the log alone can distinguish pending (a request with no
+   * settling successor), done (the operation's completion fact), and lost
+   * (this event). Deliberately no competing status field — this fact plus the
+   * request's seq is the whole surface. Recovery continues through the
+   * existing abandoned-publication flow, which re-runs the phase. */
+  'publication.lost': z.strictObject({
+    /** seq of the lost `publication.requested` event. */
+    request: z.number().int().positive(),
+    operation: z.enum(['implement', 'reconcile', 'finalize', 'finalize-step']),
+    branch: z.string().min(1),
+    sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+    reason: z.string().trim().min(1),
+  }),
   /** Checkpoints in the dispatcher-owned, retry-safe abort cleanup saga. */
   'abort.remote-branch-deleted': z.strictObject({ branch: z.string().min(1) }),
   'abort.local-branch-deleted': z.strictObject({ branch: z.string().min(1) }),
