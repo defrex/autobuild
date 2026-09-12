@@ -16,16 +16,38 @@ import { createProductionRuntimes } from '../ports/runner/production'
 import type { BuildStore } from '../store/types'
 import { systemClock } from '../store/types'
 import { openProductionStore, type StoreOpener } from '../cli/store-opening'
+import { resolveRepoStatePaths } from '../cli/repo-state'
 import { DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS } from '../kernel/harvest'
 import { HarvestRunner } from './harvest-runner'
 
 export type { HarvestExecutionEnvironment }
 
+/** Guest-side ticket-source arguments, identical to what a local harvest in
+ * this checkout would pass: targetRepo is the physical guest checkout, and
+ * localStateRoot follows the same store-selection precedence rule the host's
+ * `resolveRepoStatePaths` applies (remote store → checkout-local `.autobuild`,
+ * local store → the resolved store ref). A relative or defaulted
+ * `[tickets].dir` therefore resolves identically on host and guest. */
+export function guestTicketSourceArgs(
+  input: HarvestRunnerLaunch,
+  workspacePath: string,
+): { targetRepo: string; localStateRoot: string } {
+  const paths = resolveRepoStatePaths({
+    repo: input.repo,
+    checkout: workspacePath,
+    storeRef: input.storeRef,
+  })
+  return { targetRepo: paths.checkout, localStateRoot: paths.localStateRoot }
+}
+
 /** Guest-side composition. The launch envelope supplies identity, lease
  * adoption, and environment provenance only; configuration comes from the
  * guest checkout and the hosted Store/ticket authority from the forwarded
  * environment — the same kernel class a local harvest runs, so filed
- * proposals, creation keys, and idempotency are byte-identical. */
+ * proposals, creation keys, and idempotency are byte-identical. Ticket-source
+ * composition likewise matches a local harvest in this checkout: a relative
+ * or defaulted `[tickets].dir` resolves against the guest checkout and the
+ * selected local state root (see `guestTicketSourceArgs`). */
 export async function runHarvestChild(
   input: HarvestRunnerLaunch,
   env: Record<string, string | undefined> = process.env,
@@ -47,7 +69,17 @@ export async function runHarvestChild(
       repoRoot: workspacePath,
       env,
     })
-    const tickets = await createTicketSource(config.tickets, env, input.repo, undefined, plugins)
+    // Ticket-source composition matches a local harvest in this checkout: a
+    // relative or defaulted [tickets].dir resolves against the guest checkout
+    // and the selected local state root, never the host-side repo identity.
+    const { targetRepo, localStateRoot } = guestTicketSourceArgs(input, workspacePath)
+    const tickets = await createTicketSource(
+      config.tickets,
+      env,
+      targetRepo,
+      localStateRoot,
+      plugins,
+    )
 
     const runner = new HarvestRunner({
       store: fullStore,
