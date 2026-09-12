@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#322](https://github.com/defrex/autobuild/pull/322) — Treat UNKNOWN mergeable_state as transient in the auto-merge gate
 - [#321](https://github.com/defrex/autobuild/pull/321) — Record publication loss durably before any workspace release
 - [#320](https://github.com/defrex/autobuild/pull/320) — Guarantee the hosted deployment ships the packed bun distribution
 - [#319](https://github.com/defrex/autobuild/pull/319) — Compose the guest harvest ticket source like a local harvest

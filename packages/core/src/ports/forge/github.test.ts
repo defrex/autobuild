@@ -54,10 +54,14 @@ function makeTransport(responses: (Scripted | GitHubResponse)[] = []) {
 }
 
 /** A forge whose coordinates resolve from the explicit option (origin mode
- * never touches git). */
+ * never touches git). Retry delays are zero so no test sleeps. */
 function makeForge(responses: (Scripted | GitHubResponse)[] = []) {
   const { transport, calls } = makeTransport(responses)
-  const forge = new GitHubForge({ transport, repository: 'acme/app' })
+  const forge = new GitHubForge({
+    transport,
+    repository: 'acme/app',
+    mergeabilityRetryDelaysMs: [0, 0],
+  })
   return { forge, calls }
 }
 
@@ -685,7 +689,7 @@ describe('GitHubForge.setAutoMerge', () => {
   })
 
   test('ungated transient/conflict states defer, while an unexplained blocker fails closed with a reason', async () => {
-    for (const state of ['unknown', 'dirty'] as const) {
+    for (const state of ['dirty'] as const) {
       const { forge } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
       expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
         kind: 'deferred',
@@ -700,6 +704,102 @@ describe('GitHubForge.setAutoMerge', () => {
       kind: 'deferred',
       reason: { code: 'unproven-gate-state', detail: expect.stringContaining('BLOCKED') },
     })
+  })
+
+  test('ungated UNKNOWN re-queries mergeability, then defers with a transient-flavored reason', async () => {
+    // mergeable_state 'unknown' means GitHub is still computing mergeability —
+    // typically transient just after required checks finish. The gate waits
+    // (bounded) and re-queries before concluding; when the state never
+    // resolves, the deferral names the transient computation and retry count
+    // instead of a generic unproven gate state.
+    const { forge, calls } = makeForge([
+      prView('unknown'),
+      prView('unknown'),
+      prView('unknown'),
+      branchWith(fullProtection),
+      ruleset([]),
+    ])
+    const result = await forge.setAutoMerge('/ws/build-1', 42, true)
+    expect(result).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'mergeability-uncomputed' },
+    })
+    if (result.kind !== 'deferred') return
+    expect(result.reason?.detail).toContain('still being computed')
+    expect(result.reason?.detail).toContain('2 re-queries')
+    expect(result.reason?.detail).toContain('PR #42')
+    // Exactly the bounded reads: first inspection plus two re-queries, then
+    // the usual one-pass gate probe (no probe duplication per re-query).
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/pulls/42')).toHaveLength(3)
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/branches/main')).toHaveLength(
+      1,
+    )
+  })
+
+  test('ungated UNKNOWN that resolves inside the retry window becomes a direct candidate', async () => {
+    const { forge, calls } = makeForge([
+      prView('unknown'),
+      prView('clean'),
+      branchWith(fullProtection),
+      ruleset([]),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/pulls/42')).toHaveLength(2)
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/branches/main')).toHaveLength(
+      1,
+    )
+  })
+
+  test('gated UNKNOWN that resolves inside the retry window enables native auto-merge', async () => {
+    const { forge } = makeForge([
+      prView('unknown'),
+      prView('clean'),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+      }),
+      ruleset([]),
+      repositoryAutoMerge(true),
+      graphqlApplied('enablePullRequestAutoMerge'),
+      nativeState(true),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+  })
+
+  test('gated UNKNOWN that persists keeps its existing native-auto-merge classification', async () => {
+    // Bounded re-queries exhaust with the state still UNKNOWN; a proved gate
+    // makes UNKNOWN route to native exactly as before the re-query existed.
+    const { forge, calls } = makeForge([
+      prView('unknown'),
+      prView('unknown'),
+      prView('unknown'),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+      }),
+      ruleset([]),
+      repositoryAutoMerge(true),
+      graphqlApplied('enablePullRequestAutoMerge'),
+      nativeState(true),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    // Three inspection reads plus the post-mutation native confirmation read.
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/pulls/42')).toHaveLength(4)
+  })
+
+  test('native auto-merge appearing on a re-read is adopted without a mutation', async () => {
+    // Another actor enabled native auto-merge while the gate was waiting out
+    // the UNKNOWN computation: the idempotent auto_merge hit returns applied
+    // with no enable mutation of our own.
+    const { forge, calls } = makeForge([
+      prView('unknown'),
+      prView('clean', { mergeMethod: 'SQUASH' }),
+    ])
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    expect(calls.some((call) => call.path === 'graphql')).toBe(false)
   })
 
   test('has_hooks is never treated as ungated and delegates to native auto-merge', async () => {

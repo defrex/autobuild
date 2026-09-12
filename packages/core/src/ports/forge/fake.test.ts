@@ -288,6 +288,30 @@ describe('FakeForge', () => {
     expect(forge.squashMergeCalls).toEqual([])
   })
 
+  test('a seeded mergeability-uncomputed deferral flows through verbatim', async () => {
+    // The transient-flavored reason the GitHub forge returns for a persistent
+    // mergeable_state 'unknown'; dispatcher-level tests seed it on the fake.
+    const forge = new FakeForge()
+    const pr = await forge.openPr(prOpts())
+    forge.setPrState(pr.number, { state: 'open', mergeable: true })
+    forge.setAutoMergeDeferral(pr.number, {
+      code: 'mergeability-uncomputed',
+      detail:
+        "GitHub reported mergeable_state 'UNKNOWN' for PR #7 — mergeability was still being " +
+        'computed (transient) after 2 re-queries over 2000 ms; native auto-merge was not enabled',
+    })
+    expect(await forge.setAutoMerge('/ws/a', pr.number, true)).toEqual({
+      kind: 'deferred',
+      reason: {
+        code: 'mergeability-uncomputed',
+        detail:
+          "GitHub reported mergeable_state 'UNKNOWN' for PR #7 — mergeability was still being " +
+          'computed (transient) after 2 re-queries over 2000 ms; native auto-merge was not enabled',
+      },
+    })
+    expect(forge.isAutoMergeEnabled(pr.number)).toBe(false)
+  })
+
   test('all non-transient reason families are configurable and leave native state off', async () => {
     const forge = new FakeForge()
     const pr = await forge.openPr(prOpts())
