@@ -197,6 +197,24 @@ describe('auto-merge deferral observations', () => {
     expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
   })
 
+  test('a merge-conflicts deferral records the exact conflict-naming summary', async () => {
+    const reason = {
+      code: 'merge-conflicts',
+      detail:
+        "GitHub reports mergeable_state 'DIRTY' for PR #42 — the head branch has merge conflicts " +
+        "with 'main'; update the branch or resolve the conflicts and the pending consent will be " +
+        're-examined on a later tick. Native auto-merge was not enabled',
+    } as const
+    const write = autoMergeDeferralObservation(reason, 42, 17, 'obs_conflicts')
+    expect(write.payload.summary).toBe(
+      'Auto-merge gate could not apply consent for PR #42: the PR has merge conflicts with its ' +
+        "base branch — GitHub reports mergeable_state 'DIRTY' for PR #42 — the head branch has " +
+        "merge conflicts with 'main'; update the branch or resolve the conflicts and the pending " +
+        'consent will be re-examined on a later tick. Native auto-merge was not enabled',
+    )
+    expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
+  })
+
   test('a single writer records a newly encountered deferral', async () => {
     const store = new MemoryBuildStore()
     await store.createBuild(sampleBuildInput('deferral-single'))

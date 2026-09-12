@@ -312,6 +312,32 @@ describe('FakeForge', () => {
     expect(forge.isAutoMergeEnabled(pr.number)).toBe(false)
   })
 
+  test('a seeded merge-conflicts deferral flows through verbatim', async () => {
+    // The conflict-naming reason the GitHub forge returns for a persistent
+    // mergeable_state 'DIRTY'; dispatcher-level tests seed it on the fake.
+    const forge = new FakeForge()
+    const pr = await forge.openPr(prOpts())
+    forge.setPrState(pr.number, { state: 'open', mergeable: true })
+    forge.setAutoMergeDeferral(pr.number, {
+      code: 'merge-conflicts',
+      detail:
+        "GitHub reports mergeable_state 'DIRTY' for PR #7 — the head branch has merge conflicts " +
+        "with 'main'; update the branch or resolve the conflicts and the pending consent will be " +
+        're-examined on a later tick. Native auto-merge was not enabled',
+    })
+    expect(await forge.setAutoMerge('/ws/a', pr.number, true)).toEqual({
+      kind: 'deferred',
+      reason: {
+        code: 'merge-conflicts',
+        detail:
+          "GitHub reports mergeable_state 'DIRTY' for PR #7 — the head branch has merge conflicts " +
+          "with 'main'; update the branch or resolve the conflicts and the pending consent will be " +
+          're-examined on a later tick. Native auto-merge was not enabled',
+      },
+    })
+    expect(forge.isAutoMergeEnabled(pr.number)).toBe(false)
+  })
+
   test('all non-transient reason families are configurable and leave native state off', async () => {
     const forge = new FakeForge()
     const pr = await forge.openPr(prOpts())

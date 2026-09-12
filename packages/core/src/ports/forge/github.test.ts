@@ -688,17 +688,68 @@ describe('GitHubForge.setAutoMerge', () => {
     }
   })
 
-  test('ungated transient/conflict states defer, while an unexplained blocker fails closed with a reason', async () => {
-    for (const state of ['dirty'] as const) {
-      const { forge } = makeForge([prView(state), branchWith(fullProtection), ruleset([])])
-      expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
+  test('a DIRTY merge state defers with a conflict-naming reason whatever the gate configuration', async () => {
+    // DIRTY is a persistent, definite state — GitHub has computed merge
+    // conflicts — so the deferral must name the conflict and its standard
+    // recovery instead of the generic unproven-gate-state message. The
+    // disposition is deferred for both gate configurations, so the reason
+    // branch is shared; each leg proves gate presence/absence explicitly.
+    // `branchWith(fullProtection)` (all three subsections null) proves classic
+    // protection ABSENT via classifyClassicProtection's null fall-through,
+    // combined with `ruleset([])` finding no merge-blocking rules.
+    const conflictDetail = (baseRef: string) =>
+      `GitHub reports mergeable_state 'DIRTY' for PR #42 — the head branch has ` +
+      `merge conflicts with '${baseRef}'; update the branch or resolve the conflicts ` +
+      'and the pending consent will be re-examined on a later tick. ' +
+      'Native auto-merge was not enabled'
+    const expectConflictDeferral = async (
+      forge: GitHubForge,
+      calls: ApiCall[],
+      baseRef = 'main',
+    ) => {
+      const result = await forge.setAutoMerge('/ws/build-1', 42, true)
+      expect(result).toEqual({
         kind: 'deferred',
-        reason: {
-          code: 'unproven-gate-state',
-          detail: expect.stringContaining(state.toUpperCase()),
-        },
+        reason: { code: 'merge-conflicts', detail: conflictDetail(baseRef) },
       })
+      // The deferral happens before any repository read or native mutation.
+      expect(calls.some((call) => call.path === 'GET repos/acme/app')).toBe(false)
+      expect(enableMutation(calls)).toBeUndefined()
     }
+
+    // Gate absent (classic probe negative, no merge-blocking ruleset).
+    const absent = makeForge([prView('dirty'), branchWith(fullProtection), ruleset([])])
+    await expectConflictDeferral(absent.forge, absent.calls)
+
+    // Gate present, proved by a non-null classic required_status_checks
+    // subsection (the same shape the clean-gated native test uses).
+    const classicPresent = makeForge([
+      prView('dirty'),
+      branchWith({
+        ...fullProtection,
+        required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+      }),
+      ruleset([]),
+    ])
+    await expectConflictDeferral(classicPresent.forge, classicPresent.calls)
+
+    // Gate present, proved through the ruleset probe (the same merge-blocking
+    // ruleset shape the ruleset-gate native test uses).
+    const rulesetPresent = makeForge([
+      prView('dirty'),
+      branchWith(fullProtection),
+      ruleset([
+        {
+          type: 'required_status_checks',
+          ruleset_source_type: 'Organization',
+          parameters: { required_status_checks: [{ context: 'ci' }] },
+        },
+      ]),
+    ])
+    await expectConflictDeferral(rulesetPresent.forge, rulesetPresent.calls)
+
+    // The contrast stays pinned: an unexplained BLOCKED still lands in the
+    // generic unproven-gate-state family — only DIRTY got its own.
     const blocked = makeForge([prView('blocked'), branchWith(fullProtection), ruleset([])])
     expect(await blocked.forge.setAutoMerge('/ws/build-1', 42, true)).toMatchObject({
       kind: 'deferred',
