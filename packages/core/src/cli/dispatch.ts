@@ -361,6 +361,16 @@ export interface DispatchOpts {
   /** Private child-kernel correlation. Presence suppresses terminal ownership
    * and enables durable dispatcher status publication. */
   kernelRunId?: string
+  /** Durable journaling identity of this dispatcher invocation. Every
+   * dispatcher-initiated journal write and the repository lease carry this id,
+   * so "who holds this repository?" and "who is writing this journal?" are the
+   * same string. Kernel children pass their kernelRunId; plain invocations
+   * leave it unset — abDispatch synthesizes `<host>-dispatch-<id>` once per
+   * invocation and the loop falls back to the same shape if unset. This is
+   * purely a journaling identity: behavioral kernelRunId gates (interactive
+   * frontend routing, terminal-ownership suppression) keep reading
+   * kernelRunId. */
+  runId?: string
   /** Private child mode: preserve kernel behavior while routing no legacy
    * line output into the terminal-owning parent. */
   silent?: boolean
@@ -664,6 +674,10 @@ class DispatchLoop {
   }
   /** The holder id this invocation already recorded a `tick-yielded` for. */
   private yieldedTo: string | undefined
+  /** The invocation's durable journaling identity: every repository-lease
+   * claim and every `dispatcher.*` journal payload carries exactly this
+   * string. Computed once in the constructor (see above). */
+  private readonly runId: string
   /** Repository identity (§12): the normalized origin, or the checkout path
    * when there is no origin. Every Store-keyed key uses this; filesystem
    * consumers keep using `opts.targetRepo` (the checkout or scratch root). */
@@ -677,6 +691,11 @@ class DispatchLoop {
     private readonly opts: DispatchOpts,
   ) {
     const config = liveConfig.current().config
+    // Minted exactly once per invocation: `wiring.ids` is `randomIds()` and a
+    // fresh id per access would split the journal run from the lease holder.
+    // abDispatch always passes `runId`, so the fallback only covers direct
+    // DispatchLoop constructions (tests).
+    this.runId = opts.runId ?? opts.kernelRunId ?? `${this.host}-dispatch-${wiring.ids('inst')}`
     this.dashboard = opts.terminal?.interactive === true && opts.plain !== true
     this.keyboard =
       this.dashboard && opts.terminal !== undefined && opts.input !== undefined
@@ -752,7 +771,7 @@ class DispatchLoop {
       content: effectiveBuildConfigContent(snapshot.config),
       metadata: {
         revision: snapshot.revision,
-        ...(this.opts.kernelRunId !== undefined ? { run: this.opts.kernelRunId } : {}),
+        run: this.runId,
       },
     })
   }
@@ -764,7 +783,6 @@ class DispatchLoop {
   }
 
   private async appendStatus(event: RepositoryEventWrite): Promise<void> {
-    if (this.opts.kernelRunId === undefined) return
     await this.wiring.store.appendRepo(this.repoIdentity, event)
   }
 
@@ -790,7 +808,7 @@ class DispatchLoop {
         await this.appendStatus({
           actor: DISPATCHER,
           type: 'dispatcher.config-rejected',
-          payload: { run: this.opts.kernelRunId!, error: outcome.error },
+          payload: { run: this.runId, error: outcome.error },
         })
         this.warn(`config reload rejected: ${outcome.error}`)
       }
@@ -800,7 +818,7 @@ class DispatchLoop {
       await this.appendStatus({
         actor: DISPATCHER,
         type: 'dispatcher.config-publication-failed',
-        payload: { run: this.opts.kernelRunId!, error: outcome.error },
+        payload: { run: this.runId, error: outcome.error },
       })
       this.warn(`config reload not applied because its durable trace failed: ${outcome.error}`)
       return
@@ -839,20 +857,14 @@ class DispatchLoop {
       // Every tick first tries the repository supervisor lease. Without it,
       // this invocation records the yield and performs no claims, launches,
       // or publications — including no tick-completed status publication.
-      if (
-        !(await this.ensureRepoLease(
-          this.repoLeaseHolder ??
-            this.opts.kernelRunId ??
-            `${this.host}-dispatch-${this.wiring.ids('inst')}`,
-        ))
-      ) {
+      if (!(await this.ensureRepoLease(this.repoLeaseHolder ?? this.runId))) {
         await this.recordTickYielded()
         return emptyTickReport()
       }
       await this.appendStatus({
         actor: DISPATCHER,
         type: 'dispatcher.tick-started',
-        payload: { run: this.opts.kernelRunId! },
+        payload: { run: this.runId },
       })
 
       // Unclaimed observations are display-only and sampled once per interactive
@@ -1839,16 +1851,14 @@ class DispatchLoop {
       })
       .catch(async (error: unknown) => {
         this.pendingHarvest.harvestFailed += 1
-        if (this.opts.kernelRunId !== undefined) {
-          await this.appendStatus({
-            actor: DISPATCHER,
-            type: 'dispatcher.harvest-runner-failed',
-            payload: {
-              run: this.opts.kernelRunId,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          })
-        }
+        await this.appendStatus({
+          actor: DISPATCHER,
+          type: 'dispatcher.harvest-runner-failed',
+          payload: {
+            run: this.runId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        })
         if (!this.stopped) {
           this.warn(
             `harvest runner failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1977,16 +1987,14 @@ class DispatchLoop {
         }
       }
       this.pendingHarvest.harvestFailed += 1
-      if (this.opts.kernelRunId !== undefined) {
-        await this.appendStatus({
-          actor: DISPATCHER,
-          type: 'dispatcher.harvest-runner-failed',
-          payload: {
-            run: this.opts.kernelRunId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        })
-      }
+      await this.appendStatus({
+        actor: DISPATCHER,
+        type: 'dispatcher.harvest-runner-failed',
+        payload: {
+          run: this.runId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
       if (!this.stopped) {
         this.warn(
           `harvest runner failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -2147,7 +2155,7 @@ class DispatchLoop {
       actor: DISPATCHER,
       type: 'dispatcher.tick-completed',
       payload: {
-        run: this.opts.kernelRunId!,
+        run: this.runId,
         ...this.lastTickStatus,
         counters,
       },
@@ -2196,7 +2204,7 @@ class DispatchLoop {
         workspacePath: this.opts.targetRepo,
         exec: this.opts.exec,
         ids: this.wiring.ids,
-        runId: this.opts.kernelRunId!,
+        runId: this.runId,
         clock: this.wiring.clock,
       },
       slug,
@@ -2257,7 +2265,7 @@ class DispatchLoop {
         await this.appendStatus({
           actor: DISPATCHER,
           type: 'dispatcher.runner-settled',
-          payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
+          payload: { run: this.runId, slug, outcome: 'lease-held' },
         })
         this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
@@ -2337,7 +2345,7 @@ class DispatchLoop {
                 await this.appendStatus({
                   actor: DISPATCHER,
                   type: 'dispatcher.runner-settled',
-                  payload: { run: this.opts.kernelRunId!, slug, outcome: 'lease-held' },
+                  payload: { run: this.runId, slug, outcome: 'lease-held' },
                 })
                 this.failureNotice(`build ${slug} already held by another runner — skipped`)
                 return
@@ -2349,7 +2357,7 @@ class DispatchLoop {
                   actor: DISPATCHER,
                   type: 'dispatcher.runner-settled',
                   payload: {
-                    run: this.opts.kernelRunId!,
+                    run: this.runId,
                     slug,
                     outcome: 'parked',
                     status: state.status,
@@ -2365,7 +2373,7 @@ class DispatchLoop {
               await this.appendStatus({
                 actor: DISPATCHER,
                 type: 'dispatcher.runner-settled',
-                payload: { run: this.opts.kernelRunId!, slug, outcome: 'failed', error: detail },
+                payload: { run: this.runId, slug, outcome: 'failed', error: detail },
               })
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
@@ -2433,7 +2441,7 @@ class DispatchLoop {
         actor: DISPATCHER,
         type: 'dispatcher.runner-settled',
         payload: {
-          run: this.opts.kernelRunId!,
+          run: this.runId,
           slug,
           outcome: 'launch-failed',
           error: error instanceof Error ? error.message : String(error),
@@ -2820,15 +2828,13 @@ class DispatchLoop {
             return
           }
           this.availableUpgrade = version
-          if (this.opts.kernelRunId !== undefined) {
-            void this.appendStatus({
-              actor: DISPATCHER,
-              type: 'dispatcher.upgrade-available',
-              payload: { run: this.opts.kernelRunId, version },
-            }).catch(() => {
-              // Release discovery and publication are a silent courtesy.
-            })
-          }
+          void this.appendStatus({
+            actor: DISPATCHER,
+            type: 'dispatcher.upgrade-available',
+            payload: { run: this.runId, version },
+          }).catch(() => {
+            // Release discovery and publication are a silent courtesy.
+          })
           this.syncModelControls()
           this.paint()
         },
@@ -3004,7 +3010,7 @@ class DispatchLoop {
         actor: DISPATCHER,
         type: 'dispatcher.tick-yielded',
         payload: {
-          ...(this.opts.kernelRunId !== undefined ? { run: this.opts.kernelRunId } : {}),
+          run: this.runId,
           holder,
         },
       })
@@ -3030,8 +3036,9 @@ class DispatchLoop {
     this.reportRoleDiagnostics()
     // Repository supervisor lease (§12): two invocations for one repository
     // never both act. A losing invocation records the yield and performs no
-    // claims, launches, or publications.
-    const holder = this.opts.kernelRunId ?? `${this.host}-dispatch-${this.wiring.ids('inst')}`
+    // claims, launches, or publications. The holder is the invocation's
+    // journaling run id — the same string every journal payload carries.
+    const holder = this.runId
     if (!(await this.ensureRepoLease(holder))) {
       await this.recordTickYielded()
       const peer = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))?.lease
@@ -3106,7 +3113,7 @@ class DispatchLoop {
           await this.appendStatus({
             actor: DISPATCHER,
             type: 'dispatcher.tick-failed',
-            payload: { run: this.opts.kernelRunId!, error: message },
+            payload: { run: this.runId, error: message },
           })
           this.warn(`tick failed: ${message}`)
         }
@@ -3384,6 +3391,15 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     runtimes,
     plugins: wired.plugins ?? plugins,
   }
+  // The invocation's durable journaling identity — the single synthesis point
+  // for this invocation. Kernel children keep their kernelRunId; every plain
+  // invocation mints `<host>-dispatch-<id>` exactly the format the
+  // repository-supervisor lease holder already uses. Minted once: `wiring.ids`
+  // is `randomIds()`, so a getter re-evaluating it would re-mint per access.
+  // Everything below (startup deposits, the loop's journal payloads, both
+  // lease sites) carries this one value.
+  const runId = resolvedOpts.kernelRunId ?? `${hostname()}-dispatch-${wiring.ids('inst')}`
+  resolvedOpts.runId = runId
   // Construction eagerly validates every startup role before repository
   // settings or runner work can mutate durable state. The publisher is used
   // only by later watch refreshes.
@@ -3404,10 +3420,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           {
             kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
             content: effectiveConfigContent(effectiveConfig),
-            metadata: {
-              ...(resolvedOpts.kernelRunId !== undefined ? { run: resolvedOpts.kernelRunId } : {}),
-              effectiveChanged,
-            },
+            metadata: { run: runId, effectiveChanged },
           },
         ],
         (deposited) => {
@@ -3423,16 +3436,12 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
               artifact: { kind: artifact.kind, rev: artifact.revision },
               restartRequired: [...restartRequired],
               effectiveChanged,
-              ...(resolvedOpts.kernelRunId !== undefined
-                ? {
-                    run: resolvedOpts.kernelRunId,
-                    effectiveConfig: {
-                      kind: effectiveArtifact.kind,
-                      rev: effectiveArtifact.revision,
-                    },
-                    roleWarnings: roleKeyWarnings(effectiveConfig),
-                  }
-                : {}),
+              run: runId,
+              effectiveConfig: {
+                kind: effectiveArtifact.kind,
+                rev: effectiveArtifact.revision,
+              },
+              roleWarnings: roleKeyWarnings(effectiveConfig),
             },
           }
         },
@@ -3450,75 +3459,69 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     await wiring.store.appendRepo(state.repo, {
       actor,
       type: 'dispatcher.intake-set',
-      payload: { enabled: resolvedOpts.intake },
+      payload: { enabled: resolvedOpts.intake, run: runId },
     })
   }
   if (resolvedOpts.defaultAutoMerge !== undefined) {
     await wiring.store.appendRepo(state.repo, {
       actor,
       type: 'dispatcher.auto-merge-default-set',
-      payload: { enabled: resolvedOpts.defaultAutoMerge },
+      payload: { enabled: resolvedOpts.defaultAutoMerge, run: runId },
     })
   }
 
-  if (resolvedOpts.kernelRunId !== undefined) {
-    await wiring.store.appendRepoWithArtifacts(
-      state.repo,
-      [
-        {
-          kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
-          content: effectiveConfigContent(config),
-          metadata: { run: resolvedOpts.kernelRunId, revision: 0 },
-        },
-      ],
-      (deposited) => {
-        const artifact = deposited[0]
-        if (artifact === undefined) throw new Error('startup config deposit returned no artifact')
-        return {
-          actor: DISPATCHER,
-          type: 'dispatcher.run-started',
-          payload: {
-            run: resolvedOpts.kernelRunId!,
-            pid: process.pid,
-            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
-            roleWarnings: roleKeyWarnings(config),
-          },
-        }
+  await wiring.store.appendRepoWithArtifacts(
+    state.repo,
+    [
+      {
+        kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+        content: effectiveConfigContent(config),
+        metadata: { run: runId, revision: 0 },
       },
-    )
-  }
+    ],
+    (deposited) => {
+      const artifact = deposited[0]
+      if (artifact === undefined) throw new Error('startup config deposit returned no artifact')
+      return {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: runId,
+          pid: process.pid,
+          effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+          roleWarnings: roleKeyWarnings(config),
+        },
+      }
+    },
+  )
 
   const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts)
   try {
     await loop.run()
-    if (resolvedOpts.kernelRunId !== undefined) {
+    await wiring.store.appendRepo(state.repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: {
+        run: runId,
+        outcome: 'normal',
+        exitCode: 0,
+        ...(loop.supersededByPeer ? { reason: 'superseded' as const } : {}),
+      },
+    })
+  } catch (error) {
+    try {
       await wiring.store.appendRepo(state.repo, {
         actor: DISPATCHER,
         type: 'dispatcher.run-stopped',
         payload: {
-          run: resolvedOpts.kernelRunId,
-          outcome: 'normal',
-          exitCode: 0,
-          ...(loop.supersededByPeer ? { reason: 'superseded' as const } : {}),
+          run: runId,
+          outcome: 'abnormal',
+          exitCode: 1,
+          error: error instanceof Error ? error.message : String(error),
         },
       })
-    }
-  } catch (error) {
-    if (resolvedOpts.kernelRunId !== undefined) {
-      try {
-        await wiring.store.appendRepo(state.repo, {
-          actor: DISPATCHER,
-          type: 'dispatcher.run-stopped',
-          payload: {
-            run: resolvedOpts.kernelRunId,
-            outcome: 'abnormal',
-            exitCode: 1,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        })
-      } catch {
-        // Preserve the kernel failure; the supervising frontend records exit.
-      }
+    } catch {
+      // Preserve the kernel failure; the supervising frontend records exit.
     }
     throw error
   } finally {

@@ -12,7 +12,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolveCliEnv } from './env'
@@ -1179,6 +1179,161 @@ describe('abDispatch guards', () => {
       await rm(tmp, { recursive: true, force: true })
     }
   })
+})
+
+/** The regression guard for the invisible-dispatcher bug: every `abDispatch`
+ * invocation — kernel child or plain `ab dispatch` — now carries one durable
+ * journaling run id, synthesized `<host>-dispatch-<id>` when no kernelRunId is
+ * supplied, and every journal write plus the repository lease share it. */
+describe('dispatcher run identity without a kernelRunId', () => {
+  test('a plain --once dispatch journals run boundaries, tick facts, and lease under one synthesized run id', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    try {
+      const leaseHolders: string[] = []
+      const originalClaim = fx.store.claimRepoLease.bind(fx.store)
+      fx.store.claimRepoLease = async (repo, holder, ttl) => {
+        leaseHolders.push(holder)
+        return originalClaim(repo, holder, ttl)
+      }
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: fx.wire,
+      })
+
+      const repoEvents = await fx.store.getRepoEvents(fx.origin)
+      const runEvents = repoEvents.filter(
+        (event) =>
+          event.type === 'dispatcher.run-started' ||
+          event.type === 'dispatcher.tick-started' ||
+          event.type === 'dispatcher.tick-completed' ||
+          event.type === 'dispatcher.run-stopped',
+      )
+      expect(runEvents.map((event) => event.type)).toEqual([
+        'dispatcher.run-started',
+        'dispatcher.tick-started',
+        'dispatcher.tick-completed',
+        'dispatcher.run-stopped',
+      ])
+      // One run id across every boundary and tick fact — the id abDispatch
+      // mints exactly once per invocation.
+      const runs = new Set(runEvents.map((event) => event.payload.run))
+      expect(runs.size).toBe(1)
+      const run = runEvents[0]!.payload.run
+      expect(run.startsWith(`${hostname()}-dispatch-`)).toBe(true)
+
+      const stopped = runEvents.find(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.run-stopped' }> =>
+          event.type === 'dispatcher.run-stopped',
+      )
+      expect(stopped).toMatchObject({ payload: { outcome: 'normal', exitCode: 0 } })
+
+      // "Who holds this repository?" and "who is writing this journal?" are
+      // the same string while the invocation owns the lease.
+      expect(leaseHolders.length).toBeGreaterThan(0)
+      expect(leaseHolders.every((holder) => holder === run)).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('startup launch-flag writes carry the invocation run id and stay human-authored', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        intake: false,
+        defaultAutoMerge: true,
+        wire: fx.wire,
+      })
+
+      const repoEvents = await fx.store.getRepoEvents(fx.origin)
+      const started = repoEvents.find(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.run-started' }> =>
+          event.type === 'dispatcher.run-started',
+      )
+      const intake = repoEvents.find(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.intake-set' }> =>
+          event.type === 'dispatcher.intake-set',
+      )
+      const autoMerge = repoEvents.find(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.auto-merge-default-set' }> =>
+          event.type === 'dispatcher.auto-merge-default-set',
+      )
+      expect(started).toBeDefined()
+      // The writing dispatcher is identifiable from the setting facts, while
+      // the operator intent stays a human actor.
+      expect(intake?.actor.kind).toBe('human')
+      expect(autoMerge?.actor.kind).toBe('human')
+      expect(intake?.payload).toEqual({ enabled: false, run: started!.payload.run })
+      expect(autoMerge?.payload).toEqual({ enabled: true, run: started!.payload.run })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a failing tick without a kernelRunId journals dispatcher.tick-failed under the synthesized run', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    try {
+      const originalAppendRepo = fx.store.appendRepo.bind(fx.store)
+      fx.store.appendRepo = async (repo, event) => {
+        if (event.type === 'dispatcher.tick-started') {
+          throw new Error('injected tick failure')
+        }
+        return originalAppendRepo(repo, event)
+      }
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          stop.abort()
+        },
+        wire: fx.wire,
+      })
+
+      const repoEvents = await fx.store.getRepoEvents(fx.origin)
+      const started = repoEvents.find(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.run-started' }> =>
+          event.type === 'dispatcher.run-started',
+      )
+      const failed = repoEvents.find(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.tick-failed' }> =>
+          event.type === 'dispatcher.tick-failed',
+      )
+      expect(started).toBeDefined()
+      expect(failed).toMatchObject({
+        actor: { kind: 'dispatcher' },
+        payload: { run: started!.payload.run, error: 'injected tick failure' },
+      })
+      // The invocation still closes its run boundary cleanly.
+      expect(
+        repoEvents.some(
+          (event) =>
+            event.type === 'dispatcher.run-stopped' && event.payload.run === started!.payload.run,
+        ),
+      ).toBe(true)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
 })
 
 describe('abDispatch --once', () => {
@@ -3875,13 +4030,23 @@ function latestDashboardFrame(term: { frames: string[] }): string {
 /** The repository-setting facts a dashboard action durably wrote, in journal
  * order — `[type, payload]` pairs, so both the values and their ORDER are
  * assertable. Order matters: the pause fact is the quiescence boundary and must
- * precede intake (src/cli/bulk-control.ts). */
+ * precede intake (src/cli/bulk-control.ts). Run-boundary and tick facts the
+ * loop now journals unconditionally are excluded — the setting-write path is
+ * what this helper is for. */
+function settingWritesFilter(type: RepositoryEvent['type']): boolean {
+  return (
+    type === 'dispatcher.pause-set' ||
+    type === 'dispatcher.intake-set' ||
+    type === 'dispatcher.auto-merge-default-set'
+  )
+}
+
 async function settingWrites(
   store: BuildStore,
   repo: string,
 ): Promise<[string, { enabled: boolean }][]> {
   return (await store.getRepoEvents(repo))
-    .filter((event) => event.type.startsWith('dispatcher.'))
+    .filter((event) => settingWritesFilter(event.type))
     .map((event) => [event.type, event.payload as { enabled: boolean }])
 }
 
@@ -5182,13 +5347,20 @@ describe('abDispatch interactive keyboard controls', () => {
         event.type.startsWith('dispatcher.'),
       )
       // The losing invocation records its yield once; the winner performs the
-      // settings actions both operators pressed.
+      // settings actions both operators pressed. Every run boundary and tick
+      // fact now also journals unconditionally (run identity is synthesized
+      // for plain dispatchers), so the equality below scopes itself to the
+      // durable setting writes.
       const yields = settings.filter((event) => event.type === 'dispatcher.tick-yielded')
       expect(yields).toHaveLength(1)
       expect(yields[0]?.actor.kind).toBe('dispatcher')
       expect(
         settings
-          .filter((event) => event.type !== 'dispatcher.tick-yielded')
+          .filter(
+            (event) =>
+              event.type === 'dispatcher.intake-set' ||
+              event.type === 'dispatcher.auto-merge-default-set',
+          )
           .map((event) => [
             event.actor.kind === 'human' ? event.actor.user : event.actor.kind,
             event.type,
@@ -5298,12 +5470,23 @@ describe('abDispatch interactive keyboard controls', () => {
           payload: event.payload,
         })),
       ).toEqual([
-        // The loop yields the repository lease to the standing holder; the
-        // yield is its only durable tick record.
+        // The loop journals its run boundary unconditionally — the run id is
+        // synthesized for plain dispatchers — then yields the repository lease
+        // to the standing holder; the yield is its only durable tick record.
+        {
+          actor: { kind: 'dispatcher' },
+          type: 'dispatcher.run-started',
+          payload: {
+            run: expect.stringMatching(/-dispatch-/),
+            pid: expect.any(Number),
+            effectiveConfig: { kind: 'dispatcher-effective-config', rev: expect.any(Number) },
+            roleWarnings: [],
+          },
+        },
         {
           actor: { kind: 'dispatcher' },
           type: 'dispatcher.tick-yielded',
-          payload: { holder: 'other-dispatcher' },
+          payload: { run: expect.stringMatching(/-dispatch-/), holder: 'other-dispatcher' },
         },
         {
           actor: { kind: 'human', user: 'harvest-op' },
@@ -5358,27 +5541,38 @@ describe('abDispatch interactive keyboard controls', () => {
       expect(stripAnsi(term.all())).not.toContain('harvest run has no available action')
 
       const repoAdded = (await fx.store.getRepoEvents(fx.origin)).slice(beforeRepo.length)
-      // The staged open run means the loop yields the repository lease to the
-      // standing holder; the yield is its only durable tick record.
+      // The loop journals its synthesized run boundary first, then yields the
+      // repository lease to the standing holder; the yield is its only durable
+      // tick record.
       expect(
         repoAdded
-          .slice(0, 1)
+          .slice(0, 2)
           .map((event) => ({ actor: event.actor, type: event.type, payload: event.payload })),
       ).toEqual([
         {
           actor: { kind: 'dispatcher' },
+          type: 'dispatcher.run-started',
+          payload: {
+            run: expect.stringMatching(/-dispatch-/),
+            pid: expect.any(Number),
+            effectiveConfig: { kind: 'dispatcher-effective-config', rev: expect.any(Number) },
+            roleWarnings: [],
+          },
+        },
+        {
+          actor: { kind: 'dispatcher' },
           type: 'dispatcher.tick-yielded',
-          payload: { holder: 'other-dispatcher' },
+          payload: { run: expect.stringMatching(/-dispatch-/), holder: 'other-dispatcher' },
         },
       ])
-      expect(repoAdded.slice(1).map((event) => event.type)).toEqual([
+      expect(repoAdded.slice(2).map((event) => event.type)).toEqual([
         'dispatcher.auto-merge-default-set',
         'dispatcher.auto-merge-default-set',
         'harvest.pause-requested',
         'harvest.resume-requested',
         'harvest.resumed',
       ])
-      for (const event of repoAdded.slice(1, 5)) {
+      for (const event of repoAdded.slice(2, 6)) {
         expect(event.actor).toEqual({
           kind: 'human',
           user: 'harvest-op',
@@ -5697,13 +5891,15 @@ describe('abDispatch interactive keyboard controls', () => {
           .some((event) => event.type === 'harvest.resume-requested'),
       )
       const added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
-      // The loop yields the repository lease to the standing holder; the
-      // yield is its only durable tick record.
+      // The loop journals its run boundary first (run identity is synthesized
+      // for plain dispatchers), then yields the repository lease to the
+      // standing holder; the yield is its only durable tick record.
       expect(added.map((event) => event.type)).toEqual([
+        'dispatcher.run-started',
         'dispatcher.tick-yielded',
         'harvest.resume-requested',
       ])
-      expect(added[1]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
+      expect(added[2]?.actor).toEqual({ kind: 'human', user: 'failure-op' })
       expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       await fx.store.appendRepo(fx.origin, {
@@ -5836,8 +6032,15 @@ describe('abDispatch interactive keyboard controls', () => {
           .some((event) => event.type === 'harvest.resume-requested'),
       )
       let added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
-      expect(added.map((event) => event.type)).toEqual(['harvest.resume-requested'])
-      expect(added[0]?.actor).toEqual({ kind: 'human', user: 'error-op' })
+      // The unconditional run boundary and the tick facts precede the human
+      // control write (this invocation holds the repository lease and ticks).
+      expect(added.map((event) => event.type)).toEqual([
+        'dispatcher.run-started',
+        'dispatcher.tick-started',
+        'dispatcher.tick-completed',
+        'harvest.resume-requested',
+      ])
+      expect(added[3]?.actor).toEqual({ kind: 'human', user: 'error-op' })
       expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       // A second p while the request is pending is a no-op. The queued Up is
@@ -5845,7 +6048,8 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('pause')
       input.press('up')
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
-      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + 1)
+      // Run boundary, the two tick facts, and the one human control write.
+      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + 4)
       expect(stripAnsi(term.all())).not.toContain('harvest run: resume acknowledgement pending')
 
       await fx.store.appendRepo(fx.origin, {
@@ -5985,9 +6189,14 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(() => /^ > .*Harvest.*ESCALATED/m.test(latestDashboardFrame(term)))
       input.press('pause')
       input.press('up')
-      // The selection move is serialized after the no-op run action.
+      // The selection move is serialized after the no-op run action. The run
+      // boundary is the invocation's only durable write up to this point.
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
-      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before)
+      expect((await fx.store.getRepoEvents(fx.origin)).slice(before).map((e) => e.type)).toEqual([
+        'dispatcher.run-started',
+        'dispatcher.tick-started',
+        'dispatcher.tick-completed',
+      ])
       expect(stripAnsi(term.all())).not.toContain(
         'harvest run action unavailable while harvest is OFF',
       )
@@ -6445,7 +6654,7 @@ describe('abDispatch interactive keyboard controls', () => {
         ['dispatcher.intake-set', { enabled: false }],
       ])
       const settings = (await fx.store.getRepoEvents(fx.origin)).filter((event) =>
-        event.type.startsWith('dispatcher.'),
+        settingWritesFilter(event.type),
       )
       expect(
         settings.every((event) => event.actor.kind === 'human' && event.actor.user === 'quiet-op'),

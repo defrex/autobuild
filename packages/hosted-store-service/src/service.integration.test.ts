@@ -188,7 +188,11 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   const dashboardRequests = requests.slice(requestCountBeforeDashboard)
   expect(dashboardOutput).toContain('add-rate-limiting')
   const repoEvents = await h.store.getRepoEvents(h.origin)
-  const dashboardRun = repoEvents.find((event) => event.type === 'dispatcher.run-started')
+  // Plain --once passes journal their own synthesized runs now; the supervised
+  // kernel child's run is the one whose pid is not this process.
+  const dashboardRun = repoEvents.findLast(
+    (event) => event.type === 'dispatcher.run-started' && event.payload.pid !== process.pid,
+  )
   expect(dashboardRun?.type).toBe('dispatcher.run-started')
   if (dashboardRun?.type !== 'dispatcher.run-started') throw new Error('missing dashboard run')
   expect(dashboardRun.payload.pid).not.toBe(process.pid)

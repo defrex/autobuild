@@ -120,6 +120,21 @@ artifact per minute per repository; the dispatcher run/config artifacts
 themselves are retention-bounded (see below), while the journal's events keep
 accumulating by design.
 
+This is true of *every* dispatcher, not only the hosted one. A local `ab
+dispatch` pointed at the hosted Store — a watch, an operator cron on a host,
+a manual one-shot — synthesizes its own `<host>-dispatch-<id>` run id and
+journals the same run boundaries and tick facts under it. That makes cutover
+verification answerable from the journal alone:
+
+- Every `dispatcher.*` event with a non-`hosted-dispatcher` run id is direct
+  evidence that another dispatcher was writing to the hosted Store.
+- A journal window with no `dispatcher.*` events at all means no dispatcher
+  ran against the Store in that window.
+- The launch-flag facts (`dispatcher.intake-set`,
+  `dispatcher.auto-merge-default-set`) carry the writing invocation's run id
+  alongside their human actor, so even those writes identify the dispatcher
+  that performed them.
+
 ### Runtime logs
 
 Every invocation also writes to the deployment's runtime logs (Vercel's
