@@ -1939,7 +1939,11 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       0,
     )
     let persisted = openLocalStore(storeRef)
-    expect(await persisted.getRepoEvents(tmp)).toEqual([])
+    // The loop's own run boundaries and tick facts now journal unconditionally;
+    // omission must still write no durable *setting* fact.
+    expect(
+      (await persisted.getRepoEvents(tmp)).filter((event) => event.type.endsWith('-set')),
+    ).toEqual([])
     await persisted.close()
 
     expect(
@@ -1950,21 +1954,23 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
     ).toBe(0)
     persisted = openLocalStore(storeRef)
     expect(
-      (await persisted.getRepoEvents(tmp)).map((event) => ({
-        actor: event.actor,
-        type: event.type,
-        payload: event.payload,
-      })),
+      (await persisted.getRepoEvents(tmp))
+        .filter((event) => event.type.endsWith('-set'))
+        .map((event) => ({
+          actor: event.actor,
+          type: event.type,
+          payload: event.payload,
+        })),
     ).toEqual([
       {
         actor: { kind: 'human', user: 'launch-user' },
         type: 'dispatcher.intake-set',
-        payload: { enabled: false },
+        payload: { enabled: false, run: expect.stringMatching(/-dispatch-/) },
       },
       {
         actor: { kind: 'human', user: 'launch-user' },
         type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: true },
+        payload: { enabled: true, run: expect.stringMatching(/-dispatch-/) },
       },
     ])
     await persisted.close()
@@ -1975,7 +1981,9 @@ describe('runCli — ab dispatch flag parsing (§3.3)', () => {
       0,
     )
     persisted = openLocalStore(storeRef)
-    expect((await persisted.getRepoEvents(tmp)).length).toBe(2)
+    expect(
+      (await persisted.getRepoEvents(tmp)).filter((event) => event.type.endsWith('-set')).length,
+    ).toBe(2)
     await persisted.close()
   })
 

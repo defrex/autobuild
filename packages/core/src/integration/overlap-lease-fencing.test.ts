@@ -274,12 +274,16 @@ describe('concurrent-pair overlap lease fencing', () => {
       expect(loserExec.launched).toEqual([])
       expect(loser.stderr.some((line) => line.includes('tick yielded'))).toBe(true)
 
-      // The yield is durable evidence naming the winner as holder, with no
-      // run-surprise payload (no kernelRunId ⇒ no `run` key).
+      // The yield is durable evidence naming the winner as holder. The loser
+      // journals its synthesized run id too (every dispatcher now carries one),
+      // so the payload is `{ run, holder }` — holder identifies the winner.
       const repoEvents = await h.store.getRepoEvents(h.remote)
       const yields = repoEvents.filter((event) => event.type === 'dispatcher.tick-yielded')
       expect(yields).toHaveLength(1)
-      expect(yields[0]!.payload).toEqual({ holder })
+      expect(yields[0]!.payload).toEqual({
+        run: expect.stringMatching(/-dispatch-/),
+        holder,
+      })
 
       // The lease is released after the owner's once-pass.
       expect((await h.store.getRepo(h.remote))?.lease).toBeUndefined()

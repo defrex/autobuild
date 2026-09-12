@@ -661,7 +661,11 @@ export async function prepareHappyScenario(): Promise<HappyScenario> {
         ]),
       ),
     ) as Record<HappyBuildSlug, string[]>
-    const repoJournalBefore = JSON.stringify(await harness.store.getRepoEvents(harness.origin))
+    const repoJournalBefore = JSON.stringify(
+      (await harness.store.getRepoEvents(harness.origin)).filter((event) =>
+        event.type.startsWith('harvest.'),
+      ),
+    )
     return { harness, buildEventsBefore, repoJournalBefore }
   } catch (error) {
     await harness.cleanup()
@@ -978,9 +982,16 @@ export async function captureDashboardFrames(
     ) {
       throw new Error('dashboard capture happy scenario unexpectedly attempted auto-merge')
     }
-    const repoJournalUnchanged =
-      JSON.stringify(await happy.harness.store.getRepoEvents(happy.harness.origin)) ===
-      happy.repoJournalBefore
+    const harvestJournal = async (): Promise<string> =>
+      JSON.stringify(
+        (await happy.harness.store.getRepoEvents(happy.harness.origin)).filter((event) =>
+          event.type.startsWith('harvest.'),
+        ),
+      )
+    // The dispatcher's own run boundaries and tick facts now journal
+    // unconditionally (even without a kernelRunId), so purity is asserted over
+    // the Harvest journal — the facts painting must never mutate.
+    const repoJournalUnchanged = (await harvestJournal()) === happy.repoJournalBefore
     if (!repoJournalUnchanged) {
       throw new Error('dashboard capture happy scenario mutated the Harvest journal while painting')
     }
