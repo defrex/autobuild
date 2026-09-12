@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#320](https://github.com/defrex/autobuild/pull/320) — Guarantee the hosted deployment ships the packed bun distribution
 - [#319](https://github.com/defrex/autobuild/pull/319) — Compose the guest harvest ticket source like a local harvest
 - [#318](https://github.com/defrex/autobuild/pull/318) — Correct the drainInFlight comment on hosted-harvest draining
 - [#317](https://github.com/defrex/autobuild/pull/317) — Validate hosted dispatcher cutover end-to-end and attach AUT-304 acceptance evidence
