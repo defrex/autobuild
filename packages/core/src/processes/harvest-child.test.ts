@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import type { BuildStore } from '../store/types'
-import { runHarvestChild } from './harvest-child'
+import { createTicketSource } from '../ports/tickets/create'
+import { guestTicketSourceArgs, runHarvestChild } from './harvest-child'
 
 const HOST_ENV = {
   provider: 'vercel-sandbox',
@@ -116,6 +117,98 @@ describe('harvest child (guest runner composition)', () => {
         ),
       ).rejects.toThrow(/AB_TOKEN/)
       expect(closed).toBe(true)
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('a defaulted file dir resolves against the guest checkout and its local state root, like a local harvest', async () => {
+    const workspace = await guestWorkspace(['source = "file"', 'readyState = "Ready"'])
+    try {
+      const args = guestTicketSourceArgs(guestInput(), workspace)
+      // The guest checkout is the targetRepo — never the host-side identity.
+      expect(args.targetRepo).toBe(resolve(workspace))
+      // A remote store ref selects the checkout-local default, exactly what a
+      // local harvest in this checkout would pass.
+      expect(args.localStateRoot).toBe(join(resolve(workspace), '.autobuild'))
+      const source = await createTicketSource(
+        { source: 'file', readyState: 'Ready' },
+        { AB_STORE: 'https://store.example.test' },
+        args.targetRepo,
+        args.localStateRoot,
+      )
+      await source.create({ title: 'T', body: 'b' })
+      // The literal directory a local harvest in the same checkout would use.
+      expect(await readdir(join(workspace, '.autobuild', 'tickets', 'triage'))).toEqual([
+        'file-1.md',
+      ])
+      // The defaulted backlog hides itself from git.
+      expect(await readdir(join(workspace, '.autobuild', 'tickets'))).toContain('.gitignore')
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('a relative [tickets].dir resolves against the guest checkout, not the host repo identity', async () => {
+    const workspace = await guestWorkspace([
+      'source = "file"',
+      'readyState = "Ready"',
+      'dir = "tickets"',
+    ])
+    try {
+      const args = guestTicketSourceArgs(guestInput(), workspace)
+      const source = await createTicketSource(
+        { source: 'file', readyState: 'Ready', dir: 'tickets' },
+        {},
+        args.targetRepo,
+        args.localStateRoot,
+      )
+      await source.create({ title: 'T', body: 'b' })
+      // Resolved against the guest checkout; input.repo is '/repo', so the old
+      // composition would have written outside the checkout entirely.
+      expect(await readdir(join(workspace, 'tickets', 'triage'))).toEqual(['file-1.md'])
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('a local-path store ref selects the resolved store ref as the guest local state root', async () => {
+    const workspace = await guestWorkspace(['source = "file"', 'readyState = "Ready"'])
+    try {
+      const args = guestTicketSourceArgs(guestInput({ storeRef: 'state-store' }), workspace)
+      // Same precedence rule resolveRepoStatePaths applies on the host.
+      expect(args.localStateRoot).toBe(resolve(workspace, 'state-store'))
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('hosted composition is inert for the guest ticket args', async () => {
+    const workspace = await guestWorkspace([
+      'source = "hosted"',
+      'teamKey = "AUT"',
+      'readyState = "Todo"',
+    ])
+    try {
+      const args = guestTicketSourceArgs(guestInput(), workspace)
+      const env = { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped-token' }
+      const withGuestArgs = await createTicketSource(
+        { source: 'hosted', teamKey: 'AUT', readyState: 'Todo' },
+        env,
+        args.targetRepo,
+        args.localStateRoot,
+      )
+      // The hosted branch never reads targetRepo/localStateRoot, so the wrong
+      // arguments compose a byte-identical source.
+      const withLegacyArgs = await createTicketSource(
+        { source: 'hosted', teamKey: 'AUT', readyState: 'Todo' },
+        env,
+        '/repo',
+        undefined,
+      )
+      expect(withGuestArgs.name).toBe('hosted')
+      expect(withLegacyArgs.name).toBe('hosted')
+      expect(withGuestArgs).toBeInstanceOf(withLegacyArgs.constructor as new () => unknown)
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }

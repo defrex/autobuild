@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#323](https://github.com/defrex/autobuild/pull/323) — Journal every dispatcher invocation under one synthesized run id
+- [#320](https://github.com/defrex/autobuild/pull/320) — Guarantee the hosted deployment ships the packed bun distribution
+- [#319](https://github.com/defrex/autobuild/pull/319) — Compose the guest harvest ticket source like a local harvest
+- [#318](https://github.com/defrex/autobuild/pull/318) — Correct the drainInFlight comment on hosted-harvest draining
 - [#317](https://github.com/defrex/autobuild/pull/317) — Validate hosted dispatcher cutover end-to-end and attach AUT-304 acceptance evidence
 - [#315](https://github.com/defrex/autobuild/pull/315) — Run harvest in a disposable sandbox on hosted dispatchers
 - [#314](https://github.com/defrex/autobuild/pull/314) — Prove auto-merge gate presence from the mechanism actually in effect

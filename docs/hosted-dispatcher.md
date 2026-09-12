@@ -45,19 +45,30 @@ must pack the archive while both exist — in its build step — and carry it in
 the function bundle:
 
 ```json
-{ "scripts": { "deploy:build": "bun packages/hosted-store-service/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build" } }
+{ "scripts": { "deploy:build": "bun packages/hosted-store-service/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun tools/ship-packed-distribution.ts" } }
 ```
 
 `pack-distribution` writes `.autobuild-dist/autobuild-<version>.tgz` under the
-distribution root (`--root DIR` overrides), and the Next.js config includes
-that directory in the cron route's bundle
-(`outputFileTracingIncludes: { '/api/dispatch': ['./.autobuild-dist/**'] }`).
+distribution root (`--root DIR` overrides). The Next.js config's
+`outputFileTracingIncludes: { '/api/dispatch': ['./.autobuild-dist/**'] }`
+records the intent to include that directory in the cron route's bundle, but
+Next 16's default Turbopack builds never apply `outputFileTracingIncludes`
+(only webpack builds do), so a deployment cannot rely on the config alone. The
+autobuild-api pipeline therefore ends `deploy:build` with a post-build trace
+step (`bun tools/ship-packed-distribution.ts`) that appends the archive to the
+dispatch route's `route.js.nft.json` — the trace file Vercel's Next builder
+consumes when assembling the function bundle — and fails the deploy loudly if
+nothing was packed or the trace file is missing. A deployment using this
+pipeline cannot ship without the archive; deployments that skip both packing
+and the trace step still fail at runtime.
+
 At runtime the kernel takes, in order: `AB_DISTRIBUTION_ARCHIVE` (an explicit
 archive path), the single archive under `.autobuild-dist/` of the
 distribution root or working directory, a source checkout packed on the spot,
 and finally the running version's published GitHub release asset. A tick that
 reports `Executable not found in $PATH: "bun"` during `provision` is a
-deployment that skipped this step.
+deployment that skipped the pack step (or, outside this pipeline, the trace
+step that ships the archive).
 
 ## Bounding the invocation
 
