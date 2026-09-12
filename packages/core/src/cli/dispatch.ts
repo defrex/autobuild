@@ -2447,17 +2447,21 @@ class DispatchLoop {
     return this.opts.signal?.aborted === true || this.inputStop.signal.aborted
   }
 
-  /** `--once` awaits local-parent executions, locally run harvest, and any
-   * remote provisioning continuation this invocation kicked (a sandbox is
-   * created, bootstrapped, and launched by the host, so leaving early would
-   * abandon it at teardown and the next invocation would start over). An
-   * environment-supervised execution (remote build or hosted harvest) keeps
-   * running in its guest, and a later invocation settles it from the Store
-   * alone. An invocation deadline stops the await loop; the remaining
-   * `local-parent` executions are then stopped and reaped by the
-   * `stopBuildExecutions()` teardown, exactly as a deliberately stopped watch
-   * run, and an unfinished provisioning is recorded as abandoned for the next
-   * supervisor to adopt. */
+  /** `--once` awaits everything in `inFlight` that is not tagged
+   * 'environment': `local-parent` build executions, locally run harvest, and
+   * hosted harvest. Hosted harvest runs in a disposable guest but carries no
+   * 'environment' tag (launchHarvest never sets inFlightKinds), so `--once`
+   * awaits it and one invocation reaches a durable boundary — per the
+   * launchHarvest doc comment. The provisioning drain is awaited too (a
+   * sandbox is created, bootstrapped, and launched by the host, so leaving
+   * early would abandon it at teardown and the next invocation would start
+   * over). Only build executions launched with environment supervision are
+   * excluded (tagged at the build-launch site): they keep running in their
+   * guest, and a later invocation settles them from the Store alone. An
+   * invocation deadline stops the await loop; the remaining `local-parent`
+   * executions are then stopped and reaped by the `stopBuildExecutions()`
+   * teardown, exactly as a deliberately stopped watch run, and an unfinished
+   * provisioning is recorded as abandoned for the next supervisor to adopt. */
   private async drainInFlight(): Promise<void> {
     for (;;) {
       const pending: Promise<unknown>[] = [...this.inFlight].filter(

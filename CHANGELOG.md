@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#321](https://github.com/defrex/autobuild/pull/321) — Record publication loss durably before any workspace release
+- [#319](https://github.com/defrex/autobuild/pull/319) — Compose the guest harvest ticket source like a local harvest
+- [#318](https://github.com/defrex/autobuild/pull/318) — Correct the drainInFlight comment on hosted-harvest draining
 - [#317](https://github.com/defrex/autobuild/pull/317) — Validate hosted dispatcher cutover end-to-end and attach AUT-304 acceptance evidence
 - [#315](https://github.com/defrex/autobuild/pull/315) — Run harvest in a disposable sandbox on hosted dispatchers
 - [#314](https://github.com/defrex/autobuild/pull/314) — Prove auto-merge gate presence from the mechanism actually in effect
