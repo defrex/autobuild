@@ -107,6 +107,72 @@ describe('defaultDistributionArchive', () => {
     expect(archive.byteLength).toBeGreaterThan(0)
   })
 
+  test('a checkout with bun on PATH still takes the pack path', async () => {
+    // The real workspace root has .git and no prebuilt archive; injecting
+    // bun availability pins the contract that a present bun keeps the pack
+    // path rather than routing to the release asset.
+    const archive = await defaultDistributionArchive({}, undefined, () => true)
+    expect(archive.byteLength).toBeGreaterThan(0)
+  })
+
+  test('a bundled deployment with a vestigial .git and no bun falls through to the release asset', async () => {
+    // The real workspace root has .git and no prebuilt archive; with bun
+    // unavailable, the release asset for the running version is fetched —
+    // the pack path is never taken (the marker bytes prove it).
+    const version = await readDistributionIdentity()
+    const marker = new Uint8Array([7, 7, 7])
+    const calls: string[] = []
+    const archive = await defaultDistributionArchive(
+      {},
+      (async (method: string, path: string) => {
+        calls.push(`${method} ${path}`)
+        if (path.endsWith(`/releases/tags/v${version}`)) {
+          return {
+            status: 200,
+            headers: {},
+            json: {
+              assets: [
+                {
+                  name: distributionAssetName(version),
+                  browser_download_url: 'https://downloads.example/asset',
+                },
+              ],
+            },
+          }
+        }
+        return { status: 200, headers: {}, bytes: marker }
+      }) as never,
+      () => false,
+    )
+    expect(archive).toEqual(marker)
+    expect(calls.some((call) => call.endsWith(`/releases/tags/v${version}`))).toBe(true)
+  })
+
+  test('a bundled deployment with no bun and no release asset names the missing prebuilt archive', async () => {
+    const version = await readDistributionIdentity()
+    const original = new GitHubApiError(404, 'Not Found')
+    const error: unknown = await defaultDistributionArchive(
+      {},
+      (async () => {
+        throw original
+      }) as never,
+      () => false,
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect((error as Error).message).toContain(`.autobuild-dist/autobuild-${version}.tgz`)
+    expect((error as Error).message).toContain('AB_DISTRIBUTION_ARCHIVE')
+    // fetchDistributionReleaseAsset wraps a 404 in its own "cut a release"
+    // error before the guard rethrows with guidance, so the original error is
+    // preserved through the cause chain rather than as the direct cause.
+    const causes: unknown[] = []
+    for (let cause = (error as Error).cause; cause instanceof Error; cause = cause.cause) {
+      causes.push(cause)
+    }
+    expect(causes).toContain(original)
+  })
+
   test('without a checkout, fetches the published release asset for the running version', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-dist-release-'))
     cleanups.push(dir)

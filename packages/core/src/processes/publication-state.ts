@@ -55,12 +55,34 @@ export function publicationRequestSettled(
   )
 }
 
-export function abandonedPublicationPending(events: readonly AbEvent[]): boolean {
+/** The latest `publication.requested` with no settling completion fact — the
+ * single settlement target for every caller that would previously re-derive it
+ * with a private `findLast`. */
+export function latestUncompletedPublicationRequest(
+  events: readonly AbEvent[],
+): PublicationRequest | undefined {
   const request = events.findLast(
     (event) =>
       event.type === 'publication.requested' && !publicationRequestCompleted(events, event),
   )
-  return request?.type === 'publication.requested' && publicationRequestSettled(events, request)
+  return request?.type === 'publication.requested' ? request : undefined
+}
+
+/** Whether the durable loss record (AUT-328) has already been appended for
+ * `request`. The release guard and the settlement backstop both consult this
+ * so repeated ticks append at most one `publication.lost` per request. */
+export function publicationLostRecorded(
+  events: readonly AbEvent[],
+  request: PublicationRequest,
+): boolean {
+  return events.some(
+    (event) => event.type === 'publication.lost' && event.payload.request === request.seq,
+  )
+}
+
+export function abandonedPublicationPending(events: readonly AbEvent[]): boolean {
+  const request = latestUncompletedPublicationRequest(events)
+  return request !== undefined && publicationRequestSettled(events, request)
 }
 
 export function publicationPending(events: readonly AbEvent[]): boolean {

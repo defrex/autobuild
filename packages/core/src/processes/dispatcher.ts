@@ -75,6 +75,7 @@ import { lastExecutionOutcome, openExecution, settleExecution } from './executio
 import { openHarvestExecutions } from './harvest-execution-state'
 import type { RepositoryEvent } from '../events/repository'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
+import { settlePublicationBeforeRelease } from './publication-loss'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
 
@@ -1758,6 +1759,16 @@ export class Dispatcher {
     if (open === null) return false
     const recovery = this.workspaceOwner(open)?.recovery
     if (recovery === undefined) return false
+    // Last-chance settlement boundary (AUT-328): record the pending
+    // publication's fate BEFORE the destructive reap. The guard's append
+    // failure propagates — a stale workspace with an unrecorded pending
+    // request is never reaped (the next tick retries).
+    events = await settlePublicationBeforeRelease(
+      { store: this.deps.store, settlePublication: this.deps.settlePublication },
+      slug,
+      events,
+      reason,
+    )
     const attempt =
       events.filter(
         (event) =>
@@ -1837,6 +1848,16 @@ export class Dispatcher {
       path: open.path ?? open.ref,
       branch: open.branch,
     }
+    // Last-chance settlement boundary (AUT-328): settle or durably record the
+    // pending publication BEFORE any provider cleanup call, while the
+    // workspace still exists. The guard's append failure propagates — the
+    // release never proceeds past an unrecorded pending request.
+    events = await settlePublicationBeforeRelease(
+      { store: this.deps.store, settlePublication: this.deps.settlePublication },
+      slug,
+      events,
+      reason,
+    )
     const recovery = owner.recovery
     if (recovery !== undefined) {
       const attempt =

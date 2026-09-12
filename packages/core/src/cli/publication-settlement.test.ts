@@ -581,3 +581,131 @@ describe('settlePendingPublication', () => {
     ).toHaveLength(1)
   })
 })
+
+describe('settlePendingPublication: the publication.lost backstop (AUT-328)', () => {
+  test('an abandoned unpublished request records the loss durably, deduped per request', async () => {
+    const h = await seed()
+    const artifact = await h.store.putArtifact(SLUG, {
+      kind: 'implement-notes',
+      content: 'never landed',
+    })
+    const requested = await h.store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-1', reason: 'replacement' },
+    })
+    h.deps.publication = {
+      isPublished: async () => false,
+      publish: async () => {
+        throw new Error('a released workspace must never be published again')
+      },
+    }
+
+    await settlePendingPublication(h.deps, SLUG)
+    await settlePendingPublication(h.deps, SLUG)
+
+    const lost = (await h.store.getEvents(SLUG)).filter(
+      (event) => event.type === 'publication.lost',
+    )
+    expect(lost).toHaveLength(1)
+    expect(lost[0]!.actor).toEqual(DISPATCHER)
+    expect(lost[0]!.payload).toEqual({
+      request: requested.seq,
+      operation: 'implement',
+      branch: BRANCH,
+      sha: SHA,
+      reason: 'workspace released with the publication uncompleted',
+    })
+  })
+
+  test('an abandoned request the guest already pushed is settled, never recorded lost', async () => {
+    const h = await seed()
+    const artifact = await h.store.putArtifact(SLUG, {
+      kind: 'implement-notes',
+      content: 'landed before the release',
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: { ref: 'sandbox-1', reason: 'abort' },
+    })
+    h.deps.publication = {
+      isPublished: async (input) => input.sha === SHA && input.branch === BRANCH,
+      publish: async () => {
+        throw new Error('an already-pushed branch must not publish again')
+      },
+    }
+
+    await settlePendingPublication(h.deps, SLUG)
+
+    const events = await h.store.getEvents(SLUG)
+    expect(events.some((event) => event.type === 'publication.lost')).toBe(false)
+    expect(
+      events.filter(
+        (event) => event.type === 'implement.completed' && event.payload.commits.head === SHA,
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('a live guest that already pushed gets its completion fact without a publish call', async () => {
+    const h = await seed()
+    const artifact = await h.store.putArtifact(SLUG, {
+      kind: 'implement-notes',
+      content: 'pushed before parking',
+    })
+    await h.store.append(SLUG, {
+      actor: agentActor('implement', 'session-1'),
+      type: 'publication.requested',
+      payload: {
+        operation: 'implement',
+        branch: BRANCH,
+        sha: SHA,
+        round: 1,
+        base: BASE,
+        artifact: { kind: artifact.kind, rev: artifact.revision },
+      },
+    })
+    let publishAttempts = 0
+    h.deps.publication = {
+      isPublished: async (input) => input.sha === SHA && input.branch === BRANCH,
+      publish: async () => {
+        publishAttempts += 1
+      },
+    }
+
+    await settlePendingPublication(h.deps, SLUG)
+
+    expect(publishAttempts).toBe(0)
+    const events = await h.store.getEvents(SLUG)
+    expect(events.some((event) => event.type === 'publication.lost')).toBe(false)
+    expect(
+      events.filter(
+        (event) => event.type === 'implement.completed' && event.payload.commits.head === SHA,
+      ),
+    ).toHaveLength(1)
+  })
+})
