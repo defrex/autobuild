@@ -469,6 +469,8 @@ function restMergeState(raw: string): MergeStateStatus {
 
 // ── Forge adapter ────────────────────────────────────────────────────────────
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 /** Hard cap on the janitor poll's per-PR ETag cache. One small entry per PR
  * ever polled in a dispatcher process lifetime makes hitting this in practice
  * implausible; the cap is hygiene, not a load-bearing bound. */
@@ -497,6 +499,8 @@ export class GitHubForge implements Forge {
    * is an ordinary unconditional poll, so eviction is harmless by
    * construction. */
   private readonly prStateCache = new Map<string, { etag: string; state: PrState }>()
+  /** Bounded waits between mergeability re-queries on the UNKNOWN path. */
+  private readonly mergeabilityRetryDelaysMs: number[]
 
   constructor(
     opts: {
@@ -506,6 +510,10 @@ export class GitHubForge implements Forge {
       repository?: string
       repoRoot?: string
       env?: Readonly<Record<string, string | undefined>>
+      /** Bounded waits between mergeability re-queries when GitHub reports
+       * `mergeable_state: 'unknown'` (mergeability still being computed).
+       * Two retries default; tests inject `[0, 0]` so no test sleeps. */
+      mergeabilityRetryDelaysMs?: number[]
     } = {},
   ) {
     this.exec = opts.exec ?? bunExec
@@ -523,6 +531,7 @@ export class GitHubForge implements Forge {
       this.explicitRepository = this.env.AB_REPOSITORY
     }
     this.repoRoot = opts.repoRoot
+    this.mergeabilityRetryDelaysMs = opts.mergeabilityRetryDelaysMs ?? [500, 1500]
     this.prAttachments = new GitHubPrAttachmentHosting({ transport: this.transport })
   }
 
@@ -898,6 +907,56 @@ export class GitHubForge implements Forge {
   }
 
   /**
+   * Enable-path PR inspection with bounded mergeability re-query. GitHub's
+   * `mergeable_state: 'unknown'` means mergeability is still being computed —
+   * transient, commonly observed just after required checks finish — so the
+   * same view is re-GET after short waits before concluding, stopping early if
+   * native auto-merge appears applied (another actor enabled it; the caller
+   * acknowledges adoption without a mutation). Unknown *unrecognized* state
+   * strings still throw into the caller's fail-closed handling — only the
+   * mapped UNKNOWN value re-queries.
+   */
+  private async inspectAutoMergeView(
+    repoPath: string,
+    number: number,
+  ): Promise<{
+    view: z.infer<typeof restAutoMergeView>
+    mergeState: MergeStateStatus
+    requeries: number
+    waitedMs: number
+  }> {
+    const view = await this.getJson(
+      restAutoMergeView,
+      `${repoPath}/pulls/${number}`,
+      `PR #${number} auto-merge inspection`,
+    )
+    let current = view
+    let requeries = 0
+    let waitedMs = 0
+    while (
+      current.auto_merge === null &&
+      restMergeState(current.mergeable_state) === 'UNKNOWN' &&
+      requeries < this.mergeabilityRetryDelaysMs.length
+    ) {
+      const delay = this.mergeabilityRetryDelaysMs[requeries] ?? 0
+      await sleep(delay)
+      waitedMs += delay
+      requeries += 1
+      current = await this.getJson(
+        restAutoMergeView,
+        `${repoPath}/pulls/${number}`,
+        `PR #${number} auto-merge inspection`,
+      )
+    }
+    return {
+      view: current,
+      mergeState: restMergeState(current.mergeable_state),
+      requeries,
+      waitedMs,
+    }
+  }
+
+  /**
    * Reconcile native auto-merge state. A native idempotent hit is acknowledged
    * immediately. Otherwise enabling is classified from authoritative gate
    * existence plus the complete current merge-state enum; only a proved
@@ -933,14 +992,12 @@ export class GitHubForge implements Forge {
     try {
       const { owner, name } = await this.requireCoordinates()
       const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
-      const view = await this.getJson(
-        restAutoMergeView,
-        `${repoPath}/pulls/${number}`,
-        `PR #${number} auto-merge inspection`,
+      const { view, mergeState, requeries, waitedMs } = await this.inspectAutoMergeView(
+        repoPath,
+        number,
       )
       if (view.auto_merge !== null) return { kind: 'applied' }
 
-      const mergeState = restMergeState(view.mergeable_state)
       const gate = await this.mergeGatePresence(view.base.ref)
       if (gate.kind === 'deferred') return gate
       const disposition = classifyAutoMergeEnable(mergeState, gate.presence)
@@ -981,6 +1038,21 @@ export class GitHubForge implements Forge {
         case 'direct':
           return { kind: 'ungated', headSha: view.head.sha }
         case 'deferred':
+          if (mergeState === 'UNKNOWN') {
+            // Not a persistent indeterminacy: mergeability was still being
+            // computed (transient) after the bounded re-queries. pendingAutoMerge
+            // keeps the consent pending, so a later janitor tick retries.
+            return {
+              kind: 'deferred',
+              reason: {
+                code: 'mergeability-uncomputed',
+                detail:
+                  `GitHub reported mergeable_state 'UNKNOWN' for PR #${number} — mergeability ` +
+                  `was still being computed (transient) after ${requeries} re-quer${requeries === 1 ? 'y' : 'ies'} ` +
+                  `over ${waitedMs} ms; native auto-merge was not enabled`,
+              },
+            }
+          }
           return {
             kind: 'deferred',
             reason: {

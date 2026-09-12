@@ -229,6 +229,8 @@ export type AutoMergeDeferralCode =
   | 'github-plan-limitation'
   | 'repository-auto-merge-disabled'
   | 'unproven-gate-state'
+  /** Mergeability not yet computed — transient, resolves on retry. */
+  | 'mergeability-uncomputed'
   | 'local-base-checkout-dirty'
   | 'local-git-identity-missing'
 
