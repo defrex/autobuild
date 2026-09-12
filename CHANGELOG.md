@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#324](https://github.com/defrex/autobuild/pull/324) — Route a bundled deployment's missing archive to a legible, correctly-routed failure
+- [#322](https://github.com/defrex/autobuild/pull/322) — Treat UNKNOWN mergeable_state as transient in the auto-merge gate
 - [#320](https://github.com/defrex/autobuild/pull/320) — Guarantee the hosted deployment ships the packed bun distribution
 - [#319](https://github.com/defrex/autobuild/pull/319) — Compose the guest harvest ticket source like a local harvest
 - [#318](https://github.com/defrex/autobuild/pull/318) — Correct the drainInFlight comment on hosted-harvest draining
