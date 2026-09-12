@@ -488,6 +488,39 @@ describe('repository event catalog', () => {
         ).toThrow(/invalid payload/)
       }
     }
+
+    // Launch-flag settings may record which dispatcher invocation performed
+    // the write; the operator-only pause gate has no dispatcher writer. The
+    // field is optional, so historical journals replay unchanged, and the
+    // human actor kind is unchanged either way.
+    for (const type of ['dispatcher.intake-set', 'dispatcher.auto-merge-default-set'] as const) {
+      expect(
+        validateRepositoryEventWrite({
+          actor: humanActor('operator'),
+          type,
+          payload: { enabled: true, run: 'host-run_1' },
+        }).payload,
+      ).toEqual({ enabled: true, run: 'host-run_1' })
+      for (const payload of [
+        { enabled: true, run: '' },
+        { enabled: true, run: 7 },
+      ]) {
+        expect(() =>
+          validateRepositoryEventWrite({
+            actor: humanActor('operator'),
+            type,
+            payload,
+          }),
+        ).toThrow(/invalid payload/)
+      }
+    }
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('operator'),
+        type: 'dispatcher.pause-set',
+        payload: { enabled: true, run: 'host-run_1' },
+      }),
+    ).toThrow(/invalid payload/)
   })
 
   test('rejects unknown repository facts and identifies the harvest subset', () => {

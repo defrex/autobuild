@@ -33,6 +33,11 @@ const harvestEnvironmentSchema = z.strictObject({
 const empty = z.strictObject({})
 const setting = z.strictObject({ enabled: z.boolean() })
 const dispatchRun = z.string().min(1)
+/** A durable repository setting written by a dispatcher's startup launch
+ * flags. `run` optionally names the dispatcher invocation that performed the
+ * write (the operator intent stays `human`); optional so historical journals
+ * replay unchanged. */
+const dispatcherSetting = z.strictObject({ enabled: z.boolean(), run: dispatchRun.optional() })
 const boundedDiagnostics = z.array(z.string().min(1)).max(1_000)
 const tickCountersSchema = z.strictObject({
   merged: z.number().int().nonnegative(),
@@ -324,7 +329,7 @@ export const dispatcherSettingEventPayloadSchemas = {
     roleWarnings: boundedDiagnostics.optional(),
   }),
   /** Current repository-wide intake gate sampled by every dispatcher tick. */
-  'dispatcher.intake-set': setting,
+  'dispatcher.intake-set': dispatcherSetting,
   /** Repository-wide quiescence flag: pause-all sets it, resume-all clears it,
    * and while it is set no dispatcher tick attaches a runner to a queued build.
    * Deliberately independent of intake — intake governs new ticket intake, and
@@ -332,7 +337,7 @@ export const dispatcherSettingEventPayloadSchemas = {
    * work the repository has already accepted. */
   'dispatcher.pause-set': setting,
   /** Claim-time auto-merge default sampled by every dispatcher tick. */
-  'dispatcher.auto-merge-default-set': setting,
+  'dispatcher.auto-merge-default-set': dispatcherSetting,
 } as const
 
 export const repositoryEventPayloadSchemas = {
