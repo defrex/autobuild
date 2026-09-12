@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#322](https://github.com/defrex/autobuild/pull/322) — Treat UNKNOWN mergeable_state as transient in the auto-merge gate
 - [#318](https://github.com/defrex/autobuild/pull/318) — Correct the drainInFlight comment on hosted-harvest draining
 - [#317](https://github.com/defrex/autobuild/pull/317) — Validate hosted dispatcher cutover end-to-end and attach AUT-304 acceptance evidence
 - [#315](https://github.com/defrex/autobuild/pull/315) — Run harvest in a disposable sandbox on hosted dispatchers
