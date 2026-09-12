@@ -4,8 +4,11 @@
  * Two sources, one archive layout (`autobuild-<version>.tgz`, the same bytes
  * `bun pm pack` produces and the guest bootstrap extracts):
  *
- * - Source checkout: `bun pm pack` from the host tree (local-git consumers,
- *   and any dispatcher running from a checkout — byte-identical to today).
+ * - Usable source checkout: `bun pm pack` from the host tree (local-git
+ *   consumers, and any dispatcher running from a checkout with a `bun`
+ *   executable on `PATH` — byte-identical to today). A checkout without `bun`
+ *   cannot be packed, so a vestigial `.git` directory in a bundled deployment
+ *   routes to the release asset instead of attempting a pack it cannot run.
  * - Checkout-less origin mode: the dispatcher's own published release asset,
  *   fetched from GitHub by the running version, so the guest installs exactly
  *   the version the launching dispatcher reports even when no source tree
@@ -187,22 +190,43 @@ export async function findPrebuiltDistributionArchive(
   return null
 }
 
+/** Whether a `bun` executable is available to pack a source checkout with.
+ * Injectable in tests via `defaultDistributionArchive`. */
+const hasBunExecutable = (): boolean => Bun.which('bun') !== null
+
 /**
  * The default guest distribution source, in precedence order: an archive
  * prebuilt for this deployment (`AB_DISTRIBUTION_ARCHIVE` or
- * `.autobuild-dist/`), then a source checkout packed from the host tree, then
- * the running version's published release asset (see module docs). The
- * prebuilt archive comes first because a bundled deployment can carry a
- * vestigial `.git` directory without a `bun` executable to pack with.
+ * `.autobuild-dist/`), then a usable source checkout — a `.git` directory
+ * *and* a `bun` executable to pack with — then the running version's
+ * published release asset (see module docs). The prebuilt archive comes
+ * first because a bundled deployment can carry a vestigial `.git` directory
+ * without a `bun` executable to pack with; in that case the release asset is
+ * the route, and when it too is missing the error names the prebuilt archive
+ * the deployment should have shipped.
  */
 export async function defaultDistributionArchive(
   env: Readonly<Record<string, string | undefined>> = process.env,
   transport?: GitHubRequest,
+  hasBun: () => boolean = hasBunExecutable,
 ): Promise<Uint8Array> {
   const prebuilt = await findPrebuiltDistributionArchive(env)
   if (prebuilt !== null) return new Uint8Array(await readFile(prebuilt))
   if (await fileExists(join(distributionRoot(), '.git'))) {
-    return packageAutobuildDistribution()
+    if (hasBun()) return packageAutobuildDistribution()
+    // Vestigial `.git` in a bundled deployment: there is no usable source
+    // checkout to pack, so fall through to the release asset — and when that
+    // also fails, name the prebuilt archive the deployment should ship
+    // instead of leaving an unactionable failure behind.
+    const version = await readDistributionIdentity()
+    return fetchDistributionReleaseAsset(version, env, transport).catch((error: unknown) => {
+      throw new Error(
+        `no usable source checkout to pack and no prebuilt distribution archive for this deployment; ` +
+          `ship .autobuild-dist/autobuild-${version}.tgz with the deployment or point ` +
+          `${DISTRIBUTION_ARCHIVE_ENV} at one (see the deployment pack step)`,
+        { cause: error },
+      )
+    })
   }
   const version = await readDistributionIdentity()
   return fetchDistributionReleaseAsset(version, env, transport)
