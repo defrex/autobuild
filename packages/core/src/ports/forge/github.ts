@@ -1053,6 +1053,25 @@ export class GitHubForge implements Forge {
               },
             }
           }
+          if (mergeState === 'DIRTY') {
+            // A persistent, definite state: GitHub has computed merge
+            // conflicts with the base branch, so native auto-merge cannot be
+            // enabled against it. The recovery is updating the branch or
+            // resolving the conflicts — not gate-state investigation — and
+            // pendingAutoMerge keeps the consent pending so a later janitor
+            // tick re-examines it once the conflict is resolved.
+            return {
+              kind: 'deferred',
+              reason: {
+                code: 'merge-conflicts',
+                detail:
+                  `GitHub reports mergeable_state 'DIRTY' for PR #${number} — the head branch has ` +
+                  `merge conflicts with '${view.base.ref}'; update the branch or resolve the conflicts ` +
+                  'and the pending consent will be re-examined on a later tick. ' +
+                  'Native auto-merge was not enabled',
+              },
+            }
+          }
           return {
             kind: 'deferred',
             reason: {

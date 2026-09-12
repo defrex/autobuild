@@ -229,6 +229,10 @@ export type AutoMergeDeferralCode =
   | 'github-plan-limitation'
   | 'repository-auto-merge-disabled'
   | 'unproven-gate-state'
+  /** A persistent, definite state — GitHub has computed merge conflicts with
+   * the base branch. Recovery is updating the branch or resolving the
+   * conflicts, not gate-state investigation. */
+  | 'merge-conflicts'
   /** Mergeability not yet computed — transient, resolves on retry. */
   | 'mergeability-uncomputed'
   | 'local-base-checkout-dirty'

@@ -149,6 +149,7 @@ const DEFERRAL_SUMMARIES = {
     'GitHub rulesets are unavailable because of the repository account plan',
   'repository-auto-merge-disabled': 'repository-level auto-merge is disabled',
   'unproven-gate-state': 'merge-gate state or native auto-merge application could not be proven',
+  'merge-conflicts': 'the PR has merge conflicts with its base branch',
   'mergeability-uncomputed':
     'GitHub has not finished computing mergeability (transient; expected to resolve on retry)',
   'local-base-checkout-dirty': 'local merge is blocked by uncommitted work in the base checkout',
