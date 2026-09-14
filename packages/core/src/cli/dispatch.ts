@@ -73,7 +73,11 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from '../p
 import { settlePendingPublication as settleWorkspacePublication } from './publication-settlement'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
 import { createForge, resolveForgeRegistration } from '../ports/forge/create'
-import { GitHubApiError, type GitHubRequest } from '../ports/forge/github-transport'
+import {
+  GitHubApiError,
+  githubTokenFromEnv,
+  type GitHubRequest,
+} from '../ports/forge/github-transport'
 import { GitHubForge } from '../ports/forge/github'
 import { createProductionRuntimes } from '../ports/runner/production'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
@@ -438,12 +442,16 @@ async function defaultWire(
       if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
       validateVercelGithubOrigin(origin.stdout.trim())
     }
-    if (!opts.env.GITHUB_TOKEN && !opts.env.GH_TOKEN) {
+    if (githubTokenFromEnv(opts.env) === undefined) {
       throw new Error(
         'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment',
       )
     }
   }
+  // The builtin GitHub forge resolves its credential lazily on its first
+  // request (GITHUB_TOKEN, GH_TOKEN, then the gh CLI login) and names the
+  // miss reason on any request that had to go out anonymously; nothing is
+  // probed here, so a dispatcher that never publishes spawns nothing.
   const forge = await createForge({
     name: config.forge,
     registry: plugins,
@@ -3160,6 +3168,7 @@ async function fetchOriginModeConfig(
   const forge = new GitHubForge({
     env: opts.env,
     repository,
+    exec: opts.exec,
     ...(transport !== undefined ? { transport } : {}),
   })
   const readFile = forge.readFile
@@ -3226,7 +3235,12 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
   if (opts.env.AB_TOKEN === undefined || opts.env.AB_TOKEN === '') {
     throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
   }
-  if (opts.env.GITHUB_TOKEN === undefined && opts.env.GH_TOKEN === undefined) {
+  // Checkout-less hosts (serverless functions, sandboxes) have no gh CLI and
+  // no keyring, and the only workspace provider origin mode can run —
+  // vercel-sandbox — injects this same credential for publication, so origin
+  // mode requires an exported token: the gh fallback is a checkout-mode
+  // convenience only.
+  if (githubTokenFromEnv(opts.env) === undefined) {
     throw new Error('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
   }
   const scratch = join(

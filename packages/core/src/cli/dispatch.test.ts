@@ -522,13 +522,32 @@ describe('abDispatch guards', () => {
     await expect(
       abDispatch({ ...common, originConfigTransport: transport, env: {} } as never),
     ).rejects.toThrow(/requires an HTTPS BuildStore/)
+    // Origin mode never consults the gh CLI: a checkout-less host has none.
+    const probes: string[][] = []
     await expect(
       abDispatch({
         ...common,
         originConfigTransport: transport,
         env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped' },
+        exec: async (cmd: string[]) => {
+          probes.push([...cmd])
+          return { stdout: 'gho_from_keyring\n', stderr: '', exitCode: 0 }
+        },
       } as never),
-    ).rejects.toThrow(/requires GITHUB_TOKEN or GH_TOKEN/)
+    ).rejects.toThrow('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
+    // An exported-but-empty placeholder is no credential either.
+    await expect(
+      abDispatch({
+        ...common,
+        originConfigTransport: transport,
+        env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped', GITHUB_TOKEN: '' },
+        exec: async (cmd: string[]) => {
+          probes.push([...cmd])
+          return { stdout: 'gho_from_keyring\n', stderr: '', exitCode: 0 }
+        },
+      } as never),
+    ).rejects.toThrow('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
+    expect(probes).toEqual([])
   }, 10_000)
 
   test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {

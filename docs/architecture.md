@@ -363,6 +363,19 @@ receive-pack-free network policy, so even a failed publication-policy restore
 fails closed before setup or plugin code runs. Normal VM sessions never receive
 Forge credentials.
 
+**Forge credentials.** `packages/core/src/ports/forge/github-transport.ts` owns the
+REST transport seam and credential resolution for the builtin GitHub forge:
+`GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login read through
+`gh auth token --hostname github.com` under a bounded deadline. A transport resolves
+lazily on its first request and asks its resolver again at most once per bounded
+interval — after a miss, or after a `401` past that interval (a rotated login) — so a
+miss is never frozen into anonymous access and nothing is re-probed per request. Nothing is probed at construction time; a request that had to
+go out anonymously carries the miss reason (gh missing, not logged in to github.com,
+timed out) in its error, in every process that holds a forge. Origin-mode dispatch — and therefore the hosted
+dispatcher — requires an exported token before any side effect and never consults gh:
+a checkout-less host has neither gh nor a keyring, and `vercel-sandbox` publication
+injects that same token.
+
 **Agent runtimes.** `packages/core/src/ports/runner/`: `runtime.ts` (capability-carrying
 registry plus boundary validation), `routing.ts` (eager role resolver),
 `production.ts` (shipped Claude/Codex/Pi registrations), `codex.ts` (direct

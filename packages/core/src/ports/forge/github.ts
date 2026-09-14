@@ -4,12 +4,15 @@
  * kernel-side plumbing (SPEC §8.6 [D7]) — agents never touch the remote, so
  * forge credentials never enter the sandbox.
  *
- * The adapter never shells `gh` or reads a local checkout for its API calls:
- * the same adapter serves a checkout-bound dispatcher and a checkout-less
- * (`--repository`) one. The one deliberate exception is `pushBranch`, which
- * remains `git push` from the workspace — it is only ever called from
- * worktree-side terminals and contract fixtures; `vercel-sandbox` builds
- * publish through the sandbox's receive-pack proxy and the host never pushes.
+ * The adapter never routes API calls through `gh` or reads a local checkout
+ * for them: the same adapter serves a checkout-bound dispatcher and a
+ * checkout-less (`--repository`) one. Credentials come from `GITHUB_TOKEN` /
+ * `GH_TOKEN`, falling back to the gh CLI's stored login (`gh auth token`) so
+ * a local operator needs only `gh auth login`. The one deliberate subprocess
+ * exception on the API side is that probe; `pushBranch` remains `git push`
+ * from the workspace — it is only ever called from worktree-side terminals
+ * and contract fixtures; `vercel-sandbox` builds publish through the
+ * sandbox's receive-pack proxy and the host never pushes.
  *
  * Native auto-merge is the one operation GitHub exposes only through its
  * GraphQL schema (no REST route exists), so its enable/disable mutations
@@ -22,12 +25,14 @@
  */
 import { z } from 'zod'
 import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin'
+import type { Exec } from '../workspace/git-worktree'
 import {
   GitHubApiError,
   createGitHubFetchTransport,
-  githubTokenFromEnv,
+  githubTokenSource,
   restPlanLimitation,
   type GitHubRequest,
+  type GitHubTokenSource,
   type GitHubRequestOpts,
   type GitHubResponse,
 } from './github-transport'
@@ -48,17 +53,11 @@ import type {
 } from '../types'
 import { GitHubPrAttachmentHosting } from './github-pr-attachments'
 
-export interface ExecResult {
-  stdout: string
-  stderr: string
-  exitCode: number
-}
-
-/** Same seam shape as the workspace module: argv array, cwd, no shell. */
-export type Exec = (
-  cmd: string[],
-  opts: { cwd: string; signal?: AbortSignal },
-) => Promise<ExecResult>
+/** One subprocess seam for every forge command: argv array, optional cwd,
+ * no shell. Git commands name their cwd; the gh credential probe needs none.
+ * The contract is the workspace module's, re-exported so the forge and its
+ * callers name one type. */
+export type { Exec, ExecResult } from '../workspace/git-worktree'
 
 export const bunExec: Exec = async (cmd, opts) => {
   if (opts.signal?.aborted === true) {
@@ -506,7 +505,10 @@ export class GitHubForge implements Forge {
     opts: {
       transport?: GitHubRequest
       exec?: Exec
-      token?: string
+      /** Literal token, or a resolver. Absent: the adapter resolves
+       * `GITHUB_TOKEN`, `GH_TOKEN`, then the gh CLI login lazily through its
+       * own exec seam. */
+      token?: GitHubTokenSource
       repository?: string
       repoRoot?: string
       env?: Readonly<Record<string, string | undefined>>
@@ -517,14 +519,16 @@ export class GitHubForge implements Forge {
     } = {},
   ) {
     this.exec = opts.exec ?? bunExec
+    this.env = opts.env ?? {}
+    // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
+    // stored login, probed lazily through this adapter's exec seam on the
+    // first request. A request that still goes out anonymously carries the
+    // miss reason in its error, so nothing is probed at construction time.
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({
-        ...(opts.token !== undefined
-          ? { token: opts.token }
-          : { token: githubTokenFromEnv(opts.env ?? {}) }),
+        token: opts.token !== undefined ? opts.token : githubTokenSource(this.env, this.exec),
       })
-    this.env = opts.env ?? {}
     if (opts.repository !== undefined && opts.repository !== '') {
       this.explicitRepository = opts.repository
     } else if (this.env.AB_REPOSITORY !== undefined && this.env.AB_REPOSITORY !== '') {

@@ -1,9 +1,13 @@
 /**
  * GitHub REST transport seam, shared by the forge adapter and its PR
- * attachment hosting. Kept dependency-free so both can import it without a
- * cycle, and so tests inject a fake transport instead of shelling `gh`.
+ * attachment hosting, plus the credential resolution every GitHub caller
+ * shares. Imports nothing from the forge module so both can import it
+ * without a cycle (the workspace module's `spawnExec` is the only production
+ * dependency), and tests inject a fake transport or exec seam instead of
+ * shelling `gh`.
  */
 import { z } from 'zod'
+import { spawnExec } from '../workspace/git-worktree'
 
 export interface GitHubRequestOpts {
   query?: Record<string, string>
@@ -78,15 +82,80 @@ export const restPlanLimitation = z
   })
   .passthrough()
 
+/** Where a transport's bearer token comes from: a literal, nothing (anonymous
+ * requests), or a resolver the transport invokes lazily — a bare token or a
+ * {@link GitHubCredential}, whose miss reason the transport then attaches to
+ * the error of any request that had to go out anonymously. The transport asks
+ * a resolver again at most once per {@link CREDENTIAL_MISS_TTL_MS}: after a
+ * miss (a momentarily locked keyring is neither frozen into anonymous access
+ * for the process lifetime nor re-probed on every request), and after a
+ * request answers `401 Unauthorized` (a rotated or revoked `gh auth login` is
+ * picked up without a restart, while a revoked-but-still-stored login cannot
+ * drive a gh spawn per request). */
+export type GitHubTokenSource =
+  | string
+  | undefined
+  | (() => Promise<string | undefined | GitHubCredential>)
+
+/** Minimum interval between two invocations of a token resolver. */
+export const CREDENTIAL_MISS_TTL_MS = 60_000
+
 /** Production transport: token-authenticated fetch against api.github.com.
- * The token comes from `GITHUB_TOKEN ?? GH_TOKEN` unless overridden. */
+ * Callers pass a literal token or a resolver such as
+ * {@link githubTokenSource}; no `Authorization` header is sent when neither
+ * yields one. */
 export function createGitHubFetchTransport(opts: {
-  token?: string
+  token?: GitHubTokenSource
   apiBase?: string
+  now?: () => number
 }): GitHubRequest {
-  const token = opts.token
+  const source = opts.token
+  const now = opts.now ?? Date.now
+  let resolved: Promise<GitHubCredential> | undefined
+  /** When the current answer arrived; `undefined` while one is in flight. */
+  let resolvedAt: number | undefined
+  let missed = false
+  const stale = (): boolean =>
+    resolvedAt !== undefined && now() - resolvedAt >= CREDENTIAL_MISS_TTL_MS
+  const normalize = (answer: string | undefined | GitHubCredential): GitHubCredential => {
+    if (typeof answer === 'object') return answer
+    return answer === undefined || answer === ''
+      ? { token: undefined, reason: 'no GitHub credential was available' }
+      : { token: answer }
+  }
+  const resolveToken = (): Promise<GitHubCredential> => {
+    if (missed && stale()) resolved = undefined
+    if (resolved === undefined) {
+      resolvedAt = undefined
+      missed = false
+      const attempt = (typeof source === 'function' ? source() : Promise.resolve(source)).then(
+        normalize,
+      )
+      resolved = attempt
+      attempt.then(
+        (credential) => {
+          if (resolved !== attempt) return
+          resolvedAt = now()
+          missed = credential.token === undefined
+        },
+        () => {
+          // A rejected probe is not an answer at all — ask again next time.
+          if (resolved === attempt) resolved = undefined
+        },
+      )
+    }
+    return resolved
+  }
+  /** 401: the memoized token is no longer accepted. Drop it once the interval
+   * has passed so the next request resolves again; inside the interval the
+   * stale token keeps failing without spawning anything. */
+  const forgetToken = (): void => {
+    if (typeof source === 'function' && stale()) resolved = undefined
+  }
   const base = opts.apiBase ?? GITHUB_API_BASE
   return async (method, path, request = {}) => {
+    const credential = await resolveToken()
+    const token = credential.token
     let url = /^https:\/\//i.test(path) ? path : `${base}/${path.replace(/^\/+/, '')}`
     if (request.query !== undefined) {
       const params = new URLSearchParams(request.query)
@@ -138,10 +207,17 @@ export function createGitHubFetchTransport(opts: {
       if (buffer.byteLength > 0) bytes = new Uint8Array(buffer)
     }
     if (!response.ok) {
+      if (response.status === 401) forgetToken()
       if (bytes !== undefined) text = new TextDecoder().decode(bytes)
+      // An anonymous request that failed names why it was anonymous: a 404 on
+      // a private repository is otherwise indistinguishable from a bad path,
+      // and the operator's fix (export a token, or `gh auth login`) is the
+      // point of the message.
+      const anonymous =
+        credential.token === undefined ? ` (request was unauthenticated: ${credential.reason})` : ''
       throw new GitHubApiError(
         response.status,
-        githubErrorMessage(response.status, json, text),
+        `${githubErrorMessage(response.status, json, text)}${anonymous}`,
         json,
       )
     }
@@ -157,6 +233,120 @@ export function createGitHubFetchTransport(opts: {
 export function githubTokenFromEnv(
   env: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
-  const token = env.GITHUB_TOKEN ?? env.GH_TOKEN
+  // `||`, not `??`: an exported-but-empty GITHUB_TOKEN (a templated .env or
+  // unit file) must not mask a valid GH_TOKEN.
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN
   return token !== undefined && token !== '' ? token : undefined
+}
+
+/** Subprocess seam for the gh CLI credential probe: argv and an abort signal
+ * in; exit code, stdout, and stderr out. The workspace module's `spawnExec`
+ * satisfies it and is the default; callers that own a richer exec seam adapt
+ * it so tests never reach a real `gh`. The signal is the probe's deadline. */
+export type GitHubCliExec = (
+  cmd: string[],
+  opts: { signal: AbortSignal },
+) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+
+/** How long the gh probe may take before it is treated as "no credential".
+ * `gh auth token` never prompts, so anything this slow is a wedged keyring. */
+export const GH_CLI_TOKEN_TIMEOUT_MS = 10_000
+
+/** The argv of the gh CLI credential probe. Exported so exec seams in tests
+ * can recognize it. `--hostname` pins github.com even when the operator's
+ * default gh host is an enterprise instance, because the transport only ever
+ * speaks to api.github.com. */
+export const GH_CLI_TOKEN_COMMAND: readonly string[] = [
+  'gh',
+  'auth',
+  'token',
+  '--hostname',
+  'github.com',
+]
+
+/** Outcome of one credential lookup. A miss carries the reason so a
+ * fail-fast caller can say *why* (gh not installed, not logged in to
+ * github.com, timed out) instead of a generic "no token". */
+export type GitHubCredential = { token: string } | { token: undefined; reason: string }
+
+/** The credential the operator stored with `gh auth login`, read through
+ * `gh auth token`. Never throws: gh missing, unauthenticated, silent, or
+ * slower than the deadline all resolve to a miss with its reason. The
+ * deadline is enforced here — not in the spawner — so it holds for every
+ * injected exec seam: the probe is aborted through the signal and its result
+ * abandoned, so a wrapper script that forked the real gh and left the pipes
+ * open cannot hold the caller. The probe inherits this process's environment
+ * (gh reads its own keyring) and needs no working directory. */
+export async function githubTokenFromGhCli(
+  exec: GitHubCliExec = spawnExec,
+  timeoutMs: number = GH_CLI_TOKEN_TIMEOUT_MS,
+): Promise<GitHubCredential> {
+  const command = GH_CLI_TOKEN_COMMAND.join(' ')
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const deadline = new Promise<GitHubCredential>((resolve) => {
+    controller.signal.addEventListener(
+      'abort',
+      () =>
+        resolve({
+          token: undefined,
+          reason: `\`${command}\` did not answer within ${timeoutMs} ms`,
+        }),
+      { once: true },
+    )
+  })
+  const probe = (async (): Promise<GitHubCredential> => {
+    try {
+      const result = await exec([...GH_CLI_TOKEN_COMMAND], { signal: controller.signal })
+      if (result.exitCode !== 0) {
+        const detail = result.stderr.trim() || result.stdout.trim()
+        return {
+          token: undefined,
+          reason: `\`${command}\` exited ${result.exitCode}${detail === '' ? '' : `: ${detail}`}`,
+        }
+      }
+      const token = result.stdout.trim()
+      if (token === '') return { token: undefined, reason: `\`${command}\` printed no token` }
+      return { token }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return { token: undefined, reason: `\`${command}\` could not run: ${detail}` }
+    }
+  })()
+  try {
+    return await Promise.race([probe, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** GitHub credential resolution for kernel-side forge access: `GITHUB_TOKEN`,
+ * then `GH_TOKEN` ({@link githubTokenFromEnv}), then the gh CLI's stored
+ * login. The environment variables serve hosted and sandboxed dispatchers,
+ * which have no gh and no keyring; the gh fallback keeps a local
+ * checkout-mode dispatcher working with nothing more than `gh auth login`, as
+ * it did before the adapter moved off gh subprocesses. A miss names what was
+ * tried. */
+export async function resolveGitHubToken(
+  env: Readonly<Record<string, string | undefined>>,
+  exec?: GitHubCliExec,
+): Promise<GitHubCredential> {
+  const fromEnv = githubTokenFromEnv(env)
+  if (fromEnv !== undefined) return { token: fromEnv }
+  const probe = await githubTokenFromGhCli(exec)
+  if (probe.token !== undefined) return probe
+  return {
+    token: undefined,
+    reason: `GITHUB_TOKEN and GH_TOKEN are unset and ${probe.reason}`,
+  }
+}
+
+/** A transport token source over {@link resolveGitHubToken}: the builtin
+ * forge's default. Resolves whenever the transport asks (first request, then
+ * after a miss interval or a 401). */
+export function githubTokenSource(
+  env: Readonly<Record<string, string | undefined>>,
+  exec?: GitHubCliExec,
+): () => Promise<GitHubCredential> {
+  return () => resolveGitHubToken(env, exec)
 }
