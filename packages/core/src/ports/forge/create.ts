@@ -2,8 +2,7 @@ import { resolve } from 'node:path'
 import type { PluginFactoryContext } from '../../plugins/manifest'
 import type { AdapterRegistration, PluginRegistry } from '../../plugins/registry'
 import type { Forge } from '../types'
-import { GitHubForge, type Exec } from './github'
-import type { GitHubTokenSource } from './github-transport'
+import { GitHubForge } from './github'
 import { LocalGitForge } from './local-git'
 
 const EMPTY_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
@@ -38,13 +37,6 @@ export async function createForge(opts: {
   /** Explicit repository identity (normalized origin). Origin-mode dispatch
    * passes it so the builtin GitHub forge never probes a local checkout. */
   repository?: string
-  /** Subprocess seam for the builtin GitHub forge (git push, origin probe,
-   * gh credential probe). Threaded from the dispatcher so an injected exec
-   * governs every subprocess the forge runs. */
-  exec?: Exec
-  /** Credential for the builtin GitHub forge — a literal or a resolver the
-   * caller already seeded (see `githubTokenSource`). */
-  githubToken?: GitHubTokenSource
 }): Promise<Forge> {
   const registration = resolveForgeRegistration(opts.name, opts.registry)
   if (registration.owner.kind === 'builtin') {
@@ -53,8 +45,6 @@ export async function createForge(opts: {
         env: opts.env,
         repoRoot: opts.repoRoot,
         ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
-        ...(opts.exec !== undefined ? { exec: opts.exec } : {}),
-        ...(opts.githubToken !== undefined ? { token: opts.githubToken } : {}),
       })
     }
     if (opts.name === 'local-git') return new LocalGitForge()

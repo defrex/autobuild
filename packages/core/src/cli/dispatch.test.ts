@@ -535,6 +535,18 @@ describe('abDispatch guards', () => {
         },
       } as never),
     ).rejects.toThrow('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
+    // An exported-but-empty placeholder is no credential either.
+    await expect(
+      abDispatch({
+        ...common,
+        originConfigTransport: transport,
+        env: { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped', GITHUB_TOKEN: '' },
+        exec: async (cmd: string[]) => {
+          probes.push([...cmd])
+          return { stdout: 'gho_from_keyring\n', stderr: '', exitCode: 0 }
+        },
+      } as never),
+    ).rejects.toThrow('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
     expect(probes).toEqual([])
   }, 10_000)
 
@@ -1048,54 +1060,6 @@ describe('abDispatch guards', () => {
         once: true,
       })
       expect(errors).toContain('plugin ticket source selected')
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
-
-  test('production wiring probes the gh CLI login once and warns, with the reason, when no credential answers', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-gh-fallback-'))
-    const origin = join(tmp, 'repo')
-    try {
-      await initOrigin(
-        origin,
-        '[roles.default]\nruntime = "claude"\n[tickets]\nsource = "file"\nreadyState = "ready"\n',
-      )
-      const launch = async (answer: { exitCode: number; stdout: string; stderr: string }) => {
-        const probes: string[][] = []
-        const errors: string[] = []
-        await abDispatch({
-          targetRepo: origin,
-          env: { GITHUB_TOKEN: '', GH_TOKEN: '' },
-          exec: async (cmd, opts) => {
-            if (cmd[0] === 'gh') {
-              probes.push([...cmd])
-              return answer
-            }
-            return spawnExec(cmd, opts)
-          },
-          stdout: () => {},
-          stderr: (line) => errors.push(line),
-          once: true,
-        })
-        return { probes, errors }
-      }
-
-      const unauthenticated = await launch({
-        exitCode: 1,
-        stdout: '',
-        stderr: 'no oauth token found for github.com\n',
-      })
-      expect(unauthenticated.probes).toEqual([['gh', 'auth', 'token', '--hostname', 'github.com']])
-      expect(unauthenticated.errors).toContain(
-        'warning: the github forge has no credential — export GITHUB_TOKEN or GH_TOKEN, or run ' +
-          'gh auth login — PR operations will fail until one exists: GITHUB_TOKEN and GH_TOKEN ' +
-          'are unset and `gh auth token --hostname github.com` exited 1: no oauth token found for github.com',
-      )
-
-      const loggedIn = await launch({ exitCode: 0, stdout: 'gho_from_keyring\n', stderr: '' })
-      expect(loggedIn.probes).toEqual([['gh', 'auth', 'token', '--hostname', 'github.com']])
-      expect(loggedIn.errors.filter((line) => line.includes('github forge'))).toEqual([])
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }

@@ -311,20 +311,35 @@ describe('createGitHubFetchTransport token resolution', () => {
     }
   })
 
-  test('githubTokenSource hands out its seed once, then resolves afresh', async () => {
-    const probes: string[][] = []
-    const exec: GitHubCliExec = async (cmd) => {
-      probes.push([...cmd])
-      return { exitCode: 0, stdout: 'gho_later\n', stderr: '' }
+  test('a failed anonymous request names why it was anonymous', async () => {
+    const stub = stubFetch(
+      () =>
+        new Response(JSON.stringify({ message: 'Not Found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    try {
+      const exec: GitHubCliExec = async () => ({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'no oauth token found for github.com\n',
+      })
+      const transport = createGitHubFetchTransport({ token: githubTokenSource({}, exec) })
+      await expect(transport('GET', 'repos/acme/private/pulls/1')).rejects.toThrow(
+        'Not Found (request was unauthenticated: GITHUB_TOKEN and GH_TOKEN are unset and ' +
+          '`gh auth token --hostname github.com` exited 1: no oauth token found for github.com)',
+      )
+      // A literal miss says so too; an authenticated failure is left alone.
+      const anonymous = createGitHubFetchTransport({ token: undefined })
+      await expect(anonymous('GET', 'user')).rejects.toThrow(
+        'Not Found (request was unauthenticated: no GitHub credential was available)',
+      )
+      const authenticated = createGitHubFetchTransport({ token: 'gho_x' })
+      await expect(authenticated('GET', 'user')).rejects.toThrow(/^Not Found$/)
+    } finally {
+      stub.restore()
     }
-    const source = githubTokenSource({}, exec, { token: 'gho_seed' })
-    expect(await source()).toBe('gho_seed')
-    expect(probes).toEqual([])
-    expect(await source()).toBe('gho_later')
-    expect(probes).toEqual([[...GH_CLI_TOKEN_COMMAND]])
-    const missSeeded = githubTokenSource({}, exec, { token: undefined, reason: 'nothing yet' })
-    expect(await missSeeded()).toBeUndefined()
-    expect(await missSeeded()).toBe('gho_later')
   })
 
   test('retries a source whose probe rejected instead of caching the failure', async () => {

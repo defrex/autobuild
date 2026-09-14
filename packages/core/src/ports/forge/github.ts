@@ -25,6 +25,7 @@
  */
 import { z } from 'zod'
 import { isValidGitBranchName, normalizeGitRemoteUrl } from '../../kernel/origin'
+import type { Exec } from '../workspace/git-worktree'
 import {
   GitHubApiError,
   createGitHubFetchTransport,
@@ -52,18 +53,11 @@ import type {
 } from '../types'
 import { GitHubPrAttachmentHosting } from './github-pr-attachments'
 
-export interface ExecResult {
-  stdout: string
-  stderr: string
-  exitCode: number
-}
-
-/** Same seam shape as the workspace module: argv array, optional cwd, no
- * shell. Git commands name their cwd; the gh credential probe needs none. */
-export type Exec = (
-  cmd: string[],
-  opts: { cwd?: string; signal?: AbortSignal },
-) => Promise<ExecResult>
+/** One subprocess seam for every forge command: argv array, optional cwd,
+ * no shell. Git commands name their cwd; the gh credential probe needs none.
+ * The contract is the workspace module's, re-exported so the forge and its
+ * callers name one type. */
+export type { Exec, ExecResult } from '../workspace/git-worktree'
 
 export const bunExec: Exec = async (cmd, opts) => {
   if (opts.signal?.aborted === true) {
@@ -507,9 +501,9 @@ export class GitHubForge implements Forge {
     opts: {
       transport?: GitHubRequest
       exec?: Exec
-      /** Literal token, or a resolver (see `githubTokenSource`). Absent: the
-       * adapter resolves `GITHUB_TOKEN`, `GH_TOKEN`, then the gh CLI login
-       * lazily through its own exec seam. */
+      /** Literal token, or a resolver. Absent: the adapter resolves
+       * `GITHUB_TOKEN`, `GH_TOKEN`, then the gh CLI login lazily through its
+       * own exec seam. */
       token?: GitHubTokenSource
       repository?: string
       repoRoot?: string
@@ -519,9 +513,9 @@ export class GitHubForge implements Forge {
     this.exec = opts.exec ?? bunExec
     this.env = opts.env ?? {}
     // Credential order: explicit token → GITHUB_TOKEN/GH_TOKEN → the gh CLI's
-    // stored login, probed lazily through this adapter's exec seam. The
-    // dispatcher resolves once at wiring and seeds a source with that answer;
-    // this default serves the other constructors (build child, CLI commands).
+    // stored login, probed lazily through this adapter's exec seam on the
+    // first request. A request that still goes out anonymously carries the
+    // miss reason in its error, so nothing is probed at construction time.
     this.transport =
       opts.transport ??
       createGitHubFetchTransport({

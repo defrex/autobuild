@@ -83,14 +83,19 @@ export const restPlanLimitation = z
   .passthrough()
 
 /** Where a transport's bearer token comes from: a literal, nothing (anonymous
- * requests), or a resolver the transport invokes lazily. The transport asks a
- * resolver again at most once per {@link CREDENTIAL_MISS_TTL_MS}: after a miss
- * (a momentarily locked keyring is neither frozen into anonymous access for
- * the process lifetime nor re-probed on every request), and after a request
- * answers `401 Unauthorized` (a rotated or revoked `gh auth login` is picked
- * up without a restart, while a revoked-but-still-stored login cannot drive
- * a gh spawn per request). */
-export type GitHubTokenSource = string | undefined | (() => Promise<string | undefined>)
+ * requests), or a resolver the transport invokes lazily — a bare token or a
+ * {@link GitHubCredential}, whose miss reason the transport then attaches to
+ * the error of any request that had to go out anonymously. The transport asks
+ * a resolver again at most once per {@link CREDENTIAL_MISS_TTL_MS}: after a
+ * miss (a momentarily locked keyring is neither frozen into anonymous access
+ * for the process lifetime nor re-probed on every request), and after a
+ * request answers `401 Unauthorized` (a rotated or revoked `gh auth login` is
+ * picked up without a restart, while a revoked-but-still-stored login cannot
+ * drive a gh spawn per request). */
+export type GitHubTokenSource =
+  | string
+  | undefined
+  | (() => Promise<string | undefined | GitHubCredential>)
 
 /** Minimum interval between two invocations of a token resolver. */
 export const CREDENTIAL_MISS_TTL_MS = 60_000
@@ -106,24 +111,32 @@ export function createGitHubFetchTransport(opts: {
 }): GitHubRequest {
   const source = opts.token
   const now = opts.now ?? Date.now
-  let resolved: Promise<string | undefined> | undefined
+  let resolved: Promise<GitHubCredential> | undefined
   /** When the current answer arrived; `undefined` while one is in flight. */
   let resolvedAt: number | undefined
   let missed = false
   const stale = (): boolean =>
     resolvedAt !== undefined && now() - resolvedAt >= CREDENTIAL_MISS_TTL_MS
-  const resolveToken = (): Promise<string | undefined> => {
+  const normalize = (answer: string | undefined | GitHubCredential): GitHubCredential => {
+    if (typeof answer === 'object') return answer
+    return answer === undefined || answer === ''
+      ? { token: undefined, reason: 'no GitHub credential was available' }
+      : { token: answer }
+  }
+  const resolveToken = (): Promise<GitHubCredential> => {
     if (missed && stale()) resolved = undefined
     if (resolved === undefined) {
       resolvedAt = undefined
       missed = false
-      const attempt = typeof source === 'function' ? source() : Promise.resolve(source)
+      const attempt = (typeof source === 'function' ? source() : Promise.resolve(source)).then(
+        normalize,
+      )
       resolved = attempt
       attempt.then(
-        (token) => {
+        (credential) => {
           if (resolved !== attempt) return
           resolvedAt = now()
-          missed = token === undefined
+          missed = credential.token === undefined
         },
         () => {
           // A rejected probe is not an answer at all — ask again next time.
@@ -141,7 +154,8 @@ export function createGitHubFetchTransport(opts: {
   }
   const base = opts.apiBase ?? GITHUB_API_BASE
   return async (method, path, request = {}) => {
-    const token = await resolveToken()
+    const credential = await resolveToken()
+    const token = credential.token
     let url = /^https:\/\//i.test(path) ? path : `${base}/${path.replace(/^\/+/, '')}`
     if (request.query !== undefined) {
       const params = new URLSearchParams(request.query)
@@ -195,9 +209,15 @@ export function createGitHubFetchTransport(opts: {
     if (!response.ok) {
       if (response.status === 401) forgetToken()
       if (bytes !== undefined) text = new TextDecoder().decode(bytes)
+      // An anonymous request that failed names why it was anonymous: a 404 on
+      // a private repository is otherwise indistinguishable from a bad path,
+      // and the operator's fix (export a token, or `gh auth login`) is the
+      // point of the message.
+      const anonymous =
+        credential.token === undefined ? ` (request was unauthenticated: ${credential.reason})` : ''
       throw new GitHubApiError(
         response.status,
-        githubErrorMessage(response.status, json, text),
+        `${githubErrorMessage(response.status, json, text)}${anonymous}`,
         json,
       )
     }
@@ -321,23 +341,12 @@ export async function resolveGitHubToken(
   }
 }
 
-/** A transport token source over {@link resolveGitHubToken}. A caller that
- * already resolved the credential once (to warn or fail at startup) passes
- * that answer as `seed`: the source hands it out first instead of running the
- * gh probe a second time, then resolves afresh whenever the transport asks
- * again (after a miss interval or a 401). */
+/** A transport token source over {@link resolveGitHubToken}: the builtin
+ * forge's default. Resolves whenever the transport asks (first request, then
+ * after a miss interval or a 401). */
 export function githubTokenSource(
   env: Readonly<Record<string, string | undefined>>,
   exec?: GitHubCliExec,
-  seed?: GitHubCredential,
-): () => Promise<string | undefined> {
-  let pending = seed
-  return async () => {
-    if (pending !== undefined) {
-      const first = pending
-      pending = undefined
-      return first.token
-    }
-    return (await resolveGitHubToken(env, exec)).token
-  }
+): () => Promise<GitHubCredential> {
+  return () => resolveGitHubToken(env, exec)
 }
