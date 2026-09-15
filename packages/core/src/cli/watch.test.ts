@@ -515,6 +515,52 @@ describe('watch cursor resume', () => {
       expect(h.out).toEqual([])
     }
   })
+
+  test('a --repository baseline cursor records the journal position, so a resume replays no history', async () => {
+    const store = makeStore()
+    await store.ensureRepo(REPO)
+    // Pre-existing journal history the watch must never replay.
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'h0',
+        source: 'agent',
+        reason: 'stalled',
+        observations: [{ build: 'b1', seq: 1 }],
+      },
+    })
+
+    // Run 1: a fresh --repository watch emits nothing, and its final cursor
+    // carries the journal baseline (seq 1), not 0.
+    const first = harness(store)
+    await abWatch({ ...first.base, repository: true, timeout: '1' })
+    expect(first.out.slice(0, -1)).toEqual([])
+    const cursor = (JSON.parse(first.out.at(-1)!) as { cursor: string }).cursor
+    expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
+      '#repo': 1,
+    })
+
+    // Run 2: resuming from that cursor delivers no pre-watch history.
+    const second = harness(store)
+    await abWatch({ ...second.base, repository: true, since: cursor, timeout: '1' })
+    expect(second.out.slice(0, -1)).toEqual([])
+
+    // Run 3: a journal event appended after the baseline is delivered exactly once.
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-failed',
+      payload: { run: 'r1', error: 'boom' },
+    })
+    const third = harness(store)
+    await abWatch({ ...third.base, repository: true, since: cursor, timeout: '1' })
+    const records = third.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
+    expect(records.map((record) => record.event)).toEqual([
+      expect.objectContaining({ type: 'dispatcher.tick-failed', seq: 2 }),
+    ])
+  })
 })
 
 describe('watch exit conditions', () => {

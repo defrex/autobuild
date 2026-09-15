@@ -636,6 +636,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           if (resumeSeq === undefined && (await store.getRepo(repo)) !== null) {
             const events = await store.getRepoEvents(repo)
             stream.lastSeq = events.at(-1)?.seq ?? 0
+            positions[REPO_STREAM_KEY] = stream.lastSeq
           }
           return true
         } catch {
