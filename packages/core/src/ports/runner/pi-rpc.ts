@@ -106,6 +106,9 @@ export class PiRpcClient implements PiSession {
   private readonly pending = new Map<string, PendingResponse>()
   private readonly notifications = new Set<(value: JsonRecord) => void>()
   private activeTurn: TurnCapture | undefined
+  /** Optional observer invoked with every non-response session event
+   * (SPEC §9 translation hook). Fires regardless of turn state. */
+  onEvent: ((event: JsonRecord) => void) | undefined
 
   private constructor(
     private readonly process: PiRpcProcess,
@@ -124,9 +127,11 @@ export class PiRpcClient implements PiSession {
     invocation: PiRpcInvocation,
     spawn: PiRpcSpawnFn = spawnPiRpc,
     configuredTools: readonly string[] = [],
+    onEvent?: (event: JsonRecord) => void,
   ): Promise<PiRpcClient> {
     const process = spawn(invocation)
     const client = new PiRpcClient(process, crypto.randomUUID(), configuredTools)
+    client.onEvent = onEvent
     try {
       const state = await client.command('get_state')
       const data = record(state.data)
@@ -292,6 +297,7 @@ export class PiRpcClient implements PiSession {
     }
 
     for (const listener of this.notifications) listener(value)
+    this.onEvent?.(value)
     const capture = this.activeTurn
     if (capture === undefined) return
     if (value.type === 'message_update') {
@@ -334,6 +340,8 @@ export interface PiRpcSessionOptions {
   skill?: string
   env: Record<string, string>
   spawn?: PiRpcSpawnFn
+  /** Session-event observer handed to the RPC client (SPEC §9). */
+  onEvent?: (event: JsonRecord) => void
 }
 
 export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiSession> {
@@ -357,7 +365,12 @@ export async function createPiRpcSession(opts: PiRpcSessionOptions): Promise<PiS
   // --extension paths in configured args still load alongside the bridge.
   args.push('--no-extensions', '--extension', PI_BRIDGE_PATH)
   args.push(...opts.args)
-  return PiRpcClient.launch({ args, cwd: opts.cwd, env: opts.env }, opts.spawn, opts.tools)
+  return PiRpcClient.launch(
+    { args, cwd: opts.cwd, env: opts.env },
+    opts.spawn,
+    opts.tools,
+    opts.onEvent,
+  )
 }
 
 export async function readLocalPiCatalog(opts: {
