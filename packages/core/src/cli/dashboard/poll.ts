@@ -1,13 +1,16 @@
 import type { Config } from '../../config/schema'
 import type { AbEvent } from '../../events/catalog'
 import { reduceBuild, type BuildState } from '../../kernel/reducer'
-import type { BuildRecord } from '../../store/types'
+import type { BuildRecord, StreamRecord, StreamScope } from '../../store/types'
 import { projectBuild, type DashboardBuild } from './model'
 
-/** The read-only BuildStore surface needed to construct dashboard build rows. */
+/** The read-only BuildStore surface needed to construct dashboard build rows.
+ * `listStreams` is optional: when present, build-scope records enrich each
+ * row's session history with authoritative stream ids and statuses (SPEC §9). */
 export interface DashboardBuildReader {
   listBuilds(): Promise<BuildRecord[]>
   getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
+  listStreams?(scope: StreamScope): Promise<StreamRecord[]>
 }
 
 export interface DashboardPollSnapshot {
@@ -89,6 +92,18 @@ export class DashboardBuildPollCache {
     private config: Config,
   ) {}
 
+  /** Authoritative stream records for one build, when the reader supports
+   * the stream primitive (SPEC §9). Failures are display-only: an absent
+   * enrichment degrades to the pairing-derived status. */
+  private async readStreams(slug: string): Promise<StreamRecord[] | undefined> {
+    if (this.reader.listStreams === undefined) return undefined
+    try {
+      return await this.reader.listStreams({ kind: 'build', build: slug })
+    } catch {
+      return undefined
+    }
+  }
+
   /** True only while no later refresh has committed. */
   isCurrent(snapshot: DashboardPollSnapshot): boolean {
     return snapshot.revision === this.committedRevision
@@ -131,7 +146,13 @@ export class DashboardBuildPollCache {
           configChanged
             ? {
                 ...current,
-                build: projectBuild(record, current.state, config, current.events),
+                build: projectBuild(
+                  record,
+                  current.state,
+                  config,
+                  current.events,
+                  await this.readStreams(record.slug),
+                ),
               }
             : current,
         )
@@ -148,7 +169,7 @@ export class DashboardBuildPollCache {
         kind: 'live',
         events,
         state,
-        build: projectBuild(record, state, config, events),
+        build: projectBuild(record, state, config, events, await this.readStreams(record.slug)),
       })
     }
 

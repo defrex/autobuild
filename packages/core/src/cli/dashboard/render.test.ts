@@ -2294,6 +2294,7 @@ describe('renderDashboard: build detail and transcript views', () => {
         status: 'ended',
         transcript: { kind: 'transcript', rev: 2 },
         usage: { inputTokens: 90, outputTokens: 30, turns: 2 },
+        streamStatus: 'closed',
       },
       {
         id: 's_review',
@@ -2303,6 +2304,7 @@ describe('renderDashboard: build detail and transcript views', () => {
         runtime: 'claude',
         startedSeq: 9,
         status: 'open',
+        streamStatus: 'closed',
       },
       {
         id: 's_reclaimed',
@@ -2313,6 +2315,7 @@ describe('renderDashboard: build detail and transcript views', () => {
         startedSeq: 12,
         status: 'reclaimed',
         reclaimedBy: { instance: 'runner-2', resumedFromSeq: 12 },
+        streamStatus: 'closed',
       },
     ],
   })
@@ -2338,6 +2341,33 @@ describe('renderDashboard: build detail and transcript views', () => {
     expect(out).toContain('implement phase implement round 2 runtime pi reclaimed')
     expect(out).toContain('by runner-2 at resume boundary 12 transcript unavailable')
     expect(out).not.toContain('Autobuild')
+  })
+
+  test('session lines expose the stream id and open/closed status (SPEC §9)', () => {
+    const withStream = {
+      ...detailedBuild,
+      sessions: [
+        {
+          id: 's_plan',
+          role: 'plan',
+          phase: 'plan',
+          runtime: 'pi',
+          startedSeq: 5,
+          status: 'open' as const,
+          stream: 'st_1f2e',
+          streamStatus: 'open' as const,
+        },
+      ],
+    }
+    const out = rd(
+      {
+        ...model([withStream]),
+        selection: { kind: 'build', slug: withStream.slug },
+        view: { kind: 'detail', slug: withStream.slug, sessionId: 's_plan', scroll: 0 },
+      },
+      { color: false, width: 200 },
+    ).join('\n')
+    expect(out).toContain('stream st_1f2e (open)')
   })
 
   test('detail keeps complete multiline messages and scroll reaches both ends', () => {

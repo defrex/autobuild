@@ -2141,3 +2141,85 @@ describe('store lifecycle', () => {
     expect(closed).toBe(true)
   })
 })
+
+describe('detail: session stream status (SPEC §9)', () => {
+  test('open sessions gain stream id and open/closed from the store records', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    const started = await store.append('b1', {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_1', role: 'plan', runner: 'claude', phase: 'plan', round: 1 },
+    })
+    await store.createStream({ kind: 'build', build: 'b1' }, 'session:s_1')
+
+    const withoutStreams = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
+    expect(withoutStreams.openSessions[0]).toMatchObject({ session: 's_1' })
+    expect(withoutStreams.openSessions[0]?.stream).toBeUndefined()
+
+    const streams = await store.listStreams({ kind: 'build', build: 'b1' })
+    const enriched = detail(
+      (await store.getBuild('b1'))!,
+      await store.getEvents('b1'),
+      NOW,
+      undefined,
+      undefined,
+      streams,
+    )
+    expect(enriched.openSessions[0]).toMatchObject({
+      session: 's_1',
+      seq: started.seq,
+      stream: streams[0]!.id,
+      streamStatus: 'open',
+    })
+
+    // Human output names the stream and its status.
+    const lines = renderDetail(enriched, NOW).join('\n')
+    expect(lines).toContain(`stream ${streams[0]!.id} (open)`)
+    await store.close()
+  })
+
+  test('abBuildStatus human and --json output carry the stream fields', async () => {
+    const lines: string[] = []
+    const slug = 'b1'
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'session.started',
+      payload: { session: 's_1', role: 'plan', runner: 'claude', phase: 'plan', round: 1 },
+    })
+    const stream = await store.createStream({ kind: 'build', build: slug }, 'session:s_1')
+
+    await abBuildStatus({
+      slug,
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => lines.push(line),
+      openStore: () => store,
+      now: () => NOW,
+    })
+    expect(lines.join('\n')).toContain(`stream ${stream.id} (open)`)
+
+    const json: string[] = []
+    await abBuildStatus({
+      slug,
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => json.push(line),
+      json: true,
+      openStore: () => store,
+      now: () => NOW,
+    })
+    const detailJson = JSON.parse(json.join('\n')) as {
+      openSessions: Array<{ stream?: string; streamStatus?: string }>
+    }
+    expect(detailJson.openSessions[0]).toMatchObject({
+      stream: stream.id,
+      streamStatus: 'open',
+    })
+    await store.close()
+  })
+})

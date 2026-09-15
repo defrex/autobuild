@@ -1433,6 +1433,14 @@ The rerun opens one fresh session, so after attachment only work that could
 still be alive appears in `ab build status`. Dashboard session history keeps the
 reclaimed entry visibly distinct and reports that its transcript is unavailable.
 
+Each session row also shows its live-view stream: the stream id and
+whether that stream is `open` or `closed` — for example `stream st_1f2e (open)`.
+A session that never streamed (a plugin runtime without the streaming
+capability, or a historical log) shows no stream segment. While a session
+runs, its stream is the live view of the turn; once the session ends the
+stream finalizes into an artifact, and `ab artifact download <slug>
+stream:<id>` retrieves the closed session's finalized document.
+
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 durable repository gate and an ordered collection of every unresolved failed
 run plus relevant open/latest context from the same journal the runner resumes.
@@ -1476,6 +1484,46 @@ the durable log is moving. For `running` + `expired`, inspect the build detail
 to distinguish actionable work that will return through the lease sweep from
 an ended PR awaiting repository-level completion. `no-lease` with recent
 progress is usually a runner still starting up.
+
+## Serving the operator tools over MCP
+
+`ab mcp [--store <ref>] [--repo <id>]` serves Autobuild's operator tool
+registry as an MCP (Model Context Protocol) server over stdio. Every tool it
+advertises mirrors an operator CLI command or an operator API route — same
+input schemas, same annotations, same results — and mutating tools attribute
+their writes to the sessionless operator identity (USER/USERNAME, else
+"dashboard"), exactly like the other operator commands. The server fails
+closed inside a phase session: repository-wide operator authority cannot be
+narrowed to the ambient build, so a complete or malformed `AB_*` phase tuple
+refuses to start it.
+
+**The `ab` CLI stays the primary local interface** for agents that have a
+shell. Use `ab mcp` when a local agent cannot run commands, for dogfooding the
+operator tools, or for parity testing of the tool registry itself — the
+served tools are generated from the same closed table the CLI and operator API
+are measured against.
+
+| Flag | Effect |
+|---|---|
+| `--store <ref>` | Override the BuildStore path or URL, same precedence as the other sessionless commands. |
+| `--repo <id>` | Constrain the server to one repository; calls naming any other repository are refused. |
+
+Register it with Claude Code (from an Autobuild installation root):
+
+```sh
+claude mcp add autobuild -- bun <install-root>/bin/ab.ts mcp
+```
+
+Register it with Codex by adding a server entry to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.autobuild]
+command = "bun"
+args = ["<install-root>/bin/ab.ts", "mcp"]
+```
+
+The server runs until its client disconnects (stdio EOF) and needs no
+daemon: each client session starts one short-lived `ab mcp` process.
 
 ## The installed skills
 

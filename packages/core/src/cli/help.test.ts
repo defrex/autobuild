@@ -11,6 +11,7 @@ const COMMANDS = [
   'repository',
   'builds',
   'build',
+  'mcp',
   'pause',
   'resume',
   'answer',
@@ -223,6 +224,7 @@ describe('layered CLI help catalog', () => {
         'requires no session identity',
         'permits only the ambient build',
       ],
+      mcp: ['ab mcp [--store <ref>] [--repo <id>]', 'primary local', 'fails closed'],
       pause: [
         'pause <slug>',
         '--store',
@@ -341,6 +343,8 @@ describe('layered CLI help catalog', () => {
       expect(isSessionlessInvocation([command, '--help'])).toBe(true)
     }
     expect(isSessionlessInvocation(['repository', 'status'])).toBe(true)
+    expect(isSessionlessInvocation(['mcp'])).toBe(true)
+    expect(isSessionlessInvocation(['mcp', '--repo', 'acme/widgets'])).toBe(true)
     expect(isSessionlessInvocation(['context'])).toBe(false)
     expect(isSessionlessInvocation(['context', '--help', 'extra'])).toBe(false)
     expect(isSessionlessInvocation(['artifact', 'put'])).toBe(false)

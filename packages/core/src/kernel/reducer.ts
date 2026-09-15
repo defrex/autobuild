@@ -94,6 +94,8 @@ export interface OpenSession {
   model?: string
   phase: Phase
   round?: number
+  /** Live-view stream id (SPEC §9); absent on historical events. */
+  stream?: string
   /** seq of the `session.started` event. */
   seq: number
 }
@@ -484,6 +486,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
           model: event.payload.model,
           phase: event.payload.phase,
           round: event.payload.round,
+          stream: event.payload.stream,
           seq: event.seq,
         })
         break

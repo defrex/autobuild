@@ -32,6 +32,7 @@ import {
 } from '../ports/runner/fake'
 import type { AgentRunner, AgentSessionHandle, AgentTurnResult } from '../ports/types'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import type { ArtifactMeta, BuildStore, Clock } from '../store/types'
@@ -322,6 +323,9 @@ interface HarnessOptions {
   sessionEnv?: Record<string, string>
   /** Optional nonconforming/runtime-specific seam; scripted journals remain on Harness.runner. */
   runtimeRunner?: AgentRunner
+  /** Extra registration fields applied to every harness runtime entry — the
+   * session-stream capability seam (SPEC §9). */
+  registrationExtras?: { openSessionStream?: RuntimeRegistry[string]['openSessionStream'] }
   runnerOpts?: BuildRunnerOpts
   clock?: Clock
   /** Seed build.created + workspace.provisioned + spec@0 + spec.imported
@@ -554,9 +558,21 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       // `scripted` (the default runtime) serves the `m-` family so the routed
       // `plan = { runtime = "scripted", model = "m-plan" }` role resolves; the
       // pi/claude entries prove a second runtime is selectable.
-      scripted: { runner: options.runtimeRunner ?? runner, servesModels: ['m-'] },
-      claude: { runner: options.runtimeRunner ?? runner, servesModels: ['claude-'] },
-      pi: { runner: options.runtimeRunner ?? runner, servesModels: ['kimi-'] },
+      scripted: {
+        runner: options.runtimeRunner ?? runner,
+        servesModels: ['m-'],
+        ...(options.registrationExtras ?? {}),
+      },
+      claude: {
+        runner: options.runtimeRunner ?? runner,
+        servesModels: ['claude-'],
+        ...(options.registrationExtras ?? {}),
+      },
+      pi: {
+        runner: options.runtimeRunner ?? runner,
+        servesModels: ['kimi-'],
+        ...(options.registrationExtras ?? {}),
+      },
     },
     workspacePath: handle.path,
     branch: BRANCH,
@@ -4908,5 +4924,213 @@ describe('resume after sandbox death (§15.6-C)', () => {
     expect(journal.opts.env.AB_PHASE).toBe('implement@2')
     const completed = ofType(after, 'implement.completed').at(-1)!
     expect(completed.payload.round).toBe(2)
+  })
+})
+
+// ── Session streams (SPEC §9) ────────────────────────────────────────────────
+
+describe('session streams', () => {
+  test('a streaming registration opens one stream per bracket, names it on session.started, and passes the emitter into the turn', async () => {
+    const opened: string[] = []
+    // The scripted turn appends a part through the per-turn emitter — the
+    // wiring under test — before its terminal.
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => {
+          opened.push(info.session)
+          return sink.open(`session:${info.session}`)
+        },
+      },
+      handlers: (store) =>
+        Object.fromEntries(
+          Object.entries(happyHandlers(store)).map(([skill, handler]) => [
+            skill,
+            async (ctx) => {
+              ctx.opts.stream?.append([{ type: 'data-ab-prompt', data: { text: ctx.opts.skill } }])
+              return handler(ctx)
+            },
+          ]),
+        ),
+    })
+    await h.br.run()
+
+    const events = await h.store.getEvents(SLUG)
+    const started = ofType(events, 'session.started')
+    expect(started.length).toBe(7)
+    expect(opened.length).toBe(7)
+    for (const event of started) {
+      // The stream field carries the store-assigned stream id, which is also
+      // the label's key: `session:<sessionId>`.
+      expect(typeof event.payload.stream).toBe('string')
+    }
+    // Every stream: first part data-ab-session, closed completed, finalized
+    // document assembled from the appended parts, one per opened session.
+    const streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    expect(streams).toHaveLength(7)
+    expect(new Set(started.map((e) => e.payload.stream))).toEqual(new Set(streams.map((r) => r.id)))
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('completed')
+      expect(record.label).toMatch(/^session:/)
+      const artifact = await h.store.getArtifact(SLUG, `stream:${record.id}`)
+      expect(artifact).not.toBeNull()
+      const document = JSON.parse(new TextDecoder().decode(artifact!.content))
+      expect(document[0]?.parts?.[0]?.type).toBe('data-ab-session')
+      expect(document[0]?.parts?.some((p: { type: string }) => p.type === 'data-ab-prompt')).toBe(
+        true,
+      )
+    }
+  })
+})
+
+describe('session streams: capability boundary and failure containment', () => {
+  test('a plugin registration without the capability yields sessions with no stream and no emitter', async () => {
+    const h = await makeHarness()
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    for (const event of ofType(events, 'session.started')) {
+      expect(event.payload.stream).toBeUndefined()
+    }
+    expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
+    // No emitter reached the turns either.
+    for (const journal of h.runner.sessions.values()) {
+      expect(journal.opts.stream).toBeUndefined()
+    }
+  })
+
+  test('streamSessions: false reproduces the no-stream event log', async () => {
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
+      runnerOpts: { streamSessions: false },
+    })
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    for (const event of ofType(events, 'session.started')) {
+      expect(event.payload.stream).toBeUndefined()
+    }
+    expect(await h.store.listStreams({ kind: 'build', build: SLUG })).toHaveLength(0)
+  })
+
+  test('a store whose stream appends always fail lets the phase complete with one diagnostic and an aborted close', async () => {
+    const diagnostics: string[] = []
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
+      runnerOpts: { onDiagnostic: (message) => diagnostics.push(message) },
+    })
+    // Break the append primitive after the streams are open.
+    const failing = new Set<string>()
+    const originalAppend = h.store.appendStreamParts.bind(h.store)
+    h.store.appendStreamParts = async (streamId: string, parts: never) => {
+      if (failing.has(streamId)) throw new Error('store down')
+      return originalAppend(streamId, parts)
+    }
+    // Every stream fails from its first append: mark all ids as failing when
+    // they are created.
+    const originalCreate = h.store.createStream.bind(h.store)
+    h.store.createStream = async (scope: never, label: never) => {
+      const record = await originalCreate(scope, label)
+      failing.add(record.id)
+      return record
+    }
+
+    const state = await h.br.run()
+    // The phase completes exactly as it would without streams.
+    expect(state.status).toBe('running')
+    expect(state.prState).toBe('open')
+    // Every bracket's deposit-path close observed the undeliverable buffer:
+    // one diagnostic each, closed aborted, phase unaffected.
+    expect(diagnostics.length).toBe(7)
+    // Each defunct writer closed its stream aborted, best-effort.
+    const streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    expect(streams.length).toBeGreaterThan(0)
+    for (const record of streams) {
+      expect(record.outcome).toBe('aborted')
+    }
+    // The transcript artifact is deposited regardless.
+    const ended = ofType(await h.store.getEvents(SLUG), 'session.ended')
+    expect(ended.length).toBe(7)
+  })
+})
+
+describe('session streams: close outcomes per exit path', () => {
+  test('a budget-expired bracket closes its stream aborted', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    const stuck: AgentRunner = {
+      name: 'stuck',
+      start: () => new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {}),
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: async () => ({
+        content: '',
+        metadata: { runner: 'stuck', usage: { inputTokens: 0, outputTokens: 0, turns: 0 } },
+      }),
+    }
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
+      runtimeRunner: stuck,
+      runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
+    })
+
+    const run = h.br.run()
+    await timers.expireNext()
+    await timers.expireNext()
+    expect((await run).status).toBe('blocked')
+
+    // Both expired brackets' streams closed aborted (best-effort background
+    // release; poll for the writer's cadence).
+    const deadline = Date.now() + 2_000
+    let streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    while (streams.length < 2 && Date.now() < deadline) {
+      await Bun.sleep(25)
+      streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    }
+    expect(streams).toHaveLength(2)
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('aborted')
+    }
+  })
+
+  test('an operator-aborted bracket that settles keeps its transcript deposit and closes aborted', async () => {
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        plan: async (ctx) => {
+          await store.append(SLUG, {
+            actor: humanActor('aron'),
+            type: 'build.abort-requested',
+            payload: { reason: 'stop work' },
+          })
+          // The turn observes its cancellation signal — as a conforming
+          // adapter does — and returns the failed result.
+          await new Promise((resolve) => {
+            if (ctx.opts.signal?.aborted) resolve(undefined)
+            else {
+              ctx.opts.signal?.addEventListener('abort', () => resolve(undefined), { once: true })
+            }
+          })
+          return failedTurnResult('turn aborted by caller', false)
+        },
+      }),
+    })
+    // The plan turn sees the abort via its signal and returns; the bracket
+    // closes aborted with its transcript still deposited.
+    const state = await h.br.run()
+    expect(state.status).toBe('aborted')
+
+    const streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    expect(streams).toHaveLength(1)
+    expect(streams[0]!.outcome).toBe('aborted')
+    // The transcript was still deposited.
+    const ended = ofType(await h.store.getEvents(SLUG), 'session.ended')
+    expect(ended).toHaveLength(1)
   })
 })

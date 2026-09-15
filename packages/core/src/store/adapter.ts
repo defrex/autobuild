@@ -27,6 +27,7 @@ export {
 } from './retention'
 export { assembleUIMessageDocument } from './streams/assemble'
 export { readEventsWithWait, readStreamWithWait, STREAM_WAIT_POLL_MS } from './streams/wait'
+export { createSessionStreamSink } from './streams/session-writer'
 export {
   clampWaitSeconds,
   MAX_STREAM_WAIT_SECONDS,

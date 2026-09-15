@@ -63,7 +63,7 @@ export class PhaseSessionError extends Error {
         : target.kind === 'admin'
           ? `${operation} (admin)`
           : `${operation} targeting ${target.kind} ${JSON.stringify(target.id)}`
-    super(message ?? `local session store scoped to ${authority} forbids ${addressed}`)
+    super(message ?? `local phase-session store scoped to ${authority} forbids ${addressed}`)
     this.name = 'PhaseSessionError'
   }
 }
@@ -180,7 +180,7 @@ export function scopeLocalStoreToPhaseSession(
         scope,
         operation,
         undefined,
-        `local session store scoped to session ${JSON.stringify(scope.session)} may not write events attributed to ${
+        `local phase-session store scoped to session ${JSON.stringify(scope.session)} may not write events attributed to ${
           session === null
             ? 'an agent without a valid session'
             : `session ${JSON.stringify(session)}`

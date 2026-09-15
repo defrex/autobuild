@@ -16,7 +16,8 @@ import {
   isCodexRuntimeUsable,
 } from './codex'
 import { isPiRuntimeUsable, PI_OWNED_ARGS, PiAgentRunner } from './pi'
-import type { RuntimeRegistry } from './runtime'
+import type { SessionStreamInfo, RuntimeRegistry } from './runtime'
+import type { SessionStreamSink } from '../types'
 
 export interface ProductionRuntimes {
   runtimes: RuntimeRegistry
@@ -38,6 +39,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         servesModels: ['claude-'],
         ownedArgs: CLAUDE_OWNED_ARGS,
         promptBoundary: CLAUDE_PROMPT_BOUNDARY,
+        openSessionStream: openSessionStreamLabel,
       },
       codex: {
         runner: codex,
@@ -48,6 +50,7 @@ export function createProductionRuntimes(): ProductionRuntimes {
         servesModels: ['gpt-'],
         ownedArgs: CODEX_OWNED_ARGS,
         promptBoundary: CODEX_PROMPT_BOUNDARY,
+        openSessionStream: openSessionStreamLabel,
       },
       pi: {
         runner: pi,
@@ -58,7 +61,14 @@ export function createProductionRuntimes(): ProductionRuntimes {
         servesModels: ['*/*'],
         defaultModel: 'kimi-coding/k3',
         ownedArgs: PI_OWNED_ARGS,
+        openSessionStream: openSessionStreamLabel,
       },
     },
   }
+}
+
+/** The one shared opener: a session bracket's stream is labeled by its
+ * Autobuild session id, never a harness-native session/thread id. */
+function openSessionStreamLabel(sink: SessionStreamSink, info: SessionStreamInfo): Promise<string> {
+  return sink.open(`session:${info.session}`)
 }
