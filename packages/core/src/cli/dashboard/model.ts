@@ -42,7 +42,7 @@ import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer
 import { currentAutoMergeDeferral } from '../../kernel/auto-merge'
 import { decideNext } from '../../kernel/engine'
 import { verifyPhase } from '../../ontology'
-import type { BuildRecord } from '../../store/types'
+import type { BuildRecord, StreamRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
 import type { TranscriptPresentation } from './transcript'
@@ -467,6 +467,7 @@ export function projectBuild(
   state: BuildState,
   config: Config,
   events: AbEvent[],
+  streams?: readonly StreamRecord[],
 ): DashboardBuild | null {
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
@@ -525,7 +526,7 @@ export function projectBuild(
       dispatch,
       blockers: [],
       autoMerge: autoMergeDisplay(state),
-      sessions: projectSessions(events),
+      sessions: projectSessions(events, streams),
     }
   }
 
@@ -546,7 +547,7 @@ export function projectBuild(
       ...(state.pr !== undefined && state.prState !== undefined
         ? { pr: { url: state.pr.url, state: state.prState } }
         : {}),
-      sessions: projectSessions(events),
+      sessions: projectSessions(events, streams),
     }
   }
 
@@ -849,7 +850,7 @@ export function projectBuild(
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),
-    sessions: projectSessions(events),
+    sessions: projectSessions(events, streams),
   }
 }
 

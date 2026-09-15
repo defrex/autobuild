@@ -281,3 +281,26 @@ describe('Pi RPC JSONL', () => {
     await session.dispose()
   })
 })
+
+describe('PiRpcClient session-event hook (SPEC §9)', () => {
+  test('delivers every non-response event to the onEvent observer', async () => {
+    const fake = fakeRpc()
+    const events: Record<string, unknown>[] = []
+    const session = await createPiRpcSession({
+      cwd: '/repo',
+      tools: ['read'],
+      args: [],
+      env: { PATH: '/bin' },
+      spawn: fake.spawn,
+      onEvent: (event) => {
+        if (event.type !== 'response') events.push(event)
+      },
+    })
+    await session.prompt('/skill:ab-plan rpc-build', { AB_PHASE: 'plan@1' })
+    const types = events.map((event) => event.type)
+    expect(types).toContain('message_update')
+    expect(types).toContain('message_end')
+    expect(types).toContain('agent_settled')
+    await session.dispose()
+  })
+})

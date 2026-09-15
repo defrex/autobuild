@@ -17,6 +17,9 @@ export interface ResolvedRuntime {
   model?: string
   /** Extra CLI argv tokens, preserved in declared order. */
   args: readonly string[]
+  /** Session-stream capability passthrough from the registration (SPEC §9).
+   * Absent ⇒ this runtime's sessions get no stream. */
+  openSessionStream?: RuntimeRegistration['openSessionStream']
 }
 
 /** A role's primary target plus its failure-triggered targets in declaration order. */
@@ -147,6 +150,7 @@ function resolveAxes(
     runtime,
     ...(model !== undefined ? { model } : {}),
     args,
+    ...(reg.openSessionStream !== undefined ? { openSessionStream: reg.openSessionStream } : {}),
   }
 }
 

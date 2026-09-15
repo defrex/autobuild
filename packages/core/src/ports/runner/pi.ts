@@ -1,5 +1,6 @@
 /** AgentRunner adapter for the operator's locally installed Pi CLI. */
 import semver from 'semver'
+import type { StreamPart } from '../../store/streams/types'
 import {
   agentInvocation,
   type AgentContinueOpts,
@@ -8,11 +9,29 @@ import {
   type AgentStartOpts,
   type AgentTurnFailure,
   type AgentTurnResult,
+  type SessionStreamEmitter,
   type Transcript,
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
 import { createPiRpcSession, PI_MODEL_ARG, PI_RPC_MODE_ARG } from './pi-rpc'
+import {
+  abortPart,
+  errorPart,
+  finishPart,
+  finishStepPart,
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textEndPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+} from './stream-parts'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
@@ -228,6 +247,9 @@ export type PiCreateSessionFn = (opts: {
   args: readonly string[]
   skill?: string
   env: Record<string, string>
+  /** Session-event observer for stream translation (SPEC §9); fakes may
+   * invoke it to deliver native session events during a prompt. */
+  onEvent?: (event: JsonRecord) => void
 }) => Promise<PiSession>
 
 const createLocalPiSession: PiCreateSessionFn = async (opts) => {
@@ -243,11 +265,118 @@ interface TurnRecord {
   failure?: AgentTurnFailure
 }
 
+type JsonRecord = Record<string, unknown>
+
+/** Per-session event hook: the current turn's translator, or none between
+ * turns. Prompts are sequential per session, so one slot is safe. */
+interface PiTurnEventHook {
+  translator?: PiTurnTranslator
+}
+
 interface SessionState {
   opts: AgentStartOpts
   model?: string
   session?: PiSession
+  /** Set whenever the session was created through a path that could deliver
+   * native events; a turn without a stream leaves it unused. */
+  turnEvents?: PiTurnEventHook
   turns: TurnRecord[]
+}
+
+/**
+ * Maps Pi's native session events onto the stream part vocabulary (SPEC §9).
+ * Unrecognized events produce no parts (fail open); the harness outcome is
+ * remembered so a turn ending in a provider abort emits an `abort` part
+ * rather than `error`.
+ */
+interface PiTurnTranslator {
+  onEvent(event: JsonRecord): void
+  /** Set when `message_end` carried stopReason "aborted". */
+  aborted(): boolean
+}
+
+function createPiTurnTranslator(emit: (parts: StreamPart[]) => void): PiTurnTranslator {
+  let nextId = 0
+  let textId: string | undefined
+  let thinkingId: string | undefined
+  let aborted = false
+
+  const blockId = (event: JsonRecord, current: string | undefined): string => {
+    const existing = event.id
+    if (typeof existing === 'string' && existing.length > 0) return existing
+    return current ?? `pi-${++nextId}`
+  }
+
+  return {
+    onEvent(event) {
+      switch (event.type) {
+        case 'agent_start':
+        case 'turn_start':
+          emit([startStepPart()])
+          break
+        case 'message_update': {
+          const update = isRecord(event.assistantMessageEvent) ? event.assistantMessageEvent : {}
+          switch (update.type) {
+            case 'text_start':
+              textId = blockId(update, textId ?? `pi-${++nextId}`)
+              emit([textStartPart(textId)])
+              break
+            case 'text_delta':
+              textId ??= `pi-${++nextId}`
+              if (typeof update.delta === 'string') emit([textDeltaPart(textId, update.delta)])
+              break
+            case 'text_end':
+              emit([textEndPart(blockId(update, textId ?? `pi-${++nextId}`))])
+              textId = undefined
+              break
+            case 'thinking_start':
+              thinkingId = blockId(update, thinkingId ?? `pi-${++nextId}`)
+              emit([reasoningStartPart(thinkingId)])
+              break
+            case 'thinking_delta':
+              thinkingId ??= `pi-${++nextId}`
+              if (typeof update.delta === 'string') {
+                emit([reasoningDeltaPart(thinkingId, update.delta)])
+              }
+              break
+            case 'thinking_end':
+              emit([reasoningEndPart(blockId(update, thinkingId ?? `pi-${++nextId}`))])
+              thinkingId = undefined
+              break
+            default:
+              break
+          }
+          break
+        }
+        case 'tool_execution_start': {
+          const toolCallId =
+            typeof event.toolCallId === 'string' ? event.toolCallId : `pi-${++nextId}`
+          const toolName = typeof event.toolName === 'string' ? event.toolName : 'tool'
+          emit([toolInputPart(toolCallId, toolName, event.args ?? {})])
+          break
+        }
+        case 'tool_execution_end': {
+          const toolCallId =
+            typeof event.toolCallId === 'string' ? event.toolCallId : `pi-${++nextId}`
+          emit([toolOutputPart(toolCallId, event.result ?? null)])
+          break
+        }
+        case 'message_end': {
+          const message = isRecord(event.message) ? event.message : {}
+          if (message.stopReason === 'aborted') aborted = true
+          break
+        }
+        case 'turn_end':
+          emit([finishStepPart()])
+          break
+        default:
+          break
+      }
+    },
+    aborted() {
+      return aborted
+    },
+  }
 }
 
 export class PiAgentRunner implements AgentRunner, OneShotCompletion {
@@ -286,6 +415,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     const prompt = `/skill:${opts.skill} ${agentInvocation(opts)}`
     let native: PiSession | undefined
     let turn: PiTurn
+    const turnEvents: PiTurnEventHook = {}
     try {
       native = await this.createSessionFn({
         cwd: opts.workspacePath,
@@ -294,8 +424,18 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
         args: opts.args ?? [],
         skill: opts.skill,
         env: sessionEnv(opts.env),
+        // Stream translation is per turn; the hook stays live for later
+        // continued turns even when turn 1 streams nothing.
+        onEvent: (event) => turnEvents.translator?.onEvent(event),
       })
-      turn = await this.runPrompt(native, prompt, this.turnEnv(opts.env), opts.signal)
+      turn = await this.runPrompt(
+        native,
+        prompt,
+        this.turnEnv(opts.env),
+        opts.signal,
+        opts.stream,
+        turnEvents,
+      )
     } catch (error) {
       turn = {
         text: '',
@@ -313,6 +453,7 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       opts,
       ...(opts.model !== undefined ? { model: opts.model } : {}),
       ...(native !== undefined ? { session: native } : {}),
+      ...(native !== undefined ? { turnEvents } : {}),
       turns: [this.turnRecord(1, prompt, turn)],
     })
     return { session: handle, result: this.toResult(turn) }
@@ -328,7 +469,14 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
       throw new Error(`pi: cannot continue session "${handle.id}" because local Pi failed to start`)
     }
     const scoped = opts?.env !== undefined ? { ...state.opts.env, ...opts.env } : state.opts.env
-    const turn = await this.runPrompt(state.session, message, this.turnEnv(scoped), opts?.signal)
+    const turn = await this.runPrompt(
+      state.session,
+      message,
+      this.turnEnv(scoped),
+      opts?.signal,
+      opts?.stream,
+      state.turnEvents,
+    )
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)
   }
@@ -368,15 +516,43 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
     prompt: string,
     env: Record<string, string>,
     signal?: AbortSignal,
+    stream?: SessionStreamEmitter,
+    turnEvents?: PiTurnEventHook,
   ): Promise<PiTurn> {
+    if (stream !== undefined) stream.append([promptPart(prompt), startPart(crypto.randomUUID())])
+    const translator =
+      stream !== undefined ? createPiTurnTranslator((parts) => stream.append(parts)) : undefined
+    if (translator !== undefined && turnEvents !== undefined) turnEvents.translator = translator
     try {
-      return await session.prompt(prompt, env, signal)
+      const turn = await session.prompt(prompt, env, signal)
+      if (stream !== undefined) {
+        if (turn.failure === undefined) {
+          stream.append([finishPart()])
+        } else if (translator?.aborted() === true || signal?.aborted === true) {
+          stream.append([abortPart(turn.failure.message)])
+        } else {
+          stream.append([errorPart(turn.failure.message)])
+        }
+      }
+      return turn
     } catch (error) {
+      const failure = localPiFailure(error)
+      if (stream !== undefined) {
+        if (signal?.aborted) {
+          stream.append([abortPart(error instanceof Error ? error.message : String(error))])
+        } else if (translator?.aborted() === true) {
+          stream.append([abortPart(failure.message)])
+        } else {
+          stream.append([errorPart(failure.message)])
+        }
+      }
       return {
         text: '',
         usage: { inputTokens: 0, outputTokens: 0 },
-        failure: localPiFailure(error),
+        failure,
       }
+    } finally {
+      if (translator !== undefined && turnEvents !== undefined) turnEvents.translator = undefined
     }
   }
 

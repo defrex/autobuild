@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import type { StreamPart } from '../../store/streams/types'
 import type { AgentRunner, AgentSessionHandle, AgentTurnResult, Transcript } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput } from './one-shot'
 import { AGENT_BIN_DIR } from './session-env'
@@ -13,6 +14,7 @@ export type AgentRunnerContractScenario =
   | 'exhaustion-failure'
   | 'cancel-start'
   | 'cancel-continue'
+  | 'stream-turn'
 
 export const CONTRACT_INVOCATION = 'agent-runner-contract'
 export const CONTRACT_SKILL = 'ab-runner-contract'
@@ -22,6 +24,7 @@ export const CONTRACT_PERMANENT_FAILURE = 'contract authentication failed'
 export const CONTRACT_EXHAUSTION_FAILURE = 'contract usage quota exhausted'
 export const CONTRACT_ONE_SHOT_PROMPT = 'contract one-shot prompt'
 export const CONTRACT_ONE_SHOT_TEXT = 'contract-one-shot-result'
+export const CONTRACT_STREAM_TOOL = 'contract-tool'
 
 /** An observation made below the adapter boundary. Contract fixtures normalize
  * their SDK-specific calls to this shape so the suite can verify delivery and
@@ -55,6 +58,10 @@ export interface AgentRunnerContractHarness {
   disposed?: () => number
   /** Present only when the runtime declares the optional capability. */
   oneShot?: AgentRunnerContractOneShotHarness
+  /** Stream-part observation (SPEC §9): every part the adapter appended via
+   * the per-turn emitter, across turns, in order. Present only when the
+   * offline fake supports streaming. */
+  stream?: () => readonly StreamPart[]
   cleanup?: () => Promise<void>
 }
 
@@ -396,6 +403,89 @@ export function describeAgentRunnerContract(
         expect(observed?.cwd).toBe(input.cwd)
         expect(observed?.env.AB_CONTRACT_ONE_SHOT).toBe('scoped-value')
         expect(observed?.model).toBe(input.model)
+      })
+    })
+
+    // ── Session streams (SPEC §9) ── exercised only when the offline fake
+    // supports the streaming boundary; a runner without it skips cleanly.
+
+    test('a representative turn streams prompt, text, one tool call with input and output, and finish-step', async () => {
+      await withHarness(factory, 'stream-turn', async (harness) => {
+        if (harness.stream === undefined) return
+        const parts: StreamPart[] = []
+        const started = await harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+          stream: { append: (appended: StreamPart[]) => parts.push(...appended) },
+        })
+        expectTypedCompleted(started.result)
+        const types = parts.map((part) => part.type)
+        // The turn's two sides are visible: its prompt precedes the output.
+        expect(types[0]).toBe('data-ab-prompt')
+        expect(types).toContain('start')
+        // At minimum: a completed assistant message, one tool call with its
+        // input and output, and the step bracket around them.
+        expect(types).toContain('start-step')
+        expect(types).toContain('finish-step')
+        expect(types).toContain('text-start')
+        expect(types).toContain('text-delta')
+        expect(types).toContain('text-end')
+        const toolInput = parts.find((part) => part.type === 'tool-input-available') as unknown as
+          | { toolName: string }
+          | undefined
+        expect(toolInput?.toolName).toBeDefined()
+        expect(parts.some((part) => part.type === 'tool-output-available')).toBe(true)
+        expect(parts.at(-1)?.type).toBe('finish')
+        // The prompt part carries this turn's skill invocation.
+        const prompt = parts.find((part) => part.type === 'data-ab-prompt') as unknown as
+          | { data: { text: string } }
+          | undefined
+        expect(prompt?.data.text).toContain(CONTRACT_SKILL)
+      })
+    })
+
+    test('a failed turn emits an error part before the stream closes', async () => {
+      await withHarness(factory, 'retryable-failure', async (harness) => {
+        if (harness.stream === undefined) return
+        const parts: StreamPart[] = []
+        await harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+          stream: { append: (appended: StreamPart[]) => parts.push(...appended) },
+        })
+        expect(parts.at(-1)?.type).toBe('error')
+      })
+    })
+
+    test('a cancelled turn emits an abort part', async () => {
+      await withHarness(factory, 'cancel-start', async (harness) => {
+        if (harness.stream === undefined) return
+        const parts: StreamPart[] = []
+        const controller = new AbortController()
+        const pending = harness.runner.start({
+          skill: CONTRACT_SKILL,
+          invocation: CONTRACT_INVOCATION,
+          workspacePath: harness.workspacePath,
+          model: harness.model,
+          env: { AB_PHASE: 'implement@1' },
+          signal: controller.signal,
+          stream: { append: (appended: StreamPart[]) => parts.push(...appended) },
+        })
+        await waitForTurn(harness, 1)
+        controller.abort(new Error('contract operator cancellation'))
+        await Promise.race([
+          pending,
+          Bun.sleep(1000).then(() => {
+            throw new Error('cancelled streaming turn did not settle within one second')
+          }),
+        ])
+        expect(parts.at(-1)?.type).toBe('abort')
       })
     })
   })

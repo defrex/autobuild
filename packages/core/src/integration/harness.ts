@@ -295,6 +295,9 @@ export async function makeHarness(opts: {
   /** Optional adapter-level runtime composition for focused integration tests.
    * The scripted agent remains available as the fake provider behind it. */
   createRuntimeRegistry?: (agents: ScriptedAgentRunner) => RuntimeRegistry
+  /** Pass false to launch runners with `streamSessions: false` — the exact
+   * event log a build produces when session streaming is off. */
+  streamSessions?: boolean
   /** Optional production-like workspace composition seam. The default remains
    * the real git-worktree adapter used by existing scenarios. */
   createWorkspaceProvider?: (context: {
@@ -504,7 +507,11 @@ export async function makeHarness(opts: {
         ...(sessionEnv !== undefined ? { sessionEnv } : {}),
         // Long lease/heartbeat: liveness is driven by the shared stepping
         // clock; scenarios advance it explicitly to expire a lease.
-        opts: { heartbeatMs: 3_600_000, leaseTtlMs: 3_600_000 },
+        opts: {
+          heartbeatMs: 3_600_000,
+          leaseTtlMs: 3_600_000,
+          ...(opts.streamSessions === false ? { streamSessions: false } : {}),
+        },
       }),
     }
   }

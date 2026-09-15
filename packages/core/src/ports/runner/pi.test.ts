@@ -11,6 +11,7 @@ import {
   CONTRACT_ONE_SHOT_TEXT,
   CONTRACT_PERMANENT_FAILURE,
   CONTRACT_RETRYABLE_FAILURE,
+  CONTRACT_STREAM_TOOL,
   describeAgentRunnerContract,
   type AgentRunnerContractFactory,
 } from './contract'
@@ -25,6 +26,7 @@ import {
   type PiTurn,
 } from './pi'
 import { classifyProviderError } from './provider-error'
+import type { StreamPart } from '../../store/streams/types'
 import { AGENT_BIN_DIR } from './session-env'
 
 describe('Pi init usability', () => {
@@ -246,6 +248,7 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
       args: opts.args,
     })
     nextSession += 1
+    const onEvent = opts.onEvent
     return {
       sessionId: `pi-contract-${nextSession}`,
       async prompt(text, env, signal): Promise<PiTurn> {
@@ -267,7 +270,33 @@ const piContractFactory: AgentRunnerContractFactory = (scenario) => {
             else signal.addEventListener('abort', abort, { once: true })
           })
         }
-        if (scenario !== 'success' && scenario !== 'cancel-continue') {
+        // Native session events: a registered translator (a streamed turn)
+        // maps them onto parts; other scenarios never carry one.
+        if (onEvent !== undefined) {
+          onEvent({ type: 'turn_start' })
+          onEvent({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'text_start', id: 't1' },
+          })
+          onEvent({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'text_delta', delta: 'contract stream' },
+          })
+          onEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_end', id: 't1' } })
+          onEvent({
+            type: 'tool_execution_start',
+            toolCallId: 'tool-1',
+            toolName: CONTRACT_STREAM_TOOL,
+            args: { q: 'x' },
+          })
+          onEvent({ type: 'tool_execution_end', toolCallId: 'tool-1', result: 'ok' })
+          onEvent({ type: 'turn_end' })
+        }
+        if (
+          scenario !== 'success' &&
+          scenario !== 'cancel-continue' &&
+          scenario !== 'stream-turn'
+        ) {
           const message =
             scenario === 'permanent-failure'
               ? CONTRACT_PERMANENT_FAILURE
@@ -822,5 +851,69 @@ describe('PiAgentRunner.end', () => {
     const { session } = await runner.start(startOpts())
     await runner.end(session)
     await expect(runner.end(session)).rejects.toThrow('unknown session "pi-1"')
+  })
+})
+
+describe('PiAgentRunner stream translation (SPEC §9)', () => {
+  /** A session whose prompt drives the native event observer like the real
+   * RPC client does, then returns a completed turn. */
+  function eventSession(): { createSessionFn: PiCreateSessionFn } {
+    return {
+      createSessionFn: async (opts) => {
+        return {
+          sessionId: 'p1',
+          async prompt(_text, _env, _signal): Promise<PiTurn> {
+            opts.onEvent?.({ type: 'turn_start' })
+            opts.onEvent?.({
+              type: 'message_update',
+              assistantMessageEvent: { type: 'text_start', id: 't1' },
+            })
+            opts.onEvent?.({
+              type: 'message_update',
+              assistantMessageEvent: { type: 'text_delta', delta: 'contract stream' },
+            })
+            opts.onEvent?.({
+              type: 'message_update',
+              assistantMessageEvent: { type: 'text_end', id: 't1' },
+            })
+            opts.onEvent?.({
+              type: 'tool_execution_start',
+              toolCallId: 'tool-1',
+              toolName: 'read',
+              args: { path: 'a.ts' },
+            })
+            opts.onEvent?.({ type: 'tool_execution_end', toolCallId: 'tool-1', result: 'ok' })
+            opts.onEvent?.({ type: 'turn_end' })
+            return { text: 'contract stream', usage: { inputTokens: 1, outputTokens: 1 } }
+          },
+          dispose() {},
+        }
+      },
+    }
+  }
+
+  test('a turn with an emitter maps native events onto the part vocabulary', async () => {
+    const runner = new PiAgentRunner({ createSessionFn: eventSession().createSessionFn })
+    const parts: StreamPart[] = []
+    const started = await runner.start({
+      skill: 'ab-plan',
+      invocation: 'rpc-build',
+      workspacePath: '/ws',
+      model: 'openai/gpt',
+      env: { AB_SESSION: 's_1' },
+      stream: { append: (appended) => parts.push(...appended) },
+    })
+    expect(started.result).toMatchObject({ kind: 'completed' })
+    const types = parts.map((part) => part.type)
+    expect(types[0]).toBe('data-ab-prompt')
+    expect(types).toContain('start')
+    expect(types).toContain('start-step')
+    expect(types).toContain('text-start')
+    expect(types).toContain('text-delta')
+    expect(types).toContain('text-end')
+    expect(types).toContain('tool-input-available')
+    expect(types).toContain('tool-output-available')
+    expect(types).toContain('finish-step')
+    expect(parts.at(-1)?.type).toBe('finish')
   })
 })
