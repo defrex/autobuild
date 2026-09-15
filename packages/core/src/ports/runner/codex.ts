@@ -748,18 +748,17 @@ function launchFailure(error: unknown): CodexTurn {
  * item.started → tool-input-available; item.completed → tool output, whole
  * agent-message text, or reasoning parts; item.updated → text deltas when it
  * carries incremental text. Unrecognized records produce no parts.
+ *
+ * Items without an `id` still correlate across started/updated/completed:
+ * each item kind's events arrive sequentially, so a stable per-kind key is
+ * assigned when the item is first seen and reused until the item completes.
  */
 function createCodexStreamTranslator(emit: (parts: StreamPart[]) => void): {
   onEvent(event: JsonRecord): void
 } {
-  let nextId = 0
-  const openText = new Map<string, string>()
-
-  const itemId = (item: JsonRecord | undefined): string => {
-    const id = stringField(item, 'id')
-    if (id !== undefined && id.length > 0) return id
-    return `cx-${++nextId}`
-  }
+  const openText = new Set<string>()
+  const keys = createItemKeyTracker()
+  const itemKey = keys.keyFor
 
   return {
     onEvent(event) {
@@ -770,11 +769,12 @@ function createCodexStreamTranslator(emit: (parts: StreamPart[]) => void): {
         case 'item.started': {
           const item = isRecord(event.item) ? event.item : undefined
           const itemType = stringField(item, 'type')
+          // agent_message/reasoning items stream at item.updated/item.completed;
+          // a bare item.started opens nothing yet (the first delta does).
           if (itemType === undefined || itemType === 'agent_message' || itemType === 'reasoning') {
-            if (itemType === 'agent_message') openText.set(itemId(item), itemId(item))
             break
           }
-          emit([toolInputPart(itemId(item), itemType, itemCommand(item) ?? item)])
+          emit([toolInputPart(itemKey(item, itemType), itemType, itemCommand(item) ?? item)])
           break
         }
         case 'item.updated': {
@@ -783,9 +783,9 @@ function createCodexStreamTranslator(emit: (parts: StreamPart[]) => void): {
           if (stringField(item, 'type') !== 'agent_message') break
           const delta = itemText(item)
           if (delta === undefined || delta.length === 0) break
-          const id = itemId(item)
+          const id = itemKey(item, 'agent_message')
           if (!openText.has(id)) emit([textStartPart(id)])
-          openText.set(id, id)
+          openText.add(id)
           emit([textDeltaPart(id, delta)])
           break
         }
@@ -793,7 +793,7 @@ function createCodexStreamTranslator(emit: (parts: StreamPart[]) => void): {
           const item = isRecord(event.item) ? event.item : undefined
           const itemType = stringField(item, 'type')
           if (itemType === 'agent_message') {
-            const id = itemId(item)
+            const id = itemKey(item, itemType)
             const text = itemText(item)
             if (openText.has(id)) {
               emit([textEndPart(id)])
@@ -801,21 +801,25 @@ function createCodexStreamTranslator(emit: (parts: StreamPart[]) => void): {
             } else if (text !== undefined && text.length > 0) {
               emit([textStartPart(id), textDeltaPart(id, text), textEndPart(id)])
             }
+            keys.complete(item, itemType)
             break
           }
           if (itemType === 'reasoning') {
-            const id = itemId(item)
+            const id = itemKey(item, itemType)
             const text = itemText(item)
             if (text !== undefined && text.length > 0) {
               emit([reasoningStartPart(id), reasoningDeltaPart(id, text), reasoningEndPart(id)])
             }
+            keys.complete(item, itemType)
             break
           }
           if (itemType === undefined) break
-          emit([toolOutputPart(itemId(item), itemCommand(item) ?? item)])
+          emit([toolOutputPart(itemKey(item, itemType), itemCommand(item) ?? item)])
+          keys.complete(item, itemType)
           break
         }
         case 'turn.completed':
+          keys.clear()
           emit([finishStepPart()])
           break
         default:
@@ -835,34 +839,75 @@ function itemCommand(item: JsonRecord | undefined): unknown {
 }
 
 /**
+ * Stable per-item keys (SPEC §9 translation): items carrying an `id` key by
+ * it; items without one key by kind and occurrence — each kind's events
+ * arrive sequentially, so the slot assigned when the item is first seen is
+ * reused until it completes, and a per-turn reset frees the counters.
+ */
+function createItemKeyTracker(): {
+  keyFor(item: JsonRecord | undefined, itemType: string | undefined): string
+  complete(item: JsonRecord | undefined, itemType: string | undefined): void
+  clear(): void
+} {
+  const counters = new Map<string, number>()
+  const lastIdless = new Map<string, string>()
+  return {
+    keyFor(item, itemType) {
+      const id = stringField(item, 'id')
+      if (id !== undefined && id.length > 0) return id
+      const kind = itemType ?? 'item'
+      const known = lastIdless.get(kind)
+      if (known !== undefined) return known
+      const n = (counters.get(kind) ?? 0) + 1
+      counters.set(kind, n)
+      const key = `cx-${kind}-${n}`
+      lastIdless.set(kind, key)
+      return key
+    },
+    /** An id-less item's kind slot frees up when the item completes. */
+    complete(item, itemType) {
+      if (stringField(item, 'id') === undefined) lastIdless.delete(itemType ?? 'item')
+    },
+    clear() {
+      lastIdless.clear()
+    },
+  }
+}
+
+/**
  * Buffered-path translation (degraded latency, same content): walk the
  * completed turn's events and emit whole messages — start-step/finish-step
  * around the turn, text/reasoning parts from items, and tool input/output
  * from non-message items.
  */
 function translateBufferedCodexTurn(turn: CodexTurn, emit: (parts: StreamPart[]) => void): void {
-  let nextId = 0
+  const keys = createItemKeyTracker()
   emit([startStepPart()])
   for (const event of turn.events) {
     if (event.type !== 'item.completed' && event.type !== 'item.started') continue
     const item = isRecord(event.item) ? event.item : undefined
     const itemType = stringField(item, 'type')
-    const id = stringField(item, 'id') ?? `cx-${++nextId}`
     if (itemType === 'agent_message' && event.type === 'item.completed') {
       const text = itemText(item)
       if (text !== undefined && text.length > 0) {
+        const id = keys.keyFor(item, itemType)
         emit([textStartPart(id), textDeltaPart(id, text), textEndPart(id)])
       }
+      keys.complete(item, itemType)
     } else if (itemType === 'reasoning' && event.type === 'item.completed') {
       const text = itemText(item)
       if (text !== undefined && text.length > 0) {
+        const id = keys.keyFor(item, itemType)
         emit([reasoningStartPart(id), reasoningDeltaPart(id, text), reasoningEndPart(id)])
       }
+      keys.complete(item, itemType)
     } else if (itemType !== undefined && itemType !== 'agent_message' && itemType !== 'reasoning') {
       // Mirror the live mapping: input at item.started, output at completed.
+      const id = keys.keyFor(item, itemType)
       if (event.type === 'item.started')
         emit([toolInputPart(id, itemType, itemCommand(item) ?? item)])
       else emit([toolOutputPart(id, itemCommand(item) ?? item)])
+      if (event.type === 'item.completed') keys.complete(item, itemType)
     }
   }
   emit([finishStepPart()])

@@ -239,6 +239,98 @@ describe('createSessionStreamSink', () => {
     expect(truncation.data.omittedBytes).toBe(80_000 - 65_536)
   })
 
+  test('tool payload truncation keeps the payload kind (objects stay objects)', async () => {
+    const fake = fakeStore()
+    const timer = manualScheduler()
+    const sink = createSessionStreamSink({
+      store: fake.store,
+      scope: SCOPE,
+      schedule: timer.schedule,
+    })
+    await sink.open('session:s1')
+    // Object input: JSON serialization is {"blob":"…"} = 70_011 bytes.
+    sink.append([
+      {
+        type: 'tool-input-available',
+        toolCallId: 't1',
+        toolName: 'shell',
+        input: { blob: 'x'.repeat(70_000) },
+      },
+    ])
+    // String output truncates as a string.
+    sink.append([{ type: 'tool-output-available', toolCallId: 't1', output: 'y'.repeat(70_000) }])
+    await sink.close('completed')
+    const parts = fake.chunks.flatMap((c) => c.parts)
+    expect(parts).toHaveLength(4)
+    const input = parts[0] as { type: string; input: unknown }
+    expect(input.type).toBe('tool-input-available')
+    expect(typeof input.input).toBe('object')
+    const truncated = (input.input as { truncated: string }).truncated
+    expect(new TextEncoder().encode(truncated).byteLength).toBeLessThanOrEqual(65_536)
+    expect(parts[1]).toEqual({
+      type: 'data-ab-truncation',
+      data: { omittedBytes: 70_011 - 65_536 },
+    })
+    const output = parts[2] as { type: string; output: unknown }
+    expect(output.type).toBe('tool-output-available')
+    expect(typeof output.output).toBe('string')
+    expect(parts[3]).toEqual({ type: 'data-ab-truncation', data: { omittedBytes: 4_464 } })
+  })
+
+  test('concurrent flush requests never overlap and close drains what lands mid-flush', async () => {
+    let inAppends = 0
+    let maxConcurrent = 0
+    const delivered: string[] = []
+    const fake = fakeStore()
+    const realAppend = fake.store.appendStreamParts.bind(fake.store)
+    const realClose = fake.store.closeStream.bind(fake.store)
+    fake.store.appendStreamParts = async (streamId, parts) => {
+      inAppends += 1
+      maxConcurrent = Math.max(maxConcurrent, inAppends)
+      await Bun.sleep(2)
+      inAppends -= 1
+      delivered.push(...parts.map((p) => p.type))
+      return realAppend(streamId, parts)
+    }
+    fake.store.closeStream = async (streamId, outcome) => {
+      delivered.push('CLOSED')
+      return realClose(streamId, outcome)
+    }
+    const timer = manualScheduler()
+    const sink = createSessionStreamSink({
+      store: fake.store,
+      scope: SCOPE,
+      schedule: timer.schedule,
+      flushMs: 1,
+    })
+    await sink.open('session:s1')
+    sink.append([
+      { type: 'start', messageId: 'm' },
+      { type: 'text-start', id: 't' },
+      { type: 'text-delta', id: 't', delta: 'a' },
+    ])
+    const draining = timer.tick()
+    // Parts appended while the first drain is still in flight.
+    sink.append([
+      { type: 'text-delta', id: 't', delta: 'b' },
+      { type: 'text-end', id: 't' },
+    ])
+    await draining
+    await sink.close('completed')
+    // Single-flight: appends never overlapped, order is the append order,
+    // and everything landed before the stream closed.
+    expect(maxConcurrent).toBe(1)
+    expect(delivered).toEqual([
+      'start',
+      'text-start',
+      'text-delta',
+      'text-delta',
+      'text-end',
+      'CLOSED',
+    ])
+    expect(fake.closed).toEqual(['completed'])
+  })
+
   test('splits batches that would exceed the store ceiling', async () => {
     const fake = fakeStore()
     const timer = manualScheduler()

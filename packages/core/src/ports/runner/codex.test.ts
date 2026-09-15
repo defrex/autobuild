@@ -616,4 +616,74 @@ describe('CodexAgentRunner streaming boundary (SPEC §9)', () => {
     await pending
     expect(cancelledParts.at(-1)?.type).toBe('abort')
   })
+
+  test('id-less items correlate across started/updated/completed with stable keys', async () => {
+    const lines = [
+      event(thread('contract-thread')),
+      event({ type: 'turn.started' }),
+      // A tool item whose events carry no id.
+      event({ type: 'item.started', item: { type: 'command_execution', command: 'grep -r x' } }),
+      event({
+        type: 'item.completed',
+        item: { type: 'command_execution', command: 'grep -r x', exit_code: 0 },
+      }),
+      // An agent message that streams as incremental updates, no id.
+      event({ type: 'item.started', item: { type: 'agent_message' } }),
+      event({ type: 'item.updated', item: { type: 'agent_message', text: 'he' } }),
+      event({ type: 'item.updated', item: { type: 'agent_message', text: 'llo' } }),
+      event({ type: 'item.completed', item: { type: 'agent_message', text: 'hello' } }),
+      event(completed(1, 1)),
+    ]
+    const parts: StreamPart[] = []
+    const runner = new CodexAgentRunner({
+      createSessionId: () => 'synthetic',
+      runCliStream: () => ({
+        lines: (async function* () {
+          for (const line of lines) yield line
+        })(),
+        result: Promise.resolve({ stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 }),
+      }),
+    })
+    const started = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => parts.push(...appended) },
+    })
+    expect(started.result).toMatchObject({ kind: 'completed', text: 'hello' })
+
+    // The tool call correlates by one toolCallId across input and output.
+    const toolInputs = parts.filter((part) => part.type === 'tool-input-available')
+    const toolOutputs = parts.filter((part) => part.type === 'tool-output-available')
+    expect(toolInputs).toHaveLength(1)
+    expect(toolOutputs).toHaveLength(1)
+    expect(toolOutputs[0]!.toolCallId).toBe(toolInputs[0]!.toolCallId)
+
+    // The streamed message is one open-and-closed text segment under one id.
+    const textStarts = parts.filter((part) => part.type === 'text-start')
+    const textEnds = parts.filter((part) => part.type === 'text-end')
+    expect(textStarts).toHaveLength(1)
+    expect(textEnds).toHaveLength(1)
+    expect(textEnds[0]!.id).toBe(textStarts[0]!.id)
+    for (const delta of parts.filter((part) => part.type === 'text-delta')) {
+      expect(delta.id).toBe(textStarts[0]!.id)
+    }
+
+    // Buffered-path equivalence: the same id-less events, translated after
+    // completion, correlate the same way.
+    const bufferedParts: StreamPart[] = []
+    const buffered = new CodexAgentRunner({
+      createSessionId: () => 'synthetic',
+      runCli: async () => ({ stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 }),
+    })
+    await buffered.start({
+      ...startOpts(),
+      stream: { append: (appended) => bufferedParts.push(...appended) },
+    })
+    const bufferedToolInputs = bufferedParts.filter((part) => part.type === 'tool-input-available')
+    const bufferedToolOutputs = bufferedParts.filter(
+      (part) => part.type === 'tool-output-available',
+    )
+    expect(bufferedToolInputs).toHaveLength(1)
+    expect(bufferedToolOutputs).toHaveLength(1)
+    expect(bufferedToolInputs[0]!.toolCallId).toBe(bufferedToolOutputs[0]!.toolCallId)
+  })
 })

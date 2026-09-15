@@ -17,9 +17,14 @@
  * truncated on a UTF-8 boundary and followed by a `data-ab-truncation`
  * part naming the omitted byte count, so no single delta can exceed the
  * store's batch ceiling.
+ *
+ * Flushes are single-flight: at most one drain runs at a time, so parts are
+ * appended to the store strictly in buffer order (per-stream sequencing can
+ * never reorder), retries re-queue at the front under the same discipline,
+ * and `close` waits out any in-flight drain before closing the stream.
  */
 import type { SessionStreamSink } from '../../ports/types'
-import { truncationPart } from '../../ports/runner/stream-parts'
+import { STREAM_PART_MAX_BYTES, truncationPart } from '../../ports/runner/stream-parts'
 import type { JsonRecord } from '../../ports/runner/json-record'
 import {
   serializedBatchSize,
@@ -68,9 +73,10 @@ function truncateUtf8(text: string, maxBytes: number): { text: string; omitted: 
 /**
  * Bound one part's payload against `STREAM_PART_MAX_BYTES`. Text and
  * reasoning deltas truncate their `delta`; tool inputs/outputs truncate
- * their JSON serialization; the prompt part truncates `data.text`. Anything
- * else passes through untouched. Returns the (possibly replaced) part plus
- * a `data-ab-truncation` part when bytes were omitted.
+ * their JSON serialization, keeping the payload's JSON kind (objects stay
+ * objects, strings stay strings); the prompt part truncates `data.text`.
+ * Anything else passes through untouched. Returns the (possibly replaced)
+ * part plus a `data-ab-truncation` part when bytes were omitted.
  */
 function boundPart(part: StreamPart, maxBytes: number): StreamPart[] {
   const record = part as JsonRecord
@@ -89,12 +95,20 @@ function boundPart(part: StreamPart, maxBytes: number): StreamPart[] {
       const key = part.type === 'tool-input-available' ? 'input' : 'output'
       const value = record[key]
       if (value === undefined) return [part]
+      // Strings truncate as strings; objects stay objects (the shape the
+      // part type carries) with the truncated serialization inside.
+      if (typeof value === 'string') {
+        const { text, omitted } = truncateUtf8(value, maxBytes)
+        return omitted === 0
+          ? [part]
+          : [{ ...record, type: part.type, [key]: text }, truncationPart(omitted)]
+      }
       const serialized = JSON.stringify(value)
       if (typeof serialized !== 'string') return [part]
       const { text, omitted } = truncateUtf8(serialized, maxBytes)
       return omitted === 0
         ? [part]
-        : [{ ...record, type: part.type, [key]: text }, truncationPart(omitted)]
+        : [{ ...record, type: part.type, [key]: { truncated: text } }, truncationPart(omitted)]
     }
     default: {
       // data-ab-prompt carries the turn's prompt in data.text; other data
@@ -121,7 +135,7 @@ function boundPart(part: StreamPart, maxBytes: number): StreamPart[] {
 export function createSessionStreamSink(options: SessionStreamSinkOptions): SessionStreamSink {
   const { store, scope } = options
   const flushMs = options.flushMs ?? 250
-  const maxPartBytes = 65_536
+  const maxPartBytes = STREAM_PART_MAX_BYTES
 
   let streamId: string | undefined
   let openError: unknown
@@ -132,6 +146,11 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
   let closed = false
   let firstOutcome: StreamOutcome | undefined
   let cancelSchedule: (() => void) | undefined
+  /** Single-flight drain discipline: at most one `doFlush` runs at a time;
+   * everything else joins the in-flight promise, so the shared buffer is
+   * never mutated by two concurrent flushes and per-stream part order is
+   * the store-arrival order. */
+  let inFlight: Promise<void> | undefined
 
   const schedule =
     options.schedule ??
@@ -149,15 +168,19 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
 
   function ensureTimer(): void {
     if (cancelSchedule !== undefined || defunct || closed) return
-    cancelSchedule = schedule(() => void flush(), flushMs)
+    cancelSchedule = schedule(() => void requestFlush(), flushMs)
   }
 
-  async function flush(): Promise<void> {
+  /** One drain of the buffer. Never overlapping: it only starts when no
+   * drain is in flight (`requestFlush` gates that), so the shared buffer is
+   * never mutated by two concurrent flushes. */
+  async function doFlush(): Promise<void> {
     if (streamId === undefined || defunct || closed) return
-    if (buffer.length === 0) return
     // Split the buffer into store-sized batches (parts were already
     // per-part bounded at append time, so every batch eventually lands).
-    while (buffer.length > 0) {
+    // Parts appended mid-drain are picked up by the loop's re-check, so a
+    // drain ends only when the buffer is empty or the writer gave up.
+    while (streamId !== undefined && !defunct && !closed && buffer.length > 0) {
       const batch: StreamPart[] = [buffer[0]!]
       buffer.shift()
       while (
@@ -181,11 +204,24 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
             `session stream "${streamId}" stopped after ${MAX_FLUSH_FAILURES} failed appends: ` +
               `${error instanceof Error ? error.message : String(error)}`,
           )
+          // Reentrant close: this drain is the current call stack, so
+          // `closeSink` skips its own drain (`defunct` guards the loop).
           await closeSink('aborted')
         }
         return
       }
     }
+  }
+
+  /** The one way to start (or join) a drain. Never overlaps a running one. */
+  function requestFlush(): Promise<void> {
+    if (inFlight !== undefined) return inFlight
+    const run = doFlush()
+    const tracked = run.finally(() => {
+      if (inFlight === tracked) inFlight = undefined
+    })
+    inFlight = tracked
+    return tracked
   }
 
   /** First-outcome-wins, flush-then-close, best-effort. An undeliverable
@@ -198,7 +234,22 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
     cancelSchedule = undefined
     if (streamId !== undefined) {
       try {
-        await flush()
+        // Flush-then-close under the single-flight discipline: wait out any
+        // in-flight drain, then keep draining until the buffer is empty —
+        // or the writer has given up (defunct, or a failed batch awaiting
+        // its next-tick retry, which closes `aborted` below).
+        while (
+          !defunct &&
+          !closed &&
+          flushFailures === 0 &&
+          (inFlight !== undefined || buffer.length > 0)
+        ) {
+          if (inFlight !== undefined) {
+            await inFlight
+          } else {
+            await requestFlush()
+          }
+        }
       } catch {
         // flush is defensive; appends already handle their own failures.
       }
@@ -229,7 +280,7 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
         streamId = record.id
         ensureTimer()
         // Parts appended while opening flush immediately after the id lands.
-        await flush()
+        await requestFlush()
         return record.id
       } catch (error) {
         openError = error
