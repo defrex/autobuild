@@ -333,6 +333,45 @@ describe('reduceBuild: dispatch recovery and discard', () => {
   })
 })
 
+describe('reduceBuild: open sessions carry the stream id (SPEC §9)', () => {
+  test('session.started passes the optional stream through; historical logs omit it', () => {
+    const streamed = toLog([
+      ...prelude(),
+      ev('session.started', {
+        session: 's_plan',
+        role: 'plan',
+        runner: 'claude',
+        phase: 'plan',
+        round: 1,
+        stream: 'st_abc',
+      }),
+    ])
+    expect(reduceBuild(streamed).sessions.open).toEqual([
+      {
+        session: 's_plan',
+        role: 'plan',
+        runner: 'claude',
+        model: undefined,
+        phase: 'plan',
+        round: 1,
+        stream: 'st_abc',
+        seq: 5,
+      },
+    ])
+    const historical = toLog([
+      ...prelude(),
+      ev('session.started', {
+        session: 's_plan',
+        role: 'plan',
+        runner: 'claude',
+        phase: 'plan',
+        round: 1,
+      }),
+    ])
+    expect(reduceBuild(historical).sessions.open[0]?.stream).toBeUndefined()
+  })
+})
+
 describe('reduceBuild: §15.6 happy path', () => {
   const log = toLog([
     ...prelude(), // 1-4

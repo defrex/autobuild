@@ -55,7 +55,7 @@ import type {
   VerifyOutcome,
 } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { BuildRecord } from '../store/types'
+import type { BuildRecord, StreamRecord, StreamScope } from '../store/types'
 import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
 import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { buildInRepository, resolveMainRepo } from './repo-state'
@@ -133,7 +133,7 @@ export interface BuildDetail extends BuildSummary {
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
-  openSessions: OpenSession[]
+  openSessions: StatusOpenSession[]
   observations: BuildObservation[]
   /** Current setup failure only; a later successful attachment clears it. */
   setupFailure?: SetupFailureDetail
@@ -239,14 +239,28 @@ export function summarize(record: BuildRecord, events: AbEvent[], now: Date): Bu
 }
 
 /** Summary plus the detail fields; `eventCount` appends the newest n events. */
+/** One open session enriched with its live-view stream status (SPEC §9). */
+export interface StatusOpenSession extends OpenSession {
+  /** Open until the stream closes; the store's records are authoritative. */
+  streamStatus?: 'open' | 'closed'
+}
+
 export function detail(
   record: BuildRecord,
   events: AbEvent[],
   now: Date,
   eventCount?: number,
   decision?: BuildDecisionProjection,
+  streams?: readonly StreamRecord[],
 ): BuildDetail {
   const state = reduceBuild(events)
+  const streamStatus = new Map<string, { stream?: string; status: 'open' | 'closed' }>()
+  if (streams !== undefined) {
+    for (const record of streams) {
+      if (record.scope.kind !== 'build') continue
+      streamStatus.set(record.label, { stream: record.id, status: record.status })
+    }
+  }
   const summary = summarizeFrom(record, state, now)
   // §15.6-A: only the CURRENT cycle's results describe the current code.
   // Without this filter an earlier cycle's passes read as current — wrong, and
@@ -273,7 +287,14 @@ export function detail(
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
-    openSessions: state.sessions.open,
+    openSessions: state.sessions.open.map((session) => {
+      const record = streamStatus.get(`session:${session.session}`)
+      return {
+        ...session,
+        ...(record?.stream !== undefined ? { stream: record.stream } : {}),
+        ...(record !== undefined ? { streamStatus: record.status } : {}),
+      }
+    }),
     // Observations are historical facts rather than a derived current-state
     // opinion. Preserve event order and exact optional evidence fields.
     observations: events
@@ -561,8 +582,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.openSessions.length > 0) {
     lines.push(`  open sessions (${d.openSessions.length}):`)
     for (const session of d.openSessions) {
+      const stream =
+        session.stream !== undefined
+          ? ` — stream ${session.stream} (${session.streamStatus ?? 'open'})`
+          : ''
       lines.push(
-        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})`,
+        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})${stream}`,
       )
     }
   }
@@ -791,7 +816,18 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     }
     const events = await context.store.getEvents(opts.slug)
     const decision = await projectBuildDecision(events)
-    const d = detail(record, events, now, opts.events, decision)
+    // Stream enrichment is presentation (SPEC §9): an unavailable read
+    // degrades to payload-carried ids without a status, never a failure.
+    let streams: StreamRecord[] | undefined
+    try {
+      streams = await context.store.listStreams({
+        kind: 'build',
+        build: opts.slug,
+      } satisfies StreamScope)
+    } catch {
+      streams = undefined
+    }
+    const d = detail(record, events, now, opts.events, decision, streams)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(d, null, 2))
       return

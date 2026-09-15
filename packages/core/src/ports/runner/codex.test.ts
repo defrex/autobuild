@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { delimiter } from 'node:path'
-import type { AgentStartOpts } from '../types'
+import type { StreamPart } from '../../store/streams/types'
+import type { AgentRunner, AgentStartOpts, SessionStreamEmitter } from '../types'
 import {
   CONTRACT_EXHAUSTION_FAILURE,
   CONTRACT_FOLLOW_UP,
@@ -123,13 +124,51 @@ const codexContractFactory: AgentRunnerContractFactory = (scenario) => {
       ])
     }
     const text = prompt === CONTRACT_FOLLOW_UP ? 'contract continued' : 'contract started'
+    if (scenario === 'stream-turn') {
+      return output([
+        thread('contract-thread'),
+        {
+          type: 'item.started',
+          item: { id: 'tool-1', type: 'command_execution', command: 'grep -r x' },
+        },
+        {
+          type: 'item.completed',
+          item: { id: 'tool-1', type: 'command_execution', command: 'grep -r x', exit_code: 0 },
+        },
+        message('contract stream'),
+        completed(),
+      ])
+    }
     return output([thread('contract-thread'), message(text), completed()])
   }
-  const runner = new CodexAgentRunner({ runCli, createSessionId: () => 'synthetic-contract' })
+  // The recording emitter forwards to the caller's emitter (if any) while
+  // keeping every part observable for the stream contract tests.
+  const recorded: StreamPart[] = []
+  const record = <T extends { stream?: SessionStreamEmitter }>(opts: T): T =>
+    opts.stream === undefined
+      ? opts
+      : {
+          ...opts,
+          stream: {
+            append: (parts: StreamPart[]) => {
+              recorded.push(...parts)
+              opts.stream?.append(parts)
+            },
+          },
+        }
+  const inner = new CodexAgentRunner({ runCli, createSessionId: () => 'synthetic-contract' })
+  const runner: AgentRunner = {
+    name: inner.name,
+    start: (opts) => inner.start(record(opts)),
+    continue: (session, message, opts) =>
+      inner.continue(session, message, opts === undefined ? undefined : record(opts)),
+    end: (session) => inner.end(session),
+  }
   return {
     runner,
     model: 'gpt-contract-model',
     workspacePath: process.cwd(),
+    stream: () => recorded,
     turns: () =>
       calls
         .filter((call) => promptOf(call) !== CONTRACT_ONE_SHOT_PROMPT)
@@ -138,7 +177,7 @@ const codexContractFactory: AgentRunnerContractFactory = (scenario) => {
           env: call.env,
         })),
     oneShot: {
-      completion: runner,
+      completion: inner,
       observation: () => {
         const call = calls.find((candidate) => promptOf(candidate) === CONTRACT_ONE_SHOT_PROMPT)
         if (call === undefined) return undefined
@@ -450,5 +489,131 @@ describe('CodexAgentRunner complete', () => {
     await expect(runner.complete({ prompt: 'name it', cwd: '/repo', env: {} })).rejects.toThrow(
       'tool item(s): command_execution',
     )
+  })
+})
+
+describe('CodexAgentRunner streaming boundary (SPEC §9)', () => {
+  test('maps item.started/completed live and buffers equivalently', async () => {
+    const lines = [
+      event(thread('contract-thread')),
+      event({ type: 'turn.started' }),
+      event({
+        type: 'item.started',
+        item: { id: 'tool-1', type: 'command_execution', command: 'grep -r x' },
+      }),
+      event({
+        type: 'item.completed',
+        item: { id: 'tool-1', type: 'command_execution', command: 'grep -r x', exit_code: 0 },
+      }),
+      event({
+        type: 'item.completed',
+        item: { id: 'item-1', type: 'agent_message', text: 'done' },
+      }),
+      event(completed(3, 2)),
+    ]
+    const parts: StreamPart[] = []
+    let streamed = false
+    const runner = new CodexAgentRunner({
+      createSessionId: () => 'synthetic',
+      runCliStream: () => {
+        streamed = true
+        return {
+          lines: (async function* () {
+            for (const line of lines) yield line
+          })(),
+          result: Promise.resolve({ stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 }),
+        }
+      },
+      runCli: async () => {
+        throw new Error('buffered boundary must not run when streaming')
+      },
+    })
+    const started = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => parts.push(...appended) },
+    })
+    expect(started.result).toMatchObject({ kind: 'completed', text: 'done' })
+    expect(streamed).toBe(true)
+
+    const types = parts.map((part) => part.type)
+    expect(types[0]).toBe('data-ab-prompt')
+    expect(types).toContain('start-step')
+    expect(types).toContain('tool-input-available')
+    expect(types).toContain('tool-output-available')
+    expect(types).toContain('text-start')
+    expect(types).toContain('text-delta')
+    expect(types).toContain('text-end')
+    expect(types).toContain('finish-step')
+    expect(parts.at(-1)?.type).toBe('finish')
+
+    // Buffered-path equivalence: same part sequence (modulo ids) with no
+    // streaming boundary.
+    const bufferedParts: StreamPart[] = []
+    const buffered = new CodexAgentRunner({
+      createSessionId: () => 'synthetic',
+      runCli: async () => ({ stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 }),
+    })
+    await buffered.start({
+      ...startOpts(),
+      stream: { append: (appended) => bufferedParts.push(...appended) },
+    })
+    expect(bufferedParts.map((part) => part.type)).toEqual(types)
+    const bufferedInput = bufferedParts.find(
+      (part) => part.type === 'tool-input-available',
+    ) as unknown as { toolName: string; input: unknown }
+    expect(bufferedInput.toolName).toBe('command_execution')
+    expect(bufferedInput.input).toBe('grep -r x')
+  })
+
+  test('a streamed failure emits error and a cancelled turn emits abort', async () => {
+    const failing = new CodexAgentRunner({
+      createSessionId: () => 'synthetic',
+      runCliStream: () => ({
+        lines: (async function* () {
+          yield event(thread('contract-thread'))
+          yield event({ type: 'turn.failed', error: { message: CONTRACT_RETRYABLE_FAILURE } })
+        })(),
+        result: Promise.resolve({
+          stdout: event({ type: 'turn.failed', error: { message: CONTRACT_RETRYABLE_FAILURE } }),
+          stderr: '',
+          exitCode: 1,
+        }),
+      }),
+    })
+    const failedParts: StreamPart[] = []
+    await failing.start({
+      ...startOpts(),
+      stream: { append: (appended) => failedParts.push(...appended) },
+    })
+    expect(failedParts.at(-1)?.type).toBe('error')
+
+    const cancelledParts: StreamPart[] = []
+    const controller = new AbortController()
+    const cancelling = new CodexAgentRunner({
+      createSessionId: () => 'synthetic',
+      runCliStream: (invocation) => ({
+        lines: (async function* () {
+          yield event(thread('contract-thread'))
+          await new Promise((resolve) => {
+            if (invocation.signal?.aborted) resolve(undefined)
+            else
+              invocation.signal?.addEventListener('abort', () => resolve(undefined), { once: true })
+          })
+        })(),
+        result: new Promise((resolve) => {
+          invocation.signal?.addEventListener('abort', () => {
+            resolve({ stdout: '', stderr: 'aborted', exitCode: 1 })
+          })
+        }),
+      }),
+    })
+    const pending = cancelling.start({
+      ...startOpts(),
+      signal: controller.signal,
+      stream: { append: (appended) => cancelledParts.push(...appended) },
+    })
+    controller.abort(new Error('operator stopped'))
+    await pending
+    expect(cancelledParts.at(-1)?.type).toBe('abort')
   })
 })

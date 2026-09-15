@@ -1426,7 +1426,7 @@ The rerun opens one fresh session, so after attachment only work that could
 still be alive appears in `ab build status`. Dashboard session history keeps the
 reclaimed entry visibly distinct and reports that its transcript is unavailable.
 
-Each session row also shows its live-view stream (SPEC §9): the stream id and
+Each session row also shows its live-view stream: the stream id and
 whether that stream is `open` or `closed` — for example `stream st_1f2e (open)`.
 A session that never streamed (a plugin runtime without the streaming
 capability, or a historical log) shows no stream segment. While a session

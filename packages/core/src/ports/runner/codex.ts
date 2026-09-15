@@ -256,7 +256,11 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     } = {},
   ) {
     this.runCli = opts.runCli ?? runCodexCli
-    this.runCliStream = opts.runCliStream ?? runCodexCliStream
+    // A test injecting only the buffered boundary takes the buffered
+    // translation path for streaming turns (degraded latency, same content);
+    // production gets the live streaming boundary.
+    this.runCliStream =
+      opts.runCliStream ?? (opts.runCli !== undefined ? undefined : runCodexCliStream)
     this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
 
@@ -855,8 +859,10 @@ function translateBufferedCodexTurn(turn: CodexTurn, emit: (parts: StreamPart[])
         emit([reasoningStartPart(id), reasoningDeltaPart(id, text), reasoningEndPart(id)])
       }
     } else if (itemType !== undefined && itemType !== 'agent_message' && itemType !== 'reasoning') {
-      emit([toolInputPart(id, itemType, itemCommand(item) ?? item)])
-      if (event.type === 'item.completed') emit([toolOutputPart(id, itemCommand(item) ?? item)])
+      // Mirror the live mapping: input at item.started, output at completed.
+      if (event.type === 'item.started')
+        emit([toolInputPart(id, itemType, itemCommand(item) ?? item)])
+      else emit([toolOutputPart(id, itemCommand(item) ?? item)])
     }
   }
   emit([finishStepPart()])

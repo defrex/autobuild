@@ -188,7 +188,9 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
     }
   }
 
-  /** First-outcome-wins, flush-then-close, best-effort. */
+  /** First-outcome-wins, flush-then-close, best-effort. An undeliverable
+   * buffer at close time means the stream's content is incomplete: it closes
+   * `aborted` with one diagnostic, whatever outcome was requested. */
   async function closeSink(outcome: StreamOutcome): Promise<void> {
     if (closed || firstOutcome !== undefined) return
     firstOutcome = outcome
@@ -200,8 +202,16 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
       } catch {
         // flush is defensive; appends already handle their own failures.
       }
+      let effective = outcome
+      if (flushFailures > 0) {
+        effective = 'aborted'
+        onDiagnosticOnce(
+          `session stream "${streamId}" closed with ${buffer.length} undelivered parts ` +
+            `after ${flushFailures} failed appends`,
+        )
+      }
       try {
-        await store.closeStream(streamId, outcome)
+        await store.closeStream(streamId, effective)
       } catch (error) {
         onDiagnosticOnce(
           `session stream "${streamId}" failed to close: ` +

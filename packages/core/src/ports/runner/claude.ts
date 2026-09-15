@@ -249,7 +249,11 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     } = {},
   ) {
     this.runCli = opts.runCli ?? runClaudeCli
-    this.runCliStream = opts.runCliStream ?? runClaudeCliStream
+    // A test injecting only the buffered boundary takes the buffered
+    // translation path for streaming turns (degraded latency, same content);
+    // production gets the live streaming boundary.
+    this.runCliStream =
+      opts.runCliStream ?? (opts.runCli !== undefined ? undefined : runClaudeCliStream)
     this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
 
