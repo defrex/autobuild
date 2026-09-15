@@ -3,7 +3,13 @@
  * the single validation entry point every store adapter calls at append.
  * This is where the ontology is *enforced*, not just described (SPEC §8).
  */
-import { actorSchema, type Actor, type ActorKind } from './envelope'
+import {
+  actorSchema,
+  VIA_ACTOR_RULE,
+  viaOnNonHumanActor,
+  type Actor,
+  type ActorKind,
+} from './envelope'
 import { eventPayloadSchemas, isEventType, type EventPayload, type EventType } from './payloads'
 
 /**
@@ -139,6 +145,9 @@ export function validateEventWrite(input: {
     )
   }
 
+  if (viaOnNonHumanActor(input.actor)) {
+    throw new EventValidationError(VIA_ACTOR_RULE)
+  }
   const actorResult = actorSchema.safeParse(input.actor)
   if (!actorResult.success) {
     throw new EventValidationError(

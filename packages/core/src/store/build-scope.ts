@@ -4,6 +4,12 @@ import type { RepositoryEventType, RepositoryEventWrite } from '../events/reposi
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import type { RepositoryEvent, RepositoryEventEnvelope } from '../events/repository'
 import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../events/sessions'
+import type {
   Artifact,
   ArtifactInput,
   ArtifactMeta,
@@ -14,6 +20,8 @@ import type {
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
+  SessionArtifactMeta,
+  SessionRecord,
   SubscribeOptions,
   Unsubscribe,
 } from './types'
@@ -188,6 +196,43 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     releaseRepoLease(repo: string, _holder: string): Promise<void> {
       return Promise.reject(new BuildScopeError(scope, 'releaseRepoLease', repo))
+    },
+    createSession(input): Promise<SessionRecord> {
+      return Promise.reject(new BuildScopeError(scope, 'createSession', input.repo))
+    },
+    getSession(id: string): Promise<SessionRecord | null> {
+      return Promise.reject(new BuildScopeError(scope, 'getSession', id))
+    },
+    listSessions(repo: string): Promise<SessionRecord[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listSessions', repo))
+    },
+    appendSessionEvent<T extends SessionEventType>(
+      id: string,
+      _event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T>> {
+      return Promise.reject(new BuildScopeError(scope, 'appendSessionEvent', id))
+    },
+    getSessionEvents(id: string, _sinceSeq?: number): Promise<SessionEvent[]> {
+      return Promise.reject(new BuildScopeError(scope, 'getSessionEvents', id))
+    },
+    appendSessionWithArtifacts<T extends SessionEventType>(
+      id: string,
+      _artifacts: ArtifactInput[],
+      _makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+    ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+      return Promise.reject(new BuildScopeError(scope, 'appendSessionWithArtifacts', id))
+    },
+    putSessionArtifact(id: string, _artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+      return Promise.reject(new BuildScopeError(scope, 'putSessionArtifact', id))
+    },
+    getSessionArtifact(id: string, _kind: string, _rev?: number): Promise<null> {
+      return Promise.reject(new BuildScopeError(scope, 'getSessionArtifact', id))
+    },
+    listSessionArtifacts(id: string, _kind?: string): Promise<SessionArtifactMeta[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listSessionArtifacts', id))
+    },
+    scopeSession(id: string): never {
+      throw new BuildScopeError(scope, 'scopeSession', id)
     },
     async createStream(candidate: StreamScope, label: string): Promise<StreamRecord> {
       buildScope('createStream', candidate)

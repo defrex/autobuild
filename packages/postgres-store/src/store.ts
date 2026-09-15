@@ -1,13 +1,17 @@
 import { SQL } from 'bun'
 import {
   contentHash,
+  humanActor,
   createBuildScopedStore,
+  createSessionScopedStore,
+  normalizeOperator,
   pollingSubscribe,
   systemClock,
   toBytes,
   validateEventWrite,
   validateExpectedSeq,
   validateRepositoryEventWrite,
+  validateSessionEventWrite,
   type AbEvent,
   type Artifact,
   type ArtifactInput,
@@ -21,6 +25,7 @@ import {
   type EventType,
   type EventWrite,
   type NewBuildInput,
+  type NewSessionInput,
   type RepositoryArtifact,
   type RepositoryArtifactMeta,
   type RepositoryEvent,
@@ -28,6 +33,14 @@ import {
   type RepositoryEventType,
   type RepositoryEventWrite,
   type RepositoryRecord,
+  type SessionArtifact,
+  type SessionArtifactMeta,
+  type SessionEvent,
+  type SessionEventEnvelope,
+  type SessionEventType,
+  type SessionEventWrite,
+  type SessionRecord,
+  type SessionScopedStore,
   type SubscribeOptions,
   type Unsubscribe,
 } from 'autobuild/store-adapter'
@@ -41,6 +54,7 @@ import type {
 } from 'autobuild/store-adapter'
 import {
   assembleUIMessageDocument,
+  readEventsWithWait,
   readStreamWithWait,
   serializedBatchSize,
   STREAM_BATCH_MAX_BYTES,
@@ -95,6 +109,10 @@ export class PostgresBuildStore implements BuildStore {
 
   scopeBuild(slug: string): BuildScopedStore {
     return createBuildScopedStore(this, slug)
+  }
+
+  scopeSession(id: string): SessionScopedStore {
+    return createSessionScopedStore(this, id)
   }
 
   private now(): string {
@@ -453,6 +471,210 @@ export class PostgresBuildStore implements BuildStore {
     return this.release('repo_streams', repo, holder)
   }
 
+  // ── Operator sessions (SPEC §7.1.1 — a third resource kind) ─────────
+
+  private async lockSession(tx: Tx, id: string): Promise<Row> {
+    const rows: Row[] = await tx`SELECT * FROM sessions WHERE id = ${id} FOR UPDATE`
+    const row = rows[0]
+    if (!row) throw new Error(`unknown session "${id}"`)
+    return row
+  }
+
+  private sessionRecord(row: Row): SessionRecord {
+    return {
+      id: String(row.id),
+      repo: String(row.repo),
+      operator: String(row.operator),
+      ...(row.title !== null && row.title !== undefined ? { title: String(row.title) } : {}),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    }
+  }
+
+  async createSession(input: NewSessionInput): Promise<SessionRecord> {
+    const operator = normalizeOperator(input.operator)
+    if (!input.repo) throw new Error('repo is required')
+    const ts = this.now()
+    const id = `os_${crypto.randomUUID()}`
+    // The record and its first fact land together: `session.created` (seq 1,
+    // actor the operator) commits in the same transaction as the insert (D6).
+    const validated = validateSessionEventWrite({
+      actor: humanActor(operator),
+      type: 'session.created',
+      payload: input.title !== undefined ? { title: input.title } : {},
+    })
+    return this.sql.begin(async (tx) => {
+      await tx`INSERT INTO sessions (id, repo, operator, title, created_at, updated_at)
+        VALUES (${id}, ${input.repo}, ${operator}, ${input.title ?? null}, ${ts}, ${ts})`
+      await tx`INSERT INTO session_events (session, seq, ts, actor, type, payload)
+        VALUES (${id}, 1, ${ts}, ${validated.actor}, ${validated.type}, ${validated.payload})`
+      return this.sessionRecord(await this.lockSession(tx, id))
+    })
+  }
+
+  async getSession(id: string): Promise<SessionRecord | null> {
+    const rows: Row[] = await this.sql`SELECT * FROM sessions WHERE id = ${id}`
+    return rows[0] ? this.sessionRecord(rows[0]) : null
+  }
+
+  async listSessions(repo: string): Promise<SessionRecord[]> {
+    const rows: Row[] = await this
+      .sql`SELECT * FROM sessions WHERE repo = ${repo} ORDER BY created_at, id`
+    return rows.map((row) => this.sessionRecord(row))
+  }
+
+  private async appendSessionLocked(
+    tx: Tx,
+    id: string,
+    event: SessionEventWrite,
+    alreadyLocked = false,
+  ): Promise<SessionEventEnvelope> {
+    if (!alreadyLocked) await this.lockSession(tx, id)
+    const tails: Row[] =
+      await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM session_events WHERE session = ${id}`
+    const seq = num(tails[0]?.seq) + 1
+    const ts = this.now()
+    await tx`INSERT INTO session_events (session, seq, ts, actor, type, payload)
+      VALUES (${id}, ${seq}, ${ts}, ${event.actor}, ${event.type}, ${event.payload})`
+    await tx`UPDATE sessions SET updated_at = ${ts} WHERE id = ${id}`
+    return { session: id, seq, ts, actor: event.actor, type: event.type, payload: event.payload }
+  }
+
+  async appendSessionEvent<T extends SessionEventType>(
+    id: string,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T>> {
+    const validated = validateSessionEventWrite(event)
+    return (await this.sql.begin((tx) =>
+      this.appendSessionLocked(tx, id, validated),
+    )) as SessionEventEnvelope<T>
+  }
+
+  async getSessionEvents(
+    id: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<SessionEvent[]> {
+    const read = async (): Promise<SessionEvent[]> => {
+      if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
+      const rows: Row[] = await this
+        .sql`SELECT * FROM session_events WHERE session = ${id} AND seq > ${sinceSeq} ORDER BY seq`
+      return rows.map((row) => ({
+        session: String(row.session),
+        seq: num(row.seq),
+        ts: iso(row.ts),
+        actor: json(row.actor),
+        type: String(row.type),
+        payload: json(row.payload),
+      })) as SessionEvent[]
+    }
+    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+  }
+
+  private async depositSessionLocked(
+    tx: Tx,
+    id: string,
+    artifact: PreparedArtifact,
+    revisions: Map<string, number>,
+  ): Promise<SessionArtifactMeta> {
+    let revision = revisions.get(artifact.kind)
+    if (revision === undefined) {
+      const tails: Row[] =
+        await tx`SELECT COALESCE(MAX(revision), -1) AS revision FROM session_artifacts WHERE session=${id} AND kind=${artifact.kind}`
+      revision = num(tails[0]?.revision) + 1
+    }
+    revisions.set(artifact.kind, revision + 1)
+    const createdAt = this.now()
+    await tx`INSERT INTO session_artifacts (session, kind, revision, blob_ref, metadata, created_at)
+      VALUES (${id}, ${artifact.kind}, ${revision}, ${artifact.blobRef}, ${artifact.metadata}, ${createdAt})`
+    await tx`UPDATE sessions SET updated_at = ${createdAt} WHERE id = ${id}`
+    return {
+      session: id,
+      kind: artifact.kind,
+      revision,
+      blobRef: artifact.blobRef,
+      metadata: artifact.metadata,
+      createdAt,
+    }
+  }
+
+  async appendSessionWithArtifacts<T extends SessionEventType>(
+    id: string,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+  ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+    const prepared: PreparedArtifact[] = []
+    for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
+    // Same shape as `appendWithArtifacts`: deposits land unpruned inside one
+    // locked transaction, the batch event is validated before any commit of
+    // the caller-visible state, and an invalid event throws, rolling back
+    // every deposit (D6). Session artifacts are not retention-managed.
+    return this.sql.begin(async (tx) => {
+      await this.lockSession(tx, id)
+      const revisions = new Map<string, number>()
+      const deposited: SessionArtifactMeta[] = []
+      for (const artifact of prepared) {
+        deposited.push(await this.depositSessionLocked(tx, id, artifact, revisions))
+      }
+      const validated = validateSessionEventWrite(makeEvent(structuredClone(deposited)))
+      const event = (await this.appendSessionLocked(
+        tx,
+        id,
+        validated,
+        true,
+      )) as SessionEventEnvelope<T>
+      return { event, artifacts: deposited }
+    })
+  }
+
+  async putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+    const prepared = await this.prepare(artifact)
+    return this.sql.begin(async (tx) => {
+      await this.lockSession(tx, id)
+      return this.depositSessionLocked(tx, id, prepared, new Map())
+    })
+  }
+
+  private sessionArtifactMeta(row: Row): SessionArtifactMeta {
+    return {
+      session: String(row.session),
+      kind: String(row.kind),
+      revision: num(row.revision),
+      blobRef: String(row.blob_ref),
+      metadata: json(row.metadata),
+      createdAt: iso(row.created_at),
+    }
+  }
+
+  async getSessionArtifact(
+    id: string,
+    kind: string,
+    rev?: number,
+  ): Promise<SessionArtifact | null> {
+    if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
+    const rows: Row[] =
+      rev === undefined
+        ? await this
+            .sql`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} ORDER BY revision DESC LIMIT 1`
+        : await this
+            .sql`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} AND revision = ${rev}`
+    const row = rows[0]
+    if (!row) return null
+    const content = await this.blobs.get(String(row.blob_ref))
+    return content ? { meta: this.sessionArtifactMeta(row), content } : null
+  }
+
+  async listSessionArtifacts(id: string, kind?: string): Promise<SessionArtifactMeta[]> {
+    if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
+    const rows: Row[] =
+      kind === undefined
+        ? await this
+            .sql`SELECT * FROM session_artifacts WHERE session = ${id} ORDER BY kind, revision`
+        : await this
+            .sql`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} ORDER BY kind, revision`
+    return rows.map((row) => this.sessionArtifactMeta(row))
+  }
+
   async ensureRepo(repo: string): Promise<RepositoryRecord> {
     if (!repo) throw new Error('repo is required')
     const ts = this.now()
@@ -636,6 +858,9 @@ export class PostgresBuildStore implements BuildStore {
     if (row.scope_kind === 'repo' && row.repo !== null) {
       return { kind: 'repo', repo: String(row.repo) }
     }
+    if (row.scope_kind === 'session' && row.session !== null) {
+      return { kind: 'session', session: String(row.session) }
+    }
     throw new Error(`stream "${String(row.id)}" has an unreadable scope`)
   }
 
@@ -667,14 +892,17 @@ export class PostgresBuildStore implements BuildStore {
    * the most recently closed one in this scope (closedAt, then id).
    * Records, finalized artifacts, and open streams are never touched. */
   private async pruneStreamChunksLocked(tx: Tx, scope: StreamScope): Promise<void> {
-    const rows: Row[] =
-      scope.kind === 'build'
-        ? await tx`SELECT id FROM streams
-            WHERE status = 'closed' AND scope_kind = 'build' AND build = ${scope.build}
-            ORDER BY closed_at DESC, id DESC OFFSET 1`
-        : await tx`SELECT id FROM streams
-            WHERE status = 'closed' AND scope_kind = 'repo' AND repo = ${scope.repo}
-            ORDER BY closed_at DESC, id DESC OFFSET 1`
+    const owner =
+      scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
+    const rows: Row[] = await tx`
+      SELECT id FROM streams
+      WHERE status = 'closed' AND scope_kind = ${scope.kind}
+        AND (
+          (scope_kind = 'build' AND build = ${scope.kind === 'build' ? owner : null})
+          OR (scope_kind = 'repo' AND repo = ${scope.kind === 'repo' ? owner : null})
+          OR (scope_kind = 'session' AND session = ${scope.kind === 'session' ? owner : null})
+        )
+      ORDER BY closed_at DESC, id DESC OFFSET 1`
     for (const row of rows) {
       await tx`DELETE FROM stream_chunks WHERE stream = ${String(row.id)}`
     }
@@ -686,12 +914,15 @@ export class PostgresBuildStore implements BuildStore {
     const ts = this.now()
     return this.sql.begin(async (tx) => {
       if (scope.kind === 'build') await this.lockBuild(tx, scope.build)
-      else await this.lockRepo(tx, scope.repo)
+      else if (scope.kind === 'repo') await this.lockRepo(tx, scope.repo)
+      else await this.lockSession(tx, scope.session)
       await this.pruneStreamChunksLocked(tx, scope)
       await tx`INSERT INTO streams
-        (id, scope_kind, build, repo, label, format, status, created_at)
+        (id, scope_kind, build, repo, session, label, format, status, created_at)
         VALUES (${id}, ${scope.kind}, ${scope.kind === 'build' ? scope.build : null},
-          ${scope.kind === 'repo' ? scope.repo : null}, ${label}, ${STREAM_FORMAT}, 'open', ${ts})`
+          ${scope.kind === 'repo' ? scope.repo : null},
+          ${scope.kind === 'session' ? scope.session : null},
+          ${label}, ${STREAM_FORMAT}, 'open', ${ts})`
       return this.streamRecord(await this.lockStream(tx, id))
     })
   }
@@ -775,20 +1006,66 @@ export class PostgresBuildStore implements BuildStore {
     return this.sql.begin(async (tx) => {
       const fresh = await this.lockStream(tx, streamId)
       if (String(fresh.status) === 'closed') return this.streamRecord(fresh)
+      // Commit-time verification (AUT-348): the prepare-phase chunk snapshot
+      // can go stale — an append from another connection may commit after the
+      // snapshot and before this transaction takes the row lock. Re-read the
+      // chunk rows under the lock; on a mismatch re-assemble and re-put the
+      // blob so every acknowledged append is included in the finalized
+      // artifact. An append that commits before the lock is taken lands here;
+      // one that waits on the lock fails the closed check above instead.
+      const lockedChunks: Row[] = await tx`SELECT * FROM stream_chunks
+        WHERE stream = ${streamId} ORDER BY seq`
+      let closeInput = input
+      let closeRef = blobRef
+      if (lockedChunks.length !== chunkRows.length) {
+        const reassembled = await assembleUIMessageDocument(
+          lockedChunks.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
+        )
+        closeInput = streamArtifactInput(
+          String(row.id),
+          scope,
+          String(row.label),
+          outcome,
+          reassembled.document,
+          lockedChunks.length,
+          reassembled.droppedPartCount,
+        )
+        closeRef = contentHash(toBytes(closeInput.content))
+        await this.blobs.put(closeRef, toBytes(closeInput.content))
+      }
       const meta =
         scope.kind === 'build'
           ? await this.depositBuildLocked(
               tx,
               scope.build,
-              { kind: input.kind, blobRef, metadata: structuredClone(input.metadata) },
+              {
+                kind: closeInput.kind,
+                blobRef: closeRef,
+                metadata: structuredClone(closeInput.metadata),
+              },
               new Map(),
             )
-          : await this.depositRepoLocked(
-              tx,
-              scope.repo,
-              { kind: input.kind, blobRef, metadata: structuredClone(input.metadata) },
-              new Map(),
-            )
+          : scope.kind === 'repo'
+            ? await this.depositRepoLocked(
+                tx,
+                scope.repo,
+                {
+                  kind: closeInput.kind,
+                  blobRef: closeRef,
+                  metadata: structuredClone(closeInput.metadata),
+                },
+                new Map(),
+              )
+            : await this.depositSessionLocked(
+                tx,
+                scope.session,
+                {
+                  kind: closeInput.kind,
+                  blobRef: closeRef,
+                  metadata: structuredClone(closeInput.metadata),
+                },
+                new Map(),
+              )
       await tx`UPDATE streams
         SET status = 'closed', outcome = ${outcome}, closed_at = ${meta.createdAt},
           artifact_kind = ${meta.kind}, artifact_revision = ${meta.revision},
@@ -804,14 +1081,17 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
-    const rows: Row[] =
-      scope.kind === 'build'
-        ? await this.sql`SELECT * FROM streams
-            WHERE scope_kind = 'build' AND build = ${scope.build}
-            ORDER BY created_at, id`
-        : await this.sql`SELECT * FROM streams
-            WHERE scope_kind = 'repo' AND repo = ${scope.repo}
-            ORDER BY created_at, id`
+    const owner =
+      scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
+    const rows: Row[] = await this.sql`
+      SELECT * FROM streams
+      WHERE scope_kind = ${scope.kind}
+        AND (
+          (scope_kind = 'build' AND build = ${scope.kind === 'build' ? owner : null})
+          OR (scope_kind = 'repo' AND repo = ${scope.kind === 'repo' ? owner : null})
+          OR (scope_kind = 'session' AND session = ${scope.kind === 'session' ? owner : null})
+        )
+      ORDER BY created_at, id`
     return rows.map((row) => this.streamRecord(row))
   }
 

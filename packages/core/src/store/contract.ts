@@ -12,8 +12,9 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { EventValidationError, type EventWrite } from '../events/catalog'
-import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, humanActor, KERNEL, type Via } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
+import type { SessionEventWrite } from '../events/sessions'
 import { manualClock } from '../testing/fixed'
 import {
   contentHash,
@@ -156,6 +157,21 @@ export function runStartedWrite(
       effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
       roleWarnings: [],
     },
+  }
+}
+
+export function messagePostedWrite(text = 'hello'): SessionEventWrite<'message.posted'> {
+  return { actor: humanActor('operator'), type: 'message.posted', payload: { text } }
+}
+
+export function turnStartedWrite(
+  turn = 't1',
+  stream = `st_${turn}`,
+): SessionEventWrite<'turn.started'> {
+  return {
+    actor: agentActor('orchestrator', 'os_turn'),
+    type: 'turn.started',
+    payload: { turn, stream, trigger: { kind: 'message', messageSeq: 1 } },
   }
 }
 
@@ -863,6 +879,43 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(
             (await store.getArtifact('retain-b', 'build-runner-effective-config'))?.meta.revision,
           ).toBe(2)
+        })
+      })
+
+      test('the operator-notes kind is retention-managed at the same deposit path', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.ensureRepo('acme/retention')
+          // Three deposits of the agent notes kind prune the oldest, exactly
+          // like the dispatcher family: the newest 2 survive, and the
+          // latest-by-default read (what notes.read serves) still works.
+          for (let i = 0; i < 3; i++) {
+            await store.putRepoArtifact('acme/retention', {
+              kind: 'operator-notes',
+              content: `notes-${i}`,
+              metadata: { user: 'Ada' },
+            })
+          }
+          const revisions = (await store.listRepoArtifacts('acme/retention', 'operator-notes')).map(
+            (meta) => meta.revision,
+          )
+          expect(revisions).toEqual([1, 2])
+          expect(await store.getRepoArtifact('acme/retention', 'operator-notes', 0)).toBeNull()
+          const latest = await store.getRepoArtifact('acme/retention', 'operator-notes')
+          expect(latest?.meta.revision).toBe(2)
+          expect(new TextDecoder().decode(latest!.content)).toBe('notes-2')
+          // The dispatcher family's documented bound is untouched by the
+          // operator kind: a family deposit still prunes its own kind alone.
+          const { artifacts } = await store.appendRepoWithArtifacts(
+            'acme/retention',
+            [{ kind: 'dispatcher-effective-config', content: 'cfg' }],
+            (deposited) => runStartedWrite('retention-notes-run', deposited),
+          )
+          expect(artifacts.map((meta) => meta.revision)).toEqual([0])
+          expect(
+            (await store.listRepoArtifacts('acme/retention', 'operator-notes')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([1, 2])
         })
       })
     })
@@ -1652,6 +1705,468 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(
             (await store.listStreams({ kind: 'repo', repo: 'acme/rate-limiter' })).map((r) => r.id),
           ).toEqual([stream.id])
+        })
+      })
+
+      test('session-scoped streams run the full lifecycle with the artifact deposited on the session scope', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const session = await store.createSession({
+            repo: 'acme/rate-limiter',
+            operator: 'operator',
+            title: 'orchestrator',
+          })
+          const stream = await store.createStream(
+            { kind: 'session', session: session.id },
+            'turn one',
+          )
+          await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'om' }])
+          await store.appendStreamParts(stream.id, [
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'thinking' },
+            { type: 'text-end', id: 't' },
+          ])
+          clock.advance(1000)
+          const record = await store.closeStream(stream.id, 'completed')
+          expect(record.scope).toEqual({ kind: 'session', session: session.id })
+          expect(record.outcome).toBe('completed')
+          const artifact = await store.getSessionArtifact(session.id, `stream:${stream.id}`)
+          expect(artifact?.meta.metadata).toMatchObject({
+            stream: stream.id,
+            label: 'turn one',
+            scope: { kind: 'session', session: session.id },
+            outcome: 'completed',
+          })
+          expect(JSON.parse(artifactText(artifact!))).toEqual([
+            {
+              id: 'om',
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'thinking', state: 'done' }],
+            },
+          ])
+          expect(
+            (await store.listStreams({ kind: 'session', session: session.id })).map((r) => r.id),
+          ).toEqual([stream.id])
+        })
+      })
+
+      describe('operator sessions (SPEC §7.1.1 — a third resource kind)', () => {
+        test('createSession assigns an os_ id, clock timestamps, and appends session.created at seq 1', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            const record = await store.createSession({
+              repo: 'acme/a',
+              operator: '  operator  ',
+              title: 'orchestrator',
+            })
+            expect(record.id).toMatch(/^os_/)
+            expect(record.repo).toBe('acme/a')
+            expect(record.operator).toBe('operator')
+            expect(record.title).toBe('orchestrator')
+            expect(record.createdAt).toBe(CONTRACT_T0)
+            expect(record.updatedAt).toBe(CONTRACT_T0)
+            expect(await store.getSession(record.id)).toEqual(record)
+            const events = await store.getSessionEvents(record.id)
+            expect(events).toHaveLength(1)
+            expect(events[0]).toMatchObject({
+              session: record.id,
+              seq: 1,
+              ts: CONTRACT_T0,
+              actor: { kind: 'human', user: 'operator' },
+              type: 'session.created',
+              payload: { title: 'orchestrator' },
+            })
+          })
+        })
+
+        test('getSession returns null for an unknown session; listSessions isolates by repository', async () => {
+          await withStore(factory, undefined, async (store) => {
+            expect(await store.getSession('os_never')).toBeNull()
+            const a = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const a2 = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const b = await store.createSession({ repo: 'acme/b', operator: 'op' })
+            expect((await store.listSessions('acme/a')).map((s) => s.id)).toEqual([a.id, a2.id])
+            expect((await store.listSessions('acme/b')).map((s) => s.id)).toEqual([b.id])
+            expect(await store.listSessions('acme/never')).toEqual([])
+          })
+        })
+
+        test('a blank operator identity rejects', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const err = await store
+              .createSession({ repo: 'acme/a', operator: '   ' })
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(Error)
+          })
+        })
+
+        test('per-session sequencing is independent across sessions and updates the record', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            const a = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const b = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            clock.advance(1000)
+            const a2 = await store.appendSessionEvent(a.id, messagePostedWrite('first'))
+            clock.advance(1000)
+            const a3 = await store.appendSessionEvent(a.id, messagePostedWrite('second'))
+            const b2 = await store.appendSessionEvent(b.id, messagePostedWrite('other'))
+            expect([a2.seq, a3.seq]).toEqual([2, 3])
+            expect(b2.seq).toBe(2)
+            expect((await store.getSession(a.id))?.updatedAt).toBe(atT0(2000))
+            expect((await store.getSessionEvents(a.id)).map((e) => e.seq)).toEqual([1, 2, 3])
+            expect((await store.getSessionEvents(a.id, 1)).map((e) => e.seq)).toEqual([2, 3])
+            expect(await store.getSessionEvents(a.id, 3)).toEqual([])
+          })
+        })
+
+        test('appendSessionEvent validation rejects unknown types, malformed payloads, and wrong actor kinds, leaving the log untouched', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const cases = [
+              // Unknown type.
+              {
+                actor: humanActor('op'),
+                type: 'no.such-type',
+                payload: {},
+              },
+              // Malformed payload: message.posted requires nonempty text.
+              { actor: humanActor('op'), type: 'message.posted', payload: { text: '' } },
+              // Wrong actor kind: only humans post messages.
+              {
+                actor: agentActor('orchestrator', 'os_t'),
+                type: 'message.posted',
+                payload: { text: 'hi' },
+              },
+              // Wrong actor kind: only the agent starts turns.
+              {
+                actor: humanActor('op'),
+                type: 'turn.started',
+                payload: {
+                  turn: 't1',
+                  stream: 'st_t1',
+                  trigger: { kind: 'message', messageSeq: 1 },
+                },
+              },
+            ] as const
+            for (const bad of cases) {
+              const err = await store
+                .appendSessionEvent(session.id, bad as unknown as SessionEventWrite)
+                .catch((e: unknown) => e)
+              expect(err).toBeInstanceOf(EventValidationError)
+            }
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([1])
+          })
+        })
+
+        test('appendSessionEvent on an unknown session rejects', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const err = await store
+              .appendSessionEvent('os_ghost', messagePostedWrite())
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(Error)
+            expect((err as Error).message).toContain('unknown session')
+          })
+        })
+
+        test('bounded-wait session event read: early return on append, waits out the bound when empty, clamps above 30', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            // Early return when an event lands during the wait.
+            const pending = store.getSessionEvents(session.id, 1, { waitSeconds: 5 })
+            await Bun.sleep(100)
+            const appended = await store.appendSessionEvent(session.id, messagePostedWrite('wake'))
+            const woke = await pending
+            expect(woke.map((e) => e.seq)).toEqual([appended.seq])
+
+            // Waits out the bound when nothing arrives.
+            const started = Date.now()
+            const empty = await store.getSessionEvents(session.id, 99, { waitSeconds: 1 })
+            expect(empty).toEqual([])
+            expect(Date.now() - started).toBeGreaterThanOrEqual(950)
+          })
+        })
+
+        test('session deposits are atomic: success, invalid-event rollback, validation-before-prune', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const { event, artifacts } = await store.appendSessionWithArtifacts(
+              session.id,
+              [{ kind: 'turn-context', content: '{"turn":"t1"}' }],
+              () => ({
+                actor: agentActor('orchestrator', 'os_turn'),
+                type: 'turn.started',
+                payload: {
+                  turn: 't1',
+                  stream: 'st_t1',
+                  trigger: { kind: 'message', messageSeq: 1 },
+                },
+              }),
+            )
+            expect(artifacts.map((meta) => meta.revision)).toEqual([0])
+            expect(event.seq).toBe(2)
+            expect(
+              (await store.getSessionArtifact(session.id, 'turn-context'))?.meta.revision,
+            ).toBe(0)
+
+            // An invalid event rolls the whole deposit back.
+            const err = await store
+              .appendSessionWithArtifacts(
+                session.id,
+                [{ kind: 'turn-context', content: 'second' }],
+                () =>
+                  ({
+                    actor: humanActor('op'),
+                    type: 'turn.started',
+                    payload: {
+                      turn: 't2',
+                      stream: 'st_t2',
+                      trigger: { kind: 'message', messageSeq: 1 },
+                    },
+                  }) as unknown as SessionEventWrite,
+              )
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(EventValidationError)
+            expect((await store.listSessionArtifacts(session.id, 'turn-context')).length).toBe(1)
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([1, 2])
+          })
+        })
+
+        test('session artifacts version per kind and read latest/pinned', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const a0 = await store.putSessionArtifact(session.id, {
+              kind: 'context',
+              content: 'v0',
+            })
+            const a1 = await store.putSessionArtifact(session.id, {
+              kind: 'context',
+              content: 'v1',
+            })
+            expect([a0.revision, a1.revision]).toEqual([0, 1])
+            expect((await store.getSessionArtifact(session.id, 'context'))?.meta.revision).toBe(1)
+            expect((await store.getSessionArtifact(session.id, 'context', 0))?.meta.revision).toBe(
+              0,
+            )
+            expect(await store.getSessionArtifact(session.id, 'never')).toBeNull()
+            expect(
+              (await store.listSessionArtifacts(session.id)).map((m) => [m.kind, m.revision]),
+            ).toEqual([
+              ['context', 0],
+              ['context', 1],
+            ])
+          })
+        })
+
+        test('session-scoped handles touch only their own session and reject everything else', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const own = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const foreign = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            await store.ensureRepo('acme/a')
+            await store.createBuild(sampleBuildInput('scope-build'))
+            const scoped = store.scopeSession(own.id)
+            expect(scoped.sessionScope).toBe(own.id)
+
+            // Own operations work.
+            expect(await scoped.getSession(own.id)).not.toBeNull()
+            await scoped.appendSessionEvent(own.id, messagePostedWrite('mine'))
+            await scoped.putSessionArtifact(own.id, { kind: 'notes', content: 'owned' })
+            expect((await scoped.getSessionArtifact(own.id, 'notes'))?.meta.revision).toBe(0)
+            const ownStream = await scoped.createStream(
+              { kind: 'session', session: own.id },
+              'turn',
+            )
+            await scoped.appendStreamParts(ownStream.id, [
+              { type: 'text-delta', id: 't', delta: 'x' },
+            ])
+            expect((await scoped.readStream(ownStream.id)).chunks).toHaveLength(1)
+            expect(
+              (await scoped.listStreams({ kind: 'session', session: own.id })).map((r) => r.id),
+            ).toEqual([ownStream.id])
+            expect(scoped.scopeSession(own.id)).toBe(scoped)
+
+            // Foreign session, create/list, and every build/repository operation reject.
+            const attempts = [
+              () => scoped.getSession(foreign.id),
+              () => scoped.appendSessionEvent(foreign.id, messagePostedWrite()),
+              () => scoped.listSessions('acme/a'),
+              () => scoped.createSession({ repo: 'acme/a', operator: 'op' }),
+              () => scoped.createStream({ kind: 'session', session: foreign.id }, 'x'),
+              () => scoped.listStreams({ kind: 'session', session: foreign.id }),
+              () => scoped.getBuild('scope-build'),
+              () => scoped.append('scope-build', sampleEventWrite()),
+              () => scoped.listBuilds(),
+              () => scoped.createBuild(sampleBuildInput('scope-build-2')),
+              () => scoped.ensureRepo('acme/a'),
+              () => scoped.appendRepo('acme/a', harvestStartedWrite()),
+              () => scoped.getRepoEvents('acme/a'),
+              () => scoped.createStream({ kind: 'build', build: 'scope-build' }, 'x'),
+              () => scoped.createStream({ kind: 'repo', repo: 'acme/a' }, 'x'),
+              () => scoped.close(),
+            ] as const
+            for (const attempt of attempts) {
+              const err = await attempt().catch((e: unknown) => e)
+              expect(err, `${attempt.toString()} must reject`).toBeInstanceOf(Error)
+              expect((err as Error).message).toContain('session-scoped store')
+            }
+          })
+        })
+
+        test('build-scoped handles reject session operations and session-scoped streams', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            await store.createBuild(sampleBuildInput('bscope'))
+            const scoped = store.scopeBuild('bscope')
+            const sessionStream = await store.createStream(
+              { kind: 'session', session: session.id },
+              'turn',
+            )
+            const attempts = [
+              () => scoped.getSession(session.id),
+              () => scoped.appendSessionEvent(session.id, messagePostedWrite()),
+              () => scoped.listSessions('acme/a'),
+              () => scoped.createSession({ repo: 'acme/a', operator: 'op' }),
+              () => scoped.putSessionArtifact(session.id, { kind: 'x', content: 'x' }),
+              () => scoped.listSessionArtifacts(session.id),
+              () => scoped.createStream({ kind: 'session', session: session.id }, 'x'),
+              () =>
+                scoped.appendStreamParts(sessionStream.id, [
+                  { type: 'text-delta', id: 't', delta: 'x' },
+                ]),
+              () => scoped.readStream(sessionStream.id),
+              () => scoped.listStreams({ kind: 'session', session: session.id }),
+            ] as const
+            for (const attempt of attempts) {
+              const err = await attempt().catch((e: unknown) => e)
+              expect(err, `${attempt.toString()} must reject`).toBeInstanceOf(Error)
+              expect((err as Error).message).toContain('build-scoped store')
+            }
+          })
+        })
+
+        test('session streams never list under build or repo scopes and vice versa', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            await store.createBuild(sampleBuildInput('st-mix'))
+            await store.ensureRepo('acme/a')
+            const sessionStream = await store.createStream(
+              { kind: 'session', session: session.id },
+              'turn',
+            )
+            const buildStream = await store.createStream(
+              { kind: 'build', build: 'st-mix' },
+              'phase',
+            )
+            expect(
+              (await store.listStreams({ kind: 'session', session: session.id })).map((r) => r.id),
+            ).toEqual([sessionStream.id])
+            expect(
+              (await store.listStreams({ kind: 'build', build: 'st-mix' })).map((r) => r.id),
+            ).toEqual([buildStream.id])
+            expect(await store.listStreams({ kind: 'repo', repo: 'acme/a' })).toEqual([])
+          })
+        })
+      })
+
+      describe('via attribution (delegated writes, SPEC §15.1)', () => {
+        const viaSession: Via = { kind: 'session', id: 'os_delegate' }
+        const viaMcp: Via = { kind: 'mcp', client: 'claude-code' }
+
+        test('build and repository writes accept human actors carrying each via kind and round-trip it', async () => {
+          await withStore(factory, undefined, async (store) => {
+            await store.createBuild(sampleBuildInput('via-build'))
+            await store.ensureRepo('acme/via')
+            for (const via of [viaSession, viaMcp]) {
+              const envelope = await store.append('via-build', {
+                actor: humanActor('operator', via),
+                type: 'build.created',
+                payload: {
+                  ticket: sampleBuildInput('via-build').ticket!,
+                  repo: 'acme/rate-limiter',
+                  baseBranch: 'main',
+                },
+              })
+              expect(envelope.actor).toEqual({ kind: 'human', user: 'operator', via })
+              await store.appendRepo('acme/via', {
+                actor: humanActor('operator', via),
+                type: 'dispatcher.intake-set',
+                payload: { enabled: false },
+              })
+            }
+            const events = await store.getEvents('via-build')
+            expect(events.map((e) => (e.actor as { via?: Via }).via)).toEqual([viaSession, viaMcp])
+            const repoEvents = await store.getRepoEvents('acme/via')
+            expect(repoEvents.map((e) => (e.actor as { via?: Via }).via)).toEqual([
+              viaSession,
+              viaMcp,
+            ])
+            // Events without via replay unchanged.
+            const plain = await store.append('via-build', {
+              actor: humanActor('operator'),
+              type: 'build.pause-requested',
+              payload: {},
+            })
+            expect(plain.actor).toEqual({ kind: 'human', user: 'operator' })
+          })
+        })
+
+        test('via on any non-human actor rejects with the explicit rule message', async () => {
+          await withStore(factory, undefined, async (store) => {
+            await store.createBuild(sampleBuildInput('via-nonhuman'))
+            await store.ensureRepo('acme/via')
+            for (const actor of [
+              { kind: 'kernel', via: viaSession },
+              { kind: 'agent', role: 'implement', session: 's_1', via: viaSession },
+              { kind: 'dispatcher', via: viaMcp },
+              { kind: 'ingester', source: 'webhook', via: viaMcp },
+            ]) {
+              const err = await store
+                .append('via-nonhuman', {
+                  actor,
+                  type: 'observation.recorded',
+                  payload: { id: 'o', kind: 'followup', summary: 'x' },
+                } as unknown as EventWrite)
+                .catch((e: unknown) => e)
+              expect(err).toBeInstanceOf(EventValidationError)
+              expect((err as Error).message).toContain('only human actors may carry via')
+              const repoErr = await store
+                .appendRepo('acme/via', {
+                  actor,
+                  type: 'harvest.started',
+                  payload: harvestStartedWrite().payload,
+                } as unknown as RepositoryEventWrite)
+                .catch((e: unknown) => e)
+              expect(repoErr).toBeInstanceOf(EventValidationError)
+              expect((repoErr as Error).message).toContain('only human actors may carry via')
+            }
+            expect(await store.getEvents('via-nonhuman')).toEqual([])
+            expect(await store.getRepoEvents('acme/via')).toEqual([])
+          })
+        })
+
+        test('malformed via shapes reject', async () => {
+          await withStore(factory, undefined, async (store) => {
+            await store.createBuild(sampleBuildInput('via-malformed'))
+            for (const via of [
+              { kind: 'session' },
+              { kind: 'session', id: '' },
+              { kind: 'mcp' },
+              { kind: 'mcp', client: '' },
+              { kind: 'slack', channel: 'x' },
+              'os_delegate',
+            ]) {
+              const err = await store
+                .append('via-malformed', {
+                  actor: { kind: 'human', user: 'operator', via },
+                  type: 'build.pause-requested',
+                  payload: {},
+                } as unknown as EventWrite)
+                .catch((e: unknown) => e)
+              expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(
+                EventValidationError,
+              )
+            }
+            expect(await store.getEvents('via-malformed')).toEqual([])
+          })
         })
       })
     })

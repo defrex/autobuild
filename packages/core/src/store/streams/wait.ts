@@ -34,3 +34,25 @@ export async function readStreamWithWait(opts: {
   }
   return result
 }
+
+/**
+ * The event-read variant of the shared wait loop: read once, then poll until
+ * newer events arrive or the clamped deadline passes. Session event reads
+ * (§7.1.1) honor the same clamp/early-return rules as stream reads so the
+ * operator UI's poll loop cannot drift between the two; there is no
+ * "closed" state to short-circuit on — an event log is always open.
+ */
+export async function readEventsWithWait<T>(opts: {
+  read: () => Promise<T[]>
+  waitSeconds?: number
+  pollMs?: number
+}): Promise<T[]> {
+  const pollMs = opts.pollMs ?? STREAM_WAIT_POLL_MS
+  const deadline = Date.now() + clampWaitSeconds(opts.waitSeconds ?? 0) * 1000
+  let result = await opts.read()
+  while (result.length === 0 && Date.now() < deadline) {
+    await Bun.sleep(pollMs)
+    result = await opts.read()
+  }
+  return result
+}

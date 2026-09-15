@@ -1,8 +1,24 @@
+/**
+ * Local ambient phase-session wrapper for a BuildStore.
+ *
+ * This module's "session" is the CLI's validated ambient phase/Harvest
+ * identity (agent-session attribution): it scopes a local store handle to the
+ * exact build or repository resource and rejects agent-attributed event
+ * writes for any other `AB_SESSION`. It is unrelated to the operator-session
+ * scope handles in `session-handle.ts` (hosted-only, AUT-339), which scope a
+ * store to a single operator session's record.
+ */
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import type { RepositoryEvent, RepositoryEventEnvelope } from '../events/repository'
+import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../events/sessions'
 import type {
   Artifact,
   ArtifactInput,
@@ -10,9 +26,12 @@ import type {
   BuildRecord,
   BuildStore,
   NewBuildInput,
+  NewSessionInput,
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
+  SessionArtifactMeta,
+  SessionRecord,
   SubscribeOptions,
   Unsubscribe,
 } from './types'
@@ -25,14 +44,14 @@ import type {
   StreamScope,
 } from './streams/types'
 
-export type LocalSessionScope =
+export type PhaseSessionScope =
   | { kind: 'build'; id: string; session: string }
   | { kind: 'repo'; id: string; session: string }
 
 /** An in-process authority failure for a local phase-session store handle. */
-export class SessionScopeError extends Error {
+export class PhaseSessionError extends Error {
   constructor(
-    readonly scope: LocalSessionScope,
+    readonly scope: PhaseSessionScope,
     readonly operation: string,
     readonly target?: { kind: 'build' | 'repo' | 'admin'; id?: string },
     message?: string,
@@ -45,27 +64,27 @@ export class SessionScopeError extends Error {
           ? `${operation} (admin)`
           : `${operation} targeting ${target.kind} ${JSON.stringify(target.id)}`
     super(message ?? `local session store scoped to ${authority} forbids ${addressed}`)
-    this.name = 'SessionScopeError'
+    this.name = 'PhaseSessionError'
   }
 }
 
-type BuildSessionScope = Extract<LocalSessionScope, { kind: 'build' }>
-type RepositorySessionScope = Extract<LocalSessionScope, { kind: 'repo' }>
+type BuildPhaseSessionScope = Extract<PhaseSessionScope, { kind: 'build' }>
+type RepositoryPhaseSessionScope = Extract<PhaseSessionScope, { kind: 'repo' }>
 
 /** Nested same-build scoping is idempotent while a foreign scope can never
  * widen this ambient-session handle. */
-export interface BuildLocalSessionStore extends BuildStore {
-  readonly sessionScope: BuildSessionScope
+export interface BuildPhaseSessionStore extends BuildStore {
+  readonly phaseSession: BuildPhaseSessionScope
   readonly buildScope: string
-  scopeBuild(slug: string): BuildLocalSessionStore
+  scopeBuild(slug: string): BuildPhaseSessionStore
 }
 
-export interface RepositoryLocalSessionStore extends BuildStore {
-  readonly sessionScope: RepositorySessionScope
+export interface RepositoryPhaseSessionStore extends BuildStore {
+  readonly phaseSession: RepositoryPhaseSessionScope
   scopeBuild(slug: string): never
 }
 
-export type LocalSessionStore = BuildLocalSessionStore | RepositoryLocalSessionStore
+export type PhaseSessionStore = BuildPhaseSessionStore | RepositoryPhaseSessionStore
 
 function actorSession(actor: unknown): string | null {
   if (typeof actor !== 'object' || actor === null) return null
@@ -79,30 +98,30 @@ function actorSession(actor: unknown): string | null {
  * the session dimension applies only to agent-attributed event writes so the
  * CLI's trusted KERNEL plumbing remains usable.
  */
-export function scopeLocalStoreToSession(
+export function scopeLocalStoreToPhaseSession(
   store: BuildStore,
-  scope: BuildSessionScope,
-): BuildLocalSessionStore
-export function scopeLocalStoreToSession(
+  scope: BuildPhaseSessionScope,
+): BuildPhaseSessionStore
+export function scopeLocalStoreToPhaseSession(
   store: BuildStore,
-  scope: RepositorySessionScope,
-): RepositoryLocalSessionStore
-export function scopeLocalStoreToSession(
+  scope: RepositoryPhaseSessionScope,
+): RepositoryPhaseSessionStore
+export function scopeLocalStoreToPhaseSession(
   store: BuildStore,
-  scope: LocalSessionScope,
-): LocalSessionStore
-export function scopeLocalStoreToSession(
+  scope: PhaseSessionScope,
+): PhaseSessionStore
+export function scopeLocalStoreToPhaseSession(
   store: BuildStore,
-  scope: LocalSessionScope,
-): LocalSessionStore {
+  scope: PhaseSessionScope,
+): PhaseSessionStore {
   const target = (kind: 'build' | 'repo', id: string) => ({ kind, id }) as const
   const own = (operation: string, kind: 'build' | 'repo', id: string): void => {
     if (scope.kind !== kind || scope.id !== id) {
-      throw new SessionScopeError(scope, operation, target(kind, id))
+      throw new PhaseSessionError(scope, operation, target(kind, id))
     }
   }
   const admin = (operation: string): never => {
-    throw new SessionScopeError(scope, operation, { kind: 'admin' })
+    throw new PhaseSessionError(scope, operation, { kind: 'admin' })
   }
   /** Streams carry no actor, so the session dimension does not gate them —
    * only the exact-resource guard does. Addressed operations resolve the
@@ -114,12 +133,16 @@ export function scopeLocalStoreToSession(
         ? record.scope.kind === 'build' && record.scope.build === scope.id
         : record.scope.kind === 'repo' && record.scope.repo === scope.id
     if (!matches) {
-      throw new SessionScopeError(
+      throw new PhaseSessionError(
         scope,
         'stream',
         record.scope.kind === 'build'
           ? ({ kind: 'build', id: record.scope.build } as const)
-          : ({ kind: 'repo', id: record.scope.repo } as const),
+          : record.scope.kind === 'repo'
+            ? ({ kind: 'repo', id: record.scope.repo } as const)
+            : // Session-scoped streams are hosted-only; an ambient phase
+              // session never owns one.
+              ({ kind: 'admin' } as const),
       )
     }
   }
@@ -132,12 +155,14 @@ export function scopeLocalStoreToSession(
   const ownStreamScopeArg = (operation: string, candidate: StreamScope): void => {
     const expected = streamScope()
     if (JSON.stringify(candidate) !== JSON.stringify(expected)) {
-      throw new SessionScopeError(
+      throw new PhaseSessionError(
         scope,
         operation,
         candidate.kind === 'build'
           ? ({ kind: 'build', id: candidate.build } as const)
-          : ({ kind: 'repo', id: candidate.repo } as const),
+          : candidate.kind === 'repo'
+            ? ({ kind: 'repo', id: candidate.repo } as const)
+            : ({ kind: 'admin' } as const),
       )
     }
   }
@@ -151,7 +176,7 @@ export function scopeLocalStoreToSession(
     }
     const session = actorSession(actor)
     if (session !== scope.session) {
-      throw new SessionScopeError(
+      throw new PhaseSessionError(
         scope,
         operation,
         undefined,
@@ -165,12 +190,12 @@ export function scopeLocalStoreToSession(
   }
 
   const scoped = {
-    sessionScope: scope,
+    phaseSession: scope,
     ...(scope.kind === 'build' ? { buildScope: scope.id } : {}),
 
-    scopeBuild(slug: string): BuildLocalSessionStore {
+    scopeBuild(slug: string): BuildPhaseSessionStore {
       own('scopeBuild', 'build', slug)
-      return scoped as BuildLocalSessionStore
+      return scoped as BuildPhaseSessionStore
     },
 
     async createBuild(_input: NewBuildInput): Promise<BuildRecord> {
@@ -340,13 +365,53 @@ export function scopeLocalStoreToSession(
       return store.listStreams(candidate)
     },
 
+    // Operator sessions are hosted-only: an ambient phase-session handle —
+    // a local construct — never creates or touches one.
+    createSession(_input: NewSessionInput): Promise<SessionRecord> {
+      return admin('createSession')
+    },
+    getSession(_id: string): Promise<SessionRecord | null> {
+      return admin('getSession')
+    },
+    listSessions(_repo: string): Promise<SessionRecord[]> {
+      return admin('listSessions')
+    },
+    appendSessionEvent<T extends SessionEventType>(
+      _id: string,
+      _event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T>> {
+      return admin('appendSessionEvent')
+    },
+    getSessionEvents(_id: string, _sinceSeq?: number): Promise<SessionEvent[]> {
+      return admin('getSessionEvents')
+    },
+    appendSessionWithArtifacts<T extends SessionEventType>(
+      _id: string,
+      _artifacts: ArtifactInput[],
+      _makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+    ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+      return admin('appendSessionWithArtifacts')
+    },
+    putSessionArtifact(_id: string, _artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+      return admin('putSessionArtifact')
+    },
+    getSessionArtifact(_id: string, _kind: string, _rev?: number): Promise<null> {
+      return admin('getSessionArtifact')
+    },
+    listSessionArtifacts(_id: string, _kind?: string): Promise<SessionArtifactMeta[]> {
+      return admin('listSessionArtifacts')
+    },
+    scopeSession(_id: string): never {
+      return admin('scopeSession')
+    },
+
     close(): Promise<void> {
       return store.close()
     },
   } satisfies BuildStore & {
-    readonly sessionScope: LocalSessionScope
+    readonly phaseSession: PhaseSessionScope
     readonly buildScope?: string
-    scopeBuild(slug: string): BuildLocalSessionStore
+    scopeBuild(slug: string): BuildPhaseSessionStore
   }
-  return scoped as LocalSessionStore
+  return scoped as PhaseSessionStore
 }

@@ -3,6 +3,11 @@
 ## Unreleased
 
 - [#333](https://github.com/defrex/autobuild/pull/333) — Stream every local build session as AI SDK UI message parts
+- [#332](https://github.com/defrex/autobuild/pull/332) — Add the agent tool registry and ab mcp over stdio
+- [#330](https://github.com/defrex/autobuild/pull/330) — State the stream close/append interleaving guarantee in SPEC §7.6
+- [#329](https://github.com/defrex/autobuild/pull/329) — Serialize stream close against append to stop silent chunk loss
+- [#328](https://github.com/defrex/autobuild/pull/328) — Rename the phase-session store wrapper to deconflict from operator sessions
+- [#327](https://github.com/defrex/autobuild/pull/327) — Add operator sessions as a third store resource with via attribution
 - [#326](https://github.com/defrex/autobuild/pull/326) — Add a stream primitive to the BuildStore finalizing into artifacts
 - [#325](https://github.com/defrex/autobuild/pull/325) — Classify DIRTY mergeable_state as merge conflicts in auto-merge gate
 - [#324](https://github.com/defrex/autobuild/pull/324) — Route a bundled deployment's missing archive to a legible, correctly-routed failure
