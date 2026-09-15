@@ -537,6 +537,18 @@ read-only process-local UI concerns. Build actions still use the shared control
 service and append human facts; the header shows acknowledged durable state,
 never optimistic intent. Forge mutation stays in dispatcher plumbing.
 
+**Agent tool registry.** `packages/core/src/operator/registry.ts` is the agent-facing
+face of the operator services: one closed table of typed tools whose handlers call
+the same control, query, ticket, and artifact services the operator API routes call
+(`operator/control.ts`, `operator/query.ts`, `operator/tickets.ts`), with the
+route-level glue re-derived beside it in `operator/requests.ts` and tool/route parity
+proven per tool by `operator/registry.contract.test.ts`. Every binding is generated
+from the table and never widens beyond the operator services: the shipped one is
+`packages/core/src/cli/mcp.ts` (`ab mcp`, a stdio MCP server over the registry that
+fails closed inside a phase, exactly as repository-wide `ab builds` does); the
+embedded orchestrator and later transports register from the same table. Checked-in
+risk classes live in `operator/annotations.ts` (SPEC §8.9).
+
 **Init and upgrade.** `packages/core/src/cli/init.ts` owns deterministic skill vendoring,
 ignore maintenance, runtime probes, and the stack-neutral first config. It then
 launches an interactive agent CLI, or prints the identical short prompt, telling

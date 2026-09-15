@@ -618,6 +618,7 @@ sessions need no separate global installation.
 | `ab done` | complete a producer phase (validates, then runs phase plumbing) | **yes** |
 | `ab verdict <approve\|revise\|escalate\|pass\|fail\|skip> …` | complete a review/verify phase | **yes** |
 | `ab escalate <question>` | park the build for human input | **yes** |
+| `ab mcp [--store <ref>] [--repo <id>]` | serve the agent tool registry as an MCP server over stdio; fails closed inside a phase | no |
 
 The read-only `ab builds`, `ab build status`, and `ab artifact download` forms
 require no session identity for operator use and preserve their repository-wide
@@ -808,6 +809,26 @@ append an event, claim a ticket, attach a runner, or start dispatcher work.
 
 Agents never receive TicketSource credentials. Only the deterministic file
 step creates/adopts approved proposals and commits ledger facts.
+
+### 8.9 The agent tool registry
+
+`packages/core/src/operator/registry.ts` is the agent tool surface: one typed,
+closed table of tools — each naming the tool, describing it for a model,
+declaring its input schema and MCP annotations, carrying an approval class, and
+binding a handler that calls the same operator services the operator API routes
+call. It is the single source of truth for the agent-facing operator surface,
+and every binding is generated from it; the table never widens beyond the
+operator services, and a contract suite proves, tool by tool, that each
+handler's result equals the corresponding route's.
+
+The shipped binding is `ab mcp`, a stdio MCP server over the registry: the CLI
+remains the primary local interface for agents that have a shell, while the
+binding exists so the registry can be exercised end to end from a local
+install, for dogfooding, and for local agents that cannot run commands. It
+fails closed inside a phase session — repository-wide operator authority cannot
+be narrowed to the ambient build — and `--repo` constrains every call to one
+repository. Mutating tools attribute their writes to the sessionless operator
+identity, exactly as the other operator commands do.
 
 ## 9. AgentRunner
 
