@@ -20,7 +20,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
 import { reduceBuild } from '../kernel/reducer'
 import { artifactDownload, artifactGet, artifactPut } from './artifact'
-import { parseArgs, stringFlag, type ParsedArgs } from './args'
+import { multiFlag, parseArgs, stringFlag, type ParsedArgs } from './args'
 import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
 import {
   abBulkControl,
@@ -47,6 +47,7 @@ import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
 import { abBuilds, abBuildStatus } from './status'
 import { abRepositoryStatus } from './repository-status'
+import { abWatch, WATCH_USAGE } from './watch'
 import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
 import { abTicket, openTicketSource } from './ticket'
@@ -98,6 +99,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'dispatch',
   'builds',
   'build',
+  'watch',
   'repository',
   'pause',
   'resume',
@@ -798,6 +800,61 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
+      })
+      return 0
+    }
+
+    // Read-only streaming runs OUTSIDE build sessions (§16.3) like the other
+    // status commands: it resolves its own store (--store > AB_STORE > default)
+    // and honors a complete ambient identity as a scope restriction (watch.ts).
+    case 'watch': {
+      const parsed = parseArgs(
+        rest,
+        {
+          repository: 'boolean',
+          event: 'multi',
+          since: 'value',
+          timeout: 'value',
+          interval: 'value',
+          count: 'value',
+          json: 'boolean',
+          store: 'value',
+        },
+        WATCH_USAGE,
+      )
+      const countFlag = stringFlag(parsed, 'count')
+      let count: number | undefined
+      if (countFlag !== undefined) {
+        const parsedCount = Number(countFlag)
+        if (!Number.isInteger(parsedCount) || parsedCount <= 0) {
+          throw new Error(
+            `--count requires a positive integer, got "${countFlag}" — ${WATCH_USAGE}`,
+          )
+        }
+        count = parsedCount
+      }
+      const storeRef = stringFlag(parsed, 'store')
+      if (deps.exec === undefined) {
+        throw new Error("'ab watch' needs an exec seam — this is a wiring bug in the ab binary")
+      }
+      await abWatch({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        stderr,
+        slugs: parsed.positionals,
+        repository: parsed.flags.has('repository'),
+        events: multiFlag(parsed, 'event'),
+        since: stringFlag(parsed, 'since'),
+        timeout: stringFlag(parsed, 'timeout'),
+        interval: stringFlag(parsed, 'interval'),
+        ...(count !== undefined ? { count } : {}),
+        json: parsed.flags.has('json'),
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+        ...(deps.clock !== undefined ? { now: deps.clock } : {}),
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       })
       return 0
     }
