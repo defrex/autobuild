@@ -219,8 +219,11 @@ if (testUrl) {
         // deterministic (created_at, id)-ordered counter per row and
         // otherwise leaves the rows untouched.
         await sql.unsafe(SCHEMA_V3_DDL)
+        // The genuine v3 marker is version 3 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v3 checksum under any other
+        // version is (correctly) rejected as incompatible.
         await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V3_CHECKSUM}, ${new Date().toISOString()})`
+          (true, 3, ${SCHEMA_V3_CHECKSUM}, ${new Date().toISOString()})`
         for (const id of ['os_legacy-2', 'os_legacy-1']) {
           await sql`INSERT INTO sessions (id, repo, operator, created_at, updated_at)
             VALUES (${id}, 'acme/v3', 'op', ${CONTRACT_T0}, ${CONTRACT_T0})`
