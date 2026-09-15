@@ -10,8 +10,37 @@ import type {
   TicketRef,
   WorkspaceBase,
 } from '../ontology'
+import type { StreamOutcome, StreamPart } from '../store/streams/types'
 import type { BuildExecution } from './workspace/build-execution'
 import type { HarvestExecution } from './workspace/harvest-execution'
+
+// ── Session streams (SPEC §9) ─────────────────────────────────────────────
+//
+// The live, protocol-shaped view of a build session: a runner that holds the
+// optional streaming capability translates its harness's native output into
+// AI SDK UI Message Stream parts and appends them as they happen. Streams
+// are presentation, never routing; outcomes still travel only the typed CLI.
+
+/**
+ * The per-turn write side of a session stream. `append` NEVER throws: a
+ * failing stream path must never fail a turn. Adapters call it with the
+ * part vocabulary of `ai-ui-message-stream/v1` plus the `data-ab-*`
+ * extension parts.
+ */
+export interface SessionStreamEmitter {
+  append(parts: StreamPart[]): void
+}
+
+/**
+ * The bracket-scoped sink a runtime registration's `openSessionStream`
+ * capability receives: `open` creates the store stream and returns its id,
+ * after which the sink is also an emitter; `close` is idempotent (first
+ * outcome wins) and best-effort.
+ */
+export interface SessionStreamSink extends SessionStreamEmitter {
+  open(label: string): Promise<string>
+  close(outcome: StreamOutcome): Promise<void>
+}
 
 // ── TicketSource (SPEC §3.2, §13) ────────────────────────────────────────────
 //
@@ -411,6 +440,9 @@ export interface AgentStartOpts {
   /** Caller-owned cancellation for this turn. Aborting must leave any created
    * session endable so its transcript can still be deposited. */
   signal?: AbortSignal
+  /** Live session stream, present only when the resolved runtime declared
+   * the streaming capability (SPEC §9). A turn without it emits no parts. */
+  stream?: SessionStreamEmitter
 }
 
 /** Per-turn refresh for a continued session (§10): each continue turn is a
@@ -430,6 +462,9 @@ export interface AgentContinueOpts {
   env?: Record<string, string>
   /** Caller-owned cancellation for this continued turn. */
   signal?: AbortSignal
+  /** Live session stream, present only when the resolved runtime declared
+   * the streaming capability (SPEC §9). A turn without it emits no parts. */
+  stream?: SessionStreamEmitter
 }
 
 export interface AgentRunner {
