@@ -4,6 +4,7 @@
  * resumption; non-phase judgments run as isolated, tool-free ephemeral turns.
  */
 import type { StreamPart } from '../../store/streams/types'
+import { spawnCliStream } from './cli-stream'
 import {
   agentInvocation,
   type AgentContinueOpts,
@@ -82,55 +83,7 @@ const runCodexCli: CodexCliRunFn = async (invocation) => {
   return { stdout, stderr, exitCode }
 }
 
-const runCodexCliStream: CodexCliStreamFn = (invocation) => {
-  const proc = Bun.spawn(['codex', ...invocation.args], {
-    cwd: invocation.cwd,
-    env: invocation.env,
-    stdin: 'ignore',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    ...(invocation.signal !== undefined ? { signal: invocation.signal } : {}),
-  })
-  const decoder = new LineDecoder()
-  return {
-    lines: decoder.lines(proc.stdout),
-    result: (async () => {
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      return { stdout, stderr, exitCode }
-    })(),
-  }
-}
-
-/** Incremental line decoder shared by the streaming path. */
-class LineDecoder {
-  private buffer = ''
-  private readonly text = new TextDecoder()
-
-  async *lines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-    for await (const chunk of stream) {
-      this.buffer += this.text.decode(chunk, { stream: true })
-      yield* this.drain()
-    }
-    this.buffer += this.text.decode()
-    yield* this.drain()
-    if (this.buffer.length > 0) yield this.buffer
-  }
-
-  private *drain(): Generator<string> {
-    for (;;) {
-      const index = this.buffer.indexOf('\n')
-      if (index < 0) break
-      let line = this.buffer.slice(0, index)
-      this.buffer = this.buffer.slice(index + 1)
-      if (line.endsWith('\r')) line = line.slice(0, -1)
-      if (line.length > 0) yield line
-    }
-  }
-}
+const runCodexCliStream: CodexCliStreamFn = (invocation) => spawnCliStream('codex', invocation)
 
 /** Verify both the local executable and Codex login for init suggestions. */
 export async function isCodexRuntimeUsable(
