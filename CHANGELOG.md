@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#328](https://github.com/defrex/autobuild/pull/328) — Rename the phase-session store wrapper to deconflict from operator sessions
 - [#327](https://github.com/defrex/autobuild/pull/327) — Add operator sessions as a third store resource with via attribution
 - [#326](https://github.com/defrex/autobuild/pull/326) — Add a stream primitive to the BuildStore finalizing into artifacts
 - [#325](https://github.com/defrex/autobuild/pull/325) — Classify DIRTY mergeable_state as merge conflicts in auto-merge gate

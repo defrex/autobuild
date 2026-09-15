@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { SessionScopeError } from '../store/session-scope'
+import { PhaseSessionError } from '../store/phase-session'
 import { textContent } from '../store/types'
 import { artifactDownload, artifactGet, artifactPut, parseArtifactSpec } from './artifact'
 import { makeEnv, seedStore } from './testkit'
@@ -271,7 +271,7 @@ describe('artifact download', () => {
         outputPath: deniedOutput,
         openStore: () => store,
       }),
-    ).rejects.toBeInstanceOf(SessionScopeError)
+    ).rejects.toBeInstanceOf(PhaseSessionError)
     expect(await Bun.file(deniedOutput).exists()).toBe(false)
 
     await store.ensureRepo(repo)
@@ -291,7 +291,7 @@ describe('artifact download', () => {
         outputPath: deniedOutput,
         openStore: () => store,
       }),
-    ).rejects.toBeInstanceOf(SessionScopeError)
+    ).rejects.toBeInstanceOf(PhaseSessionError)
     expect(await Bun.file(deniedOutput).exists()).toBe(false)
   })
 

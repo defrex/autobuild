@@ -19,7 +19,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { BUILD_STATUSES } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { SessionScopeError } from '../store/session-scope'
+import { PhaseSessionError } from '../store/phase-session'
 import type { BuildRecord, BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import {
@@ -1702,7 +1702,7 @@ describe('ambient read authority', () => {
         now: () => NOW,
         slug: 'foreign',
       }),
-    ).rejects.toBeInstanceOf(SessionScopeError)
+    ).rejects.toBeInstanceOf(PhaseSessionError)
     await expect(
       abBuilds({
         targetRepo: '/anywhere',
@@ -1734,7 +1734,7 @@ describe('ambient read authority', () => {
         openStore: () => store,
         slug: 'mine',
       }),
-    ).rejects.toBeInstanceOf(SessionScopeError)
+    ).rejects.toBeInstanceOf(PhaseSessionError)
 
     let opens = 0
     await expect(

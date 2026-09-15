@@ -3,7 +3,7 @@ import { agentActor, KERNEL } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
 import { harvestStartedWrite, sampleBuildInput, sampleEventWrite } from './contract'
 import { MemoryBuildStore } from './memory'
-import { scopeLocalStoreToSession, SessionScopeError } from './session-scope'
+import { scopeLocalStoreToPhaseSession, PhaseSessionError } from './phase-session'
 import type { BuildStore } from './types'
 
 const REPO = 'acme/project'
@@ -36,20 +36,20 @@ function proposalWrite(
   }
 }
 
-async function authorityError(run: () => unknown | Promise<unknown>): Promise<SessionScopeError> {
+async function authorityError(run: () => unknown | Promise<unknown>): Promise<PhaseSessionError> {
   try {
     await run()
   } catch (error) {
-    expect(error).toBeInstanceOf(SessionScopeError)
-    return error as SessionScopeError
+    expect(error).toBeInstanceOf(PhaseSessionError)
+    return error as PhaseSessionError
   }
-  throw new Error('expected a SessionScopeError')
+  throw new Error('expected a PhaseSessionError')
 }
 
 describe('local build-session scope', () => {
   test('allows every exact-build data operation and trusted kernel writes', async () => {
     const underlying = await seeded()
-    const store = scopeLocalStoreToSession(underlying, {
+    const store = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'build',
       id: BUILD,
       session: SESSION,
@@ -107,7 +107,7 @@ describe('local build-session scope', () => {
 
   test('rejects foreign, repository, collection, and admin access', async () => {
     const underlying = await seeded()
-    const store = scopeLocalStoreToSession(underlying, {
+    const store = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'build',
       id: BUILD,
       session: SESSION,
@@ -128,7 +128,7 @@ describe('local build-session scope', () => {
       () => store.scopeBuild(OTHER_BUILD),
     ]
     for (const call of foreignBuildCalls) await authorityError(call)
-    expect(() => store.subscribe(OTHER_BUILD, {}, () => {})).toThrow(SessionScopeError)
+    expect(() => store.subscribe(OTHER_BUILD, {}, () => {})).toThrow(PhaseSessionError)
 
     const repositoryCalls: Array<() => unknown | Promise<unknown>> = [
       () => store.ensureRepo(REPO),
@@ -154,7 +154,7 @@ describe('local build-session scope', () => {
 
   test('rejects another agent session before direct, conditional, or atomic mutation', async () => {
     const underlying = await seeded()
-    const store = scopeLocalStoreToSession(underlying, {
+    const store = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'build',
       id: BUILD,
       session: SESSION,
@@ -183,7 +183,7 @@ describe('local build-session scope', () => {
 describe('local Harvest-session scope', () => {
   test('allows every exact-repository operation, same-session events, and kernel plumbing', async () => {
     const underlying = await seeded()
-    const store = scopeLocalStoreToSession(underlying, {
+    const store = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'repo',
       id: REPO,
       session: SESSION,
@@ -217,7 +217,7 @@ describe('local Harvest-session scope', () => {
 
   test('rejects build, foreign-repository, and repository-admin access', async () => {
     const underlying = await seeded()
-    const store = scopeLocalStoreToSession(underlying, {
+    const store = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'repo',
       id: REPO,
       session: SESSION,
@@ -238,7 +238,7 @@ describe('local Harvest-session scope', () => {
       () => store.scopeBuild(BUILD),
     ]
     for (const call of buildCalls) await authorityError(call)
-    expect(() => store.subscribe(BUILD, {}, () => {})).toThrow(SessionScopeError)
+    expect(() => store.subscribe(BUILD, {}, () => {})).toThrow(PhaseSessionError)
 
     const foreignRepoCalls: Array<() => unknown | Promise<unknown>> = [
       () => store.getRepo(OTHER_REPO),
@@ -261,7 +261,7 @@ describe('local Harvest-session scope', () => {
 
   test('rejects wrong-session direct and atomic writes without durable mutation', async () => {
     const underlying = await seeded()
-    const store = scopeLocalStoreToSession(underlying, {
+    const store = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'repo',
       id: REPO,
       session: SESSION,
@@ -283,12 +283,12 @@ describe('local Harvest-session scope', () => {
 
   test('streams follow the exact-resource guard without a session gate (parts carry no actor)', async () => {
     const underlying = await seeded()
-    const build = scopeLocalStoreToSession(underlying, {
+    const build = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'build',
       id: BUILD,
       session: SESSION,
     })
-    const repo = scopeLocalStoreToSession(underlying, {
+    const repo = scopeLocalStoreToPhaseSession(underlying, {
       kind: 'repo',
       id: REPO,
       session: SESSION,
@@ -336,5 +336,5 @@ describe('local Harvest-session scope', () => {
 // Compile-time assertion: the wrapper retains the complete Store surface used
 // by phase CLI composition rather than exposing a narrowed test-only facade.
 const _buildStore: (store: BuildStore) => BuildStore = (store) =>
-  scopeLocalStoreToSession(store, { kind: 'build', id: BUILD, session: SESSION })
+  scopeLocalStoreToPhaseSession(store, { kind: 'build', id: BUILD, session: SESSION })
 void _buildStore
