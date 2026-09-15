@@ -31,6 +31,25 @@ import {
   type SubscribeOptions,
   type Unsubscribe,
 } from 'autobuild/store-adapter'
+import type {
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+} from 'autobuild/store-adapter'
+import {
+  assembleUIMessageDocument,
+  readStreamWithWait,
+  serializedBatchSize,
+  STREAM_BATCH_MAX_BYTES,
+  STREAM_FORMAT,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  streamArtifactInput,
+  validateStreamParts,
+} from 'autobuild/store-adapter'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -599,6 +618,201 @@ export class PostgresBuildStore implements BuildStore {
 
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
+  }
+
+  // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
+
+  private async lockStream(tx: Tx, streamId: string): Promise<Row> {
+    const rows: Row[] = await tx`SELECT * FROM streams WHERE id = ${streamId} FOR UPDATE`
+    const row = rows[0]
+    if (!row) throw new Error(`unknown stream "${streamId}"`)
+    return row
+  }
+
+  private streamScopeOf(row: Row): StreamScope {
+    if (row.scope_kind === 'build' && row.build !== null) {
+      return { kind: 'build', build: String(row.build) }
+    }
+    if (row.scope_kind === 'repo' && row.repo !== null) {
+      return { kind: 'repo', repo: String(row.repo) }
+    }
+    throw new Error(`stream "${String(row.id)}" has an unreadable scope`)
+  }
+
+  private streamRecord(row: Row): StreamRecord {
+    const record: StreamRecord = {
+      id: String(row.id),
+      scope: this.streamScopeOf(row),
+      label: String(row.label),
+      format: String(row.format) as StreamRecord['format'],
+      status: String(row.status) as StreamRecord['status'],
+      createdAt: iso(row.created_at),
+      ...(row.closed_at ? { closedAt: iso(row.closed_at) } : {}),
+      ...(row.outcome ? { outcome: String(row.outcome) as StreamRecord['outcome'] } : {}),
+      ...(row.artifact_kind && row.artifact_revision !== null && row.artifact_blob_ref
+        ? {
+            artifact: {
+              kind: String(row.artifact_kind),
+              revision: num(row.artifact_revision),
+              blobRef: String(row.artifact_blob_ref),
+            },
+          }
+        : {}),
+    }
+    return record
+  }
+
+  /** Deposit-path, count-based chunk retention (SPEC §7.6), inside the
+   * create's locked transaction: keep every closed stream's chunks except
+   * the most recently closed one in this scope (closedAt, then id).
+   * Records, finalized artifacts, and open streams are never touched. */
+  private async pruneStreamChunksLocked(tx: Tx, scope: StreamScope): Promise<void> {
+    const rows: Row[] =
+      scope.kind === 'build'
+        ? await tx`SELECT id FROM streams
+            WHERE status = 'closed' AND scope_kind = 'build' AND build = ${scope.build}
+            ORDER BY closed_at DESC, id DESC OFFSET 1`
+        : await tx`SELECT id FROM streams
+            WHERE status = 'closed' AND scope_kind = 'repo' AND repo = ${scope.repo}
+            ORDER BY closed_at DESC, id DESC OFFSET 1`
+    for (const row of rows) {
+      await tx`DELETE FROM stream_chunks WHERE stream = ${String(row.id)}`
+    }
+  }
+
+  async createStream(scope: StreamScope, label: string): Promise<StreamRecord> {
+    if (!label) throw new Error('stream label is required')
+    const id = `st_${crypto.randomUUID()}`
+    const ts = this.now()
+    return this.sql.begin(async (tx) => {
+      if (scope.kind === 'build') await this.lockBuild(tx, scope.build)
+      else await this.lockRepo(tx, scope.repo)
+      await this.pruneStreamChunksLocked(tx, scope)
+      await tx`INSERT INTO streams
+        (id, scope_kind, build, repo, label, format, status, created_at)
+        VALUES (${id}, ${scope.kind}, ${scope.kind === 'build' ? scope.build : null},
+          ${scope.kind === 'repo' ? scope.repo : null}, ${label}, ${STREAM_FORMAT}, 'open', ${ts})`
+      return this.streamRecord(await this.lockStream(tx, id))
+    })
+  }
+
+  async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+    validateStreamParts(parts)
+    const bytes = serializedBatchSize(parts)
+    if (bytes > STREAM_BATCH_MAX_BYTES) throw new StreamBatchTooLargeError(bytes)
+    return this.sql.begin(async (tx) => {
+      const row = await this.lockStream(tx, streamId)
+      if (String(row.status) === 'closed') throw new StreamClosedError(streamId)
+      const tails: Row[] =
+        await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM stream_chunks WHERE stream = ${streamId}`
+      const chunk: StreamChunk = {
+        stream: streamId,
+        seq: num(tails[0]?.seq) + 1,
+        ts: this.now(),
+        parts: structuredClone(parts),
+      }
+      await tx`INSERT INTO stream_chunks (stream, seq, ts, parts)
+        VALUES (${streamId}, ${chunk.seq}, ${chunk.ts}, ${JSON.stringify(chunk.parts)})`
+      return chunk
+    })
+  }
+
+  async readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number },
+  ): Promise<StreamRead> {
+    const read = async (): Promise<StreamRead> => {
+      const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
+      const row = rows[0]
+      if (!row) throw new Error(`unknown stream "${streamId}"`)
+      const chunks: Row[] = await this.sql`SELECT * FROM stream_chunks
+        WHERE stream = ${streamId} AND seq > ${opts?.since ?? 0} ORDER BY seq`
+      const record = this.streamRecord(row)
+      return {
+        chunks: chunks.map((chunk) => ({
+          stream: String(chunk.stream),
+          seq: num(chunk.seq),
+          ts: iso(chunk.ts),
+          parts: json<StreamPart[]>(chunk.parts),
+        })),
+        status: record.status,
+        ...(record.outcome !== undefined ? { outcome: record.outcome } : {}),
+        ...(record.artifact !== undefined ? { artifact: record.artifact } : {}),
+      }
+    }
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+  }
+
+  async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+    // Prepare phase — lock-free read of record and chunks, assembly, and the
+    // blob write all happen before the transaction (D6 shape: content-
+    // addressed orphan blobs are harmless; a deposit failure leaves the
+    // stream open and unwritten).
+    const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
+    const row = rows[0]
+    if (!row) throw new Error(`unknown stream "${streamId}"`)
+    if (String(row.status) === 'closed') return this.streamRecord(row)
+    const chunkRows: Row[] = await this.sql`SELECT * FROM stream_chunks
+      WHERE stream = ${streamId} ORDER BY seq`
+    const { document, droppedPartCount } = await assembleUIMessageDocument(
+      chunkRows.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
+    )
+    const scope = this.streamScopeOf(row)
+    const input = streamArtifactInput(
+      String(row.id),
+      scope,
+      String(row.label),
+      outcome,
+      document,
+      chunkRows.length,
+      droppedPartCount,
+    )
+    const blobRef = contentHash(toBytes(input.content))
+    await this.blobs.put(blobRef, toBytes(input.content))
+    // Commit phase — one locked transaction: the artifact deposit and the
+    // close land together. A close that raced us through the prepare phase
+    // wins; ours re-reads and returns its record.
+    return this.sql.begin(async (tx) => {
+      const fresh = await this.lockStream(tx, streamId)
+      if (String(fresh.status) === 'closed') return this.streamRecord(fresh)
+      const meta =
+        scope.kind === 'build'
+          ? await this.depositBuildLocked(
+              tx,
+              scope.build,
+              { kind: input.kind, blobRef, metadata: structuredClone(input.metadata) },
+              new Map(),
+            )
+          : await this.depositRepoLocked(
+              tx,
+              scope.repo,
+              { kind: input.kind, blobRef, metadata: structuredClone(input.metadata) },
+              new Map(),
+            )
+      await tx`UPDATE streams
+        SET status = 'closed', outcome = ${outcome}, closed_at = ${meta.createdAt},
+          artifact_kind = ${meta.kind}, artifact_revision = ${meta.revision},
+          artifact_blob_ref = ${meta.blobRef}
+        WHERE id = ${streamId}`
+      return this.streamRecord(await this.lockStream(tx, streamId))
+    })
+  }
+
+  async getStream(streamId: string): Promise<StreamRecord | null> {
+    const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
+    return rows[0] ? this.streamRecord(rows[0]) : null
+  }
+
+  async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
+    const rows: Row[] =
+      scope.kind === 'build'
+        ? await this.sql`SELECT * FROM streams
+            WHERE scope_kind = 'build' AND build = ${scope.build}
+            ORDER BY created_at, id`
+        : await this.sql`SELECT * FROM streams
+            WHERE scope_kind = 'repo' AND repo = ${scope.repo}
+            ORDER BY created_at, id`
+    return rows.map((row) => this.streamRecord(row))
   }
 
   async close(): Promise<void> {

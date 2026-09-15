@@ -186,6 +186,57 @@ export const leaseClaimBodySchema = z.object({
 export const leaseHolderBodySchema = z.object({ holder: z.string().min(1) })
 export const okResponseSchema = z.object({ ok: z.boolean() })
 
+// ── Streams (SPEC §7.6 — the third primitive) ────────────────────────────
+//
+// Deliberately loose on part contents: the store performs no protocol
+// validation on append (assembly at close does that), and `looseObject` —
+// not `z.object` — so unknown part keys survive the wire untouched.
+
+export const streamScopeWireSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('build'), build: z.string().min(1) }),
+  z.object({ kind: z.literal('repo'), repo: z.string().min(1) }),
+])
+
+export const streamArtifactRefWireSchema = z.object({
+  kind: z.string(),
+  revision: z.number().int().nonnegative(),
+  blobRef: z.string(),
+})
+
+export const streamRecordWireSchema = z.object({
+  id: z.string(),
+  scope: streamScopeWireSchema,
+  label: z.string(),
+  format: z.string(),
+  status: z.enum(['open', 'closed']),
+  createdAt: z.string(),
+  closedAt: z.string().optional(),
+  outcome: z.enum(['completed', 'aborted']).optional(),
+  artifact: streamArtifactRefWireSchema.optional(),
+})
+export const streamRecordListSchema = z.array(streamRecordWireSchema)
+
+export const createStreamBodySchema = z.object({ label: z.string().min(1) })
+export const closeStreamBodySchema = z.object({ outcome: z.enum(['completed', 'aborted']) })
+
+export const streamPartWireSchema = z.looseObject({ type: z.string().min(1) })
+export const appendStreamBodySchema = z.object({
+  parts: z.array(streamPartWireSchema).min(1),
+})
+
+export const streamChunkWireSchema = z.object({
+  stream: z.string(),
+  seq: z.number().int().positive(),
+  ts: z.string(),
+  parts: z.array(z.record(z.string(), z.unknown())),
+})
+export const streamReadWireSchema = z.object({
+  chunks: z.array(streamChunkWireSchema),
+  status: z.enum(['open', 'closed']),
+  outcome: z.enum(['completed', 'aborted']).optional(),
+  artifact: streamArtifactRefWireSchema.optional(),
+})
+
 // ── Base64 content encoding ──────────────────────────────────────────────────
 
 export function encodeBase64(bytes: Uint8Array): string {

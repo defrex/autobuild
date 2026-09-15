@@ -24,6 +24,23 @@ import {
   revisionsToPrune,
 } from './retention'
 import { pollingSubscribe } from './subscribe'
+import { assembleUIMessageDocument } from './streams/assemble'
+import { readStreamWithWait } from './streams/wait'
+import {
+  serializedBatchSize,
+  STREAM_BATCH_MAX_BYTES,
+  STREAM_FORMAT,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  streamArtifactInput,
+  validateStreamParts,
+  type StreamChunk,
+  type StreamOutcome,
+  type StreamPart,
+  type StreamRead,
+  type StreamRecord,
+  type StreamScope,
+} from './streams/types'
 import {
   contentHash,
   systemClock,
@@ -93,9 +110,15 @@ interface BuildState {
   artifacts: Map<string, ArtifactMeta[]>
 }
 
+interface StreamState {
+  record: StreamRecord
+  chunks: StreamChunk[]
+}
+
 export class MemoryBuildStore implements BuildStore {
   private readonly builds = new Map<string, BuildState>()
   private readonly repos = new Map<string, RepoState>()
+  private readonly streams = new Map<string, StreamState>()
   private readonly clock: Clock
   private readonly maxRevisions: number
   readonly blobs: BlobStore
@@ -620,6 +643,187 @@ export class MemoryBuildStore implements BuildStore {
       state.lease = undefined
       state.record.updatedAt = this.now()
     }
+  }
+
+  // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
+
+  private streamState(streamId: string): StreamState {
+    const state = this.streams.get(streamId)
+    if (!state) throw new Error(`unknown stream "${streamId}"`)
+    return state
+  }
+
+  private snapshotStream(state: StreamState): StreamRecord {
+    return structuredClone(state.record)
+  }
+
+  /** Stream-chunk retention (SPEC §7.6, deposit-path and count-based like
+   * artifact retention): at create, drop the chunks of every previously
+   * closed stream in the same scope except the most recently closed one.
+   * Records and finalized artifacts are never touched; open streams are
+   * never pruned. Runs in the same synchronous commit as the create. */
+  private pruneStreamChunksInCommit(scope: StreamScope): void {
+    const inScope = [...this.streams.values()].filter(
+      (state) =>
+        state.record.status === 'closed' &&
+        state.record.scope.kind === scope.kind &&
+        (scope.kind === 'build'
+          ? state.record.scope.kind === 'build' && state.record.scope.build === scope.build
+          : state.record.scope.kind === 'repo' && state.record.scope.repo === scope.repo),
+    )
+    if (inScope.length <= 1) return
+    // Most recently closed survives (order by closedAt, tie-break by id).
+    const keep = inScope
+      .map((state) => state.record)
+      .sort(
+        (a, b) => (a.closedAt ?? '').localeCompare(b.closedAt ?? '') || a.id.localeCompare(b.id),
+      )
+      .at(-1)!
+    for (const state of inScope) {
+      if (state.record.id !== keep.id) state.chunks = []
+    }
+  }
+
+  async createStream(scope: StreamScope, label: string): Promise<StreamRecord> {
+    if (!label) throw new Error('stream label is required')
+    if (scope.kind === 'build') this.state(scope.build)
+    else this.repoState(scope.repo)
+    const id = `st_${crypto.randomUUID()}`
+    const record: StreamRecord = {
+      id,
+      scope: structuredClone(scope),
+      label,
+      format: STREAM_FORMAT,
+      status: 'open',
+      createdAt: this.now(),
+    }
+    // Synchronous commit: the retention prune and the insert are one step.
+    this.pruneStreamChunksInCommit(record.scope)
+    this.streams.set(id, { record, chunks: [] })
+    return this.snapshotStream(this.streamState(id))
+  }
+
+  async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+    const state = this.streamState(streamId)
+    if (state.record.status === 'closed') throw new StreamClosedError(streamId)
+    // Validate and size-check before any mutation.
+    validateStreamParts(parts)
+    const bytes = serializedBatchSize(parts)
+    if (bytes > STREAM_BATCH_MAX_BYTES) throw new StreamBatchTooLargeError(bytes)
+    const chunk: StreamChunk = {
+      stream: streamId,
+      seq: state.chunks.length + 1,
+      ts: this.now(),
+      parts: structuredClone(parts),
+    }
+    state.chunks.push(chunk)
+    return structuredClone(chunk)
+  }
+
+  async readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number },
+  ): Promise<StreamRead> {
+    const read = async (): Promise<StreamRead> => {
+      const state = this.streamState(streamId)
+      const record = state.record
+      return {
+        chunks: structuredClone(state.chunks.filter((chunk) => chunk.seq > (opts?.since ?? 0))),
+        status: record.status,
+        ...(record.outcome !== undefined ? { outcome: record.outcome } : {}),
+        ...(record.artifact !== undefined ? { artifact: structuredClone(record.artifact) } : {}),
+      }
+    }
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+  }
+
+  async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+    const state = this.streamState(streamId)
+    if (state.record.status === 'closed') return this.snapshotStream(state)
+    // Prepare phase — assemble and store the blob before touching stream
+    // state (mirrors appendWithArtifacts: content-addressed orphans are
+    // harmless; a deposit failure leaves the stream open and unwritten).
+    const { document, droppedPartCount } = await assembleUIMessageDocument(
+      structuredClone(state.chunks.flatMap((chunk) => chunk.parts)),
+    )
+    const ts = this.now()
+    const record = structuredClone(state.record)
+    const input = streamArtifactInput(
+      record.id,
+      record.scope,
+      record.label,
+      outcome,
+      document,
+      state.chunks.length,
+      droppedPartCount,
+    )
+    const bytes = toBytes(input.content)
+    const blobRef = contentHash(bytes)
+    await this.blobs.put(blobRef, bytes)
+    // Commit phase — fully synchronous (no await), so no interleaved writer
+    // can slip between the artifact deposit and the close landing. A close
+    // that raced us through the prepare phase wins; ours is the no-op.
+    const closed: StreamRecord = {
+      ...record,
+      status: 'closed',
+      closedAt: ts,
+      outcome,
+      artifact: { kind: input.kind, revision: 0, blobRef },
+    }
+    // A close that raced us through the prepare phase wins; ours is the no-op.
+    const fresh = this.streams.get(streamId)
+    if (fresh && fresh.record.status === 'closed') return this.snapshotStream(fresh)
+    state.record = closed
+    if (record.scope.kind === 'build') {
+      const meta: ArtifactMeta = {
+        build: record.scope.build,
+        kind: input.kind,
+        revision: 0,
+        blobRef,
+        metadata: structuredClone(input.metadata),
+        createdAt: ts,
+      }
+      const buildState = this.state(record.scope.build)
+      const revs = buildState.artifacts.get(input.kind) ?? []
+      revs.push(meta)
+      buildState.artifacts.set(input.kind, revs)
+    } else {
+      const repoMeta: RepositoryArtifactMeta = {
+        repo: record.scope.repo,
+        kind: input.kind,
+        revision: 0,
+        blobRef,
+        metadata: structuredClone(input.metadata),
+        createdAt: ts,
+      }
+      const repoState = this.repoState(record.scope.repo)
+      const revs = repoState.artifacts.get(input.kind) ?? []
+      revs.push(repoMeta)
+      repoState.artifacts.set(input.kind, revs)
+    }
+    return this.snapshotStream(state)
+  }
+
+  async getStream(streamId: string): Promise<StreamRecord | null> {
+    const state = this.streams.get(streamId)
+    return state ? this.snapshotStream(state) : null
+  }
+
+  async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
+    // A list of nothing is nothing: an unknown scope lists empty (only
+    // createStream requires the scope's resource to exist).
+    const records = [...this.streams.values()]
+      .filter(
+        (state) =>
+          state.record.scope.kind === scope.kind &&
+          (scope.kind === 'build'
+            ? state.record.scope.kind === 'build' && state.record.scope.build === scope.build
+            : state.record.scope.kind === 'repo' && state.record.scope.repo === scope.repo),
+      )
+      .map((state) => this.snapshotStream(state))
+    return records.sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    )
   }
 
   async close(): Promise<void> {

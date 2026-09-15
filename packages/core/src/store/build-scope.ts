@@ -17,6 +17,14 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from './types'
+import type {
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+} from './streams/types'
 
 /** Interface-level authority failure. It is deliberately independent of the
  * remote transport's authentication errors: tokens carry this scope over the
@@ -43,6 +51,24 @@ export class BuildScopeError extends Error {
 export function createBuildScopedStore(store: BuildStore, scope: string): BuildScopedStore {
   const own = (operation: string, slug: string): void => {
     if (slug !== scope) throw new BuildScopeError(scope, operation, slug)
+  }
+  /** Stream scopes ride on the record, not on an argument: create and list
+   * name the scope directly; addressed operations resolve the target's scope
+   * and reject when it is not exactly this build's. An unknown id delegates
+   * so the backing store's `unknown stream` feedback survives. */
+  const ownStreamScope = (record: StreamRecord): void => {
+    if (record.scope.kind !== 'build' || record.scope.build !== scope) {
+      throw new BuildScopeError(scope, 'stream', record.id)
+    }
+  }
+  const ownStream = async (_operation: string, streamId: string): Promise<void> => {
+    const record = await store.getStream(streamId)
+    if (record) ownStreamScope(record)
+  }
+  const buildScope = (operation: string, candidate: StreamScope): void => {
+    if (candidate.kind !== 'build' || candidate.build !== scope) {
+      throw new BuildScopeError(scope, operation, JSON.stringify(candidate))
+    }
   }
   return {
     buildScope: scope,
@@ -162,6 +188,33 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     releaseRepoLease(repo: string, _holder: string): Promise<void> {
       return Promise.reject(new BuildScopeError(scope, 'releaseRepoLease', repo))
+    },
+    async createStream(candidate: StreamScope, label: string): Promise<StreamRecord> {
+      buildScope('createStream', candidate)
+      return store.createStream(candidate, label)
+    },
+    async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+      await ownStream('appendStreamParts', streamId)
+      return store.appendStreamParts(streamId, parts)
+    },
+    async readStream(
+      streamId: string,
+      opts?: { since?: number; waitSeconds?: number },
+    ): Promise<StreamRead> {
+      await ownStream('readStream', streamId)
+      return store.readStream(streamId, opts)
+    },
+    async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+      await ownStream('closeStream', streamId)
+      return store.closeStream(streamId, outcome)
+    },
+    async getStream(streamId: string): Promise<StreamRecord | null> {
+      await ownStream('getStream', streamId)
+      return store.getStream(streamId)
+    },
+    async listStreams(candidate: StreamScope): Promise<StreamRecord[]> {
+      buildScope('listStreams', candidate)
+      return store.listStreams(candidate)
     },
     close(): Promise<void> {
       return Promise.reject(new BuildScopeError(scope, 'close'))

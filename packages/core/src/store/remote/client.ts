@@ -28,6 +28,15 @@ import type {
 } from '../../events/repository'
 import { createBuildScopedStore } from '../build-scope'
 import { pollingSubscribe } from '../subscribe'
+import type {
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+} from '../streams/types'
+import { StreamBatchTooLargeError, StreamClosedError } from '../streams/types'
 import {
   toBytes,
   type Artifact,
@@ -65,6 +74,10 @@ import {
   repositoryArtifactMetaListSchema,
   repositoryArtifactMetaWireSchema,
   repositoryRecordWireSchema,
+  streamChunkWireSchema,
+  streamReadWireSchema,
+  streamRecordListSchema,
+  streamRecordWireSchema,
 } from './protocol'
 import {
   AUTOBUILD_VERSION,
@@ -153,6 +166,15 @@ export class RemoteBuildStore implements BuildStore {
     // D6: validation feedback crosses the wire as the same error type with
     // the server's message intact.
     if (response.status === 422) return new EventValidationError(message)
+    // Typed stream rejections rehydrate by the server's message shape: the
+    // ceiling names its bytes, the closed-append names its stream (a 409 is
+    // otherwise the generic already-exists conflict).
+    if (response.status === 413 && message.startsWith('stream batch of ')) {
+      return new StreamBatchTooLargeError(undefined, undefined, message)
+    }
+    if (response.status === 409 && /^stream ".+" is closed$/.test(message)) {
+      return new StreamClosedError(message)
+    }
     // 404 carries the local adapters' message shape: `unknown build "slug"`.
     return new Error(message)
   }
@@ -453,6 +475,67 @@ export class RemoteBuildStore implements BuildStore {
 
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
+  }
+
+  // ── Streams (SPEC §7.6) ──────────────────────────────────────────────────
+  // Create and list are scoped, so they use the family routes. The four
+  // addressed operations know only the stream id — a store-assigned id is
+  // globally unique — so they use the protocol's top-level `/streams/{id}`
+  // routes, where the server resolves the stream's own scope and
+  // authorizes against it.
+
+  private streamFamilyPath(scope: StreamScope): string {
+    return scope.kind === 'build'
+      ? `${this.buildPath(scope.build)}/streams`
+      : `${this.repoPath(scope.repo)}/streams`
+  }
+
+  private streamPath(streamId: string, suffix = ''): string {
+    return `/streams/${encodeURIComponent(streamId)}${suffix}`
+  }
+
+  async createStream(scope: StreamScope, label: string): Promise<StreamRecord> {
+    return this.requestJson('POST', this.streamFamilyPath(scope), streamRecordWireSchema, {
+      label,
+    }) as Promise<StreamRecord>
+  }
+
+  async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+    return this.requestJson('POST', this.streamPath(streamId, '/chunks'), streamChunkWireSchema, {
+      parts,
+    }) as Promise<StreamChunk>
+  }
+
+  async readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number },
+  ): Promise<StreamRead> {
+    const params = new URLSearchParams({ since: String(opts?.since ?? 0) })
+    if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
+    return this.requestJson(
+      'GET',
+      `${this.streamPath(streamId, '/chunks')}?${params}`,
+      streamReadWireSchema,
+    ) as Promise<StreamRead>
+  }
+
+  async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+    return this.requestJson('POST', this.streamPath(streamId, '/close'), streamRecordWireSchema, {
+      outcome,
+    }) as Promise<StreamRecord>
+  }
+
+  async getStream(streamId: string): Promise<StreamRecord | null> {
+    const response = await this.raw('GET', this.streamPath(streamId))
+    if (response.status === 404) return null
+    if (!response.ok) throw await this.toError(response)
+    return streamRecordWireSchema.parse(await response.json()) as StreamRecord
+  }
+
+  async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
+    return this.requestJson('GET', this.streamFamilyPath(scope), streamRecordListSchema) as Promise<
+      StreamRecord[]
+    >
   }
 
   async close(): Promise<void> {

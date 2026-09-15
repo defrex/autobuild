@@ -19,6 +19,14 @@ import type {
   RepositoryEventWrite,
 } from '../events/repository'
 import type { TicketRef } from '../ontology'
+import type {
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+} from './streams/types'
 
 /** Injectable time source — adapters take one so tests are deterministic. */
 export type Clock = () => Date
@@ -218,6 +226,50 @@ export interface BuildStore {
   claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean>
   heartbeatRepo(repo: string, holder: string): Promise<boolean>
   releaseRepoLease(repo: string, holder: string): Promise<void>
+
+  // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
+  // An append-only, per-stream sequenced log of protocol parts with an
+  // open-then-closed lifecycle that finalizes into an artifact. Presentation,
+  // never routing: no kernel, engine, reducer, or dispatcher decision reads
+  // stream content; outcomes travel only the typed CLI. Chunk vocabulary:
+  // the AI SDK UI Message Stream protocol (`ai-ui-message-stream/v1`).
+  //
+  // Stream ids are store-assigned (`st_<uuid>`); the scope is fixed at
+  // create and every operation addresses the stream by id.
+
+  /** Create an open stream under `scope`. Store-assigned id and
+   * `createdAt`; `format` is the literal `ai-ui-message-stream/v1`. */
+  createStream(scope: StreamScope, label: string): Promise<StreamRecord>
+
+  /** Append one batch of parts. Each part must be a JSON object whose `type`
+   * is a nonempty string; the store performs no further protocol validation
+   * on append. The store assigns the per-stream sequence (from 1) and the
+   * timestamp. A batch whose serialized size exceeds 1,048,576 bytes rejects
+   * with `StreamBatchTooLargeError` without mutation; a closed or unknown
+   * stream rejects (`StreamClosedError` / `Error`) and writes nothing. */
+  appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk>
+
+  /** Chunks with sequence strictly greater than `since` (default 0), in
+   * order, plus the stream's current status and, when closed, its outcome
+   * and artifact reference. When no newer chunk exists and the stream is
+   * open, an adapter honors `waitSeconds` (whole seconds; above 30 clamped
+   * to 30): it returns no later than the bound and as soon as a chunk is
+   * appended or the stream closes. Closed streams never wait. */
+  readStream(streamId: string, opts?: { since?: number; waitSeconds?: number }): Promise<StreamRead>
+
+  /** Close with an outcome. One atomic operation: assemble the chunks into
+   * the protocol's `UIMessage[]` document, deposit it as an artifact
+   * (`stream:<streamId>`, revision 0) on the owning scope, and mark the
+   * stream closed. If the artifact deposit fails the stream stays open and
+   * nothing is written. Closing an already-closed stream is a no-op
+   * returning the record. */
+  closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord>
+
+  /** The stream record, or null when the id is unknown. */
+  getStream(streamId: string): Promise<StreamRecord | null>
+
+  /** Every stream in `scope`, oldest first. */
+  listStreams(scope: StreamScope): Promise<StreamRecord[]>
 
   close(): Promise<void>
 }

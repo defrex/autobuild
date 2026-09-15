@@ -16,6 +16,14 @@ import type {
   SubscribeOptions,
   Unsubscribe,
 } from './types'
+import type {
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+} from './streams/types'
 
 export type LocalSessionScope =
   | { kind: 'build'; id: string; session: string }
@@ -95,6 +103,43 @@ export function scopeLocalStoreToSession(
   }
   const admin = (operation: string): never => {
     throw new SessionScopeError(scope, operation, { kind: 'admin' })
+  }
+  /** Streams carry no actor, so the session dimension does not gate them —
+   * only the exact-resource guard does. Addressed operations resolve the
+   * target's scope from its record; an unknown id delegates so the backing
+   * store's `unknown stream` feedback survives. */
+  const ownStreamScope = (record: StreamRecord): void => {
+    const matches =
+      scope.kind === 'build'
+        ? record.scope.kind === 'build' && record.scope.build === scope.id
+        : record.scope.kind === 'repo' && record.scope.repo === scope.id
+    if (!matches) {
+      throw new SessionScopeError(
+        scope,
+        'stream',
+        record.scope.kind === 'build'
+          ? ({ kind: 'build', id: record.scope.build } as const)
+          : ({ kind: 'repo', id: record.scope.repo } as const),
+      )
+    }
+  }
+  const ownStream = async (streamId: string): Promise<void> => {
+    const record = await store.getStream(streamId)
+    if (record) ownStreamScope(record)
+  }
+  const streamScope = (): StreamScope =>
+    scope.kind === 'build' ? { kind: 'build', build: scope.id } : { kind: 'repo', repo: scope.id }
+  const ownStreamScopeArg = (operation: string, candidate: StreamScope): void => {
+    const expected = streamScope()
+    if (JSON.stringify(candidate) !== JSON.stringify(expected)) {
+      throw new SessionScopeError(
+        scope,
+        operation,
+        candidate.kind === 'build'
+          ? ({ kind: 'build', id: candidate.build } as const)
+          : ({ kind: 'repo', id: candidate.repo } as const),
+      )
+    }
   }
   const authorizeActor = (operation: string, actor: unknown): void => {
     if (
@@ -265,6 +310,34 @@ export function scopeLocalStoreToSession(
     async releaseRepoLease(repo: string, holder: string): Promise<void> {
       own('releaseRepoLease', 'repo', repo)
       return store.releaseRepoLease(repo, holder)
+    },
+
+    async createStream(candidate: StreamScope, label: string): Promise<StreamRecord> {
+      ownStreamScopeArg('createStream', candidate)
+      return store.createStream(candidate, label)
+    },
+    async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+      await ownStream(streamId)
+      return store.appendStreamParts(streamId, parts)
+    },
+    async readStream(
+      streamId: string,
+      opts?: { since?: number; waitSeconds?: number },
+    ): Promise<StreamRead> {
+      await ownStream(streamId)
+      return store.readStream(streamId, opts)
+    },
+    async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+      await ownStream(streamId)
+      return store.closeStream(streamId, outcome)
+    },
+    async getStream(streamId: string): Promise<StreamRecord | null> {
+      await ownStream(streamId)
+      return store.getStream(streamId)
+    },
+    async listStreams(candidate: StreamScope): Promise<StreamRecord[]> {
+      ownStreamScopeArg('listStreams', candidate)
+      return store.listStreams(candidate)
     },
 
     close(): Promise<void> {

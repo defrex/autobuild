@@ -16,6 +16,29 @@ export {
   isRetentionManagedKind,
   revisionsToPrune,
 } from './retention'
+export { assembleUIMessageDocument } from './streams/assemble'
+export { readStreamWithWait, STREAM_WAIT_POLL_MS } from './streams/wait'
+export {
+  clampWaitSeconds,
+  MAX_STREAM_WAIT_SECONDS,
+  serializedBatchSize,
+  STREAM_BATCH_MAX_BYTES,
+  STREAM_FORMAT,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  streamArtifactInput,
+  validateStreamParts,
+} from './streams/types'
+export type {
+  StreamArtifactRef,
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+  StreamStatus,
+} from './streams/types'
 export { pollingSubscribe } from './subscribe'
 export { contentHash, systemClock, toBytes, validateExpectedSeq } from './types'
 export type {

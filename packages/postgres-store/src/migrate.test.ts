@@ -1,7 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
-import { MemoryBlobStore } from 'autobuild/plugin-sdk'
-import { MIGRATE_COMMAND, SCHEMA_CHECKSUM, SCHEMA_VERSION, migratePostgres } from './schema'
+import { CONTRACT_T0, MemoryBlobStore } from 'autobuild/plugin-sdk'
+
+type Row = Record<string, unknown>
+import {
+  MIGRATE_COMMAND,
+  SCHEMA_CHECKSUM,
+  SCHEMA_V1_CHECKSUM,
+  SCHEMA_V1_DDL,
+  SCHEMA_VERSION,
+  migratePostgres,
+} from './schema'
 import { openPostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
@@ -42,7 +51,11 @@ if (testUrl) {
     })
 
     for (const scenario of [
-      { name: 'older', version: SCHEMA_VERSION - 1, checksum: SCHEMA_CHECKSUM },
+      {
+        name: 'older-with-a-foreign-checksum',
+        version: SCHEMA_VERSION - 1,
+        checksum: SCHEMA_CHECKSUM,
+      },
       { name: 'newer', version: SCHEMA_VERSION + 1, checksum: SCHEMA_CHECKSUM },
       { name: 'checksum-mismatched', version: SCHEMA_VERSION, checksum: 'wrong' },
     ]) {
@@ -68,6 +81,63 @@ if (testUrl) {
         }
       })
     }
+
+    test('upgrades a genuine v1 database in place, preserving prior rows and enabling streams', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v1 database: v1 DDL, v1 marker, plus a build, an
+        // event, and an artifact written before streams existed.
+        await sql.unsafe(SCHEMA_V1_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+          VALUES ('v1-build', 'acme/v1', ${CONTRACT_T0}, ${CONTRACT_T0})`
+        await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
+          VALUES ('v1-build', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'build.created',
+            '{"ticket":{"source":"linear","id":"TICK-1"},"repo":"acme/v1","baseBranch":"main"}')`
+        await sql`INSERT INTO artifacts (build, kind, revision, blob_ref, metadata, created_at)
+          VALUES ('v1-build', 'plan', 0, 'deadbeef', '{}', ${CONTRACT_T0})`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // Prior rows survive untouched.
+        const builds = await sql`SELECT slug FROM builds`
+        expect(builds.map((row: Row) => row.slug)).toEqual(['v1-build'])
+        const events = await sql`SELECT seq FROM events WHERE build = 'v1-build'`
+        expect(events).toHaveLength(1)
+
+        // The stream tables work end to end through the migrated store.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const stream = await store.createStream({ kind: 'build', build: 'v1-build' }, 'migrated')
+          await store.appendStreamParts(stream.id, [
+            { type: 'start', messageId: 'm' },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'survived' },
+            { type: 'text-end', id: 't' },
+          ])
+          const closed = await store.closeStream(stream.id, 'completed')
+          expect(closed.status).toBe('closed')
+          const read = await store.readStream(stream.id)
+          expect(read.chunks).toHaveLength(1)
+          expect(read.status).toBe('closed')
+          expect(read.outcome).toBe('completed')
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
 
     test('refuses a current marker when a required table is missing', async () => {
       const harness = await schemaHarness()

@@ -25,6 +25,18 @@ import {
   type NewBuildInput,
 } from './types'
 
+/** Decode artifact bytes — accepts both build and repository artifacts. */
+function artifactText(artifact: { content: Uint8Array }): string {
+  return new TextDecoder().decode(artifact.content)
+}
+import {
+  clampWaitSeconds,
+  MAX_STREAM_WAIT_SECONDS,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  type StreamPart,
+} from './streams/types'
+
 // ── Factory seams ────────────────────────────────────────────────────────────
 
 export interface BuildStoreHarness {
@@ -159,6 +171,51 @@ async function withStore(
     await store.close()
     await cleanup?.()
   }
+}
+
+// ── Stream fixtures (SPEC §7.6) ──────────────────────────────────────────
+
+/** The representative part sequence the assembly close test asserts on:
+ * text deltas, a tool call with input and output, a reasoning block, a
+ * data-* part, an error chunk, and one undefined-type part. */
+export function representativeStreamParts(): StreamPart[] {
+  return [
+    { type: 'start', messageId: 'msg-1' },
+    { type: 'text-start', id: 't1' },
+    { type: 'text-delta', id: 't1', delta: 'working' },
+    { type: 'text-end', id: 't1' },
+    { type: 'reasoning-start', id: 'r1' },
+    { type: 'reasoning-delta', id: 'r1', delta: 'considering' },
+    { type: 'reasoning-end', id: 'r1' },
+    { type: 'tool-input-available', toolCallId: 'c1', toolName: 'read', input: { path: 'a.ts' } },
+    { type: 'tool-output-available', toolCallId: 'c1', output: { lines: 10 } },
+    { type: 'data-probe', id: 'd1', data: { n: 1 } },
+    { type: 'error', errorText: 'transient' },
+    { type: 'mystery-part', foo: 1 },
+  ]
+}
+
+/** The document the representative sequence assembles into — shared by the
+ * close test and each adapter's expected-artifact assertion. */
+export function representativeStreamDocument(): unknown[] {
+  return [
+    {
+      id: 'msg-1',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'working', state: 'done' },
+        { type: 'reasoning', id: 'r1', text: 'considering', state: 'done' },
+        {
+          type: 'tool-read',
+          toolCallId: 'c1',
+          state: 'output-available',
+          input: { path: 'a.ts' },
+          output: { lines: 10 },
+        },
+        { type: 'data-probe', id: 'd1', data: { n: 1 } },
+      ],
+    },
+  ]
 }
 
 function atT0(offsetMs: number): string {
@@ -1184,6 +1241,417 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.append('sub-stop', sampleEventWrite('two'))
           await Bun.sleep(40)
           expect(received).toEqual([1])
+        })
+      })
+    })
+
+    describe('streams (SPEC §7.6 — the third primitive)', () => {
+      test('create assigns the id, literal format, open status, and clock createdAt; get and list round-trip', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-create'))
+          const record = await store.createStream(
+            { kind: 'build', build: 'st-create' },
+            'implement turn',
+          )
+          expect(record.id).toMatch(/^st_/)
+          expect(record.scope).toEqual({ kind: 'build', build: 'st-create' })
+          expect(record.label).toBe('implement turn')
+          expect(record.format).toBe('ai-ui-message-stream/v1')
+          expect(record.status).toBe('open')
+          expect(record.createdAt).toBe(CONTRACT_T0)
+          expect(record.closedAt).toBeUndefined()
+          expect(record.outcome).toBeUndefined()
+          expect(record.artifact).toBeUndefined()
+          expect(await store.getStream(record.id)).toEqual(record)
+          expect(await store.getStream('st_unknown')).toBeNull()
+          expect(await store.listStreams({ kind: 'build', build: 'st-create' })).toEqual([record])
+          await store.createBuild(sampleBuildInput('st-empty'))
+          expect(await store.listStreams({ kind: 'build', build: 'st-empty' })).toEqual([])
+        })
+      })
+
+      test('append assigns per-stream sequences from 1, independent across streams, with clock ts and exact parts', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-append'))
+          const a = await store.createStream({ kind: 'build', build: 'st-append' }, 'a')
+          const b = await store.createStream({ kind: 'build', build: 'st-append' }, 'b')
+          clock.advance(1000)
+          const parts: StreamPart[] = [
+            { type: 'text-delta', id: 't', delta: 'hello' },
+            { type: 'data-probe', data: { nested: true, extra: 'keys survive' } },
+          ]
+          const c1 = await store.appendStreamParts(a.id, parts)
+          clock.advance(1000)
+          const c2 = await store.appendStreamParts(a.id, [{ type: 'text-end', id: 't' }])
+          const b1 = await store.appendStreamParts(b.id, [{ type: 'start', messageId: 'm' }])
+          expect([c1.seq, c2.seq]).toEqual([1, 2])
+          expect(b1.seq).toBe(1)
+          expect(c1.stream).toBe(a.id)
+          expect(c1.ts).toBe(atT0(1000))
+          expect(c2.ts).toBe(atT0(2000))
+          expect(c1.parts).toEqual(parts)
+          const read = await store.readStream(a.id)
+          expect(read.chunks.map((chunk) => chunk.seq)).toEqual([1, 2])
+          expect(read.chunks[0]?.parts).toEqual(parts)
+          expect(read.status).toBe('open')
+          expect(read.outcome).toBeUndefined()
+          expect(read.artifact).toBeUndefined()
+        })
+      })
+
+      test('append validation rejects empty batches, non-object parts, missing and empty type, and unknown streams — writing nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-validate'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-validate' }, 'v')
+          for (const bad of [
+            [] as StreamPart[],
+            ['not an object' as unknown as StreamPart],
+            [{ delta: 'no type' } as unknown as StreamPart],
+            [{ type: '' } as unknown as StreamPart],
+          ]) {
+            const err = await store.appendStreamParts(stream.id, bad).catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(Error)
+          }
+          const unknown = await store
+            .appendStreamParts('st_ghost', [{ type: 'text-delta', id: 't', delta: 'x' }])
+            .catch((e: unknown) => e)
+          expect(unknown).toBeInstanceOf(Error)
+          expect((await store.readStream(stream.id)).chunks).toEqual([])
+        })
+      })
+
+      test('a batch whose serialized size exceeds the ceiling rejects with StreamBatchTooLargeError and writes nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-ceiling'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-ceiling' }, 'big')
+          const oversized: StreamPart[] = [
+            { type: 'text-delta', id: 't', delta: 'x'.repeat(1_048_600) },
+          ]
+          const err = await store.appendStreamParts(stream.id, oversized).catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(StreamBatchTooLargeError)
+          expect((err as Error).message).toContain('1048576')
+          expect((await store.readStream(stream.id)).chunks).toEqual([])
+          // Just under the ceiling appends fine.
+          await store.appendStreamParts(stream.id, [
+            { type: 'text-delta', id: 't', delta: 'x'.repeat(1_000) },
+          ])
+          expect((await store.readStream(stream.id)).chunks).toHaveLength(1)
+        })
+      })
+
+      test('read since is strictly greater-than, in order; cursor resumes deliver exactly-once', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-since'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-since' }, 's')
+          for (const n of [1, 2, 3]) {
+            await store.appendStreamParts(stream.id, [
+              { type: 'text-delta', id: 't', delta: String(n) },
+            ])
+          }
+          expect((await store.readStream(stream.id)).chunks.map((c) => c.seq)).toEqual([1, 2, 3])
+          expect(
+            (await store.readStream(stream.id, { since: 1 })).chunks.map((c) => c.seq),
+          ).toEqual([2, 3])
+          expect(await store.readStream(stream.id, { since: 3 })).toEqual({
+            chunks: [],
+            status: 'open',
+          })
+          // Resuming from the last processed cursor never re-delivers: each
+          // chunk after the cursor arrives exactly once, in order.
+          const resumed = await store.readStream(stream.id, { since: 2 })
+          expect(resumed.chunks.map((c) => c.seq)).toEqual([3])
+          const done = await store.readStream(stream.id, { since: 3 })
+          expect(done.chunks).toEqual([])
+        })
+      })
+
+      test('bounded wait returns empty no earlier than the bound when nothing arrives', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-wait'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-wait' }, 'w')
+          const started = Date.now()
+          const read = await store.readStream(stream.id, { waitSeconds: 1 })
+          expect(read.chunks).toEqual([])
+          expect(read.status).toBe('open')
+          expect(Date.now() - started).toBeGreaterThanOrEqual(950)
+        })
+      })
+
+      test('bounded wait returns early when a chunk is appended during the wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-wake'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-wake' }, 'w')
+          const pending = store.readStream(stream.id, { waitSeconds: 5 })
+          await Bun.sleep(100)
+          const chunk = await store.appendStreamParts(stream.id, [
+            { type: 'text-delta', id: 't', delta: 'wake' },
+          ])
+          const read = await pending
+          expect(read.chunks).toEqual([chunk])
+        })
+      })
+
+      test('bounded wait returns early with the closed status when the stream closes during the wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-wake-close'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-wake-close' }, 'w')
+          const pending = store.readStream(stream.id, { waitSeconds: 5 })
+          await Bun.sleep(100)
+          const record = await store.closeStream(stream.id, 'completed')
+          const read = await pending
+          expect(read.chunks).toEqual([])
+          expect(read.status).toBe('closed')
+          expect(read.outcome).toBe('completed')
+          expect(read.artifact).toEqual(record.artifact)
+        })
+      })
+
+      test('a wait above 30 seconds is clamped, not stretched', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-clamp'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-clamp' }, 'c')
+          const pending = store.readStream(stream.id, { waitSeconds: 61 })
+          await Bun.sleep(200)
+          await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          const started = Date.now()
+          const read = await pending
+          expect(read.chunks).toHaveLength(1)
+          // The append satisfied the read — the clamp never stretched it to
+          // 30 or 61 seconds; the wait ended promptly after the append.
+          expect(Date.now() - started).toBeLessThan(5_000)
+        })
+      })
+
+      test('clampWaitSeconds clamps above 30 and below 0', () => {
+        expect(clampWaitSeconds(61)).toBe(MAX_STREAM_WAIT_SECONDS)
+        expect(clampWaitSeconds(30)).toBe(30)
+        expect(clampWaitSeconds(5)).toBe(5)
+        expect(clampWaitSeconds(0)).toBe(0)
+        expect(clampWaitSeconds(-3)).toBe(0)
+      })
+
+      test('reads of a closed stream never wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-closed-read'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-closed-read' }, 'c')
+          await store.closeStream(stream.id, 'completed')
+          const started = Date.now()
+          const read = await store.readStream(stream.id, { waitSeconds: 5 })
+          expect(read.status).toBe('closed')
+          expect(Date.now() - started).toBeLessThan(500)
+        })
+      })
+
+      test('appending to a closed stream rejects with StreamClosedError and writes nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-closed-append'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-closed-append' }, 'c')
+          await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          await store.closeStream(stream.id, 'completed')
+          const err = await store
+            .appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'y' }])
+            .catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(StreamClosedError)
+          expect((await store.readStream(stream.id)).chunks).toHaveLength(1)
+        })
+      })
+
+      test('close deposits the assembled document atomically: artifact on the owning scope, record gains outcome/closedAt/artifact', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-close'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-close' }, 'turn 1')
+          for (const part of representativeStreamParts()) {
+            await store.appendStreamParts(stream.id, [part])
+          }
+          clock.advance(1000)
+          const record = await store.closeStream(stream.id, 'completed')
+          expect(record.status).toBe('closed')
+          expect(record.outcome).toBe('completed')
+          expect(record.closedAt).toBe(atT0(1000))
+          expect(record.artifact?.kind).toBe(`stream:${stream.id}`)
+          expect(record.artifact?.revision).toBe(0)
+
+          // The finalized document is the assembled UIMessage[]...
+          const artifact = await store.getArtifact('st-close', `stream:${stream.id}`)
+          expect(artifact?.meta.kind).toBe(`stream:${stream.id}`)
+          expect(artifact?.meta.revision).toBe(0)
+          expect(artifact?.meta.metadata).toEqual({
+            stream: stream.id,
+            label: 'turn 1',
+            scope: { kind: 'build', build: 'st-close' },
+            outcome: 'completed',
+            chunkCount: 12,
+            droppedPartCount: 1,
+          })
+          expect(JSON.parse(textContent(artifact!))).toEqual(representativeStreamDocument())
+
+          // ...and the read surface carries the closed shape.
+          const read = await store.readStream(stream.id)
+          expect(read.status).toBe('closed')
+          expect(read.outcome).toBe('completed')
+          expect(read.artifact).toEqual(record.artifact)
+          expect(read.chunks).toHaveLength(12)
+        })
+      })
+
+      test('closing an already-closed stream is a no-op returning the record, even with a different outcome', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-idem'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-idem' }, 'i')
+          const closed = await store.closeStream(stream.id, 'completed')
+          const again = await store.closeStream(stream.id, 'aborted')
+          expect(again).toEqual(closed)
+          expect(again.outcome).toBe('completed')
+          expect((await store.getStream(stream.id))?.artifact).toEqual(closed.artifact)
+        })
+      })
+
+      test('close of an unknown stream rejects', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const err = await store.closeStream('st_ghost', 'completed').catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(Error)
+        })
+      })
+
+      test('chunk retention prunes older closed streams at the next create in the same scope; artifacts and open streams survive', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-prune'))
+          const first = await store.createStream({ kind: 'build', build: 'st-prune' }, 'one')
+          await store.appendStreamParts(first.id, [{ type: 'text-delta', id: 't', delta: '1' }])
+          const firstClosed = await store.closeStream(first.id, 'completed')
+
+          await Bun.sleep(5)
+          const second = await store.createStream({ kind: 'build', build: 'st-prune' }, 'two')
+          await store.appendStreamParts(second.id, [{ type: 'text-delta', id: 't', delta: '2' }])
+          await store.closeStream(second.id, 'completed')
+
+          // An open stream and a finalized artifact in the same scope.
+          const open = await store.createStream({ kind: 'build', build: 'st-prune' }, 'open')
+          await store.appendStreamParts(open.id, [{ type: 'text-delta', id: 't', delta: 'o' }])
+
+          // Creating a third stream prunes every closed stream's chunks
+          // except the most recently closed one, in the same transaction.
+          await store.createStream({ kind: 'build', build: 'st-prune' }, 'three')
+
+          const pruned = await store.readStream(first.id)
+          expect(pruned.chunks).toEqual([])
+          expect(pruned.status).toBe('closed')
+          expect(pruned.artifact).toEqual(firstClosed.artifact)
+          // The finalized artifact itself is never touched.
+          expect(await store.getArtifact('st-prune', `stream:${first.id}`)).not.toBeNull()
+
+          const survivor = await store.readStream(second.id)
+          expect(survivor.chunks).toHaveLength(1)
+          expect(await store.getArtifact('st-prune', `stream:${second.id}`)).not.toBeNull()
+
+          const openRead = await store.readStream(open.id)
+          expect(openRead.chunks).toHaveLength(1)
+          expect(openRead.status).toBe('open')
+        })
+      })
+
+      test('build-scoped handles operate on their own streams and reject foreign and repo-scoped ones', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-scope-a'))
+          await store.createBuild(sampleBuildInput('st-scope-b'))
+          await store.ensureRepo('acme/rate-limiter')
+          const scoped = store.scopeBuild('st-scope-a')
+
+          const own = await scoped.createStream({ kind: 'build', build: 'st-scope-a' }, 'mine')
+          expect(own.scope).toEqual({ kind: 'build', build: 'st-scope-a' })
+          await scoped.appendStreamParts(own.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          expect((await scoped.readStream(own.id)).chunks).toHaveLength(1)
+          expect(await scoped.getStream(own.id)).toEqual(own)
+          expect(
+            (await scoped.listStreams({ kind: 'build', build: 'st-scope-a' })).map((r) => r.id),
+          ).toEqual([own.id])
+          await scoped.closeStream(own.id, 'completed')
+
+          // A foreign build's stream (created via the unscoped store) rejects
+          // on all six operations.
+          const foreign = await store.createStream(
+            { kind: 'build', build: 'st-scope-b' },
+            'not mine',
+          )
+          const repoStream = await store.createStream(
+            { kind: 'repo', repo: 'acme/rate-limiter' },
+            'journal stream',
+          )
+          for (const [operation, attempt] of [
+            [
+              'createStream',
+              () => scoped.createStream({ kind: 'build', build: 'st-scope-b' }, 'x'),
+            ],
+            [
+              'createStream',
+              () => scoped.createStream({ kind: 'repo', repo: 'acme/rate-limiter' }, 'x'),
+            ],
+            [
+              'appendStreamParts',
+              () =>
+                scoped.appendStreamParts(foreign.id, [{ type: 'text-delta', id: 't', delta: 'x' }]),
+            ],
+            [
+              'appendStreamParts',
+              () =>
+                scoped.appendStreamParts(repoStream.id, [
+                  { type: 'text-delta', id: 't', delta: 'x' },
+                ]),
+            ],
+            ['readStream', () => scoped.readStream(foreign.id)],
+            ['readStream', () => scoped.readStream(repoStream.id)],
+            ['closeStream', () => scoped.closeStream(foreign.id, 'completed')],
+            ['closeStream', () => scoped.closeStream(repoStream.id, 'completed')],
+            ['getStream', () => scoped.getStream(foreign.id)],
+            ['getStream', () => scoped.getStream(repoStream.id)],
+            ['listStreams', () => scoped.listStreams({ kind: 'build', build: 'st-scope-b' })],
+            ['listStreams', () => scoped.listStreams({ kind: 'repo', repo: 'acme/rate-limiter' })],
+          ] as const) {
+            const err = await attempt().catch((e: unknown) => e)
+            expect(err, `${operation} must reject`).toBeInstanceOf(Error)
+            expect((err as Error).message).toContain('build-scoped store')
+          }
+        })
+      })
+
+      test('repo-scoped streams run the full lifecycle with the artifact deposited on the repo scope', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.ensureRepo('acme/rate-limiter')
+          const stream = await store.createStream(
+            { kind: 'repo', repo: 'acme/rate-limiter' },
+            'harvest run',
+          )
+          await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'hm' }])
+          await store.appendStreamParts(stream.id, [
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'scanning' },
+            { type: 'text-end', id: 't' },
+          ])
+          clock.advance(1000)
+          const record = await store.closeStream(stream.id, 'aborted')
+          expect(record.scope).toEqual({ kind: 'repo', repo: 'acme/rate-limiter' })
+          expect(record.outcome).toBe('aborted')
+          const artifact = await store.getRepoArtifact('acme/rate-limiter', `stream:${stream.id}`)
+          expect(artifact?.meta.metadata).toMatchObject({
+            stream: stream.id,
+            label: 'harvest run',
+            scope: { kind: 'repo', repo: 'acme/rate-limiter' },
+            outcome: 'aborted',
+          })
+          expect(JSON.parse(artifactText(artifact!))).toEqual([
+            {
+              id: 'hm',
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'scanning', state: 'done' }],
+            },
+          ])
+          expect(
+            (await store.listStreams({ kind: 'repo', repo: 'acme/rate-limiter' })).map((r) => r.id),
+          ).toEqual([stream.id])
         })
       })
     })

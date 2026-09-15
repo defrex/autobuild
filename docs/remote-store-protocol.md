@@ -41,7 +41,7 @@ document and the package's executable contracts together.
   `Date.toISOString()` form, for example `2026-07-15T12:00:00.000Z`.
 - Event sequence numbers and artifact revisions are integers assigned by the
   server. Clients must not assign either except for the negative deposit
-  placeholders described in [Atomic deposits](#6-atomic-deposits).
+  placeholders described in [Atomic deposits](#7-atomic-deposits).
 - Optional object members are omitted, not represented as `null`, unless a
   response below explicitly specifies JSON `null`.
 - The server owns durability. Events and artifact metadata visible in a
@@ -245,7 +245,7 @@ The response is:
 }
 ```
 
-Section 6 defines the placeholder and transaction semantics.
+Section 7 defines the placeholder and transaction semantics.
 
 ### Lease and error messages
 
@@ -353,7 +353,144 @@ for each repository independently of every build and other repository.
 The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals.
 
-## 5. Authentication and token scope
+## 5. Stream operations
+
+Streams are the BuildStore's third primitive: an append-only, per-stream
+sequenced log of chunks with an open-then-closed lifecycle that finalizes into
+an artifact. A chunk is a nonempty batch of protocol parts from the Vercel AI
+SDK UI Message Stream protocol, version 1 of the current major (AI SDK 7):
+each part is a JSON object with a nonempty-string `type`, and part types are
+exactly that protocol's (`text-start`/`text-delta`/`text-end`,
+`reasoning-start`/`-delta`/`-end`, `tool-input-*`, `tool-output-*`,
+`tool-approval-*`, `start-step`, `finish-step`, `start`, `finish`, `abort`,
+`error`, `message-metadata`, `source-url`, `source-document`, `file`,
+`reasoning-file`, `custom`, and the open `data-*` namespace). The store
+performs no protocol validation on append; validation happens once, at close,
+when the chunks assemble into the protocol's `UIMessage[]` document. Streams
+are presentation, never routing: no kernel, engine, reducer, or dispatcher
+decision reads stream content.
+
+Every stream record carries a server-assigned id (`st_`-prefixed), its scope,
+a caller-supplied label, the literal format `ai-ui-message-stream/v1`, a
+status of `open` or `closed`, `createdAt`, and, once closed, its outcome
+(`completed` or `aborted`), `closedAt`, and the reference of its finalized
+artifact:
+
+```jsonc
+// StreamRecord
+{
+  "id": "st_9f2c…",
+  "scope": { "kind": "build", "build": "remote-store-protocol" },
+  // or { "kind": "repo", "repo": "acme/autobuild" }
+  "label": "implement round 1",
+  "format": "ai-ui-message-stream/v1",
+  "status": "closed",
+  "createdAt": "2026-07-15T12:00:00.000Z",
+  "closedAt": "2026-07-15T12:03:00.000Z",      // optional; closed only
+  "outcome": "completed",                       // optional; closed only
+  "artifact": {                                  // optional; closed only
+    "kind": "stream:st_9f2c…",
+    "revision": 0,
+    "blobRef": "64-lowercase-hex-sha256"
+  }
+}
+```
+
+A chunk response is:
+
+```jsonc
+{
+  "stream": "st_9f2c…",
+  "seq": 1,                        // per-stream, assigned by the server from 1
+  "ts": "2026-07-15T12:00:00.000Z",
+  "parts": [ { "type": "text-delta", "id": "t1", "delta": "…" } ]
+}
+```
+
+A read response carries the chunks plus the stream's current status and,
+when closed, its outcome and artifact reference:
+
+```jsonc
+{
+  "chunks": [ /* StreamChunk */ ],
+  "status": "open",
+  "outcome": "completed",          // optional; closed only
+  "artifact": { /* StreamArtifactRef */ } // optional; closed only
+}
+```
+
+`{slug}` and `{repo}` mean the same percent-encoded path segments as above.
+All six operations exist under both resource families; the scope is fixed at
+create and comes from the path. All stream routes authorize like the event
+routes (section 6: resource scope gates everything) and carry no
+session-attribution dimension — stream parts have no actor.
+
+| BuildStore operation | HTTP route | Request | Success |
+|---|---|---|---|
+| `createStream` | `POST /builds/{slug}/streams` and `POST /repos/{repo}/streams` | `{"label": string}` with a nonempty label | `201` + `StreamRecord` |
+| `listStreams` | `GET /builds/{slug}/streams` and `GET /repos/{repo}/streams` | none | `200` + `StreamRecord[]`, oldest first |
+| `getStream` | `GET /builds/{slug}/streams/{id}` and `GET /repos/{repo}/streams/{id}` | none | `200` + `StreamRecord`; `404` when unknown **or** scoped to another resource |
+| `appendStreamParts` | `POST /builds/{slug}/streams/{id}/chunks` and `POST /repos/{repo}/streams/{id}/chunks` | `{"parts": [ { "type": nonempty string, … } ]}`, nonempty | `201` + `StreamChunk` |
+| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) and `wait` (whole seconds) query values, parsed exactly like the `since` of section 3 | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
+| `closeStream` | `POST /builds/{slug}/streams/{id}/close` and `POST /repos/{repo}/streams/{id}/close` | `{"outcome": "completed" \| "aborted"}` | `200` + the closed `StreamRecord` |
+
+Because a stream id is globally unique but names no scope, the shipped server
+and client additionally expose the four addressed operations as top-level
+routes, which resolve the stream's own scope and then authorize against it:
+
+| Operation | Top-level route | Notes |
+|---|---|---|
+| `getStream` | `GET /streams/{id}` | `404` maps to `null` in the shipped client |
+| `appendStreamParts` | `POST /streams/{id}/chunks` | |
+| `readStream` | `GET /streams/{id}/chunks?since={n}&wait={n}` | |
+| `closeStream` | `POST /streams/{id}/close` | |
+
+On both route families, a stream that does not exist and one scoped to a
+different resource are the same `404 not-found` (`unknown stream "…"`), so no
+cross-scope existence leaks; a token that does not cover the resolved scope
+receives `401`/`403` per section 6.
+
+Append semantics, enforced before any mutation:
+
+- Each part must be a JSON object whose `type` is a nonempty string; anything
+  else is `400 validation`. Unknown part keys must survive the wire untouched.
+- The server assigns each appended batch a per-stream sequence starting at 1
+  and the timestamp; producers cannot fake ordering.
+- A batch whose serialized JSON exceeds 1,048,576 bytes is `413 validation`
+  naming the ceiling — the same bound and shape as the artifact ceiling.
+- Appending to a closed stream is `409 conflict` (`stream "…" is closed`);
+  appending to an unknown stream is `404 not-found`. Neither writes anything.
+
+Read wait semantics: when no newer chunk exists and the stream is open, the
+server may hold the request up to the parsed `wait` bound in whole seconds,
+returning as soon as a chunk is appended or the stream closes, and no later
+than the bound. A `wait` above 30 seconds is clamped to 30. Reads of a closed
+stream never wait. A server may return before the bound at any time.
+
+Close semantics: one atomic operation that assembles the chunks into the
+protocol's `UIMessage[]` document — following the protocol for its defined
+part types and dropping parts of undefined types while counting them —
+deposits that document as an artifact on the owning scope with kind
+`stream:<streamId>` at revision 0 and metadata naming the stream id, label,
+scope, outcome, chunk count, and dropped-part count, and marks the stream
+closed. If the artifact deposit fails, the stream stays open and nothing is
+written. Closing an already-closed stream is a no-op that returns the record
+(regardless of the requested outcome).
+
+Chunk retention is deposit-path and count-based, like artifact retention: a
+closed stream's chunks remain readable until the next stream is created in
+the same scope, at which point the chunks of every previously closed stream
+in that scope except the most recently closed one are deleted in the same
+transaction as the create. Finalized `stream:*` artifacts are never touched
+by this rule (their retention belongs to the open archival thread), and open
+streams are never pruned. A read of a stream whose chunks were pruned returns
+no chunks, `status: "closed"`, and the artifact reference.
+
+These additions are purely additive: the protocol version stays `2`, and a
+conforming server implements the stream routes together with this document's
+rules exactly as it does for the event and artifact routes.
+
+## 6. Authentication and token scope
 
 ### Open and authenticated modes
 
@@ -447,7 +584,7 @@ Deployment scopes have `{ "operator": true, "session": "*", "exp": … }` and
 cover raw store and [hosted ticket](remote-ticket-protocol.md) routes without
 granting attributed operator controls.
 
-## 6. Atomic deposits
+## 7. Atomic deposits
 
 The in-process `appendWithArtifacts` APIs take a callback that receives
 server-assigned artifact revisions. A callback cannot cross HTTP, so the wire
@@ -495,7 +632,7 @@ transactional so concurrent deposits receive distinct revisions and events.
 
 These rules apply identically to build and repository deposits.
 
-## 7. Errors and validation
+## 8. Errors and validation
 
 Every non-success response is exactly the JSON error shape from section 2.
 The shipped server maps failures as follows:
@@ -505,9 +642,9 @@ The shipped server maps failures as follows:
 | `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, or a `since`/`rev` value whose JavaScript `Number` conversion is not an integer |
 | `401` | `auth` | Missing bearer credentials or an invalid, malformed, badly signed, or expired token |
 | `403` | `auth` | Valid token with the wrong resource scope or event-session attribution |
-| `404` | `not-found` | Unknown route, unsupported method, unknown build, or unknown repository |
-| `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, or a backing conflict reported as already existing |
-| `413` | `validation` | Decoded artifact exceeds the configured ceiling; the message names the ceiling |
+| `404` | `not-found` | Unknown route, unsupported method, unknown build, unknown repository, or an unknown or foreign-scoped stream |
+| `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, appending to a closed stream (`stream "…" is closed`), or a backing conflict reported as already existing |
+| `413` | `validation` | Decoded artifact or serialized stream batch exceeds the configured ceiling; the message names the ceiling |
 | `422` | `validation` | `EventValidationError` from build or repository catalog validation; its message is preserved verbatim |
 | `500` | `internal` | Any other unexpected backing or server failure; the thrown error message is returned |
 
@@ -525,7 +662,7 @@ catalog. Servers must call the matched build validator
 `validateEventWrite` or repository validator `validateRepositoryEventWrite`
 before every ordinary append and inside every atomic deposit.
 
-## 8. Lease and persistence requirements
+## 9. Lease and persistence requirements
 
 A conforming backing server provides these behaviors for both build and
 repository leases:
@@ -560,10 +697,25 @@ Beyond leases, the backing store must maintain:
   trips;
 - artifact lists ordered by kind and revision;
 - strict event payload and actor validation before mutation;
-- atomic deposit visibility and rollback as described in section 6; and
+- atomic deposit visibility and rollback as described in section 7; and
 - rejection of event, artifact, and lease writes to unknown resources.
 
-## 9. Client-only behavior and health
+For streams, the backing store must additionally maintain:
+
+- per-stream monotonically assigned chunk sequences starting at 1, preserving
+  append order and continuity across server restarts;
+- append rejection (with no mutation) for closed and unknown streams and for
+  batches above the serialized-byte ceiling;
+- the bounded read wait exactly as specified in section 5, including the
+  30-second clamp and no wait on closed streams;
+- the atomic close — document assembly, artifact deposit, and the closed
+  record visible together or not at all, with the stream left open and
+  unwritten when the deposit fails;
+- the chunk-retention prune at the next create in a scope, in the same
+  transaction, keeping the most recently closed stream's chunks; and
+- stream ids that are globally unique and `st_`-prefixed.
+
+## 10. Client-only behavior and health
 
 Four shipped behaviors do not add `BuildStore` routes:
 
@@ -591,7 +743,7 @@ Four shipped behaviors do not add `BuildStore` routes:
 There is no push/WebSocket subscription protocol, batch-read route,
 repository listing, artifact deletion, or server deployment API.
 
-## 10. Conformance
+## 11. Conformance
 
 The compatibility bar is an HTTP-backed `BuildStore` client driving the
 complete `describeBuildStoreContract` suite against a clean server. Both the
