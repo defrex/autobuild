@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#329](https://github.com/defrex/autobuild/pull/329) — Serialize stream close against append to stop silent chunk loss
 - [#326](https://github.com/defrex/autobuild/pull/326) — Add a stream primitive to the BuildStore finalizing into artifacts
 - [#325](https://github.com/defrex/autobuild/pull/325) — Classify DIRTY mergeable_state as merge conflicts in auto-merge gate
 - [#324](https://github.com/defrex/autobuild/pull/324) — Route a bundled deployment's missing archive to a legible, correctly-routed failure
