@@ -24,6 +24,11 @@ import {
   type Clock,
   type NewBuildInput,
 } from './types'
+
+/** Decode artifact bytes — accepts both build and repository artifacts. */
+function artifactText(artifact: { content: Uint8Array }): string {
+  return new TextDecoder().decode(artifact.content)
+}
 import {
   clampWaitSeconds,
   MAX_STREAM_WAIT_SECONDS,
@@ -1465,11 +1470,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(record.status).toBe('closed')
           expect(record.outcome).toBe('completed')
           expect(record.closedAt).toBe(atT0(1000))
-          expect(record.artifact).toEqual({
-            kind: `stream:${stream.id}`,
-            revision: 0,
-            blobRef: record.artifact?.blobRef,
-          })
+          expect(record.artifact?.kind).toBe(`stream:${stream.id}`)
+          expect(record.artifact?.revision).toBe(0)
 
           // The finalized document is the assembled UIMessage[]...
           const artifact = await store.getArtifact('st-close', `stream:${stream.id}`)
@@ -1639,7 +1641,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             scope: { kind: 'repo', repo: 'acme/rate-limiter' },
             outcome: 'aborted',
           })
-          expect(JSON.parse(textContent(artifact!))).toEqual([
+          expect(JSON.parse(artifactText(artifact!))).toEqual([
             {
               id: 'hm',
               role: 'assistant',

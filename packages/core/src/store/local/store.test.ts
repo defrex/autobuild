@@ -145,6 +145,62 @@ describe('SqliteBuildStore durability', () => {
     }
   })
 
+  test('streams created before a reopen still read with their chunks and artifact after it', async () => {
+    const root = await freshRoot()
+    try {
+      const clock = manualClock(CONTRACT_T0)
+      const first = openLocalStore(root, { clock })
+      await first.createBuild(sampleBuildInput('persist-streams'))
+      await first.ensureRepo('acme/rate-limiter')
+      const stream = await first.createStream(
+        { kind: 'build', build: 'persist-streams' },
+        'turn one',
+      )
+      await first.appendStreamParts(stream.id, [
+        { type: 'start', messageId: 'm' },
+        { type: 'text-start', id: 't' },
+      ])
+      await first.appendStreamParts(stream.id, [
+        { type: 'text-delta', id: 't', delta: 'durable' },
+        { type: 'text-end', id: 't' },
+      ])
+      const closed = await first.closeStream(stream.id, 'completed')
+      const repoStream = await first.createStream(
+        { kind: 'repo', repo: 'acme/rate-limiter' },
+        'harvest stream',
+      )
+      await first.appendStreamParts(repoStream.id, [{ type: 'text-delta', id: 'u', delta: 'r' }])
+      await first.close()
+
+      const second = openLocalStore(root, { clock })
+      try {
+        const record = await second.getStream(stream.id)
+        expect(record?.status).toBe('closed')
+        expect(record?.outcome).toBe('completed')
+        expect(record?.artifact).toEqual(closed.artifact)
+        const read = await second.readStream(stream.id)
+        expect(read.chunks.map((chunk) => chunk.seq)).toEqual([1, 2])
+        const artifact = await second.getArtifact('persist-streams', `stream:${stream.id}`)
+        expect(JSON.parse(textContent(artifact!))).toEqual([
+          { id: 'm', role: 'assistant', parts: [{ type: 'text', text: 'durable', state: 'done' }] },
+        ])
+
+        // The open repo-side stream resumes: appends continue the sequence.
+        const resumed = await second.readStream(repoStream.id)
+        expect(resumed.chunks).toHaveLength(1)
+        const next = await second.appendStreamParts(repoStream.id, [{ type: 'text-end', id: 'u' }])
+        expect(next.seq).toBe(2)
+        expect(
+          (await second.listStreams({ kind: 'build', build: 'persist-streams' })).map((r) => r.id),
+        ).toEqual([stream.id])
+      } finally {
+        await second.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('opening a pre-origin store adds repo_origin without a migration step and keeps old rows', async () => {
     const root = await freshRoot()
     try {
