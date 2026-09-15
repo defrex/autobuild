@@ -1401,6 +1401,13 @@ or `--all` before concluding a build doesn't exist.
 **`ab build status <slug>`** details one build: unresolved escalations, open
 sessions, chronological durable observations, verify progress for the current
 cycle, PR lifecycle, latest event, durable progress age, heartbeat, and lease.
+For an open PR, the current work-owner decision reads the build-owned
+configuration from the store's deposited `build-runner-effective-config`
+artifact — deposited at every runner launch and refreshed on effective-config
+changes — falling back to the local workspace's `autobuild.toml` only when no
+deposit exists; the decision is reported unavailable only when neither source
+can supply a configuration, and that message names the missing artifact kind
+rather than a workspace path.
 Observations are shown without `--events`; for `forge = "local-git"`, this is where a deferred landing
 names uncommitted work that collides with the squash. Autobuild leaves that work
 untouched and later dispatcher ticks retry automatically after the operator
