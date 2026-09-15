@@ -600,6 +600,25 @@ artifact or is rejected with `StreamClosedError`; an accepted append is never
 silently omitted from the artifact the close deposits. Appends to other
 streams are unaffected.
 
+Closing an already-closed stream is a no-op that returns the closed record.
+The repeated close's outcome argument is ignored; the artifact the first
+close deposited is left untouched.
+
+**Rejections write nothing.** Append validation and every rejection below
+happen before any mutation: a rejected operation leaves no chunk, no sequence
+number, and no artifact. An append batch must be a nonempty array of JSON
+objects, each carrying a nonempty-string `type`; a batch that fails this
+shape is rejected with a plain error, and a batch whose serialized JSON
+exceeds 1,048,576 bytes is rejected with `StreamBatchTooLargeError`.
+Operations that address an unknown stream id — append, read, and close — are
+rejected with a plain error; `getStream` alone answers `null` for an unknown
+id, never an error. The contract is common to every shipped store — the
+in-memory reference, the local SQLite adapter, and the remote Postgres-backed
+service. Over the remote protocol the typed rejections cross the wire as
+status codes — the ceiling as 413, the closed-append rejection above as 409,
+the unknown stream as 404 — and the shipped client rehydrates the same error
+types; `docs/remote-store-protocol.md` specifies the wire surface.
+
 Chunk retention is deposit-path and count-based, like artifact retention: at
 the next stream create in a scope, every previously closed stream's chunks
 except the most recently closed are deleted; finalized artifacts are never
