@@ -38,7 +38,7 @@ import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { SessionScopeError } from '../store/session-scope'
-import type { BuildRecord, BuildStore } from '../store/types'
+import type { BuildRecord } from '../store/types'
 import { resolveAmbientReadSession } from './env'
 import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
@@ -539,10 +539,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
       }
 
+      /** The event must already be appended to `stream.events` (the full
+       * prefix): the record's state is the reduction after it. */
       const processBuildEvent = (stream: BuildStream, event: AbEvent): void => {
         stream.lastSeq = event.seq
         positions[stream.slug] = event.seq
-        stream.events.push(event)
         if (!matchesBuildFilter(event.type, filters)) return
         emit(event, reduceBuild(stream.events))
       }
@@ -574,6 +575,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           status: reduceBuild(events).status,
         }
         streams.set(slug, stream)
+        positions[slug] = stream.lastSeq
         if (resumeSeq === undefined) return true
         stream.lastSeq = resumeSeq
         for (const event of events) {
@@ -606,6 +608,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               status,
             }
             streams.set(record.slug, stream)
+            positions[record.slug] = stream.lastSeq
           }
           return true
         } catch {
@@ -617,6 +620,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         const resumeSeq = sinceStreams[REPO_STREAM_KEY]
         const stream: RepositoryStream = { kind: 'repo', lastSeq: resumeSeq ?? 0 }
         streams.set(REPO_STREAM_KEY, stream)
+        positions[REPO_STREAM_KEY] = stream.lastSeq
         try {
           // A fresh store has no repository row; do not create one.
           if (resumeSeq === undefined && (await store.getRepo(repo)) !== null) {
@@ -632,6 +636,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       const pollBuild = async (stream: BuildStream): Promise<boolean> => {
         const fresh = await store.getEvents(stream.slug, stream.lastSeq)
         for (const event of fresh) {
+          stream.events.push(event)
           processBuildEvent(stream, event)
           if (stop) break
         }
