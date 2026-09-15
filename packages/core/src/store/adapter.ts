@@ -1,4 +1,5 @@
 export { validateEventWrite } from '../events/catalog'
+export { humanActor } from '../events/envelope'
 export type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 export type { EventType } from '../events/payloads'
 export { validateRepositoryEventWrite } from '../events/repository'
@@ -8,7 +9,15 @@ export type {
   RepositoryEventType,
   RepositoryEventWrite,
 } from '../events/repository'
+export { validateSessionEventWrite } from '../events/sessions'
+export type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../events/sessions'
 export { createBuildScopedStore } from './build-scope'
+export { createSessionScopedStore } from './session-handle'
 export {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   DISPATCHER_RETENTION_BUILD_KINDS,
@@ -17,7 +26,7 @@ export {
   revisionsToPrune,
 } from './retention'
 export { assembleUIMessageDocument } from './streams/assemble'
-export { readStreamWithWait, STREAM_WAIT_POLL_MS } from './streams/wait'
+export { readEventsWithWait, readStreamWithWait, STREAM_WAIT_POLL_MS } from './streams/wait'
 export {
   clampWaitSeconds,
   MAX_STREAM_WAIT_SECONDS,
@@ -51,9 +60,15 @@ export type {
   BuildStore,
   Clock,
   NewBuildInput,
+  NewSessionInput,
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
+  SessionArtifact,
+  SessionArtifactMeta,
+  SessionRecord,
+  SessionScopedStore,
   SubscribeOptions,
   Unsubscribe,
 } from './types'
+export { normalizeOperator } from './types'

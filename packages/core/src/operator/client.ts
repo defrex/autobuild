@@ -20,6 +20,15 @@ import {
 } from './protocol'
 import type { OperatorBuildView, OperatorDashboardSnapshot } from './query'
 import type { OperatorTicketDetail, OperatorTicketQueue } from './tickets'
+import type { OperatorSessionView } from './sessions'
+import type { SessionRecord } from '../store/types'
+import type { StreamRead } from '../store/streams/types'
+import type {
+  OperatorSessionApprovalRequest,
+  OperatorSessionCreateRequest,
+  OperatorSessionMessageRequest,
+  OperatorSessionWakeRequest,
+} from './protocol'
 
 export class OperatorApiError extends Error {
   constructor(
@@ -154,6 +163,63 @@ export class OperatorApiClient {
       method: 'POST',
       body: JSON.stringify(request),
     })
+  }
+  listSessions(repo: string): Promise<SessionRecord[]> {
+    return this.request(repo, 'sessions')
+  }
+  createSession(repo: string, request: OperatorSessionCreateRequest): Promise<SessionRecord> {
+    return this.request(repo, 'sessions', { method: 'POST', body: JSON.stringify(request) })
+  }
+  getSession(repo: string, sid: string): Promise<OperatorSessionView> {
+    return this.request(repo, `sessions/${encodeURIComponent(sid)}`)
+  }
+  postSessionMessage(
+    repo: string,
+    sid: string,
+    request: OperatorSessionMessageRequest,
+  ): Promise<{ ok: boolean }> {
+    return this.request(repo, `sessions/${encodeURIComponent(sid)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+  setSessionWake(
+    repo: string,
+    sid: string,
+    request: OperatorSessionWakeRequest,
+  ): Promise<{ ok: boolean }> {
+    return this.request(repo, `sessions/${encodeURIComponent(sid)}/wake`, {
+      method: 'PUT',
+      body: JSON.stringify(request),
+    })
+  }
+  answerSessionApproval(
+    repo: string,
+    sid: string,
+    request: OperatorSessionApprovalRequest,
+  ): Promise<{ ok: boolean }> {
+    return this.request(repo, `sessions/${encodeURIComponent(sid)}/approvals`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+  archiveSession(repo: string, sid: string): Promise<{ ok: boolean }> {
+    return this.request(repo, `sessions/${encodeURIComponent(sid)}/archive`, {
+      method: 'POST',
+    })
+  }
+  readSessionTurnStream(
+    repo: string,
+    sid: string,
+    turn: string,
+    opts: { since?: number; waitSeconds?: number } = {},
+  ): Promise<StreamRead> {
+    const query = new URLSearchParams({ since: String(opts?.since ?? 0) })
+    if (opts?.waitSeconds !== undefined) query.set('wait', String(opts.waitSeconds))
+    return this.request(
+      repo,
+      `sessions/${encodeURIComponent(sid)}/turns/${encodeURIComponent(turn)}/stream?${query}`,
+    )
   }
   controlBuild(
     repo: string,

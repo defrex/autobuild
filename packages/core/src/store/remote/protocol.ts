@@ -27,7 +27,7 @@
 import { z } from 'zod'
 import { actorSchema } from '../../events/envelope'
 import { ticketRefSchema } from '../../ontology'
-import type { ArtifactMeta, RepositoryArtifactMeta } from '../types'
+import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '../types'
 
 // ── Errors (D6: errors as feedback over the wire) ────────────────────────────
 
@@ -138,6 +138,55 @@ export const repoDepositsResponseSchema = z.object({
   artifacts: repositoryArtifactMetaListSchema,
 })
 
+// ── Operator sessions (SPEC §7.1.1) ─────────────────────────────────────────
+
+export const newSessionBodySchema = z.object({
+  repo: z.string().min(1),
+  operator: z.string().min(1),
+  title: z.string().optional(),
+})
+
+export const sessionRecordWireSchema = z.object({
+  id: z.string(),
+  repo: z.string(),
+  operator: z.string(),
+  title: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+export const sessionRecordListSchema = z.array(sessionRecordWireSchema)
+
+export const sessionEventEnvelopeWireSchema = z.object({
+  session: z.string(),
+  seq: z.number().int().positive(),
+  ts: z.string(),
+  actor: actorSchema,
+  type: z.string(),
+  payload: z.unknown(),
+})
+export const sessionEventListSchema = z.array(sessionEventEnvelopeWireSchema)
+
+export const sessionArtifactMetaWireSchema = z.object({
+  session: z.string(),
+  kind: z.string(),
+  revision: z.number().int().nonnegative(),
+  blobRef: z.string(),
+  metadata: z.record(z.string(), z.unknown()),
+  createdAt: z.string(),
+})
+export const sessionArtifactMetaListSchema = z.array(sessionArtifactMetaWireSchema)
+export const sessionArtifactGetResponseSchema = z.union([
+  z.null(),
+  z.object({
+    meta: sessionArtifactMetaWireSchema,
+    contentBase64: z.string(),
+  }),
+])
+export const sessionDepositsResponseSchema = z.object({
+  event: sessionEventEnvelopeWireSchema,
+  artifacts: sessionArtifactMetaListSchema,
+})
+
 // ── Artifacts ────────────────────────────────────────────────────────────────
 
 export const artifactMetaWireSchema = z.object({
@@ -195,6 +244,7 @@ export const okResponseSchema = z.object({ ok: z.boolean() })
 export const streamScopeWireSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('build'), build: z.string().min(1) }),
   z.object({ kind: z.literal('repo'), repo: z.string().min(1) }),
+  z.object({ kind: z.literal('session'), session: z.string().min(1) }),
 ])
 
 export const streamArtifactRefWireSchema = z.object({
@@ -279,7 +329,7 @@ function isPlaceholderRef(value: unknown): value is { kind: string; rev: number 
  */
 export function substitutePlaceholderRefs(
   value: unknown,
-  deposited: Array<ArtifactMeta | RepositoryArtifactMeta>,
+  deposited: Array<ArtifactMeta | RepositoryArtifactMeta | SessionArtifactMeta>,
 ): unknown {
   if (isPlaceholderRef(value)) {
     const meta = deposited[-value.rev - 1]

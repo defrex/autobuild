@@ -109,6 +109,26 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     ) {
       return 'operator'
     }
+    // Operator sessions: collection list/create and the addressed family.
+    if (rest[0] === 'sessions') {
+      if ((req.method === 'GET' || req.method === 'POST') && rest.length === 1) return 'operator'
+      if (req.method === 'GET' && rest.length === 2 && rest[1]) return 'operator'
+      if (req.method === 'POST' && rest.length === 3 && rest[1]) {
+        if (rest[2] === 'messages' || rest[2] === 'approvals' || rest[2] === 'archive') {
+          return 'operator'
+        }
+      }
+      if (req.method === 'PUT' && rest.length === 3 && rest[2] === 'wake') return 'operator'
+      if (
+        req.method === 'GET' &&
+        rest.length === 5 &&
+        rest[2] === 'turns' &&
+        rest[4] === 'stream'
+      ) {
+        return 'operator'
+      }
+      return undefined
+    }
     if (req.method === 'GET' && rest.join('/') === 'harvest/status') return 'operator'
     if (
       req.method === 'POST' &&
@@ -143,14 +163,51 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
       : undefined
   }
 
+  // Global addressed stream routes (SPEC §7.6): the client addresses streams
+  // by store-assigned id, so the server resolves the stream's own scope.
+  if (segments[0] === 'streams' && segments.length >= 2) {
+    const leaf = segments.slice(2).join('/')
+    if (leaf === '') return req.method === 'GET' ? 'store' : undefined
+    if (leaf === 'chunks')
+      return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
+    if (leaf === 'close') return req.method === 'POST' ? 'store' : undefined
+    return undefined
+  }
+
   const root = segments[0]
-  if (root !== 'builds' && root !== 'repos') return undefined
+  if (root !== 'builds' && root !== 'repos' && root !== 'sessions') return undefined
+  if (root === 'sessions') {
+    // Raw store session family: /sessions/{id}/… mirrors the repository
+    // journal's resource routes; the collection lives under /repos/.
+    if (segments.length === 2) return req.method === 'GET' ? 'store' : undefined
+    const route = `${req.method} ${segments.slice(2).join('/')}`
+    if (route === 'GET streams' || route === 'POST streams') return 'store'
+    return storeResourceRoutes.has(route) ? 'store' : undefined
+  }
   if (segments.length === 1) {
     const allowed =
       root === 'builds' ? req.method === 'GET' || req.method === 'POST' : req.method === 'POST'
     return allowed ? 'store' : undefined
   }
   if (segments.length === 2) return req.method === 'GET' ? 'store' : undefined
+  if (root === 'repos' && segments[2] === 'sessions' && segments.length === 3) {
+    return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
+  }
+
+  // Stream family and addressed stream sub-routes under any resource root
+  // (build, repo, session): create/list at …/streams, then chunks and close.
+  if (segments[2] === 'streams' && segments.length >= 3) {
+    const leaf = segments.slice(4).join('/')
+    if (segments.length === 3) {
+      return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
+    }
+    if (segments.length === 4 && req.method === 'GET') return 'store'
+    if (leaf === 'chunks') {
+      return req.method === 'GET' || req.method === 'POST' ? 'store' : undefined
+    }
+    if (leaf === 'close') return req.method === 'POST' ? 'store' : undefined
+    return undefined
+  }
 
   const route = `${req.method} ${segments.slice(2).join('/')}`
   if (root === 'builds' && route === 'POST events/conditional') return 'store'

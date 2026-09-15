@@ -389,6 +389,18 @@ export function relativeTime(iso: string, now: Date): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+/**
+ * Delegated-write attribution (§15.1): a human actor carrying a via marker
+ * renders as `human (via session os_…)` / `human (via mcp client)`; plain
+ * actors render unchanged. The JSON output and the operator API's build
+ * detail serialize the actor object verbatim, so the marker reaches those
+ * surfaces without transformation.
+ */
+function viaMarker(actor: Actor): string {
+  if (actor.kind !== 'human' || actor.via === undefined) return actor.kind
+  return `human (via ${actor.via.kind === 'session' ? `session ${actor.via.id}` : `mcp ${actor.via.client}`})`
+}
+
 function padColumns(rows: string[][]): string[] {
   const widths: number[] = []
   for (const row of rows) {
@@ -596,7 +608,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
 
   if (d.lastEvent !== undefined) {
     lines.push(
-      `  last event: ${d.lastEvent.type} (seq ${d.lastEvent.seq}) ${d.lastEvent.ts} by ${d.lastEvent.actor.kind}`,
+      `  last event: ${d.lastEvent.type} (seq ${d.lastEvent.seq}) ${d.lastEvent.ts} by ${viaMarker(d.lastEvent.actor)}`,
     )
   }
 
@@ -606,7 +618,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       `    ${event.seq}`,
       event.ts,
       event.type,
-      event.actor.kind,
+      viaMarker(event.actor),
     ])
     for (const line of padColumns(rows)) lines.push(line)
   }
