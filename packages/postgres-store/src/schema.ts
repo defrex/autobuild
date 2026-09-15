@@ -6,8 +6,92 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
+
+/** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
+ * recognized and upgraded in place (see migratePostgres). */
+export const SCHEMA_V3_DDL = `
+CREATE TABLE IF NOT EXISTS ab_schema_migrations (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  version integer NOT NULL,
+  checksum text NOT NULL,
+  applied_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS builds (
+  slug text PRIMARY KEY, repo text NOT NULL, ticket jsonb, branch text,
+  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+  lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
+  heartbeat_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS events (
+  build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (build, seq)
+);
+CREATE TABLE IF NOT EXISTS artifacts (
+  build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (build, kind, revision)
+);
+CREATE TABLE IF NOT EXISTS repo_streams (
+  repo text PRIMARY KEY, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+  lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
+  heartbeat_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS repo_events (
+  repo text NOT NULL REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (repo, seq)
+);
+CREATE TABLE IF NOT EXISTS repo_artifacts (
+  repo text NOT NULL REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (repo, kind, revision)
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  id text PRIMARY KEY,
+  repo text NOT NULL,
+  operator text NOT NULL,
+  title text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_events (
+  session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (session, seq)
+);
+CREATE TABLE IF NOT EXISTS session_artifacts (
+  session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (session, kind, revision)
+);
+CREATE TABLE IF NOT EXISTS streams (
+  id text PRIMARY KEY, scope_kind text NOT NULL,
+  build text REFERENCES builds(slug) ON DELETE CASCADE,
+  repo text REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  label text NOT NULL, format text NOT NULL, status text NOT NULL,
+  outcome text, artifact_kind text, artifact_revision bigint,
+  artifact_blob_ref text, created_at timestamptz NOT NULL, closed_at timestamptz,
+  session text REFERENCES sessions(id) ON DELETE CASCADE,
+  CONSTRAINT streams_scope_kind_check CHECK (scope_kind IN ('build','repo','session')),
+  CONSTRAINT streams_status_check CHECK (status IN ('open','closed')),
+  CONSTRAINT streams_scope_exactly_one_check CHECK (
+    (scope_kind = 'build' AND build IS NOT NULL AND repo IS NULL AND session IS NULL)
+    OR (scope_kind = 'repo' AND build IS NULL AND repo IS NOT NULL AND session IS NULL)
+    OR (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
+  )
+);
+CREATE TABLE IF NOT EXISTS stream_chunks (
+  stream text NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, parts jsonb NOT NULL,
+  PRIMARY KEY (stream, seq)
+);`.trim()
+export const SCHEMA_V3_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V3_DDL).digest('hex')
 
 /** The frozen v2 DDL, kept verbatim so a deployed v2 marker's checksum can be
  * recognized and upgraded in place (see migratePostgres). */
@@ -156,13 +240,15 @@ CREATE TABLE IF NOT EXISTS repo_artifacts (
   metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
   PRIMARY KEY (repo, kind, revision)
 );
+CREATE SEQUENCE IF NOT EXISTS sessions_creation_seq;
 CREATE TABLE IF NOT EXISTS sessions (
   id text PRIMARY KEY,
   repo text NOT NULL,
   operator text NOT NULL,
   title text,
   created_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL
+  updated_at timestamptz NOT NULL,
+  creation_seq bigint NOT NULL
 );
 CREATE TABLE IF NOT EXISTS session_events (
   session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -300,6 +386,10 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['title', 'text', false],
     ['created_at', 'timestamp with time zone', true],
     ['updated_at', 'timestamp with time zone', true],
+    // The creation-order tiebreak column rides last: the guarded v3→v4 ALTER
+    // adds it at the end, so migrated and fresh databases assert identically
+    // (the streams.session precedent).
+    ['creation_seq', 'bigint', true],
   ],
   session_events: [
     ['session', 'text', true],
@@ -592,18 +682,20 @@ export async function migratePostgres(url: string): Promise<void> {
         if (version === SCHEMA_VERSION) {
           if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('marker is incompatible')
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
-          // v1 → v3: the idempotent full DDL above already applied the deltas
+          // v1 → v4: the idempotent full DDL above already applied the deltas
           // (the stream tables and the session tables); v1 databases never had
-          // a streams table, so the full DDL created it with the session
-          // column and widened CHECKs. Promote the marker in this transaction.
+          // a streams or sessions table, so the full DDL created them with the
+          // session column, the widened CHECKs, and the creation_seq column.
+          // Promote the marker in this transaction.
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 2 && marker.checksum === SCHEMA_V2_CHECKSUM) {
-          // v2 → v3: the idempotent full DDL above created the session
-          // tables; a v2 database's streams table needs the guarded session
-          // column and the widened CHECK constraints.
+          // v2 → v4: the idempotent full DDL above created the session tables
+          // (with the creation_seq column); a v2 database's streams table
+          // needs the guarded session column and the widened CHECK
+          // constraints.
           await tx.unsafe(`
             DO $$ BEGIN
               IF NOT EXISTS (
@@ -626,6 +718,38 @@ export async function migratePostgres(url: string): Promise<void> {
                 OR (scope_kind = 'repo' AND build IS NULL AND repo IS NOT NULL AND session IS NULL)
                 OR (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
               );
+          `)
+          await tx`UPDATE ab_schema_migrations
+            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
+        } else if (version === 3 && marker.checksum === SCHEMA_V3_CHECKSUM) {
+          // v3 → v4: the listSessions creation-order tiebreak (store/types.ts).
+          // The idempotent full DDL above created the sessions_creation_seq
+          // sequence; a v3 database's sessions table needs the guarded
+          // creation_seq column, a (created_at, id)-ordered backfill — legacy
+          // same-millisecond ties are genuinely unorderable, so any total
+          // order consistent with createdAt is acceptable — SET NOT NULL, and
+          // the sequence positioned above the backfilled values so the next
+          // nextval continues the counter without collision.
+          await tx.unsafe(`
+            DO $$ BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'sessions'
+                  AND column_name = 'creation_seq'
+              ) THEN
+                ALTER TABLE sessions ADD COLUMN creation_seq bigint;
+                WITH numbered AS (
+                  SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn FROM sessions
+                )
+                UPDATE sessions SET creation_seq = numbered.rn
+                  FROM numbered WHERE sessions.id = numbered.id;
+                ALTER TABLE sessions ALTER COLUMN creation_seq SET NOT NULL;
+                PERFORM setval('sessions_creation_seq',
+                  (SELECT COALESCE(MAX(creation_seq), 0) FROM sessions) + 1, false);
+              END IF;
+            END $$;
           `)
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},

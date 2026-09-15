@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#339](https://github.com/defrex/autobuild/pull/339) — Pin the listSessions same-millisecond tiebreak across stores
 - [#337](https://github.com/defrex/autobuild/pull/337) — Land the ab-implement ground-rules rewording in the canonical skill
 - [#336](https://github.com/defrex/autobuild/pull/336) — State close idempotence and the append error surface in SPEC §7.6 (AUT-354)
 - [#334](https://github.com/defrex/autobuild/pull/334) — Read the build-owned config from the store in ab build status

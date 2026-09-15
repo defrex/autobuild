@@ -504,8 +504,12 @@ export class PostgresBuildStore implements BuildStore {
       payload: input.title !== undefined ? { title: input.title } : {},
     })
     return this.sql.begin(async (tx) => {
-      await tx`INSERT INTO sessions (id, repo, operator, title, created_at, updated_at)
-        VALUES (${id}, ${input.repo}, ${operator}, ${input.title ?? null}, ${ts}, ${ts})`
+      // Store-assigned monotonic creation sequence (the listSessions
+      // same-timestamp tiebreak): the sequence is concurrency-safe and never
+      // repeats, so ties order by assignment. Sessions are never deleted, so
+      // the counter is never reused.
+      await tx`INSERT INTO sessions (id, repo, operator, title, creation_seq, created_at, updated_at)
+        VALUES (${id}, ${input.repo}, ${operator}, ${input.title ?? null}, nextval('sessions_creation_seq'), ${ts}, ${ts})`
       await tx`INSERT INTO session_events (session, seq, ts, actor, type, payload)
         VALUES (${id}, 1, ${ts}, ${validated.actor}, ${validated.type}, ${validated.payload})`
       return this.sessionRecord(await this.lockSession(tx, id))
@@ -518,8 +522,10 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async listSessions(repo: string): Promise<SessionRecord[]> {
+    // Pinned tiebreak (store/types.ts): createdAt ascending, then the
+    // store-assigned monotonic creation sequence — never the random id.
     const rows: Row[] = await this
-      .sql`SELECT * FROM sessions WHERE repo = ${repo} ORDER BY created_at, id`
+      .sql`SELECT * FROM sessions WHERE repo = ${repo} ORDER BY created_at, creation_seq`
     return rows.map((row) => this.sessionRecord(row))
   }
 

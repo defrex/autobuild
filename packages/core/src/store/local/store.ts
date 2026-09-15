@@ -175,6 +175,7 @@ const BOOTSTRAP_DDL = [
     repo TEXT NOT NULL,
     operator TEXT NOT NULL,
     title TEXT,
+    creation_seq INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -292,6 +293,20 @@ export class SqliteBuildStore implements BuildStore {
     }>
     if (!streamColumns.some((column) => column.name === 'session')) {
       this.sqlite.exec('ALTER TABLE streams ADD COLUMN session TEXT')
+    }
+    // Stores created before the listSessions creation-order tiebreak existed
+    // keep working: add the sessions.creation_seq column idempotently when a
+    // pre-existing table lacks it (the repo_origin precedent), then backfill
+    // by rowid — rowid equals insertion order because sessions are never
+    // deleted, so the backfill is consistent with the pinned creation-order
+    // contract. Legacy same-millisecond ties are genuinely unorderable; the
+    // pinned guarantee applies from the migrated store onward.
+    const sessionColumns = this.sqlite.query("PRAGMA table_info('sessions')").all() as Array<{
+      name: string
+    }>
+    if (!sessionColumns.some((column) => column.name === 'creation_seq')) {
+      this.sqlite.exec('ALTER TABLE sessions ADD COLUMN creation_seq INTEGER NOT NULL DEFAULT 0')
+      this.sqlite.exec('UPDATE sessions SET creation_seq = rowid')
     }
     this.db = drizzle(this.sqlite)
   }
@@ -1079,6 +1094,16 @@ export class SqliteBuildStore implements BuildStore {
       payload: input.title !== undefined ? { title: input.title } : {},
     })
     return this.writeTx(() => {
+      // Store-assigned monotonic creation sequence: MAX+1 inside the write
+      // transaction (every write runs BEGIN IMMEDIATE, so writers are
+      // serialized) — the same pattern as the seq assignments in this file.
+      // Sessions are never deleted, so the counter is never reused and the
+      // listSessions same-millisecond tiebreak is stable over time.
+      const tail = this.db
+        .select({ max: sql<number | null>`max(${sessions.creationSeq})` })
+        .from(sessions)
+        .get()
+      const creationSeq = (tail?.max ?? 0) + 1
       this.db
         .insert(sessions)
         .values({
@@ -1086,6 +1111,7 @@ export class SqliteBuildStore implements BuildStore {
           repo: input.repo,
           operator,
           title: input.title ?? null,
+          creationSeq,
           createdAt: ts,
           updatedAt: ts,
         })
@@ -1111,11 +1137,13 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async listSessions(repo: string): Promise<SessionRecord[]> {
+    // Pinned tiebreak (store/types.ts): createdAt ascending, then the
+    // store-assigned monotonic creation sequence — never the random id.
     return this.db
       .select()
       .from(sessions)
       .where(eq(sessions.repo, repo))
-      .orderBy(asc(sessions.createdAt), asc(sessions.id))
+      .orderBy(asc(sessions.createdAt), asc(sessions.creationSeq))
       .all()
       .map((row) => this.toSessionRecord(row))
   }
