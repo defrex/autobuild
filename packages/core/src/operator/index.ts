@@ -31,6 +31,27 @@ export type {
 } from './query'
 export { OperatorControlError } from './control'
 export { OperatorQueryError } from './query'
+export {
+  OPERATOR_NOTES_ARTIFACT,
+  TOOLS,
+  attributed,
+  buildRegistry,
+  RegistryError,
+} from './registry'
+export type {
+  OperatorToolRegistry,
+  RegistryErrorReason,
+  RegistryOptions,
+  ToolApproval,
+  ToolContext,
+  ToolEntry,
+  ToolFailureBody,
+  ToolHandler,
+} from './registry'
+export { OPERATOR_TOOL_ANNOTATIONS } from './annotations'
+export type { OperatorToolName, ToolAnnotationsTableEntry } from './annotations'
+export type { RouteRefusal } from './requests'
+export { RouteRefusalError } from './requests'
 export type {
   OperatorTicketBackend,
   OperatorTicketBuild,
