@@ -601,28 +601,28 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
        * the watch, baselined at its current maximum so no history replays. A
        * build discovered while nonterminal stays tracked even after it turns
        * terminal. Cursor-resumed and named streams are never re-baselined.
+       *
+       * Throws on a failed read — never swallows it: the poll loop's tick
+       * catches and reports the failure once on stderr, and the initial scan
+       * turns it into the friendly startup error. Streams discovered before
+       * the throw stay tracked, so the retry neither duplicates nor skips.
        */
-      const discoverBuilds = async (): Promise<boolean> => {
-        try {
-          for (const record of (await store.listBuilds()).filter(mine)) {
-            if (streams.has(record.slug)) continue
-            const events = await store.getEvents(record.slug)
-            const status = reduceBuild(events).status
-            if (!NONTERMINAL_STATUSES.includes(status)) continue
-            const stream: BuildStream = {
-              kind: 'build',
-              slug: record.slug,
-              named: false,
-              events,
-              lastSeq: events.at(-1)?.seq ?? 0,
-              status,
-            }
-            streams.set(record.slug, stream)
-            positions[record.slug] = stream.lastSeq
+      const discoverBuilds = async (): Promise<void> => {
+        for (const record of (await store.listBuilds()).filter(mine)) {
+          if (streams.has(record.slug)) continue
+          const events = await store.getEvents(record.slug)
+          const status = reduceBuild(events).status
+          if (!NONTERMINAL_STATUSES.includes(status)) continue
+          const stream: BuildStream = {
+            kind: 'build',
+            slug: record.slug,
+            named: false,
+            events,
+            lastSeq: events.at(-1)?.seq ?? 0,
+            status,
           }
-          return true
-        } catch {
-          return false
+          streams.set(record.slug, stream)
+          positions[record.slug] = stream.lastSeq
         }
       }
 
@@ -693,7 +693,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         let allReadsOk = true
         if (slugs.length === 0) {
           try {
-            allReadsOk = (await discoverBuilds()) && allReadsOk
+            await discoverBuilds()
           } catch (error) {
             allReadsOk = false
             reportReadFailure(error)
@@ -742,8 +742,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       } else if (slugs.length === 0) {
         // Membership discovery also baselines the default watch; a failed
         // discovery here is fatal — nothing has started yet.
-        if (!(await discoverBuilds())) {
-          throw new Error('could not list builds in this store')
+        try {
+          await discoverBuilds()
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          throw new Error(`could not list builds in this store (${message})`)
         }
       }
 

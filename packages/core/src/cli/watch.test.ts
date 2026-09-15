@@ -789,6 +789,45 @@ describe('watch ambient scope', () => {
 })
 
 describe('watch read-failure resilience', () => {
+  test('a mid-watch discovery failure is reported once, retried, and loses no event', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    // Call 1 is the initial scan; fail the first tick's discovery.
+    let listCalls = 0
+    const flaky: BuildStore = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'listBuilds') {
+          return async () => {
+            listCalls += 1
+            if (listCalls === 2) throw new Error('list failed')
+            return (target as MemoryBuildStore).listBuilds()
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => flaky,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 2) await appendEscalation(store, 'b1')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '2' })
+
+    // Reported exactly once — the swallowing regression reported nothing.
+    expect(h.err).toEqual([expect.stringContaining('ab watch: a store read failed (list failed)')])
+    // The next tick's discovery succeeded, and the matching event arrived.
+    const records = h.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
+    expect(records.map((record) => record.event)).toEqual([
+      expect.objectContaining({ type: 'escalation.raised', seq: 2 }),
+    ])
+  })
+
   test('a failed read is reported once, retried, and loses no event', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
