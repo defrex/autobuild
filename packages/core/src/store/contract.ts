@@ -1266,7 +1266,8 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(await store.getStream(record.id)).toEqual(record)
           expect(await store.getStream('st_unknown')).toBeNull()
           expect(await store.listStreams({ kind: 'build', build: 'st-create' })).toEqual([record])
-          expect(await store.listStreams({ kind: 'repo', repo: 'acme/nobody' })).toEqual([])
+          await store.createBuild(sampleBuildInput('st-empty'))
+          expect(await store.listStreams({ kind: 'build', build: 'st-empty' })).toEqual([])
         })
       })
 

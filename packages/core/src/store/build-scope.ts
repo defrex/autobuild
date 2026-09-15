@@ -61,7 +61,7 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       throw new BuildScopeError(scope, 'stream', record.id)
     }
   }
-  const ownStream = async (operation: string, streamId: string): Promise<void> => {
+  const ownStream = async (_operation: string, streamId: string): Promise<void> => {
     const record = await store.getStream(streamId)
     if (record) ownStreamScope(record)
   }

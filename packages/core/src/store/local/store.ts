@@ -1099,7 +1099,7 @@ export class SqliteBuildStore implements BuildStore {
       .orderBy(asc(streamChunks.seq))
       .all()
     const { document, droppedPartCount } = await assembleUIMessageDocument(
-      chunkRows.map((chunk) => chunk.parts).flat(),
+      chunkRows.flatMap((chunk) => chunk.parts),
     )
     const scope = this.streamScopeOf(row)
     const input = streamArtifactInput(
@@ -1123,7 +1123,6 @@ export class SqliteBuildStore implements BuildStore {
     return this.writeTx(() => {
       const fresh = this.requireStream(streamId)
       if (fresh.status === 'closed') return this.toStreamRecord(fresh)
-      const ts = this.now()
       const meta =
         scope.kind === 'build'
           ? this.depositInTx(scope.build, prepared)

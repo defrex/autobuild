@@ -19,6 +19,7 @@ import {
 } from '../contract'
 import { BuildScopeError } from '../build-scope'
 import { MemoryBuildStore } from '../memory'
+import { StreamBatchTooLargeError, StreamClosedError } from '../streams/types'
 import { textContent } from '../types'
 import { AuthError, RemoteBuildStore } from './client'
 import { createStoreServer, startStoreServer } from './server'
@@ -586,6 +587,131 @@ describe('wire robustness', () => {
       expect(response.status).toBe(404)
       expect(((await response.json()) as { kind: string }).kind).toBe('not-found')
     } finally {
+      await server.stop()
+    }
+  })
+})
+
+// ── Stream wire specifics (SPEC §7.6) ────────────────────────────────────
+// Beyond the shared contract: token scope on the stream routes, cross-scope
+// addressing, and the typed error mappings (413 ceiling, 409 closed append).
+
+describe('stream wire specifics', () => {
+  const SECRET = 'stream-secret'
+  const EXP = Date.parse(CONTRACT_T0) + 3_600_000
+
+  test('token scope gates the stream routes like the events routes; cross-scope addressing is 404', async () => {
+    const clock = manualClock(CONTRACT_T0)
+    const backing = new MemoryBuildStore({ clock })
+    const server = startStoreServer({ store: backing, secret: SECRET, clock })
+    const admin = new RemoteBuildStore({
+      url: server.url,
+      token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
+    })
+    try {
+      await admin.createBuild(sampleBuildInput('wire-a'))
+      await admin.createBuild(sampleBuildInput('wire-b'))
+      await admin.ensureRepo('acme/wire')
+      const streamA = await admin.createStream({ kind: 'build', build: 'wire-a' }, 'a')
+      const repoStream = await admin.createStream({ kind: 'repo', repo: 'acme/wire' }, 'r')
+
+      // A build-scoped token uses its own streams end to end.
+      const clientA = new RemoteBuildStore({
+        url: server.url,
+        token: mintToken(SECRET, { build: 'wire-a', session: '*', exp: EXP }),
+      })
+      const chunk = await clientA.appendStreamParts(streamA.id, [
+        { type: 'text-delta', id: 't', delta: 'x' },
+      ])
+      expect(chunk.seq).toBe(1)
+      expect((await clientA.readStream(streamA.id)).chunks).toHaveLength(1)
+      expect(
+        (await clientA.listStreams({ kind: 'build', build: 'wire-a' })).map((r) => r.id),
+      ).toEqual([streamA.id])
+
+      // Another build's token: 403 AuthError on every shape.
+      const clientB = new RemoteBuildStore({
+        url: server.url,
+        token: mintToken(SECRET, { build: 'wire-b', session: '*', exp: EXP }),
+      })
+      for (const attempt of [
+        () => clientB.appendStreamParts(streamA.id, [{ type: 'text-delta', id: 't', delta: 'y' }]),
+        () => clientB.readStream(streamA.id),
+        () => clientB.closeStream(streamA.id, 'completed'),
+        () => clientB.getStream(streamA.id),
+        () => clientB.listStreams({ kind: 'build', build: 'wire-a' }),
+      ]) {
+        const err = await attempt().catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(AuthError)
+      }
+
+      // A repo token cannot touch build streams and vice versa.
+      const repoClient = new RemoteBuildStore({
+        url: server.url,
+        token: mintToken(SECRET, {
+          resource: { kind: 'repo', id: 'acme/wire' },
+          session: '*',
+          exp: EXP,
+        }),
+      })
+      const repoErr = await repoClient
+        .appendStreamParts(streamA.id, [{ type: 'text-delta', id: 't', delta: 'z' }])
+        .catch((e: unknown) => e)
+      expect(repoErr).toBeInstanceOf(AuthError)
+      const buildErr = await clientA
+        .appendStreamParts(repoStream.id, [{ type: 'text-delta', id: 't', delta: 'z' }])
+        .catch((e: unknown) => e)
+      expect(buildErr).toBeInstanceOf(AuthError)
+
+      // Unknown stream id → 404 → null (getStream), Error elsewhere.
+      expect(await clientA.getStream('st_nope')).toBeNull()
+      const unknownErr = await clientA.readStream('st_nope').catch((e: unknown) => e)
+      expect((unknownErr as Error).message).toContain('unknown stream')
+    } finally {
+      await admin.close()
+      await server.stop()
+    }
+  })
+
+  test('the ceiling is 413 and a closed append is 409, with typed rehydration; family routes 404 on cross-scope addressing', async () => {
+    const backing = new MemoryBuildStore()
+    const server = startStoreServer({ store: backing })
+    const store = new RemoteBuildStore({ url: server.url })
+    try {
+      await store.createBuild(sampleBuildInput('wire-map'))
+      const stream = await store.createStream({ kind: 'build', build: 'wire-map' }, 'm')
+
+      const oversized = await store
+        .appendStreamParts(stream.id, [
+          { type: 'text-delta', id: 't', delta: 'x'.repeat(1_048_600) },
+        ])
+        .catch((e: unknown) => e)
+      expect(oversized).toBeInstanceOf(StreamBatchTooLargeError)
+      expect((oversized as Error).message).toContain('1048576')
+
+      await store.closeStream(stream.id, 'completed')
+      const closed = await store
+        .appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'y' }])
+        .catch((e: unknown) => e)
+      expect(closed).toBeInstanceOf(StreamClosedError)
+
+      // Addressing another resource's stream under a family route — and an
+      // unknown id under any route — is the same 404, no existence leak.
+      await store.createBuild(sampleBuildInput('wire-map-b'))
+      const other = await store.createStream({ kind: 'build', build: 'wire-map-b' }, 'o')
+      const headers = {
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      }
+      const raw = await fetch(`${server.url}/builds/wire-map/streams/${other.id}`, { headers })
+      expect(raw.status).toBe(404)
+      expect(((await raw.json()) as { kind: string }).kind).toBe('not-found')
+      const unknown = await fetch(`${server.url}/builds/wire-map/streams/st_missing`, {
+        headers,
+      })
+      expect(unknown.status).toBe(404)
+    } finally {
+      await store.close()
       await server.stop()
     }
   })

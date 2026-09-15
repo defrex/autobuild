@@ -744,7 +744,7 @@ export class MemoryBuildStore implements BuildStore {
     // state (mirrors appendWithArtifacts: content-addressed orphans are
     // harmless; a deposit failure leaves the stream open and unwritten).
     const { document, droppedPartCount } = await assembleUIMessageDocument(
-      structuredClone(state.chunks.map((chunk) => chunk.parts).flat()),
+      structuredClone(state.chunks.flatMap((chunk) => chunk.parts)),
     )
     const ts = this.now()
     const record = structuredClone(state.record)

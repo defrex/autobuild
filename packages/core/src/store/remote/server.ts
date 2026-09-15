@@ -24,8 +24,13 @@ import type { ZodType } from 'zod'
 import { EventValidationError, type EventWrite } from '../../events/catalog'
 import type { RepositoryEventWrite } from '../../events/repository'
 import { systemClock, type BuildStore, type Clock } from '../types'
+import type { StreamOutcome, StreamPart, StreamScope } from '../streams/types'
+import { StreamBatchTooLargeError, StreamClosedError } from '../streams/types'
 import {
+  appendStreamBodySchema,
+  closeStreamBodySchema,
   conditionalEventBodySchema,
+  createStreamBodySchema,
   decodeBase64,
   depositsBodySchema,
   encodeBase64,
@@ -112,6 +117,15 @@ function intParam(url: URL, name: string): number | undefined {
     )
   }
   return value
+}
+
+function streamScopesEqual(a: StreamScope, b: StreamScope): boolean {
+  return (
+    a.kind === b.kind &&
+    (a.kind === 'build'
+      ? b.kind === 'build' && a.build === b.build
+      : b.kind === 'repo' && a.repo === b.repo)
+  )
 }
 
 export function createStoreServer(opts: StoreServerOptions): StoreServer {
@@ -244,6 +258,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     rest: string,
     scope: TokenScope | null,
   ): Promise<Response> {
+    const segments = rest.split('/')
+    if (segments[0] === 'streams') {
+      return streamRoute(req, url, { kind: 'repo', repo }, segments.slice(1))
+    }
     switch (`${req.method} ${rest}`) {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
@@ -330,6 +348,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     rest: string,
     scope: TokenScope | null,
   ): Promise<Response> {
+    const segments = rest.split('/')
+    if (segments[0] === 'streams') {
+      return streamRoute(req, url, { kind: 'build', build: slug }, segments.slice(1))
+    }
     switch (`${req.method} ${rest}`) {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
@@ -412,6 +434,85 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
   }
 
+  /**
+   * Stream routes (SPEC §7.6), shared by the build and repository families:
+   * `rest` is the segments after `streams`, the scope comes from the path.
+   * Addressed operations verify the stream actually belongs to this scope —
+   * an unknown stream and one scoped elsewhere are the same 404, so no
+   * cross-scope existence leaks.
+   */
+  async function streamRoute(
+    req: Request,
+    url: URL,
+    scope: StreamScope,
+    rest: string[],
+  ): Promise<Response> {
+    if (rest.length === 0) {
+      if (req.method === 'POST') {
+        const body = await readBody(req, createStreamBodySchema)
+        return json(201, await store.createStream(scope, body.label))
+      }
+      if (req.method === 'GET') return json(200, await store.listStreams(scope))
+      return fail(404, 'not-found', `no route: ${req.method} streams`)
+    }
+    const [streamId, leaf, ...extra] = rest
+    if (extra.length > 0 || streamId === undefined) {
+      return fail(404, 'not-found', `no route: ${req.method} streams/${rest.join('/')}`)
+    }
+    const record = await store.getStream(streamId)
+    if (record === null || !streamScopesEqual(record.scope, scope)) {
+      return fail(404, 'not-found', `unknown stream "${streamId}"`)
+    }
+    if (leaf === undefined || leaf === '') {
+      if (req.method === 'GET') return json(200, record)
+      return fail(404, 'not-found', `no route: ${req.method} streams/${streamId}`)
+    }
+    if (leaf === 'chunks') {
+      if (req.method === 'POST') {
+        const body = await readBody(req, appendStreamBodySchema)
+        return json(201, await store.appendStreamParts(streamId, body.parts as StreamPart[]))
+      }
+      if (req.method === 'GET') {
+        const since = intParam(url, 'since') ?? 0
+        const wait = intParam(url, 'wait')
+        const read = await store.readStream(streamId, {
+          since,
+          ...(wait !== undefined ? { waitSeconds: wait } : {}),
+        })
+        return json(200, read)
+      }
+      return fail(404, 'not-found', `no route: ${req.method} streams/${streamId}/chunks`)
+    }
+    if (leaf === 'close') {
+      if (req.method !== 'POST') {
+        return fail(404, 'not-found', `no route: ${req.method} streams/${streamId}/close`)
+      }
+      const body = await readBody(req, closeStreamBodySchema)
+      return json(200, await store.closeStream(streamId, body.outcome as StreamOutcome))
+    }
+    return fail(404, 'not-found', `no route: ${req.method} streams/${rest.join('/')}`)
+  }
+
+  /**
+   * Top-level addressed stream routes. A stream id is globally unique but
+   * carries no scope, so the client (which addresses streams by id alone)
+   * uses these: the server resolves the stream's own scope and authorizes
+   * against it, exactly like the family routes authorize by path. An
+   * unknown stream and a scope the token does not cover are both 404 — the
+   * same no-existence-leak rule the family routes apply.
+   */
+  async function globalStreamRoute(req: Request, url: URL, segments: string[]): Promise<Response> {
+    const streamId = segments[1]
+    if (streamId === undefined || streamId === '') {
+      return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
+    }
+    const record = await store.getStream(streamId)
+    if (record === null) return fail(404, 'not-found', `unknown stream "${streamId}"`)
+    const scopeId = record.scope.kind === 'build' ? record.scope.build : record.scope.repo
+    authorize(req, record.scope.kind, scopeId)
+    return streamRoute(req, url, record.scope, segments.slice(1))
+  }
+
   async function route(req: Request): Promise<Response> {
     const url = new URL(req.url)
     let segments: string[]
@@ -431,7 +532,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
       })
     }
-    if (segments[0] === 'repos' || segments[0] === 'builds') validateIdentity(req)
+    if (segments[0] === 'repos' || segments[0] === 'builds' || segments[0] === 'streams') {
+      validateIdentity(req)
+    }
+    if (segments[0] === 'streams') {
+      return globalStreamRoute(req, url, segments)
+    }
     if (segments[0] === 'repos') {
       if (segments.length === 1) return repoAdminRoute(req)
       const repo = segments[1]!
@@ -473,12 +579,20 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (error instanceof EventValidationError) {
       return fail(422, 'validation', error.message)
     }
+    if (error instanceof StreamBatchTooLargeError) {
+      return fail(413, 'validation', error.message)
+    }
+    if (error instanceof StreamClosedError) {
+      return fail(409, 'conflict', error.message)
+    }
     if (error instanceof Error && error.message.includes('already exists')) {
       return fail(409, 'conflict', error.message)
     }
     if (
       error instanceof Error &&
-      (error.message.startsWith('unknown build') || error.message.startsWith('unknown repo'))
+      (error.message.startsWith('unknown build') ||
+        error.message.startsWith('unknown repo') ||
+        error.message.startsWith('unknown stream'))
     ) {
       return fail(404, 'not-found', error.message)
     }

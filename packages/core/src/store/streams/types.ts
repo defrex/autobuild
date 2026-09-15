@@ -79,22 +79,28 @@ export interface StreamRead {
 
 /** Appending a batch whose serialized size exceeds the ceiling. Typed so the
  * remote server maps it to `413 {kind:'validation'}` like the artifact
- * ceiling; the message names the bound. */
+ * ceiling and the remote client rehydrates it; the message names the bound. */
 export class StreamBatchTooLargeError extends Error {
   constructor(
-    readonly bytes: number,
+    readonly bytes: number | undefined,
     readonly maxBytes: number = STREAM_BATCH_MAX_BYTES,
+    message?: string,
   ) {
-    super(`stream batch of ${bytes} bytes exceeds the ${maxBytes}-byte ceiling`)
+    super(message ?? `stream batch of ${bytes} bytes exceeds the ${maxBytes}-byte ceiling`)
     this.name = 'StreamBatchTooLargeError'
   }
 }
 
-/** Appending to a closed (or already-closed) stream. Typed so the remote
- * server maps it to `409 {kind:'conflict'}`. */
+/** Appending to a closed stream. Typed so the remote server maps it to
+ * `409 {kind:'conflict'}` and the remote client rehydrates it. The argument
+ * is the stream id locally, or the server's message over the wire. */
 export class StreamClosedError extends Error {
-  constructor(readonly stream: string) {
-    super(`stream "${stream}" is closed`)
+  constructor(streamOrMessage: string) {
+    super(
+      streamOrMessage.startsWith('stream "')
+        ? streamOrMessage
+        : `stream "${streamOrMessage}" is closed`,
+    )
     this.name = 'StreamClosedError'
   }
 }
