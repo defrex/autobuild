@@ -67,13 +67,18 @@ import {
   type RuntimeResolver,
 } from '../ports/runner/routing'
 import { isAlternateEligible, mayRetryPhase } from '../ports/runner/provider-error'
+import { sessionPart } from '../ports/runner/stream-parts'
+import type { SessionStreamInfo } from '../ports/runner/runtime'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
+import { createSessionStreamSink } from '../store/streams/session-writer'
+import type { StreamOutcome } from '../store/streams/types'
 import type {
   AgentRunner,
   AgentSessionHandle,
   AgentTurnFailure,
   AgentTurnResult,
   Forge,
+  SessionStreamSink,
 } from '../ports/types'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import { phaseScratchRejection, scratchPathsTouchedInRange } from '../ports/workspace/phase-scratch'
@@ -130,6 +135,13 @@ export interface BuildRunnerOpts {
   leaseTtlMs?: number
   /** Test seam for phase-session deadlines. Production uses an unref'ed timer. */
   scheduleSessionBudget?: (expire: () => void, delayMs: number) => () => void
+  /** Session streams (SPEC §9): open one stream per session bracket for
+   * runtimes that declare the streaming capability. Default true. A failing
+   * stream path never fails a turn; disabling reproduces the event log
+   * without streams. */
+  streamSessions?: boolean
+  /** Where stream diagnostics land. Default: a stderr write. */
+  onDiagnostic?: (message: string) => void
 }
 
 export interface BuildRunnerDeps {
@@ -227,6 +239,19 @@ interface SessionSpec {
 
 /** Longest tail of check output preserved in a verify report (§8.2). */
 const REPORT_TAIL_CHARS = 10_000
+
+/**
+ * One session bracket's live stream (SPEC §9): the sink the build-runner
+ * opened through the resolved target's streaming capability, the store id it
+ * returned, and the identity already emitted as the stream's first part.
+ * Undefined ⇒ the runtime declared no capability or the opener declined —
+ * the bracket then behaves exactly as before streams existed.
+ */
+interface SessionBracketStream {
+  sink: SessionStreamSink
+  streamId: string
+  info: SessionStreamInfo
+}
 /** Git object ids are 40 hex characters for SHA-1 repositories and 64 for
  * SHA-256 repositories. `rev-parse <ref>^{commit}` supplies the type check. */
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
@@ -397,6 +422,8 @@ export class BuildRunner {
   private readonly maxPhaseAttempts: number
   private readonly heartbeatMs: number
   private readonly leaseTtlMs: number
+  private readonly streamSessions: boolean
+  private readonly onDiagnostic: (message: string) => void
   private attached = false
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined
   /** Set when a heartbeat reports the lease lapsed (§7.4): the store never
@@ -416,6 +443,8 @@ export class BuildRunner {
     this.maxPhaseAttempts = deps.opts?.maxPhaseAttempts ?? 2
     this.heartbeatMs = deps.opts?.heartbeatMs ?? 15_000
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? BUILD_EXECUTION_LEASE_TTL_MS
+    this.streamSessions = deps.opts?.streamSessions ?? true
+    this.onDiagnostic = deps.opts?.onDiagnostic ?? ((message) => console.error(message))
     this.boundaryConfig = deps.config
     this.boundaryResolver = createRuntimeResolver(
       deps.runtimes,
@@ -1163,6 +1192,21 @@ export class BuildRunner {
     for (let index = 0; index < targets.length; index += 1) {
       const target = targets[index]!
       const session = ids('s')
+      const finalizeBracket = {
+        phase: 'finalize' as const,
+        round: 1,
+        role: step,
+        runnerName: target.runtime,
+      }
+      const streamBracket = await this.openSessionStream(target, {
+        session,
+        role: step,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        phase: 'finalize',
+        round: 1,
+      })
+      const stream = streamBracket?.sink
       const started = await store.append(slug, {
         actor: KERNEL,
         type: 'session.started',
@@ -1174,6 +1218,7 @@ export class BuildRunner {
           args: [...target.args],
           phase: 'finalize',
           round: 1,
+          ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
           ...(substitution !== undefined
             ? { substitution: { failed: substitution, selectedIndex: index } }
             : {}),
@@ -1195,6 +1240,7 @@ export class BuildRunner {
             ...(target.args !== undefined ? { args: target.args } : {}),
             env: this.sessionEnvFor('finalize@1', session),
             signal,
+            ...(stream !== undefined ? { stream } : {}),
           }),
       )
       if (turn.settlement.kind === 'value') {
@@ -1211,9 +1257,12 @@ export class BuildRunner {
             target.runner,
             handle,
             session,
-            { phase: 'finalize', round: 1, role: step, runnerName: target.runtime },
+            finalizeBracket,
             target.model,
+            streamBracket,
           )
+        } else {
+          this.closeBracketStream(streamBracket, 'aborted')
         }
         return {
           actor: agentActor(step, session),
@@ -1224,23 +1273,29 @@ export class BuildRunner {
       if (handle !== undefined) {
         try {
           const transcript = await target.runner.end(handle)
+          const outcome: StreamOutcome =
+            turnError === undefined && result?.kind !== 'failed' ? 'completed' : 'aborted'
           await this.depositTranscriptAndEnd(
             session,
-            { phase: 'finalize', round: 1, role: step, runnerName: target.runtime },
+            finalizeBracket,
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? target.model,
+            streamBracket !== undefined ? { stream: streamBracket, outcome } : undefined,
           )
         } catch {
           // The failure-tolerant post-step still records its outcome below.
         }
       }
       if (turn.abortCause === 'operator') {
+        this.closeBracketStream(streamBracket, 'aborted')
         return { actor: agentActor(step, session), failureNote: undefined, cancelled: true }
       }
       if (turnError === undefined && result?.kind !== 'failed') {
+        this.closeBracketStream(streamBracket, 'completed')
         return { actor: agentActor(step, session), failureNote: undefined, cancelled: false }
       }
+      this.closeBracketStream(streamBracket, 'aborted')
       const failure: AgentTurnFailure =
         turnError !== undefined
           ? { message: errorMessage(turnError), permanent: false, cause: 'availability' }
@@ -1280,13 +1335,23 @@ export class BuildRunner {
   ): Promise<{ actor: Actor; failureNote: string | undefined; cancelled: boolean }> {
     const { store, slug, ids, workspacePath } = this.deps
     const session = ids('s')
-    const {
-      runner,
-      runtime: runnerName,
-      model,
-      args,
-      sessionBudgetSeconds,
-    } = this.boundaryResolver.resolve(step)
+    const resolved = this.boundaryResolver.resolve(step)
+    const { runner, runtime: runnerName, model, args, sessionBudgetSeconds } = resolved
+    const finalizeBracket = {
+      phase: 'finalize' as const,
+      round: 1,
+      role: step,
+      runnerName,
+    }
+    const streamBracket = await this.openSessionStream(resolved, {
+      session,
+      role: step,
+      runner: runnerName,
+      ...(model !== undefined ? { model } : {}),
+      phase: 'finalize',
+      round: 1,
+    })
+    const stream = streamBracket?.sink
 
     const started = await store.append(slug, {
       actor: KERNEL,
@@ -1299,6 +1364,7 @@ export class BuildRunner {
         args: [...args],
         phase: 'finalize',
         round: 1,
+        ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
       },
     } satisfies EventWrite<'session.started'>)
 
@@ -1314,6 +1380,7 @@ export class BuildRunner {
         ...(args !== undefined ? { args } : {}),
         env: this.sessionEnvFor('finalize@1', session),
         signal,
+        ...(stream !== undefined ? { stream } : {}),
       }),
     )
     if (turn.settlement.kind === 'value') {
@@ -1328,13 +1395,9 @@ export class BuildRunner {
     }
     if (turn.abortCause === 'budget') {
       if (handle !== undefined) {
-        this.releaseExpiredSession(
-          runner,
-          handle,
-          session,
-          { phase: 'finalize', round: 1, role: step, runnerName },
-          model,
-        )
+        this.releaseExpiredSession(runner, handle, session, finalizeBracket, model, streamBracket)
+      } else {
+        this.closeBracketStream(streamBracket, 'aborted')
       }
       return {
         actor: agentActor(step, session),
@@ -1348,15 +1411,25 @@ export class BuildRunner {
         const transcript = await runner.end(handle)
         await this.depositTranscriptAndEnd(
           session,
-          { phase: 'finalize', round: 1, role: step, runnerName },
+          finalizeBracket,
           transcript.content,
           transcript.metadata.usage,
           transcript.metadata.model ?? model,
+          streamBracket !== undefined
+            ? {
+                stream: streamBracket,
+                outcome: failureNote === undefined ? 'completed' : 'aborted',
+              }
+            : undefined,
         )
       } catch {
         // Best-effort: the step outcome below is still recorded.
       }
     }
+    this.closeBracketStream(
+      streamBracket,
+      failureNote === undefined && turn.abortCause !== 'operator' ? 'completed' : 'aborted',
+    )
 
     return {
       actor: agentActor(step, session),
@@ -1511,13 +1584,16 @@ export class BuildRunner {
 
   /** Start resource cleanup without allowing a stuck `end()` or transcript
    * deposit to extend an already-expired phase. Conforming adapters still end
-   * immediately; every cleanup/deposit failure remains best-effort. */
+   * immediately; every cleanup/deposit failure remains best-effort. The
+   * bracket's stream closes `aborted` (budget cancellation) before the
+   * deposit, preserving the close-before-`session.ended` ordering. */
   private releaseExpiredSession(
     runner: AgentRunner,
     handle: AgentSessionHandle,
     session: string,
     bracket: { phase: Phase; round: number; role: string; runnerName: string },
     model?: string,
+    stream?: SessionBracketStream,
   ): void {
     void (async () => {
       try {
@@ -1528,9 +1604,13 @@ export class BuildRunner {
           transcript.content,
           transcript.metadata.usage,
           transcript.metadata.model ?? model,
+          stream !== undefined ? { stream, outcome: 'aborted' } : undefined,
         )
       } catch {
         // The expiry failure must remain bounded even when cleanup is not.
+      } finally {
+        // Belt and braces: idempotent close covers a failed deposit path.
+        if (stream !== undefined) void stream.sink.close('aborted')
       }
     })()
   }
@@ -1603,6 +1683,17 @@ export class BuildRunner {
     for (let index = 0; index < targets.length; index += 1) {
       const target = targets[index]!
       const session = ids('s')
+      // SPEC §9: each chain target gets its own durable bracket and its own
+      // stream, opened before the bracket's first turn.
+      const streamBracket = await this.openSessionStream(target, {
+        session,
+        role: spec.role,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        phase: spec.phase,
+        round: spec.round,
+      })
+      const stream = streamBracket?.sink
       const startedEnvelope = await store.append(slug, {
         actor: KERNEL,
         type: 'session.started',
@@ -1614,6 +1705,7 @@ export class BuildRunner {
           args: [...target.args],
           phase: spec.phase,
           round: spec.round,
+          ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
           ...(substitution !== undefined
             ? { substitution: { failed: substitution, selectedIndex: index } }
             : {}),
@@ -1631,6 +1723,7 @@ export class BuildRunner {
               .continue(live.handle, continueMessage(spec), {
                 env: this.sessionEnvFor(spec.abPhase, session),
                 signal,
+                ...(stream !== undefined ? { stream } : {}),
               })
               .then((continued) => ({ session: live.handle, result: continued }))
           : target.runner.start({
@@ -1642,6 +1735,7 @@ export class BuildRunner {
               ...(target.args !== undefined ? { args: target.args } : {}),
               env: this.sessionEnvFor(spec.abPhase, session),
               signal,
+              ...(stream !== undefined ? { stream } : {}),
             }),
       )
       if (turn.settlement.kind === 'value') {
@@ -1684,11 +1778,15 @@ export class BuildRunner {
               transcript.content,
               transcript.metadata.usage,
               transcript.metadata.model ?? target.model,
+              streamBracket !== undefined
+                ? { stream: streamBracket, outcome: 'aborted' }
+                : undefined,
             )
           } catch {
             // Cancellation remains a control boundary, never phase failure.
           }
         }
+        this.closeBracketStream(streamBracket, 'aborted')
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         return
       }
@@ -1697,7 +1795,9 @@ export class BuildRunner {
       // when the adapter has not yet returned its handle/result.
       if (terminal && turn.abortCause === 'budget') {
         if (handle !== undefined) {
-          this.releaseExpiredSession(owner, handle, session, bracket, target.model)
+          this.releaseExpiredSession(owner, handle, session, bracket, target.model, streamBracket)
+        } else {
+          this.closeBracketStream(streamBracket, 'aborted')
         }
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         return
@@ -1721,7 +1821,16 @@ export class BuildRunner {
             null,
             2,
           )
-          await this.depositTranscriptAndEnd(session, bracket, content, result.usage, target.model)
+          await this.depositTranscriptAndEnd(
+            session,
+            bracket,
+            content,
+            result.usage,
+            target.model,
+            streamBracket !== undefined
+              ? { stream: streamBracket, outcome: 'completed' }
+              : undefined,
+          )
         } else {
           // An alternate producer must not become sticky across the review
           // boundary. End it like any fresh session; the next round begins on
@@ -1733,6 +1842,9 @@ export class BuildRunner {
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? target.model,
+            streamBracket !== undefined
+              ? { stream: streamBracket, outcome: 'completed' }
+              : undefined,
           )
           if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         }
@@ -1749,19 +1861,25 @@ export class BuildRunner {
               transcript.content,
               transcript.metadata.usage,
               transcript.metadata.model ?? target.model,
+              streamBracket !== undefined
+                ? { stream: streamBracket, outcome: 'completed' }
+                : undefined,
             )
           } catch {
             // The durable terminal remains authoritative over adapter failure
             // and best-effort transcript cleanup.
           }
         }
+        this.closeBracketStream(streamBracket, 'completed')
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         return
       }
 
       if (turn.abortCause === 'budget') {
         if (handle !== undefined) {
-          this.releaseExpiredSession(owner, handle, session, bracket, target.model)
+          this.releaseExpiredSession(owner, handle, session, bracket, target.model, streamBracket)
+        } else {
+          this.closeBracketStream(streamBracket, 'aborted')
         }
         if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
         await this.failPhase(
@@ -1783,11 +1901,13 @@ export class BuildRunner {
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? target.model,
+            streamBracket !== undefined ? { stream: streamBracket, outcome: 'aborted' } : undefined,
           )
         } catch {
           // A dead provider may leave no recoverable transcript.
         }
       }
+      this.closeBracketStream(streamBracket, 'aborted')
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
 
       const failure: AgentTurnFailure =
@@ -1834,14 +1954,19 @@ export class BuildRunner {
     // `session.started.role` records the LOGICAL name the pipeline dispatched
     // in every case, including when a deprecated alias answered the lookup —
     // the runtime/model on the same payload say what was resolved.
-    const {
-      runner,
-      runtime: runnerName,
-      model,
-      args,
-      sessionBudgetSeconds,
-    } = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    const resolved = this.boundaryResolver.resolve(spec.role, ...(spec.roleAliases ?? []))
+    const { runner, runtime: runnerName, model, args, sessionBudgetSeconds } = resolved
     const route = JSON.stringify({ runtime: runnerName, model, args })
+    // SPEC §9: the stream opens before the bracket's first turn — its id is
+    // already known when `session.started` appends.
+    const streamBracket = await this.openSessionStream(resolved, {
+      session,
+      role: spec.role,
+      runner: runnerName,
+      ...(model !== undefined ? { model } : {}),
+      phase: spec.phase,
+      round: spec.round,
+    })
     let live =
       spec.producerPhase !== undefined ? this.producerSessions.get(spec.producerPhase) : undefined
     if (live !== undefined && (live.runner !== runner || live.route !== route)) {
@@ -1868,9 +1993,11 @@ export class BuildRunner {
         args: [...args],
         phase: spec.phase,
         round: spec.round,
+        ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
       },
     } satisfies EventWrite<'session.started'>)
     const preSeq = startedEnvelope.seq
+    const stream = streamBracket?.sink
 
     let handle: AgentSessionHandle | undefined = live?.handle
     let result: AgentTurnResult | undefined
@@ -1887,6 +2014,7 @@ export class BuildRunner {
           .continue(live.handle, continueMessage(spec), {
             env: this.sessionEnvFor(spec.abPhase, session),
             signal,
+            ...(stream !== undefined ? { stream } : {}),
           })
           .then((continued) => ({ session: live.handle, result: continued }))
       }
@@ -1899,6 +2027,7 @@ export class BuildRunner {
         ...(args !== undefined ? { args } : {}),
         env: this.sessionEnvFor(spec.abPhase, session),
         signal,
+        ...(stream !== undefined ? { stream } : {}),
       })
     })
     if (turn.settlement.kind === 'value') {
@@ -1950,12 +2079,14 @@ export class BuildRunner {
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? model,
+            streamBracket !== undefined ? { stream: streamBracket, outcome: 'aborted' } : undefined,
           )
         } catch {
           // A provider that died before yielding an endable handle leaves the
           // open session for stale-runner recovery, but never a phase failure.
         }
       }
+      this.closeBracketStream(streamBracket, 'aborted')
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
       return
     }
@@ -1965,7 +2096,9 @@ export class BuildRunner {
     if (terminal && turn.abortCause === 'budget') {
       if (handle !== undefined) {
         const owner = live?.runner ?? runner
-        this.releaseExpiredSession(owner, handle, session, bracket, model)
+        this.releaseExpiredSession(owner, handle, session, bracket, model, streamBracket)
+      } else {
+        this.closeBracketStream(streamBracket, 'aborted')
       }
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
       return
@@ -1992,7 +2125,14 @@ export class BuildRunner {
           null,
           2,
         )
-        await this.depositTranscriptAndEnd(session, bracket, content, result.usage, model)
+        await this.depositTranscriptAndEnd(
+          session,
+          bracket,
+          content,
+          result.usage,
+          model,
+          streamBracket !== undefined ? { stream: streamBracket, outcome: 'completed' } : undefined,
+        )
       } else {
         // Reviewer / agent-verify: single-run session, real transcript.
         const transcript = await runner.end(handle)
@@ -2002,6 +2142,7 @@ export class BuildRunner {
           transcript.content,
           transcript.metadata.usage,
           transcript.metadata.model ?? model,
+          streamBracket !== undefined ? { stream: streamBracket, outcome: 'completed' } : undefined,
         )
       }
       return
@@ -2018,12 +2159,16 @@ export class BuildRunner {
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? model,
+            streamBracket !== undefined
+              ? { stream: streamBracket, outcome: 'completed' }
+              : undefined,
           )
         } catch {
           // The durable terminal remains authoritative over adapter failure
           // and best-effort transcript cleanup.
         }
       }
+      this.closeBracketStream(streamBracket, 'completed')
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
       return
     }
@@ -2031,7 +2176,9 @@ export class BuildRunner {
     if (turn.abortCause === 'budget') {
       if (handle !== undefined) {
         const owner = live?.runner ?? runner
-        this.releaseExpiredSession(owner, handle, session, bracket, model)
+        this.releaseExpiredSession(owner, handle, session, bracket, model, streamBracket)
+      } else {
+        this.closeBracketStream(streamBracket, 'aborted')
       }
       if (spec.producerPhase !== undefined) this.producerSessions.delete(spec.producerPhase)
       await this.failPhase(
@@ -2059,12 +2206,14 @@ export class BuildRunner {
           transcript.content,
           transcript.metadata.usage,
           transcript.metadata.model ?? model,
+          streamBracket !== undefined ? { stream: streamBracket, outcome: 'aborted' } : undefined,
         )
       } catch {
         // Transcript deposition can still fail. A later recovering runner
         // explicitly reclaims this open session before announcing attachment.
       }
     }
+    this.closeBracketStream(streamBracket, 'aborted')
     if (spec.producerPhase !== undefined) {
       this.producerSessions.delete(spec.producerPhase)
     }
@@ -2088,15 +2237,23 @@ export class BuildRunner {
 
   /** Transcript artifact + `session.ended` in one atomic bundle (D6). The
    * metadata IS the analysis corpus (§7.1): phase, round, role, runner,
-   * model, session, usage. */
+   * model, session, usage. When the bracket carried a stream, it closes
+   * here — before the `session.ended` append lands — so a reader never sees
+   * a closed session with an open stream. */
   private async depositTranscriptAndEnd(
     session: string,
     bracket: { phase: Phase; round: number; role: string; runnerName: string },
     content: string,
     usage: { inputTokens: number; outputTokens: number; turns: number },
     model?: string,
+    close?: { stream: SessionBracketStream; outcome: StreamOutcome },
   ): Promise<void> {
     const { store, slug } = this.deps
+    if (close !== undefined) {
+      // Close must land no later than `session.ended`; this makes the
+      // ordering structural rather than call-site discipline.
+      await close.stream.sink.close(close.outcome)
+    }
     await store.appendWithArtifacts(
       slug,
       [
@@ -2166,7 +2323,50 @@ export class BuildRunner {
     } satisfies EventWrite<'escalation.raised'>)
   }
 
-  // ── Small helpers ──────────────────────────────────────────────────────────
+  // ── Session streams (SPEC §9) ────────────────────────────────────────────
+
+  /**
+   * Open one stream for this session bracket through the resolved target's
+   * streaming capability: create the store-backed sink, call the capability,
+   * and — once it returns an id — emit the bracket's `data-ab-session` part.
+   * Returns undefined (and reports once) when streaming is disabled, the
+   * runtime declared no capability, or the opener declined/failed; the
+   * bracket then proceeds exactly as without streams.
+   */
+  private async openSessionStream(
+    target: ResolvedRuntime,
+    info: SessionStreamInfo,
+  ): Promise<SessionBracketStream | undefined> {
+    if (!this.streamSessions) return undefined
+    const open = target.openSessionStream
+    if (open === undefined) return undefined
+    const sink = createSessionStreamSink({
+      store: this.deps.store,
+      scope: { kind: 'build', build: this.deps.slug },
+      onDiagnostic: this.onDiagnostic,
+    })
+    try {
+      const streamId = await open(sink, info)
+      if (streamId === undefined) return undefined
+      sink.append([sessionPart(info)])
+      return { sink, streamId, info }
+    } catch (error) {
+      this.onDiagnostic(
+        `session stream for "${info.session}" failed to open: ${errorMessage(error)}`,
+      )
+      return undefined
+    }
+  }
+
+  /** Best-effort belt-and-braces close; idempotency makes repeated calls
+   * harmless and lets the deposit path own the close-then-append ordering. */
+  private closeBracketStream(
+    stream: SessionBracketStream | undefined,
+    outcome: StreamOutcome,
+  ): void {
+    if (stream === undefined) return
+    void stream.sink.close(outcome)
+  }
 
   /** D8 ambient auth: sessionEnv may override AB_STORE (remote stores) and
    * add AB_TOKEN, but never the per-session identity keys. */
