@@ -810,8 +810,8 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
-    if (scope.kind === 'build') this.state(scope.build)
-    else this.repoState(scope.repo)
+    // A list of nothing is nothing: an unknown scope lists empty (only
+    // createStream requires the scope's resource to exist).
     const records = [...this.streams.values()]
       .filter(
         (state) =>

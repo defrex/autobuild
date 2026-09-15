@@ -280,6 +280,57 @@ describe('local Harvest-session scope', () => {
     expect(await underlying.listRepoArtifacts(REPO, 'harvest-proposals')).toEqual([])
     await store.close()
   })
+
+  test('streams follow the exact-resource guard without a session gate (parts carry no actor)', async () => {
+    const underlying = await seeded()
+    const build = scopeLocalStoreToSession(underlying, {
+      kind: 'build',
+      id: BUILD,
+      session: SESSION,
+    })
+    const repo = scopeLocalStoreToSession(underlying, {
+      kind: 'repo',
+      id: REPO,
+      session: SESSION,
+    })
+
+    // Own-scope lifecycle works; no actor is involved, so the session
+    // dimension never gates stream operations.
+    const own = await build.createStream({ kind: 'build', build: BUILD }, 'turn')
+    await build.appendStreamParts(own.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+    expect((await build.readStream(own.id)).chunks).toHaveLength(1)
+    expect((await build.listStreams({ kind: 'build', build: BUILD })).map((r) => r.id)).toEqual([
+      own.id,
+    ])
+    expect(await build.getStream(own.id)).toEqual(own)
+    const closed = await build.closeStream(own.id, 'completed')
+    expect(closed.status).toBe('closed')
+
+    const repoStream = await repo.createStream({ kind: 'repo', repo: REPO }, 'harvest stream')
+    await repo.appendStreamParts(repoStream.id, [{ type: 'start', messageId: 'm' }])
+    expect((await repo.readStream(repoStream.id)).chunks).toHaveLength(1)
+    await repo.closeStream(repoStream.id, 'aborted')
+
+    // Cross-resource addressing rejects on every operation.
+    const foreign = await underlying.createStream({ kind: 'build', build: OTHER_BUILD }, 'not mine')
+    for (const call of [
+      () => build.createStream({ kind: 'build', build: OTHER_BUILD }, 'x'),
+      () => build.createStream({ kind: 'repo', repo: REPO }, 'x'),
+      () => build.appendStreamParts(foreign.id, [{ type: 'text-delta', id: 't', delta: 'x' }]),
+      () => build.readStream(foreign.id),
+      () => build.closeStream(foreign.id, 'completed'),
+      () => build.getStream(foreign.id),
+      () => build.listStreams({ kind: 'build', build: OTHER_BUILD }),
+      () => repo.appendStreamParts(own.id, [{ type: 'text-delta', id: 't', delta: 'x' }]),
+      () => repo.readStream(own.id),
+      () => repo.closeStream(own.id, 'completed'),
+      () => repo.getStream(own.id),
+      () => repo.listStreams({ kind: 'repo', repo: OTHER_REPO }),
+    ]) {
+      await authorityError(call)
+    }
+    await build.close()
+  })
 })
 
 // Compile-time assertion: the wrapper retains the complete Store surface used
