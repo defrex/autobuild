@@ -33,6 +33,7 @@ import {
   revisionsToPrune,
 } from './retention'
 import { pollingSubscribe } from './subscribe'
+import { StreamLocks } from './streams/lock'
 import { assembleUIMessageDocument } from './streams/assemble'
 import { readEventsWithWait, readStreamWithWait } from './streams/wait'
 import {
@@ -141,6 +142,9 @@ export class MemoryBuildStore implements BuildStore {
   private readonly builds = new Map<string, BuildState>()
   private readonly repos = new Map<string, RepoState>()
   private readonly streams = new Map<string, StreamState>()
+  /** Per-stream in-process mutex (store/streams/lock.ts): serializes a
+   * stream's close against its appends inside this process (AUT-348). */
+  private readonly streamLocks = new StreamLocks()
   private readonly sessions = new Map<string, SessionState>()
   private readonly clock: Clock
   private readonly maxRevisions: number
@@ -931,20 +935,27 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
-    const state = this.streamState(streamId)
-    if (state.record.status === 'closed') throw new StreamClosedError(streamId)
-    // Validate and size-check before any mutation.
+    // Validate and size-check before taking the per-stream lock, so invalid
+    // input keeps its current error precedence (AUT-348).
     validateStreamParts(parts)
     const bytes = serializedBatchSize(parts)
     if (bytes > STREAM_BATCH_MAX_BYTES) throw new StreamBatchTooLargeError(bytes)
-    const chunk: StreamChunk = {
-      stream: streamId,
-      seq: state.chunks.length + 1,
-      ts: this.now(),
-      parts: structuredClone(parts),
-    }
-    state.chunks.push(chunk)
-    return structuredClone(chunk)
+    // The per-stream lock covers the closed check and the mutation as one
+    // critical section: an append issued during a close waits for the close
+    // to commit, then fails the status check with an explicit
+    // StreamClosedError instead of being silently omitted from the artifact.
+    return this.streamLocks.run(streamId, () => {
+      const state = this.streamState(streamId)
+      if (state.record.status === 'closed') throw new StreamClosedError(streamId)
+      const chunk: StreamChunk = {
+        stream: streamId,
+        seq: state.chunks.length + 1,
+        ts: this.now(),
+        parts: structuredClone(parts),
+      }
+      state.chunks.push(chunk)
+      return structuredClone(chunk)
+    })
   }
 
   async readStream(
@@ -965,83 +976,89 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
-    const state = this.streamState(streamId)
-    if (state.record.status === 'closed') return this.snapshotStream(state)
-    // Prepare phase — assemble and store the blob before touching stream
-    // state (mirrors appendWithArtifacts: content-addressed orphans are
-    // harmless; a deposit failure leaves the stream open and unwritten).
-    const { document, droppedPartCount } = await assembleUIMessageDocument(
-      structuredClone(state.chunks.flatMap((chunk) => chunk.parts)),
-    )
-    const ts = this.now()
-    const record = structuredClone(state.record)
-    const input = streamArtifactInput(
-      record.id,
-      record.scope,
-      record.label,
-      outcome,
-      document,
-      state.chunks.length,
-      droppedPartCount,
-    )
-    const bytes = toBytes(input.content)
-    const blobRef = contentHash(bytes)
-    await this.blobs.put(blobRef, bytes)
-    // Commit phase — fully synchronous (no await), so no interleaved writer
-    // can slip between the artifact deposit and the close landing. A close
-    // that raced us through the prepare phase wins; ours is the no-op.
-    const closed: StreamRecord = {
-      ...record,
-      status: 'closed',
-      closedAt: ts,
-      outcome,
-      artifact: { kind: input.kind, revision: 0, blobRef },
-    }
-    // A close that raced us through the prepare phase wins; ours is the no-op.
-    const fresh = this.streams.get(streamId)
-    if (fresh && fresh.record.status === 'closed') return this.snapshotStream(fresh)
-    state.record = closed
-    if (record.scope.kind === 'build') {
-      const meta: ArtifactMeta = {
-        build: record.scope.build,
-        kind: input.kind,
-        revision: 0,
-        blobRef,
-        metadata: structuredClone(input.metadata),
-        createdAt: ts,
+    // The per-stream lock covers prepare and commit as one critical section
+    // (AUT-348): the commit is synchronous, so with the lock held, no in-
+    // process append can land inside the prepare window — one that waits
+    // instead rejects on the closed check below.
+    return this.streamLocks.run(streamId, async () => {
+      const state = this.streamState(streamId)
+      if (state.record.status === 'closed') return this.snapshotStream(state)
+      // Prepare phase — assemble and store the blob before touching stream
+      // state (mirrors appendWithArtifacts: content-addressed orphans are
+      // harmless; a deposit failure leaves the stream open and unwritten).
+      const { document, droppedPartCount } = await assembleUIMessageDocument(
+        structuredClone(state.chunks.flatMap((chunk) => chunk.parts)),
+      )
+      const ts = this.now()
+      const record = structuredClone(state.record)
+      const input = streamArtifactInput(
+        record.id,
+        record.scope,
+        record.label,
+        outcome,
+        document,
+        state.chunks.length,
+        droppedPartCount,
+      )
+      const bytes = toBytes(input.content)
+      const blobRef = contentHash(bytes)
+      await this.blobs.put(blobRef, bytes)
+      // Commit phase — fully synchronous (no await), so no interleaved writer
+      // can slip between the artifact deposit and the close landing. A close
+      // that raced us through the prepare phase wins; ours is the no-op.
+      const closed: StreamRecord = {
+        ...record,
+        status: 'closed',
+        closedAt: ts,
+        outcome,
+        artifact: { kind: input.kind, revision: 0, blobRef },
       }
-      const buildState = this.state(record.scope.build)
-      const revs = buildState.artifacts.get(input.kind) ?? []
-      revs.push(meta)
-      buildState.artifacts.set(input.kind, revs)
-    } else if (record.scope.kind === 'repo') {
-      const repoMeta: RepositoryArtifactMeta = {
-        repo: record.scope.repo,
-        kind: input.kind,
-        revision: 0,
-        blobRef,
-        metadata: structuredClone(input.metadata),
-        createdAt: ts,
+      // A close that raced us through the prepare phase wins; ours is the no-op.
+      const fresh = this.streams.get(streamId)
+      if (fresh && fresh.record.status === 'closed') return this.snapshotStream(fresh)
+      state.record = closed
+      if (record.scope.kind === 'build') {
+        const meta: ArtifactMeta = {
+          build: record.scope.build,
+          kind: input.kind,
+          revision: 0,
+          blobRef,
+          metadata: structuredClone(input.metadata),
+          createdAt: ts,
+        }
+        const buildState = this.state(record.scope.build)
+        const revs = buildState.artifacts.get(input.kind) ?? []
+        revs.push(meta)
+        buildState.artifacts.set(input.kind, revs)
+      } else if (record.scope.kind === 'repo') {
+        const repoMeta: RepositoryArtifactMeta = {
+          repo: record.scope.repo,
+          kind: input.kind,
+          revision: 0,
+          blobRef,
+          metadata: structuredClone(input.metadata),
+          createdAt: ts,
+        }
+        const repoState = this.repoState(record.scope.repo)
+        const revs = repoState.artifacts.get(input.kind) ?? []
+        revs.push(repoMeta)
+        repoState.artifacts.set(input.kind, revs)
+      } else {
+        const sessionMeta: SessionArtifactMeta = {
+          session: record.scope.session,
+          kind: input.kind,
+          revision: 0,
+          blobRef,
+          metadata: structuredClone(input.metadata),
+          createdAt: ts,
+        }
+        const sessionState = this.sessionState(record.scope.session)
+        const revs = sessionState.artifacts.get(input.kind) ?? []
+        revs.push(sessionMeta)
+        sessionState.artifacts.set(input.kind, revs)
       }
-      const repoState = this.repoState(record.scope.repo)
-      const revs = repoState.artifacts.get(input.kind) ?? []
-      revs.push(repoMeta)
-      repoState.artifacts.set(input.kind, revs)
-    } else {
-      const sessionMeta: SessionArtifactMeta = {
-        session: record.scope.session,
-        kind: input.kind,
-        revision: 0,
-        blobRef,
-        metadata: structuredClone(input.metadata),
-        createdAt: ts,
-      }
-      const sessionState = this.sessionState(record.scope.session)
-      const revs = sessionState.artifacts.get(input.kind) ?? []
-      revs.push(sessionMeta)
-      sessionState.artifacts.set(input.kind, revs)
-    }
-    return this.snapshotStream(state)
+      return this.snapshotStream(state)
+    })
   }
 
   async getStream(streamId: string): Promise<StreamRecord | null> {
