@@ -78,3 +78,21 @@ export const operatorErrorSchema = z.strictObject({
   progress: z.unknown().optional(),
 })
 export type OperatorErrorBody = z.infer<typeof operatorErrorSchema>
+
+export const sessionCreateRequestSchema = z.strictObject({ title: z.string().min(1).optional() })
+export type OperatorSessionCreateRequest = z.infer<typeof sessionCreateRequestSchema>
+
+export const sessionMessageRequestSchema = z.strictObject({ text: z.string().trim().min(1) })
+export type OperatorSessionMessageRequest = z.infer<typeof sessionMessageRequestSchema>
+
+export const sessionWakeRequestSchema = z.strictObject({
+  globs: z.array(z.string().min(1)).max(100),
+})
+export type OperatorSessionWakeRequest = z.infer<typeof sessionWakeRequestSchema>
+
+export const sessionApprovalRequestSchema = z.strictObject({
+  turn: z.string().min(1),
+  toolCallId: z.string().min(1),
+  decision: z.enum(['approve', 'deny']),
+})
+export type OperatorSessionApprovalRequest = z.infer<typeof sessionApprovalRequestSchema>
