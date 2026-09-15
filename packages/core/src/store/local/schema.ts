@@ -86,6 +86,10 @@ export const sessions = sqliteTable('sessions', {
   repo: text('repo').notNull(),
   operator: text('operator').notNull(),
   title: text('title'),
+  /** Store-assigned monotonic creation sequence (assigned in-transaction at
+   * `createSession`, never reused — sessions are never deleted). The
+   * `listSessions` same-timestamp tiebreak; not part of `SessionRecord`. */
+  creationSeq: integer('creation_seq').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 })
