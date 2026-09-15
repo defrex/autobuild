@@ -399,7 +399,7 @@ identity is already the actor.
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
 | `createSession` | `POST /repos/{repo}/sessions` | `{"repo": string, "operator": string, "title"?: string}`; the body `repo` must equal the path repository | `201` + `SessionRecord` |
-| `listSessions` | `GET /repos/{repo}/sessions` | none | `200` + `SessionRecord[]`, insertion order |
+| `listSessions` | `GET /repos/{repo}/sessions` | none | `200` + `SessionRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getSession` | `GET /sessions/{id}` | none | `200` + `SessionRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendSessionEvent` | `POST /sessions/{id}/events` | event write | `201` + session event envelope (same envelope shape with `"session"` in place of `"build"`) |
 | `getSessionEvents` | `GET /sessions/{id}/events?since={n}&wait={n}` | optional `since` (default `0`) and `wait` (whole seconds) query values, parsed exactly like the stream read's | `200` + session event envelopes with `seq >` parsed `since`, in increasing sequence order |
