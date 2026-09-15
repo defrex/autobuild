@@ -150,8 +150,11 @@ if (testUrl) {
         // Create a real v2 database: v2 DDL, v2 marker, plus a build and a
         // closed build-scoped stream written before sessions existed.
         await sql.unsafe(SCHEMA_V2_DDL)
+        // The genuine v2 marker is version 2 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v2 checksum under any other
+        // version is (correctly) rejected as incompatible.
         await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V2_CHECKSUM}, ${new Date().toISOString()})`
+          (true, 2, ${SCHEMA_V2_CHECKSUM}, ${new Date().toISOString()})`
         await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
           VALUES ('v2-build', 'acme/v2', ${CONTRACT_T0}, ${CONTRACT_T0})`
         await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
