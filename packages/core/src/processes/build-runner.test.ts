@@ -5055,3 +5055,82 @@ describe('session streams: capability boundary and failure containment', () => {
     expect(ended.length).toBe(7)
   })
 })
+
+describe('session streams: close outcomes per exit path', () => {
+  test('a budget-expired bracket closes its stream aborted', async () => {
+    const timers = new ManualSessionBudgetScheduler()
+    const stuck: AgentRunner = {
+      name: 'stuck',
+      start: () => new Promise<{ session: AgentSessionHandle; result: AgentTurnResult }>(() => {}),
+      continue: () => new Promise<AgentTurnResult>(() => {}),
+      end: async () => ({
+        content: '',
+        metadata: { runner: 'stuck', usage: { inputTokens: 0, outputTokens: 0, turns: 0 } },
+      }),
+    }
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
+      runtimeRunner: stuck,
+      runnerOpts: { maxPhaseAttempts: 2, scheduleSessionBudget: timers.schedule },
+    })
+
+    const run = h.br.run()
+    await timers.expireNext()
+    await timers.expireNext()
+    expect((await run).status).toBe('blocked')
+
+    // Both expired brackets' streams closed aborted (best-effort background
+    // release; poll for the writer's cadence).
+    const deadline = Date.now() + 2_000
+    let streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    while (streams.length < 2 && Date.now() < deadline) {
+      await Bun.sleep(25)
+      streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    }
+    expect(streams).toHaveLength(2)
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('aborted')
+    }
+  })
+
+  test('an operator-aborted bracket that settles keeps its transcript deposit and closes aborted', async () => {
+    const h = await makeHarness({
+      registrationExtras: {
+        openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+      },
+      handlers: (store) => ({
+        ...happyHandlers(store),
+        plan: async (ctx) => {
+          await store.append(SLUG, {
+            actor: humanActor('aron'),
+            type: 'build.abort-requested',
+            payload: { reason: 'stop work' },
+          })
+          // The turn observes its cancellation signal — as a conforming
+          // adapter does — and returns the failed result.
+          await new Promise((resolve) => {
+            if (ctx.opts.signal?.aborted) resolve(undefined)
+            else {
+              ctx.opts.signal?.addEventListener('abort', () => resolve(undefined), { once: true })
+            }
+          })
+          return failedTurnResult('turn aborted by caller', false)
+        },
+      }),
+    })
+    // The plan turn sees the abort via its signal and returns; the bracket
+    // closes aborted with its transcript still deposited.
+    const state = await h.br.run()
+    expect(state.status).toBe('aborted')
+
+    const streams = await h.store.listStreams({ kind: 'build', build: SLUG })
+    expect(streams).toHaveLength(1)
+    expect(streams[0]!.outcome).toBe('aborted')
+    // The transcript was still deposited.
+    const ended = ofType(await h.store.getEvents(SLUG), 'session.ended')
+    expect(ended).toHaveLength(1)
+  })
+})
