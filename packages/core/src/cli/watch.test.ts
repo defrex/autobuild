@@ -6,7 +6,7 @@
  * terminal, signal) is driven deterministically through those seams.
  */
 import { describe, expect, test } from 'bun:test'
-import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { EVENT_TYPES } from '../events/payloads'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -398,6 +398,61 @@ describe('watch cursor resume', () => {
     const third = harness(store, { signal: alreadyAborted() })
     await abWatch({ ...third.base, slugs: ['b1'], since: cursor2 })
     expect(third.out.slice(0, -1)).toEqual([])
+  })
+
+  test('a resumed backlog record carries the reduction after ITS event, not the final state', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+
+    // A gap holding several matching backlog events: the first record's state
+    // must not be the reduction of the events that landed after it.
+    await appendEscalation(store, 'b1') // seq 2 — attention
+    await store.append('b1', {
+      actor: humanActor('op'),
+      type: 'escalation.answered',
+      payload: { id: 'esc_1', answer: 'use sqlite', resolution: 'guidance' },
+    }) // seq 3 — outside the attention set
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    }) // seq 4 — attention
+
+    const cursor = encodeCursor({
+      v: 1,
+      store: `${REPO}/.autobuild`,
+      repo: REPO,
+      streams: { b1: 1 },
+    })
+    const h = harness(store, { signal: alreadyAborted() })
+    await abWatch({ ...h.base, slugs: ['b1'], since: cursor })
+    const records = h.out.slice(0, -1).map(
+      (line) =>
+        JSON.parse(line) as {
+          event: { type: string; seq: number }
+          state: {
+            status: string
+            openEscalations: { id: string; question: string }[]
+            outcome: string | null
+          }
+        },
+    )
+
+    expect(records.map((record) => record.event.seq)).toEqual([2, 4])
+    // The escalation.raised record is the state as of seq 2 — blocked, with
+    // the escalation still open and no outcome — not the state leaked from
+    // the answered escalation and the completion that followed it.
+    expect(records[0]!.state).toEqual(
+      expect.objectContaining({
+        status: 'blocked',
+        openEscalations: [{ id: 'esc_1', question: ESCALATION.question }],
+        outcome: null,
+      }),
+    )
+    // The build.completed record is the reduction after it.
+    expect(records[1]!.state).toEqual(
+      expect.objectContaining({ status: 'done', openEscalations: [], outcome: 'merged' }),
+    )
   })
 
   test('a count-tripped cursor never skips events read in the same tick', async () => {

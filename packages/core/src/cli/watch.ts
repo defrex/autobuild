@@ -539,13 +539,17 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
       }
 
-      /** The event must already be appended to `stream.events` (the full
-       * prefix): the record's state is the reduction after it. */
-      const processBuildEvent = (stream: BuildStream, event: AbEvent): void => {
+      /** Record one event. `prefix` is the event prefix ENDING at `event` —
+       * the record's state is the reduction after THIS event, never a
+       * reduction over events that landed after it. The poll path passes the
+       * stream's just-extended array; the resume path replays the backlog
+       * into a scratch prefix so a resumed record never leaks state from
+       * events that landed after it. */
+      const processBuildEvent = (stream: BuildStream, event: AbEvent, prefix: AbEvent[]): void => {
         stream.lastSeq = event.seq
         positions[stream.slug] = event.seq
         if (!matchesBuildFilter(event.type, filters)) return
-        emit(event, reduceBuild(stream.events))
+        emit(event, reduceBuild(prefix))
       }
 
       const processRepositoryEvent = (stream: RepositoryStream, event: RepositoryEvent): void => {
@@ -578,9 +582,15 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         positions[slug] = stream.lastSeq
         if (resumeSeq === undefined) return true
         stream.lastSeq = resumeSeq
+        // Replay the backlog into a scratch prefix: each record's state is
+        // the reduction of the prefix ENDING at that event, never the
+        // reduction of the full loaded prefix, which would leak state from
+        // events that landed after the one being recorded.
+        const replay: AbEvent[] = events.filter((event) => event.seq <= resumeSeq)
         for (const event of events) {
           if (event.seq <= resumeSeq) continue
-          processBuildEvent(stream, event)
+          replay.push(event)
+          processBuildEvent(stream, event, replay)
           if (stop) break
         }
         return true
@@ -637,7 +647,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         const fresh = await store.getEvents(stream.slug, stream.lastSeq)
         for (const event of fresh) {
           stream.events.push(event)
-          processBuildEvent(stream, event)
+          processBuildEvent(stream, event, stream.events)
           if (stop) break
         }
         if (fresh.length > 0 && !stop) {
