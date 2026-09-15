@@ -8,7 +8,7 @@
  */
 import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
-import { scopeLocalStoreToSession } from '../store/session-scope'
+import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
 import {
   resolveAmbientReadSession,
@@ -42,13 +42,13 @@ export const openProductionStore: StoreOpener = (ref, token) => {
  * handles retain token-backed server authorization; filesystem handles receive
  * the equivalent in-process scope. Keeping this primitive shared prevents
  * phase commands and ambient-aware query commands from drifting. */
-function scopeSelectedStoreToSession(
+function scopeSelectedStoreToPhaseSession(
   store: BuildStore,
   ref: string,
   env: AmbientReadSession,
 ): BuildStore {
   if (isRemoteStoreRef(ref)) return store
-  return scopeLocalStoreToSession(
+  return scopeLocalStoreToPhaseSession(
     store,
     'build' in env
       ? { kind: 'build', id: env.build, session: env.session }
@@ -58,7 +58,7 @@ function scopeSelectedStoreToSession(
 
 /** Open the Store for a validated phase/Harvest ambient identity. */
 export function openProductionSessionStore(env: CliEnv | HarvestCliEnv): BuildStore {
-  return scopeSelectedStoreToSession(openProductionStore(env.store, env.token), env.store, env)
+  return scopeSelectedStoreToPhaseSession(openProductionStore(env.store, env.token), env.store, env)
 }
 
 export interface OpenedStoreContext extends RepoStatePaths {
@@ -150,7 +150,7 @@ export async function openAmbientReadStore(
   return {
     ...context,
     ambient,
-    store: scopeSelectedStoreToSession(context.store, state.storeRef, ambient),
+    store: scopeSelectedStoreToPhaseSession(context.store, state.storeRef, ambient),
   }
 }
 
