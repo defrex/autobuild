@@ -593,6 +593,13 @@ document — dropping parts of undefined types while counting them — and
 deposits that document as an artifact (`stream:<streamId>`, revision 0) on the
 owning scope in the same atomic operation that marks the stream closed. A
 stream that dies mid-turn stays open and readable, so its output survives.
+
+Close serializes against append, per stream: an append issued while a stream
+is being closed — or after it has closed — either lands in the finalized
+artifact or is rejected with `StreamClosedError`; an accepted append is never
+silently omitted from the artifact the close deposits. Appends to other
+streams are unaffected.
+
 Chunk retention is deposit-path and count-based, like artifact retention: at
 the next stream create in a scope, every previously closed stream's chunks
 except the most recently closed are deleted; finalized artifacts are never
