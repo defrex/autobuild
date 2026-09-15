@@ -8,6 +8,8 @@ import {
   SCHEMA_CHECKSUM,
   SCHEMA_V1_CHECKSUM,
   SCHEMA_V1_DDL,
+  SCHEMA_V2_CHECKSUM,
+  SCHEMA_V2_DDL,
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
@@ -90,7 +92,7 @@ if (testUrl) {
         // event, and an artifact written before streams existed.
         await sql.unsafe(SCHEMA_V1_DDL)
         await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
+          (true, 1, ${SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
         await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
           VALUES ('v1-build', 'acme/v1', ${CONTRACT_T0}, ${CONTRACT_T0})`
         await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
@@ -127,6 +129,68 @@ if (testUrl) {
           expect(read.chunks).toHaveLength(1)
           expect(read.status).toBe('closed')
           expect(read.outcome).toBe('completed')
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v2 database in place: session tables, the streams.session column, and widened CHECKs, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v2 database: v2 DDL, v2 marker, plus a build and a
+        // closed build-scoped stream written before sessions existed.
+        await sql.unsafe(SCHEMA_V2_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V2_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+          VALUES ('v2-build', 'acme/v2', ${CONTRACT_T0}, ${CONTRACT_T0})`
+        await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
+          VALUES ('v2-build', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'build.created',
+            '{"ticket":{"source":"linear","id":"TICK-1"},"repo":"acme/v2","baseBranch":"main"}')`
+        await sql`INSERT INTO streams (id, scope_kind, build, label, format, status, created_at)
+          VALUES ('st_v2', 'build', 'v2-build', 'before', 'ai-ui-message-stream/v1', 'open', ${CONTRACT_T0})`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // Prior rows survive untouched.
+        const events = await sql`SELECT seq FROM events WHERE build = 'v2-build'`
+        expect(events).toHaveLength(1)
+        const oldStream = await sql`SELECT scope_kind, session FROM streams WHERE id = 'st_v2'`
+        expect(oldStream[0]?.scope_kind).toBe('build')
+        expect(oldStream[0]?.session).toBeNull()
+
+        // The migrated store works end to end, including sessions and
+        // session-scoped streams.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const session = await store.createSession({ repo: 'acme/v2', operator: 'op' })
+          await store.appendSessionEvent(session.id, {
+            actor: { kind: 'human', user: 'op' },
+            type: 'message.posted',
+            payload: { text: 'hello' },
+          })
+          const stream = await store.createStream(
+            { kind: 'session', session: session.id },
+            'migrated turn',
+          )
+          await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          const closed = await store.closeStream(stream.id, 'completed')
+          expect(closed.status).toBe('closed')
+          expect(
+            (await store.getSessionArtifact(session.id, `stream:${stream.id}`))?.meta.revision,
+          ).toBe(0)
         } finally {
           await store.close()
         }
