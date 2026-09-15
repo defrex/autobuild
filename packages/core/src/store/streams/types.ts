@@ -42,9 +42,13 @@ export interface StreamChunk {
   parts: StreamPart[]
 }
 
-/** Where a stream lives. The vocabulary is closed; a later operator-session
- * kind is the anticipated extension. */
-export type StreamScope = { kind: 'build'; build: string } | { kind: 'repo'; repo: string }
+/** Where a stream lives. The vocabulary is closed: builds, the repository
+ * journal, and operator sessions (SPEC §7.1.1) — every turn's content is one
+ * session-scoped stream. */
+export type StreamScope =
+  | { kind: 'build'; build: string }
+  | { kind: 'repo'; repo: string }
+  | { kind: 'session'; session: string }
 
 export type StreamStatus = 'open' | 'closed'
 export type StreamOutcome = 'completed' | 'aborted'

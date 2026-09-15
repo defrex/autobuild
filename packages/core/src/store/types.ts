@@ -18,6 +18,12 @@ import type {
   RepositoryEventType,
   RepositoryEventWrite,
 } from '../events/repository'
+import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../events/sessions'
 import type { TicketRef } from '../ontology'
 import type {
   StreamChunk,
@@ -90,6 +96,53 @@ export interface RepositoryArtifactMeta {
 
 export interface RepositoryArtifact {
   meta: RepositoryArtifactMeta
+  content: Uint8Array
+}
+
+/** An operator session: hosted-only durable orchestrator-conversation state
+ * (SPEC §7.1.1). The record carries only identity and timestamps; everything
+ * else — status, open turn, pending approval, wake settings — is a reduction
+ * of the session's own event log (sessions/reducer.ts), never a column. */
+export interface SessionRecord {
+  /** Store-assigned (`os_<uuid>`). */
+  id: string
+  repo: string
+  /** The owning operator's normalized identity (trimmed nonblank — the same
+   * normalization `OperatorTokenScope` applies). A session belongs to its
+   * creating operator. */
+  operator: string
+  title?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface NewSessionInput {
+  repo: string
+  operator: string
+  title?: string
+}
+
+/** The operator identity's one normalization — trimmed, nonblank. The same
+ * normalization `OperatorTokenScope` applies to its `user` claim, so a token's
+ * user matches the session records it creates. */
+export function normalizeOperator(operator: string): string {
+  const trimmed = operator.trim()
+  if (!trimmed) throw new Error('operator is required')
+  return trimmed
+}
+
+export interface SessionArtifactMeta {
+  session: string
+  kind: string
+  /** 0-based per kind, like build and repository artifacts (§6.3). */
+  revision: number
+  blobRef: string
+  metadata: Record<string, unknown>
+  createdAt: string
+}
+
+export interface SessionArtifact {
+  meta: SessionArtifactMeta
   content: Uint8Array
 }
 
@@ -227,6 +280,53 @@ export interface BuildStore {
   heartbeatRepo(repo: string, holder: string): Promise<boolean>
   releaseRepoLease(repo: string, holder: string): Promise<void>
 
+  // ── Operator sessions (SPEC §7.1.1 — a third resource kind) ────────────
+  // Hosted-only durable orchestrator-conversation state: a record keyed by
+  // repository and operator, its own small typed event catalog
+  // (events/sessions.ts) with a per-session sequence, and session-scoped
+  // streams. The record and its first fact (`session.created`) land together;
+  // every later fact appends through the same validated gate as builds and
+  // the repository journal. Nothing local creates sessions; adapters merely
+  // implement the contract uniformly.
+  /** Create the record and atomically append `session.created` (seq 1,
+   * actor the operator). Unlike builds, nothing else ever creates sessions. */
+  createSession(input: NewSessionInput): Promise<SessionRecord>
+  getSession(id: string): Promise<SessionRecord | null>
+  /** Every session of `repo`, in insertion order. */
+  listSessions(repo: string): Promise<SessionRecord[]>
+  /** Append one validated session event; the store assigns the per-session
+   * `seq` (monotonic, from 1) and `ts`. Unknown sessions reject; invalid
+   * events throw `EventValidationError` and append nothing. */
+  appendSessionEvent<T extends SessionEventType>(
+    id: string,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T>>
+  /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
+   * When nothing newer exists, an adapter honors `waitSeconds` with the
+   * same clamp/early-return rules as stream reads (§7.6): whole seconds,
+   * above 30 clamped to 30, returning as soon as an event lands. */
+  getSessionEvents(
+    id: string,
+    sinceSeq?: number,
+    opts?: { waitSeconds?: number },
+  ): Promise<SessionEvent[]>
+  /** Same atomic-deposit and validation-before-prune contracts as
+   * `appendWithArtifacts` (D6, AUT-322): the batch event is validated before
+   * any retention prune of artifacts in the same deposit batch, and an
+   * invalid event leaves no trace. */
+  appendSessionWithArtifacts<T extends SessionEventType>(
+    id: string,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+  ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }>
+  putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta>
+  /** Latest revision when `rev` is omitted; null if kind (or rev) absent. */
+  getSessionArtifact(id: string, kind: string, rev?: number): Promise<SessionArtifact | null>
+  listSessionArtifacts(id: string, kind?: string): Promise<SessionArtifactMeta[]>
+  /** Return an interface-enforced handle with authority over exactly one
+   * session: its record, events, artifacts, and session-scoped streams. */
+  scopeSession(id: string): SessionScopedStore
+
   // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
   // An append-only, per-stream sequenced log of protocol parts with an
   // open-then-closed lifecycle that finalizes into an artifact. Presentation,
@@ -279,6 +379,16 @@ export interface BuildStore {
 export interface BuildScopedStore extends BuildStore {
   readonly buildScope: string
   scopeBuild(slug: string): BuildScopedStore
+}
+
+/** A BuildStore constrained to one operator session. `sessionScope` is
+ * immutable; the handle may touch only its own session's events, artifacts,
+ * and session-scoped streams, and rejects session create/list and every
+ * build/repository operation. This is the (later turn runner's) authority
+ * over exactly one session, mirroring `BuildScopedStore`. */
+export interface SessionScopedStore extends BuildStore {
+  readonly sessionScope: string
+  scopeSession(id: string): SessionScopedStore
 }
 
 /** Shared runtime guard for in-process conditional append callers. */
