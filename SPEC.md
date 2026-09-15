@@ -405,6 +405,34 @@ repo_events  repo, seq, timestamp, actor, type, payload (JSON) — append-only
 repo_artifacts repo, kind, revision, blobRef, metadata
 ```
 
+#### 7.1.1 Operator sessions (the third resource kind)
+
+An operator session is durable orchestrator-conversation state — a record keyed
+by repository and operator, hosted-only. It is neither a build nor a
+repository fact: folding it into the build streams would leak conversation
+facts into the build reducer, and folding it into the repository journal would
+mix one operator's chat with dispatcher and harvest history that every process
+reads. The store's data model therefore gains a third resource family with the
+same shape as the other two:
+
+```
+sessions          id (os_…), repo, operator, title?, created/updated
+session_events    session_id, seq, timestamp, actor, type, payload (JSON) — append-only
+session_artifacts session_id, kind, revision, blobRef, metadata
+```
+
+The record carries only identity and timestamps; everything else — status
+(`idle | running | suspended | awaiting-approval | archived`), the open turn,
+the pending approval, wake settings, wake cursors, the turn list — is a
+reduction of the session's own event log (a pure reducer, never a column).
+The session event catalog is closed and validated separately from the build
+and repository catalogs, so no build reducer can interpret session facts, and
+per-session sequencing is independent. The stream primitive's scope vocabulary
+gains `{kind: "session"}` with the session id as its reference, so every
+turn's content is one session-scoped stream. Local installs never create
+sessions: local adapters implement the contract uniformly, and the operator
+API (§14) is the only creation surface.
+
 Schema requirements (the exact DDL is not design-critical): simple,
 normalized, defined once, with a local embedded target and a remote
 server-database target. Blobs are content-addressed (sha256) behind a narrow
@@ -474,11 +502,10 @@ conformance suite):
 Required phase outputs persist at **phase/round boundaries**; a killed phase
 re-runs from its start. An agent may also explicitly deposit a review artifact
 mid-session, including an atomic PR-attachment designation (§7.5, §8.2); these
-immutable revisions are harmless if a killed phase later retries. Designated
-streaming exception (future, out of scope for v2.0): **live transcript
-streaming**, so a web UI controlling remote agents can watch output in real
-time. The store's types should reserve a streaming revision concept even while
-no adapter implements it.
+immutable revisions are harmless if a killed phase later retries. The
+streaming exception reserved here is now the stream primitive (§7.6): live
+output persists continuously while an agent runs, so a session that dies
+mid-turn leaves its transcript behind instead of nothing.
 
 ### 7.4 Resumption across sandboxes
 
@@ -540,6 +567,54 @@ observations and preserve the complete text projection; they never fail
 verification or block finalize. Agents receive no forge credentials. A
 designation after the PR exists publishes a new complete summary, so finalize
 post-steps and post-reconcile verifiers need no custom phase.
+
+### 7.6 Streams (the third primitive)
+
+The store's content model is three primitives, each doing one job:
+
+- **Events** carry facts — small, typed, append-only, the routing spine.
+- **Artifacts** carry bulk — content-addressed bytes deposited at boundaries.
+- **Streams** carry the agent's running output — token deltas, tool calls and
+  results, reasoning — which is too bulky for the event log and arrives too
+  continuously to be an artifact until a session ends.
+
+A stream is an append-only, per-stream sequenced log of **chunks** (a chunk is
+a nonempty batch of protocol parts) with an open-then-closed lifecycle. The
+chunk vocabulary is the Vercel AI SDK UI Message Stream protocol, version 1 of
+the current major (AI SDK 7): the store holds the protocol's parts rather than
+a private shape, so a read route can re-emit them as Server-Sent Events that
+the AI SDK's own client hooks and any customer's tooling consume unchanged.
+The store performs no protocol validation on append; each part only needs a
+nonempty-string `type`, and the store assigns each batch its per-stream
+sequence (from 1) and timestamp, so producers cannot fake ordering.
+
+Closing a stream assembles its chunks into the protocol's `UIMessage[]`
+document — dropping parts of undefined types while counting them — and
+deposits that document as an artifact (`stream:<streamId>`, revision 0) on the
+owning scope in the same atomic operation that marks the stream closed. A
+stream that dies mid-turn stays open and readable, so its output survives.
+
+Close serializes against append, per stream: an append issued while a stream
+is being closed — or after it has closed — either lands in the finalized
+artifact or is rejected with `StreamClosedError`; an accepted append is never
+silently omitted from the artifact the close deposits. Appends to other
+streams are unaffected.
+
+Chunk retention is deposit-path and count-based, like artifact retention: at
+the next stream create in a scope, every previously closed stream's chunks
+except the most recently closed are deleted; finalized artifacts are never
+touched.
+
+Streams are scoped to a build, to a repository, or to an operator session
+(§7.1.1) — the scope vocabulary is closed. Reads are cursor-based
+(`since` sequence) with an optional bounded wait that returns as soon as a
+chunk lands or the stream closes — the resumable live channel every frontend
+would otherwise invent for itself.
+
+**Presentation, never routing.** No kernel, engine, reducer, or dispatcher
+decision reads stream content; outcomes travel only the typed CLI. Writers
+(agent runners emitting parts) and readers (operator UIs) are separate
+tickets; this section defines only the primitive.
 
 ## 8. The `ab` CLI
 
@@ -1328,6 +1403,16 @@ shape with `repo` in place of `build` and their own per-repository sequence,
 validated by the separate repository catalog so build reducers cannot
 accidentally interpret repository state.
 
+A human actor may carry an optional `via` marker for delegated writes —
+`{kind: "session", id}` (the operator's orchestrator session) or
+`{kind: "mcp", client}` (an MCP client) — so a team's audit trail can
+distinguish "the operator did this" from "the operator's orchestrator session
+did this" or "an MCP client did this" forever. `via` is valid only on human
+actors and only on build and repository events (session events are the
+delegate's own log); validation rejects it anywhere else. The hosted service
+stamps `via` from the authorizing token and rejects a write claiming a `via`
+the token does not carry; events without it replay unchanged.
+
 ### 15.2 Conventions
 
 1. **Closed vocabularies live in type names; open ones live in payloads.**
@@ -1357,8 +1442,11 @@ accidentally interpret repository state.
 
 ### 15.3 Catalog
 
-Authoritative in code (`packages/core/src/events/payloads.ts`, `packages/core/src/events/repository.ts`).
-The families, with illustrative members:
+Authoritative in code (`packages/core/src/events/payloads.ts`,
+`packages/core/src/events/repository.ts`, and the session catalog in
+`packages/core/src/events/sessions.ts` — the third catalog, validated
+separately like the repository journal's). The build and repository families,
+with illustrative members:
 
 | Family | Examples |
 |---|---|
@@ -2005,7 +2093,9 @@ or installs releases in the foreground or background.
 ## 17. Out of scope for v2.0 (explicitly)
 
 - True push `subscribe` (interface reserved; polling implementation).
-- Live transcript streaming (types reserved; boundary persistence only).
+- Live transcript streaming for writers and readers (the stream primitive —
+  SPEC §7.6 — has shipped; agent runners emitting parts and operator UIs
+  rendering them remain future work).
 - Web UI (seam designed; terminal first).
 - Generic workflow DAGs (the grammar is fixed; extension via `verify:*` and
   `finalize:*` only).

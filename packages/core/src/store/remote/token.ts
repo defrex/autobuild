@@ -11,6 +11,7 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
+import { viaSchema, type Via } from '../../events/envelope'
 
 export interface LegacyBuildTokenScope {
   /** Retained wire compatibility for all existing build-scoped tokens. */
@@ -21,18 +22,26 @@ export interface LegacyBuildTokenScope {
 
 export interface ResourceTokenScope {
   resource: {
-    kind: 'build' | 'repo'
+    kind: 'build' | 'repo' | 'session'
     id: string
   }
   session: string
   exp: number
+  /** Delegated-write attribution (§15.1): when present, the hosted service
+   * stamps this via onto human-actor event writes and rejects writes claiming
+   * a via the token does not carry. A session resource token's authority is
+   * exactly its one session. */
+  via?: Via
 }
 
 /** Human operator authority is deliberately disjoint from raw store authority.
- * The signed nonblank user claim attributes every operator API event. */
+ * The signed nonblank user claim attributes every operator API event. An
+ * unscoped operator token carries no via claim, so any write claiming a via
+ * under it is rejected. */
 export interface OperatorTokenScope {
   operator: { user: string }
   exp: number
+  via?: Via
 }
 
 /** Deployment authority used by dispatchers for raw store and hosted ticket
@@ -58,20 +67,22 @@ const tokenScopeSchema = z.union([
   z.strictObject({ build: z.string().min(1), ...commonScope }),
   z.strictObject({
     resource: z.strictObject({
-      kind: z.enum(['build', 'repo']),
+      kind: z.enum(['build', 'repo', 'session']),
       id: z.string().min(1),
     }),
     ...commonScope,
+    via: viaSchema.optional(),
   }),
   z.strictObject({
     operator: z.strictObject({ user: z.string().trim().min(1) }),
     exp: z.number().int(),
+    via: viaSchema.optional(),
   }),
   z.strictObject({ operator: z.literal(true), ...commonScope }),
 ])
 
 export function tokenResource(scope: TokenScope): {
-  kind: 'build' | 'repo' | 'admin' | 'operator' | 'deployment'
+  kind: 'build' | 'repo' | 'session' | 'admin' | 'operator' | 'deployment'
   id: string
 } {
   if ('operator' in scope) {

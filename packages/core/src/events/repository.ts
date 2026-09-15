@@ -18,7 +18,13 @@ import {
   harvestTriggerSchema,
   occurrenceKeySchema,
 } from '../harvest/schema'
-import { actorSchema, type Actor, type ActorKind } from './envelope'
+import {
+  actorSchema,
+  VIA_ACTOR_RULE,
+  viaOnNonHumanActor,
+  type Actor,
+  type ActorKind,
+} from './envelope'
 import { EventValidationError } from './catalog'
 import { providerAttemptsSchema, providerSubstitutionSchema } from './payloads'
 
@@ -445,6 +451,9 @@ export function validateRepositoryEventWrite(input: {
     throw new EventValidationError(
       `unknown repository event type "${input.type}" — known types: ${REPOSITORY_EVENT_TYPES.join(', ')}`,
     )
+  }
+  if (viaOnNonHumanActor(input.actor)) {
+    throw new EventValidationError(VIA_ACTOR_RULE)
   }
   const actorResult = actorSchema.safeParse(input.actor)
   if (!actorResult.success) {

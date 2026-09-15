@@ -17,6 +17,7 @@ import { mkdirSync } from 'node:fs'
 import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { humanActor } from '../../events/envelope'
 import {
   validateEventWrite,
   type AbEvent,
@@ -31,15 +32,42 @@ import {
   type RepositoryEventType,
   type RepositoryEventWrite,
 } from '../../events/repository'
+import {
+  validateSessionEventWrite,
+  type SessionEvent,
+  type SessionEventEnvelope,
+  type SessionEventType,
+  type SessionEventWrite,
+} from '../../events/sessions'
 import { createBuildScopedStore } from '../build-scope'
+import { createSessionScopedStore } from '../session-handle'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
   revisionsToPrune,
 } from '../retention'
 import { pollingSubscribe } from '../subscribe'
+import { StreamLocks } from '../streams/lock'
+import { assembleUIMessageDocument } from '../streams/assemble'
+import { readEventsWithWait, readStreamWithWait } from '../streams/wait'
+import {
+  serializedBatchSize,
+  STREAM_BATCH_MAX_BYTES,
+  STREAM_FORMAT,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  streamArtifactInput,
+  validateStreamParts,
+  type StreamChunk,
+  type StreamOutcome,
+  type StreamPart,
+  type StreamRead,
+  type StreamRecord,
+  type StreamScope,
+} from '../streams/types'
 import {
   contentHash,
+  normalizeOperator,
   systemClock,
   toBytes,
   validateExpectedSeq,
@@ -52,14 +80,31 @@ import {
   type BuildStore,
   type Clock,
   type NewBuildInput,
+  type NewSessionInput,
   type RepositoryArtifact,
   type RepositoryArtifactMeta,
   type RepositoryRecord,
+  type SessionArtifact,
+  type SessionArtifactMeta,
+  type SessionRecord,
+  type SessionScopedStore,
   type SubscribeOptions,
   type Unsubscribe,
 } from '../types'
 import { DirBlobStore } from './blobs'
-import { artifacts, builds, events, repoArtifacts, repoEvents, repoStreams } from './schema'
+import {
+  artifacts,
+  builds,
+  events,
+  repoArtifacts,
+  repoEvents,
+  repoStreams,
+  sessionArtifacts,
+  sessionEvents,
+  sessions,
+  streamChunks,
+  streams,
+} from './schema'
 
 /**
  * Bootstrap DDL, applied idempotently at open. MUST match `schema.ts` —
@@ -125,6 +170,62 @@ const BOOTSTRAP_DDL = [
     created_at TEXT NOT NULL,
     PRIMARY KEY (repo, kind, revision)
   )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS session_events (
+    session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (session, seq)
+  )`,
+  `CREATE TABLE IF NOT EXISTS session_artifacts (
+    session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    blob_ref TEXT NOT NULL,
+    metadata TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session, kind, revision)
+  )`,
+  `CREATE TABLE IF NOT EXISTS streams (
+    id TEXT PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('build','repo','session')),
+    build TEXT,
+    repo TEXT,
+    session TEXT,
+    label TEXT NOT NULL,
+    format TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open','closed')),
+    outcome TEXT,
+    artifact_kind TEXT,
+    artifact_revision INTEGER,
+    artifact_blob_ref TEXT,
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    CHECK (
+      (scope_kind = 'build' AND build IS NOT NULL AND repo IS NULL AND session IS NULL)
+      OR
+      (scope_kind = 'repo' AND build IS NULL AND repo IS NOT NULL AND session IS NULL)
+      OR
+      (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
+    )
+  )`,
+  `CREATE TABLE IF NOT EXISTS stream_chunks (
+    stream TEXT NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    parts TEXT NOT NULL,
+    PRIMARY KEY (stream, seq)
+  )`,
 ] as const
 
 type BuildRow = typeof builds.$inferSelect
@@ -148,6 +249,10 @@ export interface SqliteBuildStoreOptions {
 export class SqliteBuildStore implements BuildStore {
   private readonly sqlite: Database
   private readonly db: BunSQLiteDatabase
+  /** Per-stream in-process mutex (store/streams/lock.ts): serializes a
+   * stream's close against same-process appends (AUT-348). Cross-connection
+   * writers are arbitrated by the commit transaction's chunk re-verification. */
+  private readonly streamLocks = new StreamLocks()
   private readonly clock: Clock
   private readonly maxRevisions: number
   readonly blobs: BlobStore
@@ -173,11 +278,30 @@ export class SqliteBuildStore implements BuildStore {
     if (!columns.some((column) => column.name === 'repo_origin')) {
       this.sqlite.exec('ALTER TABLE builds ADD COLUMN repo_origin TEXT')
     }
+    // Stores created before session-scoped streams existed keep working: add
+    // the streams.session column idempotently when a pre-existing table lacks
+    // it (the repo_origin precedent). A pre-existing local database also keeps
+    // its old `scope_kind` CHECK, so it cannot host session-scoped streams —
+    // unreachable in product terms because sessions are hosted-only and
+    // nothing local creates one; fresh stores (and every contract-suite
+    // database) get the widened DDL above. Rebuilding the table to widen a
+    // CHECK would risk local data for an unreachable path and is deliberately
+    // not attempted.
+    const streamColumns = this.sqlite.query("PRAGMA table_info('streams')").all() as Array<{
+      name: string
+    }>
+    if (!streamColumns.some((column) => column.name === 'session')) {
+      this.sqlite.exec('ALTER TABLE streams ADD COLUMN session TEXT')
+    }
     this.db = drizzle(this.sqlite)
   }
 
   scopeBuild(slug: string): BuildScopedStore {
     return createBuildScopedStore(this, slug)
+  }
+
+  scopeSession(id: string): SessionScopedStore {
+    return createSessionScopedStore(this, id)
   }
 
   private now(): string {
@@ -886,8 +1010,535 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
+  // ── Operator sessions (SPEC §7.1.1 — a third resource kind) ─────────
+
+  private sessionRow(id: string): typeof sessions.$inferSelect | undefined {
+    return this.db.select().from(sessions).where(eq(sessions.id, id)).get()
+  }
+
+  private requireSession(id: string): typeof sessions.$inferSelect {
+    const row = this.sessionRow(id)
+    if (!row) throw new Error(`unknown session "${id}"`)
+    return row
+  }
+
+  private toSessionRecord(row: typeof sessions.$inferSelect): SessionRecord {
+    return {
+      id: row.id,
+      repo: row.repo,
+      operator: row.operator,
+      ...(row.title !== null ? { title: row.title } : {}),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }
+  }
+
+  /** Runs inside an open transaction — see `appendInTx`. */
+  private appendSessionInTx(id: string, validated: SessionEventWrite): SessionEventEnvelope {
+    this.requireSession(id)
+    const ts = this.now()
+    const row = this.db
+      .select({ max: sql<number | null>`max(${sessionEvents.seq})` })
+      .from(sessionEvents)
+      .where(eq(sessionEvents.session, id))
+      .get()
+    const seq = (row?.max ?? 0) + 1
+    this.db
+      .insert(sessionEvents)
+      .values({
+        session: id,
+        seq,
+        ts,
+        actor: validated.actor,
+        type: validated.type,
+        payload: validated.payload,
+      })
+      .run()
+    this.db.update(sessions).set({ updatedAt: ts }).where(eq(sessions.id, id)).run()
+    return {
+      session: id,
+      seq,
+      ts,
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    }
+  }
+
+  async createSession(input: NewSessionInput): Promise<SessionRecord> {
+    const operator = normalizeOperator(input.operator)
+    if (!input.repo) throw new Error('repo is required')
+    const ts = this.now()
+    const id = `os_${crypto.randomUUID()}`
+    // The record and its first fact land together: `session.created` (seq 1,
+    // actor the operator) commits in the same transaction as the insert —
+    // there is no state where a session exists without its creation fact (D6).
+    const validated = validateSessionEventWrite({
+      actor: humanActor(operator),
+      type: 'session.created',
+      payload: input.title !== undefined ? { title: input.title } : {},
+    })
+    return this.writeTx(() => {
+      this.db
+        .insert(sessions)
+        .values({
+          id,
+          repo: input.repo,
+          operator,
+          title: input.title ?? null,
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+      this.db
+        .insert(sessionEvents)
+        .values({
+          session: id,
+          seq: 1,
+          ts,
+          actor: validated.actor,
+          type: validated.type,
+          payload: validated.payload,
+        })
+        .run()
+      return this.toSessionRecord(this.requireSession(id))
+    })
+  }
+
+  async getSession(id: string): Promise<SessionRecord | null> {
+    const row = this.sessionRow(id)
+    return row ? this.toSessionRecord(row) : null
+  }
+
+  async listSessions(repo: string): Promise<SessionRecord[]> {
+    return this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.repo, repo))
+      .orderBy(asc(sessions.createdAt), asc(sessions.id))
+      .all()
+      .map((row) => this.toSessionRecord(row))
+  }
+
+  async appendSessionEvent<T extends SessionEventType>(
+    id: string,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T>> {
+    const validated = validateSessionEventWrite(event)
+    return this.writeTx(() => this.appendSessionInTx(id, validated) as SessionEventEnvelope<T>)
+  }
+
+  async getSessionEvents(
+    id: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<SessionEvent[]> {
+    const read = async (): Promise<SessionEvent[]> => {
+      this.requireSession(id)
+      const rows = this.db
+        .select()
+        .from(sessionEvents)
+        .where(and(eq(sessionEvents.session, id), gt(sessionEvents.seq, sinceSeq)))
+        .orderBy(asc(sessionEvents.seq))
+        .all()
+      return rows.map(
+        (row) =>
+          ({
+            session: row.session,
+            seq: row.seq,
+            ts: row.ts,
+            actor: row.actor,
+            type: row.type,
+            payload: row.payload,
+          }) as SessionEvent,
+      )
+    }
+    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+  }
+
+  /** Runs inside an open transaction — see `depositInTx` for `prune`. */
+  private depositSessionInTx(id: string, prepared: PreparedArtifact): SessionArtifactMeta {
+    this.requireSession(id)
+    const createdAt = this.now()
+    const row = this.db
+      .select({ max: sql<number | null>`max(${sessionArtifacts.revision})` })
+      .from(sessionArtifacts)
+      .where(and(eq(sessionArtifacts.session, id), eq(sessionArtifacts.kind, prepared.kind)))
+      .get()
+    const revision = (row?.max ?? -1) + 1
+    this.db
+      .insert(sessionArtifacts)
+      .values({
+        session: id,
+        kind: prepared.kind,
+        revision,
+        blobRef: prepared.blobRef,
+        metadata: prepared.metadata,
+        createdAt,
+      })
+      .run()
+    this.db.update(sessions).set({ updatedAt: createdAt }).where(eq(sessions.id, id)).run()
+    return {
+      session: id,
+      kind: prepared.kind,
+      revision,
+      blobRef: prepared.blobRef,
+      metadata: prepared.metadata,
+      createdAt,
+    }
+  }
+
+  async appendSessionWithArtifacts<T extends SessionEventType>(
+    id: string,
+    artifactInputs: ArtifactInput[],
+    makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+  ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+    const prepared: PreparedArtifact[] = []
+    for (const input of artifactInputs) {
+      prepared.push(await this.prepareArtifact(input))
+    }
+    // One synchronous transaction: deposits + event append commit together;
+    // an invalid event throws, rolling back every deposit (D6). Session
+    // artifacts are not retention-managed, so the AUT-322 ordering invariant
+    // holds trivially — validation still precedes every deposit commit.
+    return this.writeTx(() => {
+      const deposited = prepared.map((p) => this.depositSessionInTx(id, p))
+      const validated = validateSessionEventWrite(makeEvent(deposited))
+      const event = this.appendSessionInTx(id, validated) as SessionEventEnvelope<T>
+      return { event, artifacts: deposited }
+    })
+  }
+
+  async putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+    const prepared = await this.prepareArtifact(artifact)
+    return this.writeTx(() => this.depositSessionInTx(id, prepared))
+  }
+
+  private toSessionMeta(row: typeof sessionArtifacts.$inferSelect): SessionArtifactMeta {
+    return {
+      session: row.session,
+      kind: row.kind,
+      revision: row.revision,
+      blobRef: row.blobRef,
+      metadata: row.metadata,
+      createdAt: row.createdAt,
+    }
+  }
+
+  async getSessionArtifact(
+    id: string,
+    kind: string,
+    rev?: number,
+  ): Promise<SessionArtifact | null> {
+    this.requireSession(id)
+    const scoped = and(eq(sessionArtifacts.session, id), eq(sessionArtifacts.kind, kind))
+    const row =
+      rev === undefined
+        ? this.db
+            .select()
+            .from(sessionArtifacts)
+            .where(scoped)
+            .orderBy(desc(sessionArtifacts.revision))
+            .limit(1)
+            .get()
+        : this.db
+            .select()
+            .from(sessionArtifacts)
+            .where(and(scoped, eq(sessionArtifacts.revision, rev)))
+            .get()
+    if (!row) return null
+    const content = await this.blobs.get(row.blobRef)
+    return content ? { meta: this.toSessionMeta(row), content } : null
+  }
+
+  async listSessionArtifacts(id: string, kind?: string): Promise<SessionArtifactMeta[]> {
+    this.requireSession(id)
+    const where = kind
+      ? and(eq(sessionArtifacts.session, id), eq(sessionArtifacts.kind, kind))
+      : eq(sessionArtifacts.session, id)
+    return this.db
+      .select()
+      .from(sessionArtifacts)
+      .where(where)
+      .orderBy(asc(sessionArtifacts.kind), asc(sessionArtifacts.revision))
+      .all()
+      .map((row) => this.toSessionMeta(row))
+  }
+
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
+  }
+
+  // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
+
+  private streamRow(id: string): typeof streams.$inferSelect | undefined {
+    return this.db.select().from(streams).where(eq(streams.id, id)).get()
+  }
+
+  private requireStream(id: string): typeof streams.$inferSelect {
+    const row = this.streamRow(id)
+    if (!row) throw new Error(`unknown stream "${id}"`)
+    return row
+  }
+
+  private streamScopeOf(row: typeof streams.$inferSelect): StreamScope {
+    if (row.scopeKind === 'build' && row.build !== null) return { kind: 'build', build: row.build }
+    if (row.scopeKind === 'repo' && row.repo !== null) return { kind: 'repo', repo: row.repo }
+    if (row.scopeKind === 'session' && row.session !== null) {
+      return { kind: 'session', session: row.session }
+    }
+    throw new Error(`stream "${row.id}" has an unreadable scope`)
+  }
+
+  private toStreamRecord(row: typeof streams.$inferSelect): StreamRecord {
+    const record: StreamRecord = {
+      id: row.id,
+      scope: this.streamScopeOf(row),
+      label: row.label,
+      format: row.format as StreamRecord['format'],
+      status: row.status as StreamRecord['status'],
+      createdAt: row.createdAt,
+      ...(row.closedAt ? { closedAt: row.closedAt } : {}),
+      ...(row.outcome ? { outcome: row.outcome as StreamRecord['outcome'] } : {}),
+      ...(row.artifactKind && row.artifactRevision !== null && row.artifactBlobRef
+        ? {
+            artifact: {
+              kind: row.artifactKind,
+              revision: row.artifactRevision,
+              blobRef: row.artifactBlobRef,
+            },
+          }
+        : {}),
+    }
+    return record
+  }
+
+  /** Runs inside an open transaction — see `appendInTx`. The retention rule
+   * (deposit-path, count-based like artifact retention): keep every closed
+   * stream's chunks except the most recently closed one in this scope,
+   * ordering by closedAt with an id tie-break. Records, finalized artifacts,
+   * and open streams are never touched. */
+  private pruneStreamChunksInTx(scope: StreamScope): void {
+    const owner =
+      scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
+    const closed = this.db
+      .select()
+      .from(streams)
+      .where(and(eq(streams.status, 'closed'), eq(streams.scopeKind, scope.kind)))
+      .all()
+      .filter((row) =>
+        scope.kind === 'build'
+          ? row.build === owner
+          : scope.kind === 'repo'
+            ? row.repo === owner
+            : row.session === owner,
+      )
+      .sort(
+        (a, b) => (a.closedAt ?? '').localeCompare(b.closedAt ?? '') || a.id.localeCompare(b.id),
+      )
+    for (const row of closed.slice(0, -1)) {
+      this.db.delete(streamChunks).where(eq(streamChunks.stream, row.id)).run()
+    }
+  }
+
+  async createStream(scope: StreamScope, label: string): Promise<StreamRecord> {
+    if (!label) throw new Error('stream label is required')
+    if (scope.kind === 'build') this.requireBuild(scope.build)
+    else if (scope.kind === 'repo') this.requireRepo(scope.repo)
+    else this.requireSession(scope.session)
+    const id = `st_${crypto.randomUUID()}`
+    return this.writeTx(() => {
+      // Retention prune and the insert land in one transaction.
+      this.pruneStreamChunksInTx(scope)
+      this.db
+        .insert(streams)
+        .values({
+          id,
+          scopeKind: scope.kind,
+          build: scope.kind === 'build' ? scope.build : null,
+          repo: scope.kind === 'repo' ? scope.repo : null,
+          session: scope.kind === 'session' ? scope.session : null,
+          label,
+          format: STREAM_FORMAT,
+          status: 'open',
+          createdAt: this.now(),
+        })
+        .run()
+      return this.toStreamRecord(this.requireStream(id))
+    })
+  }
+
+  async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+    // Validate and size-check before taking the per-stream lock, so invalid
+    // input keeps its current error precedence (AUT-348).
+    validateStreamParts(parts)
+    const bytes = serializedBatchSize(parts)
+    if (bytes > STREAM_BATCH_MAX_BYTES) throw new StreamBatchTooLargeError(bytes)
+    // The per-stream lock covers the closed check and the transaction as one
+    // critical section: an append issued during a same-process close waits
+    // for the close to commit, then fails the status check with an explicit
+    // StreamClosedError instead of being silently omitted from the artifact.
+    return this.streamLocks.run(streamId, () =>
+      this.writeTx(() => {
+        const row = this.requireStream(streamId)
+        if (row.status === 'closed') throw new StreamClosedError(streamId)
+        const tails = this.db
+          .select({ max: sql<number | null>`max(${streamChunks.seq})` })
+          .from(streamChunks)
+          .where(eq(streamChunks.stream, streamId))
+          .get()
+        const chunk: StreamChunk = {
+          stream: streamId,
+          seq: (tails?.max ?? 0) + 1,
+          ts: this.now(),
+          parts: structuredClone(parts),
+        }
+        this.db
+          .insert(streamChunks)
+          .values({ stream: streamId, seq: chunk.seq, ts: chunk.ts, parts: chunk.parts })
+          .run()
+        return chunk
+      }),
+    )
+  }
+
+  async readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number },
+  ): Promise<StreamRead> {
+    const read = async (): Promise<StreamRead> => {
+      const row = this.requireStream(streamId)
+      const chunks = this.db
+        .select()
+        .from(streamChunks)
+        .where(and(eq(streamChunks.stream, streamId), gt(streamChunks.seq, opts?.since ?? 0)))
+        .orderBy(asc(streamChunks.seq))
+        .all()
+      const record = this.toStreamRecord(row)
+      return {
+        chunks: chunks.map((chunk) => ({
+          stream: chunk.stream,
+          seq: chunk.seq,
+          ts: chunk.ts,
+          parts: chunk.parts,
+        })),
+        status: record.status,
+        ...(record.outcome !== undefined ? { outcome: record.outcome } : {}),
+        ...(record.artifact !== undefined ? { artifact: record.artifact } : {}),
+      }
+    }
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+  }
+
+  async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+    // The per-stream mutex holds across the entire prepare→commit loop
+    // (AUT-348): a same-process append issued during this close waits for it
+    // to finish and then rejects on the closed check with StreamClosedError.
+    // Cross-connection appends (a second instance on the same file) are
+    // invisible to the mutex, so the commit transaction re-verifies the
+    // chunk tail and a mismatch retries the whole loop from a newer snapshot.
+    return this.streamLocks.run(streamId, async () => {
+      for (;;) {
+        const row = this.requireStream(streamId)
+        if (row.status === 'closed') return this.toStreamRecord(row)
+        // Prepare phase — assemble and store the blob before the transaction
+        // (D6 shape: content-addressed orphan blobs are harmless; a deposit
+        // failure leaves the stream open and unwritten).
+        const chunkRows = this.db
+          .select()
+          .from(streamChunks)
+          .where(eq(streamChunks.stream, streamId))
+          .orderBy(asc(streamChunks.seq))
+          .all()
+        const { document, droppedPartCount } = await assembleUIMessageDocument(
+          chunkRows.flatMap((chunk) => chunk.parts),
+        )
+        const scope = this.streamScopeOf(row)
+        const input = streamArtifactInput(
+          row.id,
+          scope,
+          row.label,
+          outcome,
+          document,
+          chunkRows.length,
+          droppedPartCount,
+        )
+        const prepared: PreparedArtifact = {
+          kind: input.kind,
+          blobRef: contentHash(toBytes(input.content)),
+          metadata: structuredClone(input.metadata),
+        }
+        await this.blobs.put(prepared.blobRef, toBytes(input.content))
+        // Commit phase — one synchronous transaction: the artifact deposit
+        // and the close land together or not at all. A close that raced us
+        // through the prepare phase wins; ours re-reads and returns its
+        // record. The chunk tail is re-read under the same write lock:
+        // chunk seqs are gapless 1..n (assigned as MAX+1, and retention
+        // never deletes the closing stream's chunks), so a MAX other than
+        // the prepared length means a foreign appender landed inside the
+        // prepare window.
+        const committed = this.writeTx(
+          (): { stale: true } | { stale: false; record: StreamRecord } => {
+            const fresh = this.requireStream(streamId)
+            if (fresh.status === 'closed')
+              return { stale: false, record: this.toStreamRecord(fresh) }
+            const tail = this.db
+              .select({ max: sql<number | null>`max(${streamChunks.seq})` })
+              .from(streamChunks)
+              .where(eq(streamChunks.stream, streamId))
+              .get()
+            if ((tail?.max ?? 0) !== chunkRows.length) return { stale: true }
+            const meta =
+              scope.kind === 'build'
+                ? this.depositInTx(scope.build, prepared)
+                : scope.kind === 'repo'
+                  ? this.depositRepoInTx(scope.repo, prepared)
+                  : this.depositSessionInTx(scope.session, prepared)
+            this.db
+              .update(streams)
+              .set({
+                status: 'closed',
+                outcome,
+                closedAt: meta.createdAt,
+                artifactKind: meta.kind,
+                artifactRevision: meta.revision,
+                artifactBlobRef: meta.blobRef,
+              })
+              .where(eq(streams.id, streamId))
+              .run()
+            return { stale: false, record: this.toStreamRecord(this.requireStream(streamId)) }
+          },
+        )
+        if (!committed.stale) return committed.record
+        // A foreign appender landed inside the prepare window; loop and
+        // re-prepare from the newer chunk set so its acknowledged chunk is
+        // not omitted from the finalized artifact.
+      }
+    })
+  }
+
+  async getStream(streamId: string): Promise<StreamRecord | null> {
+    const row = this.streamRow(streamId)
+    return row ? this.toStreamRecord(row) : null
+  }
+
+  async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
+    const owner =
+      scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
+    const rows = this.db
+      .select()
+      .from(streams)
+      .where(eq(streams.scopeKind, scope.kind))
+      .orderBy(asc(streams.createdAt), asc(streams.id))
+      .all()
+      .filter((row) =>
+        scope.kind === 'build'
+          ? row.scopeKind === 'build' && row.build === owner
+          : scope.kind === 'repo'
+            ? row.scopeKind === 'repo' && row.repo === owner
+            : row.scopeKind === 'session' && row.session === owner,
+      )
+    return rows.map((row) => this.toStreamRecord(row))
   }
 
   async close(): Promise<void> {

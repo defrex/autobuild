@@ -125,4 +125,27 @@ export type {
 } from '../events/repository'
 export { BuildScopeError, createBuildScopedStore } from '../store/build-scope'
 export { pollingSubscribe } from '../store/subscribe'
+export { assembleUIMessageDocument } from '../store/streams/assemble'
+export { readStreamWithWait, STREAM_WAIT_POLL_MS } from '../store/streams/wait'
+export {
+  clampWaitSeconds,
+  MAX_STREAM_WAIT_SECONDS,
+  serializedBatchSize,
+  STREAM_BATCH_MAX_BYTES,
+  STREAM_FORMAT,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  streamArtifactInput,
+  validateStreamParts,
+} from '../store/streams/types'
+export type {
+  StreamArtifactRef,
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+  StreamStatus,
+} from '../store/streams/types'
 export { contentHash, systemClock, toBytes, validateExpectedSeq } from '../store/types'

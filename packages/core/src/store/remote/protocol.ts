@@ -27,7 +27,7 @@
 import { z } from 'zod'
 import { actorSchema } from '../../events/envelope'
 import { ticketRefSchema } from '../../ontology'
-import type { ArtifactMeta, RepositoryArtifactMeta } from '../types'
+import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '../types'
 
 // ── Errors (D6: errors as feedback over the wire) ────────────────────────────
 
@@ -138,6 +138,55 @@ export const repoDepositsResponseSchema = z.object({
   artifacts: repositoryArtifactMetaListSchema,
 })
 
+// ── Operator sessions (SPEC §7.1.1) ─────────────────────────────────────────
+
+export const newSessionBodySchema = z.object({
+  repo: z.string().min(1),
+  operator: z.string().min(1),
+  title: z.string().optional(),
+})
+
+export const sessionRecordWireSchema = z.object({
+  id: z.string(),
+  repo: z.string(),
+  operator: z.string(),
+  title: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+export const sessionRecordListSchema = z.array(sessionRecordWireSchema)
+
+export const sessionEventEnvelopeWireSchema = z.object({
+  session: z.string(),
+  seq: z.number().int().positive(),
+  ts: z.string(),
+  actor: actorSchema,
+  type: z.string(),
+  payload: z.unknown(),
+})
+export const sessionEventListSchema = z.array(sessionEventEnvelopeWireSchema)
+
+export const sessionArtifactMetaWireSchema = z.object({
+  session: z.string(),
+  kind: z.string(),
+  revision: z.number().int().nonnegative(),
+  blobRef: z.string(),
+  metadata: z.record(z.string(), z.unknown()),
+  createdAt: z.string(),
+})
+export const sessionArtifactMetaListSchema = z.array(sessionArtifactMetaWireSchema)
+export const sessionArtifactGetResponseSchema = z.union([
+  z.null(),
+  z.object({
+    meta: sessionArtifactMetaWireSchema,
+    contentBase64: z.string(),
+  }),
+])
+export const sessionDepositsResponseSchema = z.object({
+  event: sessionEventEnvelopeWireSchema,
+  artifacts: sessionArtifactMetaListSchema,
+})
+
 // ── Artifacts ────────────────────────────────────────────────────────────────
 
 export const artifactMetaWireSchema = z.object({
@@ -186,6 +235,58 @@ export const leaseClaimBodySchema = z.object({
 export const leaseHolderBodySchema = z.object({ holder: z.string().min(1) })
 export const okResponseSchema = z.object({ ok: z.boolean() })
 
+// ── Streams (SPEC §7.6 — the third primitive) ────────────────────────────
+//
+// Deliberately loose on part contents: the store performs no protocol
+// validation on append (assembly at close does that), and `looseObject` —
+// not `z.object` — so unknown part keys survive the wire untouched.
+
+export const streamScopeWireSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('build'), build: z.string().min(1) }),
+  z.object({ kind: z.literal('repo'), repo: z.string().min(1) }),
+  z.object({ kind: z.literal('session'), session: z.string().min(1) }),
+])
+
+export const streamArtifactRefWireSchema = z.object({
+  kind: z.string(),
+  revision: z.number().int().nonnegative(),
+  blobRef: z.string(),
+})
+
+export const streamRecordWireSchema = z.object({
+  id: z.string(),
+  scope: streamScopeWireSchema,
+  label: z.string(),
+  format: z.string(),
+  status: z.enum(['open', 'closed']),
+  createdAt: z.string(),
+  closedAt: z.string().optional(),
+  outcome: z.enum(['completed', 'aborted']).optional(),
+  artifact: streamArtifactRefWireSchema.optional(),
+})
+export const streamRecordListSchema = z.array(streamRecordWireSchema)
+
+export const createStreamBodySchema = z.object({ label: z.string().min(1) })
+export const closeStreamBodySchema = z.object({ outcome: z.enum(['completed', 'aborted']) })
+
+export const streamPartWireSchema = z.looseObject({ type: z.string().min(1) })
+export const appendStreamBodySchema = z.object({
+  parts: z.array(streamPartWireSchema).min(1),
+})
+
+export const streamChunkWireSchema = z.object({
+  stream: z.string(),
+  seq: z.number().int().positive(),
+  ts: z.string(),
+  parts: z.array(z.record(z.string(), z.unknown())),
+})
+export const streamReadWireSchema = z.object({
+  chunks: z.array(streamChunkWireSchema),
+  status: z.enum(['open', 'closed']),
+  outcome: z.enum(['completed', 'aborted']).optional(),
+  artifact: streamArtifactRefWireSchema.optional(),
+})
+
 // ── Base64 content encoding ──────────────────────────────────────────────────
 
 export function encodeBase64(bytes: Uint8Array): string {
@@ -228,7 +329,7 @@ function isPlaceholderRef(value: unknown): value is { kind: string; rev: number 
  */
 export function substitutePlaceholderRefs(
   value: unknown,
-  deposited: Array<ArtifactMeta | RepositoryArtifactMeta>,
+  deposited: Array<ArtifactMeta | RepositoryArtifactMeta | SessionArtifactMeta>,
 ): unknown {
   if (isPlaceholderRef(value)) {
     const meta = deposited[-value.rev - 1]
