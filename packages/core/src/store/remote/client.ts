@@ -26,7 +26,14 @@ import type {
   RepositoryEventType,
   RepositoryEventWrite,
 } from '../../events/repository'
+import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../../events/sessions'
 import { createBuildScopedStore } from '../build-scope'
+import { createSessionScopedStore } from '../session-handle'
 import { pollingSubscribe } from '../subscribe'
 import type {
   StreamChunk,
@@ -46,9 +53,14 @@ import {
   type BuildScopedStore,
   type BuildStore,
   type NewBuildInput,
+  type NewSessionInput,
   type RepositoryArtifact,
   type RepositoryArtifactMeta,
   type RepositoryRecord,
+  type SessionArtifact,
+  type SessionArtifactMeta,
+  type SessionRecord,
+  type SessionScopedStore,
   type SubscribeOptions,
   type Unsubscribe,
 } from '../types'
@@ -74,6 +86,14 @@ import {
   repositoryArtifactMetaListSchema,
   repositoryArtifactMetaWireSchema,
   repositoryRecordWireSchema,
+  sessionArtifactGetResponseSchema,
+  sessionArtifactMetaListSchema,
+  sessionArtifactMetaWireSchema,
+  sessionDepositsResponseSchema,
+  sessionEventEnvelopeWireSchema,
+  sessionEventListSchema,
+  sessionRecordListSchema,
+  sessionRecordWireSchema,
   streamChunkWireSchema,
   streamReadWireSchema,
   streamRecordListSchema,
@@ -130,12 +150,20 @@ export class RemoteBuildStore implements BuildStore {
     return createBuildScopedStore(this, slug)
   }
 
+  scopeSession(id: string): SessionScopedStore {
+    return createSessionScopedStore(this, id)
+  }
+
   private buildPath(slug: string): string {
     return `/builds/${encodeURIComponent(slug)}`
   }
 
   private repoPath(repo: string): string {
     return `/repos/${encodeURIComponent(repo)}`
+  }
+
+  private sessionPath(id: string): string {
+    return `/sessions/${encodeURIComponent(id)}`
   }
 
   private async raw(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
@@ -473,6 +501,131 @@ export class RemoteBuildStore implements BuildStore {
     })
   }
 
+  // ── Operator sessions (SPEC §7.1.1) ──────────────────────────────────
+  // Mirrors the repository-journal family: collection routes under
+  // /repos/{repo}/sessions and addressed routes under /sessions/{id}.
+
+  async createSession(input: NewSessionInput): Promise<SessionRecord> {
+    return this.requestJson(
+      'POST',
+      `${this.repoPath(input.repo)}/sessions`,
+      sessionRecordWireSchema,
+      input,
+    )
+  }
+
+  async getSession(id: string): Promise<SessionRecord | null> {
+    const response = await this.raw('GET', this.sessionPath(id))
+    if (response.status === 404) return null
+    if (!response.ok) throw await this.toError(response)
+    const body: unknown = await response.json()
+    return body === null ? null : sessionRecordWireSchema.parse(body)
+  }
+
+  async listSessions(repo: string): Promise<SessionRecord[]> {
+    return this.requestJson('GET', `${this.repoPath(repo)}/sessions`, sessionRecordListSchema)
+  }
+
+  async appendSessionEvent<T extends SessionEventType>(
+    id: string,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T>> {
+    const envelope = await this.requestJson(
+      'POST',
+      `${this.sessionPath(id)}/events`,
+      sessionEventEnvelopeWireSchema,
+      { actor: event.actor, type: event.type, payload: event.payload },
+    )
+    return envelope as unknown as SessionEventEnvelope<T>
+  }
+
+  async getSessionEvents(
+    id: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<SessionEvent[]> {
+    const params = new URLSearchParams({ since: String(sinceSeq) })
+    if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
+    const events = await this.requestJson(
+      'GET',
+      `${this.sessionPath(id)}/events?${params}`,
+      sessionEventListSchema,
+    )
+    return events as unknown as SessionEvent[]
+  }
+
+  async appendSessionWithArtifacts<T extends SessionEventType>(
+    id: string,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+  ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+    const sentinels: SessionArtifactMeta[] = artifacts.map((artifact, index) => ({
+      session: id,
+      kind: artifact.kind,
+      revision: placeholderRev(index),
+      blobRef: '',
+      metadata: structuredClone(artifact.metadata ?? {}),
+      createdAt: '',
+    }))
+    const write = makeEvent(sentinels)
+    const result = await this.requestJson(
+      'POST',
+      `${this.sessionPath(id)}/deposits`,
+      sessionDepositsResponseSchema,
+      {
+        artifacts: artifacts.map((artifact) => ({
+          kind: artifact.kind,
+          contentBase64: encodeBase64(toBytes(artifact.content)),
+          ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
+        })),
+        event: { actor: write.actor, type: write.type, payload: write.payload },
+      },
+    )
+    return {
+      event: result.event as unknown as SessionEventEnvelope<T>,
+      artifacts: result.artifacts,
+    }
+  }
+
+  async putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+    return this.requestJson(
+      'POST',
+      `${this.sessionPath(id)}/artifacts`,
+      sessionArtifactMetaWireSchema,
+      {
+        kind: artifact.kind,
+        contentBase64: encodeBase64(toBytes(artifact.content)),
+        ...(artifact.metadata !== undefined ? { metadata: artifact.metadata } : {}),
+      },
+    )
+  }
+
+  async getSessionArtifact(
+    id: string,
+    kind: string,
+    rev?: number,
+  ): Promise<SessionArtifact | null> {
+    const params = new URLSearchParams({ kind })
+    if (rev !== undefined) params.set('rev', String(rev))
+    const result = await this.requestJson(
+      'GET',
+      `${this.sessionPath(id)}/artifacts?${params}`,
+      sessionArtifactGetResponseSchema,
+    )
+    return result === null
+      ? null
+      : { meta: result.meta, content: decodeBase64(result.contentBase64) }
+  }
+
+  async listSessionArtifacts(id: string, kind?: string): Promise<SessionArtifactMeta[]> {
+    const query = kind !== undefined ? `?kind=${encodeURIComponent(kind)}` : ''
+    return this.requestJson(
+      'GET',
+      `${this.sessionPath(id)}/artifact-list${query}`,
+      sessionArtifactMetaListSchema,
+    )
+  }
+
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
     return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
   }
@@ -487,7 +640,9 @@ export class RemoteBuildStore implements BuildStore {
   private streamFamilyPath(scope: StreamScope): string {
     return scope.kind === 'build'
       ? `${this.buildPath(scope.build)}/streams`
-      : `${this.repoPath(scope.repo)}/streams`
+      : scope.kind === 'repo'
+        ? `${this.repoPath(scope.repo)}/streams`
+        : `${this.sessionPath(scope.session)}/streams`
   }
 
   private streamPath(streamId: string, suffix = ''): string {

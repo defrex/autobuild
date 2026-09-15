@@ -17,7 +17,16 @@ import {
   type RepositoryEventType,
   type RepositoryEventWrite,
 } from '../events/repository'
+import {
+  validateSessionEventWrite,
+  type SessionEvent,
+  type SessionEventEnvelope,
+  type SessionEventType,
+  type SessionEventWrite,
+} from '../events/sessions'
+import { humanActor } from '../events/envelope'
 import { createBuildScopedStore } from './build-scope'
+import { createSessionScopedStore } from './session-handle'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -26,7 +35,7 @@ import {
 import { pollingSubscribe } from './subscribe'
 import { StreamLocks } from './streams/lock'
 import { assembleUIMessageDocument } from './streams/assemble'
-import { readStreamWithWait } from './streams/wait'
+import { readEventsWithWait, readStreamWithWait } from './streams/wait'
 import {
   serializedBatchSize,
   STREAM_BATCH_MAX_BYTES,
@@ -44,6 +53,7 @@ import {
 } from './streams/types'
 import {
   contentHash,
+  normalizeOperator,
   systemClock,
   toBytes,
   validateExpectedSeq,
@@ -56,9 +66,14 @@ import {
   type BuildStore,
   type Clock,
   type NewBuildInput,
+  type NewSessionInput,
   type RepositoryArtifact,
   type RepositoryArtifactMeta,
   type RepositoryRecord,
+  type SessionArtifact,
+  type SessionArtifactMeta,
+  type SessionRecord,
+  type SessionScopedStore,
   type SubscribeOptions,
   type Unsubscribe,
 } from './types'
@@ -116,6 +131,13 @@ interface StreamState {
   chunks: StreamChunk[]
 }
 
+interface SessionState {
+  record: SessionRecord
+  events: SessionEvent[]
+  /** kind → deposits in revision order (index = revision; 0-based, §6.3). */
+  artifacts: Map<string, SessionArtifactMeta[]>
+}
+
 export class MemoryBuildStore implements BuildStore {
   private readonly builds = new Map<string, BuildState>()
   private readonly repos = new Map<string, RepoState>()
@@ -123,6 +145,7 @@ export class MemoryBuildStore implements BuildStore {
   /** Per-stream in-process mutex (store/streams/lock.ts): serializes a
    * stream's close against its appends inside this process (AUT-348). */
   private readonly streamLocks = new StreamLocks()
+  private readonly sessions = new Map<string, SessionState>()
   private readonly clock: Clock
   private readonly maxRevisions: number
   readonly blobs: BlobStore
@@ -182,6 +205,10 @@ export class MemoryBuildStore implements BuildStore {
 
   scopeBuild(slug: string): BuildScopedStore {
     return createBuildScopedStore(this, slug)
+  }
+
+  scopeSession(id: string): SessionScopedStore {
+    return createSessionScopedStore(this, id)
   }
 
   private now(): string {
@@ -649,6 +676,202 @@ export class MemoryBuildStore implements BuildStore {
     }
   }
 
+  // ── Operator sessions (SPEC §7.1.1 — a third resource kind) ─────────
+
+  private sessionState(id: string): SessionState {
+    const state = this.sessions.get(id)
+    if (!state) throw new Error(`unknown session "${id}"`)
+    return state
+  }
+
+  private sessionSnapshot(state: SessionState): SessionRecord {
+    return structuredClone(state.record)
+  }
+
+  async createSession(input: NewSessionInput): Promise<SessionRecord> {
+    const operator = normalizeOperator(input.operator)
+    if (!input.repo) throw new Error('repo is required')
+    const ts = this.now()
+    const id = `os_${crypto.randomUUID()}`
+    const state: SessionState = {
+      record: {
+        id,
+        repo: input.repo,
+        operator,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      events: [],
+      artifacts: new Map(),
+    }
+    // The record and its first fact land together: `session.created` (seq 1,
+    // actor the operator) is validated and appended in the same synchronous
+    // commit as the insert — there is no state where a session exists without
+    // its creation fact (D6).
+    const validated = validateSessionEventWrite({
+      actor: humanActor(operator),
+      type: 'session.created',
+      payload: input.title !== undefined ? { title: input.title } : {},
+    })
+    state.events.push({
+      session: id,
+      seq: 1,
+      ts,
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    } as SessionEvent)
+    this.sessions.set(id, state)
+    return this.sessionSnapshot(state)
+  }
+
+  async getSession(id: string): Promise<SessionRecord | null> {
+    const state = this.sessions.get(id)
+    return state ? this.sessionSnapshot(state) : null
+  }
+
+  async listSessions(repo: string): Promise<SessionRecord[]> {
+    return [...this.sessions.values()]
+      .filter((state) => state.record.repo === repo)
+      .map((state) => this.sessionSnapshot(state))
+  }
+
+  async appendSessionEvent<T extends SessionEventType>(
+    id: string,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T>> {
+    const state = this.sessionState(id)
+    const validated = validateSessionEventWrite(event)
+    const envelope = {
+      session: id,
+      seq: state.events.length + 1,
+      ts: this.now(),
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    } as SessionEventEnvelope<T>
+    state.events.push(structuredClone(envelope) as SessionEvent)
+    state.record.updatedAt = envelope.ts
+    return envelope
+  }
+
+  async getSessionEvents(
+    id: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<SessionEvent[]> {
+    const read = async (): Promise<SessionEvent[]> =>
+      structuredClone(this.sessionState(id).events.filter((event) => event.seq > sinceSeq))
+    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+  }
+
+  async appendSessionWithArtifacts<T extends SessionEventType>(
+    id: string,
+    artifacts: ArtifactInput[],
+    makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+  ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+    const state = this.sessionState(id)
+    const prepared: {
+      kind: string
+      blobRef: string
+      metadata: Record<string, unknown>
+    }[] = []
+    for (const artifact of artifacts) {
+      if (!artifact.kind) throw new Error('artifact kind is required')
+      const bytes = toBytes(artifact.content)
+      const blobRef = contentHash(bytes)
+      await this.blobs.put(blobRef, bytes)
+      prepared.push({
+        kind: artifact.kind,
+        blobRef,
+        metadata: structuredClone(artifact.metadata ?? {}),
+      })
+    }
+    // Same shape as `appendRepoWithArtifacts`: everything is validated before
+    // the first mutation, so the synchronous commit has no rollback path to
+    // get wrong (D6) and the validation-before-prune invariant (AUT-322)
+    // holds trivially — session artifacts are not retention-managed.
+    const ts = this.now()
+    const nextRev = new Map<string, number>()
+    const deposited = prepared.map((item): SessionArtifactMeta => {
+      const revision =
+        nextRev.get(item.kind) ?? MemoryBuildStore.nextRevision(state.artifacts.get(item.kind))
+      nextRev.set(item.kind, revision + 1)
+      return {
+        session: id,
+        kind: item.kind,
+        revision,
+        blobRef: item.blobRef,
+        metadata: item.metadata,
+        createdAt: ts,
+      }
+    })
+    const validated = validateSessionEventWrite(makeEvent(structuredClone(deposited)))
+    for (const meta of deposited) {
+      const revisions = state.artifacts.get(meta.kind) ?? []
+      revisions.push(meta)
+      state.artifacts.set(meta.kind, revisions)
+    }
+    const envelope = {
+      session: id,
+      seq: state.events.length + 1,
+      ts,
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    } as SessionEventEnvelope<T>
+    state.events.push(structuredClone(envelope) as SessionEvent)
+    state.record.updatedAt = ts
+    return { event: envelope, artifacts: structuredClone(deposited) }
+  }
+
+  async putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+    const state = this.sessionState(id)
+    if (!artifact.kind) throw new Error('artifact kind is required')
+    const bytes = toBytes(artifact.content)
+    const blobRef = contentHash(bytes)
+    await this.blobs.put(blobRef, bytes)
+    const revisions = state.artifacts.get(artifact.kind) ?? []
+    const meta: SessionArtifactMeta = {
+      session: id,
+      kind: artifact.kind,
+      revision: MemoryBuildStore.nextRevision(revisions),
+      blobRef,
+      metadata: structuredClone(artifact.metadata ?? {}),
+      createdAt: this.now(),
+    }
+    revisions.push(meta)
+    state.artifacts.set(artifact.kind, revisions)
+    state.record.updatedAt = meta.createdAt
+    return structuredClone(meta)
+  }
+
+  async getSessionArtifact(
+    id: string,
+    kind: string,
+    rev?: number,
+  ): Promise<SessionArtifact | null> {
+    const revisions = this.sessionState(id).artifacts.get(kind)
+    if (!revisions || revisions.length === 0) return null
+    const meta =
+      rev === undefined
+        ? revisions.at(-1)
+        : revisions.find((candidate) => candidate.revision === rev)
+    if (!meta) return null
+    const content = await this.blobs.get(meta.blobRef)
+    return content ? { meta: structuredClone(meta), content } : null
+  }
+
+  async listSessionArtifacts(id: string, kind?: string): Promise<SessionArtifactMeta[]> {
+    const all = [...this.sessionState(id).artifacts.values()].flat()
+    return structuredClone(
+      (kind ? all.filter((meta) => meta.kind === kind) : all).sort(
+        (a, b) => a.kind.localeCompare(b.kind) || a.revision - b.revision,
+      ),
+    )
+  }
+
   // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
 
   private streamState(streamId: string): StreamState {
@@ -673,7 +896,10 @@ export class MemoryBuildStore implements BuildStore {
         state.record.scope.kind === scope.kind &&
         (scope.kind === 'build'
           ? state.record.scope.kind === 'build' && state.record.scope.build === scope.build
-          : state.record.scope.kind === 'repo' && state.record.scope.repo === scope.repo),
+          : scope.kind === 'repo'
+            ? state.record.scope.kind === 'repo' && state.record.scope.repo === scope.repo
+            : state.record.scope.kind === 'session' &&
+              state.record.scope.session === scope.session),
     )
     if (inScope.length <= 1) return
     // Most recently closed survives (order by closedAt, tie-break by id).
@@ -691,7 +917,8 @@ export class MemoryBuildStore implements BuildStore {
   async createStream(scope: StreamScope, label: string): Promise<StreamRecord> {
     if (!label) throw new Error('stream label is required')
     if (scope.kind === 'build') this.state(scope.build)
-    else this.repoState(scope.repo)
+    else if (scope.kind === 'repo') this.repoState(scope.repo)
+    else this.sessionState(scope.session)
     const id = `st_${crypto.randomUUID()}`
     const record: StreamRecord = {
       id,
@@ -803,7 +1030,7 @@ export class MemoryBuildStore implements BuildStore {
         const revs = buildState.artifacts.get(input.kind) ?? []
         revs.push(meta)
         buildState.artifacts.set(input.kind, revs)
-      } else {
+      } else if (record.scope.kind === 'repo') {
         const repoMeta: RepositoryArtifactMeta = {
           repo: record.scope.repo,
           kind: input.kind,
@@ -816,6 +1043,19 @@ export class MemoryBuildStore implements BuildStore {
         const revs = repoState.artifacts.get(input.kind) ?? []
         revs.push(repoMeta)
         repoState.artifacts.set(input.kind, revs)
+      } else {
+        const sessionMeta: SessionArtifactMeta = {
+          session: record.scope.session,
+          kind: input.kind,
+          revision: 0,
+          blobRef,
+          metadata: structuredClone(input.metadata),
+          createdAt: ts,
+        }
+        const sessionState = this.sessionState(record.scope.session)
+        const revs = sessionState.artifacts.get(input.kind) ?? []
+        revs.push(sessionMeta)
+        sessionState.artifacts.set(input.kind, revs)
       }
       return this.snapshotStream(state)
     })
@@ -835,7 +1075,10 @@ export class MemoryBuildStore implements BuildStore {
           state.record.scope.kind === scope.kind &&
           (scope.kind === 'build'
             ? state.record.scope.kind === 'build' && state.record.scope.build === scope.build
-            : state.record.scope.kind === 'repo' && state.record.scope.repo === scope.repo),
+            : scope.kind === 'repo'
+              ? state.record.scope.kind === 'repo' && state.record.scope.repo === scope.repo
+              : state.record.scope.kind === 'session' &&
+                state.record.scope.session === scope.session),
       )
       .map((state) => this.snapshotStream(state))
     return records.sort(

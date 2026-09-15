@@ -66,9 +66,10 @@ remote-store protocol requires matching client and server versions.
 | `package.json` | Private `autobuild` compatibility distribution and Bun workspace orchestrator; owns bins and shipped assets | — |
 | `packages/core/package.json` | Private `@autobuild/core` implementation workspace | — |
 | `packages/core/src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs, the canonical verify outcome | §4 |
-| `packages/core/src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
+| `packages/core/src/events/` | Separate build, repository, and operator-session envelopes/catalogs, frozen payload schemas, actor validation, the `via` attribution marker | §15 |
 | `packages/core/src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
-| `packages/core/src/store/` | BuildStore plus repository-journal contract; interface-enforced build and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
+| `packages/core/src/sessions/` | The operator-session reducer: status, open turn, pending approval, wake settings and cursors, and the turn list, reduced purely from the session event log | §7.1.1 |
+| `packages/core/src/store/` | BuildStore contract spanning builds, the repository journal, and operator sessions; interface-enforced build, operator-session, and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, tests, and deployment guide | §7.2, §18 |
 | `server.ts`, `vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
@@ -104,11 +105,14 @@ and later server-session human routes intentionally share one deployment.
 Where each mechanism lives, and the one rule worth knowing at the seam. The
 full behavior is specified by each owner's colocated tests.
 
-**Events and state.** `packages/core/src/events/payloads.ts` and `packages/core/src/events/repository.ts`
+**Events and state.** `packages/core/src/events/payloads.ts`, `packages/core/src/events/repository.ts`,
+and `packages/core/src/events/sessions.ts`
 are the frozen catalogs; every write passes `validateEventWrite` /
-`validateRepositoryEventWrite`. `packages/core/src/kernel/reducer.ts` derives all build
+`validateRepositoryEventWrite` / `validateSessionEventWrite`. `packages/core/src/kernel/reducer.ts` derives all build
 status; `packages/core/src/kernel/harvest.ts` and `packages/core/src/kernel/dispatch-settings.ts` reduce
-the repository journal independently of each other. No decision anywhere
+the repository journal independently of each other; `packages/core/src/sessions/reducer.ts` reduces an operator
+session's status, open turn, pending approval, and wake cursors from its own
+closed catalog. No decision anywhere
 consults a snapshot in place of the append-only log.
 
 **Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
@@ -118,8 +122,10 @@ identity for the finite `builds`, `build status`, and `artifact download` read
 shells: no identity retains operator authority, while any partial, malformed,
 shared-only, or mixed identity fails closed before Store opening. Remote
 references keep the existing token-backed client unchanged. Local references
-are wrapped by `packages/core/src/store/session-scope.ts`, which permits only the exact
-ambient build or repository resource and rejects agent-attributed event writes
+are wrapped by `packages/core/src/store/phase-session.ts`, which permits only the exact
+ambient build or repository resource (this is the phase-session wrapper, not the
+operator-session scope handle in `session-handle.ts`) and rejects
+agent-attributed event writes
 for any session other than `AB_SESSION`. The wrapper deliberately allows
 non-agent actors because phase terminals also run trusted kernel plumbing in
 that CLI process; resource authority still applies to every operation. Generic

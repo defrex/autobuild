@@ -19,7 +19,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { BUILD_STATUSES } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { SessionScopeError } from '../store/session-scope'
+import { PhaseSessionError } from '../store/phase-session'
 import type { BuildRecord, BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import {
@@ -475,6 +475,35 @@ describe('summarize', () => {
 })
 
 describe('detail', () => {
+  test('renders the via attribution marker on human actors, plain actors unchanged', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'b1' })
+    await store.append('b1', {
+      actor: humanActor('operator', { kind: 'session', id: 'os_delegate' }),
+      type: 'build.pause-requested',
+      payload: {},
+    })
+    const via = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW, 5)
+    expect(via.lastEvent?.actor).toEqual({
+      kind: 'human',
+      user: 'operator',
+      via: { kind: 'session', id: 'os_delegate' },
+    })
+    const rendered = renderDetail(via, NOW).join('\n')
+    expect(rendered).toContain('by human (via session os_delegate)')
+    expect(rendered).toContain('human (via session os_delegate)')
+
+    await store.append('b1', {
+      actor: humanActor('operator', { kind: 'mcp', client: 'claude-code' }),
+      type: 'build.resume-requested',
+      payload: {},
+    })
+    const mcp = detail((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW, 5)
+    const mcpRendered = renderDetail(mcp, NOW).join('\n')
+    expect(mcpRendered).toContain('by human (via mcp claude-code)')
+    await store.close()
+  })
+
   test('projects review round ceilings in JSON data and human output until spec revision', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -1673,7 +1702,7 @@ describe('ambient read authority', () => {
         now: () => NOW,
         slug: 'foreign',
       }),
-    ).rejects.toBeInstanceOf(SessionScopeError)
+    ).rejects.toBeInstanceOf(PhaseSessionError)
     await expect(
       abBuilds({
         targetRepo: '/anywhere',
@@ -1705,7 +1734,7 @@ describe('ambient read authority', () => {
         openStore: () => store,
         slug: 'mine',
       }),
-    ).rejects.toBeInstanceOf(SessionScopeError)
+    ).rejects.toBeInstanceOf(PhaseSessionError)
 
     let opens = 0
     await expect(

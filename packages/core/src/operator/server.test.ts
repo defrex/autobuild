@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
-import { DISPATCHER, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import { RemoteBuildStore } from '../store/remote/client'
 import { createStoreServer } from '../store/remote/server'
@@ -308,5 +308,184 @@ describe('operator HTTP API', () => {
     expect((error as Error).message).toBe(
       'build "demo" is not active (status: done); build controls require running, paused, or blocked',
     )
+  })
+})
+
+describe('operator session routes', () => {
+  const AGENT = agentActor('orchestrator', 'os_turn')
+
+  function operatorClient(
+    server: { fetch(req: Request): Promise<Response> },
+    user: string,
+  ): OperatorApiClient {
+    return new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      fetchFn: fetchFor(server),
+    })
+  }
+
+  async function startTurn(store: MemoryBuildStore, sessionId: string): Promise<string> {
+    const stream = await store.createStream({ kind: 'session', session: sessionId }, 'turn t1')
+    await store.appendSessionEvent(sessionId, {
+      actor: AGENT,
+      type: 'turn.started',
+      payload: { turn: 't1', stream: stream.id, trigger: { kind: 'message', messageSeq: 2 } },
+    })
+    await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'working' }])
+    return stream.id
+  }
+
+  test('requires an operator token; raw store and deployment tokens are 403', async () => {
+    const store = await runningStore()
+    const server = createOperatorServer({ store, secret, clock })
+    for (const token of [
+      mintToken(secret, { build: '*', session: '*', exp: now.getTime() + 60_000 }),
+      mintToken(secret, { operator: true, session: '*', exp: now.getTime() + 60_000 }),
+    ]) {
+      const response = await server.fetch(
+        new Request(`http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/sessions`, {
+          headers: {
+            authorization: `Bearer ${token}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          },
+        }),
+      )
+      expect(response.status).toBe(403)
+    }
+  })
+
+  test('session lifecycle: ownership, attribution, approval matching, archive, turn stream', async () => {
+    const store = new MemoryBuildStore({ clock })
+    const server = createOperatorServer({ store, secret, clock })
+    const ada = operatorClient(server, 'Ada')
+    const bob = operatorClient(server, 'Bob')
+
+    // Create: attributed to the signed-in operator.
+    const created = await ada.createSession(repo, { title: 'orchestrator' })
+    expect(created.id).toMatch(/^os_/)
+    expect(created.operator).toBe('Ada')
+    const foreign = await bob.createSession(repo, { title: 'bob' })
+
+    // List: both sessions of the repo, newest update first (with a frozen
+    // clock the insertion order stands in for the tie-break).
+    expect((await bob.listSessions(repo)).map((s) => s.id).sort()).toEqual(
+      [foreign.id, created.id].sort(),
+    )
+
+    // A turn on Ada's session so views have content.
+    await startTurn(store, created.id)
+    const view = await bob.getSession(repo, created.id)
+    expect(view.session.operator).toBe('Ada')
+    expect(view.state.status).toBe('running')
+    expect(view.turns).toEqual([
+      {
+        turn: 't1',
+        stream: expect.any(String),
+        startedSeq: 2,
+        trigger: { kind: 'message', messageSeq: 2 },
+        state: 'open',
+      },
+    ])
+
+    // Same-repo operators read but cannot write to someone else's session.
+    await expect(bob.postSessionMessage(repo, created.id, { text: 'hi' })).rejects.toMatchObject({
+      status: 403,
+    })
+    await expect(bob.archiveSession(repo, created.id)).rejects.toMatchObject({ status: 403 })
+    await expect(
+      bob.answerSessionApproval(repo, created.id, {
+        turn: 't1',
+        toolCallId: 'c1',
+        decision: 'approve',
+      }),
+    ).rejects.toMatchObject({ status: 403 })
+    await expect(bob.getSession(repo, created.id)).resolves.toBeDefined()
+
+    // Owner writes are attributed to the signed-in operator, never a
+    // client-supplied identity, and never carry a via marker.
+    await ada.postSessionMessage(repo, created.id, { text: 'fix the login flow' })
+    await ada.setSessionWake(repo, created.id, { globs: ['escalation.raised'] })
+    const events = await store.getSessionEvents(created.id)
+    for (const event of events) {
+      expect((event.actor as { via?: unknown }).via).toBeUndefined()
+      if (event.type !== 'turn.started') {
+        expect(event.actor).toEqual({ kind: 'human', user: 'Ada' })
+      }
+    }
+
+    // Approvals: no matching pending approval, a mismatched tool call id, or
+    // an unknown turn is a 409 refusal.
+    await expect(
+      ada.answerSessionApproval(repo, created.id, {
+        turn: 't1',
+        toolCallId: 'c1',
+        decision: 'approve',
+      }),
+    ).rejects.toMatchObject({ status: 409 })
+    await store.appendSessionEvent(created.id, {
+      actor: AGENT,
+      type: 'approval.requested',
+      payload: { turn: 't1', toolCallId: 'c1', toolName: 'bash', input: { command: 'ls' } },
+    })
+    expect((await ada.getSession(repo, created.id)).state.status).toBe('awaiting-approval')
+    await expect(
+      ada.answerSessionApproval(repo, created.id, {
+        turn: 't1',
+        toolCallId: 'c9',
+        decision: 'deny',
+      }),
+    ).rejects.toMatchObject({ status: 409 })
+    await ada.answerSessionApproval(repo, created.id, {
+      turn: 't1',
+      toolCallId: 'c1',
+      decision: 'deny',
+    })
+    const answered = await ada.getSession(repo, created.id)
+    expect(answered.state.status).toBe('running')
+    expect(answered.state.pendingApproval).toBeUndefined()
+
+    // Turn stream read; readable by any operator of the repo; unknown turn 404s.
+    await expect(
+      operatorClient(server, 'Bob').readSessionTurnStream(repo, created.id, 't1', {}),
+    ).resolves.toMatchObject({ status: 'open' })
+    await expect(
+      ada.readSessionTurnStream(repo, created.id, 't-missing', {}),
+    ).rejects.toMatchObject({ status: 404 })
+
+    // Archive: owner only; archived sessions are read-only for everyone.
+    await ada.archiveSession(repo, created.id)
+    await expect(ada.getSession(repo, created.id)).resolves.toMatchObject({
+      state: { status: 'archived' },
+    })
+    for (const attempt of [
+      () => ada.postSessionMessage(repo, created.id, { text: 'hello?' }),
+      () => ada.setSessionWake(repo, created.id, { globs: [] }),
+      () => ada.archiveSession(repo, created.id),
+      () =>
+        ada.answerSessionApproval(repo, created.id, {
+          turn: 't1',
+          toolCallId: 'c1',
+          decision: 'deny',
+        }),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject({ status: 409 })
+    }
+
+    // Bob's own session is untouched by all of this.
+    expect((await bob.getSession(repo, foreign.id)).session.operator).toBe('Bob')
+    await bob.archiveSession(repo, foreign.id)
+  })
+
+  test('unknown sessions are 404 wherever they are addressed', async () => {
+    const store = await runningStore()
+    const server = createOperatorServer({ store, secret, clock })
+    const ada = operatorClient(server, 'Ada')
+    await expect(ada.getSession(repo, 'os_nope')).rejects.toMatchObject({ status: 404 })
+    await expect(ada.postSessionMessage(repo, 'os_nope', { text: 'hi' })).rejects.toMatchObject({
+      status: 404,
+    })
+    await expect(ada.listSessions(repo)).resolves.toEqual([])
   })
 })
