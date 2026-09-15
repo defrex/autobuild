@@ -69,6 +69,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/events/` | Separate build and repository envelopes/catalogs, frozen payload schemas, actor validation | §15 |
 | `packages/core/src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
 | `packages/core/src/store/` | BuildStore plus repository-journal contract; interface-enforced build and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
+| `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, tests, and deployment guide | §7.2, §18 |
 | `server.ts`, `vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
@@ -577,7 +578,7 @@ installed `ab` binary remains the non-watching production entry.
 The seams are the contract. Five reusable contract families run the same
 behavioral assertions against every implementation:
 
-- `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`;
+- `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`, including the streams block (§7.6) every adapter runs;
 - `packages/core/src/ports/tickets/contract.ts` — `TicketSource`;
 - `packages/core/src/ports/workspace/contract.ts` — `WorkspaceProvider`;
 - `packages/core/src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and

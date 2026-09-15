@@ -474,11 +474,10 @@ conformance suite):
 Required phase outputs persist at **phase/round boundaries**; a killed phase
 re-runs from its start. An agent may also explicitly deposit a review artifact
 mid-session, including an atomic PR-attachment designation (§7.5, §8.2); these
-immutable revisions are harmless if a killed phase later retries. Designated
-streaming exception (future, out of scope for v2.0): **live transcript
-streaming**, so a web UI controlling remote agents can watch output in real
-time. The store's types should reserve a streaming revision concept even while
-no adapter implements it.
+immutable revisions are harmless if a killed phase later retries. The
+streaming exception reserved here is now the stream primitive (§7.6): live
+output persists continuously while an agent runs, so a session that dies
+mid-turn leaves its transcript behind instead of nothing.
 
 ### 7.4 Resumption across sandboxes
 
@@ -540,6 +539,47 @@ observations and preserve the complete text projection; they never fail
 verification or block finalize. Agents receive no forge credentials. A
 designation after the PR exists publishes a new complete summary, so finalize
 post-steps and post-reconcile verifiers need no custom phase.
+
+### 7.6 Streams (the third primitive)
+
+The store's content model is three primitives, each doing one job:
+
+- **Events** carry facts — small, typed, append-only, the routing spine.
+- **Artifacts** carry bulk — content-addressed bytes deposited at boundaries.
+- **Streams** carry the agent's running output — token deltas, tool calls and
+  results, reasoning — which is too bulky for the event log and arrives too
+  continuously to be an artifact until a session ends.
+
+A stream is an append-only, per-stream sequenced log of **chunks** (a chunk is
+a nonempty batch of protocol parts) with an open-then-closed lifecycle. The
+chunk vocabulary is the Vercel AI SDK UI Message Stream protocol, version 1 of
+the current major (AI SDK 7): the store holds the protocol's parts rather than
+a private shape, so a read route can re-emit them as Server-Sent Events that
+the AI SDK's own client hooks and any customer's tooling consume unchanged.
+The store performs no protocol validation on append; each part only needs a
+nonempty-string `type`, and the store assigns each batch its per-stream
+sequence (from 1) and timestamp, so producers cannot fake ordering.
+
+Closing a stream assembles its chunks into the protocol's `UIMessage[]`
+document — dropping parts of undefined types while counting them — and
+deposits that document as an artifact (`stream:<streamId>`, revision 0) on the
+owning scope in the same atomic operation that marks the stream closed. A
+stream that dies mid-turn stays open and readable, so its output survives.
+Chunk retention is deposit-path and count-based, like artifact retention: at
+the next stream create in a scope, every previously closed stream's chunks
+except the most recently closed are deleted; finalized artifacts are never
+touched.
+
+Streams are scoped to a build or to a repository. The scope vocabulary is
+closed and will later gain an operator-session kind. Reads are cursor-based
+(`since` sequence) with an optional bounded wait that returns as soon as a
+chunk lands or the stream closes — the resumable live channel every frontend
+would otherwise invent for itself.
+
+**Presentation, never routing.** No kernel, engine, reducer, or dispatcher
+decision reads stream content; outcomes travel only the typed CLI. Writers
+(agent runners emitting parts) and readers (operator UIs) are separate
+tickets; this section defines only the primitive.
 
 ## 8. The `ab` CLI
 
@@ -1984,7 +2024,9 @@ or installs releases in the foreground or background.
 ## 17. Out of scope for v2.0 (explicitly)
 
 - True push `subscribe` (interface reserved; polling implementation).
-- Live transcript streaming (types reserved; boundary persistence only).
+- Live transcript streaming for writers and readers (the stream primitive —
+  SPEC §7.6 — has shipped; agent runners emitting parts and operator UIs
+  rendering them remain future work).
 - Web UI (seam designed; terminal first).
 - Generic workflow DAGs (the grammar is fixed; extension via `verify:*` and
   `finalize:*` only).
