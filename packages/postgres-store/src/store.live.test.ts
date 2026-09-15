@@ -5,6 +5,7 @@ import {
   describeBuildStoreContract,
   sampleBuildInput,
   sampleEventWrite,
+  type BlobStore,
 } from 'autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
 import { openPostgresBuildStore } from './store'
@@ -211,6 +212,113 @@ if (testUrl) {
           runWorker(database.url, 'conditional', 'process-shared', 30),
         ])
         expect(conditional.sort()).toEqual(['stale', 'winner'])
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    })
+
+    test('a cross-connection append inside a close prepare window is included in the finalized artifact (AUT-348)', async () => {
+      const database = await isolatedDatabase()
+      // A shared gated blob store: instance A's close suspends inside its
+      // prepare-phase blobs.put until instance B's append has committed —
+      // forced ordering, no timing (AUT-348).
+      const backing = new MemoryBlobStore()
+      let signalEntered!: () => void
+      let release!: () => void
+      const entered = new Promise<void>((resolve) => {
+        signalEntered = resolve
+      })
+      const gateOpen = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let armed = true
+      const blobs: BlobStore = {
+        put: async (hash, bytes) => {
+          if (armed) {
+            armed = false
+            signalEntered()
+            await gateOpen
+          }
+          await backing.put(hash, bytes)
+        },
+        get: (hash) => backing.get(hash),
+      }
+      const a = await openPostgresBuildStore(database.url, blobs)
+      const b = await openPostgresBuildStore(database.url, blobs)
+      try {
+        await a.createBuild(sampleBuildInput('st-pg-close-race'))
+        const stream = await a.createStream({ kind: 'build', build: 'st-pg-close-race' }, 'turn')
+        await a.appendStreamParts(stream.id, [{ type: 'start', messageId: 'm' }])
+        await a.appendStreamParts(stream.id, [{ type: 'text-start', id: 't' }])
+
+        const closing = a.closeStream(stream.id, 'completed')
+        await entered
+        const chunk = await b.appendStreamParts(stream.id, [
+          { type: 'text-delta', id: 't', delta: 'late' },
+        ])
+        expect(chunk.seq).toBe(3) // B's append was acknowledged before the close commits
+        release()
+        const record = await closing
+        expect(record.status).toBe('closed')
+
+        // The commit's re-read-under-lock re-assembled from the newer chunk
+        // set: all three acknowledged appends are in chunkCount and the doc.
+        const artifact = await a.getArtifact('st-pg-close-race', `stream:${stream.id}`)
+        expect(artifact?.meta.metadata).toMatchObject({ chunkCount: 3 })
+        const document = JSON.parse(new TextDecoder().decode(artifact!.content)) as Array<{
+          parts: Array<{ type: string; text?: string; state?: string }>
+        }>
+        expect(document[0]?.parts).toContainEqual({
+          type: 'text',
+          text: 'late',
+          state: 'streaming',
+        })
+      } finally {
+        await a.close()
+        await b.close()
+        await database.cleanup()
+      }
+    })
+
+    test('a close held on stream A does not serialize an append on stream B (AUT-348)', async () => {
+      const database = await isolatedDatabase()
+      const backing = new MemoryBlobStore()
+      let signalEntered!: () => void
+      let release!: () => void
+      const entered = new Promise<void>((resolve) => {
+        signalEntered = resolve
+      })
+      const gateOpen = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let armed = true
+      const blobs: BlobStore = {
+        put: async (hash, bytes) => {
+          if (armed) {
+            armed = false
+            signalEntered()
+            await gateOpen
+          }
+          await backing.put(hash, bytes)
+        },
+        get: (hash) => backing.get(hash),
+      }
+      const store = await openPostgresBuildStore(database.url, blobs)
+      try {
+        await store.createBuild(sampleBuildInput('st-pg-two-streams'))
+        const a = await store.createStream({ kind: 'build', build: 'st-pg-two-streams' }, 'a')
+        const b = await store.createStream({ kind: 'build', build: 'st-pg-two-streams' }, 'b')
+        await store.appendStreamParts(a.id, [{ type: 'start', messageId: 'am' }])
+
+        const closing = store.closeStream(a.id, 'completed')
+        await entered // A's close is suspended inside its prepare-phase put
+        const chunk = await store.appendStreamParts(b.id, [{ type: 'start', messageId: 'bm' }])
+        expect(chunk.seq).toBe(1)
+        release()
+        const record = await closing
+        expect(record.status).toBe('closed')
+        expect((await store.readStream(b.id)).chunks).toHaveLength(1)
       } finally {
         await store.close()
         await database.cleanup()

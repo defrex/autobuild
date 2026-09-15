@@ -47,6 +47,7 @@ import {
   revisionsToPrune,
 } from '../retention'
 import { pollingSubscribe } from '../subscribe'
+import { StreamLocks } from '../streams/lock'
 import { assembleUIMessageDocument } from '../streams/assemble'
 import { readEventsWithWait, readStreamWithWait } from '../streams/wait'
 import {
@@ -248,6 +249,10 @@ export interface SqliteBuildStoreOptions {
 export class SqliteBuildStore implements BuildStore {
   private readonly sqlite: Database
   private readonly db: BunSQLiteDatabase
+  /** Per-stream in-process mutex (store/streams/lock.ts): serializes a
+   * stream's close against same-process appends (AUT-348). Cross-connection
+   * writers are arbitrated by the commit transaction's chunk re-verification. */
+  private readonly streamLocks = new StreamLocks()
   private readonly clock: Clock
   private readonly maxRevisions: number
   readonly blobs: BlobStore
@@ -1364,30 +1369,37 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
-    // Validate and size-check before any transaction.
+    // Validate and size-check before taking the per-stream lock, so invalid
+    // input keeps its current error precedence (AUT-348).
     validateStreamParts(parts)
     const bytes = serializedBatchSize(parts)
     if (bytes > STREAM_BATCH_MAX_BYTES) throw new StreamBatchTooLargeError(bytes)
-    return this.writeTx(() => {
-      const row = this.requireStream(streamId)
-      if (row.status === 'closed') throw new StreamClosedError(streamId)
-      const tails = this.db
-        .select({ max: sql<number | null>`max(${streamChunks.seq})` })
-        .from(streamChunks)
-        .where(eq(streamChunks.stream, streamId))
-        .get()
-      const chunk: StreamChunk = {
-        stream: streamId,
-        seq: (tails?.max ?? 0) + 1,
-        ts: this.now(),
-        parts: structuredClone(parts),
-      }
-      this.db
-        .insert(streamChunks)
-        .values({ stream: streamId, seq: chunk.seq, ts: chunk.ts, parts: chunk.parts })
-        .run()
-      return chunk
-    })
+    // The per-stream lock covers the closed check and the transaction as one
+    // critical section: an append issued during a same-process close waits
+    // for the close to commit, then fails the status check with an explicit
+    // StreamClosedError instead of being silently omitted from the artifact.
+    return this.streamLocks.run(streamId, () =>
+      this.writeTx(() => {
+        const row = this.requireStream(streamId)
+        if (row.status === 'closed') throw new StreamClosedError(streamId)
+        const tails = this.db
+          .select({ max: sql<number | null>`max(${streamChunks.seq})` })
+          .from(streamChunks)
+          .where(eq(streamChunks.stream, streamId))
+          .get()
+        const chunk: StreamChunk = {
+          stream: streamId,
+          seq: (tails?.max ?? 0) + 1,
+          ts: this.now(),
+          parts: structuredClone(parts),
+        }
+        this.db
+          .insert(streamChunks)
+          .values({ stream: streamId, seq: chunk.seq, ts: chunk.ts, parts: chunk.parts })
+          .run()
+        return chunk
+      }),
+    )
   }
 
   async readStream(
@@ -1419,61 +1431,89 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
-    const row = this.requireStream(streamId)
-    if (row.status === 'closed') return this.toStreamRecord(row)
-    // Prepare phase — assemble and store the blob before the transaction
-    // (D6 shape: content-addressed orphan blobs are harmless; a deposit
-    // failure leaves the stream open and unwritten).
-    const chunkRows = this.db
-      .select()
-      .from(streamChunks)
-      .where(eq(streamChunks.stream, streamId))
-      .orderBy(asc(streamChunks.seq))
-      .all()
-    const { document, droppedPartCount } = await assembleUIMessageDocument(
-      chunkRows.flatMap((chunk) => chunk.parts),
-    )
-    const scope = this.streamScopeOf(row)
-    const input = streamArtifactInput(
-      row.id,
-      scope,
-      row.label,
-      outcome,
-      document,
-      chunkRows.length,
-      droppedPartCount,
-    )
-    const prepared: PreparedArtifact = {
-      kind: input.kind,
-      blobRef: contentHash(toBytes(input.content)),
-      metadata: structuredClone(input.metadata),
-    }
-    await this.blobs.put(prepared.blobRef, toBytes(input.content))
-    // Commit phase — one synchronous transaction: the artifact deposit and
-    // the close land together or not at all. A close that raced us through
-    // the prepare phase wins; ours re-reads and returns its record.
-    return this.writeTx(() => {
-      const fresh = this.requireStream(streamId)
-      if (fresh.status === 'closed') return this.toStreamRecord(fresh)
-      const meta =
-        scope.kind === 'build'
-          ? this.depositInTx(scope.build, prepared)
-          : scope.kind === 'repo'
-            ? this.depositRepoInTx(scope.repo, prepared)
-            : this.depositSessionInTx(scope.session, prepared)
-      this.db
-        .update(streams)
-        .set({
-          status: 'closed',
+    // The per-stream mutex holds across the entire prepare→commit loop
+    // (AUT-348): a same-process append issued during this close waits for it
+    // to finish and then rejects on the closed check with StreamClosedError.
+    // Cross-connection appends (a second instance on the same file) are
+    // invisible to the mutex, so the commit transaction re-verifies the
+    // chunk tail and a mismatch retries the whole loop from a newer snapshot.
+    return this.streamLocks.run(streamId, async () => {
+      for (;;) {
+        const row = this.requireStream(streamId)
+        if (row.status === 'closed') return this.toStreamRecord(row)
+        // Prepare phase — assemble and store the blob before the transaction
+        // (D6 shape: content-addressed orphan blobs are harmless; a deposit
+        // failure leaves the stream open and unwritten).
+        const chunkRows = this.db
+          .select()
+          .from(streamChunks)
+          .where(eq(streamChunks.stream, streamId))
+          .orderBy(asc(streamChunks.seq))
+          .all()
+        const { document, droppedPartCount } = await assembleUIMessageDocument(
+          chunkRows.flatMap((chunk) => chunk.parts),
+        )
+        const scope = this.streamScopeOf(row)
+        const input = streamArtifactInput(
+          row.id,
+          scope,
+          row.label,
           outcome,
-          closedAt: meta.createdAt,
-          artifactKind: meta.kind,
-          artifactRevision: meta.revision,
-          artifactBlobRef: meta.blobRef,
-        })
-        .where(eq(streams.id, streamId))
-        .run()
-      return this.toStreamRecord(this.requireStream(streamId))
+          document,
+          chunkRows.length,
+          droppedPartCount,
+        )
+        const prepared: PreparedArtifact = {
+          kind: input.kind,
+          blobRef: contentHash(toBytes(input.content)),
+          metadata: structuredClone(input.metadata),
+        }
+        await this.blobs.put(prepared.blobRef, toBytes(input.content))
+        // Commit phase — one synchronous transaction: the artifact deposit
+        // and the close land together or not at all. A close that raced us
+        // through the prepare phase wins; ours re-reads and returns its
+        // record. The chunk tail is re-read under the same write lock:
+        // chunk seqs are gapless 1..n (assigned as MAX+1, and retention
+        // never deletes the closing stream's chunks), so a MAX other than
+        // the prepared length means a foreign appender landed inside the
+        // prepare window.
+        const committed = this.writeTx(
+          (): { stale: true } | { stale: false; record: StreamRecord } => {
+            const fresh = this.requireStream(streamId)
+            if (fresh.status === 'closed')
+              return { stale: false, record: this.toStreamRecord(fresh) }
+            const tail = this.db
+              .select({ max: sql<number | null>`max(${streamChunks.seq})` })
+              .from(streamChunks)
+              .where(eq(streamChunks.stream, streamId))
+              .get()
+            if ((tail?.max ?? 0) !== chunkRows.length) return { stale: true }
+            const meta =
+              scope.kind === 'build'
+                ? this.depositInTx(scope.build, prepared)
+                : scope.kind === 'repo'
+                  ? this.depositRepoInTx(scope.repo, prepared)
+                  : this.depositSessionInTx(scope.session, prepared)
+            this.db
+              .update(streams)
+              .set({
+                status: 'closed',
+                outcome,
+                closedAt: meta.createdAt,
+                artifactKind: meta.kind,
+                artifactRevision: meta.revision,
+                artifactBlobRef: meta.blobRef,
+              })
+              .where(eq(streams.id, streamId))
+              .run()
+            return { stale: false, record: this.toStreamRecord(this.requireStream(streamId)) }
+          },
+        )
+        if (!committed.stale) return committed.record
+        // A foreign appender landed inside the prepare window; loop and
+        // re-prepare from the newer chunk set so its acknowledged chunk is
+        // not omitted from the finalized artifact.
+      }
     })
   }
 
