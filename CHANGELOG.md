@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#334](https://github.com/defrex/autobuild/pull/334) — Read the build-owned config from the store in ab build status
 - [#330](https://github.com/defrex/autobuild/pull/330) — State the stream close/append interleaving guarantee in SPEC §7.6
 - [#329](https://github.com/defrex/autobuild/pull/329) — Serialize stream close against append to stop silent chunk loss
 - [#328](https://github.com/defrex/autobuild/pull/328) — Rename the phase-session store wrapper to deconflict from operator sessions
