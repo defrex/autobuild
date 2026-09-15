@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#340](https://github.com/defrex/autobuild/pull/340) — Guarantee a git identity for finalize commits
+- [#339](https://github.com/defrex/autobuild/pull/339) — Pin the listSessions same-millisecond tiebreak across stores
+- [#336](https://github.com/defrex/autobuild/pull/336) — State close idempotence and the append error surface in SPEC §7.6 (AUT-354)
 - [#334](https://github.com/defrex/autobuild/pull/334) — Read the build-owned config from the store in ab build status
 - [#333](https://github.com/defrex/autobuild/pull/333) — Stream every local build session as AI SDK UI message parts
 - [#332](https://github.com/defrex/autobuild/pull/332) — Add the agent tool registry and ab mcp over stdio
