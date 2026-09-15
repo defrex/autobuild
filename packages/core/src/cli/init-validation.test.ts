@@ -582,7 +582,7 @@ readyState = "ready"
     const snapshots: VercelSnapshotInfo[] = []
     const deletedSnapshotIds: string[] = []
     const sandbox: VercelSandboxHandle = {
-      getCommand: async () => ({ exitCode: null }),
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'fresh-random-sandbox',
       runCommand: async (params) => {
         commands.push({
@@ -758,7 +758,7 @@ readyState = "ready"
     let deletes = 0
     const seen: string[] = []
     const sandbox: VercelSandboxHandle = {
-      getCommand: async () => ({ exitCode: null }),
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'cancelled-sandbox',
       runCommand: async (params) => {
         expect(params.signal).toBe(controller.signal)
@@ -816,7 +816,7 @@ readyState = "ready"
 
   test('preserves validation and cleanup failures for manual Vercel remediation', async () => {
     const sandbox: VercelSandboxHandle = {
-      getCommand: async () => ({ exitCode: null }),
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'leaked-sandbox',
       runCommand: async () => ({ exitCode: 9 }),
       writeFiles: async () => {},
@@ -869,7 +869,7 @@ readyState = "ready"
 
   test('surfaces snapshot purge failure as manual release remediation', async () => {
     const sandbox: VercelSandboxHandle = {
-      getCommand: async () => ({ exitCode: null }),
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'snapshot-leak-sandbox',
       runCommand: async () => ({ exitCode: 0, stdout: async () => '', stderr: async () => '' }),
       writeFiles: async () => {},
@@ -1021,7 +1021,7 @@ readyState = "ready"
     let available = true
     let packageArchives = 0
     const sandbox: VercelSandboxHandle = {
-      getCommand: async () => ({ exitCode: null }),
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'failed-provisioning-sandbox',
       runCommand: async (params) => {
         if (
@@ -1116,7 +1116,7 @@ readyState = "ready"
     await writeFile(join(repo, 'autobuild.toml'), config)
     let deletes = 0
     const sandbox: VercelSandboxHandle = {
-      getCommand: async () => ({ exitCode: null }),
+      getCommand: async () => ({ exitCode: null, wait: async () => ({ exitCode: 0 }) }),
       name: 'malformed-sandbox',
       runCommand: async (params) => {
         const probe = params.args?.some((arg) => arg.includes('ab-init-probe'))

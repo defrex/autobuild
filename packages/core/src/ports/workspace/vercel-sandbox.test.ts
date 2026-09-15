@@ -65,8 +65,17 @@ class FakeSandbox implements VercelSandboxHandle {
   /** Epoch-ms session expiry reported to `observe`; undefined models a facade
    * without the getter or with no running session (unbounded behavior). */
   sessionExpiresAt: number | undefined
-  /** Recorded detached commands by id, for `getCommand` re-observation. */
+  /** Recorded detached commands by id, for `getCommand` re-observation: the
+   * OBSERVED state, which stays `exitCode: null` until some wait has resolved
+   * an exit — exactly the provider's plain-lookup contract. */
   readonly detachedCommands = new Map<string, { exitCode: number | null }>()
+  /** The guest's TRUE outcome per command id, settable by tests: a wait
+   * resolves this exit when known even though the lookup still reports none
+   * (the detached-guest case the observation's bounded wait exists for). */
+  readonly detachedExits = new Map<string, number>()
+  /** Command waits issued since construction, across supervision and
+   * observation paths. */
+  waitCalls = 0
   getCommandCalls = 0
   /** Automatic snapshots the environment has accumulated; a session stop
    * creates one, exactly as the provider's SDK contract describes. */
@@ -82,7 +91,46 @@ class FakeSandbox implements VercelSandboxHandle {
     if (command === undefined) {
       throw Object.assign(new Error('command not found'), { response: { status: 404 } })
     }
-    return command
+    return {
+      exitCode: command.exitCode,
+      wait: (waitParams?: { signal?: AbortSignal }) => this.waitDetached(cmdId, waitParams),
+    }
+  }
+
+  /** A command wait resolves the guest's true exit when it is known — the
+   * `detachedExits` lever if set, otherwise the injected `detachedWait` —
+   * records it into the observed state (after which the plain lookup reports
+   * it, exactly as the provider does), and rejects when its signal aborts
+   * unless the true outcome is already known. */
+  private waitDetached(
+    cmdId: string,
+    waitParams?: { signal?: AbortSignal },
+  ): Promise<{ exitCode: number }> {
+    this.waitCalls += 1
+    const known = this.detachedExits.get(cmdId)
+    if (known !== undefined) {
+      this.detachedCommands.set(cmdId, { exitCode: known })
+      return Promise.resolve({ exitCode: known })
+    }
+    const signal = waitParams?.signal
+    if (signal?.aborted === true) {
+      return Promise.reject(signal.reason ?? new Error('aborted'))
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal!.reason ?? new Error('aborted'))
+      signal?.addEventListener('abort', onAbort, { once: true })
+      this.detachedWait(waitParams).then(
+        (result) => {
+          signal?.removeEventListener('abort', onAbort)
+          this.detachedCommands.set(cmdId, { exitCode: result.exitCode })
+          resolve(result)
+        },
+        (error) => {
+          signal?.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+      )
+    })
   }
 
   async runCommand(params: Record<string, unknown>) {
@@ -117,15 +165,7 @@ class FakeSandbox implements VercelSandboxHandle {
       return {
         exitCode: null,
         cmdId,
-        wait: (waitParams?: { signal?: AbortSignal }) => {
-          if (waitParams?.signal?.aborted === true) {
-            return Promise.reject(waitParams.signal.reason ?? new Error('aborted'))
-          }
-          return this.detachedWait(waitParams).then((result) => {
-            this.detachedCommands.set(cmdId, { exitCode: result.exitCode })
-            return result
-          })
-        },
+        wait: (waitParams?: { signal?: AbortSignal }) => this.waitDetached(cmdId, waitParams),
         kill: async (_signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }) => {
           this.killSignals.push(opts?.abortSignal)
         },
@@ -307,6 +347,8 @@ function harness(
       return new Uint8Array([1, 2, 3])
     },
     distributionVersion: async () => '1.2.3',
+    // Bounded observation waits resolve in milliseconds, never the 5 s default.
+    observeWaitMs: 25,
     runtimeReferences:
       options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
   })
@@ -1195,20 +1237,133 @@ describe('VercelSandboxProvider', () => {
     })
     const identity = execution.identity!
     expect(identity.commandId).toBeDefined()
+    const waitsAtLaunch = h.sandbox.waitCalls
 
-    // A registered command with a null exit code is still running.
+    // A null exit code from the lookup proves nothing: the observation issues
+    // its bounded wait, which times out against a guest that never exits, and
+    // only then concludes running.
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
       state: 'running',
     })
     expect(h.sandbox.getCommandCalls).toBe(1)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
 
-    // A non-null exit code is a proved end carrying that code.
-    h.sandbox.detachedCommands.set(identity.commandId!, { exitCode: 7 })
+    // A wait that observes the guest's true exit is a proved end carrying
+    // that code — even though the lookup itself still reported none.
+    h.sandbox.detachedExits.set(identity.commandId!, 7)
     await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
       state: 'ended',
       exitCode: 7,
     })
     expect(h.sandbox.getCommandCalls).toBe(2)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 2)
+
+    // The resolved wait is recorded provider state: the lookup alone now
+    // reports the exit, so a repeat observation needs no further wait.
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'ended',
+      exitCode: 7,
+    })
+    expect(h.sandbox.getCommandCalls).toBe(3)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 2)
+  })
+
+  test('a guest that exits while detached is recognized on the first observation and by the lookup alone afterwards', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The launching invocation detached while the guest was still running.
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-detached-exit',
+      workspaceRef: workspace.ref,
+    })
+    const identity = execution.identity!
+    const waitsAtLaunch = h.sandbox.waitCalls
+
+    // The guest exits afterwards: the true outcome exists but no client has
+    // waited, so the plain lookup still reports no exit code.
+    h.sandbox.detachedExits.set(identity.commandId!, 0)
+    expect(h.sandbox.detachedCommands.get(identity.commandId!)).toEqual({ exitCode: null })
+
+    // The first observation's bounded wait observes the exit and settles it
+    // as a proved end.
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'ended',
+      exitCode: 0,
+    })
+    expect(h.sandbox.getCommandCalls).toBe(1)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
+
+    // From now on the lookup reports the exit and no wait is needed.
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'ended',
+      exitCode: 0,
+    })
+    expect(h.sandbox.getCommandCalls).toBe(2)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 1)
+  })
+
+  test('a genuinely running guest stays running: the bounded wait times out quickly and repeatably', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-observe-running',
+      workspaceRef: workspace.ref,
+    })
+    const identity = execution.identity!
+    const waitsAtLaunch = h.sandbox.waitCalls
+
+    const started = Date.now()
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'running',
+    })
+    // One observation never approaches the tick's operation timeout (30 s).
+    expect(Date.now() - started).toBeLessThan(1000)
+
+    // The next tick's observation repeats the bounded attempt unchanged.
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({
+      state: 'running',
+    })
+    expect(h.sandbox.getCommandCalls).toBe(2)
+    expect(h.sandbox.waitCalls).toBe(waitsAtLaunch + 2)
+  })
+
+  test('a bounded wait that finds the sandbox gone reads as lost', async () => {
+    const h = harness()
+    const workspace = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.detachedWait = () => new Promise(() => undefined)
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-observe-vanished',
+      workspaceRef: workspace.ref,
+    })
+    const identity = execution.identity!
+    // The environment vanishes between the command lookup and the wait: the
+    // wait rejects with the provider's not-found shape.
+    h.sandbox.detachedWait = async () => {
+      throw Object.assign(new Error('Status code 404 is not ok: sandbox not found'), {
+        response: { status: 404 },
+      })
+    }
+    await expect(h.provider.buildExecution.observe!(identity)).resolves.toEqual({ state: 'lost' })
   })
 
   test('observes lost executions: stopped session, a resumed session 404, and an absent sandbox', async () => {
@@ -2077,10 +2232,12 @@ describe('VercelSandboxProvider harvestExecution', () => {
 
   test('observe maps provider state to running, ended, lost, and refuses missing command ids', async () => {
     const h = harness()
-    let resolveWait: ((result: { exitCode: number }) => void) | undefined
+    // One resolver per issued wait, in call order: the launch supervision
+    // long-poll first, then the observation path's bounded wait.
+    const resolvers: Array<(result: { exitCode: number }) => void> = []
     h.sandbox.detachedWait = () =>
       new Promise((resolve) => {
-        resolveWait = resolve
+        resolvers.push(resolve)
       })
     const execution = await h.provider.harvestExecution.start({
       storeRef: 'https://store.example.test',
@@ -2108,7 +2265,9 @@ describe('VercelSandboxProvider harvestExecution', () => {
     await expect(
       h.provider.harvestExecution.observe!({ provider: 'vercel-sandbox', workspaceRef: 'x' }),
     ).rejects.toThrow(/no recorded command id/)
-    resolveWait!({ exitCode: 0 })
+    // The first wait belongs to the launch supervision; the observation's
+    // own wait already timed out against the never-exiting guest.
+    resolvers[0]!({ exitCode: 0 })
     await execution.completion
   })
 

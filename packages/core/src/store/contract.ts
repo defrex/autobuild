@@ -1780,16 +1780,17 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
 
         test('getSession returns null for an unknown session; listSessions isolates by repository', async () => {
-          // listSessions orders by createdAt, and ids are random UUIDs, so each
-          // create gets its own clock tick — same-tick timestamps would leave the
-          // creation-order assertions nondeterministic across adapters.
+          // The clock is injected and advanced between creations on purpose:
+          // listSessions orders by createdAt, and real-clock sessions can share
+          // a millisecond, leaving the order to an implementation-defined
+          // tiebreak (the sqlite store's is the random os_ id).
           const clock = manualClock(CONTRACT_T0)
           await withStore(factory, { clock }, async (store) => {
             expect(await store.getSession('os_never')).toBeNull()
             const a = await store.createSession({ repo: 'acme/a', operator: 'op' })
-            clock.advance(1000)
+            clock.advance(1)
             const a2 = await store.createSession({ repo: 'acme/a', operator: 'op' })
-            clock.advance(1000)
+            clock.advance(1)
             const b = await store.createSession({ repo: 'acme/b', operator: 'op' })
             expect((await store.listSessions('acme/a')).map((s) => s.id)).toEqual([a.id, a2.id])
             expect((await store.listSessions('acme/b')).map((s) => s.id)).toEqual([b.id])

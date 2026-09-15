@@ -97,6 +97,17 @@ ran is settled — completion facts, lease, publication — by the next
 invocation's settlement stage, and a build whose sandbox timed out is recovered
 by the lease sweep as with any dispatcher.
 
+One provider behavior matters for that settlement: Vercel's plain command
+lookup reports no exit code for a command that finished while no client was
+waiting on it, and keeps reporting none until some client issues a wait on the
+command. The dispatcher's execution observation therefore issues one bounded
+(~5 s) wait on the recorded command whenever the lookup shows no exit: a wait
+that resolves proves the guest's end (with its exit code) and the build settles
+in that same tick, while a timed-out wait leaves the guest running — one
+observation never approaches the tick's operation timeout, and the next tick
+retries. Settlement of a guest that exited after the launching invocation
+detached is expected within one tick of its exit.
+
 ## Pausing during an incident
 
 - **Stop the schedule**: remove the `crons` entry (or disable the cron in the

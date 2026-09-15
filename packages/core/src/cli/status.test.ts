@@ -14,9 +14,14 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parseConfig } from '../config/load'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { BUILD_STATUSES } from '../ontology'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  effectiveBuildConfigContent,
+} from '../processes/build-execution-state'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { PhaseSessionError } from '../store/phase-session'
@@ -1562,10 +1567,146 @@ describe('abBuildStatus', () => {
         expect(text).not.toContain('waiting:  on PR —')
         expect(text).not.toContain('lease sweep will re-attach')
         expect(text).toContain('observations (1)')
+        // The diagnostic names the missing sources, never a filesystem path or
+        // a raw OS error: for a remote build the recorded path is a guest
+        // location the operator cannot access.
+        expect(text).not.toContain('autobuild.toml at')
+        expect(text).not.toContain('ENOENT')
+        expect(text).not.toContain('sandbox:remote-host')
+        expect(text).not.toContain(badWorkspace)
       }
     } finally {
       await rm(badWorkspace, { recursive: true, force: true })
     }
+  })
+
+  test('derives the decision from the deposited build config when the recorded workspace is a remote guest path', async () => {
+    // The dispatcher freezes an effective-config artifact into the store at
+    // every runner launch, so a healthy remote build projects its decision
+    // from the deposit even though its recorded workspace path exists only
+    // inside the guest. The deferral detail proves the artifact path computes
+    // the same projection the local-workspace tests get.
+    const providerDetail = 'remote workspace never existed on this machine'
+    const store = new MemoryBuildStore({ clock: steppingClock('2026-07-15T11:00:00.000Z') })
+    await seedAwaitingPr(store, 'sandbox:remote-host/build-7', providerDetail, true)
+    await store.putArtifact('merge-wait', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(parseConfig(MINIMAL_CONFIG)),
+      metadata: { revision: 0 },
+    })
+
+    const json: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => json.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'merge-wait',
+      json: true,
+    })
+    const parsed = JSON.parse(json.join('\n'))
+    expect(parsed.decision.kind).toBe('awaiting-pr')
+    expect(parsed.decision.reason).toContain(providerDetail)
+
+    const human: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => human.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'merge-wait',
+    })
+    const text = human.join('\n')
+    expect(text).toContain('waiting:  on PR — Auto-merge gate')
+    expect(text).toContain(providerDetail)
+    expect(text).not.toContain('decision: unavailable')
+    expect(text).not.toContain('sandbox:remote-host')
+  })
+
+  test('reports the decision unavailable naming the artifact when neither source has a config', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock('2026-07-15T11:00:00.000Z') })
+    await seedAwaitingPr(store, 'sandbox:remote-host/build-7', undefined, true)
+    await store.claimLease('merge-wait', 'runner-expired', 1000)
+
+    const json: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => json.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'merge-wait',
+      json: true,
+    })
+    const parsed = JSON.parse(json.join('\n'))
+    expect(parsed.decision.kind).toBe('unavailable')
+    expect(parsed.decision.diagnostic).toContain('build-runner-effective-config')
+    expect(parsed.decision.diagnostic).not.toContain('sandbox:remote-host')
+    expect(parsed.decision.diagnostic).not.toContain('ENOENT')
+
+    const human: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => human.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'merge-wait',
+    })
+    const text = human.join('\n')
+    expect(text).toContain('decision: unavailable')
+    expect(text).toContain('build-runner-effective-config')
+    expect(text).toContain('runner actionability could not be determined')
+    expect(text).not.toContain('sandbox:remote-host')
+  })
+
+  test('projects from the deposited build config even after the workspace was released', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock('2026-07-15T11:00:00.000Z') })
+    await seedAwaitingPr(store, '/workspace/released-after-deposit')
+    await store.append('merge-wait', {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: {},
+    })
+    await store.putArtifact('merge-wait', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(parseConfig(MINIMAL_CONFIG)),
+      metadata: { revision: 0 },
+    })
+
+    const json: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => json.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'merge-wait',
+      json: true,
+    })
+    const parsed = JSON.parse(json.join('\n'))
+    expect(parsed.decision).toEqual({ kind: 'awaiting-pr' })
+
+    const human: string[] = []
+    await abBuildStatus({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => human.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      slug: 'merge-wait',
+    })
+    const text = human.join('\n')
+    expect(text).toContain('waiting:  on PR')
+    expect(text).not.toContain('decision: unavailable')
   })
 
   test('an unknown slug is an actionable error', async () => {

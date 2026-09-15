@@ -51,6 +51,14 @@ update the checked-in public/reference copies together. The self-containment
 coverage must be able to prove that every required Autobuild-owned local
 reference is delivered in the collective `ab-*` install tree.
 
+A canonical skill exists in three places in this repository, and a feature
+build advances all three in the same commit: the source in `skills/`, the
+vendored copy in `.agents/skills/ab-*`, and the pristine copy in
+`.agents/skills/.ab-pristine/ab-*`. The pristine tree is not reserved for
+upgrade tooling. `tools/vendored-skills-sync.test.ts` holds every copy to byte
+parity with the canonical install form with no exception list, so a plan that
+excludes `.ab-pristine` from a skill change is wrong and will fail verify.
+
 ## What the README is for
 
 `README.md` is marketing material for engineers: enough to understand what
