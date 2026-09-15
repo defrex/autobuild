@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#332](https://github.com/defrex/autobuild/pull/332) — Add the agent tool registry and ab mcp over stdio
 - [#331](https://github.com/defrex/autobuild/pull/331) — Reword phase-session authority errors to phase-session terminology
 - [#330](https://github.com/defrex/autobuild/pull/330) — State the stream close/append interleaving guarantee in SPEC §7.6
 - [#329](https://github.com/defrex/autobuild/pull/329) — Serialize stream close against append to stop silent chunk loss
