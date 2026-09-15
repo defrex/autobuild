@@ -391,7 +391,7 @@ test('ambient build identity scopes all three production-routed local reads', as
   ]) {
     const denied = await runBin(argv, env)
     expect(denied.code).toBe(1)
-    expect(denied.stderr).toContain('local session store scoped to build "ambient-own"')
+    expect(denied.stderr).toContain('local phase-session store scoped to build "ambient-own"')
   }
   expect(await Bun.file(join(tmp, 'downloads', 'ambient-foreign.txt')).exists()).toBe(false)
 
@@ -490,7 +490,9 @@ test('ambient reads accept a differently located checkout of the same repository
     AB_SESSION: 's_guest',
   })
   expect(legacyForeignSlug.code).toBe(1)
-  expect(legacyForeignSlug.stderr).toContain('local session store scoped to build "guest-legacy"')
+  expect(legacyForeignSlug.stderr).toContain(
+    'local phase-session store scoped to build "guest-legacy"',
+  )
 })
 
 test('complete remote phase identity has the same query allow/deny matrix', async () => {
@@ -601,7 +603,7 @@ test('complete Harvest identity cannot cross into build/admin query reads', asyn
   ]) {
     const denied = await runBin(argv, env)
     expect(denied.code).toBe(1)
-    expect(denied.stderr).toContain('local session store scoped to repo')
+    expect(denied.stderr).toContain('local phase-session store scoped to repo')
   }
   expect(await Bun.file(join(tmp, 'harvest-denied.bin')).exists()).toBe(false)
 })

@@ -129,6 +129,11 @@ describe('local build-session scope', () => {
     ]
     for (const call of foreignBuildCalls) await authorityError(call)
     expect(() => store.subscribe(OTHER_BUILD, {}, () => {})).toThrow(PhaseSessionError)
+    // Pin the phase-session terminology so the wrapper's authority failures are
+    // distinguishable from the operator-session handle surface.
+    expect((await authorityError(() => store.getBuild(OTHER_BUILD))).message).toContain(
+      'local phase-session store scoped to',
+    )
 
     const repositoryCalls: Array<() => unknown | Promise<unknown>> = [
       () => store.ensureRepo(REPO),
@@ -165,6 +170,9 @@ describe('local build-session scope', () => {
     }
 
     await authorityError(() => store.append(BUILD, forged))
+    expect((await authorityError(() => store.appendIfCurrent(BUILD, 0, forged))).message).toContain(
+      'local phase-session store scoped to session',
+    )
     await authorityError(() => store.appendIfCurrent(BUILD, 0, forged))
     await authorityError(() =>
       store.appendWithArtifacts(BUILD, [{ kind: 'plan', content: 'not visible' }], (deposited) => ({
