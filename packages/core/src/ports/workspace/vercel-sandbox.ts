@@ -72,7 +72,9 @@ export interface VercelCommand {
  * execution routinely outlives that timeout, so an interrupted long-poll is
  * re-issued until the command reports an exit code or the environment's own
  * lifetime has passed. Any other failure still propagates: it may mean the
- * environment is gone.
+ * environment is gone. The same classification reads the observation path's
+ * bounded wait: an interrupted or timed-out bounded wait leaves the execution
+ * provably unobserved, which reads as `running`.
  */
 export function isInterruptedLongPoll(error: unknown): boolean {
   if (!(error instanceof Error)) return false
@@ -93,6 +95,17 @@ export async function waitForCommandExit(
       if (!isInterruptedLongPoll(error) || expired()) throw error
     }
   }
+}
+
+/** Narrow re-observation surface of one recorded detached command. The
+ * provider's plain lookup reports `exitCode: null` for a command that finished
+ * while no client was waiting on it, and keeps reporting none until some
+ * client issues `wait` — a caller may not conclude `running` from
+ * `exitCode: null` without first issuing a wait, whose resolution carries the
+ * populated exit code. The SDK's `Command` satisfies this structurally. */
+export interface VercelCommandLookup {
+  exitCode: number | null
+  wait(params?: { signal?: AbortSignal }): Promise<{ exitCode: number }>
 }
 
 export interface VercelSandboxHandle {
@@ -120,8 +133,12 @@ export interface VercelSandboxHandle {
    * values on every observation. */
   readonly sessionExpiresAt?: number
   /** Narrowed re-observation of one recorded detached command. A missing
-   * command under a resumed session rejects; callers classify that as `lost`. */
-  getCommand(cmdId: string, opts?: { signal?: AbortSignal }): Promise<{ exitCode: number | null }>
+   * command under a resumed session rejects; callers classify that as `lost`.
+   * The plain lookup reports no exit code for a command that finished while no
+   * client was waiting on it, and keeps reporting none until some client
+   * issues `wait` — a caller may not conclude `running` from `exitCode: null`
+   * without first issuing a wait. */
+  getCommand(cmdId: string, opts?: { signal?: AbortSignal }): Promise<VercelCommandLookup>
   runCommand(params: {
     cmd: string
     args?: string[]
@@ -182,6 +199,13 @@ export const VERCEL_KEEP_LAST_SNAPSHOTS = 1
  * session expiry plus this margin it cannot still be running. Shared by the
  * command path and the observation path so the two bounds cannot drift. */
 export const VERCEL_LIFETIME_MARGIN_MS = 5 * 60 * 1000
+
+/** The bound on the observation path's single wait on a recorded command
+ * whose plain lookup reports no exit code. A few seconds: long enough to
+ * observe an already-exited guest, far below the tick's operation timeout so
+ * one observation never approaches it. A genuinely running guest costs this
+ * much per observation; the next tick retries. */
+export const VERCEL_OBSERVE_WAIT_MS = 5_000
 
 /** The snapshot rows that hold billed storage. `deleted`/`failed` rows hold
  * none and are never purge targets. */
@@ -1113,6 +1137,9 @@ export interface VercelSandboxProviderOptions {
    * the guest archive to that same version; source mode packs the same tree
    * readDistributionIdentity reads), so the two agree by construction. */
   distributionVersion?: () => Promise<string>
+  /** Test seam: the bound on the observation path's wait on a command whose
+   * lookup shows no exit. Defaults to `VERCEL_OBSERVE_WAIT_MS`. */
+  observeWaitMs?: number
 }
 
 /** Vercel-backed working copy and executor. Completed SDK command output is
@@ -1133,6 +1160,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private readonly uncertain = new Set<string>()
   private readonly origins = new Map<string, ReturnType<typeof cleanGithubOrigin>>()
   private readonly sessions = new Map<string, VercelSandboxHandle>()
+  private readonly observeWaitMs: number
 
   constructor(private readonly options: VercelSandboxProviderOptions) {
     if (!/^https:\/\//i.test(options.storeRef) || options.storeToken === '') {
@@ -1140,6 +1168,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
+    this.observeWaitMs = options.observeWaitMs ?? VERCEL_OBSERVE_WAIT_MS
     this.buildExecution = {
       start: (input) => this.start(input),
       observe: (identity) => this.observeExecution(identity),
@@ -1793,10 +1822,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }
 
   /** Liveness of a previously recorded execution, from provider state alone:
-   * one bounded facade.get plus at most one bounded getCommand. A missing
-   * sandbox, a session that is no longer running, or a command the current
-   * (resumed) session no longer knows is `lost`; a non-null command exit code
-   * is `ended`; everything else is `running`. Unknown provider errors
+   * one bounded facade.get, one command lookup, and, when the lookup shows no
+   * exit, one bounded wait on that command. A missing sandbox, a session that
+   * is no longer running, or a command the current (resumed) session no
+   * longer knows is `lost`; a non-null exit code — from the lookup or from
+   * the bounded wait it triggered — is `ended`; an interrupted or timed-out
+   * wait leaves the execution `running`. The lifetime bound (session expiry
+   * plus the shared stop/snapshot margin) runs before the lookup and fails
+   * with the environment named instead of waiting. Unknown provider errors
    * propagate — callers treat an unresolvable observation as running and
    * never reap on it. */
   private async observeExecution(identity: BuildExecutionIdentity): Promise<ExecutionObservation> {
@@ -1828,8 +1861,28 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       const command = await sandbox.getCommand(identity.commandId, {
         signal: this.operationSignal(),
       })
-      if (command.exitCode === null) return { state: 'running' }
-      return { state: 'ended', exitCode: command.exitCode }
+      if (command.exitCode !== null) return { state: 'ended', exitCode: command.exitCode }
+      // The provider's plain lookup reports no exit code for a command that
+      // finished while no client was waiting on it, and keeps reporting none
+      // until some client waits — so "null" alone proves nothing. One bounded
+      // wait turns it into evidence: a resolved wait is a proved end, an
+      // interrupted or timed-out wait leaves the guest unobserved (`running`),
+      // and a missing sandbox is `lost`. Never re-issued here; the next tick
+      // retries. The bound composes the provider operation signal so one
+      // observation never approaches the tick's operation timeout.
+      try {
+        const finished = await command.wait({
+          signal: AbortSignal.any([
+            AbortSignal.timeout(this.observeWaitMs),
+            this.operationSignal(),
+          ]),
+        })
+        return { state: 'ended', exitCode: finished.exitCode }
+      } catch (error) {
+        if (isMissingVercelSandbox(error)) return { state: 'lost' }
+        if (isInterruptedLongPoll(error)) return { state: 'running' }
+        throw error
+      }
     } catch (error) {
       if (isMissingVercelSandbox(error)) return { state: 'lost' }
       throw error
