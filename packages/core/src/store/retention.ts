@@ -25,6 +25,20 @@
  */
 
 /**
+ * Operator notes artifact kind (`operator/registry.ts`). The agent-facing
+ * notes tools read and write this repository artifact kind; it is
+ * retention-managed so an operator agent that revises its notes on every
+ * round cannot grow the repository artifact table without limit. The bound
+ * is the store's configured `maxRevisions` — the same deposit-time prune
+ * the dispatcher config family uses — whose default is
+ * `DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS` (the newest 200 revisions
+ * survive). Defined here rather than in the registry module for the same
+ * reason the dispatcher kinds are: store adapters must not import from the
+ * operator surface (store → operator would be an import cycle).
+ */
+export const OPERATOR_NOTES_REPO_KIND = 'operator-notes'
+
+/**
  * Repository-scoped artifact kinds subject to retention. Values mirror the
  * kind constants in `cli/dispatch.ts` (DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)
  * and `config/live.ts` (DISPATCHER_CONFIG_ARTIFACT); they are restated as
@@ -35,6 +49,9 @@ export const DISPATCHER_RETENTION_REPO_KINDS = [
   'dispatcher-effective-config',
   'dispatcher-config',
 ] as const
+
+/** Repository-scoped kinds retained for the operator surface (see above). */
+export const OPERATOR_RETENTION_REPO_KINDS = [OPERATOR_NOTES_REPO_KIND] as const
 
 /**
  * Build-scoped artifact kinds subject to retention. Value mirrors
@@ -49,6 +66,7 @@ export const DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS = 200
 export function isRetentionManagedKind(kind: string): boolean {
   return (
     (DISPATCHER_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
+    (OPERATOR_RETENTION_REPO_KINDS as readonly string[]).includes(kind) ||
     (DISPATCHER_RETENTION_BUILD_KINDS as readonly string[]).includes(kind)
   )
 }

@@ -808,6 +808,43 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           ).toBe(2)
         })
       })
+
+      test('the operator-notes kind is retention-managed at the same deposit path', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.ensureRepo('acme/retention')
+          // Three deposits of the agent notes kind prune the oldest, exactly
+          // like the dispatcher family: the newest 2 survive, and the
+          // latest-by-default read (what notes.read serves) still works.
+          for (let i = 0; i < 3; i++) {
+            await store.putRepoArtifact('acme/retention', {
+              kind: 'operator-notes',
+              content: `notes-${i}`,
+              metadata: { user: 'Ada' },
+            })
+          }
+          const revisions = (await store.listRepoArtifacts('acme/retention', 'operator-notes')).map(
+            (meta) => meta.revision,
+          )
+          expect(revisions).toEqual([1, 2])
+          expect(await store.getRepoArtifact('acme/retention', 'operator-notes', 0)).toBeNull()
+          const latest = await store.getRepoArtifact('acme/retention', 'operator-notes')
+          expect(latest?.meta.revision).toBe(2)
+          expect(new TextDecoder().decode(latest!.content)).toBe('notes-2')
+          // The dispatcher family's documented bound is untouched by the
+          // operator kind: a family deposit still prunes its own kind alone.
+          const { artifacts } = await store.appendRepoWithArtifacts(
+            'acme/retention',
+            [{ kind: 'dispatcher-effective-config', content: 'cfg' }],
+            (deposited) => runStartedWrite('retention-notes-run', deposited),
+          )
+          expect(artifacts.map((meta) => meta.revision)).toEqual([0])
+          expect(
+            (await store.listRepoArtifacts('acme/retention', 'operator-notes')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([1, 2])
+        })
+      })
     })
 
     describe('validation-before-prune ordering (AUT-322)', () => {
