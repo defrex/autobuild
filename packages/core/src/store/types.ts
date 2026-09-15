@@ -33,6 +33,7 @@ import type {
   StreamRecord,
   StreamScope,
 } from './streams/types'
+export type { StreamRecord, StreamScope }
 
 /** Injectable time source — adapters take one so tests are deterministic. */
 export type Clock = () => Date

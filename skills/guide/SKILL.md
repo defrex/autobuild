@@ -1426,6 +1426,14 @@ The rerun opens one fresh session, so after attachment only work that could
 still be alive appears in `ab build status`. Dashboard session history keeps the
 reclaimed entry visibly distinct and reports that its transcript is unavailable.
 
+Each session row also shows its live-view stream: the stream id and
+whether that stream is `open` or `closed` — for example `stream st_1f2e (open)`.
+A session that never streamed (a plugin runtime without the streaming
+capability, or a historical log) shows no stream segment. While a session
+runs, its stream is the live view of the turn; once the session ends the
+stream finalizes into an artifact, and `ab artifact download <slug>
+stream:<id>` retrieves the closed session's finalized document.
+
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 durable repository gate and an ordered collection of every unresolved failed
 run plus relevant open/latest context from the same journal the runner resumes.

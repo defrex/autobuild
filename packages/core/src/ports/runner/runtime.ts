@@ -15,8 +15,18 @@
  * own `.name` is a separate, also-frozen thing that fills
  * `AgentSessionHandle.runner`.
  */
-import type { AgentRunner } from '../types'
+import type { AgentRunner, SessionStreamSink } from '../types'
 import type { OneShotCompletion } from './one-shot'
+
+/** Bracket metadata for a session stream's `data-ab-session` part. */
+export interface SessionStreamInfo {
+  session: string
+  role: string
+  runner: string
+  model?: string
+  phase: string
+  round?: number
+}
 
 export interface RuntimeUsabilityInput {
   cwd: string
@@ -48,6 +58,17 @@ export interface RuntimeRegistration {
    * deterministic callers decide their own fail-safe fallback.
    */
   oneShot?: OneShotCompletion
+  /**
+   * Optional session-stream capability (SPEC §9): given a bracket-scoped
+   * sink, create the runtime's one stream for this session bracket and
+   * return its store id (or `undefined` to decline streaming for the
+   * bracket). Its absence means the runtime emits no parts and its sessions
+   * have no stream — a supported boundary, not a configuration error.
+   */
+  openSessionStream?: (
+    sink: SessionStreamSink,
+    info: SessionStreamInfo,
+  ) => Promise<string | undefined>
   /** Runtime-local prerequisite/auth check used only by `ab init`. */
   initUsable?: RuntimeUsabilityProbe
   /**
@@ -155,6 +176,10 @@ export function validateRuntimeRegistration(value: unknown): RuntimeRegistration
   const oneShot = value.oneShot
   if (oneShot !== undefined && (!isObject(oneShot) || typeof oneShot.complete !== 'function')) {
     throw new Error('oneShot.complete must be a function when provided')
+  }
+
+  if (value.openSessionStream !== undefined && typeof value.openSessionStream !== 'function') {
+    throw new Error('openSessionStream must be a function when provided')
   }
 
   if (value.initUsable !== undefined && typeof value.initUsable !== 'function') {

@@ -1034,6 +1034,52 @@ deterministic fail-safe.
   A runner process that dies before deposition is the explicit exception: a
   takeover records transcriptless reclamation rather than fabricating corpus
   bytes it cannot recover.
+- **Session streams (the live view).** While a session runs, its runner
+  translates the harness's native output into AI SDK UI Message Stream parts
+  (`ai-ui-message-stream/v1`) and appends them to a session stream (§7.6) as
+  they happen — the live counterpart of the transcript guarantee above. The
+  stream sink is a builtin-runner responsibility expressed as an optional
+  `openSessionStream` capability on the runtime registration (beside the
+  optional one-shot capability; the frozen `AgentRunner` port is untouched):
+  the build-runner creates a store-backed sink per session bracket, opens the
+  stream before the session's first turn with label `session:<sessionId>`
+  keyed to the Autobuild session id (never a harness-native session, thread,
+  or runtime id), appends `session.started` carrying the returned stream id,
+  and closes the stream at the session end boundary — before the
+  `session.ended` event lands — with outcome `completed` when the final turn
+  completed, `aborted` when it failed or was cancelled. A session that ends on
+  a substituted runtime keeps the stream opened for its own bracket.
+
+  The part vocabulary: the stream's first part is always a `data-ab-session`
+  part naming the session id, role, runner, model, phase, and round; each
+  turn's prompt (the skill invocation on turn 1, the continuation message on
+  later rounds) is a `data-ab-prompt` part before that turn's output; while a
+  turn runs the runner emits `start-step`/`finish-step` around each harness
+  step, assistant text as `text-start`/`text-delta`/`text-end` at the finest
+  granularity the harness exposes (partial-message deltas for Claude Code and
+  Pi, whole messages where the harness only reports completed messages),
+  reasoning parts when the harness exposes reasoning,
+  `tool-input-available` and `tool-output-available` per tool call, and
+  `finish` on completed turns. A turn that ends in a provider or runtime
+  failure emits an `error` part before the stream closes; a turn cancelled by
+  the caller emits an `abort` part. Text, reasoning, prompt, and tool
+  payloads serialized above 65,536 UTF-8 bytes are truncated on a UTF-8
+  boundary and followed by a `data-ab-truncation` part naming the omitted
+  byte count. Parts reach the store within one second of the harness emitting
+  them under normal conditions: the runner batches appends on a short cadence
+  rather than one request per delta.
+
+  Streams are presentation, never routing: no kernel, engine, reducer, or
+  dispatcher decision reads stream content or presence, and the phase outcome
+  still travels only the typed CLI. A failing stream path never fails a turn:
+  an append error retries on the next batch, a writer that keeps failing
+  stops streaming the session, closes the stream `aborted` when it can,
+  reports once on the build runner's diagnostics, and the phase proceeds
+  exactly as it would without streams; the transcript artifact is deposited
+  regardless. A plugin runtime that declares no capability yields sessions
+  with no stream, and every consumer treats those sessions exactly as before;
+  tool-free one-shot completions produce no stream. A closed session's
+  finalized document is the `stream:<id>` artifact (§7.6).
 - Adapters without native session resumption implement `continue` as
   start-with-rehydrate-from-store — which must exist anyway per §7.4.
 

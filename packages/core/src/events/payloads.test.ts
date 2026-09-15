@@ -885,3 +885,43 @@ describe('publication.lost loss-record protocol', () => {
     }
   })
 })
+
+describe('session.started stream field (SPEC §9)', () => {
+  const base = {
+    session: 's_streamed',
+    role: 'plan',
+    runner: 'claude',
+    phase: 'plan',
+    round: 1,
+  }
+
+  test('accepts an optional stream id', () => {
+    expect(
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...base, stream: 'st_123' },
+      }).payload,
+    ).toMatchObject({ stream: 'st_123' })
+  })
+
+  test('historical payloads without a stream replay unchanged, and unknown keys stay rejected', () => {
+    expect(
+      validateEventWrite({ actor: KERNEL, type: 'session.started', payload: base }).payload,
+    ).not.toHaveProperty('stream')
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...base, stream: 42 },
+      }),
+    ).toThrow(/stream/)
+    expect(() =>
+      validateEventWrite({
+        actor: KERNEL,
+        type: 'session.started',
+        payload: { ...base, extra: true },
+      }),
+    ).toThrow()
+  })
+})

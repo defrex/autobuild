@@ -394,6 +394,9 @@ export const eventPayloadSchemas = {
     args: z.array(z.string()).optional(),
     phase: phaseSchema,
     round: round.optional(),
+    /** Stream id this session's live view writes to (SPEC §9, session
+     * streams). Optional only so historical events replay unchanged. */
+    stream: z.string().min(1).optional(),
     /** Present only when this target substituted for the preceding failed one. */
     substitution: providerSubstitutionSchema.optional(),
   }),

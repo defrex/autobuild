@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { delimiter } from 'node:path'
-import type { AgentStartOpts } from '../types'
+import type { StreamPart } from '../../store/streams/types'
+import type { AgentRunner, AgentStartOpts, SessionStreamEmitter } from '../types'
 import {
   CONTRACT_EXHAUSTION_FAILURE,
   CONTRACT_FOLLOW_UP,
@@ -8,6 +9,7 @@ import {
   CONTRACT_ONE_SHOT_TEXT,
   CONTRACT_PERMANENT_FAILURE,
   CONTRACT_RETRYABLE_FAILURE,
+  CONTRACT_STREAM_TOOL,
   describeAgentRunnerContract,
   type AgentRunnerContractFactory,
 } from './contract'
@@ -17,6 +19,7 @@ import {
   type ClaudeCliInvocation,
   type ClaudeCliResult,
   type ClaudeCliRunFn,
+  type ClaudeCliStreamHandle,
 } from './claude'
 import { AGENT_BIN_DIR } from './session-env'
 
@@ -178,16 +181,59 @@ const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
       ])
     }
     const text = prompt === CONTRACT_FOLLOW_UP ? 'contract continued' : 'contract started'
+    if (scenario === 'stream-turn') {
+      return output([
+        assistant('contract stream'),
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', id: 'tool-1', name: CONTRACT_STREAM_TOOL, input: { q: 'x' } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }],
+          },
+        },
+        result('contract-session', 3, 2, { result: text }),
+      ])
+    }
     return output([assistant(text), result('contract-session', 3, 2, { result: text })])
   }
-  const runner = new ClaudeAgentRunner({
+  // The recording emitter forwards to the caller's emitter (if any) while
+  // keeping every part observable for the stream contract tests.
+  const recorded: StreamPart[] = []
+  const record = <T extends { stream?: SessionStreamEmitter }>(opts: T): T =>
+    opts.stream === undefined
+      ? opts
+      : {
+          ...opts,
+          stream: {
+            append: (parts: StreamPart[]) => {
+              recorded.push(...parts)
+              opts.stream?.append(parts)
+            },
+          },
+        }
+  const inner = new ClaudeAgentRunner({
     runCli,
     createSessionId: () => 'contract-session',
   })
+  const runner: AgentRunner = {
+    name: inner.name,
+    start: (opts) => inner.start(record(opts)),
+    continue: (session, message, opts) =>
+      inner.continue(session, message, opts === undefined ? undefined : record(opts)),
+    end: (session) => inner.end(session),
+  }
   return {
     runner,
     model: 'claude-contract-model',
     workspacePath: process.cwd(),
+    stream: () => recorded,
     turns: () =>
       calls
         .filter((call) => promptOf(call) !== CONTRACT_ONE_SHOT_PROMPT)
@@ -196,7 +242,7 @@ const claudeContractFactory: AgentRunnerContractFactory = (scenario) => {
           env: call.env,
         })),
     oneShot: {
-      completion: runner,
+      completion: inner,
       observation: () => {
         const call = calls.find((candidate) => promptOf(candidate) === CONTRACT_ONE_SHOT_PROMPT)
         if (call === undefined) return undefined
@@ -527,5 +573,180 @@ describe('ClaudeAgentRunner transcript and lifecycle', () => {
     const { session } = await runner.start(startOpts())
     await runner.end(session)
     await expect(runner.end(session)).rejects.toThrow('unknown session "s1"')
+  })
+})
+
+describe('ClaudeAgentRunner streaming boundary (SPEC §9)', () => {
+  function streamHandle(lines: string[], cli: ClaudeCliResult): { handle: ClaudeCliStreamHandle } {
+    return {
+      handle: {
+        lines: (async function* () {
+          for (const line of lines) yield line
+        })(),
+        result: Promise.resolve(cli),
+      },
+    }
+  }
+
+  test('maps stream_event deltas live and adds --include-partial-messages only when streaming', async () => {
+    const recorded: string[] = []
+    const stream = streamHandle(
+      [
+        event({ type: 'stream_event', event: { type: 'message_start' } }),
+        event({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', id: 't1' },
+          },
+        }),
+        event({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'hel' },
+          },
+        }),
+        event({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'lo' },
+          },
+        }),
+        event({
+          type: 'stream_event',
+          event: { type: 'content_block_stop', index: 0 },
+        }),
+        event({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_start',
+            index: 1,
+            content_block: { type: 'tool_use', id: 'tool-1', name: 'grep' },
+          },
+        }),
+        event({
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 1,
+            delta: { type: 'input_json_delta', partial_json: '{"q":"x"}' },
+          },
+        }),
+        event({ type: 'stream_event', event: { type: 'content_block_stop', index: 1 } }),
+        event({
+          type: 'user',
+          message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }] },
+        }),
+        event({ type: 'stream_event', event: { type: 'message_stop' } }),
+        event(assistant('hello')),
+        event(result('s1', 3, 2, { result: 'hello' })),
+      ],
+      output([result('s1', 3, 2, { result: 'hello' })]),
+    )
+    let streamingArgs: string[] | undefined
+    const runner = new ClaudeAgentRunner({
+      createSessionId: () => 's1',
+      runCliStream: (invocation) => {
+        streamingArgs = invocation.args
+        recorded.push('stream')
+        return stream.handle
+      },
+      runCli: async (invocation) => {
+        recorded.push('buffered')
+        void invocation
+        return { stdout: '', stderr: '', exitCode: 0 }
+      },
+    })
+    const parts: StreamPart[] = []
+    const started = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => parts.push(...appended) },
+    })
+    expect(started.result).toMatchObject({ kind: 'completed', text: 'hello' })
+    // Only the streaming boundary ran, and the flag is present.
+    expect(recorded).toEqual(['stream'])
+    expect(streamingArgs).toContain('--include-partial-messages')
+
+    const types = parts.map((part) => part.type)
+    expect(types[0]).toBe('data-ab-prompt')
+    expect(types).toContain('start')
+    expect(types).toContain('start-step')
+    expect(types).toContain('text-start')
+    expect(types).toContain('text-delta')
+    expect(types).toContain('text-end')
+    expect(types).toContain('tool-input-available')
+    expect(types).toContain('tool-output-available')
+    expect(types).toContain('finish-step')
+    expect(parts.at(-1)?.type).toBe('finish')
+
+    // The tool input arrives from buffered input_json_delta, parsed.
+    const toolInput = parts.find((p) => p.type === 'tool-input-available') as unknown as {
+      input: unknown
+    }
+    expect(toolInput.input).toEqual({ q: 'x' })
+
+    // A turn WITHOUT an emitter never asks for partial messages and uses the
+    // buffered boundary.
+    const plain = new ClaudeAgentRunner({
+      createSessionId: () => 's2',
+      runCli: async () => output([assistant('plain'), result('s2', 1, 1, { result: 'plain' })]),
+    })
+    const unstreamed = await plain.start(startOpts())
+    expect(unstreamed.result).toMatchObject({ kind: 'completed', text: 'plain' })
+  })
+
+  test('a streamed failure emits error and a cancelled turn emits abort', async () => {
+    const runner = new ClaudeAgentRunner({
+      createSessionId: () => 's1',
+      runCliStream: () => ({
+        lines: (async function* () {
+          yield event({ type: 'stream_event', event: { type: 'message_start' } })
+          yield event(result('s1', 0, 0, { is_error: true, result: CONTRACT_RETRYABLE_FAILURE }))
+        })(),
+        result: Promise.resolve(
+          output([result('s1', 0, 0, { is_error: true, result: CONTRACT_RETRYABLE_FAILURE })]),
+        ),
+      }),
+    })
+    const failedParts: StreamPart[] = []
+    await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => failedParts.push(...appended) },
+    })
+    expect(failedParts.at(-1)?.type).toBe('error')
+
+    const cancelledParts: StreamPart[] = []
+    const controller = new AbortController()
+    const cancelling = new ClaudeAgentRunner({
+      createSessionId: () => 's1',
+      runCliStream: (invocation) => ({
+        lines: (async function* () {
+          yield event({ type: 'stream_event', event: { type: 'message_start' } })
+          await new Promise((resolve) => {
+            const abort = () => resolve(undefined)
+            if (invocation.signal?.aborted) abort()
+            else invocation.signal?.addEventListener('abort', abort, { once: true })
+          })
+        })(),
+        result: new Promise((resolve) => {
+          invocation.signal?.addEventListener('abort', () => {
+            resolve({ stdout: '', stderr: 'aborted', exitCode: 1 })
+          })
+        }),
+      }),
+    })
+    const pending = cancelling.start({
+      ...startOpts(),
+      signal: controller.signal,
+      stream: { append: (appended) => cancelledParts.push(...appended) },
+    })
+    controller.abort(new Error('operator stopped'))
+    await pending
+    expect(cancelledParts.at(-1)?.type).toBe('abort')
   })
 })

@@ -8,6 +8,8 @@
  * inherits the operator's Claude Code login, and receives a fresh `sessionEnv`
  * on every turn so the current scoped Autobuild identity reaches tool calls.
  */
+import type { StreamPart } from '../../store/streams/types'
+import { spawnCliStream } from './cli-stream'
 import {
   agentInvocation,
   type AgentContinueOpts,
@@ -16,8 +18,26 @@ import {
   type AgentStartOpts,
   type AgentTurnFailure,
   type AgentTurnResult,
+  type SessionStreamEmitter,
   type Transcript,
 } from '../types'
+import {
+  abortPart,
+  errorPart,
+  finishPart,
+  finishStepPart,
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textEndPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+} from './stream-parts'
 import { classifyProviderError, configurationFailure } from './provider-error'
 import { sessionEnv } from './session-env'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
@@ -40,6 +60,18 @@ export interface ClaudeCliResult {
 /** Injectable direct-process boundary used by the offline contract suite. */
 export type ClaudeCliRunFn = (invocation: ClaudeCliInvocation) => Promise<ClaudeCliResult>
 
+/** A streaming CLI turn: decoded stdout lines as they arrive, plus the
+ * completed result. The consumer accumulates the lines it needs. */
+export interface ClaudeCliStreamHandle {
+  lines: AsyncIterable<string>
+  result: Promise<ClaudeCliResult>
+}
+
+/** Injectable streaming boundary: production spawns with
+ * `--include-partial-messages` (the adapter adds that flag when a turn
+ * carries an emitter); tests script line-at-a-time output. */
+export type ClaudeCliStreamFn = (invocation: ClaudeCliInvocation) => ClaudeCliStreamHandle
+
 const runClaudeCli: ClaudeCliRunFn = async (invocation) => {
   const proc = Bun.spawn(['claude', ...invocation.args], {
     cwd: invocation.cwd,
@@ -59,6 +91,8 @@ const runClaudeCli: ClaudeCliRunFn = async (invocation) => {
   ])
   return { stdout, stderr, exitCode }
 }
+
+const runClaudeCliStream: ClaudeCliStreamFn = (invocation) => spawnCliStream('claude', invocation)
 
 /** Verify both the local executable and Claude Code login for init suggestions. */
 export async function isClaudeRuntimeUsable(
@@ -134,6 +168,7 @@ const CLAUDE_PRINT_ARG = '-p'
 const CLAUDE_PRINT_ALIAS = '--print'
 const CLAUDE_OUTPUT_FORMAT_ARG = '--output-format'
 const CLAUDE_MODEL_ARG = '--model'
+const CLAUDE_INCLUDE_PARTIAL_ARG = '--include-partial-messages'
 
 /** Structural separator before Claude's positional prompt. */
 export const CLAUDE_PROMPT_BOUNDARY = '--'
@@ -155,16 +190,23 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'claude'
 
   private readonly runCli: ClaudeCliRunFn
+  private readonly runCliStream: ClaudeCliStreamFn | undefined
   private readonly createSessionId: () => string
   private readonly sessions = new Map<string, SessionState>()
 
   constructor(
     opts: {
       runCli?: ClaudeCliRunFn
+      runCliStream?: ClaudeCliStreamFn
       createSessionId?: () => string
     } = {},
   ) {
     this.runCli = opts.runCli ?? runClaudeCli
+    // A test injecting only the buffered boundary takes the buffered
+    // translation path for streaming turns (degraded latency, same content);
+    // production gets the live streaming boundary.
+    this.runCliStream =
+      opts.runCliStream ?? (opts.runCli !== undefined ? undefined : runClaudeCliStream)
     this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
 
@@ -263,7 +305,7 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     return state
   }
 
-  private runTurn(
+  private async runTurn(
     prompt: string,
     opts: AgentStartOpts,
     session: { sessionId: string } | { resume: string },
@@ -273,14 +315,53 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     if ('sessionId' in session) args.push('--session-id', session.sessionId)
     else args.push('--resume', session.resume)
     if (opts.model !== undefined) args.push(CLAUDE_MODEL_ARG, opts.model)
+    // Partial message chunks only exist with the streaming flag; a turn
+    // without an emitter never asks for them.
+    if (opts.stream !== undefined) args.push(CLAUDE_INCLUDE_PARTIAL_ARG)
     args.push(...(opts.args ?? []), CLAUDE_PROMPT_BOUNDARY, prompt)
 
-    return this.runPrompt({
+    const invocation: ClaudeCliInvocation = {
       args,
       cwd: opts.workspacePath,
       env: sessionEnv(opts.env),
       ...(signal !== undefined ? { signal } : {}),
-    })
+    }
+    if (opts.stream === undefined) return this.runPrompt(invocation)
+
+    // Streaming turn: translate while the CLI runs. Without an injected
+    // streaming boundary (offline fakes), the buffered path still translates
+    // after completion — degraded latency, same content.
+    const emitter = opts.stream
+    emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
+    let turn: ClaudeTurn
+    if (this.runCliStream !== undefined) {
+      turn = await this.runStreamingPrompt(invocation, emitter)
+    } else {
+      turn = await this.runPrompt(invocation)
+      translateBufferedClaudeTurn(turn, (parts) => emitter.append(parts))
+    }
+    this.emitTurnEnd(turn, emitter, signal)
+    return turn
+  }
+
+  /** Completed-turn, failed-turn, and cancelled-turn closing parts. */
+  private emitTurnEnd(
+    turn: ClaudeTurn,
+    emitter: SessionStreamEmitter,
+    signal: AbortSignal | undefined,
+  ): void {
+    if (turn.failure === undefined) {
+      emitter.append([finishPart()])
+      return
+    }
+    if (signal?.aborted) {
+      const reason = signal.reason
+      emitter.append([
+        abortPart(reason instanceof Error ? reason.message : 'claude runtime: turn aborted'),
+      ])
+      return
+    }
+    emitter.append([errorPart(turn.failure.message)])
   }
 
   private baseArgs(): string[] {
@@ -298,25 +379,60 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
     try {
       cli = await this.runCli(invocation)
     } catch (error) {
-      const missing = isEnoent(error)
-      const message = missing
-        ? MISSING_CLI_MESSAGE
-        : `${this.name} runtime: failed to launch Claude Code CLI: ${errorText(error)}`
-      return {
-        text: '',
-        usage: { inputTokens: 0, outputTokens: 0 },
-        failure: missing ? configurationFailure(message) : classifyProviderError(message),
-        cli: {
-          stdout: '',
-          stderr: errorText(error),
-          exitCode: -1,
-        },
-        events: [],
-        malformedLines: [],
-      }
+      return launchFailure(error)
     }
+    return this.finishTurn(cli, parseCliOutput(cli.stdout))
+  }
 
-    const parsed = parseCliOutput(cli.stdout)
+  /** Live translation path: consume stdout lines as they arrive, mapping
+   * `stream_event` chunks onto the part vocabulary while the same records
+   * feed the ordinary accumulators (so outcome classification is identical). */
+  private async runStreamingPrompt(
+    invocation: ClaudeCliInvocation,
+    emitter: SessionStreamEmitter,
+  ): Promise<ClaudeTurn> {
+    let handle: ClaudeCliStreamHandle
+    try {
+      handle = this.runCliStream!(invocation)
+    } catch (error) {
+      return launchFailure(error)
+    }
+    const acc = new ClaudeOutputAccumulator()
+    const translator = createClaudeStreamTranslator((parts) => emitter.append(parts))
+    try {
+      for await (const line of handle.lines) {
+        let value: unknown
+        try {
+          value = JSON.parse(line)
+        } catch {
+          acc.push(line)
+          continue
+        }
+        if (!isRecord(value)) {
+          acc.push(line)
+          continue
+        }
+        acc.pushRecord(value)
+        translator.onEvent(value)
+      }
+    } catch {
+      // The result promise below still carries the CLI's exit and stderr.
+    }
+    const cli = await handle.result
+    const parsed = acc.snapshot()
+    // Fail open against a harness that ignored the partial-messages flag: if
+    // nothing streamed, translate the buffered events instead.
+    if (!translator.streamedAnything()) {
+      const turn = this.finishTurn(cli, parsed)
+      translateBufferedClaudeTurn(turn, (parts) => emitter.append(parts))
+      return turn
+    }
+    return this.finishTurn(cli, parsed)
+  }
+
+  /** Shared post-processing of a completed CLI run: text, usage, failure
+   * classification. Identical for the buffered and streaming paths. */
+  private finishTurn(cli: ClaudeCliResult, parsed: ParsedCliOutput): ClaudeTurn {
     const usage = resultUsage(parsed.result)
     const resultText = stringField(parsed.result, 'result')
     const text = resultText ?? parsed.assistantText.join('\n')
@@ -390,55 +506,80 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
 }
 
 function parseCliOutput(stdout: string): ParsedCliOutput {
-  const parsed: ParsedCliOutput = {
-    events: [],
-    malformedLines: [],
-    assistantText: [],
-    assistantErrors: [],
-    statuses: [],
-    codes: [],
-  }
-  for (const line of stdout.split(/\r?\n/)) {
-    if (line.trim() === '') continue
+  const acc = new ClaudeOutputAccumulator()
+  for (const line of stdout.split(/\r?\n/)) acc.push(line)
+  return acc.snapshot()
+}
+
+/**
+ * Incremental accumulator over Claude Code's stream-json lines, shared by
+ * the buffered parse and the streaming path (which also feeds the stream
+ * translator below). Collects the same shape `parseCliOutput` always
+ * returned so outcome classification is byte-identical in both paths.
+ */
+class ClaudeOutputAccumulator {
+  readonly events: JsonRecord[] = []
+  readonly malformedLines: string[] = []
+  readonly assistantText: string[] = []
+  readonly assistantErrors: string[] = []
+  readonly statuses: number[] = []
+  readonly codes: Array<string | number> = []
+  result: JsonRecord | undefined
+
+  push(line: string): void {
+    if (line.trim() === '') return
     let value: unknown
     try {
       value = JSON.parse(line)
     } catch {
-      parsed.malformedLines.push(line)
-      continue
+      this.malformedLines.push(line)
+      return
     }
     if (!isRecord(value)) {
-      parsed.malformedLines.push(line)
-      continue
+      this.malformedLines.push(line)
+      return
     }
-    parsed.events.push(value)
-    if (value.type === 'assistant') collectAssistant(value, parsed)
-    if (value.type === 'result') parsed.result = value
-    if (value.type === 'system' || value.type === 'api_retry') {
-      collectHints(value, parsed)
+    this.pushRecord(value)
+  }
+
+  pushRecord(value: JsonRecord): void {
+    this.events.push(value)
+    if (value.type === 'assistant') collectAssistant(value, this)
+    if (value.type === 'result') this.result = value
+    if (value.type === 'system' || value.type === 'api_retry') collectHints(value, this)
+  }
+
+  snapshot(): ParsedCliOutput {
+    return {
+      events: [...this.events],
+      malformedLines: [...this.malformedLines],
+      ...(this.result !== undefined ? { result: this.result } : {}),
+      assistantText: [...this.assistantText],
+      assistantErrors: [...this.assistantErrors],
+      statuses: [...this.statuses],
+      codes: [...this.codes],
     }
   }
-  return parsed
 }
 
-function collectAssistant(event: JsonRecord, parsed: ParsedCliOutput): void {
+function collectAssistant(event: JsonRecord, acc: ClaudeOutputAccumulator): void {
   const error = stringField(event, 'error')
-  if (error !== undefined) parsed.assistantErrors.push(error)
+  if (error !== undefined) acc.assistantErrors.push(error)
   const message = event.message
   if (!isRecord(message) || !Array.isArray(message.content)) return
   for (const block of message.content) {
     if (!isRecord(block) || block.type !== 'text') continue
     const text = stringField(block, 'text')
-    if (text !== undefined) parsed.assistantText.push(text)
+    if (text !== undefined) acc.assistantText.push(text)
   }
 }
 
-function collectHints(event: JsonRecord, parsed: ParsedCliOutput): void {
+function collectHints(event: JsonRecord, acc: ClaudeOutputAccumulator): void {
   const status = numberField(event, 'api_error_status', 'status', 'status_code', 'statusCode')
-  if (status !== undefined) parsed.statuses.push(status)
+  if (status !== undefined) acc.statuses.push(status)
   for (const key of ['code', 'error', 'category', 'subtype']) {
     const code = stringOrNumberField(event, key)
-    if (code !== undefined) parsed.codes.push(code)
+    if (code !== undefined) acc.codes.push(code)
   }
 }
 
@@ -495,6 +636,231 @@ function nonempty(value: string | undefined): string | undefined {
 function isEnoent(error: unknown): boolean {
   if (!isRecord(error)) return false
   return error.code === 'ENOENT'
+}
+
+/** A CLI that never ran: missing executable vs. a failed launch. */
+function launchFailure(error: unknown): ClaudeTurn {
+  const missing = isEnoent(error)
+  const message = missing
+    ? MISSING_CLI_MESSAGE
+    : `claude runtime: failed to launch Claude Code CLI: ${errorText(error)}`
+  return {
+    text: '',
+    usage: { inputTokens: 0, outputTokens: 0 },
+    failure: missing ? configurationFailure(message) : classifyProviderError(message),
+    cli: {
+      stdout: '',
+      stderr: errorText(error),
+      exitCode: -1,
+    },
+    events: [],
+    malformedLines: [],
+  }
+}
+
+/**
+ * Live stream translation (SPEC §9): `stream_event` chunks carry the raw
+ * Anthropic stream; `assistant`/`user` lines still feed the accumulators and
+ * surface tool_use blocks the stream events did not (fail-open against
+ * harness drift). Unrecognized records produce no parts.
+ */
+function createClaudeStreamTranslator(emit: (parts: StreamPart[]) => void): {
+  onEvent(event: JsonRecord): void
+  streamedAnything(): boolean
+} {
+  let nextId = 0
+  let streamed = false
+  let messageOpen = false
+  const blocks = new Map<
+    number,
+    { kind: 'text' | 'thinking' | 'tool'; id: string; name?: string; json: string }
+  >()
+  const emittedTools = new Set<string>()
+
+  return {
+    streamedAnything() {
+      return streamed
+    },
+    onEvent(event) {
+      if (event.type === 'stream_event') {
+        const inner = isRecord(event.event) ? event.event : undefined
+        if (inner === undefined) return
+        const index = typeof inner.index === 'number' ? inner.index : -1
+        switch (inner.type) {
+          case 'message_start':
+            if (!messageOpen) {
+              messageOpen = true
+              streamed = true
+              emit([startStepPart()])
+            }
+            break
+          case 'content_block_start': {
+            const block = isRecord(inner.content_block) ? inner.content_block : {}
+            const id =
+              typeof block.id === 'string' && block.id.length > 0 ? block.id : `cl-${++nextId}`
+            if (block.type === 'text') {
+              blocks.set(index, { kind: 'text', id, json: '' })
+              streamed = true
+              emit([textStartPart(id)])
+            } else if (block.type === 'thinking') {
+              blocks.set(index, { kind: 'thinking', id, json: '' })
+              streamed = true
+              emit([reasoningStartPart(id)])
+            } else if (block.type === 'tool_use') {
+              blocks.set(index, {
+                kind: 'tool',
+                id,
+                name: typeof block.name === 'string' ? block.name : 'tool',
+                json: '',
+              })
+            }
+            break
+          }
+          case 'content_block_delta': {
+            const block = blocks.get(index)
+            const delta = isRecord(inner.delta) ? inner.delta : {}
+            if (block === undefined) break
+            if (block.kind === 'text' && typeof delta.text === 'string') {
+              streamed = true
+              emit([textDeltaPart(block.id, delta.text)])
+            } else if (block.kind === 'thinking' && typeof delta.thinking === 'string') {
+              streamed = true
+              emit([reasoningDeltaPart(block.id, delta.thinking)])
+            } else if (block.kind === 'tool' && typeof delta.partial_json === 'string') {
+              block.json += delta.partial_json
+            }
+            break
+          }
+          case 'content_block_stop': {
+            const block = blocks.get(index)
+            if (block === undefined) break
+            if (block.kind === 'text') {
+              emit([textEndPart(block.id)])
+            } else if (block.kind === 'thinking') {
+              emit([reasoningEndPart(block.id)])
+            } else {
+              let input: unknown = {}
+              if (block.json.length > 0) {
+                try {
+                  input = JSON.parse(block.json)
+                } catch {
+                  input = block.json
+                }
+              }
+              emittedTools.add(block.id)
+              streamed = true
+              emit([toolInputPart(block.id, block.name ?? 'tool', input)])
+            }
+            blocks.delete(index)
+            break
+          }
+          case 'message_stop':
+            if (messageOpen) {
+              messageOpen = false
+              emit([finishStepPart()])
+            }
+            break
+          default:
+            break
+        }
+        return
+      }
+
+      if (event.type === 'assistant') {
+        const message = isRecord(event.message) ? event.message : {}
+        if (!Array.isArray(message.content)) return
+        for (const block of message.content) {
+          if (!isRecord(block) || block.type !== 'tool_use') continue
+          const id =
+            typeof block.id === 'string' && block.id.length > 0 ? block.id : `cl-${++nextId}`
+          if (emittedTools.has(id)) continue
+          emittedTools.add(id)
+          streamed = true
+          emit([
+            toolInputPart(
+              id,
+              typeof block.name === 'string' ? block.name : 'tool',
+              block.input ?? {},
+            ),
+          ])
+        }
+        return
+      }
+
+      if (event.type === 'user') {
+        const message = isRecord(event.message) ? event.message : {}
+        if (!Array.isArray(message.content)) return
+        for (const block of message.content) {
+          if (!isRecord(block) || block.type !== 'tool_result') continue
+          const id =
+            typeof block.tool_use_id === 'string' && block.tool_use_id.length > 0
+              ? block.tool_use_id
+              : `cl-${++nextId}`
+          streamed = true
+          emit([toolOutputPart(id, block.content ?? null)])
+        }
+      }
+    },
+  }
+}
+
+/**
+ * Buffered-path translation (degraded latency, same content): walk the
+ * completed turn's events and emit whole messages — start-step/finish-step
+ * around each assistant message, text/reasoning/tool parts from blocks, and
+ * tool outputs from `user` tool_result lines.
+ */
+function translateBufferedClaudeTurn(turn: ClaudeTurn, emit: (parts: StreamPart[]) => void): void {
+  let nextId = 0
+  let stepOpen = false
+  const closeStep = (): void => {
+    if (stepOpen) {
+      stepOpen = false
+      emit([finishStepPart()])
+    }
+  }
+  for (const event of turn.events) {
+    if (event.type === 'assistant') {
+      closeStep()
+      stepOpen = true
+      emit([startStepPart()])
+      const message = isRecord(event.message) ? event.message : {}
+      if (!Array.isArray(message.content)) continue
+      for (const block of message.content) {
+        if (!isRecord(block)) continue
+        const id = typeof block.id === 'string' && block.id.length > 0 ? block.id : `cl-${++nextId}`
+        if (block.type === 'text' && typeof block.text === 'string') {
+          emit([textStartPart(id), textDeltaPart(id, block.text), textEndPart(id)])
+        } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+          emit([
+            reasoningStartPart(id),
+            reasoningDeltaPart(id, block.thinking),
+            reasoningEndPart(id),
+          ])
+        } else if (block.type === 'tool_use') {
+          emit([
+            toolInputPart(
+              id,
+              typeof block.name === 'string' ? block.name : 'tool',
+              block.input ?? {},
+            ),
+          ])
+        }
+      }
+    } else if (event.type === 'user') {
+      const message = isRecord(event.message) ? event.message : {}
+      if (!Array.isArray(message.content)) continue
+      for (const block of message.content) {
+        if (!isRecord(block) || block.type !== 'tool_result') continue
+        const id =
+          typeof block.tool_use_id === 'string' && block.tool_use_id.length > 0
+            ? block.tool_use_id
+            : `cl-${++nextId}`
+        emit([toolOutputPart(id, block.content ?? null)])
+      }
+    }
+  }
+  closeStep()
 }
 
 function errorText(error: unknown): string {
