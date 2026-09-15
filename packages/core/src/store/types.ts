@@ -293,7 +293,13 @@ export interface BuildStore {
    * actor the operator). Unlike builds, nothing else ever creates sessions. */
   createSession(input: NewSessionInput): Promise<SessionRecord>
   getSession(id: string): Promise<SessionRecord | null>
-  /** Every session of `repo`, in insertion order. */
+  /** Every session of `repo` in creation order: `createdAt` ascending, with
+   * same-millisecond ties broken by a store-assigned monotonic creation
+   * sequence — never by the random `os_<uuid>` id. The counter is assigned at
+   * `createSession`, is never reused (sessions are never deleted), and is not
+   * part of `SessionRecord`. This makes the returned order a function of the
+   * creation history alone, so every adapter (memory, SQLite, Postgres,
+   * remote) returns the same order for the same creation history. */
   listSessions(repo: string): Promise<SessionRecord[]>
   /** Append one validated session event; the store assigns the per-session
    * `seq` (monotonic, from 1) and `ts`. Unknown sessions reject; invalid
