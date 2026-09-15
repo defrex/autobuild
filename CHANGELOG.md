@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#332](https://github.com/defrex/autobuild/pull/332) — Add the agent tool registry and ab mcp over stdio
 - [#325](https://github.com/defrex/autobuild/pull/325) — Classify DIRTY mergeable_state as merge conflicts in auto-merge gate
 - [#324](https://github.com/defrex/autobuild/pull/324) — Route a bundled deployment's missing archive to a legible, correctly-routed failure
 - [#323](https://github.com/defrex/autobuild/pull/323) — Journal every dispatcher invocation under one synthesized run id
