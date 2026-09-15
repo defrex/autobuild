@@ -8,7 +8,7 @@ import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { MemoryBuildStore } from '../store/memory'
 import { RemoteBuildStore } from '../store/remote/client'
-import { SessionScopeError } from '../store/session-scope'
+import { PhaseSessionError } from '../store/phase-session'
 import { buildCreatedWrite, sampleEventWrite } from '../store/contract'
 import type { CliEnv, HarvestCliEnv } from './env'
 import { done } from './terminals'
@@ -92,8 +92,8 @@ describe('ambient-aware finite read opening', () => {
       },
       async ({ store: opened }) => {
         expect((await opened.getBuild('build-a'))?.slug).toBe('build-a')
-        expect(await caught(() => opened.getBuild('build-b'))).toBeInstanceOf(SessionScopeError)
-        expect(await caught(() => opened.listBuilds())).toBeInstanceOf(SessionScopeError)
+        expect(await caught(() => opened.getBuild('build-b'))).toBeInstanceOf(PhaseSessionError)
+        expect(await caught(() => opened.listBuilds())).toBeInstanceOf(PhaseSessionError)
       },
     )
   })
@@ -124,7 +124,7 @@ describe('ambient-aware finite read opening', () => {
       expect(refs).toEqual(['/explicit/store'])
       expect((await context.store.getRepo(root))?.repo).toBe(root)
       expect(await caught(() => context.store.getBuild('build-a'))).toBeInstanceOf(
-        SessionScopeError,
+        PhaseSessionError,
       )
     } finally {
       await context.store.close()
@@ -240,8 +240,8 @@ describe('openProductionSessionStore', () => {
           actor: agentActor('implement', 's_build'),
         }),
       ).toMatchObject({ seq: 1 })
-      expect(await caught(() => store.getBuild('build-b'))).toBeInstanceOf(SessionScopeError)
-      expect(await caught(() => store.getRepo('acme/project'))).toBeInstanceOf(SessionScopeError)
+      expect(await caught(() => store.getBuild('build-b'))).toBeInstanceOf(PhaseSessionError)
+      expect(await caught(() => store.getRepo('acme/project'))).toBeInstanceOf(PhaseSessionError)
       expect(
         await caught(() =>
           store.append('build-a', {
@@ -249,7 +249,7 @@ describe('openProductionSessionStore', () => {
             actor: agentActor('implement', 's_other'),
           }),
         ),
-      ).toBeInstanceOf(SessionScopeError)
+      ).toBeInstanceOf(PhaseSessionError)
       expect(await seed.getEvents('build-b')).toEqual([])
       expect(await seed.getRepoEvents('acme/project')).toEqual([])
     } finally {
@@ -279,8 +279,8 @@ describe('openProductionSessionStore', () => {
           },
         }),
       ).toMatchObject({ seq: 1 })
-      expect(await caught(() => store.getRepo('other/project'))).toBeInstanceOf(SessionScopeError)
-      expect(await caught(() => store.getBuild('build-a'))).toBeInstanceOf(SessionScopeError)
+      expect(await caught(() => store.getRepo('other/project'))).toBeInstanceOf(PhaseSessionError)
+      expect(await caught(() => store.getBuild('build-a'))).toBeInstanceOf(PhaseSessionError)
       expect(
         await caught(() =>
           store.appendRepo('acme/project', {
@@ -293,7 +293,7 @@ describe('openProductionSessionStore', () => {
             },
           }),
         ),
-      ).toBeInstanceOf(SessionScopeError)
+      ).toBeInstanceOf(PhaseSessionError)
       expect(await seed.getEvents('build-a')).toEqual([])
       expect(await seed.getRepoEvents('other/project')).toEqual([])
     } finally {

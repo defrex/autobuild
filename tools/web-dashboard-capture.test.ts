@@ -96,6 +96,7 @@ function models(): WebFixtureModels {
             status: 'ended',
             usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
             transcript: { kind: 'transcript:plan', rev: 1 },
+            streamStatus: 'closed',
           },
         ],
       }),

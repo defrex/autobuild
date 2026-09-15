@@ -4,6 +4,12 @@ import type { RepositoryEventType, RepositoryEventWrite } from '../events/reposi
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import type { RepositoryEvent, RepositoryEventEnvelope } from '../events/repository'
 import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../events/sessions'
+import type {
   Artifact,
   ArtifactInput,
   ArtifactMeta,
@@ -14,9 +20,19 @@ import type {
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
+  SessionArtifactMeta,
+  SessionRecord,
   SubscribeOptions,
   Unsubscribe,
 } from './types'
+import type {
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+} from './streams/types'
 
 /** Interface-level authority failure. It is deliberately independent of the
  * remote transport's authentication errors: tokens carry this scope over the
@@ -43,6 +59,24 @@ export class BuildScopeError extends Error {
 export function createBuildScopedStore(store: BuildStore, scope: string): BuildScopedStore {
   const own = (operation: string, slug: string): void => {
     if (slug !== scope) throw new BuildScopeError(scope, operation, slug)
+  }
+  /** Stream scopes ride on the record, not on an argument: create and list
+   * name the scope directly; addressed operations resolve the target's scope
+   * and reject when it is not exactly this build's. An unknown id delegates
+   * so the backing store's `unknown stream` feedback survives. */
+  const ownStreamScope = (record: StreamRecord): void => {
+    if (record.scope.kind !== 'build' || record.scope.build !== scope) {
+      throw new BuildScopeError(scope, 'stream', record.id)
+    }
+  }
+  const ownStream = async (_operation: string, streamId: string): Promise<void> => {
+    const record = await store.getStream(streamId)
+    if (record) ownStreamScope(record)
+  }
+  const buildScope = (operation: string, candidate: StreamScope): void => {
+    if (candidate.kind !== 'build' || candidate.build !== scope) {
+      throw new BuildScopeError(scope, operation, JSON.stringify(candidate))
+    }
   }
   return {
     buildScope: scope,
@@ -162,6 +196,70 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     releaseRepoLease(repo: string, _holder: string): Promise<void> {
       return Promise.reject(new BuildScopeError(scope, 'releaseRepoLease', repo))
+    },
+    createSession(input): Promise<SessionRecord> {
+      return Promise.reject(new BuildScopeError(scope, 'createSession', input.repo))
+    },
+    getSession(id: string): Promise<SessionRecord | null> {
+      return Promise.reject(new BuildScopeError(scope, 'getSession', id))
+    },
+    listSessions(repo: string): Promise<SessionRecord[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listSessions', repo))
+    },
+    appendSessionEvent<T extends SessionEventType>(
+      id: string,
+      _event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T>> {
+      return Promise.reject(new BuildScopeError(scope, 'appendSessionEvent', id))
+    },
+    getSessionEvents(id: string, _sinceSeq?: number): Promise<SessionEvent[]> {
+      return Promise.reject(new BuildScopeError(scope, 'getSessionEvents', id))
+    },
+    appendSessionWithArtifacts<T extends SessionEventType>(
+      id: string,
+      _artifacts: ArtifactInput[],
+      _makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+    ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+      return Promise.reject(new BuildScopeError(scope, 'appendSessionWithArtifacts', id))
+    },
+    putSessionArtifact(id: string, _artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+      return Promise.reject(new BuildScopeError(scope, 'putSessionArtifact', id))
+    },
+    getSessionArtifact(id: string, _kind: string, _rev?: number): Promise<null> {
+      return Promise.reject(new BuildScopeError(scope, 'getSessionArtifact', id))
+    },
+    listSessionArtifacts(id: string, _kind?: string): Promise<SessionArtifactMeta[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listSessionArtifacts', id))
+    },
+    scopeSession(id: string): never {
+      throw new BuildScopeError(scope, 'scopeSession', id)
+    },
+    async createStream(candidate: StreamScope, label: string): Promise<StreamRecord> {
+      buildScope('createStream', candidate)
+      return store.createStream(candidate, label)
+    },
+    async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
+      await ownStream('appendStreamParts', streamId)
+      return store.appendStreamParts(streamId, parts)
+    },
+    async readStream(
+      streamId: string,
+      opts?: { since?: number; waitSeconds?: number },
+    ): Promise<StreamRead> {
+      await ownStream('readStream', streamId)
+      return store.readStream(streamId, opts)
+    },
+    async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+      await ownStream('closeStream', streamId)
+      return store.closeStream(streamId, outcome)
+    },
+    async getStream(streamId: string): Promise<StreamRecord | null> {
+      await ownStream('getStream', streamId)
+      return store.getStream(streamId)
+    },
+    async listStreams(candidate: StreamScope): Promise<StreamRecord[]> {
+      buildScope('listStreams', candidate)
+      return store.listStreams(candidate)
     },
     close(): Promise<void> {
       return Promise.reject(new BuildScopeError(scope, 'close'))

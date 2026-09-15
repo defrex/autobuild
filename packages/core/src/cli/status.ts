@@ -36,6 +36,11 @@ import type { AbEvent } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import type { Actor } from '../events/envelope'
 import { loadConfig } from '../config/load'
+import type { Config } from '../config/schema'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseEffectiveBuildConfig,
+} from '../processes/build-execution-state'
 import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferral } from '../kernel/auto-merge'
 import { decideNext } from '../kernel/engine'
@@ -55,7 +60,7 @@ import type {
   VerifyOutcome,
 } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { BuildRecord } from '../store/types'
+import type { BuildRecord, BuildStore, StreamRecord, StreamScope } from '../store/types'
 import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
 import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { buildInRepository, resolveMainRepo } from './repo-state'
@@ -133,7 +138,7 @@ export interface BuildDetail extends BuildSummary {
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
-  openSessions: OpenSession[]
+  openSessions: StatusOpenSession[]
   observations: BuildObservation[]
   /** Current setup failure only; a later successful attachment clears it. */
   setupFailure?: SetupFailureDetail
@@ -239,14 +244,28 @@ export function summarize(record: BuildRecord, events: AbEvent[], now: Date): Bu
 }
 
 /** Summary plus the detail fields; `eventCount` appends the newest n events. */
+/** One open session enriched with its live-view stream status (SPEC §9). */
+export interface StatusOpenSession extends OpenSession {
+  /** Open until the stream closes; the store's records are authoritative. */
+  streamStatus?: 'open' | 'closed'
+}
+
 export function detail(
   record: BuildRecord,
   events: AbEvent[],
   now: Date,
   eventCount?: number,
   decision?: BuildDecisionProjection,
+  streams?: readonly StreamRecord[],
 ): BuildDetail {
   const state = reduceBuild(events)
+  const streamStatus = new Map<string, { stream?: string; status: 'open' | 'closed' }>()
+  if (streams !== undefined) {
+    for (const record of streams) {
+      if (record.scope.kind !== 'build') continue
+      streamStatus.set(record.label, { stream: record.id, status: record.status })
+    }
+  }
   const summary = summarizeFrom(record, state, now)
   // §15.6-A: only the CURRENT cycle's results describe the current code.
   // Without this filter an earlier cycle's passes read as current — wrong, and
@@ -273,7 +292,14 @@ export function detail(
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
-    openSessions: state.sessions.open,
+    openSessions: state.sessions.open.map((session) => {
+      const record = streamStatus.get(`session:${session.session}`)
+      return {
+        ...session,
+        ...(record?.stream !== undefined ? { stream: record.stream } : {}),
+        ...(record !== undefined ? { streamStatus: record.status } : {}),
+      }
+    }),
     // Observations are historical facts rather than a derived current-state
     // opinion. Preserve event order and exact optional evidence fields.
     observations: events
@@ -387,6 +413,18 @@ export function relativeTime(iso: string, now: Date): string {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
+}
+
+/**
+ * Delegated-write attribution (§15.1): a human actor carrying a via marker
+ * renders as `human (via session os_…)` / `human (via mcp client)`; plain
+ * actors render unchanged. The JSON output and the operator API's build
+ * detail serialize the actor object verbatim, so the marker reaches those
+ * surfaces without transformation.
+ */
+function viaMarker(actor: Actor): string {
+  if (actor.kind !== 'human' || actor.via === undefined) return actor.kind
+  return `human (via ${actor.via.kind === 'session' ? `session ${actor.via.id}` : `mcp ${actor.via.client}`})`
 }
 
 function padColumns(rows: string[][]): string[] {
@@ -561,8 +599,12 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
   if (d.openSessions.length > 0) {
     lines.push(`  open sessions (${d.openSessions.length}):`)
     for (const session of d.openSessions) {
+      const stream =
+        session.stream !== undefined
+          ? ` — stream ${session.stream} (${session.streamStatus ?? 'open'})`
+          : ''
       lines.push(
-        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})`,
+        `    ${session.session} — ${session.role} on ${session.phase} (runner ${session.runner})${stream}`,
       )
     }
   }
@@ -596,7 +638,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
 
   if (d.lastEvent !== undefined) {
     lines.push(
-      `  last event: ${d.lastEvent.type} (seq ${d.lastEvent.seq}) ${d.lastEvent.ts} by ${d.lastEvent.actor.kind}`,
+      `  last event: ${d.lastEvent.type} (seq ${d.lastEvent.seq}) ${d.lastEvent.ts} by ${viaMarker(d.lastEvent.actor)}`,
     )
   }
 
@@ -606,7 +648,7 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
       `    ${event.seq}`,
       event.ts,
       event.type,
-      event.actor.kind,
+      viaMarker(event.actor),
     ])
     for (const line of padColumns(rows)) lines.push(line)
   }
@@ -707,11 +749,39 @@ function openWorkspacePath(events: AbEvent[]): string | undefined {
   return path
 }
 
-/** Load the exact config frozen into the active build workspace. An absent or
- * remote-only workspace is a reportable degradation, never a reason to guess
- * from the current main branch or to make the read-only command fail. */
-async function projectBuildDecision(
+/** The kernel tail both config sources share, so the deposited artifact and
+ * the workspace file cannot drift in what they compute — the sources differ
+ * only in where the config comes from, never in what is decided with it. */
+function decideFromConfig(
   events: AbEvent[],
+  state: BuildState,
+  config: Config,
+): BuildDecisionProjection {
+  const decision = decideNext(events, config)
+  if (decision.kind !== 'wait') return { kind: 'runner-work' }
+  if (decision.reason !== 'awaiting-pr') return { kind: 'parked', reason: decision.reason }
+  const reason = currentAutoMergeDeferral(events, state)
+  return { kind: 'awaiting-pr', ...(reason !== undefined ? { reason } : {}) }
+}
+
+/** Load the build-owned configuration for the current work-owner decision.
+ *
+ * Source order: the store's deposited `build-runner-effective-config` artifact
+ * first — the exact config the dispatcher froze at the last runner launch and
+ * the one the build child actually runs on — then the local workspace's
+ * `autobuild.toml` when no deposit exists (older records predate per-launch
+ * deposits). For a remote build the recorded workspace path is a guest path
+ * that does not exist on the operator's machine; the deposit is what makes the
+ * decision available there. The decision is reported unavailable only when
+ * neither source can supply a configuration, and the diagnostic then names the
+ * missing source rather than a filesystem path: paths embed guest locations
+ * the operator cannot access. An unavailable decision is a reportable
+ * degradation, never a reason to guess from the current main branch or to make
+ * the read-only command fail. */
+async function projectBuildDecision(
+  slug: string,
+  events: AbEvent[],
+  store: Pick<BuildStore, 'getArtifact'>,
 ): Promise<BuildDecisionProjection | undefined> {
   const state = reduceBuild(events)
   const active =
@@ -722,27 +792,40 @@ async function projectBuildDecision(
   }
   if (state.prState !== 'open') return undefined
 
+  // Source 1 — the store deposit. A deposit that fails to parse is itself
+  // reportable state: it is surfaced as unavailable naming the artifact rather
+  // than silently falling back to a possibly stale workspace file.
+  const artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+  if (artifact !== null) {
+    try {
+      return decideFromConfig(events, state, parseEffectiveBuildConfig(artifact))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        kind: 'unavailable',
+        diagnostic: `the deposited ${BUILD_EFFECTIVE_CONFIG_ARTIFACT} artifact could not be read: ${message}`,
+      }
+    }
+  }
+
+  // Source 2 — the local workspace, exactly as before, only when no artifact
+  // is deposited.
   const workspace = openWorkspacePath(events)
   if (workspace === undefined) {
     return {
       kind: 'unavailable',
-      diagnostic: 'no unreleased build workspace is recorded, so the build config cannot be read',
+      diagnostic: `no ${BUILD_EFFECTIVE_CONFIG_ARTIFACT} artifact is deposited and no unreleased build workspace is recorded, so the build config cannot be read`,
     }
   }
 
-  const configPath = join(workspace, 'autobuild.toml')
   try {
-    const config = await loadConfig(configPath)
-    const decision = decideNext(events, config)
-    if (decision.kind !== 'wait') return { kind: 'runner-work' }
-    if (decision.reason !== 'awaiting-pr') return { kind: 'parked', reason: decision.reason }
-    const reason = currentAutoMergeDeferral(events, state)
-    return { kind: 'awaiting-pr', ...(reason !== undefined ? { reason } : {}) }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    return decideFromConfig(events, state, await loadConfig(join(workspace, 'autobuild.toml')))
+  } catch {
+    // The raw error deliberately stays here: ENOENT/ENOTDIR messages embed the
+    // recorded workspace path, which for a remote build is a guest location.
     return {
       kind: 'unavailable',
-      diagnostic: `could not read the build config at ${configPath}: ${message}`,
+      diagnostic: `no ${BUILD_EFFECTIVE_CONFIG_ARTIFACT} artifact is deposited and the build config in the recorded workspace could not be read`,
     }
   }
 }
@@ -790,8 +873,19 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
       )
     }
     const events = await context.store.getEvents(opts.slug)
-    const decision = await projectBuildDecision(events)
-    const d = detail(record, events, now, opts.events, decision)
+    const decision = await projectBuildDecision(opts.slug, events, context.store)
+    // Stream enrichment is presentation (SPEC §9): an unavailable read
+    // degrades to payload-carried ids without a status, never a failure.
+    let streams: StreamRecord[] | undefined
+    try {
+      streams = await context.store.listStreams({
+        kind: 'build',
+        build: opts.slug,
+      } satisfies StreamScope)
+    } catch {
+      streams = undefined
+    }
+    const d = detail(record, events, now, opts.events, decision, streams)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(d, null, 2))
       return

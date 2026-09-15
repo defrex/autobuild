@@ -3,6 +3,8 @@
  * Codex CLI. Phase turns use Codex's JSONL exec protocol and native thread
  * resumption; non-phase judgments run as isolated, tool-free ephemeral turns.
  */
+import type { StreamPart } from '../../store/streams/types'
+import { spawnCliStream } from './cli-stream'
 import {
   agentInvocation,
   type AgentContinueOpts,
@@ -11,10 +13,28 @@ import {
   type AgentStartOpts,
   type AgentTurnFailure,
   type AgentTurnResult,
+  type SessionStreamEmitter,
   type Transcript,
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
+import {
+  abortPart,
+  errorPart,
+  finishPart,
+  finishStepPart,
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textEndPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+} from './stream-parts'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
 import { sessionEnv } from './session-env'
 
@@ -35,6 +55,17 @@ export interface CodexCliResult {
 /** Injectable direct-process boundary used by deterministic adapter tests. */
 export type CodexCliRunFn = (invocation: CodexCliInvocation) => Promise<CodexCliResult>
 
+/** A streaming CLI turn: decoded JSONL lines as they arrive, plus the
+ * completed result. The consumer accumulates the lines it needs. */
+export interface CodexCliStreamHandle {
+  lines: AsyncIterable<string>
+  result: Promise<CodexCliResult>
+}
+
+/** Injectable streaming boundary: production spawns the same argv; tests
+ * script line-at-a-time output. */
+export type CodexCliStreamFn = (invocation: CodexCliInvocation) => CodexCliStreamHandle
+
 const runCodexCli: CodexCliRunFn = async (invocation) => {
   const proc = Bun.spawn(['codex', ...invocation.args], {
     cwd: invocation.cwd,
@@ -51,6 +82,8 @@ const runCodexCli: CodexCliRunFn = async (invocation) => {
   ])
   return { stdout, stderr, exitCode }
 }
+
+const runCodexCliStream: CodexCliStreamFn = (invocation) => spawnCliStream('codex', invocation)
 
 /** Verify both the local executable and Codex login for init suggestions. */
 export async function isCodexRuntimeUsable(
@@ -164,16 +197,23 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
   readonly name = 'codex'
 
   private readonly runCli: CodexCliRunFn
+  private readonly runCliStream: CodexCliStreamFn | undefined
   private readonly createSessionId: () => string
   private readonly sessions = new Map<string, SessionState>()
 
   constructor(
     opts: {
       runCli?: CodexCliRunFn
+      runCliStream?: CodexCliStreamFn
       createSessionId?: () => string
     } = {},
   ) {
     this.runCli = opts.runCli ?? runCodexCli
+    // A test injecting only the buffered boundary takes the buffered
+    // translation path for streaming turns (degraded latency, same content);
+    // production gets the live streaming boundary.
+    this.runCliStream =
+      opts.runCliStream ?? (opts.runCli !== undefined ? undefined : runCodexCliStream)
     this.createSessionId = opts.createSessionId ?? (() => crypto.randomUUID())
   }
 
@@ -301,7 +341,7 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     return state
   }
 
-  private runTurn(
+  private async runTurn(
     prompt: string,
     opts: AgentStartOpts,
     resume?: string,
@@ -319,12 +359,85 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     args.push(...(opts.args ?? []))
     if (resume !== undefined) args.push(resume)
     args.push(CODEX_PROMPT_BOUNDARY, prompt)
-    return this.runPrompt({
+    const invocation: CodexCliInvocation = {
       args,
       cwd: opts.workspacePath,
       env: sessionEnv(opts.env),
       ...(signal !== undefined ? { signal } : {}),
-    })
+    }
+    if (opts.stream === undefined) return this.runPrompt(invocation)
+
+    // Streaming turn: translate while the CLI runs. Without an injected
+    // streaming boundary (offline fakes), the buffered path still translates
+    // after completion — degraded latency, same content.
+    const emitter = opts.stream
+    emitter.append([promptPart(prompt), startPart(crypto.randomUUID())])
+    let turn: CodexTurn
+    if (this.runCliStream !== undefined) {
+      turn = await this.runStreamingPrompt(invocation, emitter)
+    } else {
+      turn = await this.runPrompt(invocation)
+      translateBufferedCodexTurn(turn, (parts) => emitter.append(parts))
+    }
+    this.emitTurnEnd(turn, emitter, signal)
+    return turn
+  }
+
+  /** Completed-turn, failed-turn, and cancelled-turn closing parts. */
+  private emitTurnEnd(
+    turn: CodexTurn,
+    emitter: SessionStreamEmitter,
+    signal: AbortSignal | undefined,
+  ): void {
+    if (turn.failure === undefined) {
+      emitter.append([finishPart()])
+      return
+    }
+    if (signal?.aborted) {
+      const reason = signal.reason
+      emitter.append([
+        abortPart(reason instanceof Error ? reason.message : 'codex runtime: turn aborted'),
+      ])
+      return
+    }
+    emitter.append([errorPart(turn.failure.message)])
+  }
+
+  /** Live translation path: consume JSONL lines as they arrive while the
+   * same records feed the ordinary accumulators. */
+  private async runStreamingPrompt(
+    invocation: CodexCliInvocation,
+    emitter: SessionStreamEmitter,
+  ): Promise<CodexTurn> {
+    let handle: CodexCliStreamHandle
+    try {
+      handle = this.runCliStream!(invocation)
+    } catch (error) {
+      return launchFailure(error)
+    }
+    const acc = new CodexOutputAccumulator()
+    const translator = createCodexStreamTranslator((parts) => emitter.append(parts))
+    try {
+      for await (const line of handle.lines) {
+        let value: unknown
+        try {
+          value = JSON.parse(line)
+        } catch {
+          acc.push(line)
+          continue
+        }
+        if (!isRecord(value)) {
+          acc.push(line)
+          continue
+        }
+        acc.pushRecord(value)
+        translator.onEvent(value)
+      }
+    } catch {
+      // The result promise below still carries the CLI's exit and stderr.
+    }
+    const cli = await handle.result
+    return this.finishTurn(cli, acc.snapshot())
   }
 
   private async runPrompt(invocation: CodexCliInvocation): Promise<CodexTurn> {
@@ -332,22 +445,13 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
     try {
       cli = await this.runCli(invocation)
     } catch (error) {
-      const missing = isEnoent(error)
-      const message = missing
-        ? MISSING_CLI_MESSAGE
-        : `${this.name} runtime: failed to launch Codex CLI executable "codex": ${errorText(error)}`
-      return {
-        text: '',
-        usage: { inputTokens: 0, outputTokens: 0 },
-        failure: missing ? configurationFailure(message) : classifyProviderError(message),
-        cli: { stdout: '', stderr: errorText(error), exitCode: -1 },
-        events: [],
-        malformedLines: [],
-        toolItems: [],
-      }
+      return launchFailure(error)
     }
+    return this.finishTurn(cli, parseCodexOutput(cli.stdout))
+  }
 
-    const parsed = parseCodexOutput(cli.stdout)
+  /** Shared post-processing of a completed CLI run. */
+  private finishTurn(cli: CodexCliResult, parsed: ParsedCodexOutput): CodexTurn {
     const text = parsed.assistantText.join('\n')
     let failureMessage: string | undefined
     let loggedOut = false
@@ -416,36 +520,51 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
 }
 
 function parseCodexOutput(stdout: string): ParsedCodexOutput {
-  const parsed: ParsedCodexOutput = {
-    events: [],
-    malformedLines: [],
-    assistantText: [],
-    usage: { inputTokens: 0, outputTokens: 0 },
-    completed: false,
-    failureMessages: [],
-    statuses: [],
-    codes: [],
-    toolItems: [],
-  }
+  const acc = new CodexOutputAccumulator()
+  for (const line of stdout.split(/\r?\n/)) acc.push(line)
+  return acc.snapshot()
+}
 
-  for (const line of stdout.split(/\r?\n/)) {
-    if (line.trim() === '') continue
+/**
+ * Incremental accumulator over Codex's JSONL exec protocol, shared by the
+ * buffered parse and the streaming path (which also feeds the stream
+ * translator below). Collects the same shape `parseCodexOutput` always
+ * returned so outcome classification is byte-identical in both paths.
+ */
+class CodexOutputAccumulator {
+  readonly events: JsonRecord[] = []
+  readonly malformedLines: string[] = []
+  readonly assistantText: string[] = []
+  readonly failureMessages: string[] = []
+  readonly statuses: number[] = []
+  readonly codes: Array<string | number> = []
+  readonly toolItems: string[] = []
+  usage = { inputTokens: 0, outputTokens: 0 }
+  completed = false
+  threadId: string | undefined
+
+  push(line: string): void {
+    if (line.trim() === '') return
     let value: unknown
     try {
       value = JSON.parse(line)
     } catch {
-      parsed.malformedLines.push(line)
-      continue
+      this.malformedLines.push(line)
+      return
     }
     if (!isRecord(value)) {
-      parsed.malformedLines.push(line)
-      continue
+      this.malformedLines.push(line)
+      return
     }
-    parsed.events.push(value)
+    this.pushRecord(value)
+  }
+
+  pushRecord(value: JsonRecord): void {
+    this.events.push(value)
 
     if (value.type === 'thread.started') {
       const id = stringField(value, 'thread_id') ?? stringField(value, 'threadId')
-      if (id !== undefined && id.length > 0) parsed.threadId = id
+      if (id !== undefined && id.length > 0) this.threadId = id
     }
 
     if (value.type === 'item.completed' || value.type === 'item.started') {
@@ -453,7 +572,7 @@ function parseCodexOutput(stdout: string): ParsedCodexOutput {
       const itemType = stringField(item, 'type')
       if (value.type === 'item.completed' && itemType === 'agent_message') {
         const text = itemText(item)
-        if (text !== undefined) parsed.assistantText.push(text)
+        if (text !== undefined) this.assistantText.push(text)
       }
       // Codex represents non-fatal warnings/deprecation notices as `error`
       // thread items. They are transcript evidence, not executed tools. Every
@@ -465,14 +584,14 @@ function parseCodexOutput(stdout: string): ParsedCodexOutput {
         itemType !== 'reasoning' &&
         itemType !== 'error'
       ) {
-        parsed.toolItems.push(itemType)
+        this.toolItems.push(itemType)
       }
     }
 
     if (value.type === 'turn.completed') {
-      parsed.completed = true
+      this.completed = true
       const usage = isRecord(value.usage) ? value.usage : undefined
-      parsed.usage = {
+      this.usage = {
         inputTokens: tokenCount(usage?.input_tokens ?? usage?.inputTokens),
         outputTokens: tokenCount(usage?.output_tokens ?? usage?.outputTokens),
       }
@@ -484,12 +603,26 @@ function parseCodexOutput(stdout: string): ParsedCodexOutput {
         stringField(nested, 'message') ??
         stringField(value, 'message') ??
         stringField(value, 'error')
-      if (message !== undefined) parsed.failureMessages.push(message)
-      collectHints(value, parsed)
-      if (nested !== undefined) collectHints(nested, parsed)
+      if (message !== undefined) this.failureMessages.push(message)
+      collectHints(value, this)
+      if (nested !== undefined) collectHints(nested, this)
     }
   }
-  return parsed
+
+  snapshot(): ParsedCodexOutput {
+    return {
+      events: [...this.events],
+      malformedLines: [...this.malformedLines],
+      ...(this.threadId !== undefined ? { threadId: this.threadId } : {}),
+      assistantText: [...this.assistantText],
+      usage: { ...this.usage },
+      completed: this.completed,
+      failureMessages: [...this.failureMessages],
+      statuses: [...this.statuses],
+      codes: [...this.codes],
+      toolItems: [...this.toolItems],
+    }
+  }
 }
 
 function itemText(item: JsonRecord | undefined): string | undefined {
@@ -506,14 +639,14 @@ function itemText(item: JsonRecord | undefined): string | undefined {
   return parts.length > 0 ? parts.join('') : undefined
 }
 
-function collectHints(value: JsonRecord, parsed: ParsedCodexOutput): void {
+function collectHints(value: JsonRecord, acc: CodexOutputAccumulator): void {
   for (const key of ['status', 'status_code', 'statusCode']) {
     const status = value[key]
-    if (typeof status === 'number' && Number.isFinite(status)) parsed.statuses.push(status)
+    if (typeof status === 'number' && Number.isFinite(status)) acc.statuses.push(status)
   }
   for (const key of ['code', 'type', 'category']) {
     const code = value[key]
-    if (typeof code === 'string' || typeof code === 'number') parsed.codes.push(code)
+    if (typeof code === 'string' || typeof code === 'number') acc.codes.push(code)
   }
 }
 
@@ -544,4 +677,191 @@ function isEnoent(error: unknown): boolean {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** A CLI that never ran: missing executable vs. a failed launch. */
+function launchFailure(error: unknown): CodexTurn {
+  const missing = isEnoent(error)
+  const message = missing
+    ? MISSING_CLI_MESSAGE
+    : `codex runtime: failed to launch Codex CLI executable "codex": ${errorText(error)}`
+  return {
+    text: '',
+    usage: { inputTokens: 0, outputTokens: 0 },
+    failure: missing ? configurationFailure(message) : classifyProviderError(message),
+    cli: { stdout: '', stderr: errorText(error), exitCode: -1 },
+    events: [],
+    malformedLines: [],
+    toolItems: [],
+  }
+}
+
+/**
+ * Live stream translation (SPEC §9): turn.started → start-step; tool-shaped
+ * item.started → tool-input-available; item.completed → tool output, whole
+ * agent-message text, or reasoning parts; item.updated → text deltas when it
+ * carries incremental text. Unrecognized records produce no parts.
+ *
+ * Items without an `id` still correlate across started/updated/completed:
+ * each item kind's events arrive sequentially, so a stable per-kind key is
+ * assigned when the item is first seen and reused until the item completes.
+ */
+function createCodexStreamTranslator(emit: (parts: StreamPart[]) => void): {
+  onEvent(event: JsonRecord): void
+} {
+  const openText = new Set<string>()
+  const keys = createItemKeyTracker()
+  const itemKey = keys.keyFor
+
+  return {
+    onEvent(event) {
+      switch (event.type) {
+        case 'turn.started':
+          emit([startStepPart()])
+          break
+        case 'item.started': {
+          const item = isRecord(event.item) ? event.item : undefined
+          const itemType = stringField(item, 'type')
+          // agent_message/reasoning items stream at item.updated/item.completed;
+          // a bare item.started opens nothing yet (the first delta does).
+          if (itemType === undefined || itemType === 'agent_message' || itemType === 'reasoning') {
+            break
+          }
+          emit([toolInputPart(itemKey(item, itemType), itemType, itemCommand(item) ?? item)])
+          break
+        }
+        case 'item.updated': {
+          const item = isRecord(event.item) ? event.item : undefined
+          if (item === undefined) break
+          if (stringField(item, 'type') !== 'agent_message') break
+          const delta = itemText(item)
+          if (delta === undefined || delta.length === 0) break
+          const id = itemKey(item, 'agent_message')
+          if (!openText.has(id)) emit([textStartPart(id)])
+          openText.add(id)
+          emit([textDeltaPart(id, delta)])
+          break
+        }
+        case 'item.completed': {
+          const item = isRecord(event.item) ? event.item : undefined
+          const itemType = stringField(item, 'type')
+          if (itemType === 'agent_message') {
+            const id = itemKey(item, itemType)
+            const text = itemText(item)
+            if (openText.has(id)) {
+              emit([textEndPart(id)])
+              openText.delete(id)
+            } else if (text !== undefined && text.length > 0) {
+              emit([textStartPart(id), textDeltaPart(id, text), textEndPart(id)])
+            }
+            keys.complete(item, itemType)
+            break
+          }
+          if (itemType === 'reasoning') {
+            const id = itemKey(item, itemType)
+            const text = itemText(item)
+            if (text !== undefined && text.length > 0) {
+              emit([reasoningStartPart(id), reasoningDeltaPart(id, text), reasoningEndPart(id)])
+            }
+            keys.complete(item, itemType)
+            break
+          }
+          if (itemType === undefined) break
+          emit([toolOutputPart(itemKey(item, itemType), itemCommand(item) ?? item)])
+          keys.complete(item, itemType)
+          break
+        }
+        case 'turn.completed':
+          keys.clear()
+          emit([finishStepPart()])
+          break
+        default:
+          break
+      }
+    },
+  }
+}
+
+/** Codex items carry their human-readable payload in `command`/`input`. */
+function itemCommand(item: JsonRecord | undefined): unknown {
+  const command = item?.command
+  if (typeof command === 'string') return command
+  const input = item?.input
+  if (input !== undefined) return input
+  return undefined
+}
+
+/**
+ * Stable per-item keys (SPEC §9 translation): items carrying an `id` key by
+ * it; items without one key by kind and occurrence — each kind's events
+ * arrive sequentially, so the slot assigned when the item is first seen is
+ * reused until it completes, and a per-turn reset frees the counters.
+ */
+function createItemKeyTracker(): {
+  keyFor(item: JsonRecord | undefined, itemType: string | undefined): string
+  complete(item: JsonRecord | undefined, itemType: string | undefined): void
+  clear(): void
+} {
+  const counters = new Map<string, number>()
+  const lastIdless = new Map<string, string>()
+  return {
+    keyFor(item, itemType) {
+      const id = stringField(item, 'id')
+      if (id !== undefined && id.length > 0) return id
+      const kind = itemType ?? 'item'
+      const known = lastIdless.get(kind)
+      if (known !== undefined) return known
+      const n = (counters.get(kind) ?? 0) + 1
+      counters.set(kind, n)
+      const key = `cx-${kind}-${n}`
+      lastIdless.set(kind, key)
+      return key
+    },
+    /** An id-less item's kind slot frees up when the item completes. */
+    complete(item, itemType) {
+      if (stringField(item, 'id') === undefined) lastIdless.delete(itemType ?? 'item')
+    },
+    clear() {
+      lastIdless.clear()
+    },
+  }
+}
+
+/**
+ * Buffered-path translation (degraded latency, same content): walk the
+ * completed turn's events and emit whole messages — start-step/finish-step
+ * around the turn, text/reasoning parts from items, and tool input/output
+ * from non-message items.
+ */
+function translateBufferedCodexTurn(turn: CodexTurn, emit: (parts: StreamPart[]) => void): void {
+  const keys = createItemKeyTracker()
+  emit([startStepPart()])
+  for (const event of turn.events) {
+    if (event.type !== 'item.completed' && event.type !== 'item.started') continue
+    const item = isRecord(event.item) ? event.item : undefined
+    const itemType = stringField(item, 'type')
+    if (itemType === 'agent_message' && event.type === 'item.completed') {
+      const text = itemText(item)
+      if (text !== undefined && text.length > 0) {
+        const id = keys.keyFor(item, itemType)
+        emit([textStartPart(id), textDeltaPart(id, text), textEndPart(id)])
+      }
+      keys.complete(item, itemType)
+    } else if (itemType === 'reasoning' && event.type === 'item.completed') {
+      const text = itemText(item)
+      if (text !== undefined && text.length > 0) {
+        const id = keys.keyFor(item, itemType)
+        emit([reasoningStartPart(id), reasoningDeltaPart(id, text), reasoningEndPart(id)])
+      }
+      keys.complete(item, itemType)
+    } else if (itemType !== undefined && itemType !== 'agent_message' && itemType !== 'reasoning') {
+      // Mirror the live mapping: input at item.started, output at completed.
+      const id = keys.keyFor(item, itemType)
+      if (event.type === 'item.started')
+        emit([toolInputPart(id, itemType, itemCommand(item) ?? item)])
+      else emit([toolOutputPart(id, itemCommand(item) ?? item)])
+      if (event.type === 'item.completed') keys.complete(item, itemType)
+    }
+  }
+  emit([finishStepPart()])
 }

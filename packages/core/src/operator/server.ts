@@ -17,6 +17,10 @@ import {
   buildListScopeSchema,
   bulkControlRequestSchema,
   harvestControlRequestSchema,
+  sessionApprovalRequestSchema,
+  sessionCreateRequestSchema,
+  sessionMessageRequestSchema,
+  sessionWakeRequestSchema,
   settingRequestSchema,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
@@ -39,6 +43,17 @@ import {
   OperatorQueryError,
 } from './query'
 import { TicketOperationError } from '../ports/tickets/operations'
+import {
+  answerOperatorApproval,
+  archiveOperatorSession,
+  createOperatorSession,
+  getOperatorSession,
+  listOperatorSessions,
+  OperatorSessionError,
+  postOperatorMessage,
+  readOperatorTurnStream,
+  setOperatorWake,
+} from './sessions'
 import {
   getOperatorTicket,
   listOperatorTickets,
@@ -287,6 +302,80 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       }
     }
 
+    if (rest[0] === 'sessions') {
+      if (rest.length === 1) {
+        if (req.method === 'GET') {
+          return json(200, await listOperatorSessions(opts.store, repo))
+        }
+        if (req.method === 'POST') {
+          const request = await body(req, sessionCreateRequestSchema)
+          return json(201, await createOperatorSession(opts.store, repo, user, request.title))
+        }
+        throw new HttpError(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
+      }
+      const sid = rest[1]!
+      if (rest.length === 2 && req.method === 'GET') {
+        return json(200, await getOperatorSession(opts.store, repo, sid))
+      }
+      if (req.method === 'POST' && rest.length === 3 && rest[2] === 'messages') {
+        const request = await body(req, sessionMessageRequestSchema)
+        await postOperatorMessage(opts.store, repo, sid, user, request.text)
+        return json(200, { ok: true })
+      }
+      if (req.method === 'PUT' && rest.length === 3 && rest[2] === 'wake') {
+        const request = await body(req, sessionWakeRequestSchema)
+        await setOperatorWake(opts.store, repo, sid, user, request.globs)
+        return json(200, { ok: true })
+      }
+      if (req.method === 'POST' && rest.length === 3 && rest[2] === 'approvals') {
+        const request = await body(req, sessionApprovalRequestSchema)
+        await answerOperatorApproval(
+          opts.store,
+          repo,
+          sid,
+          user,
+          request.turn,
+          request.toolCallId,
+          request.decision,
+        )
+        return json(200, { ok: true })
+      }
+      if (req.method === 'POST' && rest.length === 3 && rest[2] === 'archive') {
+        await archiveOperatorSession(opts.store, repo, sid, user)
+        return json(200, { ok: true })
+      }
+      if (
+        req.method === 'GET' &&
+        rest.length === 5 &&
+        rest[2] === 'turns' &&
+        rest[4] === 'stream'
+      ) {
+        const since = url.searchParams.get('since')
+        const wait = url.searchParams.get('wait')
+        let sinceSeq: number | undefined
+        if (since !== null) {
+          if (!/^[0-9]+$/.test(since)) {
+            throw new HttpError(400, 'validation', 'since must be a nonnegative integer')
+          }
+          sinceSeq = Number(since)
+        }
+        let waitSeconds: number | undefined
+        if (wait !== null) {
+          if (!/^-?[0-9]+$/.test(wait)) {
+            throw new HttpError(400, 'validation', 'wait must be an integer number of seconds')
+          }
+          waitSeconds = Number(wait)
+        }
+        return json(
+          200,
+          await readOperatorTurnStream(opts.store, repo, sid, rest[3]!, {
+            ...(sinceSeq !== undefined ? { since: sinceSeq } : {}),
+            ...(waitSeconds !== undefined ? { waitSeconds } : {}),
+          }),
+        )
+      }
+    }
+
     if (rest[0] === 'builds' && rest[1]) {
       const slug = rest[1]
       if (req.method === 'GET' && rest.length === 2) {
@@ -412,6 +501,17 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             error.code === 'not-found' ? 'not-found' : 'refusal',
             error.message,
             { code: error.code },
+          )
+        }
+        if (error instanceof OperatorSessionError) {
+          return failure(
+            error.code === 'not-found' ? 404 : error.code === 'forbidden' ? 403 : 409,
+            error.code === 'not-found'
+              ? 'not-found'
+              : error.code === 'forbidden'
+                ? 'auth'
+                : 'refusal',
+            error.message,
           )
         }
         if (error instanceof BuildControlError || error instanceof OperatorControlError) {

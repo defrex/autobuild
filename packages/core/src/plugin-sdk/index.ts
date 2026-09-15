@@ -9,7 +9,28 @@ export type * from '../store/types'
 export type {
   RuntimeRegistration,
   RuntimeRegistry,
+  SessionStreamInfo,
 } from '../ports/runner/runtime'
+export {
+  STREAM_PART_MAX_BYTES,
+  abortPart,
+  errorPart,
+  finishPart,
+  finishStepPart,
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  sessionPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textEndPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+  truncationPart,
+} from '../ports/runner/stream-parts'
 export type {
   OneShotCompletion,
   OneShotCompletionInput,
@@ -124,5 +145,29 @@ export type {
   RepositoryEventWrite,
 } from '../events/repository'
 export { BuildScopeError, createBuildScopedStore } from '../store/build-scope'
+export { createSessionStreamSink } from '../store/streams/session-writer'
 export { pollingSubscribe } from '../store/subscribe'
+export { assembleUIMessageDocument } from '../store/streams/assemble'
+export { readStreamWithWait, STREAM_WAIT_POLL_MS } from '../store/streams/wait'
+export {
+  clampWaitSeconds,
+  MAX_STREAM_WAIT_SECONDS,
+  serializedBatchSize,
+  STREAM_BATCH_MAX_BYTES,
+  STREAM_FORMAT,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  streamArtifactInput,
+  validateStreamParts,
+} from '../store/streams/types'
+export type {
+  StreamArtifactRef,
+  StreamChunk,
+  StreamOutcome,
+  StreamPart,
+  StreamRead,
+  StreamRecord,
+  StreamScope,
+  StreamStatus,
+} from '../store/streams/types'
 export { contentHash, systemClock, toBytes, validateExpectedSeq } from '../store/types'

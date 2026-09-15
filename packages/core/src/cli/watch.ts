@@ -37,7 +37,7 @@ import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { SessionScopeError } from '../store/session-scope'
+import { PhaseSessionError } from '../store/phase-session'
 import type { BuildRecord } from '../store/types'
 import { resolveAmbientReadSession } from './env'
 import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
@@ -470,17 +470,17 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
 
   // Ambient scope, before any store access: inside a phase with a complete
   // build identity, only the ambient build may be watched. The errors are the
-  // same SessionScopeError shapes the scoped store handle produces for
+  // same PhaseSessionError shapes the scoped store handle produces for
   // `ab builds` / `ab build status`, so the message matches exactly.
   const ambient = resolveAmbientReadSession(opts.env)
   if (ambient !== undefined && 'build' in ambient) {
     const scope = { kind: 'build' as const, id: ambient.build, session: ambient.session }
     if (slugs.length === 0 || repository) {
-      throw new SessionScopeError(scope, 'listBuilds', { kind: 'admin' })
+      throw new PhaseSessionError(scope, 'listBuilds', { kind: 'admin' })
     }
     for (const slug of slugs) {
       if (slug !== ambient.build) {
-        throw new SessionScopeError(scope, 'getEvents', { kind: 'build', id: slug })
+        throw new PhaseSessionError(scope, 'getEvents', { kind: 'build', id: slug })
       }
     }
   }

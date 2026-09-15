@@ -12,6 +12,7 @@
 import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 import type { Actor } from '../../events/envelope'
 import type { TicketRef } from '../../ontology'
+import type { StreamPart } from '../streams/types'
 
 export const builds = sqliteTable('builds', {
   slug: text('slug').primaryKey(),
@@ -77,6 +78,49 @@ export const repoArtifacts = sqliteTable(
   (t) => [primaryKey({ columns: [t.repo, t.kind, t.revision] })],
 )
 
+/** Operator sessions (SPEC §7.1.1): hosted-only durable orchestrator
+ * conversation state. Adapters implement the contract uniformly; nothing
+ * local creates one. */
+export const sessions = sqliteTable('sessions', {
+  id: text('id').primaryKey(),
+  repo: text('repo').notNull(),
+  operator: text('operator').notNull(),
+  title: text('title'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const sessionEvents = sqliteTable(
+  'session_events',
+  {
+    session: text('session')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    /** Per-session, monotonic from 1, assigned in-transaction on append. */
+    seq: integer('seq').notNull(),
+    ts: text('ts').notNull(),
+    actor: text('actor', { mode: 'json' }).notNull().$type<Actor>(),
+    type: text('type').notNull(),
+    payload: text('payload', { mode: 'json' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.session, t.seq] })],
+)
+
+export const sessionArtifacts = sqliteTable(
+  'session_artifacts',
+  {
+    session: text('session')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    revision: integer('revision').notNull(),
+    blobRef: text('blob_ref').notNull(),
+    metadata: text('metadata', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.session, t.kind, t.revision] })],
+)
+
 export const artifacts = sqliteTable(
   'artifacts',
   {
@@ -90,4 +134,38 @@ export const artifacts = sqliteTable(
     createdAt: text('created_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.build, t.kind, t.revision] })],
+)
+
+/** Streams (SPEC §7.6): the third primitive. Scope is fixed at create; the
+ * CHECKs guarantee exactly one of build/repo/session is set, matching the
+ * scope kind. */
+export const streams = sqliteTable('streams', {
+  id: text('id').primaryKey(),
+  scopeKind: text('scope_kind').notNull(),
+  build: text('build'),
+  repo: text('repo'),
+  session: text('session'),
+  label: text('label').notNull(),
+  format: text('format').notNull(),
+  status: text('status').notNull(),
+  outcome: text('outcome'),
+  artifactKind: text('artifact_kind'),
+  artifactRevision: integer('artifact_revision'),
+  artifactBlobRef: text('artifact_blob_ref'),
+  createdAt: text('created_at').notNull(),
+  closedAt: text('closed_at'),
+})
+
+export const streamChunks = sqliteTable(
+  'stream_chunks',
+  {
+    stream: text('stream')
+      .notNull()
+      .references(() => streams.id, { onDelete: 'cascade' }),
+    /** Per-stream, monotonic from 1, assigned in-transaction on append. */
+    seq: integer('seq').notNull(),
+    ts: text('ts').notNull(),
+    parts: text('parts', { mode: 'json' }).notNull().$type<StreamPart[]>(),
+  },
+  (t) => [primaryKey({ columns: [t.stream, t.seq] })],
 )

@@ -22,9 +22,11 @@ import {
   sampleBuildInput,
   sampleEventWrite,
 } from '../contract'
-import { textContent } from '../types'
+import { MemoryBlobStore } from '../memory'
+import { StreamClosedError } from '../streams/types'
+import { textContent, type BlobStore } from '../types'
 import { builds, repoStreams } from './schema'
-import { openLocalStore } from './store'
+import { openLocalStore, SqliteBuildStore } from './store'
 
 async function freshRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'ab-sqlite-'))
@@ -137,6 +139,62 @@ describe('SqliteBuildStore durability', () => {
         // The reopened store keeps assigning seq where the log left off.
         const next = await second.append('persist', sampleEventWrite('after reopen'))
         expect(next.seq).toBe(2)
+      } finally {
+        await second.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('streams created before a reopen still read with their chunks and artifact after it', async () => {
+    const root = await freshRoot()
+    try {
+      const clock = manualClock(CONTRACT_T0)
+      const first = openLocalStore(root, { clock })
+      await first.createBuild(sampleBuildInput('persist-streams'))
+      await first.ensureRepo('acme/rate-limiter')
+      const stream = await first.createStream(
+        { kind: 'build', build: 'persist-streams' },
+        'turn one',
+      )
+      await first.appendStreamParts(stream.id, [
+        { type: 'start', messageId: 'm' },
+        { type: 'text-start', id: 't' },
+      ])
+      await first.appendStreamParts(stream.id, [
+        { type: 'text-delta', id: 't', delta: 'durable' },
+        { type: 'text-end', id: 't' },
+      ])
+      const closed = await first.closeStream(stream.id, 'completed')
+      const repoStream = await first.createStream(
+        { kind: 'repo', repo: 'acme/rate-limiter' },
+        'harvest stream',
+      )
+      await first.appendStreamParts(repoStream.id, [{ type: 'text-delta', id: 'u', delta: 'r' }])
+      await first.close()
+
+      const second = openLocalStore(root, { clock })
+      try {
+        const record = await second.getStream(stream.id)
+        expect(record?.status).toBe('closed')
+        expect(record?.outcome).toBe('completed')
+        expect(record?.artifact).toEqual(closed.artifact)
+        const read = await second.readStream(stream.id)
+        expect(read.chunks.map((chunk) => chunk.seq)).toEqual([1, 2])
+        const artifact = await second.getArtifact('persist-streams', `stream:${stream.id}`)
+        expect(JSON.parse(textContent(artifact!))).toEqual([
+          { id: 'm', role: 'assistant', parts: [{ type: 'text', text: 'durable', state: 'done' }] },
+        ])
+
+        // The open repo-side stream resumes: appends continue the sequence.
+        const resumed = await second.readStream(repoStream.id)
+        expect(resumed.chunks).toHaveLength(1)
+        const next = await second.appendStreamParts(repoStream.id, [{ type: 'text-end', id: 'u' }])
+        expect(next.seq).toBe(2)
+        expect(
+          (await second.listStreams({ kind: 'build', build: 'persist-streams' })).map((r) => r.id),
+        ).toEqual([stream.id])
       } finally {
         await second.close()
       }
@@ -518,4 +576,145 @@ describe('SqliteBuildStore cross-process contention', () => {
       await rm(root, { recursive: true, force: true })
     }
   }, 30_000)
+})
+
+describe('SqliteBuildStore close/append interleaving (AUT-348)', () => {
+  // A BlobStore whose first put() suspends on a gate — closeStream's prepare
+  // window. The gate fires before the close's blob write lands and the test
+  // decides when the close resumes: forced ordering, no timing.
+  function gatedBlobs() {
+    const backing = new MemoryBlobStore()
+    let signalEntered!: () => void
+    let release!: () => void
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve
+    })
+    const gateOpen = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let armed = true
+    const blobs: BlobStore = {
+      put: async (hash, bytes) => {
+        if (armed) {
+          armed = false
+          signalEntered()
+          await gateOpen
+        }
+        await backing.put(hash, bytes)
+      },
+      get: (hash) => backing.get(hash),
+    }
+    return { blobs, entered, release }
+  }
+
+  async function openRaw(root: string, blobs: BlobStore): Promise<SqliteBuildStore> {
+    const database = new Database(join(root, 'autobuild.sqlite'), { create: true })
+    return new SqliteBuildStore({ database, blobs })
+  }
+
+  test('an append issued during a same-instance close waits for the commit and rejects with StreamClosedError', async () => {
+    const root = await freshRoot()
+    const { blobs, entered, release } = gatedBlobs()
+    const store = await openRaw(root, blobs)
+    try {
+      await store.createBuild(sampleBuildInput('st-close-race'))
+      const stream = await store.createStream({ kind: 'build', build: 'st-close-race' }, 'turn')
+      await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'm' }])
+      await store.appendStreamParts(stream.id, [{ type: 'text-start', id: 't' }])
+      await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'hello' }])
+
+      const closing = store.closeStream(stream.id, 'completed')
+      await entered // the close is suspended inside blobs.put — its prepare window
+      const pending = store.appendStreamParts(stream.id, [
+        { type: 'text-delta', id: 't', delta: 'late' },
+      ])
+      release()
+      await closing
+      const err = await pending.catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(StreamClosedError)
+
+      // The late append persisted nothing: three chunks, all pre-close, and
+      // the artifact's chunkCount/document cover only those.
+      const read = await store.readStream(stream.id)
+      expect(read.chunks).toHaveLength(3)
+      const artifact = await store.getArtifact('st-close-race', `stream:${stream.id}`)
+      expect(artifact?.meta.metadata).toMatchObject({ chunkCount: 3 })
+      const document = JSON.parse(textContent(artifact!)) as Array<{
+        parts: Array<{ type: string; text?: string; state?: string }>
+      }>
+      expect(document[0]?.parts.some((part) => part.type === 'text' && part.text === 'late')).toBe(
+        false,
+      )
+      expect(document[0]?.parts).toContainEqual({ type: 'text', text: 'hello', state: 'streaming' })
+    } finally {
+      await store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a cross-connection append inside the prepare window is included in the finalized artifact', async () => {
+    const root = await freshRoot()
+    const { blobs, entered, release } = gatedBlobs()
+    // Two instances on one database file — the cross-connection writer shape
+    // the per-instance mutex cannot see. The shared gated blob store forces
+    // instance B's append to commit while instance A's close sits in its
+    // prepare phase, exercising the commit-time chunk re-verification.
+    const a = await openRaw(root, blobs)
+    const b = await openRaw(root, blobs)
+    try {
+      await a.createBuild(sampleBuildInput('st-cross'))
+      const stream = await a.createStream({ kind: 'build', build: 'st-cross' }, 'turn')
+      await a.appendStreamParts(stream.id, [{ type: 'start', messageId: 'm' }])
+      await a.appendStreamParts(stream.id, [{ type: 'text-start', id: 't' }])
+
+      const closing = a.closeStream(stream.id, 'completed')
+      await entered
+      const chunk = await b.appendStreamParts(stream.id, [
+        { type: 'text-delta', id: 't', delta: 'late' },
+      ])
+      expect(chunk.seq).toBe(3) // B's append was acknowledged before the close commits
+      release()
+      const record = await closing
+      expect(record.status).toBe('closed')
+
+      // The retry loop re-prepared from the newer chunk set: all three
+      // acknowledged appends are in chunkCount and the document.
+      const artifact = await a.getArtifact('st-cross', `stream:${stream.id}`)
+      expect(artifact?.meta.metadata).toMatchObject({ chunkCount: 3 })
+      const document = JSON.parse(textContent(artifact!)) as Array<{ parts: unknown[] }>
+      expect(document[0]?.parts).toContainEqual({
+        type: 'text',
+        text: 'late',
+        state: 'streaming',
+      })
+    } finally {
+      await a.close()
+      await b.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a close held on stream A does not serialize an append on stream B', async () => {
+    const root = await freshRoot()
+    const { blobs, entered, release } = gatedBlobs()
+    const store = await openRaw(root, blobs)
+    try {
+      await store.createBuild(sampleBuildInput('st-two-streams'))
+      const a = await store.createStream({ kind: 'build', build: 'st-two-streams' }, 'a')
+      const b = await store.createStream({ kind: 'build', build: 'st-two-streams' }, 'b')
+      await store.appendStreamParts(a.id, [{ type: 'start', messageId: 'am' }])
+
+      const closing = store.closeStream(a.id, 'completed')
+      await entered // A's close holds its lock, suspended inside blobs.put
+      const chunk = await store.appendStreamParts(b.id, [{ type: 'start', messageId: 'bm' }])
+      expect(chunk.seq).toBe(1)
+      release()
+      const record = await closing
+      expect(record.status).toBe('closed')
+      expect((await store.readStream(b.id)).chunks).toHaveLength(1)
+    } finally {
+      await store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })

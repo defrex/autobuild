@@ -582,6 +582,7 @@ function sessionLines(session: DashboardSession, selected: boolean, opts: Render
     `runtime ${session.runtime}`,
     ...(session.model !== undefined ? [`model ${session.model}`] : []),
     session.status,
+    ...(session.stream !== undefined ? [`stream ${session.stream} (${session.streamStatus})`] : []),
     ...(session.reclaimedBy !== undefined
       ? [
           `by ${session.reclaimedBy.instance} at resume boundary ${session.reclaimedBy.resumedFromSeq}`,

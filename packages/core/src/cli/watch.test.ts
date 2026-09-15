@@ -13,7 +13,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { InvalidAmbientContextError } from './env'
 import { runCli } from './main'
-import { SessionScopeError, scopeLocalStoreToSession } from '../store/session-scope'
+import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
 import {
   abWatch,
@@ -705,7 +705,7 @@ describe('watch ambient scope', () => {
   }
 
   async function realScopeError(action: (scoped: BuildStore) => Promise<unknown>): Promise<string> {
-    const scoped = scopeLocalStoreToSession(new MemoryBuildStore(), {
+    const scoped = scopeLocalStoreToPhaseSession(new MemoryBuildStore(), {
       kind: 'build',
       id: 'b1',
       session: 's_1',
@@ -724,7 +724,7 @@ describe('watch ambient scope', () => {
     const error = await abWatch({ ...h.base, env: ambientEnv }).catch(
       (caught: unknown) => caught as Error,
     )
-    expect(error).toBeInstanceOf(SessionScopeError)
+    expect(error).toBeInstanceOf(PhaseSessionError)
     expect(error!.message).toBe(await realScopeError((scoped) => scoped.listBuilds()))
     expect(h.openCount()).toBe(0)
   })
@@ -735,7 +735,7 @@ describe('watch ambient scope', () => {
     const error = await abWatch({ ...h.base, env: ambientEnv, slugs: ['other'] }).catch(
       (caught: unknown) => caught as Error,
     )
-    expect(error).toBeInstanceOf(SessionScopeError)
+    expect(error).toBeInstanceOf(PhaseSessionError)
     expect(error!.message).toBe(await realScopeError((scoped) => scoped.getEvents('other')))
     expect(h.openCount()).toBe(0)
   })
@@ -749,7 +749,7 @@ describe('watch ambient scope', () => {
       slugs: ['b1'],
       repository: true,
     }).catch((caught: unknown) => caught as Error)
-    expect(error).toBeInstanceOf(SessionScopeError)
+    expect(error).toBeInstanceOf(PhaseSessionError)
     expect(error!.message).toBe(await realScopeError((scoped) => scoped.listBuilds()))
     expect(h.openCount()).toBe(0)
   })

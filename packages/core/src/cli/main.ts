@@ -48,6 +48,7 @@ import { renderPrSummary } from './pr-summary'
 import { abBuilds, abBuildStatus } from './status'
 import { abRepositoryStatus } from './repository-status'
 import { abWatch, WATCH_USAGE } from './watch'
+import { abMcp, AB_MCP_USAGE } from './mcp'
 import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
 import { abTicket, openTicketSource } from './ticket'
@@ -100,6 +101,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'builds',
   'build',
   'watch',
+  'mcp',
   'repository',
   'pause',
   'resume',
@@ -762,6 +764,27 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
       })
       return 0
+    }
+
+    case 'mcp': {
+      const parsed = parseArgs(rest, { store: 'value', repo: 'value' }, AB_MCP_USAGE)
+      if (parsed.positionals.length > 0) throw new Error(AB_MCP_USAGE)
+      if (deps.exec === undefined) {
+        throw new Error("'ab mcp' needs an exec seam — this is a wiring bug in the ab binary")
+      }
+      const storeRef = stringFlag(parsed, 'store')
+      const repo = stringFlag(parsed, 'repo')
+      return await abMcp({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        stderr,
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(repo !== undefined ? { repo } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+        ...(deps.clock !== undefined ? { clock: deps.clock } : {}),
+      })
     }
 
     case 'build': {

@@ -13,9 +13,37 @@ AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator
   --user 'Ada Lovelace' --ttl-seconds 3600
 ```
 
-Admin, build, and repository tokens have no operator authority. Operator tokens
-have no raw `/builds` or `/repos` store authority. Encode repository, build,
-and artifact kind as separate URL path segments.
+Admin, build, repository, and deployment (`{ "operator": true, … }`) tokens
+have no attributed operator authority. Human-operator tokens have no raw
+`/builds`, `/repos`, `/sessions`, or `/tickets` authority. Encode repository,
+build, session, and artifact kind as separate URL path segments.
+
+## Operator sessions
+
+Operator sessions are the signed-in operator's durable orchestrator
+conversations: a hosted-only third store resource. A session
+belongs to the operator who created it; other operators of the same repository
+can read it and cannot write to it (`403 auth` on non-owner writes). Every
+write is attributed to the token's signed user — never a client-supplied
+identity — and carries no `via` marker: session events are the delegate's own
+log. Writes of any kind to an archived session are `409 refusal`, and the
+archived status is terminal.
+
+| Method and path | Result |
+|---|---|
+| `GET …/sessions` | The repository's session records, newest update first. Readable by any operator of the repository. |
+| `POST …/sessions` | `{"title"?:"…"}` → `201` + the created `SessionRecord`; the signed-in operator owns it. |
+| `GET …/sessions/{sid}` | `{session, state, turns}` where `state` is the reducer's derived state (`status`, `openTurn`, `pendingApproval`, `wakeGlobs`, `wakeCursors`, `turns`) and `turns` the ordered turn list. Readable by any operator of the repository. |
+| `POST …/sessions/{sid}/messages` | `{"text":"…"}` → appends `message.posted`. Owner only. |
+| `PUT …/sessions/{sid}/wake` | `{"globs":["…"]}` (possibly empty) → appends `session.wake-set`. Owner only. |
+| `POST …/sessions/{sid}/approvals` | `{"turn":"…","toolCallId":"…","decision":"approve"\|"deny"}` → `approval.answered`. Owner only; `409 refusal` when the reduced state has no matching pending approval. |
+| `POST …/sessions/{sid}/archive` | Empty body → `session.archived`. Owner only; `409 refusal` when already archived. |
+| `GET …/sessions/{sid}/turns/{turn}/stream?since=N&wait=N` | The turn's stream read: `{chunks,status,outcome?,artifact?}` with `since` strictly greater-than and the same bounded-wait semantics as the stream protocol (whole seconds, clamped at 30). Unknown turn is `404 not-found`. Readable by any operator of the repository. |
+
+Session state is a reduction of the session's event log, never a stored
+column; a `GET …/sessions/{sid}` response therefore always reflects the
+session's full history. The API never exposes raw session-event append: the
+turn runner (a later ticket) is the only producer of turn facts.
 
 ## Reads
 
@@ -27,11 +55,20 @@ and artifact kind as separate URL path segments.
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
+| `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria,triageState,readyState}`. The two lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. |
+| `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
+
+For artifact reads, an absent `rev` selects the latest revision. A supplied value
+must match `[0-9]+` (one or more ASCII base-10 digits) and represent an integer
+from `0` through `Number.MAX_SAFE_INTEGER` (`9007199254740991`). All other
+supplied forms return `400 validation`.
 
 Dashboard reads use the latest durable, run-correlated `effectiveConfig`
 repository artifact. Missing, corrupt, or invalid configuration returns a typed
 `409 effective-config-unavailable`; the service never guesses from a checkout.
-Clients poll these reads; streaming is not provided.
+Clients poll these reads; streaming is not provided. `triageState`, `readyState`,
+and every entry in `states` are backend state names and must be sent back verbatim
+when used with the move control.
 
 ## Controls
 
@@ -47,6 +84,11 @@ JSON bodies are strict: unknown fields are rejected.
 | `POST …/settings/auto-merge-default/toggle` | Empty body. |
 | `POST …/bulk-control` | `{"action":"pause"\|"resume"}`. The hold fact, intake fact, then eligible build events are written in that order. |
 | `POST …/harvest/control` | `{"action":"toggle-gate"}` or `{"action":"run","run":"…"}`. A run action is bound to that concrete projected run. |
+| `POST …/tickets` | `{"title":"…","body":"…","labels"?:[],"state"?:"…","blockedBy"?:[]}`; omitted state preserves the backend default. |
+| `PATCH …/tickets/{id}` | Any nonempty subset of `title`, `body`, and complete-replacement `labels`. Body bytes are not normalized. |
+| `POST …/tickets/{id}/move` | `{"state":"backend state name"}`. |
+| `POST …/tickets/{id}/block` | `{"blockerIds":["…"]}`. |
+| `POST …/tickets/{id}/unblock` | `{"blockerIds":["…"]}`. |
 
 Answer variants:
 
@@ -104,5 +146,19 @@ refusal` and preserve the shared `BuildControlError` code and exact reason text.
 A partial bulk failure uses code `bulk-partial` and includes the durable write
 progress and unattempted builds. Unexpected failures are `500 internal`.
 
-The API does not expose phase-session commands, ticket intake, runner startup,
-streaming, or a generic event-append operation.
+## Browser gateway
+
+The same deployment serves the web dashboard through `/api/web/repos/{repo}/…`.
+That route is not a second public bearer-token API: it requires a current
+Better Auth HTTP-only cookie, rechecks the deployment email and repository
+allowlists, rejects cross-origin JSON controls, and delegates only the dashboard,
+build, settings, and harvest operator suffixes listed above. It replaces caller-supplied authorization/version
+headers with a server-minted token that expires after 30 seconds and carries
+the normalized signed-in email. Consequently every durable control event has
+the browser user's human actor while no token or signing secret reaches client
+code. Responses are private/no-store; a 401 sends the application back to sign
+in. Browser clients poll the visible dashboard every two seconds; live transcript
+streaming is not provided. Delegated bearer tokens remain server-side.
+
+The API does not expose phase-session commands, runner startup, live streaming,
+or a generic event-append operation.

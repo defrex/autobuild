@@ -12,8 +12,9 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { EventValidationError, type EventWrite } from '../events/catalog'
-import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import { agentActor, DISPATCHER, humanActor, KERNEL, type Via } from '../events/envelope'
 import type { RepositoryEventWrite } from '../events/repository'
+import type { SessionEventWrite } from '../events/sessions'
 import { manualClock } from '../testing/fixed'
 import {
   contentHash,
@@ -24,6 +25,18 @@ import {
   type Clock,
   type NewBuildInput,
 } from './types'
+
+/** Decode artifact bytes — accepts both build and repository artifacts. */
+function artifactText(artifact: { content: Uint8Array }): string {
+  return new TextDecoder().decode(artifact.content)
+}
+import {
+  clampWaitSeconds,
+  MAX_STREAM_WAIT_SECONDS,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+  type StreamPart,
+} from './streams/types'
 
 // ── Factory seams ────────────────────────────────────────────────────────────
 
@@ -147,6 +160,21 @@ export function runStartedWrite(
   }
 }
 
+export function messagePostedWrite(text = 'hello'): SessionEventWrite<'message.posted'> {
+  return { actor: humanActor('operator'), type: 'message.posted', payload: { text } }
+}
+
+export function turnStartedWrite(
+  turn = 't1',
+  stream = `st_${turn}`,
+): SessionEventWrite<'turn.started'> {
+  return {
+    actor: agentActor('orchestrator', 'os_turn'),
+    type: 'turn.started',
+    payload: { turn, stream, trigger: { kind: 'message', messageSeq: 1 } },
+  }
+}
+
 async function withStore(
   factory: BuildStoreFactory,
   opts: { clock?: Clock; retention?: { maxRevisions: number } } | undefined,
@@ -159,6 +187,51 @@ async function withStore(
     await store.close()
     await cleanup?.()
   }
+}
+
+// ── Stream fixtures (SPEC §7.6) ──────────────────────────────────────────
+
+/** The representative part sequence the assembly close test asserts on:
+ * text deltas, a tool call with input and output, a reasoning block, a
+ * data-* part, an error chunk, and one undefined-type part. */
+export function representativeStreamParts(): StreamPart[] {
+  return [
+    { type: 'start', messageId: 'msg-1' },
+    { type: 'text-start', id: 't1' },
+    { type: 'text-delta', id: 't1', delta: 'working' },
+    { type: 'text-end', id: 't1' },
+    { type: 'reasoning-start', id: 'r1' },
+    { type: 'reasoning-delta', id: 'r1', delta: 'considering' },
+    { type: 'reasoning-end', id: 'r1' },
+    { type: 'tool-input-available', toolCallId: 'c1', toolName: 'read', input: { path: 'a.ts' } },
+    { type: 'tool-output-available', toolCallId: 'c1', output: { lines: 10 } },
+    { type: 'data-probe', id: 'd1', data: { n: 1 } },
+    { type: 'error', errorText: 'transient' },
+    { type: 'mystery-part', foo: 1 },
+  ]
+}
+
+/** The document the representative sequence assembles into — shared by the
+ * close test and each adapter's expected-artifact assertion. */
+export function representativeStreamDocument(): unknown[] {
+  return [
+    {
+      id: 'msg-1',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'working', state: 'done' },
+        { type: 'reasoning', id: 'r1', text: 'considering', state: 'done' },
+        {
+          type: 'tool-read',
+          toolCallId: 'c1',
+          state: 'output-available',
+          input: { path: 'a.ts' },
+          output: { lines: 10 },
+        },
+        { type: 'data-probe', id: 'd1', data: { n: 1 } },
+      ],
+    },
+  ]
 }
 
 function atT0(offsetMs: number): string {
@@ -808,6 +881,43 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           ).toBe(2)
         })
       })
+
+      test('the operator-notes kind is retention-managed at the same deposit path', async () => {
+        await withStore(factory, { retention: { maxRevisions: 2 } }, async (store) => {
+          await store.ensureRepo('acme/retention')
+          // Three deposits of the agent notes kind prune the oldest, exactly
+          // like the dispatcher family: the newest 2 survive, and the
+          // latest-by-default read (what notes.read serves) still works.
+          for (let i = 0; i < 3; i++) {
+            await store.putRepoArtifact('acme/retention', {
+              kind: 'operator-notes',
+              content: `notes-${i}`,
+              metadata: { user: 'Ada' },
+            })
+          }
+          const revisions = (await store.listRepoArtifacts('acme/retention', 'operator-notes')).map(
+            (meta) => meta.revision,
+          )
+          expect(revisions).toEqual([1, 2])
+          expect(await store.getRepoArtifact('acme/retention', 'operator-notes', 0)).toBeNull()
+          const latest = await store.getRepoArtifact('acme/retention', 'operator-notes')
+          expect(latest?.meta.revision).toBe(2)
+          expect(new TextDecoder().decode(latest!.content)).toBe('notes-2')
+          // The dispatcher family's documented bound is untouched by the
+          // operator kind: a family deposit still prunes its own kind alone.
+          const { artifacts } = await store.appendRepoWithArtifacts(
+            'acme/retention',
+            [{ kind: 'dispatcher-effective-config', content: 'cfg' }],
+            (deposited) => runStartedWrite('retention-notes-run', deposited),
+          )
+          expect(artifacts.map((meta) => meta.revision)).toEqual([0])
+          expect(
+            (await store.listRepoArtifacts('acme/retention', 'operator-notes')).map(
+              (meta) => meta.revision,
+            ),
+          ).toEqual([1, 2])
+        })
+      })
     })
 
     describe('validation-before-prune ordering (AUT-322)', () => {
@@ -1184,6 +1294,886 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.append('sub-stop', sampleEventWrite('two'))
           await Bun.sleep(40)
           expect(received).toEqual([1])
+        })
+      })
+    })
+
+    describe('streams (SPEC §7.6 — the third primitive)', () => {
+      test('create assigns the id, literal format, open status, and clock createdAt; get and list round-trip', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-create'))
+          const record = await store.createStream(
+            { kind: 'build', build: 'st-create' },
+            'implement turn',
+          )
+          expect(record.id).toMatch(/^st_/)
+          expect(record.scope).toEqual({ kind: 'build', build: 'st-create' })
+          expect(record.label).toBe('implement turn')
+          expect(record.format).toBe('ai-ui-message-stream/v1')
+          expect(record.status).toBe('open')
+          expect(record.createdAt).toBe(CONTRACT_T0)
+          expect(record.closedAt).toBeUndefined()
+          expect(record.outcome).toBeUndefined()
+          expect(record.artifact).toBeUndefined()
+          expect(await store.getStream(record.id)).toEqual(record)
+          expect(await store.getStream('st_unknown')).toBeNull()
+          expect(await store.listStreams({ kind: 'build', build: 'st-create' })).toEqual([record])
+          await store.createBuild(sampleBuildInput('st-empty'))
+          expect(await store.listStreams({ kind: 'build', build: 'st-empty' })).toEqual([])
+        })
+      })
+
+      test('append assigns per-stream sequences from 1, independent across streams, with clock ts and exact parts', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-append'))
+          const a = await store.createStream({ kind: 'build', build: 'st-append' }, 'a')
+          const b = await store.createStream({ kind: 'build', build: 'st-append' }, 'b')
+          clock.advance(1000)
+          const parts: StreamPart[] = [
+            { type: 'text-delta', id: 't', delta: 'hello' },
+            { type: 'data-probe', data: { nested: true, extra: 'keys survive' } },
+          ]
+          const c1 = await store.appendStreamParts(a.id, parts)
+          clock.advance(1000)
+          const c2 = await store.appendStreamParts(a.id, [{ type: 'text-end', id: 't' }])
+          const b1 = await store.appendStreamParts(b.id, [{ type: 'start', messageId: 'm' }])
+          expect([c1.seq, c2.seq]).toEqual([1, 2])
+          expect(b1.seq).toBe(1)
+          expect(c1.stream).toBe(a.id)
+          expect(c1.ts).toBe(atT0(1000))
+          expect(c2.ts).toBe(atT0(2000))
+          expect(c1.parts).toEqual(parts)
+          const read = await store.readStream(a.id)
+          expect(read.chunks.map((chunk) => chunk.seq)).toEqual([1, 2])
+          expect(read.chunks[0]?.parts).toEqual(parts)
+          expect(read.status).toBe('open')
+          expect(read.outcome).toBeUndefined()
+          expect(read.artifact).toBeUndefined()
+        })
+      })
+
+      test('append validation rejects empty batches, non-object parts, missing and empty type, and unknown streams — writing nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-validate'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-validate' }, 'v')
+          for (const bad of [
+            [] as StreamPart[],
+            ['not an object' as unknown as StreamPart],
+            [{ delta: 'no type' } as unknown as StreamPart],
+            [{ type: '' } as unknown as StreamPart],
+          ]) {
+            const err = await store.appendStreamParts(stream.id, bad).catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(Error)
+          }
+          const unknown = await store
+            .appendStreamParts('st_ghost', [{ type: 'text-delta', id: 't', delta: 'x' }])
+            .catch((e: unknown) => e)
+          expect(unknown).toBeInstanceOf(Error)
+          expect((await store.readStream(stream.id)).chunks).toEqual([])
+        })
+      })
+
+      test('a batch whose serialized size exceeds the ceiling rejects with StreamBatchTooLargeError and writes nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-ceiling'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-ceiling' }, 'big')
+          const oversized: StreamPart[] = [
+            { type: 'text-delta', id: 't', delta: 'x'.repeat(1_048_600) },
+          ]
+          const err = await store.appendStreamParts(stream.id, oversized).catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(StreamBatchTooLargeError)
+          expect((err as Error).message).toContain('1048576')
+          expect((await store.readStream(stream.id)).chunks).toEqual([])
+          // Just under the ceiling appends fine.
+          await store.appendStreamParts(stream.id, [
+            { type: 'text-delta', id: 't', delta: 'x'.repeat(1_000) },
+          ])
+          expect((await store.readStream(stream.id)).chunks).toHaveLength(1)
+        })
+      })
+
+      test('read since is strictly greater-than, in order; cursor resumes deliver exactly-once', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-since'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-since' }, 's')
+          for (const n of [1, 2, 3]) {
+            await store.appendStreamParts(stream.id, [
+              { type: 'text-delta', id: 't', delta: String(n) },
+            ])
+          }
+          expect((await store.readStream(stream.id)).chunks.map((c) => c.seq)).toEqual([1, 2, 3])
+          expect(
+            (await store.readStream(stream.id, { since: 1 })).chunks.map((c) => c.seq),
+          ).toEqual([2, 3])
+          expect(await store.readStream(stream.id, { since: 3 })).toEqual({
+            chunks: [],
+            status: 'open',
+          })
+          // Resuming from the last processed cursor never re-delivers: each
+          // chunk after the cursor arrives exactly once, in order.
+          const resumed = await store.readStream(stream.id, { since: 2 })
+          expect(resumed.chunks.map((c) => c.seq)).toEqual([3])
+          const done = await store.readStream(stream.id, { since: 3 })
+          expect(done.chunks).toEqual([])
+        })
+      })
+
+      test('bounded wait returns empty no earlier than the bound when nothing arrives', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-wait'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-wait' }, 'w')
+          const started = Date.now()
+          const read = await store.readStream(stream.id, { waitSeconds: 1 })
+          expect(read.chunks).toEqual([])
+          expect(read.status).toBe('open')
+          expect(Date.now() - started).toBeGreaterThanOrEqual(950)
+        })
+      })
+
+      test('bounded wait returns early when a chunk is appended during the wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-wake'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-wake' }, 'w')
+          const pending = store.readStream(stream.id, { waitSeconds: 5 })
+          await Bun.sleep(100)
+          const chunk = await store.appendStreamParts(stream.id, [
+            { type: 'text-delta', id: 't', delta: 'wake' },
+          ])
+          const read = await pending
+          expect(read.chunks).toEqual([chunk])
+        })
+      })
+
+      test('bounded wait returns early with the closed status when the stream closes during the wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-wake-close'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-wake-close' }, 'w')
+          const pending = store.readStream(stream.id, { waitSeconds: 5 })
+          await Bun.sleep(100)
+          const record = await store.closeStream(stream.id, 'completed')
+          const read = await pending
+          expect(read.chunks).toEqual([])
+          expect(read.status).toBe('closed')
+          expect(read.outcome).toBe('completed')
+          expect(read.artifact).toEqual(record.artifact)
+        })
+      })
+
+      test('a wait above 30 seconds is clamped, not stretched', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-clamp'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-clamp' }, 'c')
+          const pending = store.readStream(stream.id, { waitSeconds: 61 })
+          await Bun.sleep(200)
+          await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          const started = Date.now()
+          const read = await pending
+          expect(read.chunks).toHaveLength(1)
+          // The append satisfied the read — the clamp never stretched it to
+          // 30 or 61 seconds; the wait ended promptly after the append.
+          expect(Date.now() - started).toBeLessThan(5_000)
+        })
+      })
+
+      test('clampWaitSeconds clamps above 30 and below 0', () => {
+        expect(clampWaitSeconds(61)).toBe(MAX_STREAM_WAIT_SECONDS)
+        expect(clampWaitSeconds(30)).toBe(30)
+        expect(clampWaitSeconds(5)).toBe(5)
+        expect(clampWaitSeconds(0)).toBe(0)
+        expect(clampWaitSeconds(-3)).toBe(0)
+      })
+
+      test('reads of a closed stream never wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-closed-read'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-closed-read' }, 'c')
+          await store.closeStream(stream.id, 'completed')
+          const started = Date.now()
+          const read = await store.readStream(stream.id, { waitSeconds: 5 })
+          expect(read.status).toBe('closed')
+          expect(Date.now() - started).toBeLessThan(500)
+        })
+      })
+
+      test('appending to a closed stream rejects with StreamClosedError and writes nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-closed-append'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-closed-append' }, 'c')
+          await store.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          await store.closeStream(stream.id, 'completed')
+          const err = await store
+            .appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'y' }])
+            .catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(StreamClosedError)
+          expect((await store.readStream(stream.id)).chunks).toHaveLength(1)
+        })
+      })
+
+      test('close deposits the assembled document atomically: artifact on the owning scope, record gains outcome/closedAt/artifact', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-close'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-close' }, 'turn 1')
+          for (const part of representativeStreamParts()) {
+            await store.appendStreamParts(stream.id, [part])
+          }
+          clock.advance(1000)
+          const record = await store.closeStream(stream.id, 'completed')
+          expect(record.status).toBe('closed')
+          expect(record.outcome).toBe('completed')
+          expect(record.closedAt).toBe(atT0(1000))
+          expect(record.artifact?.kind).toBe(`stream:${stream.id}`)
+          expect(record.artifact?.revision).toBe(0)
+
+          // The finalized document is the assembled UIMessage[]...
+          const artifact = await store.getArtifact('st-close', `stream:${stream.id}`)
+          expect(artifact?.meta.kind).toBe(`stream:${stream.id}`)
+          expect(artifact?.meta.revision).toBe(0)
+          expect(artifact?.meta.metadata).toEqual({
+            stream: stream.id,
+            label: 'turn 1',
+            scope: { kind: 'build', build: 'st-close' },
+            outcome: 'completed',
+            chunkCount: 12,
+            droppedPartCount: 1,
+          })
+          expect(JSON.parse(textContent(artifact!))).toEqual(representativeStreamDocument())
+
+          // ...and the read surface carries the closed shape.
+          const read = await store.readStream(stream.id)
+          expect(read.status).toBe('closed')
+          expect(read.outcome).toBe('completed')
+          expect(read.artifact).toEqual(record.artifact)
+          expect(read.chunks).toHaveLength(12)
+        })
+      })
+
+      test('closing an already-closed stream is a no-op returning the record, even with a different outcome', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-idem'))
+          const stream = await store.createStream({ kind: 'build', build: 'st-idem' }, 'i')
+          const closed = await store.closeStream(stream.id, 'completed')
+          const again = await store.closeStream(stream.id, 'aborted')
+          expect(again).toEqual(closed)
+          expect(again.outcome).toBe('completed')
+          expect((await store.getStream(stream.id))?.artifact).toEqual(closed.artifact)
+        })
+      })
+
+      test('close of an unknown stream rejects', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const err = await store.closeStream('st_ghost', 'completed').catch((e: unknown) => e)
+          expect(err).toBeInstanceOf(Error)
+        })
+      })
+
+      test('chunk retention prunes older closed streams at the next create in the same scope; artifacts and open streams survive', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-prune'))
+          const first = await store.createStream({ kind: 'build', build: 'st-prune' }, 'one')
+          await store.appendStreamParts(first.id, [{ type: 'text-delta', id: 't', delta: '1' }])
+          const firstClosed = await store.closeStream(first.id, 'completed')
+
+          await Bun.sleep(5)
+          const second = await store.createStream({ kind: 'build', build: 'st-prune' }, 'two')
+          await store.appendStreamParts(second.id, [{ type: 'text-delta', id: 't', delta: '2' }])
+          await store.closeStream(second.id, 'completed')
+
+          // An open stream and a finalized artifact in the same scope.
+          const open = await store.createStream({ kind: 'build', build: 'st-prune' }, 'open')
+          await store.appendStreamParts(open.id, [{ type: 'text-delta', id: 't', delta: 'o' }])
+
+          // Creating a third stream prunes every closed stream's chunks
+          // except the most recently closed one, in the same transaction.
+          await store.createStream({ kind: 'build', build: 'st-prune' }, 'three')
+
+          const pruned = await store.readStream(first.id)
+          expect(pruned.chunks).toEqual([])
+          expect(pruned.status).toBe('closed')
+          expect(pruned.artifact).toEqual(firstClosed.artifact)
+          // The finalized artifact itself is never touched.
+          expect(await store.getArtifact('st-prune', `stream:${first.id}`)).not.toBeNull()
+
+          const survivor = await store.readStream(second.id)
+          expect(survivor.chunks).toHaveLength(1)
+          expect(await store.getArtifact('st-prune', `stream:${second.id}`)).not.toBeNull()
+
+          const openRead = await store.readStream(open.id)
+          expect(openRead.chunks).toHaveLength(1)
+          expect(openRead.status).toBe('open')
+        })
+      })
+
+      test('build-scoped handles operate on their own streams and reject foreign and repo-scoped ones', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('st-scope-a'))
+          await store.createBuild(sampleBuildInput('st-scope-b'))
+          await store.ensureRepo('acme/rate-limiter')
+          const scoped = store.scopeBuild('st-scope-a')
+
+          const own = await scoped.createStream({ kind: 'build', build: 'st-scope-a' }, 'mine')
+          expect(own.scope).toEqual({ kind: 'build', build: 'st-scope-a' })
+          await scoped.appendStreamParts(own.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+          expect((await scoped.readStream(own.id)).chunks).toHaveLength(1)
+          expect(await scoped.getStream(own.id)).toEqual(own)
+          expect(
+            (await scoped.listStreams({ kind: 'build', build: 'st-scope-a' })).map((r) => r.id),
+          ).toEqual([own.id])
+          await scoped.closeStream(own.id, 'completed')
+
+          // A foreign build's stream (created via the unscoped store) rejects
+          // on all six operations.
+          const foreign = await store.createStream(
+            { kind: 'build', build: 'st-scope-b' },
+            'not mine',
+          )
+          const repoStream = await store.createStream(
+            { kind: 'repo', repo: 'acme/rate-limiter' },
+            'journal stream',
+          )
+          for (const [operation, attempt] of [
+            [
+              'createStream',
+              () => scoped.createStream({ kind: 'build', build: 'st-scope-b' }, 'x'),
+            ],
+            [
+              'createStream',
+              () => scoped.createStream({ kind: 'repo', repo: 'acme/rate-limiter' }, 'x'),
+            ],
+            [
+              'appendStreamParts',
+              () =>
+                scoped.appendStreamParts(foreign.id, [{ type: 'text-delta', id: 't', delta: 'x' }]),
+            ],
+            [
+              'appendStreamParts',
+              () =>
+                scoped.appendStreamParts(repoStream.id, [
+                  { type: 'text-delta', id: 't', delta: 'x' },
+                ]),
+            ],
+            ['readStream', () => scoped.readStream(foreign.id)],
+            ['readStream', () => scoped.readStream(repoStream.id)],
+            ['closeStream', () => scoped.closeStream(foreign.id, 'completed')],
+            ['closeStream', () => scoped.closeStream(repoStream.id, 'completed')],
+            ['getStream', () => scoped.getStream(foreign.id)],
+            ['getStream', () => scoped.getStream(repoStream.id)],
+            ['listStreams', () => scoped.listStreams({ kind: 'build', build: 'st-scope-b' })],
+            ['listStreams', () => scoped.listStreams({ kind: 'repo', repo: 'acme/rate-limiter' })],
+          ] as const) {
+            const err = await attempt().catch((e: unknown) => e)
+            expect(err, `${operation} must reject`).toBeInstanceOf(Error)
+            expect((err as Error).message).toContain('build-scoped store')
+          }
+        })
+      })
+
+      test('repo-scoped streams run the full lifecycle with the artifact deposited on the repo scope', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.ensureRepo('acme/rate-limiter')
+          const stream = await store.createStream(
+            { kind: 'repo', repo: 'acme/rate-limiter' },
+            'harvest run',
+          )
+          await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'hm' }])
+          await store.appendStreamParts(stream.id, [
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'scanning' },
+            { type: 'text-end', id: 't' },
+          ])
+          clock.advance(1000)
+          const record = await store.closeStream(stream.id, 'aborted')
+          expect(record.scope).toEqual({ kind: 'repo', repo: 'acme/rate-limiter' })
+          expect(record.outcome).toBe('aborted')
+          const artifact = await store.getRepoArtifact('acme/rate-limiter', `stream:${stream.id}`)
+          expect(artifact?.meta.metadata).toMatchObject({
+            stream: stream.id,
+            label: 'harvest run',
+            scope: { kind: 'repo', repo: 'acme/rate-limiter' },
+            outcome: 'aborted',
+          })
+          expect(JSON.parse(artifactText(artifact!))).toEqual([
+            {
+              id: 'hm',
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'scanning', state: 'done' }],
+            },
+          ])
+          expect(
+            (await store.listStreams({ kind: 'repo', repo: 'acme/rate-limiter' })).map((r) => r.id),
+          ).toEqual([stream.id])
+        })
+      })
+
+      test('session-scoped streams run the full lifecycle with the artifact deposited on the session scope', async () => {
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          const session = await store.createSession({
+            repo: 'acme/rate-limiter',
+            operator: 'operator',
+            title: 'orchestrator',
+          })
+          const stream = await store.createStream(
+            { kind: 'session', session: session.id },
+            'turn one',
+          )
+          await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'om' }])
+          await store.appendStreamParts(stream.id, [
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'thinking' },
+            { type: 'text-end', id: 't' },
+          ])
+          clock.advance(1000)
+          const record = await store.closeStream(stream.id, 'completed')
+          expect(record.scope).toEqual({ kind: 'session', session: session.id })
+          expect(record.outcome).toBe('completed')
+          const artifact = await store.getSessionArtifact(session.id, `stream:${stream.id}`)
+          expect(artifact?.meta.metadata).toMatchObject({
+            stream: stream.id,
+            label: 'turn one',
+            scope: { kind: 'session', session: session.id },
+            outcome: 'completed',
+          })
+          expect(JSON.parse(artifactText(artifact!))).toEqual([
+            {
+              id: 'om',
+              role: 'assistant',
+              parts: [{ type: 'text', text: 'thinking', state: 'done' }],
+            },
+          ])
+          expect(
+            (await store.listStreams({ kind: 'session', session: session.id })).map((r) => r.id),
+          ).toEqual([stream.id])
+        })
+      })
+
+      describe('operator sessions (SPEC §7.1.1 — a third resource kind)', () => {
+        test('createSession assigns an os_ id, clock timestamps, and appends session.created at seq 1', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            const record = await store.createSession({
+              repo: 'acme/a',
+              operator: '  operator  ',
+              title: 'orchestrator',
+            })
+            expect(record.id).toMatch(/^os_/)
+            expect(record.repo).toBe('acme/a')
+            expect(record.operator).toBe('operator')
+            expect(record.title).toBe('orchestrator')
+            expect(record.createdAt).toBe(CONTRACT_T0)
+            expect(record.updatedAt).toBe(CONTRACT_T0)
+            expect(await store.getSession(record.id)).toEqual(record)
+            const events = await store.getSessionEvents(record.id)
+            expect(events).toHaveLength(1)
+            expect(events[0]).toMatchObject({
+              session: record.id,
+              seq: 1,
+              ts: CONTRACT_T0,
+              actor: { kind: 'human', user: 'operator' },
+              type: 'session.created',
+              payload: { title: 'orchestrator' },
+            })
+          })
+        })
+
+        test('getSession returns null for an unknown session; listSessions isolates by repository', async () => {
+          // The clock is injected and advanced between creations on purpose:
+          // listSessions orders by createdAt, and real-clock sessions can share
+          // a millisecond, leaving the order to an implementation-defined
+          // tiebreak (the sqlite store's is the random os_ id).
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            expect(await store.getSession('os_never')).toBeNull()
+            const a = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            clock.advance(1)
+            const a2 = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            clock.advance(1)
+            const b = await store.createSession({ repo: 'acme/b', operator: 'op' })
+            expect((await store.listSessions('acme/a')).map((s) => s.id)).toEqual([a.id, a2.id])
+            expect((await store.listSessions('acme/b')).map((s) => s.id)).toEqual([b.id])
+            expect(await store.listSessions('acme/never')).toEqual([])
+          })
+        })
+
+        test('a blank operator identity rejects', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const err = await store
+              .createSession({ repo: 'acme/a', operator: '   ' })
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(Error)
+          })
+        })
+
+        test('per-session sequencing is independent across sessions and updates the record', async () => {
+          const clock = manualClock(CONTRACT_T0)
+          await withStore(factory, { clock }, async (store) => {
+            const a = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const b = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            clock.advance(1000)
+            const a2 = await store.appendSessionEvent(a.id, messagePostedWrite('first'))
+            clock.advance(1000)
+            const a3 = await store.appendSessionEvent(a.id, messagePostedWrite('second'))
+            const b2 = await store.appendSessionEvent(b.id, messagePostedWrite('other'))
+            expect([a2.seq, a3.seq]).toEqual([2, 3])
+            expect(b2.seq).toBe(2)
+            expect((await store.getSession(a.id))?.updatedAt).toBe(atT0(2000))
+            expect((await store.getSessionEvents(a.id)).map((e) => e.seq)).toEqual([1, 2, 3])
+            expect((await store.getSessionEvents(a.id, 1)).map((e) => e.seq)).toEqual([2, 3])
+            expect(await store.getSessionEvents(a.id, 3)).toEqual([])
+          })
+        })
+
+        test('appendSessionEvent validation rejects unknown types, malformed payloads, and wrong actor kinds, leaving the log untouched', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const cases = [
+              // Unknown type.
+              {
+                actor: humanActor('op'),
+                type: 'no.such-type',
+                payload: {},
+              },
+              // Malformed payload: message.posted requires nonempty text.
+              { actor: humanActor('op'), type: 'message.posted', payload: { text: '' } },
+              // Wrong actor kind: only humans post messages.
+              {
+                actor: agentActor('orchestrator', 'os_t'),
+                type: 'message.posted',
+                payload: { text: 'hi' },
+              },
+              // Wrong actor kind: only the agent starts turns.
+              {
+                actor: humanActor('op'),
+                type: 'turn.started',
+                payload: {
+                  turn: 't1',
+                  stream: 'st_t1',
+                  trigger: { kind: 'message', messageSeq: 1 },
+                },
+              },
+            ] as const
+            for (const bad of cases) {
+              const err = await store
+                .appendSessionEvent(session.id, bad as unknown as SessionEventWrite)
+                .catch((e: unknown) => e)
+              expect(err).toBeInstanceOf(EventValidationError)
+            }
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([1])
+          })
+        })
+
+        test('appendSessionEvent on an unknown session rejects', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const err = await store
+              .appendSessionEvent('os_ghost', messagePostedWrite())
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(Error)
+            expect((err as Error).message).toContain('unknown session')
+          })
+        })
+
+        test('bounded-wait session event read: early return on append, waits out the bound when empty, clamps above 30', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            // Early return when an event lands during the wait.
+            const pending = store.getSessionEvents(session.id, 1, { waitSeconds: 5 })
+            await Bun.sleep(100)
+            const appended = await store.appendSessionEvent(session.id, messagePostedWrite('wake'))
+            const woke = await pending
+            expect(woke.map((e) => e.seq)).toEqual([appended.seq])
+
+            // Waits out the bound when nothing arrives.
+            const started = Date.now()
+            const empty = await store.getSessionEvents(session.id, 99, { waitSeconds: 1 })
+            expect(empty).toEqual([])
+            expect(Date.now() - started).toBeGreaterThanOrEqual(950)
+          })
+        })
+
+        test('session deposits are atomic: success, invalid-event rollback, validation-before-prune', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const { event, artifacts } = await store.appendSessionWithArtifacts(
+              session.id,
+              [{ kind: 'turn-context', content: '{"turn":"t1"}' }],
+              () => ({
+                actor: agentActor('orchestrator', 'os_turn'),
+                type: 'turn.started',
+                payload: {
+                  turn: 't1',
+                  stream: 'st_t1',
+                  trigger: { kind: 'message', messageSeq: 1 },
+                },
+              }),
+            )
+            expect(artifacts.map((meta) => meta.revision)).toEqual([0])
+            expect(event.seq).toBe(2)
+            expect(
+              (await store.getSessionArtifact(session.id, 'turn-context'))?.meta.revision,
+            ).toBe(0)
+
+            // An invalid event rolls the whole deposit back.
+            const err = await store
+              .appendSessionWithArtifacts(
+                session.id,
+                [{ kind: 'turn-context', content: 'second' }],
+                () =>
+                  ({
+                    actor: humanActor('op'),
+                    type: 'turn.started',
+                    payload: {
+                      turn: 't2',
+                      stream: 'st_t2',
+                      trigger: { kind: 'message', messageSeq: 1 },
+                    },
+                  }) as unknown as SessionEventWrite,
+              )
+              .catch((e: unknown) => e)
+            expect(err).toBeInstanceOf(EventValidationError)
+            expect((await store.listSessionArtifacts(session.id, 'turn-context')).length).toBe(1)
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([1, 2])
+          })
+        })
+
+        test('session artifacts version per kind and read latest/pinned', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const a0 = await store.putSessionArtifact(session.id, {
+              kind: 'context',
+              content: 'v0',
+            })
+            const a1 = await store.putSessionArtifact(session.id, {
+              kind: 'context',
+              content: 'v1',
+            })
+            expect([a0.revision, a1.revision]).toEqual([0, 1])
+            expect((await store.getSessionArtifact(session.id, 'context'))?.meta.revision).toBe(1)
+            expect((await store.getSessionArtifact(session.id, 'context', 0))?.meta.revision).toBe(
+              0,
+            )
+            expect(await store.getSessionArtifact(session.id, 'never')).toBeNull()
+            expect(
+              (await store.listSessionArtifacts(session.id)).map((m) => [m.kind, m.revision]),
+            ).toEqual([
+              ['context', 0],
+              ['context', 1],
+            ])
+          })
+        })
+
+        test('session-scoped handles touch only their own session and reject everything else', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const own = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            const foreign = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            await store.ensureRepo('acme/a')
+            await store.createBuild(sampleBuildInput('scope-build'))
+            const scoped = store.scopeSession(own.id)
+            expect(scoped.sessionScope).toBe(own.id)
+
+            // Own operations work.
+            expect(await scoped.getSession(own.id)).not.toBeNull()
+            await scoped.appendSessionEvent(own.id, messagePostedWrite('mine'))
+            await scoped.putSessionArtifact(own.id, { kind: 'notes', content: 'owned' })
+            expect((await scoped.getSessionArtifact(own.id, 'notes'))?.meta.revision).toBe(0)
+            const ownStream = await scoped.createStream(
+              { kind: 'session', session: own.id },
+              'turn',
+            )
+            await scoped.appendStreamParts(ownStream.id, [
+              { type: 'text-delta', id: 't', delta: 'x' },
+            ])
+            expect((await scoped.readStream(ownStream.id)).chunks).toHaveLength(1)
+            expect(
+              (await scoped.listStreams({ kind: 'session', session: own.id })).map((r) => r.id),
+            ).toEqual([ownStream.id])
+            expect(scoped.scopeSession(own.id)).toBe(scoped)
+
+            // Foreign session, create/list, and every build/repository operation reject.
+            const attempts = [
+              () => scoped.getSession(foreign.id),
+              () => scoped.appendSessionEvent(foreign.id, messagePostedWrite()),
+              () => scoped.listSessions('acme/a'),
+              () => scoped.createSession({ repo: 'acme/a', operator: 'op' }),
+              () => scoped.createStream({ kind: 'session', session: foreign.id }, 'x'),
+              () => scoped.listStreams({ kind: 'session', session: foreign.id }),
+              () => scoped.getBuild('scope-build'),
+              () => scoped.append('scope-build', sampleEventWrite()),
+              () => scoped.listBuilds(),
+              () => scoped.createBuild(sampleBuildInput('scope-build-2')),
+              () => scoped.ensureRepo('acme/a'),
+              () => scoped.appendRepo('acme/a', harvestStartedWrite()),
+              () => scoped.getRepoEvents('acme/a'),
+              () => scoped.createStream({ kind: 'build', build: 'scope-build' }, 'x'),
+              () => scoped.createStream({ kind: 'repo', repo: 'acme/a' }, 'x'),
+              () => scoped.close(),
+            ] as const
+            for (const attempt of attempts) {
+              const err = await attempt().catch((e: unknown) => e)
+              expect(err, `${attempt.toString()} must reject`).toBeInstanceOf(Error)
+              expect((err as Error).message).toContain('session-scoped store')
+            }
+          })
+        })
+
+        test('build-scoped handles reject session operations and session-scoped streams', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            await store.createBuild(sampleBuildInput('bscope'))
+            const scoped = store.scopeBuild('bscope')
+            const sessionStream = await store.createStream(
+              { kind: 'session', session: session.id },
+              'turn',
+            )
+            const attempts = [
+              () => scoped.getSession(session.id),
+              () => scoped.appendSessionEvent(session.id, messagePostedWrite()),
+              () => scoped.listSessions('acme/a'),
+              () => scoped.createSession({ repo: 'acme/a', operator: 'op' }),
+              () => scoped.putSessionArtifact(session.id, { kind: 'x', content: 'x' }),
+              () => scoped.listSessionArtifacts(session.id),
+              () => scoped.createStream({ kind: 'session', session: session.id }, 'x'),
+              () =>
+                scoped.appendStreamParts(sessionStream.id, [
+                  { type: 'text-delta', id: 't', delta: 'x' },
+                ]),
+              () => scoped.readStream(sessionStream.id),
+              () => scoped.listStreams({ kind: 'session', session: session.id }),
+            ] as const
+            for (const attempt of attempts) {
+              const err = await attempt().catch((e: unknown) => e)
+              expect(err, `${attempt.toString()} must reject`).toBeInstanceOf(Error)
+              expect((err as Error).message).toContain('build-scoped store')
+            }
+          })
+        })
+
+        test('session streams never list under build or repo scopes and vice versa', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            await store.createBuild(sampleBuildInput('st-mix'))
+            await store.ensureRepo('acme/a')
+            const sessionStream = await store.createStream(
+              { kind: 'session', session: session.id },
+              'turn',
+            )
+            const buildStream = await store.createStream(
+              { kind: 'build', build: 'st-mix' },
+              'phase',
+            )
+            expect(
+              (await store.listStreams({ kind: 'session', session: session.id })).map((r) => r.id),
+            ).toEqual([sessionStream.id])
+            expect(
+              (await store.listStreams({ kind: 'build', build: 'st-mix' })).map((r) => r.id),
+            ).toEqual([buildStream.id])
+            expect(await store.listStreams({ kind: 'repo', repo: 'acme/a' })).toEqual([])
+          })
+        })
+      })
+
+      describe('via attribution (delegated writes, SPEC §15.1)', () => {
+        const viaSession: Via = { kind: 'session', id: 'os_delegate' }
+        const viaMcp: Via = { kind: 'mcp', client: 'claude-code' }
+
+        test('build and repository writes accept human actors carrying each via kind and round-trip it', async () => {
+          await withStore(factory, undefined, async (store) => {
+            await store.createBuild(sampleBuildInput('via-build'))
+            await store.ensureRepo('acme/via')
+            for (const via of [viaSession, viaMcp]) {
+              const envelope = await store.append('via-build', {
+                actor: humanActor('operator', via),
+                type: 'build.created',
+                payload: {
+                  ticket: sampleBuildInput('via-build').ticket!,
+                  repo: 'acme/rate-limiter',
+                  baseBranch: 'main',
+                },
+              })
+              expect(envelope.actor).toEqual({ kind: 'human', user: 'operator', via })
+              await store.appendRepo('acme/via', {
+                actor: humanActor('operator', via),
+                type: 'dispatcher.intake-set',
+                payload: { enabled: false },
+              })
+            }
+            const events = await store.getEvents('via-build')
+            expect(events.map((e) => (e.actor as { via?: Via }).via)).toEqual([viaSession, viaMcp])
+            const repoEvents = await store.getRepoEvents('acme/via')
+            expect(repoEvents.map((e) => (e.actor as { via?: Via }).via)).toEqual([
+              viaSession,
+              viaMcp,
+            ])
+            // Events without via replay unchanged.
+            const plain = await store.append('via-build', {
+              actor: humanActor('operator'),
+              type: 'build.pause-requested',
+              payload: {},
+            })
+            expect(plain.actor).toEqual({ kind: 'human', user: 'operator' })
+          })
+        })
+
+        test('via on any non-human actor rejects with the explicit rule message', async () => {
+          await withStore(factory, undefined, async (store) => {
+            await store.createBuild(sampleBuildInput('via-nonhuman'))
+            await store.ensureRepo('acme/via')
+            for (const actor of [
+              { kind: 'kernel', via: viaSession },
+              { kind: 'agent', role: 'implement', session: 's_1', via: viaSession },
+              { kind: 'dispatcher', via: viaMcp },
+              { kind: 'ingester', source: 'webhook', via: viaMcp },
+            ]) {
+              const err = await store
+                .append('via-nonhuman', {
+                  actor,
+                  type: 'observation.recorded',
+                  payload: { id: 'o', kind: 'followup', summary: 'x' },
+                } as unknown as EventWrite)
+                .catch((e: unknown) => e)
+              expect(err).toBeInstanceOf(EventValidationError)
+              expect((err as Error).message).toContain('only human actors may carry via')
+              const repoErr = await store
+                .appendRepo('acme/via', {
+                  actor,
+                  type: 'harvest.started',
+                  payload: harvestStartedWrite().payload,
+                } as unknown as RepositoryEventWrite)
+                .catch((e: unknown) => e)
+              expect(repoErr).toBeInstanceOf(EventValidationError)
+              expect((repoErr as Error).message).toContain('only human actors may carry via')
+            }
+            expect(await store.getEvents('via-nonhuman')).toEqual([])
+            expect(await store.getRepoEvents('acme/via')).toEqual([])
+          })
+        })
+
+        test('malformed via shapes reject', async () => {
+          await withStore(factory, undefined, async (store) => {
+            await store.createBuild(sampleBuildInput('via-malformed'))
+            for (const via of [
+              { kind: 'session' },
+              { kind: 'session', id: '' },
+              { kind: 'mcp' },
+              { kind: 'mcp', client: '' },
+              { kind: 'slack', channel: 'x' },
+              'os_delegate',
+            ]) {
+              const err = await store
+                .append('via-malformed', {
+                  actor: { kind: 'human', user: 'operator', via },
+                  type: 'build.pause-requested',
+                  payload: {},
+                } as unknown as EventWrite)
+                .catch((e: unknown) => e)
+              expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(
+                EventValidationError,
+              )
+            }
+            expect(await store.getEvents('via-malformed')).toEqual([])
+          })
         })
       })
     })
