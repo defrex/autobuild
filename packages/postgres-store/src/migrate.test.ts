@@ -10,6 +10,8 @@ import {
   SCHEMA_V1_DDL,
   SCHEMA_V2_CHECKSUM,
   SCHEMA_V2_DDL,
+  SCHEMA_V3_CHECKSUM,
+  SCHEMA_V3_DDL,
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
@@ -191,6 +193,74 @@ if (testUrl) {
           expect(
             (await store.getSessionArtifact(session.id, `stream:${stream.id}`))?.meta.revision,
           ).toBe(0)
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v3 database in place: the sessions.creation_seq backfill, sequence continuity, and preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v3 database: v3 DDL, v3 marker, plus two
+        // same-millisecond sessions whose id order is reversed from insertion
+        // order. Legacy ties are genuinely unorderable, so the pinned
+        // insertion order is not asserted — the backfill assigns a distinct,
+        // deterministic (created_at, id)-ordered counter per row and
+        // otherwise leaves the rows untouched.
+        await sql.unsafe(SCHEMA_V3_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V3_CHECKSUM}, ${new Date().toISOString()})`
+        for (const id of ['os_legacy-2', 'os_legacy-1']) {
+          await sql`INSERT INTO sessions (id, repo, operator, created_at, updated_at)
+            VALUES (${id}, 'acme/v3', 'op', ${CONTRACT_T0}, ${CONTRACT_T0})`
+          await sql`INSERT INTO session_events (session, seq, ts, actor, type, payload)
+            VALUES (${id}, 1, ${CONTRACT_T0}, '{"kind":"human","user":"op"}', 'session.created', '{}')`
+        }
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // Both rows survived with distinct backfilled counters, ordered by
+        // (created_at, id) — the lexicographically smaller id lands first
+        // despite being inserted second.
+        const backfilled = await sql`SELECT id, creation_seq FROM sessions ORDER BY creation_seq`
+        expect(backfilled.map((row: Row) => [row.id, Number(row.creation_seq)])).toEqual([
+          ['os_legacy-1', 1],
+          ['os_legacy-2', 2],
+        ])
+
+        // The migrated store works end to end: the sequence continues above
+        // the backfill, so a same-millisecond post-migration creation gets a
+        // fresh counter and sorts after both migrated rows.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore(), {
+          clock: () => new Date(CONTRACT_T0),
+        })
+        try {
+          const created = await store.createSession({ repo: 'acme/v3', operator: 'op' })
+          expect(created.createdAt).toBe(CONTRACT_T0)
+          const seqs = await sql`SELECT id, creation_seq FROM sessions ORDER BY creation_seq`
+          expect(seqs.map((row: Row) => row.id)).toEqual(['os_legacy-1', 'os_legacy-2', created.id])
+          expect((await store.listSessions('acme/v3')).map((s) => s.id)).toEqual([
+            'os_legacy-1',
+            'os_legacy-2',
+            created.id,
+          ])
+          await store.appendSessionEvent(created.id, {
+            actor: { kind: 'human', user: 'op' },
+            type: 'message.posted',
+            payload: { text: 'hello' },
+          })
         } finally {
           await store.close()
         }
