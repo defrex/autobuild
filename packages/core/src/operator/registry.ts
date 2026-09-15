@@ -454,10 +454,14 @@ export const TOOLS: readonly ToolEntry[] = [
     async (raw, ctx) => {
       const input = raw as z.infer<typeof buildControlInput>
       await controlPrechecks(ctx.store, input.repo, input.slug, input.action)
+      // The route maps BOTH pause and cancel-pause to `dashboard-pause`:
+      // on a running build it requests a pause, and on a build with a pending
+      // pause the reducer-supersede rule makes the same command cancel it.
+      // Only `resume` maps to `dashboard-resume`.
       const action: BuildControlAction =
-        input.action === 'pause'
+        input.action === 'pause' || input.action === 'cancel-pause'
           ? { kind: 'dashboard-pause' }
-          : input.action === 'cancel-pause' || input.action === 'resume'
+          : input.action === 'resume'
             ? { kind: 'dashboard-resume' }
             : { kind: input.action }
       return controlBuild({

@@ -44,6 +44,35 @@ interface World {
   backend: OperatorTicketBackend
 }
 
+/** A clean running build with a pending pause (display "pausing"): the
+ * cancel-pause and pause-pending-state parity cases need a build whose
+ * lifecycle is running — the seeded "demo" build is blocked by its open
+ * escalation, and effectiveStatus projects blocked over pausing. */
+async function seedPausing(): Promise<World> {
+  const world = await seedWorld()
+  await world.store.createBuild({
+    slug: 'pausing-b',
+    repo,
+    ticket: { source: 'fake', id: 'AUT-3' },
+  })
+  await world.store.append('pausing-b', {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { ticket: { source: 'fake', id: 'AUT-3' }, repo, baseBranch: 'main' },
+  })
+  await world.store.append('pausing-b', {
+    actor: KERNEL,
+    type: 'runner.attached',
+    payload: { instance: 'runner-2', host: 'host-2' },
+  })
+  await world.store.append('pausing-b', {
+    actor: humanActor('earlier'),
+    type: 'build.pause-requested',
+    payload: {},
+  })
+  return world
+}
+
 /** One seeded world: config published, a running build with an open
  * escalation, a queued build, artifact revisions, and ticket-source seeds. */
 async function seedWorld(): Promise<World> {
@@ -288,6 +317,32 @@ describe('agent tool registry contract', () => {
     const routeEvent = (await routeWorld.store.getEvents('demo')).at(-1)
     const toolEvent = (await toolWorld.store.getEvents('demo')).at(-1)
     expectEqual(toolEvent, routeEvent)
+    expectEqual(toolEvent?.actor, humanActor('Ada'))
+  })
+
+  test('builds.control cancel-pause matches the route on a pausing build', async () => {
+    // The route maps cancel-pause to `dashboard-pause`, whose reducer-supersede
+    // rule cancels a pending pause; a pausing build (pending pause, lifecycle
+    // running) must therefore cancel the pause identically on both faces.
+    const [routeWorld, toolWorld] = await Promise.all([seedPausing(), seedPausing()])
+    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
+      'POST',
+      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/pausing-b/control`,
+      { action: 'cancel-pause' },
+    )
+    expect(route.status).toBe(200)
+    const tool = await toolFor(toolWorld)('builds.control', {
+      repo,
+      slug: 'pausing-b',
+      action: 'cancel-pause',
+    })
+    expectEqual(tool, route.body)
+    expectJsonClean(tool)
+    // Both faces appended the pause-canceling resume request.
+    const routeEvent = (await routeWorld.store.getEvents('pausing-b')).at(-1)
+    const toolEvent = (await toolWorld.store.getEvents('pausing-b')).at(-1)
+    expectEqual(toolEvent, routeEvent)
+    expectEqual(toolEvent?.type, 'build.resume-requested')
     expectEqual(toolEvent?.actor, humanActor('Ada'))
   })
 
@@ -602,6 +657,33 @@ describe('agent tool registry contract', () => {
       toolFor(inactiveWorld)('builds.control', { repo, slug: 'queued-b', action: 'pause' }),
     )
     expectEqual(inactiveFailure, inactiveRoute.body)
+
+    // The route's pending-state prechecks, both refusals (BuildControlError
+    // before any controlBuild call): pause while a pause is already pending,
+    // and cancel-pause without a pending pause.
+    const [pausingRouteWorld, pausingToolWorld] = await Promise.all([seedPausing(), seedPausing()])
+    const pausingRoute = await api(
+      createOperatorServer({ store: pausingRouteWorld.store, secret, clock }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/pausing-b/control`, {
+      action: 'pause',
+    })
+    expect(pausingRoute.status).toBe(409)
+    const pausingFailure = await toolFailure(() =>
+      toolFor(pausingToolWorld)('builds.control', { repo, slug: 'pausing-b', action: 'pause' }),
+    )
+    expectEqual(pausingFailure, pausingRoute.body)
+
+    const [runningRouteWorld, runningToolWorld] = await Promise.all([seedWorld(), seedWorld()])
+    const runningRoute = await api(
+      createOperatorServer({ store: runningRouteWorld.store, secret, clock }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/control`, {
+      action: 'cancel-pause',
+    })
+    expect(runningRoute.status).toBe(409)
+    const runningFailure = await toolFailure(() =>
+      toolFor(runningToolWorld)('builds.control', { repo, slug: 'demo', action: 'cancel-pause' }),
+    )
+    expectEqual(runningFailure, runningRoute.body)
 
     // Answer with no open escalations.
     const answerWorld = await seedWorld()
