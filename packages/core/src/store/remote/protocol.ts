@@ -25,7 +25,7 @@
  * (e.g. `rev + 1`, string interpolation) is unsupported by design.
  */
 import { z } from 'zod'
-import { actorSchema, viaSchema } from '../../events/envelope'
+import { actorSchema } from '../../events/envelope'
 import { ticketRefSchema } from '../../ontology'
 import type { ArtifactMeta, RepositoryArtifactMeta, SessionArtifactMeta } from '../types'
 

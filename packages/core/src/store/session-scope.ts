@@ -4,15 +4,24 @@ import type { RepositoryEventType, RepositoryEventWrite } from '../events/reposi
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import type { RepositoryEvent, RepositoryEventEnvelope } from '../events/repository'
 import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
+} from '../events/sessions'
+import type {
   Artifact,
   ArtifactInput,
   ArtifactMeta,
   BuildRecord,
   BuildStore,
   NewBuildInput,
+  NewSessionInput,
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
+  SessionArtifactMeta,
+  SessionRecord,
   SubscribeOptions,
   Unsubscribe,
 } from './types'
@@ -119,7 +128,11 @@ export function scopeLocalStoreToSession(
         'stream',
         record.scope.kind === 'build'
           ? ({ kind: 'build', id: record.scope.build } as const)
-          : ({ kind: 'repo', id: record.scope.repo } as const),
+          : record.scope.kind === 'repo'
+            ? ({ kind: 'repo', id: record.scope.repo } as const)
+            : // Session-scoped streams are hosted-only; an ambient phase
+              // session never owns one.
+              ({ kind: 'admin' } as const),
       )
     }
   }
@@ -137,7 +150,9 @@ export function scopeLocalStoreToSession(
         operation,
         candidate.kind === 'build'
           ? ({ kind: 'build', id: candidate.build } as const)
-          : ({ kind: 'repo', id: candidate.repo } as const),
+          : candidate.kind === 'repo'
+            ? ({ kind: 'repo', id: candidate.repo } as const)
+            : ({ kind: 'admin' } as const),
       )
     }
   }
@@ -338,6 +353,46 @@ export function scopeLocalStoreToSession(
     async listStreams(candidate: StreamScope): Promise<StreamRecord[]> {
       ownStreamScopeArg('listStreams', candidate)
       return store.listStreams(candidate)
+    },
+
+    // Operator sessions are hosted-only: an ambient phase-session handle —
+    // a local construct — never creates or touches one.
+    createSession(_input: NewSessionInput): Promise<SessionRecord> {
+      return admin('createSession')
+    },
+    getSession(_id: string): Promise<SessionRecord | null> {
+      return admin('getSession')
+    },
+    listSessions(_repo: string): Promise<SessionRecord[]> {
+      return admin('listSessions')
+    },
+    appendSessionEvent<T extends SessionEventType>(
+      _id: string,
+      _event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T>> {
+      return admin('appendSessionEvent')
+    },
+    getSessionEvents(_id: string, _sinceSeq?: number): Promise<SessionEvent[]> {
+      return admin('getSessionEvents')
+    },
+    appendSessionWithArtifacts<T extends SessionEventType>(
+      _id: string,
+      _artifacts: ArtifactInput[],
+      _makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
+    ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+      return admin('appendSessionWithArtifacts')
+    },
+    putSessionArtifact(_id: string, _artifact: ArtifactInput): Promise<SessionArtifactMeta> {
+      return admin('putSessionArtifact')
+    },
+    getSessionArtifact(_id: string, _kind: string, _rev?: number): Promise<null> {
+      return admin('getSessionArtifact')
+    },
+    listSessionArtifacts(_id: string, _kind?: string): Promise<SessionArtifactMeta[]> {
+      return admin('listSessionArtifacts')
+    },
+    scopeSession(_id: string): never {
+      return admin('scopeSession')
     },
 
     close(): Promise<void> {

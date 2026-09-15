@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { EventValidationError, type EventWrite } from '../../events/catalog'
-import { agentActor, DISPATCHER, KERNEL, humanActor } from '../../events/envelope'
+import { agentActor, DISPATCHER, KERNEL, humanActor, type Via } from '../../events/envelope'
 import { manualClock } from '../../testing/fixed'
 import {
   buildCreatedWrite,
@@ -960,8 +960,8 @@ describe('session token scope and via attribution over the wire', () => {
   test('via stamping and rejection follow the token, not the write', async () => {
     await withServer(async ({ url, admin, backing }) => {
       await admin.createBuild(sampleBuildInput('via-wire'))
-      const via = { kind: 'session', id: 'os_delegate' }
-      const otherVia = { kind: 'mcp', client: 'claude-code' }
+      const via: Via = { kind: 'session', id: 'os_delegate' }
+      const otherVia: Via = { kind: 'mcp', client: 'claude-code' }
 
       // A via-carrying resource token stamps its via onto human writes.
       const stamped = new RemoteBuildStore({

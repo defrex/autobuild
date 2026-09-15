@@ -464,26 +464,25 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           }),
         )
       }
+      case 'GET artifacts': {
+        const kind = url.searchParams.get('kind')
+        if (kind === null || kind === '') {
+          throw new RequestError(400, 'validation', 'query parameter "kind" is required')
+        }
+        const artifact = await store.getSessionArtifact(id, kind, intParam(url, 'rev'))
+        return artifact === null
+          ? json(200, null)
+          : json(200, {
+              meta: artifact.meta,
+              contentBase64: encodeBase64(artifact.content),
+            })
+      }
       case 'GET artifact-list':
         return json(
           200,
           await store.listSessionArtifacts(id, url.searchParams.get('kind') ?? undefined),
         )
-      case 'POST lease/claim':
-      case 'POST lease/heartbeat':
-      case 'POST lease/release':
-        return fail(404, 'not-found', `no route: ${req.method} /sessions/:id/${rest}`)
       default:
-        if (segments.length === 2 && segments[0] === 'artifacts' && req.method === 'GET') {
-          const kind = segments[1]!
-          const artifact = await store.getSessionArtifact(id, kind, intParam(url, 'rev'))
-          return artifact === null
-            ? json(200, null)
-            : json(200, {
-                meta: artifact.meta,
-                contentBase64: encodeBase64(artifact.content),
-              })
-        }
         return fail(404, 'not-found', `no route: ${req.method} /sessions/:id/${rest}`)
     }
   }

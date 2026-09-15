@@ -66,7 +66,7 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
       throw new SessionScopeError(scope, 'stream', record.id)
     }
   }
-  const ownStream = async (operation: string, streamId: string): Promise<void> => {
+  const ownStream = async (streamId: string): Promise<void> => {
     const record = await store.getStream(streamId)
     if (record) ownStreamScope(record)
   }
@@ -185,7 +185,7 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     async createSession(input): Promise<SessionRecord> {
       throw new SessionScopeError(scope, 'createSession', input.repo)
     },
-    getSession(id: string): Promise<SessionRecord | null> {
+    async getSession(id: string): Promise<SessionRecord | null> {
       own('getSession', id)
       return store.getSession(id)
     },
@@ -236,22 +236,22 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
       return store.createStream(candidate, label)
     },
     async appendStreamParts(streamId: string, parts: StreamPart[]): Promise<StreamChunk> {
-      await ownStream('appendStreamParts', streamId)
+      await ownStream(streamId)
       return store.appendStreamParts(streamId, parts)
     },
     async readStream(
       streamId: string,
       opts?: { since?: number; waitSeconds?: number },
     ): Promise<StreamRead> {
-      await ownStream('readStream', streamId)
+      await ownStream(streamId)
       return store.readStream(streamId, opts)
     },
     async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
-      await ownStream('closeStream', streamId)
+      await ownStream(streamId)
       return store.closeStream(streamId, outcome)
     },
     async getStream(streamId: string): Promise<StreamRecord | null> {
-      await ownStream('getStream', streamId)
+      await ownStream(streamId)
       return store.getStream(streamId)
     },
     async listStreams(candidate: StreamScope): Promise<StreamRecord[]> {

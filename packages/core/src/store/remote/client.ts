@@ -77,7 +77,6 @@ import {
   errorBodySchema,
   eventEnvelopeWireSchema,
   eventListSchema,
-  newSessionBodySchema,
   repositoryEventEnvelopeWireSchema,
   repositoryEventListSchema,
   okResponseSchema,
@@ -606,12 +605,11 @@ export class RemoteBuildStore implements BuildStore {
     kind: string,
     rev?: number,
   ): Promise<SessionArtifact | null> {
-    const params = new URLSearchParams()
+    const params = new URLSearchParams({ kind })
     if (rev !== undefined) params.set('rev', String(rev))
-    const query = params.size > 0 ? `?${params}` : ''
     const result = await this.requestJson(
       'GET',
-      `${this.sessionPath(id)}/artifacts/${encodeURIComponent(kind)}${query}`,
+      `${this.sessionPath(id)}/artifacts?${params}`,
       sessionArtifactGetResponseSchema,
     )
     return result === null

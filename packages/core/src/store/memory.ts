@@ -65,6 +65,7 @@ import {
   type BuildStore,
   type Clock,
   type NewBuildInput,
+  type NewSessionInput,
   type RepositoryArtifact,
   type RepositoryArtifactMeta,
   type RepositoryRecord,

@@ -60,6 +60,7 @@ export type {
   BuildStore,
   Clock,
   NewBuildInput,
+  NewSessionInput,
   RepositoryArtifact,
   RepositoryArtifactMeta,
   RepositoryRecord,
