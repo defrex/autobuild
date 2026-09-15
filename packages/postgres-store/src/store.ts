@@ -775,18 +775,53 @@ export class PostgresBuildStore implements BuildStore {
     return this.sql.begin(async (tx) => {
       const fresh = await this.lockStream(tx, streamId)
       if (String(fresh.status) === 'closed') return this.streamRecord(fresh)
+      // Commit-time verification (AUT-348): the prepare-phase chunk snapshot
+      // can go stale — an append from another connection may commit after the
+      // snapshot and before this transaction takes the row lock. Re-read the
+      // chunk rows under the lock; on a mismatch re-assemble and re-put the
+      // blob so every acknowledged append is included in the finalized
+      // artifact. An append that commits before the lock is taken lands here;
+      // one that waits on the lock fails the closed check above instead.
+      const lockedChunks: Row[] = await tx`SELECT * FROM stream_chunks
+        WHERE stream = ${streamId} ORDER BY seq`
+      let closeInput = input
+      let closeRef = blobRef
+      if (lockedChunks.length !== chunkRows.length) {
+        const reassembled = await assembleUIMessageDocument(
+          lockedChunks.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
+        )
+        closeInput = streamArtifactInput(
+          String(row.id),
+          scope,
+          String(row.label),
+          outcome,
+          reassembled.document,
+          lockedChunks.length,
+          reassembled.droppedPartCount,
+        )
+        closeRef = contentHash(toBytes(closeInput.content))
+        await this.blobs.put(closeRef, toBytes(closeInput.content))
+      }
       const meta =
         scope.kind === 'build'
           ? await this.depositBuildLocked(
               tx,
               scope.build,
-              { kind: input.kind, blobRef, metadata: structuredClone(input.metadata) },
+              {
+                kind: closeInput.kind,
+                blobRef: closeRef,
+                metadata: structuredClone(closeInput.metadata),
+              },
               new Map(),
             )
           : await this.depositRepoLocked(
               tx,
               scope.repo,
-              { kind: input.kind, blobRef, metadata: structuredClone(input.metadata) },
+              {
+                kind: closeInput.kind,
+                blobRef: closeRef,
+                metadata: structuredClone(closeInput.metadata),
+              },
               new Map(),
             )
       await tx`UPDATE streams
