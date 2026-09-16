@@ -816,6 +816,64 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    // Abort on held reads (AUT-380): the optional signal cancels a held read
+    // before its bound — resolving with the current result, never rejecting —
+    // on every adapter uniformly. Explicit AbortController aborts only; no
+    // timing-flaky disconnect simulation.
+    describe('abort on held reads (AUT-380)', () => {
+      test('a pre-aborted signal answers all four held reads promptly and empty', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('abort-pre'))
+          await store.ensureRepo('acme/abort-pre')
+          const session = await store.createSession({ repo: 'acme/abort-pre', operator: 'op' })
+          const stream = await store.createStream({ kind: 'build', build: 'abort-pre' }, 's')
+          const controller = new AbortController()
+          controller.abort()
+          const started = Date.now()
+          await expect(
+            store.getEvents('abort-pre', 0, { waitSeconds: 5, signal: controller.signal }),
+          ).resolves.toEqual([])
+          await expect(
+            store.getRepoEvents('acme/abort-pre', 0, { waitSeconds: 5, signal: controller.signal }),
+          ).resolves.toEqual([])
+          await expect(
+            store.getSessionEvents(session.id, 1, {
+              waitSeconds: 5,
+              signal: controller.signal,
+            }),
+          ).resolves.toEqual([])
+          const streamRead = await store.readStream(stream.id, {
+            waitSeconds: 5,
+            signal: controller.signal,
+          })
+          expect(streamRead.chunks).toEqual([])
+          expect(streamRead.status).toBe('open')
+          // Even Postgres's 1 s poll budget satisfies this: abort resolves
+          // the sleep, it does not wait for the next poll tick.
+          expect(Date.now() - started).toBeLessThan(500)
+        })
+      })
+
+      test('a mid-hold abort on a quiet session read resolves empty well under the bound', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/abort-mid')
+          const session = await store.createSession({ repo: 'acme/abort-mid', operator: 'op' })
+          const controller = new AbortController()
+          // since=1: the session's own creation event is backlog; the hold
+          // must establish past it or there is nothing held to abort.
+          const pending = store.getSessionEvents(session.id, 1, {
+            waitSeconds: 10,
+            signal: controller.signal,
+          })
+          await Bun.sleep(100)
+          const started = Date.now()
+          controller.abort()
+          await expect(pending).resolves.toEqual([])
+          expect(Date.now() - started).toBeLessThan(5_000)
+        })
+      })
+    })
+
     describe('artifacts', () => {
       test('revisions are 0-based per kind (§6.3): first deposit rev 0, next rev 1', async () => {
         await withStore(factory, undefined, async (store) => {

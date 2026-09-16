@@ -10,26 +10,66 @@
  * content, poll frequency is ~25 ms, and the uniformity across synchronous
  * (SQLite) and asynchronous (PostgreSQL) backends is worth more than
  * wake-on-write precision. Closed streams never wait.
+ *
+ * Both loops accept an optional `signal` (AUT-380): when it aborts, the hold
+ * ends promptly — the inter-poll sleep resolves early, the loop stops, and the
+ * read resolves with its current result instead of polling to the wait bound.
+ * This is what lets a remote server cancel a disconnected peer's backing read
+ * rather than let it poll an unobserved database. Resolving (never rejecting)
+ * keeps every caller on one code path: callers treat the empty result exactly
+ * as they treat the hold expiring.
  */
 import { clampWaitSeconds, type StreamRead } from './types'
 
 export const STREAM_WAIT_POLL_MS = 25
 
+/** Sleep `ms`, or return early when `signal` aborts. Resolves (never
+ * rejects) on either path; the abort listener is removed on both so a
+ * long-held read cannot leak listeners. No signal (or an already-aborted
+ * one) never waits. */
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal === undefined) return Bun.sleep(ms)
+  if (signal.aborted) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }
+    const timer = setTimeout(finish, ms)
+    const onAbort = (): void => finish()
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /**
- * Read once, then poll until newer chunks arrive, the stream closes, or the
- * clamped wall-clock deadline passes. `read` must re-query the store on every
- * call; a throw from it propagates immediately.
+ * Read once, then poll until newer chunks arrive, the stream closes, the
+ * clamped wall-clock deadline passes, or `signal` aborts. `read` must
+ * re-query the store on every call; a throw from it propagates immediately.
+ * An abort ends the hold with the current result (a pre-aborted signal still
+ * performs the initial read — reads are cheap and side-effect-free — but
+ * never waits).
  */
 export async function readStreamWithWait(opts: {
   read: () => Promise<StreamRead>
   waitSeconds?: number
   pollMs?: number
+  signal?: AbortSignal
 }): Promise<StreamRead> {
   const pollMs = opts.pollMs ?? STREAM_WAIT_POLL_MS
   const deadline = Date.now() + clampWaitSeconds(opts.waitSeconds ?? 0) * 1000
   let result = await opts.read()
-  while (result.status === 'open' && result.chunks.length === 0 && Date.now() < deadline) {
-    await Bun.sleep(pollMs)
+  while (
+    !opts.signal?.aborted &&
+    result.status === 'open' &&
+    result.chunks.length === 0 &&
+    Date.now() < deadline
+  ) {
+    await sleepWithAbort(pollMs, opts.signal)
+    if (opts.signal?.aborted) break
     result = await opts.read()
   }
   return result
@@ -37,21 +77,25 @@ export async function readStreamWithWait(opts: {
 
 /**
  * The event-read variant of the shared wait loop: read once, then poll until
- * newer events arrive or the clamped deadline passes. Session event reads
- * (§7.1.1) honor the same clamp/early-return rules as stream reads so the
- * operator UI's poll loop cannot drift between the two; there is no
- * "closed" state to short-circuit on — an event log is always open.
+ * newer events arrive, the clamped deadline passes, or `signal` aborts.
+ * Session event reads (§7.1.1) honor the same clamp/early-return rules as
+ * stream reads so the operator UI's poll loop cannot drift between the two;
+ * there is no "closed" state to short-circuit on — an event log is always
+ * open. An abort ends the hold with the current result (a pre-aborted signal
+ * still performs the initial read but never waits).
  */
 export async function readEventsWithWait<T>(opts: {
   read: () => Promise<T[]>
   waitSeconds?: number
   pollMs?: number
+  signal?: AbortSignal
 }): Promise<T[]> {
   const pollMs = opts.pollMs ?? STREAM_WAIT_POLL_MS
   const deadline = Date.now() + clampWaitSeconds(opts.waitSeconds ?? 0) * 1000
   let result = await opts.read()
-  while (result.length === 0 && Date.now() < deadline) {
-    await Bun.sleep(pollMs)
+  while (result.length === 0 && !opts.signal?.aborted && Date.now() < deadline) {
+    await sleepWithAbort(pollMs, opts.signal)
+    if (opts.signal?.aborted) break
     result = await opts.read()
   }
   return result

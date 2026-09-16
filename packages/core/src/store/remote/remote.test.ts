@@ -762,7 +762,56 @@ describe('event wait over the wire', () => {
 // reaches the underlying fetch), not wait out the server's hold bound.
 // Server-side: the withDisconnect guard on the session-event route and held
 // stream reads lets server.stop(true) complete promptly when a client goes
-// away mid-hold.
+// away mid-hold — and (AUT-380) the disconnect signal also reaches the
+// backing store's poll loop, so the polls themselves cease.
+
+import { readEventsWithWait, readStreamWithWait } from '../streams/wait'
+import type { SessionEvent } from '../../events/sessions'
+import type { StreamRead } from '../streams/types'
+
+/**
+ * A MemoryBuildStore whose held-read polls are observable. One held HTTP
+ * request makes exactly one backing `getSessionEvents`/`readStream` call —
+ * the polling the spec wants to stop happens inside that call's wait loop —
+ * so a counter must observe sub-call polls, not held-read invocations.
+ * The overrides run the real wait helpers (the same ones the adapters
+ * delegate to) with a counting `read` closure that delegates to the
+ * immediate, non-waiting form, and forward the full opts — including the
+ * signal the server passes — into the loop.
+ */
+class CountingMemoryStore extends MemoryBuildStore {
+  sessionPolls = 0
+  streamPolls = 0
+
+  override async getSessionEvents(
+    id: string,
+    sinceSeq?: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<SessionEvent[]> {
+    return readEventsWithWait({
+      read: async () => {
+        this.sessionPolls++
+        return super.getSessionEvents(id, sinceSeq)
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+    })
+  }
+
+  override async readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<StreamRead> {
+    return readStreamWithWait({
+      read: async () => {
+        this.streamPolls++
+        return super.readStream(streamId, { since: opts?.since })
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+    })
+  }
+}
 
 describe('prompt teardown of held reads', () => {
   const headers = {
@@ -899,6 +948,70 @@ describe('prompt teardown of held reads', () => {
       const started = Date.now()
       await server.stop()
       expect(Date.now() - started).toBeLessThan(5_000)
+      await held
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("a disconnected peer's backing session polls cease, not just the handler promise (AUT-380)", async () => {
+    const backing = new CountingMemoryStore()
+    const server = startStoreServer({ store: backing })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.ensureRepo('acme/teardown-polls')
+      const session = await client.createSession({ repo: 'acme/teardown-polls', operator: 'op' })
+
+      const controller = new AbortController()
+      const held = fetch(`${server.url}/sessions/${session.id}/events?since=1&wait=25`, {
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await Bun.sleep(100)
+      // The hold is genuinely polling.
+      expect(backing.sessionPolls).toBeGreaterThan(0)
+      const pollsAtAbort = backing.sessionPolls
+      // The peer goes away mid-hold.
+      controller.abort()
+
+      await Bun.sleep(150)
+      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      await Bun.sleep(150)
+      // Equality across two later samples: the poll loop demonstrably
+      // ceased. On unfixed code the count keeps growing through both
+      // samples (a 25 ms poll would add ~12 polls per sample).
+      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      await held
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("a disconnected peer's backing stream polls cease, not just the handler promise (AUT-380)", async () => {
+    const backing = new CountingMemoryStore()
+    const server = startStoreServer({ store: backing })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('teardown-stream-polls'))
+      const stream = await client.createStream(
+        { kind: 'build', build: 'teardown-stream-polls' },
+        's',
+      )
+
+      const controller = new AbortController()
+      const held = fetch(`${server.url}/streams/${stream.id}/chunks?since=0&wait=25`, {
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await Bun.sleep(100)
+      expect(backing.streamPolls).toBeGreaterThan(0)
+      const pollsAtAbort = backing.streamPolls
+      controller.abort()
+
+      await Bun.sleep(150)
+      expect(backing.streamPolls).toBe(pollsAtAbort)
+      await Bun.sleep(150)
+      expect(backing.streamPolls).toBe(pollsAtAbort)
       await held
     } finally {
       await server.stop()
