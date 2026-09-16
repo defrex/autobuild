@@ -104,6 +104,87 @@ describe('SessionStreamFeed', () => {
     expect(update!.fields.source.kind === 'parts' && update!.fields.source.lastSeq).toBe(2)
   })
 
+  test('a clean close with parts in hand keeps the parts source (no artifact swap)', async () => {
+    let artifacts = 0
+    const store = {
+      async readStream(): Promise<StreamRead> {
+        return { chunks: [], status: 'closed', outcome: 'completed' }
+      },
+      async getArtifact(): Promise<{ content: string } | null> {
+        artifacts += 1
+        throw new Error('getArtifact must not be called on a clean close')
+      },
+    }
+    const feed = new SessionStreamFeed(store, 'build-a')
+    const view = sessionView({
+      source: {
+        kind: 'parts',
+        parts: [
+          { type: 'text-delta', id: 't', delta: 'live prose' },
+          { type: 'error', errorText: 'provider exploded' },
+        ],
+        lastSeq: 2,
+      },
+    })
+    const update = await feed.poll(view)
+    expect(update).not.toBeUndefined()
+    expect(update!.fields.status).toBe('closed')
+    expect(update!.fields.outcome).toBe('completed')
+    // The live part sequence survives — including the error line, which
+    // exists only on the parts path and never reaches the document.
+    expect(update!.fields.source).toEqual({
+      kind: 'parts',
+      parts: [
+        { type: 'text-delta', id: 't', delta: 'live prose' },
+        { type: 'error', errorText: 'provider exploded' },
+      ],
+      lastSeq: 2,
+    })
+    expect(update!.fields.error).toBeUndefined()
+    expect(artifacts).toBe(0)
+  })
+
+  test('a clean close with parts in hand never consults the artifact store', async () => {
+    // No artifact scripted: any getArtifact call throws, so reaching the
+    // fallback would surface as an error field on a healthy view.
+    const store = scriptedStore([{ chunks: [], status: 'closed', outcome: 'completed' }])
+    const feed = new SessionStreamFeed(store, 'build-a')
+    const view = sessionView({
+      source: {
+        kind: 'parts',
+        parts: [{ type: 'abort', reason: 'operator aborted' }],
+        lastSeq: 1,
+      },
+    })
+    const update = await feed.poll(view)
+    // No fallback: the view already holds content, so a clean close only
+    // flips status/outcome even though the artifact is missing.
+    expect(update!.fields.status).toBe('closed')
+    expect(update!.fields.source).toEqual({
+      kind: 'parts',
+      parts: [{ type: 'abort', reason: 'operator aborted' }],
+      lastSeq: 1,
+    })
+    expect(update!.fields.error).toBeUndefined()
+  })
+
+  test('a document-source error clears on a successful retry with no status change', async () => {
+    const store = scriptedStore([{ chunks: [], status: 'closed', outcome: 'completed' }])
+    const feed = new SessionStreamFeed(store, 'build-a')
+    const document: UIMessage[] = [{ id: 'm', role: 'assistant', parts: [] }]
+    const view = sessionView({
+      status: 'closed',
+      outcome: 'completed',
+      source: { kind: 'document', document },
+      error: 'stream artifact is not a readable session document',
+    })
+    const update = await feed.poll(view)
+    expect(update).not.toBeUndefined()
+    expect(update!.fields.error).toBeUndefined()
+    expect(update!.fields.source).toEqual({ kind: 'document', document })
+    expect(update!.fields.status).toBe('closed')
+  })
+
   test('the pruned-chunk fallback reads the deposited document artifact', async () => {
     const document: UIMessage[] = [
       { id: 'm', role: 'assistant', parts: [{ type: 'text', text: 'final' }] },

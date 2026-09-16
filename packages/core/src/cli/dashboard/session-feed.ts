@@ -102,11 +102,34 @@ export class SessionStreamFeed {
     try {
       const read = await this.store.readStream(this.streamId(view), { since, waitSeconds: 0 })
 
-      // A closed stream that yields no chunks despite a nonempty cursor — or
-      // one whose chunk log was pruned — renders the finalized artifact
-      // instead. This also covers a closed-session view opened to an empty log.
-      if (read.status === 'closed' && read.chunks.length === 0) {
+      // A clean close appends no chunk, so a closed read with no new chunks
+      // is the normal close signal — not a reason to swap sources. When the
+      // view already holds part content, keep it: `error` and `abort` lines
+      // exist only on the parts path, and a failed artifact read must never
+      // turn a healthy view into an error view. The finalized-artifact
+      // fallback applies only when there is nothing to keep — a closed
+      // session opened to an empty (e.g. pruned) chunk log.
+      if (
+        read.status === 'closed' &&
+        read.chunks.length === 0 &&
+        view.source.kind === 'parts' &&
+        view.source.parts.length === 0
+      ) {
         return await this.artifactFallback(view, base, since, polledSource, read)
+      }
+
+      // A document-source view only polls to retry a failed read; the
+      // finalized content is already in hand, so a successful read just
+      // clears the error and tracks the stream's status/outcome.
+      if (view.source.kind === 'document') {
+        const outcome = read.outcome ?? base.outcome
+        if (read.status === base.status && outcome === base.outcome && base.error === undefined)
+          return undefined
+        return this.update(view, since, polledSource, {
+          status: read.status,
+          ...(outcome !== undefined ? { outcome } : {}),
+          source: view.source,
+        })
       }
 
       const parts = view.source.kind === 'parts' ? [...view.source.parts] : []

@@ -4,6 +4,8 @@ import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
 import { assembleUIMessageDocument } from '../store/streams/assemble'
 import {
+  abortPart,
+  errorPart,
   promptPart,
   reasoningDeltaPart,
   reasoningEndPart,
@@ -1571,6 +1573,38 @@ test('Enter on a session with a stream opens the read-only session view; every c
   h.press({ type: 'escape' })
   await waitFor(() => h.frame().includes('Build  watched'), 'back to detail')
   expect(await h.store.getEvents(h.slug)).toEqual(before)
+
+  await h.finish()
+})
+
+test('a stream closing mid-view preserves error and abort lines across the close', async () => {
+  const h = await seedSessionViewHarness()
+  await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
+  h.press({ type: 'down' })
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Build  watched'), 'detail view')
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Session  watched'), 'session view')
+  await waitFor(
+    () => h.frame().includes('Prompt: watch the limiter'),
+    'session projection within one poll',
+  )
+
+  // These lines exist only on the parts path: assembly drops `error` and
+  // `abort` chunks, so a fallback swap to the finalized document would lose
+  // them. Appending before closeStream keeps the real close-time artifact
+  // faithful to what the chunk log can still carry.
+  await h.store.appendStreamParts(h.streamId, [
+    errorPart('provider exploded'),
+    abortPart('operator aborted'),
+  ])
+  await waitFor(() => h.frame().includes('ERROR: provider exploded'), 'live error line')
+  await waitFor(() => h.frame().includes('ABORTED: operator aborted'), 'live abort line')
+  await h.store.closeStream(h.streamId, 'completed')
+  await waitFor(() => h.frame().includes('Stream closed: completed'), 'outcome line')
+  // The close must not swap sources: both lines survive on the parts path.
+  expect(h.frame()).toContain('ERROR: provider exploded')
+  expect(h.frame()).toContain('ABORTED: operator aborted')
 
   await h.finish()
 })
