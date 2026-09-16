@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#351](https://github.com/defrex/autobuild/pull/351) — Make the via-attribution contract transport-aware
+- [#350](https://github.com/defrex/autobuild/pull/350) — Wire live Postgres store suites into CI via always-on verify step
 - [#349](https://github.com/defrex/autobuild/pull/349) — Stream harvest sessions and harvest runners as AI SDK UI message parts
 - [#348](https://github.com/defrex/autobuild/pull/348) — Reword stale streaming denials in operator-api.md
 - [#347](https://github.com/defrex/autobuild/pull/347) — Record auto-merge deferral observations only for human-actionable deferrals

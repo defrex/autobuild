@@ -29,6 +29,7 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(workspace.provisioning.map(({ name }) => name)).toEqual([
     'system-install',
     'browser-smoke',
+    'postgres',
     'git-identity',
   ])
   expect(workspace.provisioning[0]?.command).toContain('google-chrome-stable_current_amd64.deb')
@@ -41,6 +42,8 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(browserSmoke).not.toContain('--headless')
   await access(join(REPO_ROOT, 'scripts/browser-smoke.sh'), constants.X_OK)
   await access(join(REPO_ROOT, 'scripts/browser-smoke-server.ts'), constants.R_OK)
+  expect(workspace.provisioning[2]?.command).toBe('./scripts/postgres-live.sh install')
+  await access(join(REPO_ROOT, 'scripts/postgres-live.sh'), constants.X_OK)
   expect(workspace.runtimeProvisioning).toEqual({
     pi: {
       install: 'npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4',
@@ -80,8 +83,24 @@ test('remote rollout preserves this repository pipeline and hosted integration',
     typecheck: 'bun run typecheck',
     test: 'bun run test',
   })
-  expect(config.verify.steps).toEqual(['lint', 'types', 'unit', 'dashboard', 'web-dashboard'])
+  const testPostgres = config.commands['test-postgres']
+  expect(testPostgres).toContain('AB_POSTGRES_TEST_URL')
+  expect(testPostgres).toContain('packages/postgres-store/src/store.live.test.ts')
+  expect(testPostgres).toContain('packages/postgres-store/src/migrate.test.ts')
+  expect(config.verify.steps).toEqual([
+    'lint',
+    'types',
+    'unit',
+    'postgres',
+    'dashboard',
+    'web-dashboard',
+  ])
   expect(config.verify.stepConfigs.lint).toEqual({ kind: 'check', command: 'lint', always: true })
+  expect(config.verify.stepConfigs.postgres).toEqual({
+    kind: 'check',
+    command: 'test-postgres',
+    always: true,
+  })
   expect(config.verify.stepConfigs.dashboard).toMatchObject({
     kind: 'agent',
     skill: 'ab-verify-dashboard',
