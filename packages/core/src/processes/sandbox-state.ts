@@ -51,13 +51,18 @@ export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnviro
         ...(event.payload.sessionId !== undefined ? { sessionId: event.payload.sessionId } : {}),
       })
     } else if (event.type === 'orchestrator.sandbox.resumed') {
+      const previous = byEnvironment.get(event.payload.environmentId)
       byEnvironment.set(event.payload.environmentId, {
         operator: event.payload.operator,
         environmentId: event.payload.environmentId,
         provider: event.payload.provider,
         state: 'live',
         lastEvidenceTs: ts,
-        ...(event.payload.sessionId !== undefined ? { sessionId: event.payload.sessionId } : {}),
+        ...(event.payload.sessionId !== undefined
+          ? { sessionId: event.payload.sessionId }
+          : previous?.sessionId !== undefined
+            ? { sessionId: previous.sessionId }
+            : {}),
       })
     } else if (event.type === 'orchestrator.sandbox.activity') {
       const current = byEnvironment.get(event.payload.environmentId)
