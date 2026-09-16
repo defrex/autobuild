@@ -2046,7 +2046,15 @@ export class Dispatcher {
   private async baseSha(baseBranch: string): Promise<string> {
     const remoteBranchSha = this.deps.forge.remoteBranchSha
     if (remoteBranchSha !== undefined) {
-      return await remoteBranchSha.call(this.deps.forge, baseBranch)
+      try {
+        return await remoteBranchSha.call(this.deps.forge, baseBranch)
+      } catch {
+        // A forge that advertises the capability but cannot resolve this branch
+        // (a checkout-mode adapter, an unseeded test fake, or a transient
+        // remote failure) falls through to the physical checkout's git read.
+        // In origin mode there is no checkout, so the git read's failure is the
+        // actionable error and the tick still fails closed.
+      }
     }
     const args = [
       'git',

@@ -83,6 +83,13 @@ export class FakeForge implements Forge {
   readonly name = 'fake'
   readonly prAttachments?: PrAttachmentHosting
 
+  /** Optional checkout-less read seam (SPEC §16.1 pipeline pinning): seeded
+   * remote branches (`branch` → sha) and file contents keyed `ref\0path`.
+   * `remoteBranchSha` throws when the branch was never seeded — the same
+   * not-found contract as the production adapters. */
+  readonly remoteBranches = new Map<string, string>()
+  readonly files = new Map<string, string>()
+
   /** Journals — public so tests assert directly on call order and args. */
   readonly pushes: PushRecord[] = []
   readonly opened: OpenPrRecord[] = []
@@ -328,6 +335,30 @@ export class FakeForge implements Forge {
   isAutoMergeEnabled(number: number): boolean {
     this.assertPr(number)
     return this.autoMerge.get(number) ?? false
+  }
+
+  /** Seed a remote branch head for the optional checkout-less read seam. */
+  seedBranch(branch: string, sha: string): void {
+    this.remoteBranches.set(branch, sha)
+  }
+
+  /** Seed file content readable at a given ref (sha or branch name). */
+  seedFile(ref: string, path: string, content: string): void {
+    this.files.set(`${ref}\0${path}`, content)
+  }
+
+  async remoteBranchSha(branch: string): Promise<string> {
+    const sha = this.remoteBranches.get(branch)
+    if (sha === undefined) throw new Error(`FakeForge: unknown remote branch ${branch}`)
+    return sha
+  }
+
+  async readFile(path: string, ref?: string): Promise<string> {
+    const key = `${ref ?? 'default'}\0${path}`
+    const content = this.files.get(key)
+    if (content === undefined)
+      throw new Error(`FakeForge: no file ${path} at ref ${ref ?? 'default'}`)
+    return content
   }
 
   async pushBranch(workspacePath: string, branch: string): Promise<void> {

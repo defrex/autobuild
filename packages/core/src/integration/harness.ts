@@ -347,7 +347,8 @@ export async function makeHarness(opts: {
     gatePresence: opts.gatePresence ?? 'present',
     ...(opts.pluginForge?.prAttachments === true ? { prAttachments: true } : {}),
   })
-  let selectedForge: Forge = opts.localGitForge === true ? new LocalGitForge() : forge
+  let selectedForge: Forge =
+    opts.localGitForge === true ? new LocalGitForge({ repoRoot: origin }) : forge
   let plugins: PluginRegistry | undefined
   if (opts.pluginForge !== undefined) {
     plugins = createPluginRegistry()
