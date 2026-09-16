@@ -1,4 +1,8 @@
-import type { DashboardBuild, DashboardModel, StepTiming } from 'autobuild/operator-presentation'
+import type {
+  DashboardBuild,
+  DashboardModel,
+  StepTiming,
+} from '@defrex/autobuild/operator-presentation'
 
 function equalRow(a: DashboardBuild, b: DashboardBuild): boolean {
   return JSON.stringify(a) === JSON.stringify(b)

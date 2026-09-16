@@ -11,9 +11,35 @@ import {
   writePrebuiltDistributionArchive,
   distributionAssetName,
   fetchDistributionReleaseAsset,
+  fetchDistributionRegistryTarball,
   readDistributionIdentity,
+  readDistributionPackage,
+  type RegistryFetch,
 } from './distribution-archive'
 import { GitHubApiError } from '../forge/github-transport'
+
+/** A scripted registry: version-document URL → status/body, tarball URL → bytes. */
+function registryStub(
+  documents: Record<string, { status: number; body?: string; bytes?: Uint8Array }>,
+  calls: string[] = [],
+): RegistryFetch {
+  return async (url) => {
+    calls.push(url)
+    const reply = documents[url] ?? { status: 404, body: '"Not Found"' }
+    return {
+      status: reply.status,
+      text: async () => reply.body ?? '',
+      arrayBuffer: async () => {
+        const bytes = reply.bytes ?? new Uint8Array()
+        const copy = new ArrayBuffer(bytes.byteLength)
+        new Uint8Array(copy).set(bytes)
+        return copy
+      },
+    }
+  }
+}
+
+const registryAbsent = registryStub({})
 
 const cleanups: string[] = []
 
@@ -143,6 +169,7 @@ describe('defaultDistributionArchive', () => {
         return { status: 200, headers: {}, bytes: marker }
       }) as never,
       () => false,
+      registryAbsent,
     )
     expect(archive).toEqual(marker)
     expect(calls.some((call) => call.endsWith(`/releases/tags/v${version}`))).toBe(true)
@@ -157,6 +184,7 @@ describe('defaultDistributionArchive', () => {
         throw original
       }) as never,
       () => false,
+      registryAbsent,
     ).then(
       () => null,
       (e: unknown) => e,
@@ -171,6 +199,77 @@ describe('defaultDistributionArchive', () => {
       causes.push(cause)
     }
     expect(causes).toContain(original)
+  })
+
+  test('a bundled deployment installs the npm registry tarball of the running version first', async () => {
+    const { name, version } = await readDistributionPackage()
+    const encoded = name.replace('/', '%2f')
+    const documentUrl = `https://registry.npmjs.org/${encoded}/${version}`
+    const tarballUrl = `https://registry.npmjs.org/${name}/-/autobuild-${version}.tgz`
+    const marker = new Uint8Array([4, 2, 4, 2])
+    const calls: string[] = []
+    const archive = await defaultDistributionArchive(
+      {},
+      (async () => {
+        throw new Error('GitHub must not be consulted when the registry has the version')
+      }) as never,
+      () => false,
+      registryStub(
+        {
+          [documentUrl]: { status: 200, body: JSON.stringify({ dist: { tarball: tarballUrl } }) },
+          [tarballUrl]: { status: 200, bytes: marker },
+        },
+        calls,
+      ),
+    )
+    expect(archive).toEqual(marker)
+    expect(calls).toEqual([documentUrl, tarballUrl])
+  })
+
+  test('the registry tarball fetch honors NPM_CONFIG_REGISTRY and refuses documents without a tarball', async () => {
+    const calls: string[] = []
+    const bytes = await fetchDistributionRegistryTarball(
+      '@defrex/autobuild',
+      '1.2.3',
+      { NPM_CONFIG_REGISTRY: 'https://registry.example.test/' },
+      registryStub(
+        {
+          'https://registry.example.test/@defrex%2fautobuild/1.2.3': {
+            status: 200,
+            body: JSON.stringify({ dist: { tarball: 'https://cdn.example.test/a.tgz' } }),
+          },
+          'https://cdn.example.test/a.tgz': { status: 200, bytes: new Uint8Array([1]) },
+        },
+        calls,
+      ),
+    )
+    expect(bytes).toEqual(new Uint8Array([1]))
+    expect(calls[0]).toBe('https://registry.example.test/@defrex%2fautobuild/1.2.3')
+
+    const noTarball: unknown = await fetchDistributionRegistryTarball(
+      'pkg',
+      '1.0.0',
+      {},
+      registryStub({
+        'https://registry.npmjs.org/pkg/1.0.0': { status: 200, body: '{"dist":{}}' },
+      }),
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect((noTarball as Error).message).toContain('names no dist.tarball')
+
+    const missing: unknown = await fetchDistributionRegistryTarball(
+      'pkg',
+      '9.9.9',
+      {},
+      registryAbsent,
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect((missing as Error).message).toContain('HTTP 404')
+    expect((missing as Error).message).toContain('publish the release first')
   })
 
   test('without a checkout, fetches the published release asset for the running version', async () => {

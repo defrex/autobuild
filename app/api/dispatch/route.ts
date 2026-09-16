@@ -3,7 +3,7 @@
 // bounded dispatcher tick per configured repository. maxDuration is Vercel's
 // Pro default (300 s); raise it together with AB_DISPATCHER_BUDGET_SECONDS —
 // see docs/hosted-dispatcher.md.
-import { dispatcherEndpoint } from '@autobuild/hosted-store-service/web/runtime'
+import { dispatcherEndpoint } from '@defrex/autobuild-hosted-store-service/web/runtime'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

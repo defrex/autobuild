@@ -28,7 +28,7 @@ async function fixture(core: Record<string, unknown> = {}): Promise<string> {
   await writeFile(
     join(root, 'packages', 'core', 'package.json'),
     JSON.stringify({
-      name: '@autobuild/core',
+      name: '@defrex/autobuild-core',
       version: '1.2.3',
       engines: { bun: '>=1.4.0' },
       dependencies,

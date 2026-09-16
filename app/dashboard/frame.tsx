@@ -1,6 +1,6 @@
 'use client'
 
-import type { PipelineStep, StepState } from 'autobuild/operator-presentation'
+import type { PipelineStep, StepState } from '@defrex/autobuild/operator-presentation'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { elapsedMilliseconds } from './view-model'
 

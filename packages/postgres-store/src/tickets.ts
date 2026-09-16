@@ -7,8 +7,8 @@ import type {
   TicketListing,
   TicketSource,
   TicketUpdate,
-} from 'autobuild/plugin-sdk'
-import { validateTicketUpdate } from 'autobuild/ticket-update'
+} from '@defrex/autobuild/plugin-sdk'
+import { validateTicketUpdate } from '@defrex/autobuild/ticket-update'
 import { assertTicketSchema } from './schema'
 
 type Row = Record<string, unknown>

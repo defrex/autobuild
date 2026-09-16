@@ -1,4 +1,4 @@
-import { parseWebAuthEnv, safeWebConfig } from '@autobuild/hosted-store-service/web/config'
+import { parseWebAuthEnv, safeWebConfig } from '@defrex/autobuild-hosted-store-service/web/config'
 import { SignIn } from './SignIn'
 
 export const dynamic = 'force-dynamic'

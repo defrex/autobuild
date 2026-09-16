@@ -156,7 +156,7 @@ describe('layered CLI help catalog', () => {
         '--no-self-update',
         '--version <semver>',
         '--no-commit',
-        'latest GitHub Release',
+        'latest published',
         'package.json',
         'bun.lock',
         'Three-way merge',

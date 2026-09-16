@@ -38,7 +38,7 @@ Linear backend, direct Linear, local files, or a configured plugin), agent runti
 and the build store all sit behind
 narrow interfaces. Trusted Bun plugins declared in `autobuild.toml` can register
 third-party ticket, runtime, workspace, and forge adapters against the versioned
-`autobuild/plugin-sdk` surface. Repositories may also opt into the shipped
+`@defrex/autobuild/plugin-sdk` surface. Repositories may also opt into the shipped
 `vercel-sandbox` workspace provider: the complete build runs in an isolated
 Vercel VM while the local supervisor retains credentialed branch/PR publication.
 The default remains a local Git worktree. See the [workspace configuration and
@@ -67,7 +67,7 @@ usable on your machine.
 <!-- release-install:start -->
 
 ```sh
-bun add -g github:defrex/autobuild#v0.7.0
+bun add -g @defrex/autobuild@0.8.0
 ```
 
 <!-- release-install:end -->

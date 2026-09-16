@@ -4,6 +4,12 @@
 
 - [#378](https://github.com/defrex/autobuild/pull/378) — Make `ab wait` long-poll on remote stores (AUT-368)
 
+## v0.8.0 — 2026-09-16
+
+This release moves the Autobuild CLI onto npm as the scoped package @defrex/autobuild, with web dependencies split out of core and extensions now resolved from the installation itself. The ab upgrade command and guest tarballs are sourced from the registry, and each release ends with a bun publish step. Existing installs that came from GitHub migrate once by removing the old global package and adding @defrex/autobuild in its place.
+
+- [#377](https://github.com/defrex/autobuild/pull/377) — Distribute the CLI as `@defrex/autobuild` on npm: scoped package names, web dependencies out of core, extensions resolved from the installation, registry-based `ab upgrade`, registry guest tarballs, and `bun publish` at the end of a release. Existing `github:` installs migrate once with `bun remove -g autobuild && bun add -g @defrex/autobuild`.
+
 ## v0.7.0 — 2026-09-16
 
 This release moves Autobuild off the developer's machine: builds now run in Vercel Sandbox with configured runtime provisioning, failure-safe recovery, and cleanup, while a hosted dispatcher runs on a per-minute cron with per-repository forge credentials, sandboxed harvest, and a serverless PostgreSQL store behind an authenticated hosted service. The core was restructured into a Bun workspace with a new BuildStore stream primitive, operator sessions, and every build session streamed as AI SDK UI message parts, which power a live read-only session view and the new ab watch and ab wait commands. An agent tool registry is exposed over MCP both on stdio and as a hosted endpoint secured with Better Auth OAuth, backed by per-operator credential-free sandboxes. The web dashboard gained authenticated hosting, a versioned operator control API, and a round of design refinements, and the auto-merge gate now handles unknown, dirty, and unprotected-branch states correctly.

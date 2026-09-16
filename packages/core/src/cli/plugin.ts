@@ -71,14 +71,15 @@ export const spawnPluginContract: PluginContractSubprocess = async (input) => {
 
 function renderModuleReport(report: PluginDiagnosis['reports'][number]): string {
   const location = report.resolved === undefined ? '' : ` resolved=${report.resolved}`
+  const source = report.resolvedFrom === undefined ? '' : ` from=${report.resolvedFrom}`
   const plugin = report.pluginName === undefined ? '' : ` plugin=${report.pluginName}`
   const api =
     report.api === undefined
       ? ''
       : ` api=${report.api.declaredRange} host=${report.api.hostVersion} ${report.api.status}`
   return report.status === 'loaded'
-    ? `OK ${report.module} kind=${report.resolutionKind}${location}${plugin}${api}`
-    : `FAIL ${report.module} kind=${report.resolutionKind} stage=${report.stage}${location}${plugin}${api}: ${report.error}`
+    ? `OK ${report.module} kind=${report.resolutionKind}${location}${source}${plugin}${api}`
+    : `FAIL ${report.module} kind=${report.resolutionKind} stage=${report.stage}${location}${source}${plugin}${api}: ${report.error}`
 }
 
 function renderAdapter(adapter: AdapterProjection): string {
