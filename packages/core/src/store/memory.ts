@@ -35,7 +35,7 @@ import {
 import { pollingSubscribe } from './subscribe'
 import { StreamLocks } from './streams/lock'
 import { assembleUIMessageDocument } from './streams/assemble'
-import { readEventsWithWait, readStreamWithWait } from './streams/wait'
+import { EVENT_WAIT_POLL_MS, readEventsWithWait, readStreamWithWait } from './streams/wait'
 import {
   serializedBatchSize,
   STREAM_BATCH_MAX_BYTES,
@@ -790,7 +790,15 @@ export class MemoryBuildStore implements BuildStore {
   ): Promise<SessionEvent[]> {
     const read = async (): Promise<SessionEvent[]> =>
       structuredClone(this.sessionState(id).events.filter((event) => event.seq > sinceSeq))
-    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
+    return readEventsWithWait({
+      read,
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      // Hosted budget: held session-event reads poll at most once per second
+      // (AUT-383), matching the build and repository event reads — not the
+      // 25 ms stream default, which is presentation content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
   }
 
   async appendSessionWithArtifacts<T extends SessionEventType>(
