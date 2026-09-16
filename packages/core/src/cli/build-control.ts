@@ -7,7 +7,7 @@
  * normal runner and dispatcher consume them.
  */
 import type { AbEvent } from '../events/catalog'
-import { humanActor, KERNEL } from '../events/envelope'
+import { humanActor, KERNEL, type Via } from '../events/envelope'
 import { reduceBuild, type BuildState, type OpenEscalation } from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -145,8 +145,9 @@ async function appendCommand(
   slug: string,
   user: string,
   command: BuildControlCommand,
+  via?: Via,
 ): Promise<BuildControlResult> {
-  const actor = humanActor(user)
+  const actor = humanActor(user, via)
   let event: AbEvent
   switch (command) {
     case 'pause':
@@ -370,6 +371,8 @@ export interface ControlBuildOpts {
   /** Explicit identity for non-CLI callers. CLI adapters may supply env. */
   user?: string
   env?: Record<string, string | undefined>
+  /** Delegated-write attribution marker threaded onto every event actor. */
+  via?: Via
   action: BuildControlAction
   /** Injected only for --revise-spec-from-ticket. */
   readTicketBody?: (ref: TicketRef) => Promise<string>
@@ -406,7 +409,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     if (existing !== undefined) {
       return { kind: 'command', slug: opts.slug, command: 'discard', event: existing }
     }
-    return appendCommand(opts.store, opts.slug, user, 'discard')
+    return appendCommand(opts.store, opts.slug, user, 'discard', opts.via)
   }
 
   if (opts.action.kind === 'abort') {
@@ -415,7 +418,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     if (existing !== undefined) {
       return { kind: 'command', slug: opts.slug, command: 'abort', event: existing }
     }
-    return appendCommand(opts.store, opts.slug, user, 'abort')
+    return appendCommand(opts.store, opts.slug, user, 'abort', opts.via)
   }
 
   activeState(opts.slug, state)
@@ -424,7 +427,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
     case 'resume':
     case 'auto-merge-on':
     case 'auto-merge-off':
-      return appendCommand(opts.store, opts.slug, user, opts.action.kind)
+      return appendCommand(opts.store, opts.slug, user, opts.action.kind, opts.via)
 
     case 'dashboard-pause': {
       const pendingPause = state.pendingCommands.some((command) => command.command === 'pause')
@@ -437,7 +440,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
       }
       // The reducer already makes an opposing command supersede an
       // unacknowledged request. Reuse that durable rule to cancel PAUSING.
-      return appendCommand(opts.store, opts.slug, user, pendingPause ? 'resume' : 'pause')
+      return appendCommand(opts.store, opts.slug, user, pendingPause ? 'resume' : 'pause', opts.via)
     }
 
     case 'dashboard-resume': {
@@ -458,7 +461,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
             'dashboard resume requires paused with no pending resume',
         )
       }
-      return appendCommand(opts.store, opts.slug, user, 'resume')
+      return appendCommand(opts.store, opts.slug, user, 'resume', opts.via)
     }
 
     case 'toggle-auto-merge':
@@ -467,13 +470,14 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         opts.slug,
         user,
         state.autoMerge.requested ? 'auto-merge-off' : 'auto-merge-on',
+        opts.via,
       )
 
     case 'answer': {
       const captured =
         opts.action.escalationIds === undefined ? undefined : new Set(opts.action.escalationIds)
       const guidance = (opts.action.text ?? '').trim()
-      const actor = humanActor(user)
+      const actor = humanActor(user, opts.via)
       const requestedCeiling = opts.action.reviewRoundCeiling
       if (
         requestedCeiling !== undefined &&

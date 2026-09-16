@@ -1,4 +1,4 @@
-import { humanActor } from '../events/envelope'
+import { humanActor, type Via } from '../events/envelope'
 import type { RepositoryEventEnvelope } from '../events/repository'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceHarvest } from '../kernel/harvest'
@@ -27,17 +27,19 @@ export async function setRepositorySetting(opts: {
   user: string
   setting: RepositorySetting
   enabled: boolean
+  /** Delegated-write attribution marker threaded onto the event's actor. */
+  via?: Via
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   const event =
     opts.setting === 'intake'
       ? await opts.store.appendRepo(opts.repo, {
-          actor: humanActor(opts.user),
+          actor: humanActor(opts.user, opts.via),
           type: 'dispatcher.intake-set',
           payload: { enabled: opts.enabled },
         })
       : await opts.store.appendRepo(opts.repo, {
-          actor: humanActor(opts.user),
+          actor: humanActor(opts.user, opts.via),
           type: 'dispatcher.auto-merge-default-set',
           payload: { enabled: opts.enabled },
         })
@@ -49,6 +51,7 @@ export async function toggleRepositorySetting(opts: {
   repo: string
   user: string
   setting: RepositorySetting
+  via?: Via
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   const settings = reduceDispatchSettings(await opts.store.getRepoEvents(opts.repo))
@@ -60,6 +63,7 @@ export async function toggleHarvestGate(opts: {
   store: BuildStore
   repo: string
   user: string
+  via?: Via
 }): Promise<{ command: 'pause' | 'resume'; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   const state = reduceHarvest(await opts.store.getRepoEvents(opts.repo))
@@ -67,7 +71,7 @@ export async function toggleHarvestGate(opts: {
   const requestedPaused = pending === undefined ? state.paused : pending.command === 'pause'
   const command = requestedPaused ? 'resume' : 'pause'
   const event = await opts.store.appendRepo(opts.repo, {
-    actor: humanActor(opts.user),
+    actor: humanActor(opts.user, opts.via),
     type: command === 'resume' ? 'harvest.resume-requested' : 'harvest.pause-requested',
     payload: {},
   })
@@ -80,6 +84,7 @@ export async function controlHarvestRun(opts: {
   repo: string
   user: string
   run: string
+  via?: Via
 }): Promise<{ action: HarvestRunAction; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   const events = await opts.store.getRepoEvents(opts.repo)
@@ -104,7 +109,7 @@ export async function controlHarvestRun(opts: {
     throw new OperatorControlError('harvest-unavailable', 'harvest run has no available action')
   }
   const event = await opts.store.appendRepo(opts.repo, {
-    actor: humanActor(opts.user),
+    actor: humanActor(opts.user, opts.via),
     type: 'harvest.resume-requested',
     payload: {},
   })

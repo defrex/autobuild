@@ -47,6 +47,9 @@ dispatcher credential. Legacy admin tokens still cover store administration but
 cannot access tickets.
 
 The same deployment also serves the versioned [operator API](../../docs/operator-api.md).
+External agents connect to the [MCP server](../../docs/mcp.md) at `/mcp` — the
+same operator tool registry over Streamable HTTP with OAuth 2.1 through Better
+Auth — and every write is attributed to the person who authorized the client.
 Mint an attributed human-operator token with `--user`; unlike the deployment
 credential, it can use only the operator API and its signed identity is recorded
 on every control:
@@ -135,6 +138,9 @@ The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'
   visible only where their recorded `repoOrigin` matches the querying
   checkout's origin (decision 2026-09-10: dropping the old identity's history
   is acceptable).
+- `AB_WEB_MCP_RESOURCE` (optional): the protected resource the MCP server
+  binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. See the
+  [MCP server](../../docs/mcp.md).
 
 Removing an email blocks its next gateway request even if its database-backed
 session has not expired. Rotate `BETTER_AUTH_SECRET` to end every browser

@@ -1100,6 +1100,24 @@ same three-row cap and count but advertise no unavailable expansion action.
 These are display-only transformations: stored event and status text is
 unchanged.
 
+When the selected session carries a stream, Enter instead opens a read-only
+session view, whether that session is still open or has already ended. For an
+open session the view follows the stream live: the turn's prompt, the agent's
+reasoning and answer text, each tool call with a one-line input summary, tool
+output capped at eight rows (longer output names the withheld-row count), and
+step separators appear as they land, within one dashboard poll interval, while
+the view tracks the tail. For an ended session the view renders the session's
+finalized content, including error and truncation markers where the runner
+emitted them, and a final `Stream closed` line names the outcome. Up/Down
+scrolls; scrolling up from the bottom pauses tail-following — the legend says
+`paused` — and scrolling back to the bottom resumes it. The view is strictly
+read-only: no key inside it answers, pauses, resumes, or aborts anything, the
+abort confirmation cannot be opened from it, and its legend offers only
+Up/Down, Esc, and quit. Escape returns to build detail with the same session
+selected. Sessions without a stream keep the existing messages: the
+open-session unavailable note, the reclaimed note, the no-deposit note, and the
+existing transcript rendering.
+
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
