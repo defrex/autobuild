@@ -674,15 +674,20 @@ function redactRuntimeError(error: unknown, env: Record<string, string>): string
   return detail
 }
 
+/** Bootstrap the workspace runtime references with the build path's
+ * install/preflight chain. `env` is the already-resolved guest environment:
+ * callers decide which names a guest may see — the build and harvest paths
+ * forward `[workspace.config].environmentVariables`, while the operator
+ * sandbox passes its credential-free forwarded set only (build-workspace
+ * variables never enter a sandbox). */
 async function bootstrapRuntimes(
   sandbox: VercelSandboxHandle,
   config: VercelSandboxConfig,
-  hostEnv: Record<string, string | undefined>,
+  env: Record<string, string>,
   references: readonly RuntimeReferenceGroup[],
   install: boolean,
   signal?: AbortSignal,
 ): Promise<void> {
-  const env = runtimeEnvironment(config, hostEnv)
   for (const group of [...references].sort((left, right) =>
     left.runtime < right.runtime ? -1 : left.runtime > right.runtime ? 1 : 0,
   )) {
@@ -961,7 +966,7 @@ export async function validateVercelSandbox(
     await bootstrapRuntimes(
       sandbox,
       config,
-      options.env,
+      runtimeEnvironment(config, options.env),
       options.runtimeReferences ?? [],
       true,
       options.signal,
@@ -1385,7 +1390,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          this.options.env,
+          runtimeEnvironment(this.options.config, this.options.env),
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1540,7 +1545,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      this.options.env,
+      runtimeEnvironment(this.options.config, this.options.env),
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1795,7 +1800,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          this.options.env,
+          runtimeEnvironment(this.options.config, this.options.env),
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1832,7 +1837,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      this.options.env,
+      runtimeEnvironment(this.options.config, this.options.env),
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1946,14 +1951,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   // credential enters only as a network-policy header transform.
 
   /** The credential-free guest environment: one fresh record per call —
-   * never the process environment — holding the toolchain PATH plus exactly
-   * the forwarded `sandboxEnvironmentVariables`. A missing host value is a
-   * typed `environment` failure rather than a silent absence. Shared by the
-   * setup command and every tool `exec`/`start`. */
+   * never the process environment — holding exactly the forwarded
+   * `sandboxEnvironmentVariables`. A missing host value is a typed
+   * `environment` failure rather than a silent absence. The toolchain PATH is
+   * deliberately NOT part of the record: the SDK passes env values through
+   * verbatim, so a literal `$PATH` there would never be expanded — the PATH
+   * is prepended inside the guest shell instead (the same channel the build
+   * runner uses). Shared by the setup command and every tool `exec`/`start`. */
   private sandboxEnv(): Record<string, string> {
-    const env: Record<string, string> = {
-      PATH: `${VERCEL_BUN_BIN_PATH}:/opt/autobuild/bin:$PATH`,
-    }
+    const env: Record<string, string> = {}
     for (const name of this.options.sandboxEnvironmentVariables ?? []) {
       const value = this.options.env[name]
       if (value === undefined || value === '') {
@@ -1965,6 +1971,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       env[name] = value
     }
     return env
+  }
+
+  /** The toolchain PATH as a shell prefix: the guest shell expands `$PATH`
+   * from its own ambient environment, so guests get the autobuild toolchain
+   * ahead of the image's default PATH without the env record ever carrying an
+   * unexpanded literal. */
+  private sandboxPathPrefix(): string {
+    return `PATH=${VERCEL_BUN_BIN_PATH}:${VERCEL_AUTOBUILD_PATH}/bin:$PATH; export PATH; `
   }
 
   private async describeOperatorSandbox(input: {
@@ -2112,11 +2126,26 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         ],
         cwd: VERCEL_WORKSPACE_PATH,
       })
+      // Runtime provisioning precedes the setup command, exactly as the build
+      // chain orders it. The guest env is the sandbox-forwarded set only: a
+      // runtime provisioning command that needs a build-workspace variable
+      // must have that name added to [orchestrator].sandbox.environmentVariables.
+      const runtimeReferences = currentRuntimeReferences(this.options.runtimeReferences)
+      if (runtimeReferences.length > 0) {
+        await bootstrapRuntimes(
+          sandbox,
+          this.options.config,
+          this.sandboxEnv(),
+          runtimeReferences,
+          true,
+          this.operationSignal(),
+        )
+      }
       const setupCommand = this.options.setupCommand
       if (setupCommand !== undefined && setupCommand.trim() !== '') {
         await readableCommand(sandbox, {
           cmd: 'sh',
-          args: ['-c', setupCommand],
+          args: ['-c', `${this.sandboxPathPrefix()}${setupCommand}`],
           cwd: VERCEL_WORKSPACE_PATH,
           env: this.sandboxEnv(),
         })
@@ -2209,7 +2238,10 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   ): Promise<VercelCommand> {
     const command = (await sandbox.runCommand({
       cmd: 'sh',
-      args: ['-c', request.command],
+      // The toolchain PATH is prepended inside the guest shell — the only
+      // channel where `$PATH` expands (the sandbox env doc comment explains
+      // why it cannot ride in the env record).
+      args: ['-c', `${this.sandboxPathPrefix()}${request.command}`],
       ...(request.cwd !== undefined
         ? { cwd: `${VERCEL_WORKSPACE_PATH}/${request.cwd.replace(/^\/+/, '')}` }
         : { cwd: VERCEL_WORKSPACE_PATH }),
@@ -2317,14 +2349,17 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     path: string,
   ): Promise<Uint8Array> {
     const rooted = await this.sandboxRootedPath(handle, path)
-    // Exec-mechanism cat: one detached command waited to exit, then the
-    // completed output read. The rooted path rides as its own argv element.
+    // Exec-mechanism read through a byte-preserving channel: `base64` on the
+    // rooted path (the path rides as its own argv element), decoded after
+    // exit. Reading the file through the string `stdout()` channel would
+    // mangle arbitrary binary before the registry's utf8-else-base64 branch
+    // could preserve it; base64 survives that channel exactly, and the
+    // decoder strips the wrapping whitespace GNU base64 inserts.
     const sandbox = await this.sandboxHandle(handle)
     const command = (await sandbox.runCommand({
-      cmd: 'cat',
+      cmd: 'base64',
       args: [rooted],
       cwd: VERCEL_WORKSPACE_PATH,
-      env: this.sandboxEnv(),
       detached: true,
       signal: this.operationSignal(),
     })) as VercelCommand
@@ -2347,7 +2382,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       )
     }
     const stdout = await command.stdout?.().catch(() => '')
-    return new TextEncoder().encode(stdout ?? '')
+    return new Uint8Array(Buffer.from((stdout ?? '').replace(/\s+/g, ''), 'base64'))
   }
 
   private async sandboxWriteFile(

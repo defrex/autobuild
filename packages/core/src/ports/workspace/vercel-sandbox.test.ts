@@ -58,6 +58,9 @@ class FakeSandbox implements VercelSandboxHandle {
   /** When set, reading the marker returns this instead of the written value,
    * modeling a silent write/extraction failure. */
   markerReadback: string | undefined
+  /** Simulated content of an arbitrary guest file, served by a detached
+   * `base64` command (the operator sandbox's readFile channel). */
+  fileContent: Uint8Array | undefined
   detachedWait: (params?: { signal?: AbortSignal }) => Promise<{ exitCode: number }> =
     async () => ({
       exitCode: 0,
@@ -164,9 +167,20 @@ class FakeSandbox implements VercelSandboxHandle {
     if (params.detached === true) {
       const cmdId = `cmd-${this.commands.length}`
       this.detachedCommands.set(cmdId, { exitCode: null })
+      // A `base64` read returns the file lever's bytes through the string
+      // channel with GNU-style wrapping, exactly as the real guest would.
+      const content = this.fileContent
       return {
         exitCode: null,
         cmdId,
+        ...(params.cmd === 'base64'
+          ? {
+              stdout: async () =>
+                Buffer.from(content ?? new Uint8Array())
+                  .toString('base64')
+                  .replace(/(.{76})/g, '$1\n'),
+            }
+          : {}),
         wait: (waitParams?: { signal?: AbortSignal }) => this.waitDetached(cmdId, waitParams),
         kill: async (_signal?: 'SIGTERM' | 'SIGKILL', opts?: { abortSignal?: AbortSignal }) => {
           this.killSignals.push(opts?.abortSignal)
@@ -2346,6 +2360,11 @@ describe('vercelSdkCredentials', () => {
 
 describe('operator sandbox capability', () => {
   const OPERATOR = 'ops'
+  /** The toolchain PATH prefix every guest `sh -c` command must carry: the
+   * guest shell expands `$PATH` there — the env record never holds a literal
+   * (the SDK passes env values through verbatim, so nothing in that channel
+   * would expand it). */
+  const PATH_PREFIX = `PATH=${VERCEL_BUN_BIN_PATH}:${VERCEL_AUTOBUILD_PATH}/bin:$PATH; export PATH; `
 
   function expectCredentialFree(commands: Array<Record<string, unknown>>): void {
     for (const name of SANDBOX_FORBIDDEN_ENV) {
@@ -2358,8 +2377,9 @@ describe('operator sandbox capability', () => {
       if (command.env === undefined) continue
       const env = command.env as Record<string, string>
       for (const name of SANDBOX_FORBIDDEN_ENV) expect(Object.keys(env)).not.toContain(name)
-      expect(Object.keys(env)).toContain('PATH')
-      expect(env.PATH).toContain(VERCEL_BUN_BIN_PATH)
+      // PATH never rides in the env record: an unexpanded literal there broke
+      // guest toolchain resolution (the finding that moved it into the shell).
+      expect(Object.keys(env)).not.toContain('PATH')
     }
   }
 
@@ -2395,11 +2415,16 @@ describe('operator sandbox capability', () => {
     // policy transform, never as a guest variable.
     expect(h.createInput!.networkPolicy).toBe('allow-all')
     const setup = h.sandbox.commands.find(
-      (command) => command.cmd === 'sh' && (command.args as string[])?.[1] === 'echo setup-ran',
+      (command) =>
+        command.cmd === 'sh' &&
+        ((command.args as string[])?.[1] as string | undefined)?.endsWith('echo setup-ran'),
     )
     expect(setup).toBeDefined()
     expect(setup!.cwd).toBe(VERCEL_WORKSPACE_PATH)
-    expect((setup!.env as Record<string, string>).PATH).toContain(VERCEL_BUN_BIN_PATH)
+    // The toolchain PATH rides as a shell prefix — the only channel where
+    // `$PATH` expands — never as a literal inside the env record.
+    expect((setup!.args as string[])[1]).toBe(`${PATH_PREFIX}echo setup-ran`)
+    expect((setup!.env as Record<string, string>)!.PATH).toBeUndefined()
     const marker = h.sandbox.commands.findIndex((command) => command.cmd === 'touch')
     const setupIndex = h.sandbox.commands.indexOf(setup!)
     expect(setupIndex).toBeLessThan(marker)
@@ -2475,7 +2500,7 @@ describe('operator sandbox capability', () => {
     expect(polls).toBeGreaterThanOrEqual(2)
     const launch = h.sandbox.commands.at(-1) as Record<string, unknown>
     expect(launch.detached).toBe(true)
-    expect((launch.env as Record<string, string>).PATH).toContain(VERCEL_BUN_BIN_PATH)
+    expect((launch.args as string[])[1]).toBe(`${PATH_PREFIX}echo hi`)
     expectCredentialFree([launch])
   })
 
@@ -2556,7 +2581,7 @@ describe('operator sandbox capability', () => {
     expect(finished).toMatchObject({ state: 'exited', exitCode: 3 })
   })
 
-  test('readFile cats the rooted path; writeFile routes through writeFiles', async () => {
+  test('readFile reads through the byte-preserving base64 channel; writeFile routes through writeFiles', async () => {
     const h = harness()
     const identity = await h.provider.orchestratorSandbox.ensure({
       repo: '/repo',
@@ -2566,15 +2591,66 @@ describe('operator sandbox capability', () => {
     h.sandbox.detachedWait = async () => ({ exitCode: 0 })
     const bytes = await h.provider.orchestratorSandbox.readFile(identity, 'src/demo.txt')
     expect(new TextDecoder().decode(bytes)).toBe('')
-    const cat = [...h.sandbox.commands].reverse().find((command) => command.cmd === 'cat')
-    expect((cat!.args as string[])[0]).toBe(`${VERCEL_WORKSPACE_PATH}/src/demo.txt`)
-    expectCredentialFree([cat!])
+    const read = [...h.sandbox.commands].reverse().find((command) => command.cmd === 'base64')
+    expect((read!.args as string[])[0]).toBe(`${VERCEL_WORKSPACE_PATH}/src/demo.txt`)
+    expectCredentialFree([read!])
 
     await h.provider.orchestratorSandbox.writeFile(identity, 'out.txt', new Uint8Array([1, 2]))
     expect(h.sandbox.writes.at(-1)).toEqual({
       path: `${VERCEL_WORKSPACE_PATH}/out.txt`,
       content: new Uint8Array([1, 2]),
     })
+  })
+
+  test('readFile preserves arbitrary binary that a string stdout channel would mangle', async () => {
+    const h = harness()
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    h.sandbox.detachedWait = async () => ({ exitCode: 0 })
+    const binary = new Uint8Array([0, 1, 2, 0x0a, 0x22, 0xff, 0xfe, 0x80])
+    h.sandbox.fileContent = binary
+    const bytes = await h.provider.orchestratorSandbox.readFile(identity, 'blob.bin')
+    expect([...bytes]).toEqual([...binary])
+  })
+
+  test('fresh provision runs the runtime-provisioning chain the build path receives', async () => {
+    const h = harness({ provisionRuntimes: true, setupCommand: 'echo setup-ran' })
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const shStrings = h.sandbox.commands.map(
+      (command): string =>
+        ((command.args as string[] | undefined)?.[1] as string | undefined) ??
+        (command.cmd as string),
+    )
+    const indexOf = (needle: string): number => {
+      const found = shStrings.findIndex((value: string) => value.includes(needle))
+      expect(found).toBeGreaterThanOrEqual(0)
+      return found
+    }
+    // The build chain's order (runtimes sorted by name): each runtime's
+    // install then preflight, all before the repository setup command.
+    const piInstall = indexOf('install-pi@0.84.4')
+    const piPreflight = indexOf('pi --version 0.84.4')
+    const pluginInstall = indexOf('install-plugin@abc123')
+    const pluginPreflight = indexOf('plugin --version 1.2.3')
+    const setup = indexOf('echo setup-ran')
+    expect(piInstall).toBeLessThan(piPreflight)
+    expect(piPreflight).toBeLessThan(pluginInstall)
+    expect(pluginInstall).toBeLessThan(pluginPreflight)
+    expect(pluginPreflight).toBeLessThan(setup)
+    // The one env rule: build-workspace forwarded variables (the harness's
+    // ANTHROPIC_API_KEY) never enter a sandbox guest command — a runtime
+    // provisioning command needing one must have it added to
+    // [orchestrator].sandbox.environmentVariables instead.
+    const runtimeCommand = h.sandbox.commands[piInstall]!
+    expect(runtimeCommand.env ?? {}).not.toHaveProperty('ANTHROPIC_API_KEY')
+    expectCredentialFree(h.sandbox.commands)
   })
 
   test('stop ends the session and keeps the sandbox; absent is reported honestly', async () => {
