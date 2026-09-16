@@ -18,7 +18,12 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from 'autobuild/remote-store'
-import { HOSTED_ARTIFACT_MAX_BYTES, parseHostedStoreEnv, type HostedStoreEnv } from './config'
+import {
+  HOSTED_ARTIFACT_MAX_BYTES,
+  HOSTED_EVENT_WAIT_MAX_SECONDS,
+  parseHostedStoreEnv,
+  type HostedStoreEnv,
+} from './config'
 
 type HostedBackend = 'store' | 'tickets' | 'operator'
 
@@ -107,6 +112,10 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
       rest.length === 1 &&
       (rest[0] === 'builds' || rest[0] === 'dashboard' || rest[0] === 'status')
     ) {
+      return 'operator'
+    }
+    // The registry's generic tools route (one POST per tool call).
+    if (req.method === 'POST' && rest.length === 2 && rest[0] === 'tools' && rest[1]) {
       return 'operator'
     }
     // Operator sessions: collection list/create and the addressed family.
@@ -302,6 +311,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           store,
           secret: config.secret,
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          maxEventWaitSeconds: HOSTED_EVENT_WAIT_MAX_SECONDS,
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
           ...shared,
         })

@@ -79,6 +79,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
+  orchestrator: ['enabled', 'sandbox'],
 }
 
 /** The guide text under a level-three heading, up to the next one. */

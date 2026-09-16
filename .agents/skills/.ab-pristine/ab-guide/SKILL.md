@@ -777,6 +777,40 @@ Missing plugin credentials name both the selected source and every missing
 variable. If a user asks you to put an API key in `autobuild.toml`, use the
 environment variable instead and say why.
 
+### `[orchestrator]`
+
+Gates the operator-sandbox feature (AUT-340): a persistent, **credential-free**
+environment per operator × repository that an operator agent drives through the
+`sandbox.*` registry tools (`ab mcp`, and every later binding). The whole table
+is **closed to unknown keys** and restart-classified: changing it requires a
+dispatcher restart.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding and no environment is ever provisioned. |
+| `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
+
+`[orchestrator.sandbox]` fields:
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
+| `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
+
+The credential-free rule is structural, not advisory: the environment receives
+no store, forge, ticket-provider, or model credential, and naming any of
+`AB_STORE`, `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY`,
+`VERCEL_OIDC_TOKEN`, `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, or
+`AI_GATEWAY_API_KEY` in `environmentVariables` is a config error. The typed
+operator tools remain the only route to build state from inside the sandbox.
+
+Tool bounds an operator agent should know: `sandbox.exec` waits at most **300
+seconds**; stdout and stderr are each truncated at **65,536 bytes** with a
+`[truncated by autobuild: output exceeded 65536 bytes]` marker; `sandbox.reset`
+and archiving an operator's last session are **destructive** (reset re-provisions
+from the current base head); there is at most **one** environment per operator
+and repository.
+
 ## Setup and upgrades
 
 **`ab init <target> [--force]`** runs *outside* build sessions — it takes a
@@ -1515,9 +1549,15 @@ The watch ends with exit 0 when `--timeout` elapses (30 minutes by default;
 gone terminal; with no slugs named, an empty set of active builds does not end
 it. Usage errors, scope violations, unknown slugs, and cursor rejection exit 1
 before any record. A store read that fails after the watch has started is
-reported once on stderr and retried at the next interval without duplicating
-or skipping any event. The default poll interval is 5 seconds for an `http(s)`
-store and 1 second for a local store. The command is read-only — it appends no
+reported once on stderr and retried without duplicating or skipping any event.
+Against a local store the default cadence polls every 1 second. Against an
+`http(s)` store each tracked stream long-polls instead — one held request per
+stream waits up to 25 seconds for the next event, requests run concurrently,
+and an appended matching event is delivered within about a second of its
+append rather than at the next tick — while `--interval` (default 5 seconds)
+still bounds the spacing between a stream's request starts, so a quiet stream
+costs roughly one request per 25 seconds and a chatty one no more than one
+request per interval. The command is read-only — it appends no
 event, takes no lease, creates no record, and starts no work — and deciding
 what to do about a blocker or a merge stays with the caller, not the command.
 Inside a phase, only the ambient build may be watched.

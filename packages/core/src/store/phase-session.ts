@@ -237,9 +237,13 @@ export function scopeLocalStoreToPhaseSession(
         return event
       })
     },
-    async getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]> {
+    async getEvents(
+      slug: string,
+      sinceSeq?: number,
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
+    ): Promise<AbEvent[]> {
       own('getEvents', 'build', slug)
-      return store.getEvents(slug, sinceSeq)
+      return store.getEvents(slug, sinceSeq, opts)
     },
     async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
       own('putArtifact', 'build', slug)
@@ -304,9 +308,13 @@ export function scopeLocalStoreToPhaseSession(
         return event
       })
     },
-    async getRepoEvents(repo: string, sinceSeq?: number): Promise<RepositoryEvent[]> {
+    async getRepoEvents(
+      repo: string,
+      sinceSeq?: number,
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
+    ): Promise<RepositoryEvent[]> {
       own('getRepoEvents', 'repo', repo)
-      return store.getRepoEvents(repo, sinceSeq)
+      return store.getRepoEvents(repo, sinceSeq, opts)
     },
     async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
       own('putRepoArtifact', 'repo', repo)

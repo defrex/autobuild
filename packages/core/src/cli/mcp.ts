@@ -11,7 +11,8 @@
  * never drift from the in-process registry the contract suite proves.
  *
  * Identity: the sessionless operator identity the other operator commands use
- * (`buildControlUser` — USER/USERNAME, else "dashboard"), with `via: 'mcp'`.
+ * (`buildControlUser` — USER/USERNAME, else "dashboard"), with a via marker
+ * naming the connected MCP client (learned lazily at the initialize handshake).
  * The server fails closed inside a phase: repository-wide operator authority
  * cannot be narrowed to the ambient build (the §8.2 rule that makes
  * repository-wide `ab builds` fail inside a phase, moved to process start
@@ -22,7 +23,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
+import type { Via } from '../events/envelope'
 import { defaultTriageState } from '../processes/dispatcher'
+import { createWorkspaceProvider } from '../ports/workspace/create'
 import { createTicketSource } from '../ports/tickets/create'
 import { loadPlugins } from '../plugins/load'
 import { AUTOBUILD_VERSION } from '../store/remote/version'
@@ -32,6 +35,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { openSessionlessStore, type StoreOpener } from './store-opening'
 import { InvalidAmbientContextError, resolveAmbientReadSession } from './env'
 import { buildRegistry, RegistryError, type OperatorToolRegistry } from '../operator/registry'
+import { createOperatorSandboxService, type OperatorSandboxService } from '../operator/sandbox'
 import type { OperatorTicketBackend } from '../operator/tickets'
 
 export const AB_MCP_USAGE = 'usage: ab mcp [--store <ref>] [--repo <id>] (§8.2)'
@@ -127,7 +131,7 @@ export async function buildMcpTicketBackend(
 export function serveRegistry(
   registry: OperatorToolRegistry,
   server: McpServer,
-  ctx: { identity?: string; via?: string },
+  ctx: { identity?: string; via?: Via | (() => Via | undefined) },
 ): void {
   for (const entry of registry.entries) {
     server.registerTool(
@@ -142,7 +146,13 @@ export function serveRegistry(
       // path.
       async (args: unknown) => {
         try {
-          const value = await registry.call(entry.name, args, ctx)
+          // A lazy via resolves per call — the stdio server is long-lived and
+          // only learns the client's identity at the initialize handshake.
+          const via = typeof ctx.via === 'function' ? ctx.via() : ctx.via
+          const value = await registry.call(entry.name, args, {
+            identity: ctx.identity,
+            ...(via !== undefined ? { via } : {}),
+          })
           return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
         } catch (error) {
           const body =
@@ -191,9 +201,56 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
       checkout: context.checkout,
       localStateRoot: context.localStateRoot,
     })
+    // The operator-sandbox backend (AUT-340) is built only when the
+    // repository enables it. A construction failure is contained: the
+    // server still serves every other tool, one diagnostic names the
+    // failure, and the sandbox tools are absent from advertisement AND
+    // dispatch (never broken).
+    let sandbox: OperatorSandboxService | undefined
+    try {
+      const configPath = join(context.checkout, 'autobuild.toml')
+      let mcpConfig: Config
+      try {
+        mcpConfig = await loadConfig(configPath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(
+            `${configPath}: not found — 'ab mcp' reads autobuild.toml from the resolved Git main checkout (SPEC §8.8)`,
+          )
+        }
+        throw error
+      }
+      if (mcpConfig.orchestrator.enabled) {
+        const provider = await createWorkspaceProvider(mcpConfig.workspace, {
+          registry: await loadPlugins(mcpConfig.plugins, context.checkout),
+          worktreeRoot: context.worktreeRoot,
+          repoRoot: context.checkout,
+          env: opts.env,
+          storeRef: context.storeRef,
+          ...(context.token !== undefined ? { storeToken: context.token } : {}),
+          sandboxSetupCommand: mcpConfig.commands.setup,
+          sandboxRoot: join(context.localStateRoot, 'orchestrator-sandboxes'),
+          sandboxEnvironmentVariables: mcpConfig.orchestrator.sandbox.environmentVariables,
+        })
+        sandbox = await createOperatorSandboxService({
+          store: context.store,
+          repo: context.repo,
+          provider,
+          sandbox: mcpConfig.orchestrator.sandbox,
+          baseBranch: mcpConfig.baseBranch,
+          ...(opts.clock !== undefined ? { clock: opts.clock } : {}),
+        })
+      }
+    } catch (error) {
+      opts.stderr(
+        `ab mcp: operator sandbox backend unavailable, sandbox tools omitted: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      sandbox = undefined
+    }
     const registry = buildRegistry({
       store: context.store,
       tickets: backend,
+      ...(sandbox !== undefined ? { sandbox } : {}),
       clock: opts.clock,
       ...(opts.repo !== undefined ? { allowedRepo: opts.repo } : {}),
     })
@@ -204,7 +261,10 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
     )
     serveRegistry(registry, server, {
       identity: buildControlUser(opts.env),
-      via: 'mcp',
+      // Unlike the hosted stateless server, the stdio server is long-lived:
+      // the initialize handshake populates the client version before any tool
+      // call, so the via marker names the connected client.
+      via: () => ({ kind: 'mcp', client: server.server.getClientVersion()?.name ?? 'stdio' }),
     })
 
     const done = new Promise<void>((resolve) => {

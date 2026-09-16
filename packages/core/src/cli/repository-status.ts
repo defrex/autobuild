@@ -1,11 +1,20 @@
 import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchSettings, type DispatchSettings } from '../kernel/dispatch-settings'
+import { sandboxStates } from '../processes/sandbox-state'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
+  /** Live operator sandboxes (AUT-340); released environments are omitted. */
+  sandboxes: Array<{
+    operator: string
+    environmentId: string
+    provider: string
+    state: 'live' | 'stopped'
+    lastEvidenceAt: string
+  }>
 }
 
 export interface RepositoryStatusOpts {
@@ -22,7 +31,19 @@ export interface RepositoryStatusOpts {
 }
 
 export function projectRepositoryStatus(repo: string, events: RepositoryEvent[]): RepositoryStatus {
-  return { repo, ...reduceDispatchSettings(events) }
+  return {
+    repo,
+    ...reduceDispatchSettings(events),
+    sandboxes: sandboxStates(events)
+      .filter((state) => state.state !== 'released')
+      .map((state) => ({
+        operator: state.operator,
+        environmentId: state.environmentId,
+        provider: state.provider,
+        state: state.state === 'stopped' ? ('stopped' as const) : ('live' as const),
+        lastEvidenceAt: state.lastEvidenceTs,
+      })),
+  }
 }
 
 export function renderRepositoryStatus(status: RepositoryStatus): string[] {
@@ -32,6 +53,10 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     `intake: ${setting(status.intake)}`,
     `repository pause: ${setting(status.paused)}`,
     `default auto-merge: ${setting(status.defaultAutoMerge)}`,
+    ...status.sandboxes.map(
+      (sandbox) =>
+        `operator sandbox ${sandbox.environmentId} (${sandbox.provider}) — ${sandbox.state}, idle since ${sandbox.lastEvidenceAt}`,
+    ),
   ]
 }
 

@@ -4,13 +4,14 @@ import {
   MemoryBlobStore,
   StreamBatchTooLargeError,
   describeBuildStoreContract,
+  harvestStartedWrite,
   sampleBuildInput,
   sampleEventWrite,
   type BlobStore,
   type StreamPart,
 } from 'autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
-import { openPostgresBuildStore } from './store'
+import { EVENT_WAIT_POLL_MS, openPostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -218,6 +219,42 @@ if (testUrl) {
         await store.close()
         await database.cleanup()
       }
+    })
+
+    test('a held event read observes a cross-connection append within the one-second poll budget (AUT-334)', async () => {
+      const database = await isolatedDatabase()
+      const blobs = new MemoryBlobStore()
+      const reader = await openPostgresBuildStore(database.url, blobs)
+      const writer = await openPostgresBuildStore(database.url, blobs)
+      try {
+        await reader.createBuild(sampleBuildInput('evt-wait-x'))
+        await reader.ensureRepo('acme/evt-wait-x')
+
+        // Build events: instance A holds, instance B appends; A resolves with
+        // the event well under the bound (the 1 s poll plus query slack).
+        const pendingBuild = reader.getEvents('evt-wait-x', 0, { waitSeconds: 5 })
+        await Bun.sleep(200)
+        const event = await writer.append('evt-wait-x', sampleEventWrite('cross'))
+        const started = Date.now()
+        expect(await pendingBuild).toEqual([event])
+        expect(Date.now() - started).toBeLessThan(2_000)
+
+        // Repository journal, symmetric.
+        const pendingRepo = reader.getRepoEvents('acme/evt-wait-x', 0, { waitSeconds: 5 })
+        await Bun.sleep(200)
+        const repoEvent = await writer.appendRepo('acme/evt-wait-x', harvestStartedWrite('h_x'))
+        const repoStarted = Date.now()
+        expect(await pendingRepo).toEqual([repoEvent])
+        expect(Date.now() - repoStarted).toBeLessThan(2_000)
+      } finally {
+        await reader.close()
+        await writer.close()
+        await database.cleanup()
+      }
+    })
+
+    test('EVENT_WAIT_POLL_MS pins the one-second hosted poll budget (AUT-334)', () => {
+      expect(EVENT_WAIT_POLL_MS).toBe(1000)
     })
 
     test('a cross-connection append inside a close prepare window is included in the finalized artifact (AUT-348)', async () => {

@@ -177,6 +177,7 @@ remain pinned to their startup values and are reported explicitly:
 | `forge` | Selects the constructed Forge adapter. |
 | `workspace.provider`, `workspace.config` | Select and configure the constructed workspace provider. |
 | `tickets.source`, `tickets.teamKey`, `tickets.claimedState`, `tickets.createState`, `tickets.dir` | Select or configure the constructed TicketSource. |
+| `orchestrator` | Tool availability and the dispatcher's sandbox idle settlement are startup-constructed. |
 
 The dispatch process reads the main checkout because it owns repository intake.
 Scoped phase commands still read the build worktree's `autobuild.toml`; this is
@@ -1190,6 +1191,50 @@ triageState = "Triage"
 ```
 
 Set `COMPANY_TICKET_TOKEN` in the environment, never in this table.
+
+## `[orchestrator]`
+
+Gates the operator-sandbox feature: a persistent, **credential-free**
+environment per operator × repository that an operator agent drives through the
+`sandbox.*` registry tools (served by `ab mcp` and every later binding). The
+table is closed to unknown keys and restart-classified as a whole.
+
+| Field | Default | Constraints | Purpose |
+|---|---:|---|---|
+| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding and no environment is ever provisioned. |
+| `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
+
+`[orchestrator.sandbox]` fields:
+
+| Field | Default | Constraints | Purpose |
+|---|---:|---|---|
+| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
+| `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
+
+The credential-free rule is structural: the environment receives no store,
+forge, ticket-provider, or model credential, and naming any of `AB_STORE`,
+`AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY`, `VERCEL_OIDC_TOKEN`,
+`VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, or `AI_GATEWAY_API_KEY`
+in `environmentVariables` is a config error. The typed operator tools remain
+the only route to build state from inside the sandbox. Tool bounds:
+`sandbox.exec` waits at most 300 seconds; stdout and stderr are each truncated
+at 65,536 bytes with a `[truncated by autobuild: output exceeded 65536 bytes]`
+marker; `sandbox.reset` and archiving an operator's last session are
+destructive (reset re-provisions from the current base head); there is at most
+one environment per operator and repository.
+
+<!-- config-fragment:orchestrator -->
+```toml
+[orchestrator]
+enabled = true
+
+[orchestrator.sandbox]
+idleMinutes = 30
+environmentVariables = ["MY_TOOL_CONFIG"]
+```
+
+Set `MY_TOOL_CONFIG` in the host environment of the `ab mcp` process; a missing
+value fails the tool call that needs it, named as a typed `environment` error.
 
 ## Complete example
 

@@ -26,6 +26,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
   finalize: 'hot',
   roles: 'hot',
   policy: 'hot',
+  orchestrator: 'restart',
   tickets: {
     source: 'restart',
     readyLabels: 'hot',
@@ -50,6 +51,7 @@ export const RESTART_REQUIRED_CONFIG_PATHS = [
   'plugins',
   'workspace.provider',
   'workspace.config',
+  'orchestrator',
   'tickets.source',
   'tickets.teamKey',
   'tickets.claimedState',
@@ -84,6 +86,7 @@ export function restartRequiredChanges(
   compare('tickets.claimedState', startup.tickets.claimedState, candidate.tickets.claimedState)
   compare('tickets.createState', startup.tickets.createState, candidate.tickets.createState)
   compare('tickets.dir', startup.tickets.dir, candidate.tickets.dir)
+  compare('orchestrator', startup.orchestrator, candidate.orchestrator)
   return changed
 }
 
@@ -94,6 +97,7 @@ export function composeReloadedConfig(startup: Config, candidate: Config): Confi
     forge: startup.forge,
     plugins: startup.plugins,
     workspace: startup.workspace,
+    orchestrator: startup.orchestrator,
     tickets: {
       ...candidate.tickets,
       source: startup.tickets.source,

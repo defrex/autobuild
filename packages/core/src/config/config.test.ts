@@ -158,6 +158,10 @@ describe('parseConfig — complete flattened surface', () => {
         readyLabels: ['autobuild'],
         readyState: 'ready',
       },
+      orchestrator: {
+        enabled: false,
+        sandbox: { idleMinutes: 30, environmentVariables: [] },
+      },
     })
   })
 })
@@ -192,6 +196,10 @@ describe('parseConfig — defaults', () => {
         harvestMaxDrift: 3,
       },
       tickets: { source: 'file', readyState: 'ready' },
+      orchestrator: {
+        enabled: false,
+        sandbox: { idleMinutes: 30, environmentVariables: [] },
+      },
     })
   })
 
@@ -1046,6 +1054,60 @@ describe('loadConfig', () => {
       await expect(loadConfig(bad)).rejects.toThrow('bad.toml')
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('parseConfig — [orchestrator] sandbox gate', () => {
+  test('an absent table reads as disabled with documented defaults', () => {
+    expect(parseConfig(READY).orchestrator).toEqual({
+      enabled: false,
+      sandbox: { idleMinutes: 30, environmentVariables: [] },
+    })
+  })
+
+  test('accepts explicit enablement, idle minutes, and forwarded variables', () => {
+    const config = parseConfig(
+      `${READY}[orchestrator]\nenabled = true\n\n[orchestrator.sandbox]\nidleMinutes = 5\nenvironmentVariables = ["MY_TOOL_CONFIG"]\n`,
+    )
+    expect(config.orchestrator).toEqual({
+      enabled: true,
+      sandbox: { idleMinutes: 5, environmentVariables: ['MY_TOOL_CONFIG'] },
+    })
+  })
+
+  test('is strict against unknown keys at both nesting levels', () => {
+    const tableError = parseError(`${READY}[orchestrator]\nenabled = true\nextra = 1\n`)
+    expect(tableError.message).toContain('orchestrator')
+    const sandboxError = parseError(
+      `${READY}[orchestrator]\nenabled = true\n\n[orchestrator.sandbox]\nidleMinutes = 5\nextra = 1\n`,
+    )
+    expect(sandboxError.message).toContain('sandbox')
+  })
+
+  test('rejects nonpositive idle minutes', () => {
+    const error = parseError(`${READY}[orchestrator.sandbox]\nidleMinutes = 0\n`)
+    expect(error.message).toContain('idleMinutes')
+  })
+
+  test('refuses forwarding a credential name, naming its class and path', () => {
+    for (const name of [
+      'AB_STORE',
+      'AB_TOKEN',
+      'GITHUB_TOKEN',
+      'GH_TOKEN',
+      'LINEAR_API_KEY',
+      'VERCEL_OIDC_TOKEN',
+      'VERCEL_TOKEN',
+      'VERCEL_TEAM_ID',
+      'VERCEL_PROJECT_ID',
+      'AI_GATEWAY_API_KEY',
+    ]) {
+      const error = parseError(
+        `${READY}[orchestrator]\nenabled = true\n\n[orchestrator.sandbox]\nenvironmentVariables = ["${name}"]\n`,
+      )
+      expect(error.message).toContain('credential')
+      expect(error.message).toContain(name)
     }
   })
 })

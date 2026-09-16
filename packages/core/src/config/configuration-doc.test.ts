@@ -124,6 +124,7 @@ const TABLE_HEADINGS: Record<string, string> = {
   roles: '`[roles]`',
   policy: '`[policy]`',
   tickets: '`[tickets]`',
+  orchestrator: '`[orchestrator]`',
 }
 
 const TABLE_FIELDS: Record<string, string[]> = {
@@ -147,6 +148,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
+  orchestrator: ['enabled', 'sandbox'],
 }
 
 function tableSection(table: string): string | undefined {

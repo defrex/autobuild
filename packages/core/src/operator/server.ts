@@ -2,6 +2,7 @@ import type { ZodType } from 'zod'
 import { controlBuild, BuildControlError, type BuildControlAction } from '../cli/build-control'
 import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
 import { effectiveStatus } from '../cli/dashboard/model'
+import type { Via } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { tokenResource, verifyToken } from '../store/remote/token'
@@ -43,6 +44,7 @@ import {
   OperatorQueryError,
 } from './query'
 import { TicketOperationError } from '../ports/tickets/operations'
+import { buildRegistry, RegistryError, type OperatorToolRegistry } from './registry'
 import {
   answerOperatorApproval,
   archiveOperatorSession,
@@ -54,6 +56,7 @@ import {
   readOperatorTurnStream,
   setOperatorWake,
 } from './sessions'
+import type { OperatorSandboxService } from './sandbox'
 import {
   getOperatorTicket,
   listOperatorTickets,
@@ -67,6 +70,11 @@ export interface OperatorServerOptions {
   clock?: Clock
   /** Hosted ticket capability. Omitted deployments retain build-only operator routes. */
   ticketBackend?: OperatorTicketBackend
+  /** Operator-sandbox backend (AUT-340): archiving an operator's last open
+   * session for a repository releases their sandbox environment. The hosted
+   * service does not pass one — the hosted sandbox backend is the later
+   * hosted-transport ticket. */
+  sandbox?: OperatorSandboxService
   /** Observes unexpected backing-store failures without exposing them over HTTP. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
@@ -79,6 +87,17 @@ class HttpError extends Error {
   ) {
     super(message)
   }
+}
+
+/** The registry failure kinds map onto HTTP statuses deterministically; the
+ * failure body itself round-trips unchanged (same shape as every route's). */
+export const REGISTRY_ERROR_STATUS: Record<string, number> = {
+  validation: 400,
+  auth: 403,
+  'not-found': 404,
+  conflict: 409,
+  refusal: 409,
+  internal: 500,
 }
 
 function json(status: number, value: unknown): Response {
@@ -105,6 +124,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
   fetch(req: Request): Promise<Response>
 } {
   const clock = opts.clock ?? systemClock
+  // The registry executes over the same store and ticket backend the typed
+  // routes use; the generic tools route is its protocol face. Built once so
+  // every tool call shares one closed table.
+  const registry: OperatorToolRegistry = buildRegistry({
+    store: opts.store,
+    clock,
+    ...(opts.ticketBackend !== undefined ? { tickets: opts.ticketBackend } : {}),
+  })
 
   function identity(req: Request): void {
     const app = req.headers.get(AUTOBUILD_VERSION_HEADER)
@@ -118,7 +145,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     }
   }
 
-  function operator(req: Request): string {
+  function operator(req: Request): { user: string; via?: Via } {
     const match = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') ?? '')
     if (match === null) throw new HttpError(401, 'auth', 'missing bearer token')
     const scope = verifyToken(opts.secret, match[1]!, clock())
@@ -131,7 +158,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         `token scoped to ${resource.kind} "${resource.id}" may not access operator operations`,
       )
     }
-    return scope.operator.user
+    return { user: scope.operator.user, via: scope.via }
   }
 
   async function requireRouteBuild(repo: string, slug: string): Promise<void> {
@@ -143,7 +170,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
 
   async function route(req: Request): Promise<Response> {
     identity(req)
-    const user = operator(req)
+    const scope = operator(req)
+    const user = scope.user
     const url = new URL(req.url)
     let parts: string[]
     try {
@@ -156,6 +184,49 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     }
     const repo = parts[3]
     const rest = parts.slice(4)
+
+    // The registry's protocol face: one generic route for the whole closed
+    // table. The body IS the tool's validated input (repo included); the
+    // registry enforces schema, identity, and failure mapping, so this route
+    // adds no authority of its own and no per-tool branch.
+    if (rest[0] === 'tools' && rest[1] && req.method === 'POST' && rest.length === 2) {
+      const tool = rest[1]
+      let input: unknown
+      try {
+        input = await req.json()
+      } catch {
+        throw new HttpError(400, 'validation', 'request body is not valid JSON')
+      }
+      if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+        throw new HttpError(400, 'validation', 'tool input must be a JSON object')
+      }
+      const bodyRepo = (input as { repo?: unknown }).repo
+      if (bodyRepo !== repo) {
+        throw new HttpError(400, 'validation', `body repo must match the path repository "${repo}"`)
+      }
+      try {
+        const result = await registry.call(tool, input, {
+          identity: user,
+          ...(scope.via !== undefined ? { via: scope.via } : {}),
+        })
+        return json(200, result)
+      } catch (error) {
+        if (error instanceof RegistryError) {
+          // The failure body round-trips byte-for-byte: same kind union,
+          // error text, code, and progress as a typed route's refusal.
+          return failure(
+            REGISTRY_ERROR_STATUS[error.body.kind] ?? 500,
+            error.body.kind,
+            error.body.error,
+            {
+              ...(error.body.code !== undefined ? { code: error.body.code } : {}),
+              ...(error.body.progress !== undefined ? { progress: error.body.progress } : {}),
+            },
+          )
+        }
+        throw error
+      }
+    }
 
     if (rest[0] === 'tickets') {
       if (opts.ticketBackend === undefined) {
@@ -341,7 +412,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         return json(200, { ok: true })
       }
       if (req.method === 'POST' && rest.length === 3 && rest[2] === 'archive') {
-        await archiveOperatorSession(opts.store, repo, sid, user)
+        await archiveOperatorSession(opts.store, repo, sid, user, opts.sandbox)
         return json(200, { ok: true })
       }
       if (

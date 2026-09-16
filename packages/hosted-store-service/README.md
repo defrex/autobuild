@@ -47,6 +47,9 @@ dispatcher credential. Legacy admin tokens still cover store administration but
 cannot access tickets.
 
 The same deployment also serves the versioned [operator API](../../docs/operator-api.md).
+External agents connect to the [MCP server](../../docs/mcp.md) at `/mcp` — the
+same operator tool registry over Streamable HTTP with OAuth 2.1 through Better
+Auth — and every write is attributed to the person who authorized the client.
 Mint an attributed human-operator token with `--user`; unlike the deployment
 credential, it can use only the operator API and its signed identity is recorded
 on every control:
@@ -83,6 +86,16 @@ never creates or changes schema.
 Each artifact is content-by-value and limited to **1,048,576 decoded bytes (1
 MiB)**. Base64 and JSON make the HTTP body larger. A larger deposit receives a
 JSON 413 error naming that ceiling and does not mutate the store.
+
+Each event read also accepts a bounded wait (`?since=N&wait=S` on the build and
+repository event routes): when nothing newer than `since` exists, the server
+holds the request until such an event is appended or `S` seconds elapse, then
+answers. `wait` is one or more ASCII digits (whole seconds); any other form is a
+400 validation error, and a value above the hosted ceiling of **25 seconds** is
+clamped to 25, never rejected. The ceiling must stay under the machine routes'
+`maxDuration` of 60 s (`app/builds/[[...path]]/route.ts` and
+`app/repos/[[...path]]/route.ts`), which exists to cover the hold; raise the
+two together if you change either.
 
 ## Deploy to Vercel
 
@@ -125,6 +138,9 @@ The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'
   visible only where their recorded `repoOrigin` matches the querying
   checkout's origin (decision 2026-09-10: dropping the old identity's history
   is acceptable).
+- `AB_WEB_MCP_RESOURCE` (optional): the protected resource the MCP server
+  binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. See the
+  [MCP server](../../docs/mcp.md).
 
 Removing an email blocks its next gateway request even if its database-backed
 session has not expired. Rotate `BETTER_AUTH_SECRET` to end every browser
