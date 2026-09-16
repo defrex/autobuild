@@ -117,9 +117,13 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
       own('appendWithArtifacts', slug)
       return store.appendWithArtifacts(slug, artifacts, makeEvent)
     },
-    async getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]> {
+    async getEvents(
+      slug: string,
+      sinceSeq?: number,
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
+    ): Promise<AbEvent[]> {
       own('getEvents', slug)
-      return store.getEvents(slug, sinceSeq)
+      return store.getEvents(slug, sinceSeq, opts)
     },
     async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
       own('putArtifact', slug)

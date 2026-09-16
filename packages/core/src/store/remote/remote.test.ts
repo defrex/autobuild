@@ -617,6 +617,146 @@ describe('wire robustness', () => {
   })
 })
 
+// ── The event-read bounded wait over the wire (AUT-334) ────────────────
+
+describe('event wait over the wire', () => {
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+  }
+
+  test('the digits-only grammar: non-digit wait values are 400 validation', async () => {
+    const server = createStoreServer({ store: new MemoryBuildStore() })
+    await server.fetch(
+      new Request('https://store.test/builds', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(sampleBuildInput('wait-grammar')),
+      }),
+    )
+    for (const raw of ['abc', '0x10', '', ' 1', '1.5', '-1', '+1']) {
+      const response = await server.fetch(
+        new Request(
+          `https://store.test/builds/wait-grammar/events?since=0&wait=${encodeURIComponent(raw)}`,
+          { headers },
+        ),
+      )
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { kind: string }).kind).toBe('validation')
+    }
+    // The repository form shares the grammar.
+    await server.fetch(
+      new Request('https://store.test/repos', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ repo: 'acme/wait' }),
+      }),
+    )
+    const repoResponse = await server.fetch(
+      new Request('https://store.test/repos/acme%2Fwait/events?since=0&wait=abc', { headers }),
+    )
+    expect(repoResponse.status).toBe(400)
+  })
+
+  test('a wait above the ceiling clamps; the hold still answers an append promptly', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('wait-clamp'))
+      const pending = client.getEvents('wait-clamp', 0, { waitSeconds: 61 })
+      await Bun.sleep(100)
+      const event = await client.append('wait-clamp', sampleEventWrite('wake'))
+      const started = Date.now()
+      expect(await pending).toEqual([event])
+      // The clamp never stretched the hold to 30 or 61 seconds.
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('auth failures are answered immediately, never held', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore(), secret: 'wait-secret' })
+    try {
+      const started = Date.now()
+      const response = await fetch(`${server.url}/builds/whatever/events?since=0&wait=25`, {
+        headers: { ...headers, authorization: 'Bearer nope' },
+      })
+      expect(response.status).toBe(401)
+      expect(Date.now() - started).toBeLessThan(500)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('a server answering immediately regardless of wait still pages every event exactly once, in order', async () => {
+    // An ignoring server: reads discard the wait option entirely.
+    const backing = new MemoryBuildStore()
+    const ignoring: MemoryBuildStore = new Proxy(backing, {
+      get(target, prop) {
+        if (prop === 'getEvents') {
+          return async (slug: string, sinceSeq?: number) =>
+            (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    const server = startStoreServer({ store: ignoring })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('wait-ignoring'))
+      for (const n of [1, 2, 3]) await client.append('wait-ignoring', sampleEventWrite(String(n)))
+      // The client sends wait on every subscribe read; the ignoring server's
+      // immediate empty answers must not lose or duplicate anything.
+      const received: number[] = []
+      const unsubscribe = client.subscribe('wait-ignoring', { pollMs: 10 }, (event) =>
+        received.push(event.seq),
+      )
+      await Bun.sleep(150)
+      await client.append('wait-ignoring', sampleEventWrite('four'))
+      await Bun.sleep(150)
+      unsubscribe()
+      expect(received).toEqual([1, 2, 3, 4])
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('plain subscribe defaults to the bounded wait: one held request per wait window', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      let eventReads = 0
+      const countingFetch = (async (input, init) => {
+        if (typeof input === 'string' && input.includes('/events?')) eventReads += 1
+        return fetch(input, init)
+      }) as typeof fetch
+      const client = new RemoteBuildStore({
+        url: server.url,
+        fetchFn: countingFetch,
+      })
+      await client.createBuild(sampleBuildInput('wait-subscribe'))
+      // No waitSeconds: the default bounded window applies. With pollMs 10
+      // an interval loop would fire dozens of reads during the hold; the
+      // held request stays in flight, so the quiet window costs exactly one.
+      const received: number[] = []
+      const unsubscribe = client.subscribe('wait-subscribe', { pollMs: 10 }, (event) =>
+        received.push(event.seq),
+      )
+      await Bun.sleep(400)
+      expect(eventReads).toBe(1)
+      const event = await client.append('wait-subscribe', sampleEventWrite('wake'))
+      await Bun.sleep(400)
+      unsubscribe()
+      expect(received).toEqual([event.seq])
+      // The held request resolved on the append and the next one began.
+      expect(eventReads).toBe(2)
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
 // ── Stream wire specifics (SPEC §7.6) ────────────────────────────────────
 // Beyond the shared contract: token scope on the stream routes, cross-scope
 // addressing, and the typed error mappings (413 ceiling, 409 closed append).
