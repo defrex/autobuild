@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#369](https://github.com/defrex/autobuild/pull/369) — Parse session-event wait strictly and clamp to the hosted ceiling
 - [#368](https://github.com/defrex/autobuild/pull/368) — Plumb an AbortSignal through held BuildStore reads (AUT-380)
 - [#367](https://github.com/defrex/autobuild/pull/367) — Poll held Postgres session-event reads at the one-second budget
 - [#366](https://github.com/defrex/autobuild/pull/366) — Persist oauthApplication.authenticationScheme on Postgres DCR (v3)
