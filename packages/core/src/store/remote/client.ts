@@ -571,7 +571,7 @@ export class RemoteBuildStore implements BuildStore {
   async getSessionEvents(
     id: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]> {
     const params = new URLSearchParams({ since: String(sinceSeq) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
@@ -579,6 +579,8 @@ export class RemoteBuildStore implements BuildStore {
       'GET',
       `${this.sessionPath(id)}/events?${params}`,
       sessionEventListSchema,
+      undefined,
+      opts?.signal,
     )
     return events as unknown as SessionEvent[]
   }
@@ -702,7 +704,7 @@ export class RemoteBuildStore implements BuildStore {
 
   async readStream(
     streamId: string,
-    opts?: { since?: number; waitSeconds?: number },
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const params = new URLSearchParams({ since: String(opts?.since ?? 0) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
@@ -710,6 +712,8 @@ export class RemoteBuildStore implements BuildStore {
       'GET',
       `${this.streamPath(streamId, '/chunks')}?${params}`,
       streamReadWireSchema,
+      undefined,
+      opts?.signal,
     ) as Promise<StreamRead>
   }
 
