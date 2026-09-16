@@ -264,7 +264,7 @@ describe('plugin SDK package surface', () => {
     })
     expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
     expect((await new Response(version.stdout).text()).trim()).toBe(
-      'autobuild 0.6.0\nplugin API 1.5.0',
+      'autobuild 0.7.0\nplugin API 1.5.0',
     )
 
     const initialized = join(destination, 'initialized')
