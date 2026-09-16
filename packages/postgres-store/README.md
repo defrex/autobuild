@@ -35,6 +35,21 @@ adds team-scoped tickets, comments, and blockers without replacing the
 established BuildStore marker. Opening against a missing, older/newer, or
 checksum-mismatched schema fails; schema creation is never implicit.
 
+## Public entry points
+
+The package exposes four subpaths, each named after the source module it
+publishes:
+
+- `@defrex/autobuild-postgres-store` — the full adapter surface: `openPostgresBuildStore`,
+  `openPostgresBuildStoreFromEnv`, `migratePostgres`, ticket and blob stores.
+- `@defrex/autobuild-postgres-store/env` — URL resolution helpers
+  (`resolvePostgresUrl`, `describePostgresTarget`).
+- `@defrex/autobuild-postgres-store/schema` — schema DDL, version and checksum
+  constants, schema assertions, and `migratePostgres`.
+- `@defrex/autobuild-postgres-store/store` — `openPostgresBuildStore`, the
+  `PostgresBuildStore` class, `PostgresBuildStoreOptions`, and
+  `EVENT_WAIT_POLL_MS`.
+
 ## Concurrency
 
 Identity rows are created conflict-safely before being locked for subsequent
