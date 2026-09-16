@@ -9,13 +9,24 @@
  *
  * The command shares `ab watch`'s machinery — target selection, ambient
  * scoping (via the extracted `assertReadScope`), the cursor codec, the record
- * projection, the poll cadence, and the read-failure policy — but ends on the
+ * projection, the cadence, and the read-failure policy — but ends on the
  * first satisfied condition instead of streaming. Conditions are derived from
  * the same reducer that produces `ab build status` (`status`, `prState`,
  * `phase`), so "blocked" means an open escalation exactly as it does
  * everywhere else; no new projection is defined. In the manner of `kubectl
  * wait`, a state condition that already holds when the command starts returns
  * immediately with the build's latest event.
+ *
+ * Cadence follows the store kind, exactly as `ab watch` does since AUT-334
+ * (verified and corrected for `ab wait` in AUT-368). Against a local store
+ * the loop is the sequential interval tick. Against an `http(s)` store every
+ * tracked build long-polls instead: one held `getEvents` request per stream
+ * is in flight (tasks run concurrently), `--interval` is the floor between
+ * request starts (elapsed request time counts toward the gap), and a hold's
+ * window is the remote default (25 s, whole seconds, under the store's
+ * ceiling) capped at the remaining `--timeout` budget. Every stop — a
+ * satisfied condition, an all-terminal named set, the timeout, an interrupt —
+ * cancels the in-flight holds promptly instead of waiting out a full window.
  *
  * Read-only: it appends no event, claims or renews no lease, and creates no
  * build or repository record. Output carries no ANSI, ever, in either form.
@@ -26,7 +37,8 @@ import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { reduceBuild } from '../kernel/reducer'
 import { isPhase, type BuildStatus, type Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { buildInRepository, normalizeGitRemoteUrl } from './repo-state'
+import { REMOTE_EVENT_WAIT_SECONDS } from '../store/remote/client'
+import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
 import type { BuildRecord } from '../store/types'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 import {
@@ -429,8 +441,11 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         }
       }
 
-      const pollBuild = async (stream: WaitStream): Promise<void> => {
-        const fresh = await store.getEvents(stream.slug, stream.lastSeq)
+      const pollBuild = async (
+        stream: WaitStream,
+        readOpts?: { waitSeconds?: number; signal?: AbortSignal },
+      ): Promise<void> => {
+        const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
           stream.events.push(event)
           stream.lastSeq = event.seq
@@ -561,17 +576,185 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       const timeoutText = opts.timeout ?? '30m'
       const deadline = timeoutMs === 0 ? Number.POSITIVE_INFINITY : now().getTime() + timeoutMs
       const aborted = (): boolean => opts.signal?.aborted === true
-      while (!hasMatch()) {
-        if (aborted() || now().getTime() >= deadline) break
-        await sleep(interval, opts.signal)
-        if (aborted()) break
-        await tick()
-        if (!hasMatch() && namedAllTerminal()) {
-          const terminal = pickTerminalRecord()
-          return finish(null, terminal.event, terminal.state)
+
+      if (!isRemoteStoreRef(storeRef)) {
+        // Local cadence: one sequential tick per interval.
+        while (!hasMatch()) {
+          if (aborted() || now().getTime() >= deadline) break
+          await sleep(interval, opts.signal)
+          if (aborted()) break
+          await tick()
+          if (!hasMatch() && namedAllTerminal()) {
+            const terminal = pickTerminalRecord()
+            return finish(null, terminal.event, terminal.state)
+          }
         }
+      } else {
+        // Remote cadence (AUT-334, verified and corrected in AUT-368): one
+        // long-poll task per tracked stream, running concurrently — a quiet
+        // stream keeps one held `getEvents` request in flight, so an appended
+        // event is seen within about a second of its append instead of at the
+        // next interval tick. Gap-fill spaces each stream's request starts at
+        // least `interval` apart (elapsed request time counts toward the
+        // gap), so a server that answers immediately still sees today's
+        // request rate. Discovery keeps its interval cadence. The pre-launch
+        // guard mirrors the local loop's top-of-cycle checks: a satisfied
+        // match, an abort, an elapsed deadline, or an all-terminal named set
+        // ends the wait before any held request (an already-satisfied wait
+        // issues zero held reads).
+        // Every stop is prompt: a satisfied condition, an all-terminal named
+        // set, an external abort, or an elapsed --timeout cancels the
+        // in-flight held reads (via `requestStop`) and wakes the gap sleeps
+        // (via `stopController`) instead of waiting out a full hold. The held
+        // read's own bound is additionally capped at the wait's remaining
+        // time budget, so a hold can never outlive the deadline.
+        const inFlightReads = new Set<AbortController>()
+        const stopController = new AbortController()
+        let stop = false
+        const requestStop = (): void => {
+          stop = true
+          stopController.abort()
+          for (const controller of inFlightReads) controller.abort()
+        }
+
+        /** The wait bound for one held read: the remote default (whole
+         * seconds, under the store's clamp), capped at the wait's remaining
+         * time budget. */
+        const readWaitSeconds = (atMs: number): number => {
+          if (timeoutMs === 0) return REMOTE_EVENT_WAIT_SECONDS
+          const remaining = Math.floor((deadline - atMs) / 1000)
+          return Math.max(0, Math.min(REMOTE_EVENT_WAIT_SECONDS, remaining))
+        }
+
+        /** A failed read is reported once per failure streak, advances
+         * nothing, and is retried at the next request (the remote `next
+         * interval`); this source's success re-arms the report. */
+        const makeFailureStreak = (): {
+          onFailure: (error: unknown) => void
+          onSuccess: () => void
+        } => {
+          let reported = false
+          return {
+            onFailure: (error: unknown): void => {
+              if (reported) return
+              reported = true
+              const message = error instanceof Error ? error.message : String(error)
+              opts.stderr(
+                `ab wait: a store read failed (${message}); retrying at the next interval`,
+              )
+            },
+            onSuccess: (): void => {
+              reported = false
+            },
+          }
+        }
+
+        const shouldStop =
+          hasMatch() || aborted() || now().getTime() >= deadline || namedAllTerminal()
+        const tasks = new Set<Promise<void>>()
+        const launched = new Set<string>()
+
+        /** Track a task and keep the set accurate as tasks settle, so the
+         * drain below also waits for tasks launched while it is awaiting.
+         * The exit decision after the drain must observe every task settled,
+         * or a match landing in a still-running final hold could be missed. */
+        const track = (task: Promise<void>): void => {
+          tasks.add(task)
+          void task.then(
+            () => tasks.delete(task),
+            () => tasks.delete(task),
+          )
+        }
+
+        const runStreamTask = (stream: WaitStream): Promise<void> => {
+          launched.add(stream.slug)
+          const streak = makeFailureStreak()
+          return (async (): Promise<void> => {
+            while (!stop && !aborted() && now().getTime() < deadline) {
+              const started = now().getTime()
+              const controller = new AbortController()
+              inFlightReads.add(controller)
+              try {
+                await pollBuild(stream, {
+                  waitSeconds: readWaitSeconds(started),
+                  signal: controller.signal,
+                })
+                streak.onSuccess()
+                if (hasMatch() || namedAllTerminal()) {
+                  requestStop()
+                  return
+                }
+              } catch (error) {
+                // A cancelled held read is the wait ending, not a store
+                // failure — never report it.
+                if (!stop && !aborted() && !controller.signal.aborted) streak.onFailure(error)
+              } finally {
+                inFlightReads.delete(controller)
+              }
+              if (stop || aborted()) return
+              const elapsed = now().getTime() - started
+              if (elapsed < interval) await sleep(interval - elapsed, stopController.signal)
+            }
+          })()
+        }
+
+        const launch = (stream: WaitStream): void => {
+          if (launched.has(stream.slug)) return
+          launched.add(stream.slug)
+          track(runStreamTask(stream))
+        }
+
+        // An external abort (SIGINT) is a stop like any other: it cancels
+        // the in-flight held reads and wakes the gap sleeps.
+        opts.signal?.addEventListener('abort', requestStop, { once: true })
+
+        if (!shouldStop) {
+          for (const stream of streams.values()) launch(stream)
+
+          if (slugs.length === 0) {
+            // Discovery keeps its interval cadence, launching a new per-
+            // stream task for each newly discovered nonterminal build. A
+            // discovered build that already satisfies ends the wait.
+            track(
+              (async (): Promise<void> => {
+                const streak = makeFailureStreak()
+                while (!stop && !aborted() && now().getTime() < deadline) {
+                  try {
+                    await discoverBuilds()
+                    streak.onSuccess()
+                  } catch (error) {
+                    streak.onFailure(error)
+                  }
+                  for (const stream of streams.values()) launch(stream)
+                  if (hasMatch()) {
+                    requestStop()
+                    return
+                  }
+                  if (stop || aborted()) return
+                  await sleep(interval, stopController.signal)
+                }
+              })(),
+            )
+          }
+        }
+
+        // Await every task — including ones launched while awaiting: the
+        // discovery task adds stream tasks mid-wait, and the exit decision
+        // below must observe every task settled, or a match landing in a
+        // still-running final hold could be misreported as a timeout.
+        while (tasks.size > 0) await Promise.all(tasks)
+        opts.signal?.removeEventListener('abort', requestStop)
       }
+
       if (hasMatch()) return finishSatisfied()
+      if (namedAllTerminal()) {
+        // Decision 5, loop form: every named build went terminal without
+        // satisfying anything. The local loop checks this after each tick;
+        // on the remote path a task that observed it set the shared stop,
+        // which is why the shared stop reason must survive cancellation.
+        const terminal = pickTerminalRecord()
+        return finish(null, terminal.event, terminal.state)
+      }
       if (aborted()) {
         opts.stderr('ab wait: interrupted — no condition was satisfied before the signal')
         if (json) opts.stdout(JSON.stringify({ cursor: encodeCurrent() }))

@@ -10,6 +10,7 @@ import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
+import { REMOTE_EVENT_WAIT_SECONDS } from '../store/remote/client'
 import { InvalidAmbientContextError } from './env'
 import { runCli } from './main'
 import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase-session'
@@ -1033,6 +1034,296 @@ describe('wait resilience and read-only discipline', () => {
     expect(await abWait({ ...h.base, slugs: ['b1'] })).toBe(0)
     expect(await store.getEvents('b1')).toHaveLength(eventsBefore)
     expect(await store.listBuilds()).toHaveLength(buildsBefore)
+  })
+})
+
+// ── Remote bounded-wait cadence (AUT-368) ─────────────────────────────────
+
+describe('wait remote bounded-wait cadence (AUT-368)', () => {
+  const REMOTE_REF = 'https://stores.example.com/ab'
+
+  /** A held-read proxy: opts-bearing getEvents calls are the long-poll
+   * requests; the behavior per call is scripted by `held`, which receives the
+   * read's opts (including the cancellation signal). Immediate calls (the
+   * initial scan, discovery) pass straight through to the memory store. */
+  function longPollStore(
+    store: MemoryBuildStore,
+    held: (
+      slug: string,
+      call: number,
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
+    ) => Promise<void> | void,
+  ): { store: BuildStore; heldCalls: () => number } {
+    const perSlug = new Map<string, number>()
+    let total = 0
+    const fake: BuildStore = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'getEvents') {
+          return async (
+            slug: string,
+            sinceSeq?: number,
+            opts?: { waitSeconds?: number; signal?: AbortSignal },
+          ) => {
+            if (opts?.waitSeconds === undefined) {
+              return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+            }
+            const call = (perSlug.get(slug) ?? 0) + 1
+            perSlug.set(slug, call)
+            total += 1
+            await held(slug, call, opts)
+            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    return { store: fake, heldCalls: () => total }
+  }
+
+  /** A held read that never resolves on its own — it ends only when the wait
+   * cancels it via its signal. A wait that fails to cancel would hang until
+   * the test times out. */
+  const heldUntilCancelled = async (
+    _slug: string,
+    _call: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<void> => {
+    const signal = opts?.signal
+    await new Promise<never>((_, reject) => {
+      const abort = (): void => reject(new Error('held read cancelled'))
+      if (signal?.aborted === true) {
+        abort()
+        return
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+    })
+  }
+
+  test('an appended event satisfies the condition via a held read, without waiting the interval', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const { store: fake } = longPollStore(store, (_slug, call) => {
+      if (call === 1) return appendEscalation(store, 'b1')
+    })
+    const h = harness(store, {
+      openStore: () => fake,
+      // The condition must be satisfied by the first held read itself: any
+      // interval wait means the wait is polling, not long-polling.
+      delay: async () => {
+        throw new Error('no interval wait expected — the held read satisfied the condition')
+      },
+    })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '5' })).toBe(0)
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'b1',
+      event: { type: 'escalation.raised', seq: 2 },
+      condition: 'blocked',
+    })
+    expect(h.err).toEqual([])
+  })
+
+  test('request starts stay spaced at least --interval apart on a quiet stream', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const starts: number[] = []
+    const { store: fake } = longPollStore(store, () => {
+      starts.push(h.clock().getTime())
+    })
+    const h = harness(store, { openStore: () => fake })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '3' })).toBe(3)
+    // One held request per wait window: three cycles inside the 3 s budget,
+    // each start at least one interval after the previous — not one request
+    // per poll iteration.
+    expect(starts.length).toBeGreaterThanOrEqual(3)
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(1000)
+    }
+    expect(h.err).toEqual([expect.stringContaining('ab wait: timed out')])
+  })
+
+  test('one held request per stream is in flight concurrently', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await seedRunningBuild(store, 'b2')
+    let entered = 0
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const seen = new Set<string>()
+    const { store: fake } = longPollStore(store, (slug) => {
+      if (!seen.has(slug)) {
+        seen.add(slug)
+        entered += 1
+        if (entered === 2) release()
+        return barrier
+      }
+    })
+    const h = harness(store, { openStore: () => fake })
+    // Concurrent tasks: both streams' first held requests are issued before
+    // either resolves — a serialized per-stream tick would deadlock here.
+    expect(
+      await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1', 'b2'], timeout: '1' }),
+    ).toBe(3)
+    expect(seen).toEqual(new Set(['b1', 'b2']))
+    expect(h.err).toEqual([expect.stringContaining('ab wait: timed out')])
+  })
+
+  test('an already-satisfied wait issues zero held reads', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await appendEscalation(store, 'b1')
+    const { store: fake, heldCalls } = longPollStore(store, () => {})
+    const h = harness(store, { openStore: () => fake })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '5' })).toBe(0)
+    expect(heldCalls()).toBe(0)
+    expect(records(h.out)[0]).toMatchObject({ build: 'b1', condition: 'blocked' })
+  })
+
+  test('all named builds going terminal during a hold ends promptly with exit 2 and cancels the in-flight read', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await seedRunningBuild(store, 'b2')
+    let b1EntersHold2!: () => void
+    const enteredHold2 = new Promise<void>((resolve) => {
+      b1EntersHold2 = resolve
+    })
+    const { store: fake } = longPollStore(store, async (slug, call, opts) => {
+      if (slug === 'b1') {
+        if (call === 1) return appendCompletion(store, 'b1')
+        // b1's second hold never resolves on its own — only the wait's own
+        // cancellation (b2's task observing the all-terminal named set) can
+        // end it. Without that cancellation this test hangs.
+        b1EntersHold2()
+        await heldUntilCancelled(slug, call, opts)
+        return
+      }
+      // b2 waits until b1 is parked in its never-resolving hold, then goes
+      // terminal: the observing task must requestStop, which cancels b1's
+      // in-flight read and ends the wait with exit 2.
+      if (call === 1) {
+        await enteredHold2
+        return appendCompletion(store, 'b2')
+      }
+    })
+    const h = harness(store, { openStore: () => fake })
+    expect(
+      await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1', 'b2'], timeout: '30' }),
+    ).toBe(2)
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]!.condition).toBeNull()
+    expect(h.err).toEqual([])
+  })
+
+  test('a held-read failure is reported once per streak, retried, and the condition still fires exactly once', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const { store: fake } = longPollStore(store, (_slug, call) => {
+      if (call === 1) throw new Error('held read failed')
+      if (call === 2) return appendEscalation(store, 'b1')
+    })
+    const h = harness(store, { openStore: () => fake })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '5' })).toBe(0)
+    expect(h.err).toEqual([
+      expect.stringContaining('ab wait: a store read failed (held read failed)'),
+    ])
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({ event: { type: 'escalation.raised', seq: 2 } })
+  })
+
+  test('an abort during a hold exits 4 promptly with the --json cursor and no failure report', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const external = new AbortController()
+    const { store: fake } = longPollStore(store, async (slug, call, opts) => {
+      if (slug === 'b1' && call === 1) {
+        // Abort from inside the hold: the wait must cancel the read (via its
+        // signal) and exit instead of waiting out the hold.
+        external.abort()
+        await heldUntilCancelled(slug, call, opts)
+      }
+    })
+    const h = harness(store, { openStore: () => fake })
+    // A 30 s fake budget: without cancellation the never-resolving hold would
+    // hang the wait past the test timeout.
+    expect(
+      await abWait({
+        ...h.base,
+        storeRef: REMOTE_REF,
+        slugs: ['b1'],
+        timeout: '30',
+        signal: external.signal,
+      }),
+    ).toBe(4)
+    const [cursorRecord] = records(h.out)
+    expect(Object.keys(cursorRecord!)).toEqual(['cursor'])
+    // The cancelled read is the wait stopping, not a store failure.
+    expect(h.err).toEqual([expect.stringContaining('ab wait: interrupted')])
+  })
+
+  test("an elapsed --timeout caps the held read's waitSeconds instead of waiting out the hold", async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const waits: number[] = []
+    const { store: fake } = longPollStore(store, (_slug, _call, opts) => {
+      waits.push(opts?.waitSeconds ?? -1)
+      // Honor the bound only when it is at or under 1 s: with the cap, the
+      // 1 s --timeout makes the very first read resolve; without it the
+      // first read would carry the full 25 s window and hang the wait.
+      if ((opts?.waitSeconds ?? 0) <= 1) return
+      return new Promise<void>(() => {})
+    })
+    const h = harness(store, { openStore: () => fake })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '1' })).toBe(3)
+    expect(waits[0]).toBe(1)
+    expect(h.err).toEqual([expect.stringContaining('ab wait: timed out')])
+  })
+
+  test('--timeout 0 leaves the held window at the remote default (25 s)', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const waits: number[] = []
+    const { store: fake } = longPollStore(store, (_slug, _call, opts) => {
+      waits.push(opts?.waitSeconds ?? -1)
+    })
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 2) await appendEscalation(store, 'b1')
+      },
+    })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '0' })).toBe(0)
+    for (const wait of waits) expect(wait).toBe(REMOTE_EVENT_WAIT_SECONDS)
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({ build: 'b1', condition: 'blocked' })
+    expect(h.err).toEqual([])
+  })
+
+  test('discovery (no slugs) launches held reads for builds discovered mid-wait', async () => {
+    const store = makeStore()
+    const { store: fake } = longPollStore(store, (_slug, call) => {
+      if (call === 1) return appendEscalation(store, 'late')
+    })
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 1) await seedRunningBuild(store, 'late')
+      },
+    })
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, timeout: '5' })).toBe(0)
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'late',
+      event: { type: 'escalation.raised' },
+      condition: 'blocked',
+    })
+    expect(h.err).toEqual([])
   })
 })
 
