@@ -48,6 +48,7 @@ import { renderPrSummary } from './pr-summary'
 import { abBuilds, abBuildStatus } from './status'
 import { abRepositoryStatus } from './repository-status'
 import { abWatch, WATCH_USAGE } from './watch'
+import { abWait, WAIT_USAGE } from './wait'
 import { abMcp, AB_MCP_USAGE } from './mcp'
 import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
@@ -101,6 +102,7 @@ export const SESSIONLESS_COMMANDS = new Set([
   'builds',
   'build',
   'watch',
+  'wait',
   'mcp',
   'repository',
   'pause',
@@ -880,6 +882,51 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       })
       return 0
+    }
+
+    // Read-only blocking runs OUTSIDE build sessions (§16.3) exactly like
+    // `ab watch`: it resolves its own store and honors a complete ambient
+    // identity as a scope restriction. Exit codes 0/2/3/4 are the command's
+    // contract (wait.ts); thrown usage errors exit 1 via runCli.
+    case 'wait': {
+      const parsed = parseArgs(
+        rest,
+        {
+          for: 'multi',
+          event: 'multi',
+          since: 'value',
+          timeout: 'value',
+          interval: 'value',
+          json: 'boolean',
+          store: 'value',
+        },
+        WAIT_USAGE,
+      )
+      if (multiFlag(parsed, 'for').length === 0 && multiFlag(parsed, 'event').length === 0) {
+        throw new Error(WAIT_USAGE)
+      }
+      const storeRef = stringFlag(parsed, 'store')
+      if (deps.exec === undefined) {
+        throw new Error("'ab wait' needs an exec seam — this is a wiring bug in the ab binary")
+      }
+      return await abWait({
+        targetRepo: deps.workspacePath,
+        env: deps.processEnv ?? {},
+        exec: deps.exec,
+        stdout,
+        stderr,
+        slugs: parsed.positionals,
+        forValues: multiFlag(parsed, 'for'),
+        events: multiFlag(parsed, 'event'),
+        since: stringFlag(parsed, 'since'),
+        timeout: stringFlag(parsed, 'timeout'),
+        interval: stringFlag(parsed, 'interval'),
+        json: parsed.flags.has('json'),
+        ...(storeRef !== undefined ? { storeRef } : {}),
+        ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+        ...(deps.clock !== undefined ? { now: deps.clock } : {}),
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+      })
     }
 
     case 'abort': {
