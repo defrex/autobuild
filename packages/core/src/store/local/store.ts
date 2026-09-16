@@ -212,6 +212,7 @@ const BOOTSTRAP_DDL = [
     artifact_blob_ref TEXT,
     created_at TEXT NOT NULL,
     closed_at TEXT,
+    creation_seq INTEGER NOT NULL,
     CHECK (
       (scope_kind = 'build' AND build IS NOT NULL AND repo IS NULL AND session IS NULL)
       OR
@@ -293,6 +294,18 @@ export class SqliteBuildStore implements BuildStore {
     }>
     if (!streamColumns.some((column) => column.name === 'session')) {
       this.sqlite.exec('ALTER TABLE streams ADD COLUMN session TEXT')
+    }
+    // Stores created before the listStreams creation-order tiebreak existed
+    // keep working: add the streams.creation_seq column idempotently when a
+    // pre-existing table lacks it (the sessions.creation_seq precedent), then
+    // backfill by rowid — rowid equals insertion order because streams are
+    // never deleted (retention prunes stream_chunks only), so the backfill is
+    // consistent with the pinned creation-order contract. Legacy
+    // same-millisecond ties are genuinely unorderable; the pinned guarantee
+    // applies from the migrated store onward.
+    if (!streamColumns.some((column) => column.name === 'creation_seq')) {
+      this.sqlite.exec('ALTER TABLE streams ADD COLUMN creation_seq INTEGER NOT NULL DEFAULT 0')
+      this.sqlite.exec('UPDATE streams SET creation_seq = rowid')
     }
     // Stores created before the listSessions creation-order tiebreak existed
     // keep working: add the sessions.creation_seq column idempotently when a
@@ -1378,6 +1391,17 @@ export class SqliteBuildStore implements BuildStore {
     return this.writeTx(() => {
       // Retention prune and the insert land in one transaction.
       this.pruneStreamChunksInTx(scope)
+      // Store-assigned monotonic creation sequence: MAX+1 inside the write
+      // transaction (every write runs BEGIN IMMEDIATE, so writers are
+      // serialized) — the same pattern as the seq assignments in this file.
+      // Streams are never deleted (retention prunes stream_chunks only), so
+      // the counter is never reused and the listStreams same-millisecond
+      // tiebreak is stable over time.
+      const tail = this.db
+        .select({ max: sql<number | null>`max(${streams.creationSeq})` })
+        .from(streams)
+        .get()
+      const creationSeq = (tail?.max ?? 0) + 1
       this.db
         .insert(streams)
         .values({
@@ -1390,6 +1414,7 @@ export class SqliteBuildStore implements BuildStore {
           format: STREAM_FORMAT,
           status: 'open',
           createdAt: this.now(),
+          creationSeq,
         })
         .run()
       return this.toStreamRecord(this.requireStream(id))
@@ -1553,11 +1578,13 @@ export class SqliteBuildStore implements BuildStore {
   async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
     const owner =
       scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
+    // Pinned tiebreak (store/types.ts): createdAt ascending, then the
+    // store-assigned monotonic creation sequence — never the random id.
     const rows = this.db
       .select()
       .from(streams)
       .where(eq(streams.scopeKind, scope.kind))
-      .orderBy(asc(streams.createdAt), asc(streams.id))
+      .orderBy(asc(streams.createdAt), asc(streams.creationSeq))
       .all()
       .filter((row) =>
         scope.kind === 'build'

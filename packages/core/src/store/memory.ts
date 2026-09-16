@@ -1086,9 +1086,12 @@ export class MemoryBuildStore implements BuildStore {
                 state.record.scope.session === scope.session),
       )
       .map((state) => this.snapshotStream(state))
-    return records.sort(
-      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    )
+    // Pinned tiebreak (store/types.ts): Map iteration is insertion order and
+    // Map.set on an existing key preserves position, so insertion order *is*
+    // creation order — the store-assigned monotonic creation sequence for
+    // free, no counter needed. Streams are never deleted (retention prunes
+    // stream_chunks only), so ties never reorder over time.
+    return records
   }
 
   async close(): Promise<void> {
