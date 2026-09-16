@@ -757,6 +757,180 @@ describe('event wait over the wire', () => {
   })
 })
 
+// ── Prompt teardown of held reads (AUT-375) ─────────────────────────────
+// Client-side: stop/abort must cancel an in-flight held request (the signal
+// reaches the underlying fetch), not wait out the server's hold bound.
+// Server-side: the withDisconnect guard on the session-event route and held
+// stream reads lets server.stop(true) complete promptly when a client goes
+// away mid-hold.
+
+describe('prompt teardown of held reads', () => {
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+  }
+
+  test('subscribe unsubscribe aborts a real held fetch promptly', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const inFlight = new Set<Promise<unknown>>()
+      const fetchFn = (async (input, init) => {
+        const pending = fetch(input, init)
+        if (typeof input === 'string' && input.includes('/events?')) inFlight.add(pending)
+        try {
+          return await pending
+        } finally {
+          inFlight.delete(pending)
+        }
+      }) as typeof fetch
+      const client = new RemoteBuildStore({ url: server.url, fetchFn })
+      await client.createBuild(sampleBuildInput('teardown-sub'))
+      const unsubscribe = client.subscribe('teardown-sub', { pollMs: 10_000 }, () => {})
+      let held: Promise<unknown> | undefined
+      while (held === undefined) {
+        await Bun.sleep(10)
+        held = [...inFlight][0]
+      }
+      const started = Date.now()
+      unsubscribe()
+      const rejection = await (held as Promise<Response>).then(
+        () => null,
+        (error) => error,
+      )
+      // The held request was torn down, not served: it rejected with an
+      // abort, well inside the 25 s hold bound.
+      expect(rejection).not.toBeNull()
+      expect((rejection as Error).name).toBe('AbortError')
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('getEvents forwards the caller signal to fetch, non-aborted at call time', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const seeder = new RemoteBuildStore({ url: server.url })
+      await seeder.createBuild(sampleBuildInput('teardown-signal'))
+
+      const seen: AbortSignal[] = []
+      // A fetch that answers only when the signal it received aborts: if
+      // the signal never reaches the wire, the read hangs until the test
+      // times out instead of rejecting promptly on abort.
+      const fetchFn = (async (_input, init) => {
+        const signal = init?.signal as AbortSignal | undefined
+        if (signal === undefined) return new Promise<Response>(() => {})
+        seen.push(signal)
+        return new Promise<Response>((_, reject) => {
+          if (signal.aborted) {
+            reject(signal.reason)
+            return
+          }
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      }) as typeof fetch
+      const client = new RemoteBuildStore({ url: server.url, fetchFn })
+
+      const controller = new AbortController()
+      const pending = client.getEvents('teardown-signal', 0, {
+        waitSeconds: 25,
+        signal: controller.signal,
+      })
+      await Bun.sleep(50)
+      expect(seen.length).toBe(1)
+      expect(seen[0]!.aborted).toBe(false)
+      const started = Date.now()
+      controller.abort()
+      const rejection = await pending.catch((error) => error)
+      expect(rejection).not.toBeNull()
+      expect(Date.now() - started).toBeLessThan(1_000)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('a disconnected session-event hold no longer stalls server.stop(true)', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('teardown-session'))
+      await client.ensureRepo('acme/teardown')
+      const session = await client.createSession({ repo: 'acme/teardown', operator: 'op' })
+
+      const controller = new AbortController()
+      // The catch is attached at creation: the abort rejection lands before
+      // the assertion below and must never surface as an unhandled error.
+      // since=1: the session's own creation event is backlog; the hold must
+      // establish past it or there is nothing held to disconnect from.
+      const held = fetch(`${server.url}/sessions/${session.id}/events?since=1&wait=25`, {
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await Bun.sleep(100)
+      // The peer goes away mid-hold.
+      controller.abort()
+
+      const started = Date.now()
+      await server.stop()
+      // Without the guard the handler promise stays pending and stop hangs
+      // past the 5 s margin, out to the 25 s hold bound.
+      expect(Date.now() - started).toBeLessThan(5_000)
+      await held
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('a disconnected held stream read no longer stalls server.stop(true)', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('teardown-stream'))
+      const stream = await client.createStream({ kind: 'build', build: 'teardown-stream' }, 's')
+
+      const controller = new AbortController()
+      const held = fetch(`${server.url}/streams/${stream.id}/chunks?since=0&wait=25`, {
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await Bun.sleep(100)
+      controller.abort()
+
+      const started = Date.now()
+      await server.stop()
+      expect(Date.now() - started).toBeLessThan(5_000)
+      await held
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('a connected held session-event read still answers an append promptly', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('teardown-connected'))
+      await client.ensureRepo('acme/teardown')
+      const session = await client.createSession({ repo: 'acme/teardown', operator: 'op' })
+
+      // since=1: the session's own creation event is the backlog; the held
+      // window must start AFTER it or the read answers immediately.
+      const pending = client.getSessionEvents(session.id, 1, { waitSeconds: 25 })
+      await Bun.sleep(100)
+      const envelope = await client.appendSessionEvent(session.id, {
+        actor: humanActor('op'),
+        type: 'message.posted',
+        payload: { text: 'wake' },
+      })
+      const started = Date.now()
+      expect(await pending).toEqual([envelope])
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
 // ── Stream wire specifics (SPEC §7.6) ────────────────────────────────────
 // Beyond the shared contract: token scope on the stream routes, cross-scope
 // addressing, and the typed error mappings (413 ceiling, 409 closed append).

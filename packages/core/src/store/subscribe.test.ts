@@ -84,6 +84,42 @@ describe('pollingSubscribe bounded-wait mode', () => {
     }
   })
 
+  test('unsubscribe aborts the in-flight held read immediately', async () => {
+    const signals: AbortSignal[] = []
+    let settledAt: number | undefined
+    const getEvents: SubscribeRead = (_since, opts) => {
+      const signal = opts?.signal
+      if (signal === undefined) {
+        // A bounded-wait read without a signal could never be torn down.
+        throw new Error('bounded-wait reads must carry an abort signal')
+      }
+      signals.push(signal)
+      // A held read that resolves only when cancelled — the abort IS the
+      // answer. An un-aborted unsubscribe would hang until the test times
+      // out; prompt settling is the assertion.
+      return new Promise<never>((_, reject) => {
+        const abort = (): void => {
+          settledAt = Date.now()
+          reject(signal.reason)
+        }
+        if (signal.aborted) {
+          abort()
+          return
+        }
+        signal.addEventListener('abort', abort, { once: true })
+      })
+    }
+    const unsubscribe = pollingSubscribe(getEvents, { pollMs: 60_000, waitSeconds: 25 }, () => {})
+    await Bun.sleep(50)
+    expect(signals.length).toBe(1)
+    expect(signals[0]!.aborted).toBe(false)
+    const started = Date.now()
+    unsubscribe()
+    await Bun.sleep(50)
+    expect(settledAt).toBeDefined()
+    expect(settledAt! - started).toBeLessThan(1_000)
+  })
+
   test('a failing read is retried after the gap and delivery stays exactly once', async () => {
     const store = makeStore()
     await store.createBuild({ slug: 's', repo: 'r' })
