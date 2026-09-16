@@ -28,7 +28,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import semver from 'semver'
 import { parseConfig } from '../config/load'
-import { DISPATCHER_CONFIG_ARTIFACT, LiveConfig, type ConfigSnapshot } from '../config/live'
+import {
+  composeBuildConfig,
+  DISPATCHER_CONFIG_ARTIFACT,
+  LiveConfig,
+  type ConfigSnapshot,
+} from '../config/live'
+import { resolvePipelineSource, type PipelineSourceMeta } from '../config/pipeline-source'
 import { effectiveRuntimeReferences, roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
@@ -105,7 +111,10 @@ import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   BUILD_RUNNER_DIAGNOSTIC_ARTIFACT,
   effectiveBuildConfigContent,
+  parseBuildConfigMetadata,
   parseDiagnostic,
+  parseEffectiveBuildConfig,
+  selectOpenWorkspace,
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import { scanUnclaimedObservations, evaluateHarvestPressure } from '../processes/harvest'
@@ -779,22 +788,97 @@ class DispatchLoop {
     return this.liveConfig.current()
   }
 
+  /** Resolve this build's pinned pipeline source (SPEC §16.1). Any failure —
+   * missing build record, absent forge capability, unreadable branch/base,
+   * malformed TOML — degrades to `undefined` (the legacy fallback), never
+   * failing the deposit. */
+  private async resolveBuildPipeline(
+    slug: string,
+  ): Promise<Awaited<ReturnType<typeof resolvePipelineSource>>> {
+    try {
+      // The workspace event carries the branch the build was provisioned on;
+      // the record's `branch` (when present) is the same fact. Using the event
+      // keeps this read to the events the caller already needs and avoids an
+      // extra build-record lookup on the hot launch path.
+      const events = await this.wiring.store.getEvents(slug)
+      const workspace = selectOpenWorkspace(events)
+      return await resolvePipelineSource({
+        slug,
+        record: { ...(workspace !== null ? { branch: workspace.branch } : {}) },
+        events,
+        mode: this.opts.repository !== undefined ? 'origin' : 'checkout',
+        forge: this.wiring.forge,
+        checkout: this.opts.targetRepo,
+        exec: this.opts.exec,
+        ...(workspace !== null ? { workspacePath: workspace.path } : {}),
+      })
+    } catch {
+      return undefined
+    }
+  }
+
   /** Publish the exact composed snapshot into one build-owned namespace. The
-   * child samples only this artifact and never receives config over IPC. */
+   * child samples only this artifact and never receives config over IPC.
+   *
+   * Build-owned sections (verify/finalize/commands/workspace) come from the
+   * build's own branch at its recorded pipeline-source commit; every other
+   * section comes from the live dispatcher snapshot. The source commit travels
+   * in the artifact metadata so status can report which autobuild.toml the
+   * build runs under (SPEC §16.1). */
   private async publishBuildConfig(slug: string, snapshot = this.currentConfig()): Promise<void> {
+    const source = await this.resolveBuildPipeline(slug)
+    const config =
+      source === undefined ? snapshot.config : composeBuildConfig(source.config, snapshot.config)
+    await this.depositBuildConfig(slug, snapshot, config, source?.meta)
+  }
+
+  private async depositBuildConfig(
+    slug: string,
+    snapshot: ConfigSnapshot,
+    config: Config,
+    pipelineSource?: PipelineSourceMeta,
+  ): Promise<void> {
     await this.wiring.store.putArtifact(slug, {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-      content: effectiveBuildConfigContent(snapshot.config),
+      content: effectiveBuildConfigContent(config),
       metadata: {
         revision: snapshot.revision,
         run: this.runId,
+        ...(pipelineSource !== undefined ? { pipelineSource } : {}),
       },
     })
   }
 
+  /** Re-deposit deployment-owned sections to active builds on a reload. The
+   * build-owned sections are reused verbatim from the build's last deposit, so
+   * a base-branch reload can never retarget an in-flight build's pipeline; a
+   * build picks up pipeline changes only from its own branch at its next
+   * launch (SPEC §16.1). */
   private async publishActiveBuildConfigs(snapshot: ConfigSnapshot): Promise<void> {
     await Promise.all(
-      [...this.activeBuildRuns.keys()].map((slug) => this.publishBuildConfig(slug, snapshot)),
+      [...this.activeBuildRuns.keys()].map(async (slug) => {
+        const artifact = await this.wiring.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+        if (artifact === null) {
+          await this.publishBuildConfig(slug, snapshot)
+          return
+        }
+        let existing: Config
+        try {
+          existing = parseEffectiveBuildConfig(artifact)
+        } catch {
+          // A corrupt or pre-pin artifact cannot pin a pipeline; fall back to
+          // the launch-path resolution instead of failing the reload.
+          await this.publishBuildConfig(slug, snapshot)
+          return
+        }
+        const meta = parseBuildConfigMetadata(artifact)
+        await this.depositBuildConfig(
+          slug,
+          snapshot,
+          composeBuildConfig(existing, snapshot.config),
+          meta.pipelineSource,
+        )
+      }),
     )
   }
 
@@ -805,7 +889,10 @@ class DispatchLoop {
   private async refreshConfig(): Promise<void> {
     if (this.opts.once === true) return
     // Origin mode reloads from the forge: autobuild.toml at the CURRENT
-    // effective base branch (hot — a rename converges within two ticks).
+    // effective base branch (hot — a rename converges within two ticks). This
+    // read feeds the dispatcher's own snapshot; a reload re-deposits only the
+    // deployment-owned sections to active builds (build-owned pipeline
+    // sections stay pinned to each build's own branch, SPEC §16.1).
     // Restart-required changes keep startup-built adapters and file the
     // existing restart-required observation (LiveConfig semantics).
     const outcome =

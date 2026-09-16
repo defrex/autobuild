@@ -54,6 +54,7 @@ import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/bui
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   diagnosticArtifact,
+  parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
   selectOpenWorkspace,
 } from '../processes/build-execution-state'
@@ -3252,6 +3253,96 @@ describe('abDispatch watch build-runner coordination', () => {
         reloads[0]!.payload.artifact.rev,
       )
       expect(new TextDecoder().decode(artifact?.content)).toBe(valid)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('pins a build pipeline to its own branch across a base-branch reload (AUT-366)', async () => {
+    const handlers = happyHandlers()
+    const implement = handlers.implement!
+    let releaseImplement!: () => void
+    const implementGate = new Promise<void>((resolve) => {
+      releaseImplement = resolve
+    })
+    let markImplementStarted!: () => void
+    const implementStarted = new Promise<void>((resolve) => {
+      markImplementStarted = resolve
+    })
+    handlers.implement = async (cli) => {
+      markImplementStarted()
+      await implementGate
+      return implement(cli)
+    }
+    const fx = await makeFixture(readyTicket('T-pinned-pipeline'), handlers)
+    const stop = new AbortController()
+    // The base branch gains an always-on verify step after this build's base
+    // was cut — exactly what blocked AUT-366. Its command/script do not exist
+    // in the build's branch, so running it would fail verify.
+    const baseWithPostgres = DISPATCH_CONFIG_TOML.replace(
+      'test = "test -f ok.marker"',
+      'test = "test -f ok.marker"\npostgres = "test -f postgres.marker"',
+    )
+      .replace('steps = ["unit"]', 'steps = ["unit", "postgres"]')
+      .replace('stallRounds = 3', 'stallRounds = 7')
+      .concat('\n[verify.postgres]\nkind = "check"\ncommand = "postgres"\nalways = true\n')
+    let slug: string | undefined
+    let sleeps = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await implementStarted
+            slug = (await fx.store.listBuilds())[0]?.slug
+            await writeFile(join(fx.checkout, 'autobuild.toml'), baseWithPostgres)
+          } else if (sleeps === 2) {
+            releaseImplement()
+          } else {
+            await waitFor(async () => {
+              if (slug === undefined) return false
+              return (await fx.store.getEvents(slug)).some(
+                (event) => event.type === 'finalize.completed',
+              )
+            }, 10_000)
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      expect(slug).toBeDefined()
+      const events = await fx.store.getEvents(slug!)
+      expect(events.some((event) => event.type === 'finalize.completed')).toBe(true)
+      // The base-branch step never entered this build's verify universe.
+      expect(
+        events.filter(
+          (event) => event.type === 'verify.started' && event.payload.step === 'postgres',
+        ),
+      ).toHaveLength(0)
+      // The artifact records the pinned pipeline source and keeps the pipeline
+      // sections the build's own branch carried.
+      const artifact = await fx.store.getArtifact(slug!, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      expect(artifact).not.toBeNull()
+      const meta = parseBuildConfigMetadata(artifact!)
+      expect(meta.pipelineSource?.ref).toBe('branch-head')
+      expect(meta.pipelineSource?.commit).toMatch(/^[0-9a-f]{40}$/)
+      // The reload re-deposited (revision advanced) and delivered the
+      // deployment-owned policy change...
+      expect(meta.revision).toBeGreaterThanOrEqual(1)
+      const deposited = parseEffectiveBuildConfig(artifact!)
+      expect(deposited.policy.stallRounds).toBe(7)
+      // ...while the build-owned pipeline stayed pinned to the build branch.
+      expect(deposited.verify.steps).toEqual(['unit'])
+      expect(deposited.commands.postgres).toBeUndefined()
     } finally {
       stop.abort()
       await fx.cleanup()
