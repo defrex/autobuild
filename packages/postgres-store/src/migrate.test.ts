@@ -349,6 +349,63 @@ if (testUrl) {
       }
     })
 
+    test('upgrades a genuine v4 database in place: the builds.repo_origin column, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v4 database: v4 DDL, v4 marker, plus a build written
+        // before repoOrigin was persisted — legacy rows legitimately have no
+        // origin, so the column must backfill as NULL ("field absent").
+        await sql.unsafe(SCHEMA_V4_DDL)
+        // The genuine v4 marker is version 4 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v4 checksum under any other
+        // version is (correctly) rejected as incompatible.
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, 4, ${SCHEMA_V4_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+          VALUES ('v4-build', 'acme/v4', ${CONTRACT_T0}, ${CONTRACT_T0})`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // The legacy row survives with repo_origin NULL — the read path
+        // treats NULL as "field absent".
+        const legacy = await sql`SELECT repo_origin FROM builds WHERE slug = 'v4-build'`
+        expect(legacy[0]?.repo_origin).toBeNull()
+
+        // The migrated store persists repoOrigin both ways: with an origin
+        // the value round-trips; without one the field stays absent.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const origin = 'https://github.com/acme/v4.git'
+          const withOrigin = await store.createBuild({
+            slug: 'v4-origin-set',
+            repo: 'acme/v4',
+            repoOrigin: origin,
+          })
+          expect(withOrigin.repoOrigin).toBe(origin)
+          expect((await store.getBuild('v4-origin-set'))?.repoOrigin).toBe(origin)
+          expect(
+            (await store.listBuilds()).find((build) => build.slug === 'v4-origin-set')?.repoOrigin,
+          ).toBe(origin)
+
+          await store.createBuild({ slug: 'v4-origin-absent', repo: 'acme/v4' })
+          expect((await store.getBuild('v4-origin-absent'))?.repoOrigin).toBeUndefined()
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
     test('refuses a current marker when a required table is missing', async () => {
       const harness = await schemaHarness()
       const sql = new SQL(harness.url)

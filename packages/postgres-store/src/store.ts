@@ -125,6 +125,7 @@ export class PostgresBuildStore implements BuildStore {
       repo: String(row.repo),
       ...(row.ticket ? { ticket: json(row.ticket) } : {}),
       ...(row.branch ? { branch: String(row.branch) } : {}),
+      ...(row.repo_origin ? { repoOrigin: String(row.repo_origin) } : {}),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
       ...(row.heartbeat_at ? { heartbeatAt: iso(row.heartbeat_at) } : {}),
@@ -164,8 +165,8 @@ export class PostgresBuildStore implements BuildStore {
     const ts = this.now()
     return this.sql.begin(async (tx) => {
       const inserted: Row[] = await tx`INSERT INTO builds
-        (slug, repo, ticket, branch, created_at, updated_at)
-        VALUES (${input.slug}, ${input.repo}, ${input.ticket ?? null}, ${input.branch ?? null}, ${ts}, ${ts})
+        (slug, repo, ticket, branch, repo_origin, created_at, updated_at)
+        VALUES (${input.slug}, ${input.repo}, ${input.ticket ?? null}, ${input.branch ?? null}, ${input.repoOrigin ?? null}, ${ts}, ${ts})
         ON CONFLICT (slug) DO NOTHING RETURNING slug`
       const row = await this.lockBuild(tx, input.slug)
       if (!inserted[0]) throw new Error(`build "${input.slug}" already exists`)

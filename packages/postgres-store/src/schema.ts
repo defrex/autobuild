@@ -284,6 +284,7 @@ CREATE TABLE IF NOT EXISTS stream_chunks (
   seq bigint NOT NULL, ts timestamptz NOT NULL, parts jsonb NOT NULL,
   PRIMARY KEY (stream, seq)
 );`.trim()
+export const SCHEMA_V4_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V4_DDL).digest('hex')
 
 export const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS ab_schema_migrations (
@@ -296,7 +297,7 @@ CREATE TABLE IF NOT EXISTS builds (
   slug text PRIMARY KEY, repo text NOT NULL, ticket jsonb, branch text,
   created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
   lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
-  heartbeat_at timestamptz
+  heartbeat_at timestamptz, repo_origin text
 );
 CREATE TABLE IF NOT EXISTS events (
   build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
@@ -369,7 +370,6 @@ CREATE TABLE IF NOT EXISTS stream_chunks (
   seq bigint NOT NULL, ts timestamptz NOT NULL, parts jsonb NOT NULL,
   PRIMARY KEY (stream, seq)
 );`.trim()
-export const SCHEMA_V4_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V4_DDL).digest('hex')
 
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
@@ -425,6 +425,10 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['lease_expires_at', 'timestamp with time zone', false],
     ['lease_ttl_ms', 'bigint', false],
     ['heartbeat_at', 'timestamp with time zone', false],
+    // The repo_origin column rides last: the guarded v4→v5 ALTER adds it at
+    // the end, so migrated and fresh databases assert identically (the
+    // sessions.creation_seq and streams.session comments above).
+    ['repo_origin', 'text', false],
   ],
   events: [
     ['build', 'text', true],
@@ -797,6 +801,25 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
       const marker = rows[0]
       if (marker) {
+        // v1–v4 → v5: the guarded builds.repo_origin column runs for EVERY
+        // pre-v5 marker, before the version branches — not only in a v4
+        // branch. `CREATE TABLE IF NOT EXISTS builds` does not alter an
+        // existing builds table, so without this the internal assertSchema
+        // below would fail on every upgraded legacy database. The ALTER is
+        // guarded and idempotent, so re-running it on a v5 database (or a
+        // marker that turns out to be rejected below, which rolls this
+        // transaction back) is a no-op.
+        await tx.unsafe(`
+          DO $$ BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = current_schema() AND table_name = 'builds'
+                AND column_name = 'repo_origin'
+            ) THEN
+              ALTER TABLE builds ADD COLUMN repo_origin text;
+            END IF;
+          END $$;
+        `)
         const version = Number(marker.version)
         if (version === SCHEMA_VERSION) {
           if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('marker is incompatible')
@@ -805,7 +828,8 @@ export async function migratePostgres(url: string): Promise<void> {
           // (the stream tables and the session tables); v1 databases never had
           // a streams or sessions table, so the full DDL created them with the
           // session column, the widened CHECKs, and both creation_seq columns.
-          // Promote the marker in this transaction.
+          // The guarded repo_origin ALTER above covered builds. Promote the
+          // marker in this transaction.
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
@@ -853,7 +877,8 @@ export async function migratePostgres(url: string): Promise<void> {
           // unorderable, so any total order consistent with createdAt is
           // acceptable — SET NOT NULL, and the sequence positioned above the
           // backfilled values so the next nextval continues the counter
-          // without collision.
+          // without collision. The guarded repo_origin ALTER above covered
+          // builds.
           await tx.unsafe(`
             DO $$ BEGIN
               IF NOT EXISTS (
@@ -884,7 +909,8 @@ export async function migratePostgres(url: string): Promise<void> {
           // idempotent full DDL above created the streams_creation_seq
           // sequence; a v4 database's streams table needs the guarded
           // creation_seq column, backfill, NOT NULL, and sequence continuity
-          // (the shared pre-v5 streams migration).
+          // (the shared pre-v5 streams migration). The guarded repo_origin
+          // ALTER above covered builds.
           await tx.unsafe(STREAMS_CREATION_SEQ_MIGRATION)
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
