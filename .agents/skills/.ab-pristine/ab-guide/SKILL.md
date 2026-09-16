@@ -1100,6 +1100,24 @@ same three-row cap and count but advertise no unavailable expansion action.
 These are display-only transformations: stored event and status text is
 unchanged.
 
+When the selected session carries a stream, Enter instead opens a read-only
+session view, whether that session is still open or has already ended. For an
+open session the view follows the stream live: the turn's prompt, the agent's
+reasoning and answer text, each tool call with a one-line input summary, tool
+output capped at eight rows (longer output names the withheld-row count), and
+step separators appear as they land, within one dashboard poll interval, while
+the view tracks the tail. For an ended session the view renders the session's
+finalized content, including error and truncation markers where the runner
+emitted them, and a final `Stream closed` line names the outcome. Up/Down
+scrolls; scrolling up from the bottom pauses tail-following — the legend says
+`paused` — and scrolling back to the bottom resumes it. The view is strictly
+read-only: no key inside it answers, pauses, resumes, or aborts anything, the
+abort confirmation cannot be opened from it, and its legend offers only
+Up/Down, Esc, and quit. Escape returns to build detail with the same session
+selected. Sessions without a stream keep the existing messages: the
+open-session unavailable note, the reclaimed note, the no-deposit note, and the
+existing transcript rendering.
+
 Up/Down moves without wrapping through global first, optional `Harvest` second,
 then slug-sorted builds. Stable discriminated identity preserves selection
 through repaint, re-sort, and row appearance/disappearance. The legend is
@@ -1197,6 +1215,15 @@ A build with auto-merge off has no auto-merge token. Requested, enabled, and
 cancelling states all read `auto merge`: cyan means requested locally but not
 yet applied on GitHub, green means native auto-merge is enabled, and yellow
 means cancellation is in flight. The token disappears when cancellation lands.
+Merge conflicts recover automatically: the gate defers, the pipeline re-enters
+reconcile, and verify re-runs before consent is re-examined — the reconcile
+step on the build row is the only indication, and uncomputed mergeability
+resolves the same way on a later poll. The auto-merge gate records a durable
+observation only for a deferral a person must fix (disabled repository
+auto-merge, a dirty local checkout, a missing Git identity, an unproven gate
+state, a plan limitation) — never for a conflict the pipeline resolves itself.
+A recorded deferral stops being shown once the PR merges or closes, or once a
+reconcile or re-finalize supersedes it, until the gate re-examines consent.
 
 ### Durable build controls: CLI and dashboard
 
@@ -1440,6 +1467,14 @@ capability, or a historical log) shows no stream segment. While a session
 runs, its stream is the live view of the turn; once the session ends the
 stream finalizes into an artifact, and `ab artifact download <slug>
 stream:<id>` retrieves the closed session's finalized document.
+
+Harvest sessions stream the same protocol into *repository-scoped* streams:
+the harvest runner's synthesize and review brackets each get one stream
+(`phase` spelled `harvest:<step>`), with `harvest.session.started` carrying
+the stream id. Find them via that `stream` field or the harvest journal
+(`ab watch --repository`); a closed stream finalizes to a repository-scope
+`stream:<id>` artifact. The harvest run id is not on the stream — recover it
+from the journal event that names the stream.
 
 **`ab watch [<slug>...] [--repository] [--event <glob>]... [--since <cursor>]
 [--timeout <dur>] [--interval <dur>] [--count <n>] [--json] [--store <ref>]`**

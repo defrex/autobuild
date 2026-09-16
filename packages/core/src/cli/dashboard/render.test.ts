@@ -7,16 +7,21 @@ import { cellWidth } from './cells'
 import { renderDashboardFrameImage } from './frame-image'
 import {
   DASHBOARD_BUILD_LEGEND,
+  DASHBOARD_SESSION_LIVE_LEGEND,
+  DASHBOARD_SESSION_PAUSED_LEGEND,
   dashboardContentWidth,
   detailScrollLimit,
   formatDuration,
   moveDetailScroll,
+  moveSessionScroll,
   moveTranscriptScroll,
   renderDashboard,
   revealDetailFocus,
   resumeHintRows,
   resumeKeysRows,
   resumePanel,
+  sessionContentLines,
+  sessionScrollLimit,
   stripAnsi,
   transcriptScrollLimit,
   type RenderOpts,
@@ -2670,5 +2675,147 @@ describe('renderDashboard: build detail and transcript views', () => {
     ).join('\n')
     expect(scrolled).toContain('raw line 5')
     expect(scrolled).not.toContain('raw line 0')
+  })
+})
+
+describe('renderDashboard: the read-only session view', () => {
+  const parts: import('./model').SessionDashboardView['source'] extends infer S
+    ? S extends { kind: 'parts'; parts: infer P }
+      ? P
+      : never
+    : never = [
+    {
+      type: 'data-ab-session',
+      data: { session: 's1', role: 'implement', runner: 'pi', phase: 'implement', round: 1 },
+    },
+    { type: 'data-ab-prompt', data: { text: 'build it' } },
+    { type: 'text-delta', id: 't', delta: 'working on it' },
+    {
+      type: 'tool-input-available',
+      toolCallId: 'c1',
+      toolName: 'bash',
+      input: { command: 'bun test' },
+    },
+  ]
+  const sessionView = (
+    overrides: Partial<import('./model').SessionDashboardView> = {},
+  ): import('./model').SessionDashboardView => ({
+    kind: 'session',
+    slug: 'auth-rate-limit',
+    sessionId: 's1',
+    stream: 'st_9',
+    status: 'open',
+    source: { kind: 'parts', parts: [...parts], lastSeq: 3 },
+    follow: true,
+    scroll: 0,
+    ...overrides,
+  })
+
+  test('a live session view names the build, session, stream, and status', () => {
+    const out = rd(
+      { ...model([build()]), view: sessionView() },
+      { color: false, width: 100, height: 24 },
+    ).join('\n')
+    expect(out).toContain('Session  auth-rate-limit')
+    expect(out).toContain('session s1 · st_9 · live')
+    expect(out).toContain('implement · pi · phase implement (round 1)')
+    expect(out).toContain('Prompt: build it')
+    expect(out).toContain('working on it')
+    expect(out).toContain('bash({"command":"bun test"})')
+    expect(out).toContain('waiting for output')
+  })
+
+  test('the legend offers only scroll, back, and quit — following vs paused', () => {
+    const following = rd(
+      { ...model([build()]), view: sessionView() },
+      { color: false, width: 100, height: 24 },
+    ).join('\n')
+    expect(following).toContain(DASHBOARD_SESSION_LIVE_LEGEND)
+    expect(following).toContain('following tail')
+    const paused = rd(
+      { ...model([build()]), view: sessionView({ follow: false, scroll: 0 }) },
+      { color: false, width: 100, height: 24 },
+    ).join('\n')
+    expect(paused).toContain(DASHBOARD_SESSION_PAUSED_LEGEND)
+    expect(paused).toContain('(paused)')
+    // No control vocabulary other than the three keys may appear in a legend.
+    for (const legend of [DASHBOARD_SESSION_LIVE_LEGEND, DASHBOARD_SESSION_PAUSED_LEGEND]) {
+      expect(legend).not.toMatch(/auto-merge|abort|pause all|Enter details|transcript/)
+    }
+  })
+
+  test('a closed view shows the outcome line after the content', () => {
+    const out = rd(
+      {
+        ...model([build()]),
+        view: sessionView({
+          status: 'closed',
+          outcome: 'completed',
+          source: {
+            kind: 'parts',
+            parts: [...parts, { type: 'finish', finishReason: 'stop' }],
+            lastSeq: 4,
+          },
+        }),
+      },
+      { color: false, width: 100, height: 24 },
+    ).join('\n')
+    expect(out).toContain('Stream closed: completed')
+    expect(out).toContain('· closed')
+  })
+
+  test('an aborted stream names its outcome', () => {
+    const out = rd(
+      {
+        ...model([build()]),
+        view: sessionView({ status: 'closed', outcome: 'aborted' }),
+      },
+      { color: false, width: 100, height: 24 },
+    ).join('\n')
+    expect(out).toContain('Stream closed: aborted')
+  })
+
+  test('an error replaces the content, not the chrome', () => {
+    const out = rd(
+      {
+        ...model([build()]),
+        view: sessionView({ error: 'store unreachable' }),
+      },
+      { color: false, width: 100, height: 24 },
+    ).join('\n')
+    expect(out).toContain('store unreachable')
+    expect(out).not.toContain('bash(')
+    expect(out).toContain('Session  auth-rate-limit')
+  })
+
+  test('scroll limits agree with sessionContentLines and follow pins to the tail', () => {
+    const view = sessionView()
+    const width = 100
+    const height = 8
+    const limit = sessionScrollLimit(view, width, height)
+    expect(limit).toBeGreaterThan(0)
+    // The limit equals the shared content derivation minus the viewport.
+    const content = sessionContentLines(view, dashboardContentWidth(width))
+    const capacity = height - 5
+    expect(limit).toBe(Math.max(0, content.length - capacity))
+    // moveSessionScroll clamps and moves within the limit.
+    expect(moveSessionScroll(view, width, height, limit, 5)).toBe(limit)
+    expect(moveSessionScroll(view, width, height, limit, -2)).toBe(limit - 2)
+    expect(moveSessionScroll(view, width, height, 0, -1)).toBe(0)
+    // Following pins the painted offset to the tail: the first content line
+    // scrolls away and the last one stays visible.
+    const pinned = rd(
+      { ...model([build()]), view: sessionView({ scroll: 0, follow: true }) },
+      { color: false, width: width + 2, height },
+    ).join('\n')
+    expect(pinned).not.toContain('implement · pi · phase implement (round 1)')
+    expect(pinned).toContain('waiting for output')
+    // Paused at 0 keeps the head visible and hides the tail.
+    const head = rd(
+      { ...model([build()]), view: sessionView({ scroll: 0, follow: false }) },
+      { color: false, width: width + 2, height },
+    ).join('\n')
+    expect(head).toContain('implement · pi · phase implement (round 1)')
+    expect(head).not.toContain('waiting for output')
   })
 })

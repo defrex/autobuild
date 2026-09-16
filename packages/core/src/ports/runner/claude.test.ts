@@ -750,3 +750,55 @@ describe('ClaudeAgentRunner streaming boundary (SPEC §9)', () => {
     expect(cancelledParts.at(-1)?.type).toBe('abort')
   })
 })
+
+describe('ClaudeAgentRunner continued-turn stream forwarding (SPEC §9)', () => {
+  test('a continued turn translates through its own per-turn emitter', async () => {
+    const events = [assistant('continued text'), result('s1', 2, 1, { result: 'continued text' })]
+    const cli = fakeCli([
+      output([assistant('started text'), result('s1', 1, 1, { result: 'started text' })]),
+      output(events),
+    ])
+    const runner = new ClaudeAgentRunner({ runCli: cli.runCli, createSessionId: () => 's1' })
+    const startParts: StreamPart[] = []
+    const { session } = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => startParts.push(...appended) },
+    })
+    const continueParts: StreamPart[] = []
+    await runner.continue(session, '- address findings', {
+      env: { AB_PHASE: 'implement@2', AB_SESSION: 'round-2' },
+      stream: { append: (appended) => continueParts.push(...appended) },
+    })
+
+    // The continued turn emits the same translation sequence as the
+    // equivalent start turn — the per-turn emitter is the only difference.
+    expect(continueParts.map((part) => part.type)).toEqual(startParts.map((part) => part.type))
+    expect(continueParts[0]).toEqual({
+      type: 'data-ab-prompt',
+      data: { text: '- address findings' },
+    })
+    // Both turns asked for partial messages: each carried a live emitter.
+    expect(cli.calls[0]?.args).toContain('--include-partial-messages')
+    expect(cli.calls[1]?.args).toContain('--include-partial-messages')
+  })
+
+  test("a continued turn without an emitter emits nothing, not the start turn's stream", async () => {
+    const cli = fakeCli([
+      output([assistant('started'), result('s1', 1, 1, { result: 'started' })]),
+      output([assistant('continued'), result('s1', 2, 1, { result: 'continued' })]),
+    ])
+    const runner = new ClaudeAgentRunner({ runCli: cli.runCli, createSessionId: () => 's1' })
+    const startParts: StreamPart[] = []
+    const { session } = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => startParts.push(...appended) },
+    })
+    const startPartCount = startParts.length
+    await runner.continue(session, '- address findings')
+
+    // The start emitter received nothing from the continued turn, and the
+    // continued CLI invocation never asked for partial messages.
+    expect(startParts.length).toBe(startPartCount)
+    expect(cli.calls[1]?.args).not.toContain('--include-partial-messages')
+  })
+})
