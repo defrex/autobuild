@@ -1,5 +1,6 @@
 import semver from 'semver'
 import type { ExecResult } from '../ports/workspace/git-worktree'
+import { registryBaseUrl, registryVersionUrl } from '../registry'
 import { defaultDistRoot } from './init'
 import { addUpgradeSelfUpdatePaths, UPGRADE_COMMIT_CONTEXT_ENV } from './upgrade-commit'
 import {
@@ -34,22 +35,7 @@ export type RegistryLookup = (
   options: { signal?: AbortSignal },
 ) => Promise<{ status: number; body: string }>
 
-export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org'
-
-/** The registry an npm-channel install reads: the operator's configured
- * `NPM_CONFIG_REGISTRY` when set, else the public registry. */
-export function registryBaseUrl(env: Record<string, string | undefined> | undefined): string {
-  const configured = env?.NPM_CONFIG_REGISTRY?.trim()
-  return (
-    configured !== undefined && configured !== '' ? configured : DEFAULT_NPM_REGISTRY
-  ).replace(/\/+$/, '')
-}
-
-/** `<registry>/<encoded name>/<version|latest>` — the registry's packument
- * version endpoint, with the scope separator encoded as npm clients do. */
-export function registryVersionUrl(base: string, packageName: string, version?: string): string {
-  return `${base}/${packageName.replace('/', '%2f')}/${version ?? 'latest'}`
-}
+export { registryBaseUrl, registryVersionUrl } from '../registry'
 
 const fetchRegistry: RegistryLookup = async (url, options) => {
   const response = await fetch(url, {

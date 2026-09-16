@@ -67,7 +67,8 @@ and the trace step still fail at runtime.
 At runtime the kernel takes, in order: `AB_DISTRIBUTION_ARCHIVE` (an explicit
 archive path), the single archive under `.autobuild-dist/` of the
 distribution root or working directory, a source checkout packed on the spot,
-and finally the running version's published GitHub release asset. A tick that
+and finally the running version's published distribution — the npm registry
+tarball, else the GitHub release asset. A tick that
 reports `Executable not found in $PATH: "bun"` during `provision` is a
 deployment that skipped the pack step (or, outside this pipeline, the trace
 step that ships the archive).

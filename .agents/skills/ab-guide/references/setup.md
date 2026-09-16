@@ -191,8 +191,9 @@ from the forge at the current `baseBranch` (the first read resolves against the
 repository's default branch), so a push to the base branch is honored by a
 later tick without restarting anything. Configs declaring local `plugins` are
 rejected: plugin code is checkout-relative. The guest installs the Autobuild
-distribution published with its version's GitHub release, so origin-mode
-dispatch requires a cut release carrying `autobuild-<version>.tgz`.
+distribution published for its version — the npm registry tarball, else the
+GitHub release asset `autobuild-<version>.tgz` — so origin-mode dispatch
+requires a published release.
 
 ### Guest distribution version selection and delivery
 
