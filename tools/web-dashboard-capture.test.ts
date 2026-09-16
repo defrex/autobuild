@@ -498,6 +498,19 @@ test('a frame missing its evidence fails the capture by name', () => {
   expect(() => checkEvidence(spec, html)).toThrow(/required evidence "NOT PRESENT"/)
 })
 
+test('the parked no-consent frame renders the shared reason in row and detail (f_b163d7ca)', () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-parked-no-consent-wide')
+  if (!spec) throw new Error('builds-parked-no-consent-wide frame spec is missing')
+  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const reason = 'no auto-merge consent has been requested'
+  // Both surfaces, same words: the row register and the open detail register.
+  expect(evidenceText(html).split(reason)).toHaveLength(3)
+  expect(evidenceText(html)).toContain('`ab auto-merge complete-dashboard-evidence on`')
+  // The observed mismatch is visible in the row markup, not just the words:
+  // default ON with the build's consent off marks the token.
+  expect(html).toContain('data-mismatch')
+})
+
 test('chromium detection prefers the configured binary and reports absence', () => {
   const which = () => undefined
   expect(

@@ -27,6 +27,7 @@ import {
   type RenderOpts,
 } from './render'
 import type { DashboardBuild, DashboardHarvest, DashboardModel, PipelineStep } from './model'
+import { autoMergeConsentReason } from './model'
 
 /** A fixed render clock. Most tests carry no running timing, so the value is
  * irrelevant to them; the ticking tests pass `now` explicitly. */
@@ -1232,6 +1233,37 @@ describe('renderDashboard: never color-only', () => {
       .find((line) => stripAnsi(line).includes('off-row'))!
     expect(stripAnsi(agrees)).toContain('auto merge off')
     expect(agrees).not.toContain('\x1b[31mauto merge off')
+  })
+
+  test('the parked no-consent reason renders in the row and the detail view', () => {
+    // The shared projection attaches the reason to the merge step; the render
+    // append is what makes it reach the operator, so pin its bytes on both
+    // surfaces (f_b163d7ca).
+    const reason = autoMergeConsentReason('parked-build')
+    const parked = build({
+      slug: 'parked-build',
+      autoMerge: 'off',
+      steps: [
+        { label: 'plan', state: 'done' },
+        { label: 'merge', state: 'current', qualifier: 'waiting', reason },
+      ],
+    })
+    const row = rd(model([parked]), WIDE).join('\n')
+    expect(row).toContain('no auto-merge consent has been requested')
+    expect(row).toContain('`ab auto-merge parked-build on`')
+
+    const detail = rd(
+      { ...model([parked]), view: { kind: 'detail' as const, slug: parked.slug, scroll: 0 } },
+      WIDE,
+    ).join('\n')
+    expect(detail).toContain('no auto-merge consent has been requested')
+    expect(detail).toContain('`ab auto-merge parked-build on`')
+  })
+
+  test('a step without a reason renders no dangling separator', () => {
+    const lines = rd(model([build({ slug: 'plain-row' })]), WIDE).join('\n')
+    expect(lines).not.toContain(' — undefined')
+    expect(lines).not.toContain(' — no auto-merge consent')
   })
 })
 
