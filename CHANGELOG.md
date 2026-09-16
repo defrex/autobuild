@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#344](https://github.com/defrex/autobuild/pull/344) — Document the 30-second read-wait clamp in SPEC §7.6
 - [#341](https://github.com/defrex/autobuild/pull/341) — Document the appendStreamParts rejection precedence divergence
 - [#340](https://github.com/defrex/autobuild/pull/340) — Guarantee a git identity for finalize commits
 - [#338](https://github.com/defrex/autobuild/pull/338) — Add `ab watch`: read-only event streaming with a resumable cursor
