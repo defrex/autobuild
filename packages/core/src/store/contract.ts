@@ -205,6 +205,26 @@ async function withStore(
   }
 }
 
+/** Delivery wait for the §7.2 subscribe tests: poll the predicate every 5 ms
+ * and fail with `message` only if it never turns true within `deadlineMs`.
+ * Replaces fixed 50 ms sleeps that bet on delivery landing inside a
+ * wall-clock window — over real HTTP + Postgres round-trips the first poll
+ * can land past any small window, while a genuinely broken delivery path
+ * still fails at the deadline. */
+async function waitForDelivery(
+  predicate: () => boolean,
+  message: string,
+  deadlineMs = 10_000,
+): Promise<void> {
+  const deadline = performance.now() + deadlineMs
+  while (!predicate()) {
+    if (performance.now() > deadline) {
+      throw new Error(`timed out waiting for ${message}`)
+    }
+    await Bun.sleep(5)
+  }
+}
+
 // ── Stream fixtures (SPEC §7.6) ──────────────────────────────────────────
 
 /** The representative part sequence the assembly close test asserts on:
@@ -1393,14 +1413,17 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             received.push(event.seq)
           })
           await store.append('sub-order', sampleEventWrite('one'))
-          await Bun.sleep(50)
+          await waitForDelivery(() => received.includes(1), 'the first event')
           await store.append('sub-order', sampleEventWrite('two'))
           await store.append('sub-order', sampleEventWrite('three'))
-          await Bun.sleep(50)
+          await waitForDelivery(() => received.length >= 3, 'all three events')
           unsubscribe()
+          // Settle past unsubscribe: a duplicate delivery would still show
+          // up in the exact-array pin below.
+          await Bun.sleep(50)
           expect(received).toEqual([1, 2, 3])
         })
-      })
+      }, 30_000)
 
       test('fromSeq skips earlier events', async () => {
         await withStore(factory, undefined, async (store) => {
@@ -1412,11 +1435,12 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             received.push(event.seq),
           )
           await store.append('sub-from', sampleEventWrite('three'))
-          await Bun.sleep(50)
+          await waitForDelivery(() => received.length >= 2, 'the events from seq 2')
           unsubscribe()
+          await Bun.sleep(50)
           expect(received).toEqual([2, 3])
         })
-      })
+      }, 30_000)
 
       test('unsubscribe stops delivery', async () => {
         await withStore(factory, undefined, async (store) => {
@@ -1426,13 +1450,17 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             received.push(event.seq)
           })
           await store.append('sub-stop', sampleEventWrite('one'))
-          await Bun.sleep(50)
+          await waitForDelivery(() => received.length >= 1, 'the first event')
           unsubscribe()
           await store.append('sub-stop', sampleEventWrite('two'))
-          await Bun.sleep(40)
+          // Generous observation window: a still-subscribed client would
+          // have completed ≥ 50 poll cycles at pollMs=10 (and on the
+          // held-read remote path the append-wake plus round-trip is well
+          // under 1 s), so a late delivery cannot hide inside it.
+          await Bun.sleep(1_000)
           expect(received).toEqual([1])
         })
-      })
+      }, 30_000)
     })
 
     describe('streams (SPEC §7.6 — the third primitive)', () => {
