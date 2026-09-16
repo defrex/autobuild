@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#365](https://github.com/defrex/autobuild/pull/365) — State the Postgres held-read append-to-wake bound as nominal
 - [#363](https://github.com/defrex/autobuild/pull/363) — Evict finished detached sandbox commands from git-worktree tracking
 - [#362](https://github.com/defrex/autobuild/pull/362) — Fix stale mcp.test.ts title claiming GET 405 instead of pinned SSE 200
 - [#360](https://github.com/defrex/autobuild/pull/360) — Add ab wait — block until a build reaches a condition (AUT-333)

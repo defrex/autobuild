@@ -864,7 +864,10 @@ For streams, the backing store must additionally maintain:
   specified in section 3, with no per-request database poll faster than once
   per second (the shipped PostgreSQL adapter polls held reads at
   `EVENT_WAIT_POLL_MS = 1000`, so an append by another connection is observed
-  within about one second);
+  at the next poll — typically within about one second, worst case one poll
+  interval plus the query round-trip; a hard ≤1 s worst case would need
+  LISTEN/NOTIFY wake-on-append at a dedicated connection per held request on
+  a pooled provider, a cost considered and declined);
 - the atomic close — document assembly, artifact deposit, and the closed
   record visible together or not at all, with the stream left open and
   unwritten when the deposit fails;

@@ -221,7 +221,10 @@ if (testUrl) {
       }
     })
 
-    test('a held event read observes a cross-connection append within the one-second poll budget (AUT-334)', async () => {
+    // Nominal bound (AUT-334): the 2 s assertion covers the poll-interval
+    // worst case — the 1 s EVENT_WAIT_POLL_MS poll plus up to ~1 s of query
+    // and CI scheduler slack — not a hard one-second delivery guarantee.
+    test('a held event read observes a cross-connection append within the one-poll worst-case budget (AUT-334)', async () => {
       const database = await isolatedDatabase()
       const blobs = new MemoryBlobStore()
       const reader = await openPostgresBuildStore(database.url, blobs)
@@ -253,7 +256,7 @@ if (testUrl) {
       }
     })
 
-    test('EVENT_WAIT_POLL_MS pins the one-second hosted poll budget (AUT-334)', () => {
+    test('EVENT_WAIT_POLL_MS pins the one-second hosted poll interval (AUT-334)', () => {
       expect(EVENT_WAIT_POLL_MS).toBe(1000)
     })
 

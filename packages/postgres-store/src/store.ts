@@ -69,7 +69,11 @@ import {
  * The held-read poll cadence for event waits (AUT-334): a held
  * `getEvents`/`getRepoEvents` re-queries the database at most once per
  * second — the hosted per-query budget — so an append by another connection
- * is observed at the next poll, i.e. within about one second.
+ * is observed at the next poll: typically within about one second, worst
+ * case one poll interval plus the query round-trip. The nominal bound is
+ * deliberate — a hard ≤1 s worst case would need Postgres LISTEN/NOTIFY
+ * wake-on-append, one dedicated connection per held request on a pooled
+ * provider (Neon), a cost considered and declined (see the PR record).
  */
 export const EVENT_WAIT_POLL_MS = 1000
 import {
@@ -355,7 +359,8 @@ export class PostgresBuildStore implements BuildStore {
       read,
       waitSeconds: opts?.waitSeconds,
       // Hosted budget: no held request polls the database faster than once
-      // per second (AUT-334).
+      // per second (AUT-334), so append-to-wake is typically under one
+      // second — worst case one poll interval plus the query round-trip.
       pollMs: EVENT_WAIT_POLL_MS,
     })
   }
