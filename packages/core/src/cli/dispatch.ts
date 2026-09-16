@@ -1175,6 +1175,7 @@ class DispatchLoop {
       repo: this.repoIdentity,
       user: buildControlUser(this.opts.env),
       setting: 'intake',
+      run: this.runId,
     })
     this.say(`dispatcher intake ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
@@ -1439,6 +1440,7 @@ class DispatchLoop {
         repo: this.repoIdentity,
         user: buildControlUser(this.opts.env),
         setting: 'auto-merge-default',
+        run: this.runId,
       })
       this.say(`dispatcher auto-merge default ${event.enabled ? 'ON' : 'OFF'}`)
       await this.renderOnce()

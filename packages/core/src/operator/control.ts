@@ -29,19 +29,27 @@ export async function setRepositorySetting(opts: {
   enabled: boolean
   /** Delegated-write attribution marker threaded onto the event's actor. */
   via?: Via
+  /** Dispatcher invocation that performed the write. Present on the
+   * dashboard/launch-flag write paths so the two are distinguishable in the
+   * journal; optional so the operator API (which has no run) is unchanged. */
+  run?: string
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
+  const payload = {
+    enabled: opts.enabled,
+    ...(opts.run !== undefined ? { run: opts.run } : {}),
+  }
   const event =
     opts.setting === 'intake'
       ? await opts.store.appendRepo(opts.repo, {
           actor: humanActor(opts.user, opts.via),
           type: 'dispatcher.intake-set',
-          payload: { enabled: opts.enabled },
+          payload,
         })
       : await opts.store.appendRepo(opts.repo, {
           actor: humanActor(opts.user, opts.via),
           type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: opts.enabled },
+          payload,
         })
   return { enabled: opts.enabled, event }
 }
