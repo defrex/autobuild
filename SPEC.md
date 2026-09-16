@@ -1535,7 +1535,16 @@ did this" or "an MCP client did this" forever. `via` is valid only on human
 actors and only on build and repository events (session events are the
 delegate's own log); validation rejects it anywhere else. The hosted service
 stamps `via` from the authorizing token and rejects a write claiming a `via`
-the token does not carry; events without it replay unchanged.
+the token does not carry; events without it replay unchanged. Over a
+transport with token authority (the hosted HTTP store) that rejection is an
+authority failure — 403 `auth` (`AuthError` on the remote client), applied
+after token verification and before catalog validation, so "not your
+delegate" (403) stays distinguishable from "malformed event" (422
+`validation`). A token without a `via` claim may not write delegated events
+at all: any human write claiming a `via`, valid or malformed, rejects the
+same way. Local adapters and the open (no-secret) remote server have no
+token authority; there the backing catalog is the only `via` gate and every
+rejection is `EventValidationError`.
 
 ### 15.2 Conventions
 

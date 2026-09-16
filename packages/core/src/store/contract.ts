@@ -16,6 +16,7 @@ import { agentActor, DISPATCHER, humanActor, KERNEL, type Via } from '../events/
 import type { RepositoryEventWrite } from '../events/repository'
 import type { SessionEventWrite } from '../events/sessions'
 import { manualClock } from '../testing/fixed'
+import { AuthError } from './remote/client'
 import {
   contentHash,
   textContent,
@@ -42,6 +43,21 @@ import {
 
 export interface BuildStoreHarness {
   store: BuildStore
+  /**
+   * Delegated-write authority posture (SPEC §15.1). Absent: no token
+   * authority — the backing catalog is the only via gate (local adapters; the
+   * open no-secret remote server), and the catalog's EventValidationError is
+   * the sole rejection. Present: writes are authorized by a bearer token and
+   * `via` is the claim it carries. A token without a via claim may not write
+   * delegated events at all — any human write claiming a via, valid or
+   * malformed, rejects with AuthError (403 "token carries no via; it may not
+   * write delegated events") before catalog validation, the deliberate
+   * authority-vs-validation ordering of the remote server's enforceVia —
+   * while via-less human writes still round-trip. A token carrying a via
+   * stamps it onto human writes and accepts only that via (a write claiming
+   * a different via rejects with AuthError).
+   */
+  viaAuthority?: { via?: Via }
   cleanup?: () => Promise<void>
 }
 
@@ -178,11 +194,11 @@ export function turnStartedWrite(
 async function withStore(
   factory: BuildStoreFactory,
   opts: { clock?: Clock; retention?: { maxRevisions: number } } | undefined,
-  run: (store: BuildStore) => Promise<void>,
+  run: (store: BuildStore, viaAuthority?: { via?: Via }) => Promise<void>,
 ): Promise<void> {
-  const { store, cleanup } = await factory(opts)
+  const { store, viaAuthority, cleanup } = await factory(opts)
   try {
-    await run(store)
+    await run(store, viaAuthority)
   } finally {
     await store.close()
     await cleanup?.()
@@ -2147,13 +2163,108 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
 
       describe('via attribution (delegated writes, SPEC §15.1)', () => {
+        // The via contract is per-transport, and the harness's `viaAuthority`
+        // posture selects the branch. Absent (memory, SQLite, PostgreSQL, and
+        // the open no-secret remote server): the backing catalog is the only
+        // via gate, so every rejection is a 422 `EventValidationError`. Present
+        // (a transport with token authority — the hosted HTTP store): the
+        // server's `enforceVia` runs after token verification and before
+        // catalog validation, so a human write claiming a via the token does
+        // not carry — a valid shape or a malformed one — rejects with 403
+        // `auth` (`AuthError` on the remote client) before the catalog ever
+        // sees it. The 403-vs-422 split is the designed signal: "not your
+        // delegate" vs "malformed event" (SPEC §15.1).
         const viaSession: Via = { kind: 'session', id: 'os_delegate' }
         const viaMcp: Via = { kind: 'mcp', client: 'claude-code' }
+        const NO_VIA_MESSAGE = 'token carries no via; it may not write delegated events'
 
         test('build and repository writes accept human actors carrying each via kind and round-trip it', async () => {
-          await withStore(factory, undefined, async (store) => {
+          await withStore(factory, undefined, async (store, viaAuthority) => {
             await store.createBuild(sampleBuildInput('via-build'))
             await store.ensureRepo('acme/via')
+            if (viaAuthority !== undefined) {
+              if (viaAuthority.via === undefined) {
+                // Via-less token posture (the hosted HTTP harness): any human
+                // write claiming a via — this valid shape or a malformed one —
+                // is an authority failure before catalog validation.
+                for (const via of [viaSession, viaMcp]) {
+                  const err = await store
+                    .append('via-build', {
+                      actor: humanActor('operator', via),
+                      type: 'build.created',
+                      payload: {
+                        ticket: sampleBuildInput('via-build').ticket!,
+                        repo: 'acme/rate-limiter',
+                        baseBranch: 'main',
+                      },
+                    })
+                    .catch((e: unknown) => e)
+                  expect(err).toBeInstanceOf(AuthError)
+                  expect((err as Error).message).toBe(NO_VIA_MESSAGE)
+                  const repoErr = await store
+                    .appendRepo('acme/via', {
+                      actor: humanActor('operator', via),
+                      type: 'dispatcher.intake-set',
+                      payload: { enabled: false },
+                    })
+                    .catch((e: unknown) => e)
+                  expect(repoErr).toBeInstanceOf(AuthError)
+                  expect((repoErr as Error).message).toBe(NO_VIA_MESSAGE)
+                }
+                expect(await store.getEvents('via-build')).toEqual([])
+                expect(await store.getRepoEvents('acme/via')).toEqual([])
+                // Non-delegated human writes still round-trip faithfully over
+                // the same transport.
+                const plain = await store.append('via-build', {
+                  actor: humanActor('operator'),
+                  type: 'build.pause-requested',
+                  payload: {},
+                })
+                expect(plain.actor).toEqual({ kind: 'human', user: 'operator' })
+                const repoPlain = await store.appendRepo('acme/via', {
+                  actor: humanActor('operator'),
+                  type: 'dispatcher.intake-set',
+                  payload: { enabled: false },
+                })
+                expect(repoPlain.actor).toEqual({ kind: 'human', user: 'operator' })
+                return
+              }
+              // Token carrying a via (kept for future harnesses): the token is
+              // authoritative — it stamps its via onto plain human writes and
+              // accepts only its own claim.
+              const tokenVia = viaAuthority.via
+              const other = tokenVia.kind === 'session' ? viaMcp : viaSession
+              const envelope = await store.append('via-build', {
+                actor: humanActor('operator', tokenVia),
+                type: 'build.created',
+                payload: {
+                  ticket: sampleBuildInput('via-build').ticket!,
+                  repo: 'acme/rate-limiter',
+                  baseBranch: 'main',
+                },
+              })
+              expect(envelope.actor).toEqual({ kind: 'human', user: 'operator', via: tokenVia })
+              const stamped = await store.append('via-build', {
+                actor: humanActor('operator'),
+                type: 'build.pause-requested',
+                payload: {},
+              })
+              expect(stamped.actor).toEqual({ kind: 'human', user: 'operator', via: tokenVia })
+              const mismatch = await store
+                .append('via-build', {
+                  actor: humanActor('operator', other),
+                  type: 'build.resume-requested',
+                  payload: {},
+                })
+                .catch((e: unknown) => e)
+              expect(mismatch).toBeInstanceOf(AuthError)
+              expect((mismatch as Error).message).toBe(
+                `token carries via ${JSON.stringify(tokenVia)}; it may not write events claiming via ${JSON.stringify(other)}`,
+              )
+              return
+            }
+            // No token authority: the catalog is the only gate (today's local
+            // behavior, byte-for-byte).
             for (const via of [viaSession, viaMcp]) {
               const envelope = await store.append('via-build', {
                 actor: humanActor('operator', via),
@@ -2189,6 +2300,10 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
 
         test('via on any non-human actor rejects with the explicit rule message', async () => {
+          // This is the validation side of the 403/422 split: `enforceVia`
+          // passes non-human actors through, so even token-authority postures
+          // surface the backing catalog's EventValidationError (422 over the
+          // wire). Holds on every transport.
           await withStore(factory, undefined, async (store) => {
             await store.createBuild(sampleBuildInput('via-nonhuman'))
             await store.ensureRepo('acme/via')
@@ -2223,7 +2338,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
 
         test('malformed via shapes reject', async () => {
-          await withStore(factory, undefined, async (store) => {
+          await withStore(factory, undefined, async (store, viaAuthority) => {
             await store.createBuild(sampleBuildInput('via-malformed'))
             for (const via of [
               { kind: 'session' },
@@ -2240,9 +2355,22 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
                   payload: {},
                 } as unknown as EventWrite)
                 .catch((e: unknown) => e)
-              expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(
-                EventValidationError,
-              )
+              // All six fixtures ride human actors, so under a token posture
+              // `enforceVia` rejects each before the catalog ever sees the
+              // shape — a malformed via under a via-less token is the same 403
+              // authority failure as a valid one (SPEC §15.1).
+              if (viaAuthority !== undefined) {
+                expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(AuthError)
+                expect((err as Error).message).toBe(
+                  viaAuthority.via === undefined
+                    ? NO_VIA_MESSAGE
+                    : `token carries via ${JSON.stringify(viaAuthority.via)}; it may not write events claiming via ${JSON.stringify(via)}`,
+                )
+              } else {
+                expect(err, `via ${JSON.stringify(via)} must reject`).toBeInstanceOf(
+                  EventValidationError,
+                )
+              }
             }
             expect(await store.getEvents('via-malformed')).toEqual([])
           })

@@ -29,6 +29,7 @@ apt-get update -qq
 curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
 apt-get install -y -qq /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji fontconfig""" },
   { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/google-chrome-stable BUN_BIN=/opt/autobuild-runtime/node_modules/.bin/bun ./scripts/browser-smoke.sh" },
+  { name = "postgres", command = "./scripts/postgres-live.sh install" },
   # Finalize steps (and any in-guest git usage) need an attributable identity;
   # without this, fresh sandboxes fail `git commit` with 'Committer identity
   # unknown'. System scope so it applies to every user, incl. unprivileged
@@ -50,12 +51,13 @@ setup = "bun install"
 lint = "bun run check"
 typecheck = "bun run typecheck"
 test = "bun run test"
+test-postgres = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun test packages/postgres-store/src/store.live.test.ts packages/postgres-store/src/migrate.test.ts packages/postgres-store/src/tickets.live.test.ts"
 
 # The configured universe and order of verification. A plan may deselect
 # optional steps in its opening `verifySteps` front matter; a plan without that
 # metadata runs all of them.
 [verify]
-steps = ["lint", "types", "unit", "dashboard", "web-dashboard"]
+steps = ["lint", "types", "unit", "postgres", "dashboard", "web-dashboard"]
 
 [verify.lint]
 kind = "check"           # deterministic command + pass/fail, never an agent
@@ -69,6 +71,11 @@ command = "typecheck"
 [verify.unit]
 kind = "check"
 command = "test"
+
+[verify.postgres]
+kind = "check"
+command = "test-postgres"
+always = true
 
 # Visual evidence for dashboard-touching builds. The kernel decides
 # applicability from the build-owned diff; the skill never inspects Git or skips.
