@@ -164,7 +164,11 @@ describe('PostgreSQL store environment', () => {
     const names = Object.keys(manifest.dependencies ?? {})
     expect(names).not.toContain('@aws-sdk/client-s3')
     expect(names).not.toContain('@vercel/blob')
-    expect(manifest.dependencies?.pg).toBe('8.18.0')
+    expect(names).not.toContain('pg')
     expect(names).not.toContain('postgres')
+    const hosted = (await Bun.file('packages/hosted-store-service/package.json').json()) as {
+      dependencies?: Record<string, string>
+    }
+    expect(hosted.dependencies?.pg).toBe('8.18.0')
   })
 })

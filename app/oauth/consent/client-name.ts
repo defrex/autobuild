@@ -1,4 +1,4 @@
-import { webAuth } from '@autobuild/hosted-store-service/web/auth'
+import { webAuth } from '@defrex/autobuild-hosted-store-service/web/auth'
 
 /** How the consent page asks for a client's registered display name. */
 export type ClientNameLookup = (clientId: string) => Promise<string | null>

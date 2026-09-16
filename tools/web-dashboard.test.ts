@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { DashboardModel } from 'autobuild/operator-presentation'
+import type { DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
   elapsedMilliseconds,
   projectWebParity,

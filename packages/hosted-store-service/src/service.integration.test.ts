@@ -9,8 +9,8 @@ import { createTicketSource } from '../../core/src/ports/tickets/create'
 import { FakeTicketSource } from '../../core/src/ports/tickets/fake'
 import type { TicketSource } from '../../core/src/ports/types'
 import { spawnExec } from '../../core/src/ports/workspace/git-worktree'
-import { OperatorApiClient } from 'autobuild/operator-api'
-import { RemoteBuildStore, mintToken } from 'autobuild/remote-store'
+import { OperatorApiClient } from '@defrex/autobuild/operator-api'
+import { RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
 import {
   CONFIG_TOML,
   happyHandlers,

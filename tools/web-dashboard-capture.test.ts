@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { DashboardBuild, DashboardModel } from 'autobuild/operator-presentation'
+import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
   autoMergeAction,
   buildRowActions,

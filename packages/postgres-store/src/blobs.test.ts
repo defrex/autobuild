@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
-import { describeBlobStoreContract } from 'autobuild/plugin-sdk'
+import { describeBlobStoreContract } from '@defrex/autobuild/plugin-sdk'
 import { Buffer } from 'node:buffer'
 import { S3BlobStore } from './s3'
 import { VercelBlobStore } from './vercel'

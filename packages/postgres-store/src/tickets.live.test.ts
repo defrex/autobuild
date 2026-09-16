@@ -1,6 +1,6 @@
 import { describe, test } from 'bun:test'
 import { SQL } from 'bun'
-import { describeTicketSourceContract } from 'autobuild/plugin-sdk'
+import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
 import { openPostgresTicketDatabase } from './tickets'
 

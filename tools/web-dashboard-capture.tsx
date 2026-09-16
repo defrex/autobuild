@@ -16,7 +16,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { DashboardModel, TranscriptPresentation } from 'autobuild/operator-presentation'
+import type {
+  DashboardModel,
+  TranscriptPresentation,
+} from '@defrex/autobuild/operator-presentation'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {

@@ -1,6 +1,6 @@
 import { get, put, type get as getType, type put as putType } from '@vercel/blob'
 import { Buffer } from 'node:buffer'
-import type { BlobStore } from 'autobuild/plugin-sdk'
+import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
 import { blobPath } from './s3'
 
 type Put = typeof putType

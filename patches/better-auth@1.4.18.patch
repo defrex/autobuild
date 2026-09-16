@@ -1,0 +1,13 @@
+diff --git a/dist/plugins/mcp/index.mjs b/dist/plugins/mcp/index.mjs
+index 37b5fc35debbffd93e64efcd63450c3ca66d747f..a097b0cd0d4f75e2fd2ff2ef8c5649afbddc4b4b 100644
+--- a/dist/plugins/mcp/index.mjs
++++ b/dist/plugins/mcp/index.mjs
+@@ -183,7 +183,7 @@ const mcp = (options) => {
+ 				metadata: HIDE_METADATA
+ 			}, async (c) => {
+ 				try {
+-					const metadata = getMCPProviderMetadata(c, options);
++					const metadata = getMCPProviderMetadata(c, options?.oidcConfig);
+ 					return c.json(metadata);
+ 				} catch (e) {
+ 					console.log(e);

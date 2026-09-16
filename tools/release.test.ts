@@ -14,9 +14,13 @@ import {
   resolveReleaseVersion,
   runRelease,
   spawnCommand,
+  uploadDistributionAsset,
   type CommandRequest,
   type CommandResult,
+  type CommandRunner,
   type ReleaseOutput,
+  publishablePackages,
+  publishRecoveryCommand,
 } from './release'
 
 const temporaryDirectories: string[] = []
@@ -65,7 +69,7 @@ const fixtureReadme = `# Fixture
 ${README_INSTALL_START}
 
 \`\`\`sh
-bun add github:defrex/autobuild#main
+bun add -g @defrex/autobuild@0.0.0
 \`\`\`
 
 ${README_INSTALL_END}
@@ -118,6 +122,10 @@ function harness(
     stderr: '',
   },
   github: CommandResult = { exitCode: 0, stdout: '', stderr: '' },
+  registry: { whoami: CommandResult; publish: CommandResult } = {
+    whoami: { exitCode: 0, stdout: 'release-bot\n', stderr: '' },
+    publish: { exitCode: 0, stdout: '', stderr: '' },
+  },
 ): Harness {
   const requests: CommandRequest[] = []
   const logs: string[] = []
@@ -145,6 +153,12 @@ function harness(
       }
       if (request.command === 'bun' && request.args[0] === 'install') {
         return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      if (request.command === 'bun' && request.args[0] === 'pm' && request.args[1] === 'whoami') {
+        return registry.whoami
+      }
+      if (request.command === 'bun' && request.args[0] === 'publish') {
+        return registry.publish
       }
       if (request.command === 'bun' && request.args.join(' ') === 'run --silent postgres:migrate') {
         return {
@@ -244,12 +258,13 @@ describe('release transforms', () => {
   })
 
   test('strictly replaces only the fenced README command and manifest version', () => {
-    const replaced = replaceReadmeInstall(fixtureReadme, 'v2.1.0')
-    expect(replaced).toContain('bun add -g github:defrex/autobuild#v2.1.0')
+    const replaced = replaceReadmeInstall(fixtureReadme, '2.1.0')
+    expect(replaced).toContain('bun add -g @defrex/autobuild@2.1.0')
+    expect(replaced).not.toContain('github:')
     expect(replaced.match(/release-install:start/g)).toHaveLength(1)
-    expect(() => replaceReadmeInstall('# no markers\n', 'v2.1.0')).toThrow('exactly one')
+    expect(() => replaceReadmeInstall('# no markers\n', '2.1.0')).toThrow('exactly one')
     expect(() =>
-      replaceReadmeInstall(`${README_INSTALL_END}\n${README_INSTALL_START}`, 'v2.1.0'),
+      replaceReadmeInstall(`${README_INSTALL_END}\n${README_INSTALL_START}`, '2.1.0'),
     ).toThrow('out of order')
     expect(replacePackageVersion('{\n  "version": "2.0.0"\n}\n', '2.1.0')).toBe(
       '{\n  "version": "2.1.0"\n}\n',
@@ -268,6 +283,9 @@ describe('release orchestration', () => {
       output: testHarness.output,
       today: () => '2026-07-27',
       repositoryUrl: fixture.remote,
+      // The real packer runs outside the command seam; this stub only proves
+      // the upload uses the injected bytes.
+      packageArchive: async () => new Uint8Array([1, 2, 3]),
     })
 
     const cloneRequests = testHarness.requests.filter(
@@ -283,20 +301,33 @@ describe('release orchestration', () => {
       expect(existsSync(String(clone.args.at(-1)))).toBe(false)
     }
     const smokeBunRequests = testHarness.requests.filter(
-      (request) => request.command === 'bun' && request.args[0] !== 'pm',
+      (request) =>
+        request.command === 'bun' && request.args[0] !== 'pm' && request.args[0] !== 'publish',
     )
     expect(smokeBunRequests).toHaveLength(4)
-    // The guest distribution archive is packed and uploaded after the release.
-    const packRequest = testHarness.requests.find(
-      (request) => request.command === 'bun' && request.args[0] === 'pm',
+    // Every publishable package is published last, in dependency order, from
+    // its own directory, and only after the GitHub Release exists.
+    const publishRequests = testHarness.requests.filter(
+      (request) => request.command === 'bun' && request.args[0] === 'publish',
     )
-    expect(packRequest?.args).toEqual([
-      'pm',
-      'pack',
-      '--ignore-scripts',
-      '--destination',
-      expect.any(String),
+    expect(publishRequests.map((request) => request.cwd)).toEqual([
+      fixture.root,
+      join(fixture.root, 'packages', 'core'),
     ])
+    for (const request of publishRequests) {
+      expect(request.args).toEqual(['publish', '--access', 'public', '--ignore-scripts'])
+    }
+    const lastGhIndex = testHarness.requests.map((request) => request.command).lastIndexOf('gh')
+    expect(testHarness.requests.indexOf(publishRequests[0]!)).toBeGreaterThan(lastGhIndex)
+    // The guest distribution archive is packed by the injected packageArchive
+    // (the production packer runs outside the command seam) and uploaded to
+    // the release under the published asset name — no in-process `bun pm pack`.
+    expect(
+      testHarness.requests.some(
+        (request) =>
+          request.command === 'bun' && request.args[0] === 'pm' && request.args[1] === 'pack',
+      ),
+    ).toBe(false)
     const uploadRequest = testHarness.requests.find(
       (request) =>
         request.command === 'gh' && request.args[0] === 'release' && request.args[1] === 'upload',
@@ -381,7 +412,9 @@ describe('release orchestration', () => {
     expect(await readFile(join(fixture.root, 'packages/core/package.json'), 'utf8')).toContain(
       '"version": "2.0.1"',
     )
-    expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain('#v2.0.1')
+    expect(await readFile(join(fixture.root, 'README.md'), 'utf8')).toContain(
+      '@defrex/autobuild@2.0.1',
+    )
     expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
   })
 
@@ -534,7 +567,15 @@ describe('release orchestration', () => {
     expect(testHarness.requests.some((request) => request.command === 'claude')).toBe(true)
     expect(testHarness.requests.some((request) => request.command === 'gh')).toBe(false)
     expect(testHarness.logs.join('\n')).toContain('This release adds a new capability')
-    expect(testHarness.logs.join('\n')).toContain('bun add -g github:defrex/autobuild#v2.1.0')
+    expect(testHarness.logs.join('\n')).toContain('bun add -g @defrex/autobuild@2.1.0')
+    expect(testHarness.logs.join('\n')).toContain(
+      'Would publish fixture@2.1.0, @fixture/core@2.1.0 to the npm registry, in that order, as release-bot.',
+    )
+    expect(
+      testHarness.requests.some(
+        (request) => request.command === 'bun' && request.args[0] === 'publish',
+      ),
+    ).toBe(false)
     expect(testHarness.logs.join('\n')).toContain('--- packages/core/package.json (candidate) ---')
   })
 
@@ -635,5 +676,118 @@ describe('release orchestration', () => {
     expect(skill).toContain(
       'before that release heading — never beneath or inside the released section',
     )
+  })
+})
+
+describe('distribution asset upload', () => {
+  test('uploads the production-packed archive whose manifest omits patchedDependencies', async () => {
+    const destination = await mkdtemp(join(tmpdir(), 'autobuild-release-upload-'))
+    temporaryDirectories.push(destination)
+    const logs: string[] = []
+    let uploadedBytes: Uint8Array | undefined
+    const run: CommandRunner = async (request) => {
+      if (
+        request.command === 'gh' &&
+        request.args[0] === 'release' &&
+        request.args[1] === 'upload'
+      ) {
+        // Capture the bytes during the intercepted upload: the packer's
+        // staging directory is removed when uploadDistributionAsset returns.
+        uploadedBytes = new Uint8Array(await readFile(String(request.args[3])))
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      if (request.command === 'gh' && request.args[0] === 'release' && request.args[1] === 'view') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ assets: [{ name: 'autobuild-2.0.1.tgz', size: 1234 }] }),
+          stderr: '',
+        }
+      }
+      throw new Error(`unexpected command: ${request.command} ${request.args.join(' ')}`)
+    }
+
+    // The default packageArchive is the production packer
+    // (packageAutobuildDistribution) — the same bytes a real release uploads.
+    await uploadDistributionAsset(run, destination, 'v2.0.1', '2.0.1', {
+      log: (message) => logs.push(message),
+      warn: () => {},
+    })
+
+    expect(uploadedBytes!.length).toBeGreaterThan(0)
+    const archive = join(destination, 'autobuild-2.0.1.tgz')
+    await writeFile(archive, uploadedBytes!)
+    const manifestProcess = Bun.spawn(['tar', '-xOf', archive, 'package/package.json'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const packedManifest = JSON.parse(await new Response(manifestProcess.stdout).text()) as {
+      patchedDependencies?: Record<string, string>
+    }
+    expect(await manifestProcess.exited).toBe(0)
+    // The published release asset must not carry the repo's
+    // patchedDependencies declaration: a consumer installing it next to
+    // better-auth panics bun (finding f_812bb6b5).
+    expect(packedManifest.patchedDependencies).toBeUndefined()
+    expect(logs.join('\n')).toContain('Uploaded autobuild-2.0.1.tgz (1234 bytes)')
+  }, 60_000)
+})
+
+describe('npm publication', () => {
+  test('orders publishable packages after their workspace dependencies and skips private ones', () => {
+    const packages = publishablePackages([
+      { path: 'package.json', text: '{"name":"@acme/cli","version":"1.0.0"}' },
+      {
+        path: 'packages/service/package.json',
+        text: '{"name":"@acme/service","dependencies":{"@acme/store":"workspace:*"},"peerDependencies":{"@acme/cli":">=1"}}',
+      },
+      { path: 'packages/store/package.json', text: '{"name":"@acme/store"}' },
+      { path: 'packages/private/package.json', text: '{"name":"@acme/private","private":true}' },
+    ])
+    expect(packages.map((entry) => [entry.name, entry.directory])).toEqual([
+      ['@acme/cli', '.'],
+      ['@acme/store', 'packages/store'],
+      ['@acme/service', 'packages/service'],
+    ])
+    expect(publishRecoveryCommand(packages.slice(1))).toBe(
+      '(cd packages/store && bun publish --access public --ignore-scripts)\n(cd packages/service && bun publish --access public --ignore-scripts)',
+    )
+  })
+
+  test('refuses to release without a registry login, before any gate runs', async () => {
+    const fixture = await createFixture()
+    const testHarness = harness(undefined, undefined, {
+      whoami: { exitCode: 1, stdout: '', stderr: 'error: not logged in' },
+      publish: { exitCode: 0, stdout: '', stderr: '' },
+    })
+    await expectReleaseFailure(fixture.root, /npm registry login required/, testHarness)
+    expect(testHarness.requests.some((request) => request.command === 'claude')).toBe(false)
+    expect(testHarness.requests.some((request) => request.args.join(' ').includes('lint'))).toBe(
+      false,
+    )
+  })
+
+  test('a failed publish keeps the public refs and names the packages still unpublished', async () => {
+    const fixture = await createFixture()
+    const testHarness = harness(undefined, undefined, {
+      whoami: { exitCode: 0, stdout: 'release-bot\n', stderr: '' },
+      publish: { exitCode: 1, stdout: '', stderr: 'error: 403 Forbidden' },
+    })
+    const message = await runRelease(['--patch'], fixture.root, {
+      run: testHarness.run,
+      output: testHarness.output,
+      today: () => '2026-07-27',
+      repositoryUrl: fixture.remote,
+    }).then(
+      () => '',
+      (error: unknown) => thrownMessage(error),
+    )
+    expect(message).toContain('publishing fixture@2.0.1 failed: error: 403 Forbidden')
+    expect(message).toContain('do not rewrite them')
+    expect(message).toContain('bun publish --access public --ignore-scripts')
+    expect(message).toContain('(cd packages/core && bun publish --access public --ignore-scripts)')
+    expect((await command(fixture.root, 'git', ['tag', '--list'])).stdout.trim()).toBe('v2.0.1')
+    expect(
+      (await command(fixture.root, 'git', ['ls-remote', '--tags', 'origin'])).stdout,
+    ).toContain('refs/tags/v2.0.1')
   })
 })

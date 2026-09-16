@@ -4,7 +4,7 @@ import {
   mintToken,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from 'autobuild/remote-store'
+} from '@defrex/autobuild/remote-store'
 import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
 export interface GatewaySession {

@@ -1,17 +1,19 @@
-# `@autobuild/hosted-store-service`
+# `@defrex/autobuild-hosted-store-service`
 
 The optional hosted Autobuild service composes the remote BuildStore and the
-full TicketSource HTTP protocol with `@autobuild/postgres-store`. The root
+full TicketSource HTTP protocol with `@defrex/autobuild-postgres-store`. The root
 Next.js application mounts those machine protocols unchanged and serves the
 cookie-authenticated operator dashboard on the same origin. `server.ts` remains
 the named bare-Bun machine-service entrypoint for non-Next hosts.
 
 ## Configure and run locally
 
-The service and PostgreSQL adapter are distributed in Autobuild's GitHub
-releases rather than npm. Clone the compatible release tag and install it as
-shown in the [complete environment reference](../../docs/configuration.md), then
-migrate the database (the migration is idempotent):
+The service and PostgreSQL adapter are published to npm
+(`@defrex/autobuild-hosted-store-service`, `@defrex/autobuild-postgres-store`)
+separately from the `@defrex/autobuild` CLI. The deployable web application
+runs from a release checkout: clone the compatible release tag and install it
+as shown in the [complete environment reference](../../docs/configuration.md),
+then migrate the database (the migration is idempotent):
 
 ```sh
 DATABASE_URL=postgres://… bun run postgres:migrate
@@ -153,60 +155,16 @@ application. `bun run hosted-store` serves machine routes only.
 
 ## Hosted dispatcher
 
-The deployment can own the dispatch kernel: a cron-authenticated endpoint —
-`GET /api/dispatch` — runs one bounded dispatcher tick per configured
-repository per invocation. See the [operator procedure](../../docs/hosted-dispatcher.md)
-for the schedule, incident pauses, and behavior details. Dispatcher variables
-(server-only, like every secret above; none reach the browser):
-
-- `AB_DISPATCHER_ORIGIN`: the deployment's public origin, used as `AB_STORE`
-  for the kernel, the hosted ticket source, and guests. Absolute http(s)
-  origin; https required in production.
-- `AB_DISPATCHER_REPOSITORIES`: comma-separated repositories the dispatcher
-  serves, normalized `https://` identities exactly like `AB_WEB_REPOSITORIES`.
-  When unset, the deployment's `AB_WEB_REPOSITORIES` set is used, so a
-  deployment configures its repository set once.
-- `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
-  clamped 10–780); pair it with the route's `maxDuration` as described in the
-  operator procedure.
-- `AB_DISPATCHER_TOKEN_TTL_SECONDS`: the TTL of the per-tick deployment
-  operator token minted for guests (default 604800 — 7 days; minimum 3600).
-  It must outlive your largest guest `timeoutSeconds` (e.g. 14400).
-- `CRON_SECRET`: the cron authorization shared secret. Unset or blank disables
-  the endpoint entirely. It is never a signing input and is unrelated to
-  `AB_STORE_SECRET`.
-- `GITHUB_TOKEN` or `GH_TOKEN`: the shared forge credentials the kernel (and
-  its publication settlement) use. They stay on the service; guests never
-  receive one.
-- `AB_DISPATCHER_GITHUB_TOKENS`: optional per-repository forge credential
-  overrides — a JSON object mapping repository identities to GitHub token
-  material, e.g.
-  `{"https://github.com/acme/one":"github_pat_…","git@github.com:acme/two.git":"ghp_…"}`.
-  Keys accept the same spellings as the repository set and must name a served
-  repository; a repository with an override authenticates its dispatcher tick
-  with that token (both `GITHUB_TOKEN` and `GH_TOKEN`), every other repository
-  keeps the shared `GITHUB_TOKEN`/`GH_TOKEN`. Unset means shared-only, and a
-  repository with neither fails its tick — origin-mode dispatch never uses the
-  gh CLI login of whoever runs the service, unlike a local checkout-mode
-  dispatcher. Tokens
-  never appear in logs, responses, or artifacts; server-only like every secret
-  above.
-- Guest-forwarded variables such as `AI_GATEWAY_API_KEY` flow through from the
-  service environment to the guest session untouched.
-- `AB_DISTRIBUTION_ARCHIVE`: optional explicit path to the guest distribution
-  archive. Unset, the kernel uses the archive `ab-hosted-store pack-distribution`
-  wrote to `.autobuild-dist/` during the deployment build (required for a
-  bundled deployment, which has no `bun` to pack with at runtime — see the
-  operator procedure).
+The dispatch kernel is not part of this package. The cron-authenticated
+`GET /api/dispatch` endpoint, its `pack-distribution` bin command, and the
+packed-distribution trace helper live in the separate
+[`@defrex/autobuild-hosted-dispatcher`](../hosted-dispatcher/README.md)
+package; a deployment opts into building by installing it and mounting its
+route, and a deployment that only hosts state never attempts a dispatch tick.
+See the [operator procedure](../../docs/hosted-dispatcher.md) for the
+schedule, incident pauses, and behavior details.
 
 The Sandbox SDK authenticates with the deployment's own OIDC identity inside
-Vercel functions (the `x-vercel-oidc-token` request header, forwarded to the
-kernel as `VERCEL_OIDC_TOKEN` for the tick), so **no `VERCEL_TOKEN`
-belongs on the service**. Each invocation deposits a
-`dispatcher-effective-config` repository artifact and durable tick/run facts
-under the `hosted-dispatcher-<uuid>` run id — the web dashboard shows hosted
-activity exactly as it shows a local dispatcher. The repository journal's
-events keep growing by roughly one tick per minute per repository (intentional);
-the run/config artifacts themselves are retention-bounded — the store keeps the
-latest 200 revisions per dispatcher artifact kind and prunes older revisions at
-deposit time, overridable with `AB_ARTIFACT_RETENTION_MAX_REVISIONS`.
+Vercel functions, so no `VERCEL_TOKEN` belongs on a hosted deployment either
+way; see the dispatcher package's README for the dispatcher environment
+variables and credential handling.

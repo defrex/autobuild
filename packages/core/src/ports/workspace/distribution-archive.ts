@@ -30,6 +30,7 @@
 import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { distributionRoot, distributionPath } from '../../distribution'
+import { registryBaseUrl, registryVersionUrl } from '../../registry'
 import { parseRepoCoordinates } from '../forge/github'
 import {
   createGitHubFetchTransport,
@@ -43,18 +44,23 @@ import { packageAutobuildDistribution } from './vercel-sandbox'
  * `tools/release.ts`, which uploads them. */
 export const CANONICAL_REPOSITORY_URL = 'https://github.com/defrex/autobuild'
 
-/** The running distribution's version, from the shipped package.json.
- * Deployed distributions must ship `package.json` — a deployment requirement
- * the hosted entry point owns. Absence is a hard, actionable error. */
-export async function readDistributionIdentity(): Promise<string> {
+/** The running distribution's package name and version, from the shipped
+ * package.json. Deployed distributions must ship `package.json` — a
+ * deployment requirement the hosted entry point owns. Absence is a hard,
+ * actionable error. */
+export async function readDistributionPackage(): Promise<{ name: string; version: string }> {
   try {
     const manifest = JSON.parse(await Bun.file(distributionPath('package.json')).text()) as {
+      name?: unknown
       version?: unknown
     }
     if (typeof manifest.version !== 'string' || manifest.version === '') {
       throw new Error('the distribution package.json has no usable version field')
     }
-    return manifest.version
+    if (typeof manifest.name !== 'string' || manifest.name === '') {
+      throw new Error('the distribution package.json has no usable name field')
+    }
+    return { name: manifest.name, version: manifest.version }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     throw new Error(
@@ -74,9 +80,86 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** The running distribution's version alone. */
+export async function readDistributionIdentity(): Promise<string> {
+  return (await readDistributionPackage()).version
+}
+
 /** The release asset a version's distribution ships under. */
 export function distributionAssetName(version: string): string {
   return `autobuild-${version}.tgz`
+}
+
+/** Minimal fetch seam for registry reads: the global `fetch` in production. */
+export type RegistryFetch = (
+  url: string,
+  init: { headers: Record<string, string> },
+) => Promise<{ status: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> }>
+
+const registryFetch: RegistryFetch = (url, init) => fetch(url, init)
+
+/** Fetch the published npm tarball for `packageName@version`: read the
+ * registry's version document, follow its `dist.tarball`, and return the
+ * bytes. The tarball roots at `package/`, exactly like `bun pm pack`, so the
+ * guest bootstrap extracts it unchanged. Honors `NPM_CONFIG_REGISTRY`. */
+export async function fetchDistributionRegistryTarball(
+  packageName: string,
+  version: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  fetchImpl: RegistryFetch = registryFetch,
+): Promise<Uint8Array> {
+  const url = registryVersionUrl(registryBaseUrl(env), packageName, version)
+  const document = await fetchImpl(url, { headers: { accept: 'application/json' } })
+  if (document.status !== 200) {
+    throw new Error(
+      `npm registry has no ${packageName}@${version} (HTTP ${document.status} from ${url}); ` +
+        'publish the release first',
+    )
+  }
+  let tarball: unknown
+  try {
+    tarball = (JSON.parse(await document.text()) as { dist?: { tarball?: unknown } }).dist?.tarball
+  } catch (error) {
+    throw new Error(`npm registry returned an unreadable document for ${packageName}@${version}`, {
+      cause: error,
+    })
+  }
+  if (typeof tarball !== 'string' || tarball === '') {
+    throw new Error(`npm registry document for ${packageName}@${version} names no dist.tarball`)
+  }
+  const download = await fetchImpl(tarball, { headers: { accept: 'application/octet-stream' } })
+  if (download.status !== 200) {
+    throw new Error(`downloading ${tarball} failed with HTTP ${download.status}`)
+  }
+  const bytes = new Uint8Array(await download.arrayBuffer())
+  if (bytes.byteLength === 0) throw new Error(`${tarball} downloaded no bytes`)
+  return bytes
+}
+
+/** The published distribution for the running version: the npm registry
+ * tarball first, then the GitHub release asset (the route a fork or an
+ * unpublished channel still has). A failure names both sources. */
+async function fetchPublishedDistribution(
+  env: Readonly<Record<string, string | undefined>>,
+  transport: GitHubRequest | undefined,
+  fetchImpl: RegistryFetch,
+): Promise<Uint8Array> {
+  const { name, version } = await readDistributionPackage()
+  try {
+    return await fetchDistributionRegistryTarball(name, version, env, fetchImpl)
+  } catch (registryError) {
+    try {
+      return await fetchDistributionReleaseAsset(version, env, transport)
+    } catch (releaseError) {
+      const detail = (error: unknown): string =>
+        error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `no published Autobuild ${version} distribution: npm registry — ${detail(registryError)}; ` +
+          `GitHub release asset — ${detail(releaseError)}`,
+        { cause: releaseError },
+      )
+    }
+  }
 }
 
 /** Fetch the published `autobuild-<version>.tgz` release asset for the
@@ -128,7 +211,7 @@ export async function fetchDistributionReleaseAsset(
 }
 
 /** Directory, relative to a distribution root, where a deployment ships the
- * archive it packed at build time (`ab-hosted-store pack-distribution`). A
+ * archive it packed at build time (`ab-hosted-dispatcher pack-distribution`). A
  * bundled deployment — the hosted service on Vercel — has neither `bun` nor a
  * source tree at runtime, so the archive must be produced while both exist
  * and carried into the function bundle. */
@@ -199,16 +282,18 @@ const hasBunExecutable = (): boolean => Bun.which('bun') !== null
  * prebuilt for this deployment (`AB_DISTRIBUTION_ARCHIVE` or
  * `.autobuild-dist/`), then a usable source checkout — a `.git` directory
  * *and* a `bun` executable to pack with — then the running version's
- * published release asset (see module docs). The prebuilt archive comes
- * first because a bundled deployment can carry a vestigial `.git` directory
- * without a `bun` executable to pack with; in that case the release asset is
- * the route, and when it too is missing the error names the prebuilt archive
- * the deployment should have shipped.
+ * published distribution: the npm registry tarball, else the GitHub release
+ * asset (see module docs). The prebuilt archive comes first because a
+ * bundled deployment can carry a vestigial `.git` directory without a `bun`
+ * executable to pack with; in that case the published distribution is the
+ * route, and when it too is missing the error names the prebuilt archive the
+ * deployment should have shipped.
  */
 export async function defaultDistributionArchive(
   env: Readonly<Record<string, string | undefined>> = process.env,
   transport?: GitHubRequest,
   hasBun: () => boolean = hasBunExecutable,
+  fetchImpl: RegistryFetch = registryFetch,
 ): Promise<Uint8Array> {
   const prebuilt = await findPrebuiltDistributionArchive(env)
   if (prebuilt !== null) return new Uint8Array(await readFile(prebuilt))
@@ -219,7 +304,7 @@ export async function defaultDistributionArchive(
     // also fails, name the prebuilt archive the deployment should ship
     // instead of leaving an unactionable failure behind.
     const version = await readDistributionIdentity()
-    return fetchDistributionReleaseAsset(version, env, transport).catch((error: unknown) => {
+    return fetchPublishedDistribution(env, transport, fetchImpl).catch((error: unknown) => {
       throw new Error(
         `no usable source checkout to pack and no prebuilt distribution archive for this deployment; ` +
           `ship .autobuild-dist/autobuild-${version}.tgz with the deployment or point ` +
@@ -228,6 +313,5 @@ export async function defaultDistributionArchive(
       )
     })
   }
-  const version = await readDistributionIdentity()
-  return fetchDistributionReleaseAsset(version, env, transport)
+  return fetchPublishedDistribution(env, transport, fetchImpl)
 }

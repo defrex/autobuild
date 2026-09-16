@@ -1,19 +1,24 @@
 # The hosted dispatcher
 
-The optional [hosted service](../packages/hosted-store-service/README.md) can
-own the dispatch kernel. One authenticated HTTP endpoint — `GET /api/dispatch`
-— runs, for each configured repository, one bounded origin-mode dispatcher
+The optional [`@defrex/autobuild-hosted-dispatcher`](../packages/hosted-dispatcher/README.md)
+package lets a deployment own the dispatch kernel. Installing it and mounting
+its route — `GET /api/dispatch`, backed by the package's
+`dispatcherEndpoint()` singleton — makes the hosted deployment the kernel
+owner. One authenticated HTTP invocation runs, for each configured
+repository, one bounded origin-mode dispatcher
 tick: the kernel claims ready tickets, provisions and launches sandboxes,
 observes running builds, settles publications, opens and merges PRs, and runs
 the janitor, exactly as a local `ab dispatch --once --repository <origin>`
 pass does. The schedule is what you attach to that endpoint (Vercel Cron calls
 it once a minute by default), so builds no longer depend on a maintainer's
-machine.
+machine. A deployment that does not install the package serves the hosted
+store, ticket, operator, and web endpoints and never attempts a dispatch tick.
 
 ## Enabling the schedule
 
-1. Deploy the hosted service with the dispatcher variables from
-   [its README](../packages/hosted-store-service/README.md#hosted-dispatcher)
+1. Deploy the hosted service with the dispatcher package installed and the
+   dispatcher variables from
+   [its README](../packages/hosted-dispatcher/README.md)
    — `AB_DISPATCHER_ORIGIN`, the repository set, `CRON_SECRET`, and the forge
    credentials the kernel needs (`GITHUB_TOKEN` or `GH_TOKEN`, plus any
    guest-forwarded variables such as `AI_GATEWAY_API_KEY`). A deployment
@@ -47,17 +52,18 @@ must pack the archive while both exist — in its build step — and carry it in
 the function bundle:
 
 ```json
-{ "scripts": { "deploy:build": "bun packages/hosted-store-service/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun tools/ship-packed-distribution.ts" } }
+{ "scripts": { "deploy:build": "bun packages/hosted-dispatcher/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun packages/hosted-dispatcher/src/ship-packed-distribution.ts" } }
 ```
 
-`pack-distribution` writes `.autobuild-dist/autobuild-<version>.tgz` under the
+`pack-distribution` (the `ab-hosted-dispatcher` bin) writes
+`.autobuild-dist/autobuild-<version>.tgz` under the
 distribution root (`--root DIR` overrides). The Next.js config's
 `outputFileTracingIncludes: { '/api/dispatch': ['./.autobuild-dist/**'] }`
 records the intent to include that directory in the cron route's bundle, but
 Next 16's default Turbopack builds never apply `outputFileTracingIncludes`
 (only webpack builds do), so a deployment cannot rely on the config alone. The
 autobuild-api pipeline therefore ends `deploy:build` with a post-build trace
-step (`bun tools/ship-packed-distribution.ts`) that appends the archive to the
+step (`bun packages/hosted-dispatcher/src/ship-packed-distribution.ts`) that appends the archive to the
 dispatch route's `route.js.nft.json` — the trace file Vercel's Next builder
 consumes when assembling the function bundle — and fails the deploy loudly if
 nothing was packed or the trace file is missing. A deployment using this
@@ -67,7 +73,8 @@ and the trace step still fail at runtime.
 At runtime the kernel takes, in order: `AB_DISTRIBUTION_ARCHIVE` (an explicit
 archive path), the single archive under `.autobuild-dist/` of the
 distribution root or working directory, a source checkout packed on the spot,
-and finally the running version's published GitHub release asset. A tick that
+and finally the running version's published distribution — the npm registry
+tarball, else the GitHub release asset. A tick that
 reports `Executable not found in $PATH: "bun"` during `provision` is a
 deployment that skipped the pack step (or, outside this pipeline, the trace
 step that ships the archive).

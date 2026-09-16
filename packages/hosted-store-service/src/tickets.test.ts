@@ -1,6 +1,6 @@
-import { describeTicketSourceContract, FakeTicketSource } from 'autobuild/plugin-sdk'
-import { HostedTicketSource } from 'autobuild/remote-tickets'
-import { mintToken } from 'autobuild/remote-store'
+import { describeTicketSourceContract, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { HostedTicketSource } from '@defrex/autobuild/remote-tickets'
+import { mintToken } from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from './service'
 
 const now = new Date('2026-01-01T00:00:00.000Z')
