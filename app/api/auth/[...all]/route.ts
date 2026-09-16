@@ -1,4 +1,4 @@
-import { webAuth } from '@autobuild/hosted-store-service/web/auth'
+import { webAuth } from '@defrex/autobuild-hosted-store-service/web/auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

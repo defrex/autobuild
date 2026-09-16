@@ -15,7 +15,8 @@
  * carried as base64 strings at the entry level (`builds.artifact`'s
  * `contentBase64` is the base64 of the exact artifact bytes), so a binding's
  * `JSON.stringify` can never silently corrupt bytes. The contract suite
- * (registry.contract.test.ts) asserts the round-trip for every tool.
+ * (packages/hosted-store-service/src/registry.contract.test.ts) asserts the
+ * round-trip for every tool.
  *
  * Risk classes live in `operator/annotations.ts` (checked in, enforced by the
  * contract suite). The registry itself enforces only what every binding needs
@@ -917,7 +918,8 @@ export interface OperatorToolRegistry {
 }
 
 /** Map a service error to the registry's operator-API-shaped failure body —
- * the same kind mapping as the catch block in operator/server.ts. */
+ * the same kind mapping as the catch block in the hosted package's
+ * operator-server.ts. */
 function mapDomainError(error: unknown): RegistryError {
   if (error instanceof RegistryError) return error
   if (error instanceof RouteRefusalError) {

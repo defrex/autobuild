@@ -16,31 +16,41 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
-      "autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"],
-      "autobuild/remote-store": ["./packages/core/src/store/remote/index.ts"],
-      "autobuild/store-adapter": ["./packages/core/src/store/adapter.ts"],
-      "autobuild/operator-api": ["./packages/core/src/operator/index.ts"],
-      "autobuild/operator-presentation": ["./packages/core/src/operator/presentation.ts"],
-      "autobuild/remote-tickets": ["./packages/core/src/ports/tickets/remote-index.ts"],
-      "autobuild/ticket-update": ["./packages/core/src/ports/tickets/update.ts"],
-      "autobuild/origin": ["./packages/core/src/kernel/origin.ts"],
-      "autobuild/cli": ["./packages/core/src/cli/dispatch.ts"],
-      "autobuild/git-worktree": ["./packages/core/src/ports/workspace/git-worktree.ts"],
-      "autobuild/distribution": ["./packages/core/src/ports/workspace/distribution-archive.ts"],
-      "@autobuild/hosted-store-service": ["./packages/hosted-store-service/src/index.ts"],
-      "@autobuild/hosted-store-service/service": ["./packages/hosted-store-service/src/service.ts"],
-      "@autobuild/hosted-store-service/dispatcher": [
-        "./packages/hosted-store-service/src/dispatcher.ts"
+      "@defrex/autobuild/plugin-sdk": ["./packages/core/src/plugin-sdk/index.ts"],
+      "@defrex/autobuild/remote-store": ["./packages/core/src/store/remote/index.ts"],
+      "@defrex/autobuild/store-adapter": ["./packages/core/src/store/adapter.ts"],
+      "@defrex/autobuild/testing": ["./packages/core/src/testing/index.ts"],
+      "@defrex/autobuild/operator": ["./packages/core/src/operator/index.ts"],
+      "@defrex/autobuild/operator-presentation": ["./packages/core/src/operator/presentation.ts"],
+      "@defrex/autobuild/hosted-tickets": ["./packages/core/src/ports/tickets/hosted-index.ts"],
+      "@defrex/autobuild/ticket-update": ["./packages/core/src/ports/tickets/update.ts"],
+      "@defrex/autobuild/origin": ["./packages/core/src/kernel/origin.ts"],
+      "@defrex/autobuild/cli": ["./packages/core/src/cli/dispatch.ts"],
+      "@defrex/autobuild/git-worktree": ["./packages/core/src/ports/workspace/git-worktree.ts"],
+      "@defrex/autobuild/distribution": [
+        "./packages/core/src/ports/workspace/distribution-archive.ts"
       ],
-      "@autobuild/hosted-store-service/web/auth": [
+      "@defrex/autobuild-hosted-store-service": ["./packages/hosted-store-service/src/index.ts"],
+      "@defrex/autobuild-hosted-store-service/service": [
+        "./packages/hosted-store-service/src/service.ts"
+      ],
+      "@defrex/autobuild-hosted-store-service/web/auth": [
         "./packages/hosted-store-service/src/web/auth.ts"
       ],
-      "@autobuild/hosted-store-service/web/config": [
+      "@defrex/autobuild-hosted-store-service/web/config": [
         "./packages/hosted-store-service/src/web/config.ts"
       ],
-      "@autobuild/hosted-store-service/web/runtime": [
+      "@defrex/autobuild-hosted-store-service/web/runtime": [
         "./packages/hosted-store-service/src/web/runtime.ts"
-      ]
+      ],
+      "@defrex/autobuild-hosted-store-service/operator-api": [
+        "./packages/hosted-store-service/src/operator-api.ts"
+      ],
+      "@defrex/autobuild-hosted-store-service/remote-tickets": [
+        "./packages/hosted-store-service/src/remote-tickets.ts"
+      ],
+      "@defrex/autobuild-hosted-dispatcher": ["./packages/hosted-dispatcher/src/index.ts"],
+      "@defrex/autobuild-hosted-dispatcher/runtime": ["./packages/hosted-dispatcher/src/runtime.ts"]
     },
     "allowJs": true,
     "incremental": true,

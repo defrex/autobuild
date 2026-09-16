@@ -1,4 +1,4 @@
-import { hostedService } from '@autobuild/hosted-store-service/web/runtime'
+import { hostedService } from '@defrex/autobuild-hosted-store-service/web/runtime'
 
 async function machine(request: Request): Promise<Response> {
   return hostedService().fetch(request)

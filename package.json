@@ -1,7 +1,14 @@
 {
-  "name": "autobuild",
-  "version": "0.6.0",
-  "private": true,
+  "name": "@defrex/autobuild",
+  "version": "0.8.0",
+  "description": "Agent-driven software delivery from groomed ticket to merged PR",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/defrex/autobuild.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
@@ -30,10 +37,15 @@
       "import": "./packages/core/src/store/remote/index.ts",
       "default": "./packages/core/src/store/remote/index.ts"
     },
-    "./operator-api": {
-      "types": "./packages/core/src/operator/index.ts",
-      "import": "./packages/core/src/operator/index.ts",
-      "default": "./packages/core/src/operator/index.ts"
+    "./hosted-tickets": {
+      "types": "./packages/core/src/ports/tickets/hosted-index.ts",
+      "import": "./packages/core/src/ports/tickets/hosted-index.ts",
+      "default": "./packages/core/src/ports/tickets/hosted-index.ts"
+    },
+    "./testing": {
+      "types": "./packages/core/src/testing/index.ts",
+      "import": "./packages/core/src/testing/index.ts",
+      "default": "./packages/core/src/testing/index.ts"
     },
     "./operator-presentation": {
       "types": "./packages/core/src/operator/presentation.ts",
@@ -44,11 +56,6 @@
       "types": "./packages/core/src/ports/tickets/update.ts",
       "import": "./packages/core/src/ports/tickets/update.ts",
       "default": "./packages/core/src/ports/tickets/update.ts"
-    },
-    "./remote-tickets": {
-      "types": "./packages/core/src/ports/tickets/remote-index.ts",
-      "import": "./packages/core/src/ports/tickets/remote-index.ts",
-      "default": "./packages/core/src/ports/tickets/remote-index.ts"
     },
     "./origin": {
       "types": "./packages/core/src/kernel/origin.ts",
@@ -69,13 +76,20 @@
       "types": "./packages/core/src/ports/workspace/distribution-archive.ts",
       "import": "./packages/core/src/ports/workspace/distribution-archive.ts",
       "default": "./packages/core/src/ports/workspace/distribution-archive.ts"
+    },
+    "./operator": {
+      "types": "./packages/core/src/operator/index.ts",
+      "import": "./packages/core/src/operator/index.ts",
+      "default": "./packages/core/src/operator/index.ts"
     }
   },
   "files": [
     "bin",
     "packages/core/src",
+    "!packages/core/src/**/*.test.ts",
     "skills",
     "templates",
+    "patches",
     "LICENSE",
     "README.md",
     "SPEC.md",
@@ -85,7 +99,7 @@
     "dev": "bun run --bun next dev",
     "dev:cli": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "build": "bun run --bun next build",
-    "deploy:build": "bun packages/hosted-store-service/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun tools/ship-packed-distribution.ts",
+    "deploy:build": "bun packages/hosted-dispatcher/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun packages/hosted-dispatcher/src/ship-packed-distribution.ts",
     "start": "bun run --bun next start",
     "hosted-store": "bun server.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
@@ -103,12 +117,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@vercel/sandbox": "^3.1.0",
     "ai": "^7.0.101",
-    "better-auth": "1.4.18",
     "drizzle-orm": "^0.45.2",
-    "next": "16.1.6",
-    "pg": "8.18.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
     "semver": "^7.7.4",
     "smol-toml": "^1.7.0",
     "zod": "^4.4.3"
@@ -128,5 +137,8 @@
     "husky": "9.1.7",
     "typescript": "5.9.3",
     "vercel": "^59.11.2"
+  },
+  "patchedDependencies": {
+    "better-auth@1.4.18": "patches/better-auth@1.4.18.patch"
   }
 }

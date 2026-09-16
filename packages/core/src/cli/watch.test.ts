@@ -11,8 +11,6 @@ import { EVENT_TYPES } from '../events/payloads'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { RemoteBuildStore } from '../store/remote/client'
-import { startStoreServer } from '../store/remote/server'
 import { InvalidAmbientContextError } from './env'
 import { runCli } from './main'
 import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase-session'
@@ -1185,57 +1183,5 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '27' })
     expect(waits[0]).toBe(25)
     for (const wait of waits) expect(wait).toBeLessThanOrEqual(25)
-  })
-
-  test('an abort mid-hold tears down a real held remote request promptly', async () => {
-    // A REAL remote client over a real in-process server: the held read is a
-    // real held HTTP request, so this exercises the signal reaching the
-    // underlying fetch — the seam the fake-store tests above cannot prove.
-    const backing = new MemoryBuildStore({ clock: steppingClock() })
-    const server = startStoreServer({ store: backing })
-    try {
-      let eventReads = 0
-      const fetchFn = (async (input, init) => {
-        if (
-          typeof input === 'string' &&
-          input.includes('/events?') &&
-          (init?.method ?? 'GET') === 'GET'
-        ) {
-          eventReads += 1
-        }
-        return fetch(input, init)
-      }) as typeof fetch
-      const store = new RemoteBuildStore({ url: server.url, fetchFn })
-      await seedRunningBuild(store as never, 'b1')
-
-      const out: string[] = []
-      const err: string[] = []
-      const external = new AbortController()
-      const started = Date.now()
-      const watch = abWatch({
-        targetRepo: REPO,
-        env: {},
-        exec: fakeExec,
-        stdout: (line) => out.push(line),
-        stderr: (line) => err.push(line),
-        storeRef: server.url,
-        openStore: () => store,
-        slugs: ['b1'],
-        timeout: '60',
-        json: true,
-        signal: external.signal,
-      })
-      // The first GET is the initial scan's immediate read; the second is
-      // the held request. It cannot complete before the abort — the build is
-      // quiet and the hold bound is 25 s.
-      while (eventReads < 2) await Bun.sleep(10)
-      external.abort()
-      await watch
-      expect(Date.now() - started).toBeLessThan(5_000)
-      // The cancelled read is the watch stopping, not a store failure.
-      expect(err).toEqual([])
-    } finally {
-      await server.stop()
-    }
   })
 })

@@ -1,6 +1,6 @@
 /**
  * Stable plugin-authoring surface. Internal source paths are not public API;
- * plugins should import only `autobuild/plugin-sdk` (normally with
+ * plugins should import only `@defrex/autobuild/plugin-sdk` (normally with
  * `import type`) and run these same contracts against their adapters.
  */
 export type * from '../ports/types'

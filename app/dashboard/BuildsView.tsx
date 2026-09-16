@@ -1,6 +1,9 @@
 'use client'
 
-import type { OperatorAnswerRequest, OperatorBuildControlRequest } from 'autobuild/operator-api'
+import type {
+  OperatorAnswerRequest,
+  OperatorBuildControlRequest,
+} from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   buildActionAvailability,
   type DashboardBuild,
@@ -8,7 +11,7 @@ import {
   type DashboardHarvest,
   type DashboardModel,
   type TranscriptPresentation,
-} from 'autobuild/operator-presentation'
+} from '@defrex/autobuild/operator-presentation'
 import {
   type CSSProperties,
   type PointerEvent,

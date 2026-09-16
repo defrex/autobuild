@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
@@ -9,7 +9,11 @@ import {
 } from '../packages/postgres-store/src/env'
 import { readWorkspaceManifests } from './workspace-manifest-check'
 import { distributionAssetName } from '../packages/core/src/ports/workspace/distribution-archive'
+import { packageAutobuildDistribution } from '../packages/core/src/ports/workspace/vercel-sandbox'
 
+/** The CLI package name the README install command names. Publishing reads
+ * every package's own manifest; this constant only renders the README line. */
+export const PUBLISHED_CLI_PACKAGE = '@defrex/autobuild'
 export const README_INSTALL_START = '<!-- release-install:start -->'
 export const README_INSTALL_END = '<!-- release-install:end -->'
 
@@ -48,6 +52,11 @@ export interface ReleaseDependencies {
   today?: () => string
   /** Test seam; production releases always use the canonical GitHub repository. */
   repositoryUrl?: string
+  /** Test seam; production releases pack the distribution through
+   * `packageAutobuildDistribution`, the chokepoint that strips repo-local
+   * packaging fields (`patchedDependencies`) from the packed manifest so the
+   * published release asset cannot break a consumer's bun install. */
+  packageArchive?: () => Promise<Uint8Array>
 }
 
 export interface ChangelogRelease {
@@ -242,7 +251,7 @@ export function normalizeClaudeSummary(value: string): string | undefined {
   return paragraph
 }
 
-export function replaceReadmeInstall(readme: string, tag: string): string {
+export function replaceReadmeInstall(readme: string, version: string): string {
   const starts = readme.split(README_INSTALL_START).length - 1
   const ends = readme.split(README_INSTALL_END).length - 1
   if (starts !== 1 || ends !== 1) {
@@ -253,7 +262,7 @@ export function replaceReadmeInstall(readme: string, tag: string): string {
   const start = readme.indexOf(README_INSTALL_START)
   const end = readme.indexOf(README_INSTALL_END)
   if (end <= start) throw new Error('README.md release-install markers are out of order')
-  const replacement = `${README_INSTALL_START}\n\n\`\`\`sh\nbun add -g github:defrex/autobuild#${tag}\n\`\`\`\n\n`
+  const replacement = `${README_INSTALL_START}\n\n\`\`\`sh\nbun add -g ${PUBLISHED_CLI_PACKAGE}@${version}\n\`\`\`\n\n`
   return `${readme.slice(0, start)}${replacement}${readme.slice(end)}`
 }
 
@@ -519,6 +528,113 @@ function githubReleaseRecoveryCommand(tag: string, notes: string): string {
   return `gh release create ${tag} --verify-tag --title ${tag} --notes-file - <<'${delimiter}'\n${terminatedNotes}${delimiter}`
 }
 
+export interface PublishablePackage {
+  /** Package name from its manifest. */
+  name: string
+  /** Manifest path relative to the repository root. */
+  manifestPath: string
+  /** Directory `bun publish` runs in, relative to the repository root. */
+  directory: string
+}
+
+/** Every non-private workspace manifest, root included, ordered so that a
+ * package is published after the workspace packages it depends on. */
+export function publishablePackages(
+  manifests: readonly { path: string; text: string }[],
+): PublishablePackage[] {
+  const parsed = manifests.map((entry) => {
+    const manifest = JSON.parse(entry.text) as {
+      name?: unknown
+      private?: unknown
+      dependencies?: Record<string, unknown>
+      peerDependencies?: Record<string, unknown>
+    }
+    if (typeof manifest.name !== 'string' || manifest.name === '') {
+      throw new Error(`${entry.path} must declare a package name`)
+    }
+    const directory = entry.path.replace(/(^|\/)package\.json$/, '') || '.'
+    return {
+      name: manifest.name,
+      manifestPath: entry.path,
+      directory,
+      private: manifest.private === true,
+      dependsOn: new Set([
+        ...Object.keys(manifest.dependencies ?? {}),
+        ...Object.keys(manifest.peerDependencies ?? {}),
+      ]),
+    }
+  })
+  const candidates = parsed.filter((entry) => !entry.private)
+  const names = new Set(candidates.map((entry) => entry.name))
+  const ordered: PublishablePackage[] = []
+  const placed = new Set<string>()
+  while (ordered.length < candidates.length) {
+    const ready = candidates.filter(
+      (entry) =>
+        !placed.has(entry.name) &&
+        [...entry.dependsOn].every(
+          (dependency) => !names.has(dependency) || placed.has(dependency),
+        ),
+    )
+    if (ready.length === 0) {
+      throw new Error('publishable workspace packages form a dependency cycle')
+    }
+    for (const entry of ready) {
+      placed.add(entry.name)
+      ordered.push({
+        name: entry.name,
+        manifestPath: entry.manifestPath,
+        directory: entry.directory,
+      })
+    }
+  }
+  return ordered
+}
+
+const PUBLISH_ARGS = ['publish', '--access', 'public', '--ignore-scripts'] as const
+
+/** Verbatim retry commands for the packages a failed publish stage left
+ * unpublished, in dependency order. */
+export function publishRecoveryCommand(remaining: readonly PublishablePackage[]): string {
+  return remaining
+    .map((entry) =>
+      entry.directory === '.'
+        ? `bun ${PUBLISH_ARGS.join(' ')}`
+        : `(cd ${entry.directory} && bun ${PUBLISH_ARGS.join(' ')})`,
+    )
+    .join('\n')
+}
+
+/** `bun publish` each package in order. Publishing is neither idempotent nor
+ * revertible, so this runs last, after the refs and GitHub Release are
+ * public, and a failure names exactly what is still unpublished. */
+export async function publishPackages(
+  run: CommandRunner,
+  root: string,
+  packages: readonly PublishablePackage[],
+  version: string,
+  output: ReleaseOutput,
+): Promise<void> {
+  for (const [index, entry] of packages.entries()) {
+    output.log(`Publishing ${entry.name}@${version} to the npm registry`)
+    const result = await run({
+      command: 'bun',
+      args: [...PUBLISH_ARGS],
+      cwd: resolve(root, entry.directory),
+    })
+    if (result.exitCode !== 0) {
+      const detail =
+        result.stderr.trim() || result.stdout.trim() || `exit status ${result.exitCode}`
+      throw new Error(
+        `publishing ${entry.name}@${version} failed: ${detail}.\n` +
+          'The release commit, tag, and GitHub Release are already public; do not rewrite them. ' +
+          `Publish the remaining packages in this order:\n\n${publishRecoveryCommand(packages.slice(index))}`,
+      )
+    }
+    output.log(`Published ${entry.name}@${version}`)
+  }
+}
+
 export async function runRelease(
   args: readonly string[],
   cwd = process.cwd(),
@@ -528,6 +644,7 @@ export async function runRelease(
   const output = dependencies.output ?? defaultOutput
   const today = dependencies.today ?? (() => new Date().toISOString().slice(0, 10))
   const repositoryUrl = dependencies.repositoryUrl ?? CANONICAL_REPOSITORY_URL
+  const packageArchive = dependencies.packageArchive ?? packageAutobuildDistribution
   const arguments_ = parseReleaseArguments(args)
 
   const rootResult = await checked(
@@ -555,8 +672,16 @@ export async function runRelease(
   }
   const version = resolveReleaseVersion(manifest.version, arguments_)
   const tag = `v${version}`
+  const packages = publishablePackages(workspaceManifests)
+  if (packages.length === 0) throw new Error('no publishable (non-private) workspace package found')
 
   await ensureClean(run, root)
+  const registryLogin = await run({ command: 'bun', args: ['pm', 'whoami'], cwd: root })
+  if (registryLogin.exitCode !== 0 || registryLogin.stdout.trim() === '') {
+    throw new Error(
+      'npm registry login required before releasing: `bun pm whoami` reported no user; run `npm login` (or `bunx npm login`) and retry',
+    )
+  }
   const branch = (
     await git(run, root, ['branch', '--show-current'], 'could not inspect current branch')
   ).stdout.trim()
@@ -649,7 +774,7 @@ export async function runRelease(
   const date = today()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`release date is not YYYY-MM-DD: ${date}`)
   const changelog = renderReleasedChangelog(changelogText, tag, date, summary)
-  const readme = replaceReadmeInstall(readmeText, tag)
+  const readme = replaceReadmeInstall(readmeText, version)
   const manifestCandidates = workspaceManifests.map((entry) => ({
     path: entry.path,
     content: replacePackageVersion(entry.text, version),
@@ -673,6 +798,9 @@ export async function runRelease(
     )
     output.log(
       `Would clone exact tag ${tag} from ${CANONICAL_REPOSITORY_URL}, verify its commit and migration entry point, then publish the GitHub Release with the exact cut changelog section as its notes.`,
+    )
+    output.log(
+      `Would publish ${packages.map((entry) => `${entry.name}@${version}`).join(', ')} to the npm registry, in that order, as ${registryLogin.stdout.trim()}.`,
     )
     return
   }
@@ -773,36 +901,51 @@ export async function runRelease(
     throw new Error(
       `${config.baseBranch} and ${tag} were pushed, but GitHub Release publication failed: ${detail}.\n` +
         `Do not rewrite or delete the public refs. Run this verbatim retry command; it includes the exact cut-section notes:\n\n${recoveryCommand}` +
-        `\n\nThen pack and upload the guest distribution archive:\n\n${distributionUploadRecoveryCommand(tag)}`,
+        `\n\nThen pack and upload the guest distribution archive:\n\n${distributionUploadRecoveryCommand(tag)}` +
+        `\n\nThen publish the packages to the npm registry, in this order:\n\n${publishRecoveryCommand(packages)}`,
     )
   }
 
   // Pack and upload the guest distribution archive. Checkout-less dispatch
   // installs the guest Autobuild from this release asset, so a release that
   // omits it breaks origin-mode dispatch (see distribution-archive.ts).
-  await uploadDistributionAsset(run, root, tag, version, output)
+  await uploadDistributionAsset(run, root, tag, version, output, packageArchive)
+
+  // Publish last: npm publication cannot be undone, so every earlier step
+  // must already have succeeded, and a failure here leaves public refs alone.
+  await publishPackages(run, root, packages, version, output)
 
   await ensureClean(run, root)
-  output.log(`Released ${tag}: commit and annotated tag pushed; GitHub Release published.`)
+  output.log(
+    `Released ${tag}: commit and annotated tag pushed; GitHub Release published; ${packages.map((entry) => entry.name).join(', ')} published to the npm registry.`,
+  )
 }
 
 function distributionUploadRecoveryCommand(tag: string): string {
+  // The pack step must go through the production packer — a bare
+  // `bun pm pack` from the repo root would publish a manifest carrying the
+  // repo's `patchedDependencies`, which panics a consumer's bun install
+  // (see `packedManifestOmittedFields` in vercel-sandbox.ts).
   return [
+    '# Run from the repository root.',
     'archive_dir="$(mktemp -d)"',
-    'bun pm pack --ignore-scripts --destination "$archive_dir"',
+    `ARCHIVE_DIR="$archive_dir" bun -e 'const { packageAutobuildDistribution } = await import("./packages/core/src/ports/workspace/vercel-sandbox.ts"); const { distributionAssetName } = await import("./packages/core/src/ports/workspace/distribution-archive.ts"); const { writeFile } = await import("node:fs/promises"); const { version } = await Bun.file("package.json").json(); await writeFile(\`\${process.env.ARCHIVE_DIR}/\${distributionAssetName(version)}\`, await packageAutobuildDistribution());'`,
     `gh release upload ${tag} "$archive_dir/"*.tgz`,
     'rm -rf "$archive_dir"',
   ].join('\n')
 }
 
-/** `bun pm pack` from the source tree, upload the archive to the release,
- * then verify the asset is present with a plausible (nonzero) size. */
+/** Pack the distribution through `packageAutobuildDistribution` (the
+ * production packer, which strips repo-local packaging fields from the packed
+ * manifest), upload the archive to the release, then verify the asset is
+ * present with a plausible (nonzero) size. */
 export async function uploadDistributionAsset(
   run: CommandRunner,
   root: string,
   tag: string,
   version: string,
   output: ReleaseOutput,
+  packageArchive: () => Promise<Uint8Array> = packageAutobuildDistribution,
 ): Promise<void> {
   const expectedAsset = distributionAssetName(version)
   if (!tag.endsWith(version)) {
@@ -814,25 +957,8 @@ export async function uploadDistributionAsset(
   const destination = await mkdtemp(join(tmpdir(), 'autobuild-release-pack-'))
   try {
     output.log(`Packing guest distribution archive (${expectedAsset})`)
-    await checked(
-      run,
-      {
-        command: 'bun',
-        args: ['pm', 'pack', '--ignore-scripts', '--destination', destination],
-        cwd: root,
-      },
-      'could not pack the guest distribution archive',
-    )
-    // The pack derives the archive name from the root manifest's `name`
-    // field, not the version; rename to the published asset layout.
-    const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
-    if (archives.length !== 1) {
-      throw new Error(`expected exactly one packed archive, got ${archives.join(', ') || '(none)'}`)
-    }
     const archivePath = join(destination, expectedAsset)
-    if (archives[0] !== expectedAsset) {
-      await rename(join(destination, archives[0]!), archivePath)
-    }
+    await writeFile(archivePath, await packageArchive())
     await checked(
       run,
       { command: 'gh', args: ['release', 'upload', tag, archivePath], cwd: root },

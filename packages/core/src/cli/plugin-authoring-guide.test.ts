@@ -64,7 +64,9 @@ describe('plugin authoring guide', () => {
 
     const dualRootGuidance = [
       'Repository-path specifiers resolve from the config-bearing root, which is the immutable build worktree in scoped phases.',
-      "npm package specifiers resolve from the consuming main checkout's installed dependencies, independent of local store/worktree placement; missing packages fail and are never installed automatically",
+      "npm package specifiers resolve from the consuming main checkout's installed dependencies first, then from the Autobuild installation the CLI runs from",
+      'a repository copy wins over an installed one, and missing packages fail and are never installed automatically',
+      'bun add -g @defrex/autobuild-<extension>',
     ]
     for (const source of [guide, reference].map(normalizedProse)) {
       for (const clause of dualRootGuidance) expect(source).toContain(clause)
@@ -80,7 +82,7 @@ describe('plugin authoring guide', () => {
       expect(reference).toContain(command)
     }
     for (const contract of [
-      'autobuild/plugin-sdk',
+      '@defrex/autobuild/plugin-sdk',
       'contract: { factory, live: true }',
       'AB_RUN_LIVE_PORT_CONTRACTS=1',
       'BuildStore is **not** an in-process manifest map',
@@ -113,8 +115,8 @@ describe('plugin authoring guide', () => {
     roots.push(root)
     await writeFile(join(root, 'autobuild-plugin.ts'), module)
     await writeFile(join(root, 'autobuild.toml'), config)
-    await mkdir(join(root, 'node_modules'), { recursive: true })
-    await symlink(DIST_ROOT, join(root, 'node_modules', 'autobuild'), 'dir')
+    await mkdir(join(root, 'node_modules', '@defrex'), { recursive: true })
+    await symlink(DIST_ROOT, join(root, 'node_modules', '@defrex', 'autobuild'), 'dir')
 
     const git = Bun.spawnSync(['git', 'init', '-q'], { cwd: root })
     expect(git.exitCode).toBe(0)

@@ -45,16 +45,20 @@ K unclaimed observation.recorded events
 
 The repository is a Bun 1.4 workspace. The private root package, `autobuild`, is
 still the sole Git-installed compatibility distribution: it owns the public and
-private `bin/` entries, the `autobuild/plugin-sdk` export, and the shipped
+private `bin/` entries, the `@defrex/autobuild/plugin-sdk` export, and the shipped
 `skills/`, `templates/`, and documentation. Its implementation is included as
-unbundled TypeScript from the private `@autobuild/core` workspace at
+unbundled TypeScript from the private `@defrex/autobuild-core` workspace at
 `packages/core`; the root repeats core's runtime dependencies so a packed or
 Git installation never requires a separately published core package.
 
 `packages/core` owns the CLI, kernel, adapters, shared types, dashboard
 projection, plugin SDK, and reusable contract suites. The optional
 `packages/hosted-store-service` workspace composes the public remote-server
-surface with `packages/postgres-store`; neither package enters an ordinary CLI
+surface with `packages/postgres-store`; the separate optional
+`packages/hosted-dispatcher` workspace owns the cron-driven hosted dispatcher
+(the `/api/dispatch` route driver, the deploy-time `pack-distribution` command,
+and the packed-distribution trace helper) and peers on both the core and the
+store service. Neither package enters an ordinary CLI
 installation's runtime dependency closure. `tools/` is repository-only
 maintainer tooling. All workspace manifests share one version because the
 remote-store protocol requires matching client and server versions.
@@ -64,7 +68,7 @@ remote-store protocol requires matching client and server versions.
 | Path | Contents | SPEC |
 |---|---|---|
 | `package.json` | Private `autobuild` compatibility distribution and Bun workspace orchestrator; owns bins and shipped assets | — |
-| `packages/core/package.json` | Private `@autobuild/core` implementation workspace | — |
+| `packages/core/package.json` | Private `@defrex/autobuild-core` implementation workspace | — |
 | `packages/core/src/ontology.ts` | The shared nouns — findings, verdicts, phases, refs, the canonical verify outcome | §4 |
 | `packages/core/src/events/` | Separate build, repository, and operator-session envelopes/catalogs, frozen payload schemas, actor validation, the `via` attribution marker | §15 |
 | `packages/core/src/harvest/` | Structured occurrence, scan packet, proposal, and ledger schemas | §12 |
@@ -72,11 +76,12 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/store/` | BuildStore contract spanning builds, the repository journal, and operator sessions; interface-enforced build, operator-session, and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, tests, and deployment guide | §7.2, §18 |
+| `packages/hosted-dispatcher/` | The optional cron-driven hosted dispatcher: endpoint driver, deploy-time `pack-distribution` binary, packed-distribution trace helper, tests, and operator guide | §7.2, §12, §18 |
 | `server.ts`, `vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
-| `packages/core/src/plugin-sdk/` | The sole supported `autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
+| `packages/core/src/plugin-sdk/` | The sole supported `@defrex/autobuild/plugin-sdk` barrel: port/manifest types, contract suites, and reference fakes | §3.2.1 |
 | `packages/core/src/processes/` | build-runner and standalone child composition, durable execution config/diagnostics, dispatcher (+ janitor duty and harvest trigger), harvest deterministic core + runner | §3.3, §12, §15.7 |
 | `packages/core/src/cli/` and `bin/` | The `ab` CLI — the only agent↔store channel — plus the shared presentation-only durable-progress projection, init/upgrade, the Store-only dispatch frontend, its private supervised kernel entry, and `bin/ab-build-runner.ts` (one child per build) | §8, §14, §16.3 |
 | `packages/core/src/cli/dashboard/` | `ab dispatch`'s fixed live frame: pure projection, renderer, poll cache, and deterministic image renderer | §14 |
@@ -91,8 +96,13 @@ remote-store protocol requires matching client and server versions.
 
 ## Key boundaries
 
-**Hosted store service.** `autobuild/remote-store` is the supported protocol
-server/client/token export. The hosted workspace validates its environment,
+**Hosted store service.** `@defrex/autobuild/remote-store` is the supported protocol
+export for the remote store's client half, wire schemas, and token minting; the
+protocol servers (the remote BuildStore HTTP server, the operator API server,
+and the hosted ticket-source server) ship in
+`@defrex/autobuild-hosted-store-service`, which builds against core's
+`remote-store`, `operator`, and `hosted-tickets` subpaths only. The hosted
+workspace validates its environment,
 serves health without touching persistence, and lazily retains one
 `openPostgresBuildStoreFromEnv` promise per warm process. Its Fetch handler has
 no Vercel branch; root `server.ts` is the sole `Bun.serve()` composition point.

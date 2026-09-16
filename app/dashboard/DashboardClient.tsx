@@ -1,13 +1,16 @@
 'use client'
 
-import type { OperatorAnswerRequest, OperatorDashboardSnapshot } from 'autobuild/operator-api'
+import type {
+  OperatorAnswerRequest,
+  OperatorDashboardSnapshot,
+} from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   buildActionAvailability,
   type DashboardBuild,
   parseTranscript,
   repositoryActionAvailability,
   type TranscriptPresentation,
-} from 'autobuild/operator-presentation'
+} from '@defrex/autobuild/operator-presentation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from './api'
 import {

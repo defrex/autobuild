@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ZodError } from 'zod'
+import { distributionRoot } from '../distribution'
 import { expandIssues } from '../zod-issues'
 import {
   parsePluginManifest,
@@ -20,10 +21,15 @@ function importUrl(resolved: string): string {
 
 export type PluginLoadStage = 'resolution' | 'evaluation' | 'manifest' | 'registration'
 
+/** Which root satisfied a bare package specifier: the consuming repository's
+ * installed dependencies, or the Autobuild installation the CLI runs from. */
+export type PluginResolutionSource = 'repository' | 'installation'
+
 export interface PluginModuleReport {
   module: string
   resolutionKind: PluginResolutionKind
   resolved?: string
+  resolvedFrom?: PluginResolutionSource
   status: 'loaded' | 'failed'
   stage: PluginLoadStage | 'loaded'
   pluginName?: string
@@ -39,8 +45,13 @@ export interface PluginDiagnosis {
 }
 
 export interface PluginLoadOptions {
-  /** Root whose installed dependencies satisfy bare package specifiers. */
+  /** Root whose installed dependencies satisfy bare package specifiers first. */
   packageRoot?: string
+  /** Autobuild installation root tried after `packageRoot`, so an extension
+   * installed next to the CLI (`bun add -g @defrex/autobuild-<extension>`)
+   * loads without being added to the repository. Defaults to the running
+   * distribution's root. */
+  installationRoot?: string
 }
 
 export function pluginResolutionKind(moduleSpecifier: string): PluginResolutionKind {
@@ -91,22 +102,55 @@ export async function attemptPlugin(
   options: PluginLoadOptions = {},
 ): Promise<PluginModuleReport> {
   const resolutionKind = pluginResolutionKind(moduleSpecifier)
-  const resolutionRoot = resolutionKind === 'package' ? (options.packageRoot ?? repoRoot) : repoRoot
   const initial = { module: moduleSpecifier, resolutionKind }
   let resolved: string
-  try {
-    resolved = Bun.resolveSync(moduleSpecifier, resolutionRoot)
-  } catch (error) {
-    const rootKind = resolutionKind === 'package' ? 'package root' : 'repository'
-    return failed(
-      initial,
-      'resolution',
-      `plugin module "${moduleSpecifier}" could not be resolved from ${rootKind} "${resolutionRoot}": ${reason(error)}`,
-      error,
-    )
+  let resolvedFrom: PluginResolutionSource | undefined
+  if (resolutionKind === 'repo-path') {
+    try {
+      resolved = Bun.resolveSync(moduleSpecifier, repoRoot)
+    } catch (error) {
+      return failed(
+        initial,
+        'resolution',
+        `plugin module "${moduleSpecifier}" could not be resolved from repository "${repoRoot}": ${reason(error)}`,
+        error,
+      )
+    }
+  } else {
+    // A repository copy wins over an installed one: the consuming checkout's
+    // dependencies are tried first, then the Autobuild installation itself.
+    const candidates: Array<{ source: PluginResolutionSource; root: string }> = [
+      { source: 'repository', root: options.packageRoot ?? repoRoot },
+    ]
+    const installationRoot = options.installationRoot ?? distributionRoot()
+    if (installationRoot !== candidates[0]?.root) {
+      candidates.push({ source: 'installation', root: installationRoot })
+    }
+    const failures: string[] = []
+    let found: { path: string; source: PluginResolutionSource } | undefined
+    let lastError: unknown
+    for (const candidate of candidates) {
+      try {
+        found = { path: Bun.resolveSync(moduleSpecifier, candidate.root), source: candidate.source }
+        break
+      } catch (error) {
+        lastError = error
+        failures.push(`${candidate.source} "${candidate.root}"`)
+      }
+    }
+    if (found === undefined) {
+      return failed(
+        initial,
+        'resolution',
+        `plugin module "${moduleSpecifier}" could not be resolved from ${failures.join(' or ')}: ${reason(lastError)}`,
+        lastError,
+      )
+    }
+    resolved = found.path
+    resolvedFrom = found.source
   }
 
-  const located = { ...initial, resolved }
+  const located = { ...initial, resolved, ...(resolvedFrom !== undefined ? { resolvedFrom } : {}) }
   let namespace: Record<string, unknown>
   try {
     namespace = (await import(importUrl(resolved))) as Record<string, unknown>

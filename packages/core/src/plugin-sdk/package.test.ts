@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { packageAutobuildDistribution } from '../ports/workspace/vercel-sandbox'
 import {
   FakeForge,
   FakeTicketSource,
@@ -65,7 +66,7 @@ describe('plugin SDK package surface', () => {
       import type {
         AutobuildPluginManifest,
         PluginFactoryContext,
-      } from 'autobuild/plugin-sdk'
+      } from '@defrex/autobuild/plugin-sdk'
       interface SampleConfig { endpoint: string }
       const manifest = {
         name: 'erased-types',
@@ -93,13 +94,14 @@ describe('plugin SDK package surface', () => {
       JSON.stringify({
         name: 'sample-autobuild-plugin',
         type: 'module',
-        devDependencies: { autobuild: '2.0.0', '@types/bun': '^1.3.14' },
+        devDependencies: { '@defrex/autobuild': '2.0.0', '@types/bun': '^1.3.14' },
       }),
     )
     await writeFile(join(destination, 'plugin.ts'), source)
     const dependencyDir = join(destination, 'node_modules')
     await mkdir(join(dependencyDir, '@types'), { recursive: true })
-    await symlink(root, join(dependencyDir, 'autobuild'), 'dir')
+    await mkdir(join(dependencyDir, '@defrex'), { recursive: true })
+    await symlink(root, join(dependencyDir, '@defrex', 'autobuild'), 'dir')
     await symlink(
       join(root, 'node_modules', '@types', 'bun'),
       join(dependencyDir, '@types', 'bun'),
@@ -133,7 +135,7 @@ describe('plugin SDK package surface', () => {
     }
 
     const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(source)
-    expect(output).not.toContain('autobuild/plugin-sdk')
+    expect(output).not.toContain('@defrex/autobuild/plugin-sdk')
     const built = join(destination, 'plugin.mjs')
     await writeFile(built, output)
     await rm(dependencyDir, { recursive: true, force: true })
@@ -144,17 +146,8 @@ describe('plugin SDK package surface', () => {
   test('the packed artifact contains the SDK and all reusable contract suites', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
     temporary.push(destination)
-    const packed = Bun.spawn(
-      ['bun', 'pm', 'pack', '--destination', destination, '--ignore-scripts', '--quiet'],
-      { cwd: root, stdout: 'pipe', stderr: 'pipe' },
-    )
-    const exit = await packed.exited
-    const stderr = await new Response(packed.stderr).text()
-    expect(exit, stderr).toBe(0)
-
-    const tarballs = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
-    expect(tarballs).toHaveLength(1)
-    const archive = join(destination, tarballs[0]!)
+    const archive = join(destination, 'autobuild.tgz')
+    await writeFile(archive, await packageAutobuildDistribution())
     const listingProcess = Bun.spawn(['tar', '-tzf', archive], {
       stdout: 'pipe',
       stderr: 'pipe',
@@ -183,13 +176,15 @@ describe('plugin SDK package surface', () => {
     const packedManifest = JSON.parse(await new Response(manifestProcess.stdout).text()) as {
       exports?: Record<string, { types?: string; import?: string }>
       dependencies?: Record<string, string>
+      patchedDependencies?: Record<string, string>
     }
     expect(await manifestProcess.exited).toBe(0)
     expect(packedManifest.exports?.['./plugin-sdk']).toMatchObject({
       types: './packages/core/src/plugin-sdk/index.ts',
       import: './packages/core/src/plugin-sdk/index.ts',
     })
-    expect(packedManifest.dependencies?.['@autobuild/core']).toBeUndefined()
+    expect(packedManifest.dependencies?.['@defrex/autobuild-core']).toBeUndefined()
+    expect(packedManifest.patchedDependencies).toBeUndefined()
 
     const consumer = join(destination, 'consumer')
     await mkdir(consumer)
@@ -199,7 +194,7 @@ describe('plugin SDK package surface', () => {
         name: 'packed-plugin-sdk-consumer',
         private: true,
         type: 'module',
-        dependencies: { autobuild: `file:${archive}` },
+        dependencies: { '@defrex/autobuild': `file:${archive}` },
       }),
     )
     const install = Bun.spawn(['bun', 'install', '--linker', 'isolated'], {
@@ -223,7 +218,7 @@ describe('plugin SDK package surface', () => {
           FakeTicketSource,
           PLUGIN_API_VERSION,
           describeTicketSourceContract,
-        } from 'autobuild/plugin-sdk'
+        } from '@defrex/autobuild/plugin-sdk'
 
         if (PLUGIN_API_VERSION !== '1.5.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
@@ -263,8 +258,11 @@ describe('plugin SDK package surface', () => {
       stderr: 'pipe',
     })
     expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
+    const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+      version: string
+    }
     expect((await new Response(version.stdout).text()).trim()).toBe(
-      'autobuild 0.6.0\nplugin API 1.5.0',
+      `autobuild ${rootManifest.version}\nplugin API 1.5.0`,
     )
 
     const initialized = join(destination, 'initialized')
@@ -280,4 +278,50 @@ describe('plugin SDK package surface', () => {
       await Bun.file(join(initialized, '.agents', 'skills', 'ab-implement', 'SKILL.md')).exists(),
     ).toBe(true)
   }, 20_000)
+
+  test('the packed distribution installs next to better-auth without a patchedDependencies declaration', async () => {
+    const destination = await mkdtemp(join(tmpdir(), 'ab-pack-patch-consumer-'))
+    temporary.push(destination)
+    const archive = join(destination, 'autobuild.tgz')
+    await writeFile(archive, await packageAutobuildDistribution())
+
+    const consumer = join(destination, 'consumer')
+    await mkdir(consumer)
+    await writeFile(
+      join(consumer, 'package.json'),
+      JSON.stringify({
+        name: 'packed-better-auth-consumer',
+        private: true,
+        type: 'module',
+        dependencies: { '@defrex/autobuild': `file:${archive}`, 'better-auth': '1.4.18' },
+      }),
+    )
+    // bun 1.4.0 panics (exit 134, Option::unwrap) when the consumed manifest
+    // declares a patchedDependencies entry for a package the consumer tree
+    // contains, so this install only succeeds while the packed manifest
+    // carries no patchedDependencies field.
+    const install = Bun.spawn(['bun', 'install'], {
+      cwd: consumer,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const installExit = await install.exited
+    const [installOutput, installError] = await Promise.all([
+      new Response(install.stdout).text(),
+      new Response(install.stderr).text(),
+    ])
+    if (installExit !== 0) {
+      throw new Error(
+        `packed distribution install next to better-auth failed:\n${installOutput}${installError}`,
+      )
+    }
+    expect(
+      await Bun.file(join(consumer, 'node_modules', 'better-auth', 'package.json')).exists(),
+    ).toBe(true)
+    expect(
+      await Bun.file(
+        join(consumer, 'node_modules', '@defrex', 'autobuild', 'bin', 'ab.ts'),
+      ).exists(),
+    ).toBe(true)
+  }, 120_000)
 })

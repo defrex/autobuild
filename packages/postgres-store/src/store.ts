@@ -44,7 +44,7 @@ import {
   type SessionScopedStore,
   type SubscribeOptions,
   type Unsubscribe,
-} from 'autobuild/store-adapter'
+} from '@defrex/autobuild/store-adapter'
 import type {
   StreamChunk,
   StreamOutcome,
@@ -52,7 +52,7 @@ import type {
   StreamRead,
   StreamRecord,
   StreamScope,
-} from 'autobuild/store-adapter'
+} from '@defrex/autobuild/store-adapter'
 import {
   assembleUIMessageDocument,
   readEventsWithWait,
@@ -64,12 +64,12 @@ import {
   StreamClosedError,
   streamArtifactInput,
   validateStreamParts,
-} from 'autobuild/store-adapter'
+} from '@defrex/autobuild/store-adapter'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
   revisionsToPrune,
-} from 'autobuild/store-adapter'
+} from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 
 // The held-read poll cadence for event waits — a re-export of the canonical

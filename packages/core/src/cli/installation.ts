@@ -17,20 +17,36 @@ export interface DistributionIdentity {
 
 export type InstallScope = 'local' | 'global'
 
-export interface BunForgeInstallation extends DistributionIdentity {
+/** Where the owning package manager obtained the distribution: a `github:`
+ * forge dependency, or a version range satisfied from the npm registry. */
+export type InstallChannel = 'github' | 'npm'
+
+interface ManagedInstallationBase extends DistributionIdentity {
   sourceCheckout: false
   ownerRoot: string
   ownerManifest: string
   ownerLock: string
-  owner: string
-  repository: string
+  /** The owning manifest's direct dependency value, byte for byte. */
   dependency: string
   scope: InstallScope
 }
 
+export interface BunForgeInstallation extends ManagedInstallationBase {
+  channel: 'github'
+  owner: string
+  repository: string
+}
+
+export interface NpmRegistryInstallation extends ManagedInstallationBase {
+  channel: 'npm'
+}
+
+export type ManagedInstallation = BunForgeInstallation | NpmRegistryInstallation
+
 export type InstallationInspection =
   | { kind: 'source'; identity: DistributionIdentity; reason: string }
   | { kind: 'bun-forge'; installation: BunForgeInstallation }
+  | { kind: 'npm-registry'; installation: NpmRegistryInstallation }
   | { kind: 'unknown'; identity: DistributionIdentity; reason: string }
 
 async function exists(path: string): Promise<boolean> {
@@ -134,6 +150,15 @@ function githubDependency(value: unknown): { owner: string; repository: string }
   return { owner: match[1], repository: match[2] }
 }
 
+/** A registry dependency is a semver range (what `bun add <pkg>@<version>`
+ * writes) that the installed version satisfies. Aliases, tags, URLs, and
+ * `file:`/`link:` specifiers are not registry installs. */
+function registryDependency(value: unknown, installedVersion: string): boolean {
+  if (typeof value !== 'string' || value.trim() === '') return false
+  if (semver.validRange(value) === null) return false
+  return semver.satisfies(installedVersion, value)
+}
+
 async function parseJson(path: string): Promise<Record<string, unknown>> {
   try {
     return object(JSON.parse(await readFile(path, 'utf8'))) ?? {}
@@ -177,9 +202,12 @@ async function samePath(left: string, right: string): Promise<boolean> {
   }
 }
 
-/** Validate Bun's direct forge-install records before permitting mutation.
- * The repository comes from the owning manifest/lock, never by splitting the
- * ambiguous hyphen-delimited `.bun-tag`. */
+/** Validate Bun's direct install records before permitting mutation. A
+ * `github:` dependency is a forge install whose repository comes from the
+ * owning manifest/lock, never by splitting the ambiguous hyphen-delimited
+ * `.bun-tag`. A semver-range dependency satisfied by the installed version,
+ * whose lock record resolves to that exact registry version, is an npm
+ * registry install. Anything else is a named refusal. */
 export async function inspectInstallation(options: {
   distRoot?: string
   globalBin: string
@@ -209,11 +237,12 @@ export async function inspectInstallation(options: {
     const lock = await parseJsonc(ownerLock)
     const dependency = object(manifest.dependencies)?.[identity.packageName]
     const repository = githubDependency(dependency)
-    if (repository === undefined || typeof dependency !== 'string') {
+    const registry = repository === undefined && registryDependency(dependency, identity.version)
+    if ((repository === undefined && !registry) || typeof dependency !== 'string') {
       return {
         kind: 'unknown',
         identity,
-        reason: `${ownerManifest} does not declare ${identity.packageName} as a direct github: dependency`,
+        reason: `${ownerManifest} does not declare ${identity.packageName} as a direct github: dependency or an npm registry version range satisfied by ${identity.version}`,
       }
     }
     if (lockDependency(lock, identity.packageName) !== dependency) {
@@ -221,6 +250,38 @@ export async function inspectInstallation(options: {
         kind: 'unknown',
         identity,
         reason: `${ownerLock} does not agree with the direct dependency in ${ownerManifest}`,
+      }
+    }
+    const scope: InstallScope = (await samePath(join(options.globalBin, 'ab'), identity.binaryPath))
+      ? 'global'
+      : 'local'
+    if (repository === undefined) {
+      // Registry provenance: Bun records `<name>@<version>` with an empty
+      // registry marker; a forge, tarball, or workspace resolution differs.
+      const record = lockPackageRecord(lock, identity.packageName)
+      if (
+        record === undefined ||
+        record[0] !== `${identity.packageName}@${identity.version}` ||
+        record[1] !== ''
+      ) {
+        return {
+          kind: 'unknown',
+          identity,
+          reason: `${ownerLock} does not resolve ${identity.packageName} to registry version ${identity.version}`,
+        }
+      }
+      return {
+        kind: 'npm-registry',
+        installation: {
+          ...identity,
+          sourceCheckout: false,
+          channel: 'npm',
+          ownerRoot,
+          ownerManifest,
+          ownerLock,
+          dependency,
+          scope,
+        },
       }
     }
     const expectedTagPrefix = `${repository.owner}-${repository.repository}-`
@@ -247,14 +308,12 @@ export async function inspectInstallation(options: {
       }
     }
 
-    const scope: InstallScope = (await samePath(join(options.globalBin, 'ab'), identity.binaryPath))
-      ? 'global'
-      : 'local'
     return {
       kind: 'bun-forge',
       installation: {
         ...identity,
         sourceCheckout: false,
+        channel: 'github',
         ownerRoot,
         ownerManifest,
         ownerLock,

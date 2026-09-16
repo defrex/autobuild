@@ -2,15 +2,15 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createTerminalModeController } from '../../core/src/cli/terminal-restore'
-import { abDispatch } from '../../core/src/cli/dispatch'
-import { agentActor, KERNEL } from '../../core/src/events/envelope'
-import { createTicketSource } from '../../core/src/ports/tickets/create'
-import { FakeTicketSource } from '../../core/src/ports/tickets/fake'
-import type { TicketSource } from '../../core/src/ports/types'
-import { spawnExec } from '../../core/src/ports/workspace/git-worktree'
-import { OperatorApiClient } from 'autobuild/operator-api'
-import { RemoteBuildStore, mintToken } from 'autobuild/remote-store'
+import { createTerminalModeController } from '@defrex/autobuild/testing'
+import { abDispatch } from '@defrex/autobuild/testing'
+import { agentActor, KERNEL } from '@defrex/autobuild/testing'
+import { createTicketSource } from '@defrex/autobuild/testing'
+import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import type { TicketSource } from '@defrex/autobuild/plugin-sdk'
+import { spawnExec } from '@defrex/autobuild/testing'
+import { OperatorApiClient } from './operator-api'
+import { RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
 import {
   CONFIG_TOML,
   happyHandlers,
@@ -18,7 +18,7 @@ import {
   readyTicket,
   typesOf,
   type E2eHarness,
-} from '../../core/src/integration/harness'
+} from '@defrex/autobuild/testing'
 import { createHostedStoreService } from './service'
 
 const harnesses: E2eHarness[] = []

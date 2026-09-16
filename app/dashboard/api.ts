@@ -3,7 +3,7 @@ import type {
   OperatorApiClient,
   OperatorBuildControlRequest,
   OperatorDashboardSnapshot,
-} from 'autobuild/operator-api'
+} from '@defrex/autobuild-hosted-store-service/operator-api'
 
 export class WebOperatorError extends Error {
   constructor(

@@ -24,7 +24,7 @@ roughly one `dispatcher-effective-config` artifact per minute per repository; re
 yet implemented, so that growth is a documented property, not a fault. The full contract —
 bounding, overlap, missed ticks, sandbox authentication — is documented in
 [the hosted dispatcher procedure](../../../docs/hosted-dispatcher.md) and
-[the hosted service README](../../../packages/hosted-store-service/README.md).
+[the hosted dispatcher README](../../../packages/hosted-dispatcher/README.md).
 
 ## Pausing and resuming
 

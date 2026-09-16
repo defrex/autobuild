@@ -136,7 +136,11 @@ test('ab mcp serves reads over stdio, byte-safe artifacts included', async () =>
 
 test('a mutating call attributes its durable write to the operator identity', async () => {
   await seed()
-  const client = await connect()
+  // Pin the operator identity explicitly: the SDK's stdio transport merges the
+  // host's default environment (USER included) under the env it is given, so
+  // relying on the "dashboard" fallback would make the expectation depend on
+  // whether the machine running the suite exports USER.
+  const client = await connect({ ...bareEnv(), USER: 'operator-1' })
   try {
     const result = await client.callTool({
       name: 'repository.settings',
@@ -157,7 +161,7 @@ test('a mutating call attributes its durable write to the operator identity', as
   expect(event?.type).toBe('dispatcher.intake-set')
   expect(event?.actor).toEqual({
     kind: 'human',
-    user: 'dashboard',
+    user: 'operator-1',
     via: { kind: 'mcp', client: 'mcp-contract-test' },
   })
   await reopened.close()

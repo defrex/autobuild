@@ -1,18 +1,21 @@
 import { describe, expect, test } from 'bun:test'
-import { parseConfig } from '../config/load'
-import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
-import { MemoryBuildStore } from '../store/memory'
-import { RemoteBuildStore } from '../store/remote/client'
-import { createStoreServer } from '../store/remote/server'
-import { mintToken, tokenResource, verifyToken } from '../store/remote/token'
+import { parseConfig } from '@defrex/autobuild/testing'
+import { agentActor, DISPATCHER, KERNEL } from '@defrex/autobuild/testing'
+import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { createStoreServer } from './remote-store-server'
 import {
+  mintToken,
+  RemoteBuildStore,
+  tokenResource,
+  verifyToken,
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from '../store/remote/version'
-import { OperatorApiClient, OperatorApiError } from './client'
-import { createOperatorServer, REGISTRY_ERROR_STATUS } from './server'
+} from '@defrex/autobuild/remote-store'
+
+import { OperatorApiClient, OperatorApiError } from './operator-client'
+import { createOperatorServer, REGISTRY_ERROR_STATUS } from './operator-server'
 
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
