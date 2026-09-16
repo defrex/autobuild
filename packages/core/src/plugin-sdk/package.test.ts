@@ -263,8 +263,15 @@ describe('plugin SDK package surface', () => {
       stderr: 'pipe',
     })
     expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
+    // The packed CLI reports the packed manifest's version — derive the
+    // expectation from the source manifest so a release bump cannot stale the
+    // pin (as the v0.7.0 release did to its hardcoded predecessor).
+    const sourceManifest = JSON.parse(await Bun.file(join(root, 'package.json')).text()) as {
+      version?: string
+    }
+    expect(sourceManifest.version).toBeDefined()
     expect((await new Response(version.stdout).text()).trim()).toBe(
-      'autobuild 0.6.0\nplugin API 1.5.0',
+      `autobuild ${sourceManifest.version}\nplugin API ${PLUGIN_API_VERSION}`,
     )
 
     const initialized = join(destination, 'initialized')
