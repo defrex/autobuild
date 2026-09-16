@@ -10,8 +10,9 @@
  * synchronous (SQLite) and asynchronous (PostgreSQL) backends is worth more
  * than wake-on-write precision. The loop serves two cadences: held *stream*
  * reads are presentation content and poll at the ~25 ms `STREAM_WAIT_POLL_MS`;
- * held *event* reads (build, repository, session — AUT-334/381/383) pass the
- * one-second `EVENT_WAIT_POLL_MS` budget per call. Closed streams never wait.
+ * held *event* reads (build, repository, session — AUT-334/381/383) take the
+ * one-second `EVENT_WAIT_POLL_MS` budget when the adapter passes it per call
+ * (see `EVENT_WAIT_POLL_MS` for which adapters do). Closed streams never wait.
  *
  * Both loops accept an optional `signal` (AUT-380): when it aborts, the hold
  * ends promptly — the inter-poll sleep resolves early, the loop stops, and the
@@ -32,7 +33,10 @@ export const STREAM_WAIT_POLL_MS = 25
  * poll, typically within about one second. Held *stream* reads are excluded:
  * they are presentation content and stay at the ~25 ms `STREAM_WAIT_POLL_MS`
  * cadence. This deliberately diverges from `STREAM_WAIT_POLL_MS`; adapters
- * pass it as `pollMs` on every event-family call to `readEventsWithWait`.
+ * pass it as `pollMs` on their event-family calls to `readEventsWithWait` —
+ * the PostgreSQL and memory stores do on all three families (AUT-334/381/383).
+ * The SQLite store has not adopted the budget (out of scope for AUT-383), so
+ * its held event reads fall back to the stream default until it does.
  */
 export const EVENT_WAIT_POLL_MS = 1000
 

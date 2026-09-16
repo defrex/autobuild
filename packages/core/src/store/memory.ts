@@ -396,6 +396,10 @@ export class MemoryBuildStore implements BuildStore {
       },
       waitSeconds: opts?.waitSeconds,
       signal: opts?.signal,
+      // Hosted budget: held build-event reads poll at most once per second
+      // (AUT-383) — not the 25 ms stream default, which is presentation
+      // content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
     })
   }
 
@@ -618,6 +622,10 @@ export class MemoryBuildStore implements BuildStore {
       },
       waitSeconds: opts?.waitSeconds,
       signal: opts?.signal,
+      // Hosted budget: held repository-event reads poll at most once per
+      // second (AUT-383) — not the 25 ms stream default, which is
+      // presentation content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
     })
   }
 
