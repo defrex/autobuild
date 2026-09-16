@@ -92,6 +92,73 @@ describe('loadPlugins', () => {
     expect(registry.forges.has('decoy')).toBe(false)
   })
 
+  test('falls back to the Autobuild installation for a package the repository lacks', async () => {
+    const repo = await fixture()
+    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
+    await write(
+      join(installationRoot, '..', 'autobuild-extension', 'package.json'),
+      JSON.stringify({
+        name: '@defrex/autobuild-extension',
+        type: 'module',
+        exports: './plugin.ts',
+      }),
+    )
+    await write(
+      join(installationRoot, '..', 'autobuild-extension', 'plugin.ts'),
+      `export default { name: 'extension', apiVersion: '^1.0.0', forges: { extension: () => ({}) } }\n`,
+    )
+
+    const diagnosis = await diagnosePlugins(['@defrex/autobuild-extension'], repo, {
+      installationRoot,
+    })
+    expect(diagnosis.healthy).toBe(true)
+    expect(diagnosis.reports[0]?.resolvedFrom).toBe('installation')
+    expect(diagnosis.registry.forges.get('extension')?.owner).toEqual({
+      kind: 'plugin',
+      name: 'extension',
+    })
+  })
+
+  test('a repository copy of a package wins over the installed one', async () => {
+    const repo = await fixture()
+    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
+    for (const [base, pluginName] of [
+      [join(installationRoot, '..', 'autobuild-extension'), 'installed'],
+      [join(repo, 'node_modules', '@defrex', 'autobuild-extension'), 'repository'],
+    ] as const) {
+      await write(
+        join(base, 'package.json'),
+        JSON.stringify({
+          name: '@defrex/autobuild-extension',
+          type: 'module',
+          exports: './plugin.ts',
+        }),
+      )
+      await write(
+        join(base, 'plugin.ts'),
+        `export default { name: '${pluginName}', apiVersion: '^1.0.0', forges: { '${pluginName}': () => ({}) } }\n`,
+      )
+    }
+
+    const diagnosis = await diagnosePlugins(['@defrex/autobuild-extension'], repo, {
+      installationRoot,
+    })
+    expect(diagnosis.reports[0]?.resolvedFrom).toBe('repository')
+    expect(diagnosis.registry.forges.has('repository')).toBe(true)
+    expect(diagnosis.registry.forges.has('installed')).toBe(false)
+  })
+
+  test('a missing package names both roots it was not found in', async () => {
+    const repo = await fixture()
+    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
+    const diagnosis = await diagnosePlugins(['@defrex/autobuild-missing'], repo, {
+      installationRoot,
+    })
+    expect(diagnosis.reports[0]?.status).toBe('failed')
+    expect(diagnosis.reports[0]?.error).toContain(`repository "${repo}"`)
+    expect(diagnosis.reports[0]?.error).toContain(`installation "${installationRoot}"`)
+  })
+
   test('diagnosis reports ordered failures and keeps later successful registrations', async () => {
     const repo = await fixture()
     await write(join(repo, 'throws.ts'), `throw new Error('diagnostic boom')\n`)
@@ -121,7 +188,7 @@ describe('loadPlugins', () => {
     expect(diagnosis.reports[0]).toMatchObject({
       module: 'missing-plugin',
       stage: 'resolution',
-      error: expect.stringContaining(`package root "${packageRoot}"`),
+      error: expect.stringContaining(`repository "${packageRoot}"`),
     })
     await expect(loadPlugins(['missing-plugin'], repo, { packageRoot })).rejects.toThrow(
       /missing-plugin.*could not be resolved/,

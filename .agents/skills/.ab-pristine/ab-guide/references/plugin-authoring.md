@@ -117,8 +117,10 @@ Every module must default-export one strict `AutobuildPluginManifest`:
 Add the module specifier at the TOML root, before any table. Repository-path
 specifiers resolve from the config-bearing root, which is the immutable build
 worktree in scoped phases. npm package specifiers resolve from the consuming
-main checkout's installed dependencies, independent of local store/worktree
-placement; missing packages fail and are never installed automatically:
+main checkout's installed dependencies first, then from the Autobuild
+installation the CLI runs from (so `bun add -g @defrex/autobuild-<extension>`
+next to the CLI is enough); a repository copy wins over an installed one, and
+missing packages fail and are never installed automatically:
 
 ```toml
 plugins = ["./autobuild-plugin.ts"]

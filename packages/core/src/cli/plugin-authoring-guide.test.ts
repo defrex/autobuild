@@ -64,7 +64,9 @@ describe('plugin authoring guide', () => {
 
     const dualRootGuidance = [
       'Repository-path specifiers resolve from the config-bearing root, which is the immutable build worktree in scoped phases.',
-      "npm package specifiers resolve from the consuming main checkout's installed dependencies, independent of local store/worktree placement; missing packages fail and are never installed automatically",
+      "npm package specifiers resolve from the consuming main checkout's installed dependencies first, then from the Autobuild installation the CLI runs from",
+      'a repository copy wins over an installed one, and missing packages fail and are never installed automatically',
+      'bun add -g @defrex/autobuild-<extension>',
     ]
     for (const source of [guide, reference].map(normalizedProse)) {
       for (const clause of dualRootGuidance) expect(source).toContain(clause)

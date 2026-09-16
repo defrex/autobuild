@@ -116,15 +116,19 @@ production code can use erased type-only imports, with Autobuild present only
 as a development or peer dependency; a consuming repository needs no bridge
 module.
 
-Plugin resolution has two repository-owned roots. Relative, absolute, and
-`file:` specifiers resolve from the repository root whose config is being read;
-in a scoped build CLI process, that is the immutable build worktree. Bare
-package specifiers and package export maps resolve from the consuming
-repository's main checkout, so they use that repository's installed
-dependencies—not Autobuild's installation—and remain available when a local
-store places linked worktrees outside the checkout's package ancestry. Dispatch
-and sessionless commands naturally use the main checkout for both roots.
-Autobuild does not install a missing package.
+Plugin resolution has two repository-owned roots and one installation root.
+Relative, absolute, and `file:` specifiers resolve from the repository root
+whose config is being read; in a scoped build CLI process, that is the
+immutable build worktree. Bare package specifiers and package export maps
+resolve first from the consuming repository's main checkout, so they use that
+repository's installed dependencies and remain available when a local store
+places linked worktrees outside the checkout's package ancestry; a package the
+repository lacks then resolves from the Autobuild installation the CLI runs
+from, so an extension installed next to the CLI (`bun add -g
+@defrex/autobuild-<extension>`) loads without being added to the repository. A
+repository copy always wins over an installed one. Dispatch and sessionless
+commands naturally use the main checkout for both repository roots. Autobuild
+does not install a missing package.
 
 Configured specifier strings must be unique: an exact repeated value fails
 config validation before module resolution or evaluation, identifies the
