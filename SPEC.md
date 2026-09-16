@@ -1458,6 +1458,19 @@ never optimistically rendered — the UI shows acknowledged state. The
 repository-wide pause holds every queued build: while it is set, no dispatcher
 tick may attach a runner to a build that does not have one yet.
 
+The **operator sandbox** is the third execution kind beside build and harvest
+executions: a persistent, credential-free, per-operator-per-repository
+environment behind registry tools (`sandbox.*`, AUT-340), provisioned like a
+build workspace and exposed to operator agents only through those tools. The
+typed tools are the only route to state from inside it — the environment
+receives no store, forge, ticket-provider, or model credential, and
+`[orchestrator].sandbox.environmentVariables` may never name one. Its lifecycle
+is repository-journal fact: provisioned/resumed/activity/stopped/released facts
+bracket one deterministic environment per operator × repository, the
+ dispatcher tick's idle settlement stops an environment whose evidence is
+stale (settling an orphan exactly as harvest executions are settled), and
+`ab repository status` reports each operator's sandbox.
+
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
 any build's trail. Each dashboard build row spends its header on identity and
