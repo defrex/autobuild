@@ -94,6 +94,50 @@ describe('dispatch recovery event protocol', () => {
     ).toThrow(/invalid payload/)
   })
 
+  test('build creation retains the claim-time default provenance', () => {
+    const base = {
+      ticket: { source: 'linear', id: 'AUT-1' },
+      repo: 'acme/app',
+      baseBranch: 'main',
+    }
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, autoMergeDefaultSeq: 4 },
+      }).payload,
+    ).toEqual({ ...base, autoMergeDefaultSeq: 4 })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ...base, autoMergeDefaultSeq: 0 },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('auto-merge commands accept bare and provenance-bearing payloads, strictly', () => {
+    const command = (payload: unknown): EventWrite<'build.auto-merge-requested'> =>
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload,
+      }) as EventWrite<'build.auto-merge-requested'>
+    expect(command({}).payload).toEqual({})
+    expect(command({ defaultSeq: 12 }).payload).toEqual({ defaultSeq: 12 })
+    expect(() => command({ defaultSeq: 0 })).toThrow(/invalid payload/)
+    expect(() => command({ defaultSeq: -3 })).toThrow(/invalid payload/)
+    expect(() => command({ defaultSeq: 1.5 })).toThrow(/invalid payload/)
+    expect(() => command({ enabled: true })).toThrow(/invalid payload/)
+    expect(() =>
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-cancelled',
+        payload: { defaultSeq: 3 },
+      }),
+    ).not.toThrow()
+  })
+
   test('discard requests are strict human facts', () => {
     expect(
       validateEventWrite({

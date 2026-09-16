@@ -11,6 +11,7 @@ import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventType } from '../events/payloads'
+import type { RepositoryEvent } from '../events/repository'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
@@ -852,7 +853,7 @@ releaseId = 42
     ])
   })
 
-  test('the default never touches resumed or directly created builds', async () => {
+  test('a launch-flag seed with no durable default fact never touches resumed or directly created builds (seed-only premise)', async () => {
     const h = harness()
     const resumed = await seedBuild(h, { slug: 'resumed-build' })
     await h.store.createBuild({
@@ -6005,5 +6006,158 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     const retried = await h.dispatcher.tick()
     expect(retried.sandboxIdleStops).toBe(1)
     expect(retried.sandboxSettleFailures).toBe(0)
+  })
+})
+
+describe('the durable auto-merge default fans out onto current builds', () => {
+  /** The toggling operator's durable fact, exactly as a dashboard keypress
+   * (or `ab dispatch --auto-merge`) writes it. */
+  async function setDefault(h: Harness, enabled: boolean): Promise<RepositoryEvent> {
+    await h.store.ensureRepo(REPO)
+    return h.store.appendRepo(REPO, {
+      actor: humanActor('toggle-operator'),
+      type: 'dispatcher.auto-merge-default-set',
+      payload: { enabled },
+    })
+  }
+
+  /** The observed sequence (spec AC): default off at claim, ON pressed after
+   * `build.created`, finalize completes, PR open and mergeable, no per-build
+   * command anywhere. The build merges with no further operator action. */
+  test('an ON toggle after the claim merges a parked build on the next ticks', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setGatePresence(1, 'absent')
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+
+    const fact = await setDefault(h, true)
+
+    // One tick both records the fan-out request and applies it (the janitor
+    // reduces a fresh read inside checkPr).
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    const requested = (await h.store.getEvents(slug)).find(
+      (event) => event.type === 'build.auto-merge-requested',
+    )
+    expect(requested).toBeDefined()
+    expect(requested?.actor).toEqual({ kind: 'human', user: 'toggle-operator' })
+    expect(requested?.payload).toEqual({ defaultSeq: fact.seq })
+    expect(h.forge.squashMergeCalls).toHaveLength(1)
+
+    // The merge completes once the execution lease is gone — no human action.
+    await h.store.releaseLease(slug, 'runner-live')
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+    const final = await h.store.getEvents(slug)
+    expect(final.at(-1)?.type).toBe('build.completed')
+    expect(final.at(-1)?.payload).toEqual({ outcome: 'merged' })
+  })
+
+  test('toggling twice to the same value appends no duplicate request', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'build.auto-merge-requested'),
+    ).toHaveLength(1)
+  })
+
+  test('two dispatchers polling one shared store converge to exactly one request', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    // A second dispatcher over the same store/repo — the "seen by a second
+    // polling process" acceptance shape. Its ticks append nothing the first
+    // dispatcher's settled state does not already answer.
+    const other = harness({ store: h.store })
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    await other.dispatcher.tick()
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'build.auto-merge-requested'),
+    ).toHaveLength(1)
+  })
+
+  test('an OFF toggle withdraws consent a fan-out previously requested', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    expect(h.forge.autoMergeCalls).toEqual([
+      { workspacePath: `/ws/ab/${slug}`, number: 1, enabled: true, changed: true },
+    ])
+
+    await setDefault(h, false)
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    const cancelled = (await h.store.getEvents(slug)).filter(
+      (e) => e.type === 'build.auto-merge-cancelled',
+    )
+    expect(cancelled).toHaveLength(1)
+    expect(cancelled[0]?.actor).toEqual({ kind: 'human', user: 'toggle-operator' })
+    expect(cancelled[0]?.payload).toEqual({ defaultSeq: expect.any(Number) })
+    // The janitor disabled the native request on the forge.
+    expect(h.forge.autoMergeCalls.at(-1)).toEqual({
+      workspacePath: `/ws/ab/${slug}`,
+      number: 1,
+      enabled: false,
+      changed: true,
+    })
+    expect((await h.store.getEvents(slug)).some((e) => e.type === 'pr.auto-merge-disabled')).toBe(
+      true,
+    )
+  })
+
+  test('a per-build cancel stands against the tick; a later toggle pair overrides it', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    const perBuild = await h.store.append(slug, {
+      actor: humanActor('row-operator'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+    expect(perBuild.payload).toEqual({})
+    await h.dispatcher.tick()
+    // The per-build override survived: still exactly one request, and the
+    // cancel has no fan-out duplicate.
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'build.auto-merge-requested'),
+    ).toHaveLength(1)
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'build.auto-merge-cancelled'),
+    ).toHaveLength(1)
+
+    // OFF (no-op on an already-off build) then ON again: the newer fact
+    // re-applies over the per-build choice.
+    await setDefault(h, false)
+    await h.dispatcher.tick()
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    const requests = (await h.store.getEvents(slug)).filter(
+      (e) => e.type === 'build.auto-merge-requested',
+    )
+    expect(requests).toHaveLength(2)
+    expect(requests.at(-1)?.actor).toEqual({ kind: 'human', user: 'toggle-operator' })
+  })
+
+  test('a build claimed after the ON fact is not re-fanned on later ticks', async () => {
+    const h = harness({ tickets: [readyTicket('T-late')] })
+    await setDefault(h, true)
+    await h.dispatcher.tick({ defaultAutoMerge: true, autoMergeUser: 'dispatch-op' })
+    const slug = 'add-rate-limiting'
+    const events = await h.store.getEvents(slug)
+    const request = events.find((e) => e.type === 'build.auto-merge-requested')!
+    expect(request).toBeDefined()
+    // Claim-time seeding answers the durable fact itself (the fact's seq is
+    // on build.created), so the next tick's fan-out appends nothing further.
+    await h.dispatcher.tick()
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'build.auto-merge-requested'),
+    ).toHaveLength(1)
   })
 })

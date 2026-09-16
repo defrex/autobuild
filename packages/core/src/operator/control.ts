@@ -60,6 +60,8 @@ export async function toggleRepositorySetting(opts: {
   user: string
   setting: RepositorySetting
   via?: Via
+  /** Dispatcher invocation that performed the write (see setRepositorySetting). */
+  run?: string
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
   const settings = reduceDispatchSettings(await opts.store.getRepoEvents(opts.repo))

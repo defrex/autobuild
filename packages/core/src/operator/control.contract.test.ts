@@ -406,6 +406,47 @@ describe('operator behavioral parity contract', () => {
     }
   })
 
+  test('a run-bearing default write is exact; a run-less one stays bare', async () => {
+    const store = await makeStore()
+    await setRepositorySetting({
+      store,
+      repo: REPO,
+      user: USER,
+      setting: 'auto-merge-default',
+      enabled: true,
+      run: 'run-1',
+    })
+    await toggleRepositorySetting({
+      store,
+      repo: REPO,
+      user: USER,
+      setting: 'auto-merge-default',
+      run: 'run-2',
+    })
+    expect(repoWrites(await store.getRepoEvents(REPO), 0)).toEqual([
+      {
+        actor: { kind: 'human', user: USER },
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true, run: 'run-1' },
+      },
+      {
+        actor: { kind: 'human', user: USER },
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: false, run: 'run-2' },
+      },
+    ])
+    // The operator API (which carries no run) keeps writing the bare payload.
+    const apiStore = await makeStore()
+    await api(apiStore).setAutoMergeDefault(REPO, true)
+    expect(repoWrites(await apiStore.getRepoEvents(REPO), 0)).toEqual([
+      {
+        actor: { kind: 'human', user: USER },
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      },
+    ])
+  })
+
   for (const direction of ['pause', 'resume'] as const) {
     test(`bulk ${direction}`, async () => {
       const cliStore = await makeStore()
