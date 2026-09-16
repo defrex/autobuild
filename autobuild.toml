@@ -112,7 +112,7 @@ model = "vercel-ai-gateway/zai/glm-5.3-flash"
 # Failure-triggered fallbacks stay on Pi and preserve the repository's provider
 # preference order. Disposable guests authenticate only through AI Gateway.
 alternates = [
-  { model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash" },
+  { model = "vercel-ai-gateway/meta/muse-spark-1.3" },
   { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
 ]
 
@@ -120,13 +120,13 @@ alternates = [
 runtime = "pi"
 model = "vercel-ai-gateway/zai/glm-5.3-flash"
 alternates = [
-  { model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash" },
+  { model = "vercel-ai-gateway/meta/muse-spark-1.3" },
   { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
 ]
 
 [roles.plan-review]
 runtime = "pi"
-model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash"
+model = "vercel-ai-gateway/meta/muse-spark-1.3"
 alternates = [
   { model = "vercel-ai-gateway/zai/glm-5.3-flash" },
   { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
@@ -134,7 +134,7 @@ alternates = [
 
 [roles.code-review]
 runtime = "pi"
-model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash"
+model = "vercel-ai-gateway/meta/muse-spark-1.3"
 alternates = [
   { model = "vercel-ai-gateway/zai/glm-5.3-flash" },
   { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
