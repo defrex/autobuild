@@ -446,7 +446,10 @@ section 6 apply to session-scoped streams unchanged.
 Event reads honor the bounded wait: when no newer event exists, the server may
 hold the request up to the parsed `wait` bound in whole seconds, returning as
 soon as an event is appended and no later than the bound; a `wait` above 30
-seconds is clamped to 30. The clamp and early-return semantics are exactly the
+seconds is clamped to 30. Held session-event reads poll at the hosted
+one-second budget (`EVENT_WAIT_POLL_MS = 1000`), matching the build and
+repository event reads, so append-to-wake is typically under one second. The
+clamp and early-return semantics are exactly the
 stream read's, so a poll loop cannot drift between the two.
 
 Deposits, artifacts, and per-session sequencing follow the same contracts as
@@ -860,8 +863,8 @@ For streams, the backing store must additionally maintain:
   batches above the serialized-byte ceiling;
 - the bounded read wait exactly as specified in section 6, including the
   30-second clamp and no wait on closed streams;
-- the bounded wait on the build and repository event reads exactly as
-  specified in section 3, with no per-request database poll faster than once
+- the bounded wait on the build, repository, and session event reads exactly
+  as specified in section 3, with no per-request database poll faster than once
   per second (the shipped PostgreSQL adapter polls held reads at
   `EVENT_WAIT_POLL_MS = 1000`, so an append by another connection is observed
   at the next poll — typically within about one second, worst case one poll
