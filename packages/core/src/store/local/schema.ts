@@ -158,6 +158,11 @@ export const streams = sqliteTable('streams', {
   artifactBlobRef: text('artifact_blob_ref'),
   createdAt: text('created_at').notNull(),
   closedAt: text('closed_at'),
+  /** Store-assigned monotonic creation sequence (assigned in-transaction at
+   * `createStream`, never reused — streams are never deleted; retention
+   * prunes `stream_chunks` only). The `listStreams` same-timestamp tiebreak;
+   * not part of `StreamRecord`. */
+  creationSeq: integer('creation_seq').notNull(),
 })
 
 export const streamChunks = sqliteTable(

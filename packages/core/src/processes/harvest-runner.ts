@@ -29,12 +29,16 @@ import {
   type RuntimeResolver,
 } from '../ports/runner/routing'
 import { isAlternateEligible, mayRetryPhase } from '../ports/runner/provider-error'
-import type { RuntimeRegistry } from '../ports/runner/runtime'
+import { sessionPart } from '../ports/runner/stream-parts'
+import type { SessionStreamInfo, RuntimeRegistry } from '../ports/runner/runtime'
+import { createSessionStreamSink } from '../store/streams/session-writer'
+import type { StreamOutcome } from '../store/streams/types'
 import type {
   AgentRunner,
   AgentSessionHandle,
   AgentTurnFailure,
   AgentTurnResult,
+  SessionStreamSink,
   TicketSource,
 } from '../ports/types'
 import { installedSkillName } from '../skills'
@@ -66,6 +70,11 @@ export interface HarvestRunnerOpts {
   maxSessionAttempts?: number
   /** Durable outer reopen budget for a stopped run. */
   maxRecoveryAttempts?: number
+  /** Stream each agent session bracket as AI SDK UI message parts (SPEC §9,
+   * the same wiring the build runners use). Default true. */
+  streamSessions?: boolean
+  /** Diagnostics hook for contained stream failures. Default console.error. */
+  onDiagnostic?: (message: string) => void
 }
 
 export interface HarvestRunnerDeps {
@@ -113,6 +122,15 @@ interface ProducerSession {
 type HarvestProviderAttempt = NonNullable<
   HarvestEventPayload<'harvest.failed'>['providerAttempts']
 >[number]
+
+/** One session bracket's live stream (SPEC §9): the sink the harvest runner
+ * opened through the resolved target's streaming capability and the store id
+ * it returned. Undefined ⇒ the runtime declared no capability or the opener
+ * declined — the bracket then behaves exactly as before streams existed. */
+interface SessionBracketStream {
+  sink: SessionStreamSink
+  streamId: string
+}
 
 class SessionFailure extends Error {
   constructor(message: string) {
@@ -162,6 +180,8 @@ export class HarvestRunner {
   private readonly heartbeatMs: number
   private readonly maxSessionAttempts: number
   private readonly maxRecoveryAttempts: number
+  private readonly streamSessions: boolean
+  private readonly onDiagnostic: (message: string) => void
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined
   /** Set only when the store positively reports a lapsed/stolen lease. A
    * rejected heartbeat is an outage; later beats retry until one can decide. */
@@ -174,6 +194,8 @@ export class HarvestRunner {
     this.maxSessionAttempts = deps.opts?.maxSessionAttempts ?? 2
     this.maxRecoveryAttempts =
       deps.opts?.maxRecoveryAttempts ?? DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
+    this.streamSessions = deps.opts?.streamSessions ?? true
+    this.onDiagnostic = deps.opts?.onDiagnostic ?? ((message) => console.error(message))
     if (!Number.isInteger(this.maxRecoveryAttempts) || this.maxRecoveryAttempts <= 0) {
       throw new Error('maxRecoveryAttempts must be a positive integer')
     }
@@ -591,6 +613,15 @@ export class HarvestRunner {
       // provider starts; the incomplete step safely restarts at the primary.
       if (index > 0) await this.controlBoundary(spec.run)
       else await this.ensureLease()
+      const streamBracket = await this.openSessionStream(target, {
+        session,
+        role: spec.role,
+        runner: target.runtime,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        phase: `harvest:${spec.step}`,
+        round: spec.round,
+      })
+      const stream = streamBracket?.sink
       const started = await store.appendRepo(repo, {
         actor: KERNEL,
         type: 'harvest.session.started',
@@ -603,6 +634,7 @@ export class HarvestRunner {
           args: [...target.args],
           step: spec.step,
           round: spec.round,
+          ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
           ...(substitution !== undefined
             ? { substitution: { failed: substitution, selectedIndex: index } }
             : {}),
@@ -619,7 +651,10 @@ export class HarvestRunner {
           result = await live.runner.continue(
             live.handle,
             `Revise harvest proposals for round ${spec.round}: run ab harvest context, address .ab/findings.json, then submit.`,
-            { env: this.sessionEnv(spec.run, spec.step, spec.round, session) },
+            {
+              env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+              ...(stream !== undefined ? { stream } : {}),
+            },
           )
         } else {
           const turn = await target.runner.start({
@@ -629,6 +664,7 @@ export class HarvestRunner {
             ...(target.model !== undefined ? { model: target.model } : {}),
             ...(target.args !== undefined ? { args: target.args } : {}),
             env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+            ...(stream !== undefined ? { stream } : {}),
           })
           handle = turn.session
           result = turn.result
@@ -647,6 +683,7 @@ export class HarvestRunner {
             // A dead session may have nothing left to close.
           }
         }
+        this.closeBracketStream(streamBracket, 'aborted')
         throw error
       }
 
@@ -654,6 +691,10 @@ export class HarvestRunner {
       const terminal =
         turnError === undefined && since.some((event) => spec.terminal(event, session))
       const owner = live?.runner ?? target.runner
+      const close =
+        streamBracket !== undefined
+          ? { stream: streamBracket, outcome: 'completed' as const }
+          : undefined
       if (terminal && handle !== undefined && result !== undefined) {
         if (spec.producer && index === 0) {
           this.producer = { handle, runner: owner, route: primaryRoute }
@@ -674,6 +715,7 @@ export class HarvestRunner {
             ),
             result.usage,
             target.model,
+            close,
           )
         } else {
           const transcript = await owner.end(handle)
@@ -683,6 +725,7 @@ export class HarvestRunner {
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? target.model,
+            close,
           )
           if (spec.producer) this.producer = undefined
         }
@@ -698,10 +741,20 @@ export class HarvestRunner {
             transcript.content,
             transcript.metadata.usage,
             transcript.metadata.model ?? target.model,
+            streamBracket !== undefined
+              ? { stream: streamBracket, outcome: 'aborted' as const }
+              : undefined,
           )
         } catch (error) {
+          // The deposit was skipped, so the stream must not stay open behind
+          // the rethrow (lease lost) or the failure appends below.
+          this.closeBracketStream(streamBracket, 'aborted')
           if (error instanceof HarvestLeaseLostError) throw error
         }
+      } else {
+        // No handle: the turn failed before the adapter owned a session, so
+        // no deposit will run — close the bracket's stream here.
+        this.closeBracketStream(streamBracket, 'aborted')
       }
       if (spec.producer) this.producer = undefined
 
@@ -812,6 +865,15 @@ export class HarvestRunner {
       live = undefined
     }
     await this.ensureLease()
+    const streamBracket = await this.openSessionStream(resolved, {
+      session,
+      role: spec.role,
+      runner: resolved.runtime,
+      ...(resolved.model !== undefined ? { model: resolved.model } : {}),
+      phase: `harvest:${spec.step}`,
+      round: spec.round,
+    })
+    const stream = streamBracket?.sink
     const started = await store.appendRepo(repo, {
       actor: KERNEL,
       type: 'harvest.session.started',
@@ -824,6 +886,7 @@ export class HarvestRunner {
         args: [...resolved.args],
         step: spec.step,
         round: spec.round,
+        ...(streamBracket !== undefined ? { stream: streamBracket.streamId } : {}),
       },
     })
 
@@ -836,7 +899,10 @@ export class HarvestRunner {
         result = await live.runner.continue(
           live.handle,
           `Revise harvest proposals for round ${spec.round}: run ab harvest context, address .ab/findings.json, then submit.`,
-          { env: this.sessionEnv(spec.run, spec.step, spec.round, session) },
+          {
+            env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+            ...(stream !== undefined ? { stream } : {}),
+          },
         )
       } else {
         const turn = await resolved.runner.start({
@@ -846,6 +912,7 @@ export class HarvestRunner {
           ...(resolved.model !== undefined ? { model: resolved.model } : {}),
           ...(resolved.args !== undefined ? { args: resolved.args } : {}),
           env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+          ...(stream !== undefined ? { stream } : {}),
         })
         handle = turn.session
         result = turn.result
@@ -860,6 +927,7 @@ export class HarvestRunner {
       // The turn may have crossed the lease-expiry boundary. Close adapter
       // resources, but deposit no transcript/result after a replacement has
       // taken ownership. Continued producers are closed by run()'s finally.
+      this.closeBracketStream(streamBracket, 'aborted')
       if (handle !== undefined && live === undefined) {
         try {
           await resolved.runner.end(handle)
@@ -874,6 +942,10 @@ export class HarvestRunner {
     const terminal = turnError === undefined && since.some((event) => spec.terminal(event, session))
 
     if (terminal && handle !== undefined && result !== undefined) {
+      const close =
+        streamBracket !== undefined
+          ? { stream: streamBracket, outcome: 'completed' as const }
+          : undefined
       if (spec.producer) {
         this.producer = {
           handle,
@@ -897,6 +969,7 @@ export class HarvestRunner {
           ),
           result.usage,
           resolved.model,
+          close,
         )
       } else {
         const transcript = await resolved.runner.end(handle)
@@ -906,6 +979,7 @@ export class HarvestRunner {
           transcript.content,
           transcript.metadata.usage,
           transcript.metadata.model ?? resolved.model,
+          close,
         )
       }
       return
@@ -921,11 +995,21 @@ export class HarvestRunner {
           transcript.content,
           transcript.metadata.usage,
           transcript.metadata.model ?? resolved.model,
+          streamBracket !== undefined
+            ? { stream: streamBracket, outcome: 'aborted' as const }
+            : undefined,
         )
       } catch (error) {
+        // The deposit was skipped, so the stream must not stay open behind
+        // the rethrow (lease lost) or the failure appends below.
+        this.closeBracketStream(streamBracket, 'aborted')
         if (error instanceof HarvestLeaseLostError) throw error
         // A dead agent may have no recoverable transcript.
       }
+    } else {
+      // No handle: the turn failed before the adapter owned a session, so
+      // no deposit will run — close the bracket's stream here.
+      this.closeBracketStream(streamBracket, 'aborted')
     }
     if (spec.producer) this.producer = undefined
     const attempt = failures + 1
@@ -975,7 +1059,13 @@ export class HarvestRunner {
     content: string,
     usage: { inputTokens: number; outputTokens: number; turns: number },
     model?: string,
+    close?: { stream: SessionBracketStream; outcome: StreamOutcome },
   ): Promise<void> {
+    if (close !== undefined) {
+      // Close must land no later than `harvest.session.ended`; this makes
+      // the ordering structural rather than call-site discipline.
+      await close.stream.sink.close(close.outcome)
+    }
     await this.ensureLease()
     await this.deps.store.appendRepoWithArtifacts(
       this.deps.repo,
@@ -1479,6 +1569,53 @@ export class HarvestRunner {
       AB_PHASE: `${step}@${round}`,
       AB_SESSION: session,
     }
+  }
+
+  // ── Session streams (SPEC §9) ────────────────────────────────────────────
+
+  /**
+   * Open one stream for this harvest session bracket through the resolved
+   * target's streaming capability: create the store-backed sink, call the
+   * capability, and — once it returns an id — emit the bracket's
+   * `data-ab-session` part. Returns undefined (and reports once) when
+   * streaming is disabled, the runtime declared no capability, or the opener
+   * declined/failed; the bracket then proceeds exactly as without streams.
+   * Harvest streams are repository-scoped, the harvest analog of the
+   * build-runner's build-scoped bracket streams.
+   */
+  private async openSessionStream(
+    target: ResolvedRuntime,
+    info: SessionStreamInfo,
+  ): Promise<SessionBracketStream | undefined> {
+    if (!this.streamSessions) return undefined
+    const open = target.openSessionStream
+    if (open === undefined) return undefined
+    const sink = createSessionStreamSink({
+      store: this.deps.store,
+      scope: { kind: 'repo', repo: this.deps.repo },
+      onDiagnostic: this.onDiagnostic,
+    })
+    try {
+      const streamId = await open(sink, info)
+      if (streamId === undefined) return undefined
+      sink.append([sessionPart(info)])
+      return { sink, streamId }
+    } catch (error) {
+      this.onDiagnostic(
+        `session stream for "${info.session}" failed to open: ${errorMessage(error)}`,
+      )
+      return undefined
+    }
+  }
+
+  /** Best-effort belt-and-braces close; idempotency makes repeated calls
+   * harmless and lets the deposit path own the close-then-append ordering. */
+  private closeBracketStream(
+    stream: SessionBracketStream | undefined,
+    outcome: StreamOutcome,
+  ): void {
+    if (stream === undefined) return
+    void stream.sink.close(outcome)
   }
 
   /** Re-acquire a lapsed lease only when no replacement won it. Checked at

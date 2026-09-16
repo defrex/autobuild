@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+- [#349](https://github.com/defrex/autobuild/pull/349) — Stream harvest sessions and harvest runners as AI SDK UI message parts
+- [#348](https://github.com/defrex/autobuild/pull/348) — Reword stale streaming denials in operator-api.md
 - [#347](https://github.com/defrex/autobuild/pull/347) — Record auto-merge deferral observations only for human-actionable deferrals
 - [#346](https://github.com/defrex/autobuild/pull/346) — Document the session-event read surface in SPEC (§7.1.1)
+- [#345](https://github.com/defrex/autobuild/pull/345) — Pin the listStreams same-timestamp tiebreak across stores
 - [#344](https://github.com/defrex/autobuild/pull/344) — Document the 30-second read-wait clamp in SPEC §7.6
 - [#342](https://github.com/defrex/autobuild/pull/342) — Persist repoOrigin in PostgresBuildStore.createBuild (schema v5)
 - [#341](https://github.com/defrex/autobuild/pull/341) — Document the appendStreamParts rejection precedence divergence

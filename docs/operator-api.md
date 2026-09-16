@@ -66,7 +66,11 @@ supplied forms return `400 validation`.
 Dashboard reads use the latest durable, run-correlated `effectiveConfig`
 repository artifact. Missing, corrupt, or invalid configuration returns a typed
 `409 effective-config-unavailable`; the service never guesses from a checkout.
-Clients poll these reads; streaming is not provided. `triageState`, `readyState`,
+Clients poll these reads — the operator HTTP API exposes no push or long-poll
+event transport. Streaming is provided as a CLI read surface: `ab watch`
+streams build and repository events by polling the same event logs client-side
+(the store protocol's `GET /builds/{slug}/events` and `GET /repos/{repo}/events`
+reads), not as a transport on this API. `triageState`, `readyState`,
 and every entry in `states` are backend state names and must be sent back verbatim
 when used with the move control.
 
@@ -157,8 +161,13 @@ headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
 code. Responses are private/no-store; a 401 sends the application back to sign
-in. Browser clients poll the visible dashboard every two seconds; live transcript
-streaming is not provided. Delegated bearer tokens remain server-side.
+in. Browser clients poll the visible dashboard every two seconds; the browser
+surface offers no streaming of its own — live transcript streaming remains
+absent here, and the streaming read surface is the CLI's `ab watch`, which
+polls the store's event reads client-side. Delegated bearer tokens remain
+server-side.
 
-The API does not expose phase-session commands, runner startup, live streaming,
-or a generic event-append operation.
+The API does not expose phase-session commands, runner startup, a push or
+long-poll streaming transport, or a generic event-append operation; event
+streaming is composed client-side by `ab watch`, which polls the store's
+event reads.

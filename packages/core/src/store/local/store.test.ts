@@ -242,6 +242,85 @@ describe('SqliteBuildStore durability', () => {
     }
   })
 
+  test('opening a pre-tiebreak store backfills streams.creation_seq in insertion order and keeps old rows', async () => {
+    const root = await freshRoot()
+    try {
+      // Hand-build a database whose streams table predates the listStreams
+      // creation-order tiebreak: the current DDL minus creation_seq, with two
+      // same-millisecond streams whose id order is reversed from insertion
+      // order.
+      const legacy = new Database(join(root, 'autobuild.sqlite'), { create: true })
+      legacy.exec(`CREATE TABLE builds (
+        slug TEXT PRIMARY KEY,
+        repo TEXT NOT NULL,
+        ticket TEXT,
+        branch TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        lease_holder TEXT,
+        lease_expires_at TEXT,
+        lease_ttl_ms INTEGER,
+        heartbeat_at TEXT
+      )`)
+      legacy.exec(`CREATE TABLE streams (
+        id TEXT PRIMARY KEY,
+        scope_kind TEXT NOT NULL CHECK (scope_kind IN ('build','repo','session')),
+        build TEXT,
+        repo TEXT,
+        session TEXT,
+        label TEXT NOT NULL,
+        format TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open','closed')),
+        outcome TEXT,
+        artifact_kind TEXT,
+        artifact_revision INTEGER,
+        artifact_blob_ref TEXT,
+        created_at TEXT NOT NULL,
+        closed_at TEXT,
+        CHECK (
+          (scope_kind = 'build' AND build IS NOT NULL AND repo IS NULL AND session IS NULL)
+          OR
+          (scope_kind = 'repo' AND build IS NULL AND repo IS NOT NULL AND session IS NULL)
+          OR
+          (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
+        )
+      )`)
+      legacy
+        .prepare(`INSERT INTO builds (slug, repo, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+        .run('legacy-tie', 'acme/legacy', CONTRACT_T0, CONTRACT_T0)
+      for (const id of ['st_legacy-2', 'st_legacy-1']) {
+        legacy
+          .prepare(
+            `INSERT INTO streams (id, scope_kind, build, label, format, status, created_at)
+             VALUES (?, 'build', 'legacy-tie', 'before', 'ai-ui-message-stream/v1', 'open', ?)`,
+          )
+          .run(id, CONTRACT_T0)
+      }
+      legacy.close()
+
+      const clock = manualClock(CONTRACT_T0)
+      const store = openLocalStore(root, { clock })
+      try {
+        // Both rows survived, backfilled in insertion order (rowid) — not id
+        // order, which is reversed here.
+        expect(
+          (await store.listStreams({ kind: 'build', build: 'legacy-tie' })).map((s) => s.id),
+        ).toEqual(['st_legacy-2', 'st_legacy-1'])
+        // A fresh same-millisecond creation gets a counter above the backfill
+        // and sorts after both migrated rows.
+        const created = await store.createStream({ kind: 'build', build: 'legacy-tie' }, 'after')
+        expect(created.createdAt).toBe(CONTRACT_T0)
+        expect(
+          (await store.listStreams({ kind: 'build', build: 'legacy-tie' })).map((s) => s.id),
+        ).toEqual(['st_legacy-2', 'st_legacy-1', created.id])
+      } finally {
+        await store.close()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test("two stores opened on the same file see each other's appends (sequential)", async () => {
     const root = await freshRoot()
     try {

@@ -1450,6 +1450,14 @@ runs, its stream is the live view of the turn; once the session ends the
 stream finalizes into an artifact, and `ab artifact download <slug>
 stream:<id>` retrieves the closed session's finalized document.
 
+Harvest sessions stream the same protocol into *repository-scoped* streams:
+the harvest runner's synthesize and review brackets each get one stream
+(`phase` spelled `harvest:<step>`), with `harvest.session.started` carrying
+the stream id. Find them via that `stream` field or the harvest journal
+(`ab watch --repository`); a closed stream finalizes to a repository-scope
+`stream:<id>` artifact. The harvest run id is not on the stream — recover it
+from the journal event that names the stream.
+
 **`ab watch [<slug>...] [--repository] [--event <glob>]... [--since <cursor>]
 [--timeout <dur>] [--interval <dur>] [--count <n>] [--json] [--store <ref>]`**
 streams matching events as they land instead of answering once. With no slug it
