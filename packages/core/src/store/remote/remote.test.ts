@@ -800,7 +800,10 @@ describe('event wait over the wire', () => {
       await Bun.sleep(400)
       expect(eventReads).toBe(1)
       const event = await client.append('wait-subscribe', sampleEventWrite('wake'))
-      await Bun.sleep(400)
+      // The memory-backed server polls held event reads at the one-second
+      // EVENT_WAIT_POLL_MS budget (AUT-383), so allow a full poll interval
+      // plus round-trip slack for the append to be observed.
+      await Bun.sleep(1500)
       unsubscribe()
       expect(received).toEqual([event.seq])
       // The held request resolved on the append and the next one began.

@@ -6,10 +6,13 @@
  * semantics are adapter-uniform; the remote adapter instead delegates the
  * wait to its backing store over one held-open request.
  *
- * A small poll loop rather than a waiter registry: streams are presentation
- * content, poll frequency is ~25 ms, and the uniformity across synchronous
- * (SQLite) and asynchronous (PostgreSQL) backends is worth more than
- * wake-on-write precision. Closed streams never wait.
+ * A small poll loop rather than a waiter registry: the uniformity across
+ * synchronous (SQLite) and asynchronous (PostgreSQL) backends is worth more
+ * than wake-on-write precision. The loop serves two cadences: held *stream*
+ * reads are presentation content and poll at the ~25 ms `STREAM_WAIT_POLL_MS`;
+ * held *event* reads (build, repository, session — AUT-334/381/383) take the
+ * one-second `EVENT_WAIT_POLL_MS` budget when the adapter passes it per call
+ * (see `EVENT_WAIT_POLL_MS` for which adapters do). Closed streams never wait.
  *
  * Both loops accept an optional `signal` (AUT-380): when it aborts, the hold
  * ends promptly — the inter-poll sleep resolves early, the loop stops, and the
@@ -22,6 +25,20 @@
 import { clampWaitSeconds, type StreamRead } from './types'
 
 export const STREAM_WAIT_POLL_MS = 25
+
+/**
+ * The one-second held-event poll budget (the hosted per-query budget,
+ * AUT-334/381/383): held event reads — build, repository, and session —
+ * re-query at most once per second, so an append is observed at the next
+ * poll, typically within about one second. Held *stream* reads are excluded:
+ * they are presentation content and stay at the ~25 ms `STREAM_WAIT_POLL_MS`
+ * cadence. This deliberately diverges from `STREAM_WAIT_POLL_MS`; adapters
+ * pass it as `pollMs` on their event-family calls to `readEventsWithWait` —
+ * the PostgreSQL and memory stores do on all three families (AUT-334/381/383).
+ * The SQLite store has not adopted the budget (out of scope for AUT-383), so
+ * its held event reads fall back to the stream default until it does.
+ */
+export const EVENT_WAIT_POLL_MS = 1000
 
 /** Sleep `ms`, or return early when `signal` aborts. Resolves (never
  * rejects) on either path; the abort listener is removed on both so a
