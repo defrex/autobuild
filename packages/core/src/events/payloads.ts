@@ -36,6 +36,13 @@ import {
 
 const empty = z.strictObject({})
 const reasonOnly = z.strictObject({ reason: z.string().optional() })
+/** Fan-out provenance shared by the auto-merge command facts: the repository
+ * seq of the `dispatcher.auto-merge-default-set` fact that caused the command,
+ * when one did. Per-build commands omit it. `{}` stays valid, so existing
+ * producers and logs replay unchanged. */
+const autoMergeCommand = z.strictObject({
+  defaultSeq: z.number().int().positive().optional(),
+})
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'launch'])
@@ -194,6 +201,11 @@ export const eventPayloadSchemas = {
     /** Claim-time auto-merge intent retained across dispatch recovery until the
      * ordinary human-authored command fact can be materialized. */
     autoMergeRequestedBy: z.string().min(1).optional(),
+    /** Claim-time auto-merge intent provenance: the repository seq of the
+     * `dispatcher.auto-merge-default-set` fact the claim sampled. Retained for
+     * the same recovery window as `autoMergeRequestedBy`; omitted when the
+     * claim sampled no default fact. */
+    autoMergeDefaultSeq: z.number().int().positive().optional(),
     /** Frozen at claim time. Historical logs and disabled installs omit it. */
     pr: z
       .strictObject({
@@ -363,8 +375,8 @@ export const eventPayloadSchemas = {
   'build.resume-requested': reasonOnly,
   'build.abort-requested': reasonOnly,
   'build.discard-requested': empty,
-  'build.auto-merge-requested': empty,
-  'build.auto-merge-cancelled': empty,
+  'build.auto-merge-requested': autoMergeCommand,
+  'build.auto-merge-cancelled': autoMergeCommand,
   'build.paused': empty,
   'build.resumed': empty,
   'build.aborted': empty,

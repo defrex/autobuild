@@ -46,6 +46,11 @@ import {
   pendingAutoMerge,
   recordAutoMergeDeferralObservation,
 } from '../kernel/auto-merge'
+import {
+  autoMergeDefaultTarget,
+  latestAutoMergeDefault,
+  type AutoMergeDefaultFact,
+} from '../kernel/auto-merge-default'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { decideNext } from '../kernel/engine'
 import {
@@ -672,11 +677,14 @@ export class Dispatcher {
     /** Builds already launched this tick — a janitor/startup re-attach must
      * not be doubled by the sweep, nor a fresh dispatch by anything. */
     const launched = new Set<string>()
-    // Sampled once, before any stage that could attach a runner: a pause that
-    // lands mid-tick takes effect on the next tick, matching intake (which the
-    // CLI likewise samples before calling `tick`). Neither control pretends to
-    // a serialization the store does not offer.
-    const paused = await this.repositoryPaused()
+    // One journal read for both repository-wide controls: a pause that lands
+    // mid-tick takes effect on the next tick, matching intake (which the CLI
+    // likewise samples before calling `tick`); the auto-merge default fact is
+    // the durable driver of this tick's fan-out below. Neither control
+    // pretends to a serialization the store does not offer.
+    const repoEvents = await this.repositoryEvents()
+    const paused = reduceDispatchSettings(repoEvents).paused
+    const autoMergeDefault = latestAutoMergeDefault(repoEvents)
     // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
     // provider liveness and settle their completion, lease, and publication.
     // Runs before the janitor so its executionLeaseLive checks see freshly
@@ -691,6 +699,13 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     await this.settleOrchestratorSandboxes(report, opts)
     if (this.outOfBudget(opts)) return report
+    // The default fan-out runs before the janitor so one tick both records the
+    // consent and lets the janitor act on it (the janitor reduces a fresh read
+    // inside `checkPr`). Independent of intake and `acceptNewWork` — the
+    // durable fact drives it, so a second dispatcher polling the same
+    // repository converges the same state.
+    await this.applyAutoMergeDefault(autoMergeDefault)
+    if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     await this.recoverDispatches(report, launched, paused, opts)
@@ -700,7 +715,7 @@ export class Dispatcher {
     await this.leaseSweep(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
-      await this.dispatch(report, launched, autoMergeUser, paused, opts)
+      await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeDefault)
     }
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
@@ -750,8 +765,39 @@ export class Dispatcher {
     return this.deps.store.getRepoEvents(this.deps.repo)
   }
 
-  private async repositoryPaused(): Promise<boolean> {
-    return reduceDispatchSettings(await this.repositoryEvents()).paused
+  /** Apply the newest durable `dispatcher.auto-merge-default-set` fact to every
+   * current non-terminal build of this repository: on — request consent; off —
+   * cancel it. Attribution is the toggling human's own actor, exactly as if
+   * they had pressed `m` on each row; each command carries the fact's seq so
+   * the fan-out is idempotent (a settled build fails `autoMergeDefaultTarget`)
+   * and a per-build override stands until the default is toggled again.
+   *
+   * Per build, a compare-and-set loop (the `requestOne` shape from
+   * `bulk-control.ts`): the read/reduce/evaluate lives inside the loop, so a
+   * competing write loses at most one attempt and the next re-reads fresh
+   * state. No TickReport counter: the evidence is the build events, and the
+   * report shape stays compatible. */
+  private async applyAutoMergeDefault(fact: AutoMergeDefaultFact | undefined): Promise<void> {
+    if (fact === undefined) return
+    const { store } = this.deps
+    for (const record of (await store.listBuilds())
+      .filter((candidate) => candidate.repo === this.deps.repo)
+      .sort((a, b) => a.slug.localeCompare(b.slug))) {
+      while (true) {
+        const events = await store.getEvents(record.slug)
+        const state = reduceBuild(events)
+        const target = autoMergeDefaultTarget(state, fact)
+        if (target === undefined) break
+        const type =
+          target === 'request' ? 'build.auto-merge-requested' : 'build.auto-merge-cancelled'
+        const appended = await store.appendIfCurrent(record.slug, state.lastSeq, {
+          actor: fact.actor,
+          type,
+          payload: { defaultSeq: fact.seq },
+        })
+        if (appended !== null) break
+      }
+    }
   }
 
   private async triggerHarvest(): Promise<void> {
@@ -1065,6 +1111,7 @@ export class Dispatcher {
       body: string
       authoredSession?: string
       autoMergeUser?: string
+      autoMergeDefaultSeq?: number
     },
   ): Promise<'kicked' | 'in-flight' | 'foreign-live'> {
     const slug = record.slug
@@ -1134,6 +1181,7 @@ export class Dispatcher {
             body: string
             authoredSession?: string
             autoMergeUser?: string
+            autoMergeDefaultSeq?: number
           }
         | undefined
       tail: 'dispatch' | 'launch'
@@ -2091,6 +2139,7 @@ export class Dispatcher {
       body: string
       authoredSession?: string
       autoMergeUser?: string
+      autoMergeDefaultSeq?: number
     },
   ): Promise<DispatchOutcome> {
     const { store, config } = this.deps
@@ -2113,6 +2162,9 @@ export class Dispatcher {
             ...(seed?.autoMergeUser !== undefined
               ? { autoMergeRequestedBy: seed.autoMergeUser }
               : {}),
+            ...(seed?.autoMergeDefaultSeq !== undefined
+              ? { autoMergeDefaultSeq: seed.autoMergeDefaultSeq }
+              : {}),
             ...(config.pr !== undefined ? { pr: config.pr } : {}),
           },
         })
@@ -2124,6 +2176,10 @@ export class Dispatcher {
 
       const created = events.find((event) => event.type === 'build.created')
       const autoMergeUser = seed?.autoMergeUser ?? created?.payload.autoMergeRequestedBy
+      // The claim's sampled default fact, for the request's fan-out provenance:
+      // the seed's own value first (this dispatch created the build), else the
+      // durable `build.created` fact a recovery pass resumes from.
+      const autoMergeDefaultSeq = seed?.autoMergeDefaultSeq ?? created?.payload.autoMergeDefaultSeq
       if (
         autoMergeUser !== undefined &&
         !events.some((event) => event.type === 'build.auto-merge-requested')
@@ -2131,7 +2187,9 @@ export class Dispatcher {
         await store.append(record.slug, {
           actor: humanActor(autoMergeUser),
           type: 'build.auto-merge-requested',
-          payload: {},
+          payload: {
+            ...(autoMergeDefaultSeq !== undefined ? { defaultSeq: autoMergeDefaultSeq } : {}),
+          },
         })
         events = await store.getEvents(record.slug)
       }
@@ -2218,6 +2276,7 @@ export class Dispatcher {
       body: string
       authoredSession?: string
       autoMergeUser?: string
+      autoMergeDefaultSeq?: number
     },
     report?: TickReport,
     launched?: Set<string>,
@@ -2578,6 +2637,7 @@ export class Dispatcher {
     autoMergeUser: string | undefined,
     paused: boolean,
     opts: TickOpts = {},
+    autoMergeDefault: AutoMergeDefaultFact | undefined = undefined,
   ): Promise<void> {
     const { store, tickets, config } = this.deps
     // Blocked and paused builds still occupy a slot: their workspaces and
@@ -2731,6 +2791,12 @@ export class Dispatcher {
         body,
         ...(authoredSession !== undefined ? { authoredSession } : {}),
         ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
+        // Claim-time provenance: the durable default fact this claim sampled,
+        // recorded on `build.created` so the fan-out's seq comparison sees the
+        // claim as already answering the current default.
+        ...(opts.defaultAutoMerge === true && autoMergeDefault !== undefined
+          ? { autoMergeDefaultSeq: autoMergeDefault.seq }
+          : {}),
       })
       // Accepted dispatches: durable boundaries recorded. A deferred outcome
       // means the remote provisioning continuation owns the rest.
