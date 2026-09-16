@@ -808,11 +808,11 @@ describe('GitWorktreeProvider operator sandbox', () => {
     expect(await provider.orchestratorSandbox.readFile(identity, 'README.md')).toEqual(
       new Uint8Array(await readFile(join(identity.workspacePath, 'README.md'))),
     )
-    for (const escape of ['../outside', '/abs', 'a/../../b']) {
-      const error = await provider.orchestratorSandbox
-        .readFile(identity, escape)
+    for (const bad of ['../outside', '/abs', 'a/../../b']) {
+      const refusal = await provider.orchestratorSandbox
+        .readFile(identity, bad)
         .catch((e: unknown) => e)
-      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect(refusal).toBeInstanceOf(SandboxOperationError)
     }
   })
 

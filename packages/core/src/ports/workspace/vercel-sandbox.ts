@@ -18,7 +18,6 @@ import type {
   WorkspaceReapOutcome,
 } from '../types'
 import {
-  SANDBOX_FORBIDDEN_ENV,
   SandboxOperationError,
   type OperatorSandboxExecution,
   type SandboxCommandRequest,

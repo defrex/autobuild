@@ -682,7 +682,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   }
 
   private async sandboxWait(
-    handle: SandboxEnvironmentIdentity,
+    _handle: SandboxEnvironmentIdentity,
     input: { commandId: string; waitSeconds: number },
   ): Promise<SandboxWaitResult> {
     const child = this.sandboxChildren.get(input.commandId)

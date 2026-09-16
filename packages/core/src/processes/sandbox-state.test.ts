@@ -2,7 +2,6 @@
  * (AUT-340): pure functions over the repository journal. */
 import { describe, expect, test } from 'bun:test'
 import { humanActor } from '../events/envelope'
-import type { RepositoryEventWrite } from '../events/repository'
 import { sandboxStates } from './sandbox-state'
 
 const repo = 'acme/widgets'

@@ -36,7 +36,7 @@ async function fixture(opts?: {
     envSource: {
       PATH: process.env.PATH ?? '',
       ...(opts?.environmentVariables?.length
-        ? Object.fromEntries(opts.environmentVariables.map((name) => [name, 'v-' + name]))
+        ? Object.fromEntries(opts.environmentVariables.map((name) => [name, `v-${name}`] as const))
         : {}),
     },
   })
@@ -73,8 +73,8 @@ describe('resolveSandboxRelativePath', () => {
     expect(resolveSandboxRelativePath('src/a.txt')).toBe('src/a.txt')
     expect(resolveSandboxRelativePath('./src/./a.txt')).toBe('src/a.txt')
     expect(resolveSandboxRelativePath('src/../a.txt')).toBe('a.txt')
-    for (const escape of ['../x', '/abs', 'a/../../b', '', '.', 'a/..', 'C:/x']) {
-      expect(() => resolveSandboxRelativePath(escape)).toThrow(SandboxOperationError)
+    for (const bad of ['../x', '/abs', 'a/../../b', '', '.', 'a/..', 'C:/x']) {
+      expect(() => resolveSandboxRelativePath(bad)).toThrow(SandboxOperationError)
     }
   })
 })
@@ -125,7 +125,7 @@ describe('OperatorSandboxService', () => {
       expect(cwdEscape).toBeInstanceOf(SandboxOperationError)
       const result = await fx.service.exec('ops', {
         repo: fx.repo,
-        command: 'echo "' + 'x'.repeat(70_000) + '"',
+        command: `echo "${'x'.repeat(70_000)}"`,
       })
       expect(result.stdout.length).toBeLessThan(70_000)
       expect(result.stdout).toContain(SANDBOX_TRUNCATION_MARKER)
