@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#349](https://github.com/defrex/autobuild/pull/349) — Stream harvest sessions and harvest runners as AI SDK UI message parts
 - [#341](https://github.com/defrex/autobuild/pull/341) — Document the appendStreamParts rejection precedence divergence
 - [#340](https://github.com/defrex/autobuild/pull/340) — Guarantee a git identity for finalize commits
 - [#338](https://github.com/defrex/autobuild/pull/338) — Add `ab watch`: read-only event streaming with a resumable cursor
