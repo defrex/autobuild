@@ -240,7 +240,7 @@ export function scopeLocalStoreToPhaseSession(
     async getEvents(
       slug: string,
       sinceSeq?: number,
-      opts?: { waitSeconds?: number },
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
     ): Promise<AbEvent[]> {
       own('getEvents', 'build', slug)
       return store.getEvents(slug, sinceSeq, opts)
@@ -311,7 +311,7 @@ export function scopeLocalStoreToPhaseSession(
     async getRepoEvents(
       repo: string,
       sinceSeq?: number,
-      opts?: { waitSeconds?: number },
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
     ): Promise<RepositoryEvent[]> {
       own('getRepoEvents', 'repo', repo)
       return store.getRepoEvents(repo, sinceSeq, opts)

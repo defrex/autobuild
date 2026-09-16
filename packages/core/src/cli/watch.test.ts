@@ -924,24 +924,33 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
   const REMOTE_REF = 'https://stores.example.com/ab'
 
   /** A held-read proxy: opts-bearing getEvents calls are the long-poll
-   * requests; the behavior per call is scripted by `held`. */
+   * requests; the behavior per call is scripted by `held`, which receives the
+   * read's opts (including the cancellation signal). */
   function longPollStore(
     store: MemoryBuildStore,
-    held: (slug: string, call: number) => Promise<void> | void,
+    held: (
+      slug: string,
+      call: number,
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
+    ) => Promise<void> | void,
   ): { store: BuildStore; heldCalls: () => number } {
     const perSlug = new Map<string, number>()
     let total = 0
     const fake: BuildStore = new Proxy(store, {
       get(target, prop) {
         if (prop === 'getEvents') {
-          return async (slug: string, sinceSeq?: number, opts?: { waitSeconds?: number }) => {
+          return async (
+            slug: string,
+            sinceSeq?: number,
+            opts?: { waitSeconds?: number; signal?: AbortSignal },
+          ) => {
             if (opts?.waitSeconds === undefined) {
               return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
             }
             const call = (perSlug.get(slug) ?? 0) + 1
             perSlug.set(slug, call)
             total += 1
-            await held(slug, call)
+            await held(slug, call, opts)
             return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
           }
         }
@@ -1069,5 +1078,110 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     const h = harness(store, { openStore: () => fake })
     await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '5' })
     expect(heldCalls()).toBe(0)
+  })
+
+  /** A held read that never resolves on its own — it ends only when the
+   * watch cancels it via its signal. A watch that fails to cancel would hang
+   * until the test times out. */
+  const heldUntilCancelled = async (
+    _slug: string,
+    _call: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<void> => {
+    const signal = opts?.signal
+    await new Promise<never>((_, reject) => {
+      const abort = (): void => reject(new Error('held read cancelled'))
+      if (signal?.aborted === true) {
+        abort()
+        return
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+    })
+  }
+
+  test('an abort during a held read ends the watch promptly', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const external = new AbortController()
+    const { store: fake } = longPollStore(store, async (slug, call, opts) => {
+      if (slug === 'b1' && call === 1) {
+        // Abort from inside the hold: the watch must cancel the read (via
+        // its signal) and exit instead of waiting out the hold.
+        external.abort()
+        await heldUntilCancelled(slug, call, opts)
+      }
+    })
+    const h = harness(store, { openStore: () => fake })
+    // A 30 s fake budget: without cancellation the never-resolving hold
+    // would hang the watch past the test timeout.
+    await abWatch({
+      ...h.base,
+      storeRef: REMOTE_REF,
+      slugs: ['b1'],
+      timeout: '30',
+      signal: external.signal,
+    })
+    // The cancelled read is the watch stopping, not a store failure.
+    expect(h.err).toEqual([])
+  })
+
+  test("a tripped --count cancels the other streams' held reads", async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await seedRunningBuild(store, 'b2')
+    const { store: fake } = longPollStore(store, async (slug, call, opts) => {
+      if (slug === 'b1') {
+        // b1's first read never resolves on its own; only the watch's
+        // cancellation (the count trip on b2) can end it.
+        if (call === 1) await heldUntilCancelled(slug, call, opts)
+        return
+      }
+      if (call === 1) return appendEscalation(store, 'b2')
+    })
+    const h = harness(store, { openStore: () => fake })
+    await abWatch({
+      ...h.base,
+      storeRef: REMOTE_REF,
+      slugs: ['b1', 'b2'],
+      timeout: '30',
+      count: 1,
+    })
+    const records = h.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
+    expect(records).toHaveLength(1)
+    expect(records[0]!.event).toEqual(expect.objectContaining({ type: 'escalation.raised' }))
+    expect(h.err).toEqual([])
+  })
+
+  test("an elapsed --timeout caps the held read's wait instead of waiting out the hold", async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const waits: number[] = []
+    const { store: fake } = longPollStore(store, (_slug, _call, opts) => {
+      waits.push(opts?.waitSeconds ?? -1)
+      // Honor the bound only when it is at or under 1 s: with the cap, the
+      // 1 s --timeout makes the very first read resolve; without it the
+      // first read would carry the full 25 s window and hang the watch.
+      if ((opts?.waitSeconds ?? 0) <= 1) return
+      return new Promise<void>(() => {})
+    })
+    const h = harness(store, { openStore: () => fake })
+    await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '1' })
+    expect(waits[0]).toBe(1)
+    expect(h.err).toEqual([])
+  })
+
+  test('a --timeout above the remote window leaves the window at the remote default', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const waits: number[] = []
+    const { store: fake } = longPollStore(store, (_slug, _call, opts) => {
+      waits.push(opts?.waitSeconds ?? -1)
+    })
+    const h = harness(store, { openStore: () => fake })
+    await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '27' })
+    expect(waits[0]).toBe(25)
+    for (const wait of waits) expect(wait).toBeLessThanOrEqual(25)
   })
 })

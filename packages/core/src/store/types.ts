@@ -243,8 +243,18 @@ export interface BuildStore {
    * honors the bound: it returns no later than the bound and as soon as an
    * event with `seq > sinceSeq` is appended; when such events already exist
    * it returns immediately. Omitting `waitSeconds` (or 0) is the immediate
-   * form. */
-  getEvents(slug: string, sinceSeq?: number, opts?: { waitSeconds?: number }): Promise<AbEvent[]>
+   * form.
+   *
+   * `opts.signal` lets a caller cancel the held read before its bound (a
+   * watcher torn down mid-hold). An adapter MAY return early — rejecting
+   * with the abort or resolving empty — when the signal fires; it MUST NOT
+   * wait past the bound because of it, and ignoring the signal entirely is
+   * conforming (local adapters' holds are short). */
+  getEvents(
+    slug: string,
+    sinceSeq?: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]>
 
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>
   /** Latest revision when `rev` is omitted; null if kind (or rev) absent. */
@@ -287,11 +297,12 @@ export interface BuildStore {
   /** Same atomic-deposit and ordering contracts as `appendWithArtifacts`:
    * the batch event is validated before any retention prune of artifacts in
    * the same deposit batch (AUT-322), and an invalid event leaves no trace.
-   * The optional bounded wait mirrors `getEvents` exactly. */
+   * The optional bounded wait mirrors `getEvents` exactly, including the
+   * cancellation signal's may-return-early rule. */
   getRepoEvents(
     repo: string,
     sinceSeq?: number,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]>
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>

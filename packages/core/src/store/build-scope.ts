@@ -120,7 +120,7 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     async getEvents(
       slug: string,
       sinceSeq?: number,
-      opts?: { waitSeconds?: number },
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
     ): Promise<AbEvent[]> {
       own('getEvents', slug)
       return store.getEvents(slug, sinceSeq, opts)
