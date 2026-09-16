@@ -675,6 +675,60 @@ describe('event wait over the wire', () => {
     }
   })
 
+  test('the session-event route shares the digits-only grammar: non-digit wait values are 400 validation', async () => {
+    const server = createStoreServer({ store: new MemoryBuildStore() })
+    await server.fetch(
+      new Request('https://store.test/repos', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ repo: 'acme/wait' }),
+      }),
+    )
+    const createResponse = await server.fetch(
+      new Request('https://store.test/repos/acme%2Fwait/sessions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ repo: 'acme/wait', operator: 'op' }),
+      }),
+    )
+    expect(createResponse.status).toBe(201)
+    const { id } = (await createResponse.json()) as { id: string }
+    for (const raw of ['abc', '0x10', '', ' 1', '1.5', '-1', '+1']) {
+      const response = await server.fetch(
+        new Request(
+          `https://store.test/sessions/${id}/events?since=0&wait=${encodeURIComponent(raw)}`,
+          { headers },
+        ),
+      )
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { kind: string }).kind).toBe('validation')
+    }
+  })
+
+  test('a session-event wait above the ceiling clamps; the hold still answers an append promptly', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.ensureRepo('acme/wait-clamp')
+      const session = await client.createSession({ repo: 'acme/wait-clamp', operator: 'op' })
+      // since=1: the session's own creation event is the backlog; the held
+      // window must start AFTER it or the read answers immediately.
+      const pending = client.getSessionEvents(session.id, 1, { waitSeconds: 61 })
+      await Bun.sleep(100)
+      const envelope = await client.appendSessionEvent(session.id, {
+        actor: humanActor('op'),
+        type: 'message.posted',
+        payload: { text: 'wake' },
+      })
+      const started = Date.now()
+      expect(await pending).toEqual([envelope])
+      // The clamp never stretched the hold to 30 or 61 seconds.
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await server.stop()
+    }
+  })
+
   test('auth failures are answered immediately, never held', async () => {
     const server = startStoreServer({ store: new MemoryBuildStore(), secret: 'wait-secret' })
     try {

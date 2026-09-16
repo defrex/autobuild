@@ -71,7 +71,9 @@ describe('pollingSubscribe bounded-wait mode', () => {
     await store.createBuild({ slug: 's', repo: 'r' })
     const starts: number[] = []
     const getEvents: SubscribeRead = async (since) => {
-      starts.push(Date.now())
+      // Monotonic clock: Date.now() is wall time and can slew mid-test,
+      // measuring an honest gap as short.
+      starts.push(performance.now())
       // An early-answering (wait-ignoring) server: no hold at all.
       return store.getEvents('s', since)
     }
@@ -79,8 +81,11 @@ describe('pollingSubscribe bounded-wait mode', () => {
     await Bun.sleep(350)
     unsubscribe()
     expect(starts.length).toBeGreaterThanOrEqual(3)
+    // Bun.sleep can wake a millisecond or two early under load (observed
+    // 98–99 ms gaps on an honest pollMs cadence), so the pin allows a few
+    // milliseconds of measurement slack around the pollMs spacing.
     for (let i = 1; i < starts.length; i++) {
-      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(100)
+      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(95)
     }
   })
 
