@@ -6,6 +6,8 @@ import {
   AUTH_SCHEMA_CHECKSUM,
   AUTH_SCHEMA_V1_CHECKSUM,
   AUTH_SCHEMA_V1_DDL,
+  AUTH_SCHEMA_V2_CHECKSUM,
+  AUTH_SCHEMA_V2_DDL,
   AUTH_SCHEMA_VERSION,
 } from './auth-schema'
 
@@ -13,6 +15,7 @@ type Row = Record<string, unknown>
 import {
   MIGRATE_COMMAND,
   SCHEMA_CHECKSUM,
+  SCHEMA_DDL,
   SCHEMA_V1_CHECKSUM,
   SCHEMA_V1_DDL,
   SCHEMA_V2_CHECKSUM,
@@ -479,14 +482,67 @@ if (testUrl) {
         expect(users.map((row: Row) => row.id)).toEqual(['u1'])
 
         // The new tables work: a dynamically registered client row inserts
-        // and reads back with the exact camelCase columns the plugin writes.
+        // and reads back with the exact camelCase columns the plugin writes,
+        // including the v3 authenticationScheme column.
+        await sql`INSERT INTO "oauthApplication"
+          (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
+           "createdAt", "updatedAt", "authenticationScheme")
+          VALUES ('c1', 'e2e-mcp-client', 'client-1', 'secret', 'https://claude.ai', 'web',
+                  false, ${CONTRACT_T0}, ${CONTRACT_T0}, 'none')`
+        const clients =
+          await sql`SELECT name, "authenticationScheme" FROM "oauthApplication" WHERE "clientId" = 'client-1'`
+        expect(clients.map((row: Row) => row.name)).toEqual(['e2e-mcp-client'])
+        expect(clients[0]?.authenticationScheme).toBe('none')
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v2 auth database in place: the oauthApplication.authenticationScheme column, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v2 auth database: v2 DDL, a current build-store
+        // marker (migratePostgres validates both), a v2 auth marker, plus a
+        // legacy client row written before authenticationScheme existed —
+        // legacy rows legitimately lack the field, so it backfills as NULL
+        // ("field absent", the builds.repo_origin precedent).
+        await sql.unsafe(SCHEMA_DDL)
+        await sql.unsafe(AUTH_SCHEMA_V2_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO ab_auth_schema_migrations VALUES
+          (true, 2, ${AUTH_SCHEMA_V2_CHECKSUM}, ${new Date().toISOString()})`
         await sql`INSERT INTO "oauthApplication"
           (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
            "createdAt", "updatedAt")
-          VALUES ('c1', 'e2e-mcp-client', 'client-1', 'secret', 'https://claude.ai', 'web',
+          VALUES ('legacy', 'legacy-client', 'legacy-id', 'secret', 'https://claude.ai', 'web',
                   false, ${CONTRACT_T0}, ${CONTRACT_T0})`
-        const clients = await sql`SELECT name FROM "oauthApplication" WHERE "clientId" = 'client-1'`
-        expect(clients.map((row: Row) => row.name)).toEqual(['e2e-mcp-client'])
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_auth_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(AUTH_SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(AUTH_SCHEMA_CHECKSUM)
+
+        // The legacy row survives with authenticationScheme NULL.
+        const legacy =
+          await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'legacy'`
+        expect(legacy[0]?.authenticationScheme).toBeNull()
+
+        // A row carrying the column round-trips.
+        await sql`INSERT INTO "oauthApplication"
+          (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
+           "createdAt", "updatedAt", "authenticationScheme")
+          VALUES ('c2', 'e2e-mcp-client', 'client-2', 'secret', 'https://claude.ai', 'web',
+                  false, ${CONTRACT_T0}, ${CONTRACT_T0}, 'none')`
+        const clients =
+          await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'c2'`
+        expect(clients[0]?.authenticationScheme).toBe('none')
 
         // The upgrade is idempotent.
         await migratePostgres(harness.url)
