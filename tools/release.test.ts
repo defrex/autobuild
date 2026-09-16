@@ -14,8 +14,10 @@ import {
   resolveReleaseVersion,
   runRelease,
   spawnCommand,
+  uploadDistributionAsset,
   type CommandRequest,
   type CommandResult,
+  type CommandRunner,
   type ReleaseOutput,
 } from './release'
 
@@ -268,6 +270,9 @@ describe('release orchestration', () => {
       output: testHarness.output,
       today: () => '2026-07-27',
       repositoryUrl: fixture.remote,
+      // The real packer runs outside the command seam; this stub only proves
+      // the upload uses the injected bytes.
+      packageArchive: async () => new Uint8Array([1, 2, 3]),
     })
 
     const cloneRequests = testHarness.requests.filter(
@@ -282,21 +287,14 @@ describe('release orchestration', () => {
       expect(clone.args).toContain('v2.0.1')
       expect(existsSync(String(clone.args.at(-1)))).toBe(false)
     }
-    const smokeBunRequests = testHarness.requests.filter(
-      (request) => request.command === 'bun' && request.args[0] !== 'pm',
-    )
+    const smokeBunRequests = testHarness.requests.filter((request) => request.command === 'bun')
     expect(smokeBunRequests).toHaveLength(4)
-    // The guest distribution archive is packed and uploaded after the release.
-    const packRequest = testHarness.requests.find(
-      (request) => request.command === 'bun' && request.args[0] === 'pm',
-    )
-    expect(packRequest?.args).toEqual([
-      'pm',
-      'pack',
-      '--ignore-scripts',
-      '--destination',
-      expect.any(String),
-    ])
+    // The guest distribution archive is packed by the injected packageArchive
+    // (the production packer runs outside the command seam) and uploaded to
+    // the release under the published asset name.
+    expect(
+      testHarness.requests.some((request) => request.command === 'bun' && request.args[0] === 'pm'),
+    ).toBe(false)
     const uploadRequest = testHarness.requests.find(
       (request) =>
         request.command === 'gh' && request.args[0] === 'release' && request.args[1] === 'upload',
@@ -636,4 +634,57 @@ describe('release orchestration', () => {
       'before that release heading — never beneath or inside the released section',
     )
   })
+})
+
+describe('distribution asset upload', () => {
+  test('uploads the production-packed archive whose manifest omits patchedDependencies', async () => {
+    const destination = await mkdtemp(join(tmpdir(), 'autobuild-release-upload-'))
+    temporaryDirectories.push(destination)
+    const logs: string[] = []
+    let uploadedBytes: Uint8Array | undefined
+    const run: CommandRunner = async (request) => {
+      if (
+        request.command === 'gh' &&
+        request.args[0] === 'release' &&
+        request.args[1] === 'upload'
+      ) {
+        // Capture the bytes during the intercepted upload: the packer's
+        // staging directory is removed when uploadDistributionAsset returns.
+        uploadedBytes = new Uint8Array(await readFile(String(request.args[3])))
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      if (request.command === 'gh' && request.args[0] === 'release' && request.args[1] === 'view') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ assets: [{ name: 'autobuild-2.0.1.tgz', size: 1234 }] }),
+          stderr: '',
+        }
+      }
+      throw new Error(`unexpected command: ${request.command} ${request.args.join(' ')}`)
+    }
+
+    // The default packageArchive is the production packer
+    // (packageAutobuildDistribution) — the same bytes a real release uploads.
+    await uploadDistributionAsset(run, destination, 'v2.0.1', '2.0.1', {
+      log: (message) => logs.push(message),
+      warn: () => {},
+    })
+
+    expect(uploadedBytes!.length).toBeGreaterThan(0)
+    const archive = join(destination, 'autobuild-2.0.1.tgz')
+    await writeFile(archive, uploadedBytes!)
+    const manifestProcess = Bun.spawn(['tar', '-xOf', archive, 'package/package.json'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const packedManifest = JSON.parse(await new Response(manifestProcess.stdout).text()) as {
+      patchedDependencies?: Record<string, string>
+    }
+    expect(await manifestProcess.exited).toBe(0)
+    // The published release asset must not carry the repo's
+    // patchedDependencies declaration: a consumer installing it next to
+    // better-auth panics bun (finding f_812bb6b5).
+    expect(packedManifest.patchedDependencies).toBeUndefined()
+    expect(logs.join('\n')).toContain('Uploaded autobuild-2.0.1.tgz (1234 bytes)')
+  }, 60_000)
 })
