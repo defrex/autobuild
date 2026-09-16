@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#383](https://github.com/defrex/autobuild/pull/383) — Move the hosted store, operator, and ticket servers out of core
 - [#380](https://github.com/defrex/autobuild/pull/380) — Split the hosted dispatcher into @defrex/autobuild-hosted-dispatcher
 - [#379](https://github.com/defrex/autobuild/pull/379) — Fix the MCP plugin's metadata typing gap; drop the workaround
 - [#378](https://github.com/defrex/autobuild/pull/378) — Make `ab wait` long-poll on remote stores (AUT-368)
