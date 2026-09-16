@@ -97,7 +97,12 @@ remote-store protocol requires matching client and server versions.
 ## Key boundaries
 
 **Hosted store service.** `@defrex/autobuild/remote-store` is the supported protocol
-server/client/token export. The hosted workspace validates its environment,
+export for the remote store's client half, wire schemas, and token minting; the
+protocol servers (the remote BuildStore HTTP server, the operator API server,
+and the hosted ticket-source server) ship in
+`@defrex/autobuild-hosted-store-service`, which builds against core's
+`remote-store`, `operator`, and `hosted-tickets` subpaths only. The hosted
+workspace validates its environment,
 serves health without touching persistence, and lazily retains one
 `openPostgresBuildStoreFromEnv` promise per warm process. Its Fetch handler has
 no Vercel branch; root `server.ts` is the sole `Bun.serve()` composition point.
