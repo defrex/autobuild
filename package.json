@@ -81,6 +81,7 @@
   "files": [
     "bin",
     "packages/core/src",
+    "!packages/core/src/**/*.test.ts",
     "skills",
     "templates",
     "LICENSE",

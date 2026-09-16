@@ -8,10 +8,12 @@ the named bare-Bun machine-service entrypoint for non-Next hosts.
 
 ## Configure and run locally
 
-The service and PostgreSQL adapter are distributed in Autobuild's GitHub
-releases rather than npm. Clone the compatible release tag and install it as
-shown in the [complete environment reference](../../docs/configuration.md), then
-migrate the database (the migration is idempotent):
+The service and PostgreSQL adapter are published to npm
+(`@defrex/autobuild-hosted-store-service`, `@defrex/autobuild-postgres-store`)
+separately from the `@defrex/autobuild` CLI. The deployable web application
+runs from a release checkout: clone the compatible release tag and install it
+as shown in the [complete environment reference](../../docs/configuration.md),
+then migrate the database (the migration is idempotent):
 
 ```sh
 DATABASE_URL=postgres://… bun run postgres:migrate

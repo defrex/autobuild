@@ -2,12 +2,17 @@
 
 Serverless-safe Autobuild persistence using PostgreSQL and either an
 S3-compatible object store or Vercel Blob. This is a separate package: installing
-the `autobuild` CLI does not install its database/blob provider dependencies.
+the `@defrex/autobuild` CLI does not install its database/blob provider
+dependencies. A project that embeds the adapter adds it directly:
+
+```sh
+bun add @defrex/autobuild-postgres-store
+```
 
 ## Setup
 
-This adapter is distributed in Autobuild's GitHub releases, not on npm. Choose
-the adapter-compatible tag shown in [GitHub Releases](https://github.com/defrex/autobuild/releases),
+To run the migration from the hosted deployment's own checkout, choose the
+adapter-compatible tag shown in [GitHub Releases](https://github.com/defrex/autobuild/releases),
 then obtain and install that exact repository revision in a dedicated checkout:
 
 ```sh

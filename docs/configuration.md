@@ -18,9 +18,13 @@ example](#complete-example) is valid on its own.
 
 The optional `@defrex/autobuild-hosted-store-service` and its
 `@defrex/autobuild-postgres-store` adapter are configured entirely through the
-environment. They are distributed in Autobuild's GitHub releases rather than
-npm, so an ordinary `autobuild` CLI install does not acquire the service,
-PostgreSQL, or blob-provider dependencies. Choose the compatible tag shown in
+environment. They are published to npm as separate packages alongside the
+`@defrex/autobuild` CLI, so a CLI install never acquires the service,
+PostgreSQL, or blob-provider dependencies; a project that embeds the adapter
+or the service adds the package it needs (`bun add
+@defrex/autobuild-postgres-store` or `bun add
+@defrex/autobuild-hosted-store-service`). The deployable web application still
+runs from a release checkout: choose the compatible tag shown in
 [GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
 revision into a dedicated checkout, and run the idempotent migration there:
 
