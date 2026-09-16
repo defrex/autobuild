@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.7.0 — 2026-09-16
+
+This release moves Autobuild off the developer's machine: builds now run in Vercel Sandbox with configured runtime provisioning, failure-safe recovery, and cleanup, while a hosted dispatcher runs on a per-minute cron with per-repository forge credentials, sandboxed harvest, and a serverless PostgreSQL store behind an authenticated hosted service. The core was restructured into a Bun workspace with a new BuildStore stream primitive, operator sessions, and every build session streamed as AI SDK UI message parts, which power a live read-only session view and the new ab watch and ab wait commands. An agent tool registry is exposed over MCP both on stdio and as a hosted endpoint secured with Better Auth OAuth, backed by per-operator credential-free sandboxes. The web dashboard gained authenticated hosting, a versioned operator control API, and a round of design refinements, and the auto-merge gate now handles unknown, dirty, and unprotected-branch states correctly.
+
 - [#375](https://github.com/defrex/autobuild/pull/375) — Give EVENT_WAIT_POLL_MS a single canonical definition by importing the core constant in the Postgres store
 - [#374](https://github.com/defrex/autobuild/pull/374) — Tolerate scheduler jitter in remote teardown poll-count assertion
 - [#373](https://github.com/defrex/autobuild/pull/373) — Pace memory store's held event reads at the event-wait budget
