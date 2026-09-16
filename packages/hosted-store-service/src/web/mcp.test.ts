@@ -148,7 +148,7 @@ describe('hosted MCP endpoint guard', () => {
     expect((await missing.fetch(initializeRequest())).status).toBe(403)
   })
 
-  test('an allowlisted operator initializes; GET answers 405 and OPTIONS preflights', async () => {
+  test('an allowlisted operator initializes; stateless GET serves SSE 200 and OPTIONS preflights', async () => {
     const endpoint_ = endpoint(fakeAuth())
     const initialized = await endpoint_.fetch(initializeRequest('any'))
     expect(initialized.status).toBe(200)
