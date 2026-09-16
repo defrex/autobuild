@@ -36,6 +36,7 @@ import {
   validateProposalCoverage,
 } from '../processes/harvest'
 import type { BuildStore } from '../store/types'
+import type { StreamRecord } from '../store/streams/types'
 import type { HarvestCliEnv } from './env'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
@@ -398,6 +399,22 @@ export interface HarvestFiledStatusView {
   blockers?: { declared: string[]; derived: string[] }
 }
 
+/** One session bracket of a run. `stream` is the payload-carried repo-scoped
+ * stream id; `streamStatus` is overlaid from the store's records and absent
+ * when no stream record exists (pre-streaming journals, read failure) —
+ * the download target stays identifiable either way. */
+export interface HarvestSessionStatusView {
+  session: string
+  role: 'harvest' | 'harvest-review'
+  step: 'synthesize' | 'review'
+  round: number
+  startedSeq: number
+  startedAt: string
+  ended: boolean
+  stream?: string
+  streamStatus?: 'open' | 'closed'
+}
+
 export interface HarvestRunStatusView {
   run: string
   status: HarvestRunState['status']
@@ -407,6 +424,7 @@ export interface HarvestRunStatusView {
   trigger?: HarvestRunState['trigger']
   steps: HarvestRunState['steps']
   rounds: number
+  sessions: HarvestSessionStatusView[]
   filed: HarvestFiledStatusView[]
   escalation?: HarvestRunState['escalation']
   failure?: HarvestRunState['failure']
@@ -433,6 +451,7 @@ export interface HarvestStatusView {
   trigger?: HarvestRunState['trigger']
   steps: HarvestRunState['steps']
   rounds: number
+  sessions: HarvestSessionStatusView[]
   filed: HarvestFiledStatusView[]
   escalation?: HarvestRunState['escalation']
   failure?: HarvestRunState['failure']
@@ -491,6 +510,16 @@ function projectHarvestRunStatus(run: HarvestRunState): HarvestRunStatusView {
     ...(run.trigger !== undefined ? { trigger: run.trigger } : {}),
     steps: run.steps,
     rounds: Math.max(0, ...run.reviews.map((review) => review.round)),
+    sessions: run.sessions.map((session) => ({
+      session: session.session,
+      role: session.role,
+      step: session.step,
+      round: session.round,
+      startedSeq: session.startedSeq,
+      startedAt: session.startedAt,
+      ended: session.ended,
+      ...(session.stream !== undefined ? { stream: session.stream } : {}),
+    })),
     filed: run.filed.map((entry) => ({
       proposalKey: entry.proposalKey,
       ticket: { source: entry.ticket.source, id: entry.ticket.id },
@@ -502,10 +531,31 @@ function projectHarvestRunStatus(run: HarvestRunState): HarvestRunStatusView {
   }
 }
 
+/** Overlay the store's authoritative open/closed status onto each session's
+ * payload-carried stream id. Streams are presentation (SPEC §9): the caller
+ * degrades to payload ids alone when the read is unavailable. */
+function overlayStreamStatus(
+  runs: HarvestRunStatusView[],
+  streams: readonly StreamRecord[] | undefined,
+): HarvestRunStatusView[] {
+  if (streams === undefined) return runs
+  const status = new Map(streams.map((record) => [record.id, record.status]))
+  return runs.map((run) => ({
+    ...run,
+    sessions: run.sessions.map((session) => ({
+      ...session,
+      ...(session.stream !== undefined && status.has(session.stream)
+        ? { streamStatus: status.get(session.stream)! }
+        : {}),
+    })),
+  }))
+}
+
 export function projectHarvestStatus(
   repo: string,
   events: RepositoryEvent[],
   newestEvents?: number,
+  streams?: readonly StreamRecord[],
 ): HarvestStatusView {
   const state = reduceHarvest(events)
   const history =
@@ -515,7 +565,10 @@ export function projectHarvestStatus(
   const included = new Set(
     [...unresolved, ...open, ...(state.latest ? [state.latest] : [])].map((run) => run.run),
   )
-  const runs = state.runs.filter((run) => included.has(run.run)).map(projectHarvestRunStatus)
+  const runs = overlayStreamStatus(
+    state.runs.filter((run) => included.has(run.run)).map(projectHarvestRunStatus),
+    streams,
+  )
   const unresolvedIds = new Set(unresolved.map((run) => run.run))
   const primary =
     runs.find((run) => unresolvedIds.has(run.run)) ??
@@ -538,6 +591,7 @@ export function projectHarvestStatus(
       observations: 0,
       steps: [],
       rounds: 0,
+      sessions: [],
       filed: [],
       recovery: projectRecovery(undefined),
     }
@@ -567,6 +621,19 @@ function renderHarvestRunStatus(run: HarvestRunStatusView, paused: boolean): str
       `  ${step.step}${step.round !== undefined ? ` r${step.round}` : ''}: ` +
         `${step.outcome ?? (step.completedSeq === undefined ? 'running' : 'done')}`,
     )
+  }
+  if (run.sessions.length > 0) {
+    lines.push(`sessions (${run.sessions.length}):`)
+    for (const session of run.sessions) {
+      const detail = `harvest:${session.step} r${session.round}`
+      const state = session.ended ? 'ended' : 'running'
+      const stream =
+        session.stream !== undefined
+          ? `: stream ${session.stream}` +
+            (session.streamStatus !== undefined ? ` (${session.streamStatus})` : '')
+          : ': no stream'
+      lines.push(`  session ${session.session} (${detail}, ${state})${stream}`)
+    }
   }
   if (run.recovery.stopped !== undefined) {
     lines.push(
@@ -690,7 +757,15 @@ export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
     async ({ store, repo }) => {
       const record = await store.getRepo(repo)
       const events = record === null ? [] : await store.getRepoEvents(repo)
-      const view = projectHarvestStatus(repo, events, opts.events)
+      // Stream enrichment is presentation (SPEC §9): an unavailable read
+      // degrades to payload-carried ids without a status, never a failure.
+      let streams: StreamRecord[] | undefined
+      try {
+        streams = await store.listStreams({ kind: 'repo', repo })
+      } catch {
+        streams = undefined
+      }
+      const view = projectHarvestStatus(repo, events, opts.events, streams)
       if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
       else for (const line of renderHarvestStatus(view)) opts.stdout(line)
     },

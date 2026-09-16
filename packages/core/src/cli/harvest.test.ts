@@ -7,6 +7,7 @@ import { sequentialIds } from '../ids'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
 import type { HarvestCliEnv } from './env'
+import { artifactDownloadRepo } from './artifact'
 import {
   abHarvestStatus,
   buildHarvestContext,
@@ -480,6 +481,181 @@ describe('harvest status', () => {
       finished: true,
       automatic: { attempts: 0, exhausted: false },
     })
+  })
+
+  test('sessions project from session facts with authoritative stream status', async () => {
+    const deps = await fixture()
+    const store = deps.store
+    const stream = await store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_s1')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_1',
+        session: 'hs_s1',
+        role: 'harvest',
+        runner: 'pi',
+        step: 'synthesize',
+        round: 1,
+        stream: stream.id,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_1',
+        session: 'hs_r1',
+        role: 'harvest-review',
+        runner: 'pi',
+        step: 'review',
+        round: 1,
+      },
+    })
+
+    // Open stream, plus a bracket without a stream (pre-streaming journal or
+    // a runtime without the streaming capability).
+    const open = projectHarvestStatus('/repo', await store.getRepoEvents('/repo'), undefined, [
+      stream,
+    ])
+    expect(open.sessions).toEqual([
+      {
+        session: 'hs_s1',
+        role: 'harvest',
+        step: 'synthesize',
+        round: 1,
+        startedSeq: open.sessions[0]!.startedSeq,
+        startedAt: open.sessions[0]!.startedAt,
+        ended: false,
+        stream: stream.id,
+        streamStatus: 'open',
+      },
+      {
+        session: 'hs_r1',
+        role: 'harvest-review',
+        step: 'review',
+        round: 1,
+        startedSeq: open.sessions[1]!.startedSeq,
+        startedAt: open.sessions[1]!.startedAt,
+        ended: false,
+      },
+    ])
+    const rendered = renderHarvestStatus(open).join('\n')
+    expect(rendered).toContain(
+      `session hs_s1 (harvest:synthesize r1, running): stream ${stream.id} (open)`,
+    )
+    expect(rendered).toContain('session hs_r1 (harvest:review r1, running): no stream')
+
+    // Close the stream and end the session: the overlay flips to closed and
+    // the ended bracket reports as ended.
+    await store.closeStream(stream.id, 'completed')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.ended',
+      payload: {
+        run: 'h_1',
+        session: 'hs_s1',
+        transcript: { kind: 'harvest-transcript', rev: 0 },
+        usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+      },
+    })
+    const closed = projectHarvestStatus(
+      '/repo',
+      await store.getRepoEvents('/repo'),
+      undefined,
+      await store.listStreams({ kind: 'repo', repo: '/repo' }),
+    )
+    expect(closed.sessions[0]).toMatchObject({ stream: stream.id, streamStatus: 'closed' })
+    expect(closed.sessions[0]?.ended).toBe(true)
+    expect(renderHarvestStatus(closed).join('\n')).toContain('(closed)')
+
+    // A degraded stream read keeps the payload-carried id without a status.
+    const degraded = projectHarvestStatus('/repo', await store.getRepoEvents('/repo'))
+    expect(degraded.sessions[0]).toMatchObject({ stream: stream.id })
+    expect(degraded.sessions[0]?.streamStatus).toBeUndefined()
+  })
+
+  test('a closed harvest session stream is discoverable and downloads exact bytes end-to-end', async () => {
+    const deps = await fixture()
+    const store = deps.store
+    const stream = await store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_s1')
+    await store.appendStreamParts(stream.id, [
+      { type: 'start', messageId: 'm_1' },
+      { type: 'text-start', id: 't_1' },
+      { type: 'text-delta', id: 't_1', delta: 'harvest observations' },
+      { type: 'text-end', id: 't_1' },
+    ])
+    await store.closeStream(stream.id, 'completed')
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_1',
+        session: 'hs_s1',
+        role: 'harvest',
+        runner: 'pi',
+        step: 'synthesize',
+        round: 1,
+        stream: stream.id,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.ended',
+      payload: {
+        run: 'h_1',
+        session: 'hs_s1',
+        transcript: { kind: 'harvest-transcript', rev: 0 },
+        usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+      },
+    })
+
+    // The session surface exposes the id and closed status — both in the text
+    // render and in the structured --json projection.
+    const view = projectHarvestStatus(
+      '/repo',
+      await store.getRepoEvents('/repo'),
+      undefined,
+      await store.listStreams({ kind: 'repo', repo: '/repo' }),
+    )
+    expect(view.sessions).toEqual([
+      expect.objectContaining({ stream: stream.id, streamStatus: 'closed' }),
+    ])
+    expect(JSON.parse(JSON.stringify(view.sessions))).toEqual([
+      expect.objectContaining({ stream: stream.id, streamStatus: 'closed' }),
+    ])
+    expect(renderHarvestStatus(view).join('\n')).toContain(`stream ${stream.id} (closed)`)
+
+    // Retrieval through the repo-scoped read path returns the exact finalized
+    // UIMessage[] document bytes. An exec whose origin resolves to '/repo'
+    // makes the checkout's repository identity the seeded journal's repo.
+    const output = join(deps.workspacePath, 'stream.json')
+    const downloaded = await artifactDownloadRepo({
+      targetRepo: deps.workspacePath,
+      env: {},
+      exec: async (cmd) =>
+        cmd[1] === 'remote'
+          ? { stdout: '/repo\n', stderr: '', exitCode: 0 }
+          : {
+              stdout: `${deps.workspacePath}/.git\n${deps.workspacePath}/.git\n${deps.workspacePath}\n`,
+              stderr: '',
+              exitCode: 0,
+            },
+      spec: `stream:${stream.id}`,
+      outputPath: output,
+      openStore: () => store,
+    })
+    expect(downloaded.artifact.meta.kind).toBe(`stream:${stream.id}`)
+    expect(downloaded.artifact.meta.revision).toBe(0)
+    const stored = await store.getRepoArtifact('/repo', `stream:${stream.id}`)
+    expect(new Uint8Array(await readFile(output))).toEqual(new Uint8Array(stored!.content))
+    expect(JSON.parse(await Bun.file(output).text())).toEqual([
+      {
+        id: 'm_1',
+        role: 'assistant',
+        parts: [{ type: 'text', state: 'done', text: 'harvest observations' }],
+      },
+    ])
   })
 
   test('shares store precedence and uses the main checkout as journal identity', async () => {

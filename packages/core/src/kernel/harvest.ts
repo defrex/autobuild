@@ -37,6 +37,23 @@ export interface HarvestReviewRound {
   seq: number
 }
 
+/** One agent session bracket of a harvest run (SPEC §9). Purely additive
+ * projection: `stream` is absent on brackets journaled before streaming, and
+ * the open/closed status is overlaid at presentation time from the store's
+ * authoritative stream records — never derived here. */
+export interface HarvestSessionState {
+  session: string
+  role: 'harvest' | 'harvest-review'
+  step: 'synthesize' | 'review'
+  round: number
+  startedSeq: number
+  startedAt: string
+  /** Stream id the bracket's live view writes to (repo-scoped). */
+  stream?: string
+  /** True once the matching `harvest.session.ended` fact landed. */
+  ended: boolean
+}
+
 export interface HarvestProposalReservation {
   proposalKey: string
   id: string
@@ -79,6 +96,7 @@ export interface HarvestRunState {
   steps: HarvestStepOccurrence[]
   proposals: Array<{ round: number; artifact: ArtifactRef; seq: number }>
   reviews: HarvestReviewRound[]
+  sessions: HarvestSessionState[]
   reservations: HarvestProposalReservation[]
   filed: Array<{
     proposalKey: string
@@ -446,6 +464,7 @@ export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState 
           steps: [],
           proposals: [],
           reviews: [],
+          sessions: [],
           reservations: [],
           filed: [],
           dispositions: [],
@@ -626,10 +645,34 @@ export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState 
         }
         break
       }
-      case 'harvest.session.started':
-      case 'harvest.session.ended':
-        // Session facts remain individually queryable but add no transition.
+      case 'harvest.session.started': {
+        const run = requireRun(runs, event.payload.run, event)
+        run.sessions.push({
+          session: event.payload.session,
+          role: event.payload.role,
+          step: event.payload.step,
+          round: event.payload.round,
+          startedSeq: event.seq,
+          startedAt: event.ts,
+          ...(event.payload.stream !== undefined ? { stream: event.payload.stream } : {}),
+          ended: false,
+        })
         break
+      }
+      case 'harvest.session.ended': {
+        const run = requireRun(runs, event.payload.run, event)
+        const session = run.sessions.find(
+          (candidate) => candidate.session === event.payload.session,
+        )
+        if (session === undefined) {
+          throw new Error(
+            `harvest.session.ended at repo seq ${event.seq} references unknown ` +
+              `harvest session "${event.payload.session}" in run "${run.run}"`,
+          )
+        }
+        session.ended = true
+        break
+      }
       case 'dispatcher.intake-set':
       case 'dispatcher.pause-set':
       case 'dispatcher.auto-merge-default-set':

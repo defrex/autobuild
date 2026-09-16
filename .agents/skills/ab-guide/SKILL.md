@@ -1043,6 +1043,17 @@ Inside a phase, a complete ambient tuple permits only the ambient build; a
 foreign build or malformed/partial identity is rejected. Use the exact pinned
 `@rev` from a PR attachment command.
 
+Artifacts that live on the repository scope rather than a build — notably the
+finalized `stream:<id>` documents of closed harvest session streams — are
+retrieved by the repository-scoped sibling, `ab artifact download-repo
+<kind>[@rev] --output <file> [--store <ref>]`. It resolves the repository
+identity from the current checkout (no build slug), writes exact bytes, and
+mirrors the build form's authority: operator-wide without identity, own-repo
+only with an ambient Harvest tuple, denied with an ambient build tuple.
+Discoverability comes from `ab harvest status`: each session row shows the
+stream id and its `open`/`closed` status, mirroring the build-session rows —
+download only closed streams (open ones are still being written).
+
 In a build session, `ab artifact put <kind> <file> --attach` atomically deposits
 the exact bytes and designates that revision for the PR. A later designation of
 the same kind replaces it; distinct kinds remain distinct attachments. The
@@ -1444,7 +1455,8 @@ stream:<id>` retrieves the closed session's finalized document.
 Harvest sessions stream the same protocol into *repository-scoped* streams:
 the harvest runner's synthesize and review brackets each get one stream
 (`phase` spelled `harvest:<step>`), with `harvest.session.started` carrying
-the stream id. Find them via that `stream` field or the harvest journal
+the stream id. Find them via that `stream` field, the per-session rows of
+`ab harvest status` (stream id and open/closed status), or the harvest journal
 (`ab watch --repository`); a closed stream finalizes to a repository-scope
 `stream:<id>` artifact. The harvest run id is not on the stream — recover it
 from the journal event that names the stream.
@@ -1529,8 +1541,11 @@ run plus relevant open/latest context from the same journal the runner resumes.
 Each section distinguishes recoverable from terminal and shows that run's
 automatic attempts/limit, stopped step/round, attention, exact retained snapshot
 before exhaustion or released observation/proposal keys afterward, workflow
-occurrences, review rounds, and filed ticket refs. Repository event history is
-shown once. It is read-only and also reports an idle or paused repository with
+occurrences, review rounds, and filed ticket refs. Each session bracket renders
+as `session <id> (harvest:<step> r<N>, running|ended): stream <id> (open|closed)`
+or `: no stream` when the bracket predates streaming or the runtime lacked the
+capability — the download target for `ab artifact download-repo`. Repository
+event history is shown once. It is read-only and also reports an idle or paused repository with
 no run. The dispatch header always shows its acknowledged `harvest ON/OFF` gate
 and global `h` controls it. The optional, non-color-only `Harvest` row omits the
 internal run id and represents one deterministically selected open run or
