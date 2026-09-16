@@ -1134,8 +1134,21 @@ describe('prompt teardown of held reads', () => {
       await Bun.sleep(100)
       // The hold is genuinely polling.
       expect(backing.sessionPolls).toBeGreaterThan(0)
+      const pollsAtAbort = backing.sessionPolls
       // The peer goes away mid-hold.
       controller.abort()
+
+      // Prompt-teardown bound (AUT-416): the abort must reach the backing
+      // loop well before the 2 s settle deadline. Allow one poll already in
+      // flight at sample time (the AUT-389 structural +1) plus five slow
+      // scheduler ticks (~125 ms) of socket-close detection headroom — the
+      // lag that outran the original exact-equality and +1 forms. A
+      // lingering 25 ms loop adds ~12 polls during the 300 ms grace window
+      // (40 polls/s), far past this bound, so it fails here ~300 ms after
+      // the abort; legit teardown that only settles later is still covered
+      // by the settle-then-freeze tail below.
+      await Bun.sleep(300)
+      expect(backing.sessionPolls).toBeLessThanOrEqual(pollsAtAbort + 6)
 
       // The count must settle after the disconnect and then stay frozen: on
       // unfixed code it keeps growing through every window (a 25 ms poll
@@ -1144,6 +1157,10 @@ describe('prompt teardown of held reads', () => {
       // the-pre-abort-sample form of this assertion flaked under a full-suite
       // verify run — the socket-close detection lagged the sample past a
       // tick — which is why the count is settled first (see settlePolls).
+      // This settle-then-freeze tail alone pinned prompt teardown only up to
+      // its 2 s deadline; the prompt cap above now bounds lingering loops at
+      // ~300 ms. The stream twin below is deliberately left without a cap —
+      // its jitter tolerance is AUT-393's scope.
       const settled = await settlePolls(() => backing.sessionPolls)
       await Bun.sleep(150)
       expect(backing.sessionPolls).toBe(settled)
