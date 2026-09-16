@@ -430,7 +430,7 @@ identity is already the actor.
 | `listSessions` | `GET /repos/{repo}/sessions` | none | `200` + `SessionRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getSession` | `GET /sessions/{id}` | none | `200` + `SessionRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendSessionEvent` | `POST /sessions/{id}/events` | event write | `201` + session event envelope (same envelope shape with `"session"` in place of `"build"`) |
-| `getSessionEvents` | `GET /sessions/{id}/events?since={n}&wait={n}` | optional `since` (default `0`) and `wait` (whole seconds) query values, parsed exactly like the stream read's | `200` + session event envelopes with `seq >` parsed `since`, in increasing sequence order |
+| `getSessionEvents` | `GET /sessions/{id}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + session event envelopes with `seq >` parsed `since`, in increasing sequence order |
 | `appendSessionWithArtifacts` | `POST /sessions/{id}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using session shapes; the substitution algorithm of section 8 applies unchanged |
 | `putSessionArtifact` | `POST /sessions/{id}/artifacts` | artifact input | `201` + session artifact metadata |
 | `getSessionArtifact` | `GET /sessions/{id}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` | `200` + artifact read; missing kind/revision is `200 null` |
@@ -445,8 +445,12 @@ section 6 apply to session-scoped streams unchanged.
 
 Event reads honor the bounded wait: when no newer event exists, the server may
 hold the request up to the parsed `wait` bound in whole seconds, returning as
-soon as an event is appended and no later than the bound; a `wait` above 30
-seconds is clamped to 30. The clamp and early-return semantics are exactly the
+soon as an event is appended and no later than the bound; a `wait` above the
+event-wait ceiling of section 3 — 30 seconds on the shipped self-hosted server,
+25 on the shipped hosted service — is clamped to it. Held session-event reads poll at the hosted
+one-second budget (`EVENT_WAIT_POLL_MS = 1000`), matching the build and
+repository event reads, so append-to-wake is typically under one second. The
+clamp and early-return semantics are exactly the
 stream read's, so a poll loop cannot drift between the two.
 
 Deposits, artifacts, and per-session sequencing follow the same contracts as
@@ -532,7 +536,7 @@ session-attribution dimension — stream parts have no actor.
 | `listStreams` | `GET /builds/{slug}/streams` and `GET /repos/{repo}/streams` | none | `200` + `StreamRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getStream` | `GET /builds/{slug}/streams/{id}` and `GET /repos/{repo}/streams/{id}` | none | `200` + `StreamRecord`; `404` when unknown **or** scoped to another resource |
 | `appendStreamParts` | `POST /builds/{slug}/streams/{id}/chunks` and `POST /repos/{repo}/streams/{id}/chunks` | `{"parts": [ { "type": nonempty string, … } ]}`, nonempty | `201` + `StreamChunk` |
-| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) and `wait` (whole seconds) query values, parsed exactly like the `since` of section 3 | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
+| `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) parsed leniently like the `since` of section 3; `wait` (whole seconds) parsed by the digits-only grammar of section 3's event-wait rules — one or more ASCII digits, anything else `400 validation` per section 9 — and clamped to the 30-second stream ceiling below | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
 | `closeStream` | `POST /builds/{slug}/streams/{id}/close` and `POST /repos/{repo}/streams/{id}/close` | `{"outcome": "completed" \| "aborted"}` | `200` + the closed `StreamRecord` |
 
 Because a stream id is globally unique but names no scope, the shipped server
@@ -571,7 +575,10 @@ Read wait semantics: when no newer chunk exists and the stream is open, the
 server may hold the request up to the parsed `wait` bound in whole seconds,
 returning as soon as a chunk is appended or the stream closes, and no later
 than the bound. A `wait` above 30 seconds is clamped to 30. Reads of a closed
-stream never wait. A server may return before the bound at any time.
+stream never wait. A server may return before the bound at any time. Unlike
+`since`, the `wait` value follows the strict digits grammar of section 3's
+event-wait rules (a value that is not one or more ASCII digits is `400`
+`validation` per section 9), with the 30-second stream ceiling as its clamp.
 
 Close semantics: one atomic operation that assembles the chunks into the
 protocol's `UIMessage[]` document — following the protocol for its defined
@@ -860,11 +867,14 @@ For streams, the backing store must additionally maintain:
   batches above the serialized-byte ceiling;
 - the bounded read wait exactly as specified in section 6, including the
   30-second clamp and no wait on closed streams;
-- the bounded wait on the build and repository event reads exactly as
-  specified in section 3, with no per-request database poll faster than once
+- the bounded wait on the build, repository, and session event reads exactly
+  as specified in section 3, with no per-request database poll faster than once
   per second (the shipped PostgreSQL adapter polls held reads at
   `EVENT_WAIT_POLL_MS = 1000`, so an append by another connection is observed
-  within about one second);
+  at the next poll — typically within about one second, worst case one poll
+  interval plus the query round-trip; a hard ≤1 s worst case would need
+  LISTEN/NOTIFY wake-on-append at a dedicated connection per held request on
+  a pooled provider, a cost considered and declined);
 - the atomic close — document assembly, artifact deposit, and the closed
   record visible together or not at all, with the stream left open and
   unwritten when the deposit fails;

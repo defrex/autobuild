@@ -115,6 +115,7 @@ export {
   ISO_TS,
   buildCreatedWrite,
   harvestStartedWrite,
+  messagePostedWrite,
   planCompletedWrite,
   sampleBuildInput,
   sampleEventWrite,

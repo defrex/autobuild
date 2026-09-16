@@ -1,6 +1,6 @@
 {
   "name": "@autobuild/hosted-store-service",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -43,7 +43,7 @@
     "autobuild": ">=0.6.0"
   },
   "dependencies": {
-    "@autobuild/postgres-store": "0.6.0",
+    "@autobuild/postgres-store": "workspace:*",
     "better-auth": "1.4.18",
     "pg": "8.18.0"
   }

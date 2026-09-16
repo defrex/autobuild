@@ -316,6 +316,25 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
+  /** The BuildStore abort contract (AUT-380): a held read whose caller's
+   * signal fires resolves with the empty result — the client-side mirror of
+   * the server's `withDisconnect`, which discards the aborted response
+   * anyway — instead of rejecting with fetch's AbortError. Failures that are
+   * not the caller's own abort (the store being unreachable, say) still
+   * reject. */
+  private async heldRequest<T>(
+    signal: AbortSignal | undefined,
+    empty: () => T,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await read()
+    } catch (error) {
+      if (signal?.aborted) return empty()
+      throw error
+    }
+  }
+
   async getEvents(
     slug: string,
     sinceSeq = 0,
@@ -323,14 +342,18 @@ export class RemoteBuildStore implements BuildStore {
   ): Promise<AbEvent[]> {
     const params = new URLSearchParams({ since: String(sinceSeq) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
-    const events = await this.requestJson(
-      'GET',
-      `${this.buildPath(slug)}/events?${params}`,
-      eventListSchema,
-      undefined,
+    return this.heldRequest(
       opts?.signal,
+      (): AbEvent[] => [],
+      () =>
+        this.requestJson(
+          'GET',
+          `${this.buildPath(slug)}/events?${params}`,
+          eventListSchema,
+          undefined,
+          opts?.signal,
+        ) as Promise<AbEvent[]>,
     )
-    return events as unknown as AbEvent[]
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
@@ -455,14 +478,18 @@ export class RemoteBuildStore implements BuildStore {
   ): Promise<RepositoryEvent[]> {
     const params = new URLSearchParams({ since: String(sinceSeq) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
-    const events = await this.requestJson(
-      'GET',
-      `${this.repoPath(repo)}/events?${params}`,
-      repositoryEventListSchema,
-      undefined,
+    return this.heldRequest(
       opts?.signal,
+      (): RepositoryEvent[] => [],
+      () =>
+        this.requestJson(
+          'GET',
+          `${this.repoPath(repo)}/events?${params}`,
+          repositoryEventListSchema,
+          undefined,
+          opts?.signal,
+        ) as Promise<RepositoryEvent[]>,
     )
-    return events as unknown as RepositoryEvent[]
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
@@ -571,16 +598,22 @@ export class RemoteBuildStore implements BuildStore {
   async getSessionEvents(
     id: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]> {
     const params = new URLSearchParams({ since: String(sinceSeq) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
-    const events = await this.requestJson(
-      'GET',
-      `${this.sessionPath(id)}/events?${params}`,
-      sessionEventListSchema,
+    return this.heldRequest(
+      opts?.signal,
+      (): SessionEvent[] => [],
+      () =>
+        this.requestJson(
+          'GET',
+          `${this.sessionPath(id)}/events?${params}`,
+          sessionEventListSchema,
+          undefined,
+          opts?.signal,
+        ) as Promise<SessionEvent[]>,
     )
-    return events as unknown as SessionEvent[]
   }
 
   async appendSessionWithArtifacts<T extends SessionEventType>(
@@ -702,15 +735,24 @@ export class RemoteBuildStore implements BuildStore {
 
   async readStream(
     streamId: string,
-    opts?: { since?: number; waitSeconds?: number },
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const params = new URLSearchParams({ since: String(opts?.since ?? 0) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
-    return this.requestJson(
-      'GET',
-      `${this.streamPath(streamId, '/chunks')}?${params}`,
-      streamReadWireSchema,
-    ) as Promise<StreamRead>
+    // A closed stream never waits, so an aborted hold was necessarily on an
+    // open stream — the empty read is `open` with no chunks.
+    return this.heldRequest(
+      opts?.signal,
+      (): StreamRead => ({ chunks: [], status: 'open' }),
+      () =>
+        this.requestJson(
+          'GET',
+          `${this.streamPath(streamId, '/chunks')}?${params}`,
+          streamReadWireSchema,
+          undefined,
+          opts?.signal,
+        ) as Promise<StreamRead>,
+    )
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {

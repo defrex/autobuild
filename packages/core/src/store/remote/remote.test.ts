@@ -675,6 +675,60 @@ describe('event wait over the wire', () => {
     }
   })
 
+  test('the session-event route shares the digits-only grammar: non-digit wait values are 400 validation', async () => {
+    const server = createStoreServer({ store: new MemoryBuildStore() })
+    await server.fetch(
+      new Request('https://store.test/repos', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ repo: 'acme/wait' }),
+      }),
+    )
+    const createResponse = await server.fetch(
+      new Request('https://store.test/repos/acme%2Fwait/sessions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ repo: 'acme/wait', operator: 'op' }),
+      }),
+    )
+    expect(createResponse.status).toBe(201)
+    const { id } = (await createResponse.json()) as { id: string }
+    for (const raw of ['abc', '0x10', '', ' 1', '1.5', '-1', '+1']) {
+      const response = await server.fetch(
+        new Request(
+          `https://store.test/sessions/${id}/events?since=0&wait=${encodeURIComponent(raw)}`,
+          { headers },
+        ),
+      )
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { kind: string }).kind).toBe('validation')
+    }
+  })
+
+  test('a session-event wait above the ceiling clamps; the hold still answers an append promptly', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.ensureRepo('acme/wait-clamp')
+      const session = await client.createSession({ repo: 'acme/wait-clamp', operator: 'op' })
+      // since=1: the session's own creation event is the backlog; the held
+      // window must start AFTER it or the read answers immediately.
+      const pending = client.getSessionEvents(session.id, 1, { waitSeconds: 61 })
+      await Bun.sleep(100)
+      const envelope = await client.appendSessionEvent(session.id, {
+        actor: humanActor('op'),
+        type: 'message.posted',
+        payload: { text: 'wake' },
+      })
+      const started = Date.now()
+      expect(await pending).toEqual([envelope])
+      // The clamp never stretched the hold to 30 or 61 seconds.
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await server.stop()
+    }
+  })
+
   test('auth failures are answered immediately, never held', async () => {
     const server = startStoreServer({ store: new MemoryBuildStore(), secret: 'wait-secret' })
     try {
@@ -746,11 +800,98 @@ describe('event wait over the wire', () => {
       await Bun.sleep(400)
       expect(eventReads).toBe(1)
       const event = await client.append('wait-subscribe', sampleEventWrite('wake'))
-      await Bun.sleep(400)
+      // The memory-backed server polls held event reads at the one-second
+      // EVENT_WAIT_POLL_MS budget (AUT-383), so allow a full poll interval
+      // plus round-trip slack for the append to be observed.
+      await Bun.sleep(1500)
       unsubscribe()
       expect(received).toEqual([event.seq])
       // The held request resolved on the append and the next one began.
       expect(eventReads).toBe(2)
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
+// ── The stream-read wait grammar over the wire (AUT-384) ────────────────
+// §9's digits-only grammar is server-wide: the stream chunks GET parses
+// `wait` with the same digitsParam the event routes use (clamped to the
+// 30-second stream ceiling, not the hosted event ceiling), so the protocol
+// document and the code agree.
+
+describe('stream wait over the wire', () => {
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+  }
+
+  test('the stream routes share the digits-only grammar: non-digit wait values are 400 validation', async () => {
+    const server = createStoreServer({ store: new MemoryBuildStore() })
+    await server.fetch(
+      new Request('https://store.test/builds', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(sampleBuildInput('stream-wait-grammar')),
+      }),
+    )
+    const createResponse = await server.fetch(
+      new Request('https://store.test/builds/stream-wait-grammar/streams', {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'g' }),
+      }),
+    )
+    expect(createResponse.status).toBe(201)
+    const { id } = (await createResponse.json()) as { id: string }
+    // The same rejection matrix the event routes pin: negative, decimal,
+    // signed, whitespace-padded, hex, empty, and non-numeric text.
+    for (const raw of ['abc', '0x10', '', ' 1', '1.5', '-1', '+1']) {
+      const response = await server.fetch(
+        new Request(
+          `https://store.test/builds/stream-wait-grammar/streams/${id}/chunks?since=0&wait=${encodeURIComponent(raw)}`,
+          { headers },
+        ),
+      )
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { kind: string }).kind).toBe('validation')
+    }
+    // The top-level route is the same parse site; pin it anyway so the
+    // grammar holds across both route families.
+    const top = await server.fetch(
+      new Request(`https://store.test/streams/${id}/chunks?since=0&wait=-1`, {
+        headers,
+      }),
+    )
+    expect(top.status).toBe(400)
+    expect(((await top.json()) as { kind: string }).kind).toBe('validation')
+  })
+
+  test('digit wait values keep the stream read semantics: immediate answers and the 30-second clamp', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('stream-wait-happy'))
+      const stream = await client.createStream({ kind: 'build', build: 'stream-wait-happy' }, 'h')
+      await client.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+
+      // wait=5 with a chunk already present answers 200 immediately.
+      const started = Date.now()
+      const read = await client.readStream(stream.id, { since: 0, waitSeconds: 5 })
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(read.chunks).toHaveLength(1)
+      expect(read.status).toBe('open')
+
+      // wait=61 clamps to the 30-second stream ceiling (not the hosted
+      // event ceiling) and the immediate-return path is unchanged.
+      const clamped = await client.readStream(stream.id, { since: 0, waitSeconds: 61 })
+      expect(clamped.chunks).toHaveLength(1)
+      expect(clamped.status).toBe('open')
+
+      // wait=0 on an open, chunk-less read answers immediately, empty.
+      const immediate = await client.readStream(stream.id, { since: 1, waitSeconds: 0 })
+      expect(immediate.chunks).toHaveLength(0)
+      expect(immediate.status).toBe('open')
     } finally {
       await server.stop()
     }
@@ -762,7 +903,56 @@ describe('event wait over the wire', () => {
 // reaches the underlying fetch), not wait out the server's hold bound.
 // Server-side: the withDisconnect guard on the session-event route and held
 // stream reads lets server.stop(true) complete promptly when a client goes
-// away mid-hold.
+// away mid-hold — and (AUT-380) the disconnect signal also reaches the
+// backing store's poll loop, so the polls themselves cease.
+
+import { readEventsWithWait, readStreamWithWait } from '../streams/wait'
+import type { SessionEvent } from '../../events/sessions'
+import type { StreamRead } from '../streams/types'
+
+/**
+ * A MemoryBuildStore whose held-read polls are observable. One held HTTP
+ * request makes exactly one backing `getSessionEvents`/`readStream` call —
+ * the polling the spec wants to stop happens inside that call's wait loop —
+ * so a counter must observe sub-call polls, not held-read invocations.
+ * The overrides run the real wait helpers (the same ones the adapters
+ * delegate to) with a counting `read` closure that delegates to the
+ * immediate, non-waiting form, and forward the full opts — including the
+ * signal the server passes — into the loop.
+ */
+class CountingMemoryStore extends MemoryBuildStore {
+  sessionPolls = 0
+  streamPolls = 0
+
+  override async getSessionEvents(
+    id: string,
+    sinceSeq?: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<SessionEvent[]> {
+    return readEventsWithWait({
+      read: async () => {
+        this.sessionPolls++
+        return super.getSessionEvents(id, sinceSeq)
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+    })
+  }
+
+  override async readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<StreamRead> {
+    return readStreamWithWait({
+      read: async () => {
+        this.streamPolls++
+        return super.readStream(streamId, { since: opts?.since })
+      },
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+    })
+  }
+}
 
 describe('prompt teardown of held reads', () => {
   const headers = {
@@ -899,6 +1089,79 @@ describe('prompt teardown of held reads', () => {
       const started = Date.now()
       await server.stop()
       expect(Date.now() - started).toBeLessThan(5_000)
+      await held
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("a disconnected peer's backing session polls cease, not just the handler promise (AUT-380)", async () => {
+    const backing = new CountingMemoryStore()
+    const server = startStoreServer({ store: backing })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.ensureRepo('acme/teardown-polls')
+      const session = await client.createSession({ repo: 'acme/teardown-polls', operator: 'op' })
+
+      const controller = new AbortController()
+      const held = fetch(`${server.url}/sessions/${session.id}/events?since=1&wait=25`, {
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await Bun.sleep(100)
+      // The hold is genuinely polling.
+      expect(backing.sessionPolls).toBeGreaterThan(0)
+      const pollsAtAbort = backing.sessionPolls
+      // The peer goes away mid-hold.
+      controller.abort()
+
+      await Bun.sleep(150)
+      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      await Bun.sleep(150)
+      // Equality across two later samples: the poll loop demonstrably
+      // ceased. On unfixed code the count keeps growing through both
+      // samples (a 25 ms poll would add ~12 polls per sample).
+      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      await held
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("a disconnected peer's backing stream polls cease, not just the handler promise (AUT-380)", async () => {
+    const backing = new CountingMemoryStore()
+    const server = startStoreServer({ store: backing })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('teardown-stream-polls'))
+      const stream = await client.createStream(
+        { kind: 'build', build: 'teardown-stream-polls' },
+        's',
+      )
+
+      const controller = new AbortController()
+      const held = fetch(`${server.url}/streams/${stream.id}/chunks?since=0&wait=25`, {
+        headers,
+        signal: controller.signal,
+      }).catch(() => undefined)
+      await Bun.sleep(100)
+      expect(backing.streamPolls).toBeGreaterThan(0)
+      const pollsAtAbort = backing.streamPolls
+      controller.abort()
+
+      // The bound is `pollsAtAbort + 1`, not equality (AUT-389): the sample
+      // is wall-clock, taken concurrently with the backing 25 ms poll loop
+      // (readStreamWithWait in streams/wait.ts), so one poll already in
+      // flight can land between the sample and the abort's effect on the
+      // loop — a single slow scheduler tick adds exactly one. The loop
+      // structure bounds the overshoot at one: only one read can be in
+      // flight, and once the abort flag is observed the loop breaks. A
+      // genuinely continuing loop would add ~6 polls per 150 ms window,
+      // which this bound still fails.
+      await Bun.sleep(150)
+      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
+      await Bun.sleep(150)
+      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
       await held
     } finally {
       await server.stop()

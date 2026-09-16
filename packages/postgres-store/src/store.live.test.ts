@@ -5,6 +5,7 @@ import {
   StreamBatchTooLargeError,
   describeBuildStoreContract,
   harvestStartedWrite,
+  messagePostedWrite,
   sampleBuildInput,
   sampleEventWrite,
   type BlobStore,
@@ -221,7 +222,10 @@ if (testUrl) {
       }
     })
 
-    test('a held event read observes a cross-connection append within the one-second poll budget (AUT-334)', async () => {
+    // Nominal bound (AUT-334): the 2 s assertion covers the poll-interval
+    // worst case — the 1 s EVENT_WAIT_POLL_MS poll plus up to ~1 s of query
+    // and CI scheduler slack — not a hard one-second delivery guarantee.
+    test('a held event read observes a cross-connection append within the one-poll worst-case budget (AUT-334)', async () => {
       const database = await isolatedDatabase()
       const blobs = new MemoryBlobStore()
       const reader = await openPostgresBuildStore(database.url, blobs)
@@ -253,8 +257,44 @@ if (testUrl) {
       }
     })
 
-    test('EVENT_WAIT_POLL_MS pins the one-second hosted poll budget (AUT-334)', () => {
+    test('EVENT_WAIT_POLL_MS pins the one-second hosted poll interval (AUT-334)', () => {
       expect(EVENT_WAIT_POLL_MS).toBe(1000)
+    })
+
+    // Session events, same budget (AUT-381): the held read starts with an
+    // empty initial poll (sinceSeq past session.created), the writer appends
+    // at ~500 ms, and a 1 s poll first observes it at ~1000 ms. The ≥ 900 ms
+    // lower bound fails a regression to the 25 ms stream default (which
+    // resolves at ~525 ms); the < 2 s upper bound is the same one-poll
+    // worst-case convention as the AUT-334 test above (1 s poll plus query
+    // and CI scheduler slack), not a hard delivery guarantee.
+    test('a held session-event read observes a cross-connection append within the one-poll worst-case budget (AUT-381)', async () => {
+      const database = await isolatedDatabase()
+      const blobs = new MemoryBlobStore()
+      const reader = await openPostgresBuildStore(database.url, blobs)
+      const writer = await openPostgresBuildStore(database.url, blobs)
+      try {
+        const session = await reader.createSession({
+          repo: 'acme/evt-wait-x',
+          operator: 'operator',
+          title: 'sess-wait-x',
+        })
+        // session.created (seq 1) auto-appends; warm the path once so the
+        // held read's initial poll hits a pooled connection.
+        expect((await reader.getSessionEvents(session.id)).map((event) => event.seq)).toEqual([1])
+
+        const started = Date.now()
+        const pendingSession = reader.getSessionEvents(session.id, 1, { waitSeconds: 5 })
+        await Bun.sleep(500)
+        const event = await writer.appendSessionEvent(session.id, messagePostedWrite('cross'))
+        expect(await pendingSession).toEqual([event])
+        expect(Date.now() - started).toBeGreaterThanOrEqual(900)
+        expect(Date.now() - started).toBeLessThan(2_000)
+      } finally {
+        await reader.close()
+        await writer.close()
+        await database.cleanup()
+      }
     })
 
     test('a cross-connection append inside a close prepare window is included in the finalized artifact (AUT-348)', async () => {

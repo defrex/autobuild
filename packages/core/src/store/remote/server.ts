@@ -354,6 +354,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
             req,
             store.getRepoEvents(repo, since, {
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
+              signal: req.signal,
             }),
             (): RepositoryEvent[] => [],
           ),
@@ -470,13 +471,14 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'GET events': {
         const since = intParam(url, 'since') ?? 0
-        const wait = intParam(url, 'wait')
+        const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
           await withDisconnect(
             req,
             store.getSessionEvents(id, since, {
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
+              signal: req.signal,
             }),
             (): SessionEvent[] => [],
           ),
@@ -572,6 +574,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
             req,
             store.getEvents(slug, since, {
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
+              signal: req.signal,
             }),
             (): AbEvent[] => [],
           ),
@@ -685,7 +688,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       if (req.method === 'GET') {
         const since = intParam(url, 'since') ?? 0
-        const wait = intParam(url, 'wait')
+        // §9 grammar: `wait` is digits-only server-wide, clamped to the
+        // 30-second stream ceiling (MAX_STREAM_WAIT_SECONDS, not the hosted
+        // event ceiling of §6's hosted exception).
+        const wait = digitsParam(url, 'wait', MAX_STREAM_WAIT_SECONDS)
         return json(
           200,
           await withDisconnect(
@@ -693,6 +699,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
             store.readStream(streamId, {
               since,
               ...(wait !== undefined ? { waitSeconds: wait } : {}),
+              signal: req.signal,
             }),
             // The empty read carries the already-fetched record's lifecycle
             // fields verbatim — the response to a disconnected client is
@@ -817,7 +824,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   /** A held read must not outlive its client. When the peer disconnects, Bun
    * keeps the handler promise pending — which would stall `server.stop()` —
    * so a held read races the request's abort signal and resolves empty; the
-   * response to a disconnected client is discarded either way. */
+   * response to a disconnected client is discarded either way. The held
+   * routes also pass the same signal into the backing store read itself, so
+   * the poll loop behind the request stops too (AUT-380) instead of polling
+   * to its own wait bound; this guard remains for `server.stop()` and for
+   * any read that completes between abort and loop exit. */
   function withDisconnect<T>(req: Request, read: Promise<T>, empty: () => T): Promise<T> {
     const signal = req.signal
     if (signal.aborted) return Promise.resolve(empty())

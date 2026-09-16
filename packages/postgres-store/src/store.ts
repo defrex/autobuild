@@ -4,6 +4,7 @@ import {
   humanActor,
   createBuildScopedStore,
   createSessionScopedStore,
+  EVENT_WAIT_POLL_MS,
   normalizeOperator,
   pollingSubscribe,
   systemClock,
@@ -64,20 +65,18 @@ import {
   streamArtifactInput,
   validateStreamParts,
 } from 'autobuild/store-adapter'
-
-/**
- * The held-read poll cadence for event waits (AUT-334): a held
- * `getEvents`/`getRepoEvents` re-queries the database at most once per
- * second — the hosted per-query budget — so an append by another connection
- * is observed at the next poll, i.e. within about one second.
- */
-export const EVENT_WAIT_POLL_MS = 1000
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
   revisionsToPrune,
 } from 'autobuild/store-adapter'
 import { assertSchema } from './schema'
+
+// The held-read poll cadence for event waits — a re-export of the canonical
+// core constant (AUT-388), not a second definition. See core
+// `store/streams/wait.ts` for the budget's semantics and the AUT-334
+// rationale for why the bound is nominal rather than hard.
+export { EVENT_WAIT_POLL_MS }
 
 type Row = Record<string, unknown>
 type Tx = SQL
@@ -337,7 +336,11 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+  async getEvents(
+    slug: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]> {
     const read = async (): Promise<AbEvent[]> => {
       if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
       const rows: Row[] = await this.sql`SELECT * FROM events WHERE build = ${slug}
@@ -354,8 +357,10 @@ export class PostgresBuildStore implements BuildStore {
     return readEventsWithWait({
       read,
       waitSeconds: opts?.waitSeconds,
-      // Hosted budget: no held request polls the database faster than once
-      // per second (AUT-334).
+      signal: opts?.signal,
+      // Hosted budget: no held event request polls the database faster than
+      // once per second (AUT-334), so append-to-wake is typically under one
+      // second — worst case one poll interval plus the query round-trip.
       pollMs: EVENT_WAIT_POLL_MS,
     })
   }
@@ -577,7 +582,7 @@ export class PostgresBuildStore implements BuildStore {
   async getSessionEvents(
     id: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]> {
     const read = async (): Promise<SessionEvent[]> => {
       if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
@@ -592,7 +597,16 @@ export class PostgresBuildStore implements BuildStore {
         payload: json(row.payload),
       })) as SessionEvent[]
     }
-    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readEventsWithWait({
+      read,
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      // Hosted budget: no held event request polls the database faster than
+      // once per second (AUT-334, AUT-381), so append-to-wake is typically
+      // under one second — worst case one poll interval plus the query
+      // round-trip.
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
   }
 
   private async depositSessionLocked(
@@ -804,7 +818,7 @@ export class PostgresBuildStore implements BuildStore {
   async getRepoEvents(
     repo: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
     const read = async (): Promise<RepositoryEvent[]> => {
       if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
@@ -822,6 +836,7 @@ export class PostgresBuildStore implements BuildStore {
     return readEventsWithWait({
       read,
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
       pollMs: EVENT_WAIT_POLL_MS,
     })
   }
@@ -989,7 +1004,7 @@ export class PostgresBuildStore implements BuildStore {
 
   async readStream(
     streamId: string,
-    opts?: { since?: number; waitSeconds?: number },
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const read = async (): Promise<StreamRead> => {
       const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
@@ -1010,7 +1025,7 @@ export class PostgresBuildStore implements BuildStore {
         ...(record.artifact !== undefined ? { artifact: record.artifact } : {}),
       }
     }
-    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
