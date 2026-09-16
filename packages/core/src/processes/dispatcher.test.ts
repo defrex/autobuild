@@ -5901,15 +5901,52 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxIdleStops).toBe(0)
   })
 
-  test('an environment owned by another provider is skipped', async () => {
+  test('a stale-provider environment past the idle threshold gets its trail closed with an unconfirmed release fact', async () => {
     const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
-    expect(report.sandboxIdleStops).toBe(0)
+    const last = (await h.store.getRepoEvents(REPO)).at(-1)!
+    expect(last.type).toBe('orchestrator.sandbox.released')
+    expect(last.actor).toEqual({ kind: 'dispatcher' })
+    expect(last.payload).toMatchObject({
+      operator: 'ops',
+      environmentId: 'env-1',
+      snapshots: { outcome: 'unknown', error: expect.stringMatching(/provider/) },
+    })
+    expect(report.sandboxIdleStops).toBe(1)
+    expect(report.sandboxSettleFailures).toBe(0)
+    // Distinguish release from a confirmed stop: nothing was stopped through
+    // a provider this dispatcher no longer owns.
     expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
       'orchestrator.sandbox.stopped',
     )
+  })
+
+  test('a stale-provider release is not duplicated on the next tick', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h, { provider: 'other-provider' })
+    h.clock.advance(31 * 60 * 1000)
+    const first = await h.dispatcher.tick()
+    expect(first.sandboxIdleStops).toBe(1)
+    h.clock.advance(31 * 60 * 1000)
+    const second = await h.dispatcher.tick()
+    expect(second.sandboxIdleStops).toBe(0)
+    const releases = (await h.store.getRepoEvents(REPO)).filter(
+      (event) => event.type === 'orchestrator.sandbox.released',
+    )
+    expect(releases).toHaveLength(1)
+  })
+
+  test('the idle gate still applies to stale-provider environments', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h, { provider: 'other-provider' })
+    h.clock.advance(10 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
+      'orchestrator.sandbox.released',
+    )
+    expect(report.sandboxIdleStops).toBe(0)
   })
 
   test('an absent environment closes the orphan trail with an unconfirmed release fact', async () => {

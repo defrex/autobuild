@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#363](https://github.com/defrex/autobuild/pull/363) — Evict finished detached sandbox commands from git-worktree tracking
+- [#362](https://github.com/defrex/autobuild/pull/362) — Fix stale mcp.test.ts title claiming GET 405 instead of pinned SSE 200
 - [#360](https://github.com/defrex/autobuild/pull/360) — Add ab wait — block until a build reaches a condition (AUT-333)
+- [#361](https://github.com/defrex/autobuild/pull/361) — Close stale-provider sandbox trails with an unconfirmed release at idle settlement
 - [#359](https://github.com/defrex/autobuild/pull/359) — Correct the hosted MCP endpoint header comment: stateless GET serves SSE 200, not 405
 - [#357](https://github.com/defrex/autobuild/pull/357) — Add a bounded wait to the remote build-event reads
 - [#356](https://github.com/defrex/autobuild/pull/356) — Add per-operator credential-free sandboxes behind registry tools
