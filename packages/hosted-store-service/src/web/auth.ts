@@ -1,4 +1,4 @@
-import { betterAuth } from 'better-auth'
+import { betterAuth, type BetterAuthPlugin } from 'better-auth'
 import { jwt, mcp } from 'better-auth/plugins'
 import { Pool } from 'pg'
 import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
@@ -42,6 +42,23 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
     },
     user: { changeEmail: { enabled: false } },
     plugins: [
+      // The pinned 1.4.18 MCP plugin's DCR endpoint writes
+      // `authenticationScheme` but its declared oauthApplication schema
+      // (dist/plugins/oidc-provider/schema.mjs) omits the field, so the
+      // adapter factory's transformInput drops it before either adapter
+      // persists it (verified: a live memory-adapter DCR probe stored a row
+      // with no authenticationScheme). This declaration — at the documented
+      // plugin-schema extension point, merged in by getAuthTables — restores
+      // it, and pairs with the auth-schema v3 column so Postgres DCR
+      // round-trips the field. Patching the plugin is out of scope.
+      {
+        id: 'oauth-application-authentication-scheme',
+        schema: {
+          oauthApplication: {
+            fields: { authenticationScheme: { type: 'string', required: false } },
+          },
+        },
+      } satisfies BetterAuthPlugin,
       // The MCP plugin turns this app into an OAuth 2.1 authorization server
       // and protected resource for /mcp; the jwt companion signs its tokens
       // and serves /api/auth/jwks. The jwks_uri override points discovery at
