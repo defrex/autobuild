@@ -119,6 +119,12 @@ export interface RemoteStoreIdentity {
   protocolVersion: string
 }
 
+/** The bounded-wait window the client requests on event reads and watch
+ * polls (AUT-334): matches the hosted service's documented ceiling. A server
+ * with a smaller ceiling clamps server-side; one that ignores the parameter
+ * answers immediately, which only raises the request rate. */
+export const REMOTE_EVENT_WAIT_SECONDS = 25
+
 export interface RemoteBuildStoreOptions {
   /** Base URL of a store server (e.g. `http://127.0.0.1:4711`); fixed for life. */
   url: string
@@ -303,10 +309,12 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
-  async getEvents(slug: string, sinceSeq = 0): Promise<AbEvent[]> {
+  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+    const params = new URLSearchParams({ since: String(sinceSeq) })
+    if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
     const events = await this.requestJson(
       'GET',
-      `${this.buildPath(slug)}/events?since=${sinceSeq}`,
+      `${this.buildPath(slug)}/events?${params}`,
       eventListSchema,
     )
     return events as unknown as AbEvent[]
@@ -427,10 +435,16 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
+  async getRepoEvents(
+    repo: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<RepositoryEvent[]> {
+    const params = new URLSearchParams({ since: String(sinceSeq) })
+    if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
     const events = await this.requestJson(
       'GET',
-      `${this.repoPath(repo)}/events?since=${sinceSeq}`,
+      `${this.repoPath(repo)}/events?${params}`,
       repositoryEventListSchema,
     )
     return events as unknown as RepositoryEvent[]
@@ -627,7 +641,11 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
-    return pollingSubscribe((since) => this.getEvents(slug, since), opts, onEvent)
+    return pollingSubscribe(
+      (since, pollOpts) => this.getEvents(slug, since, pollOpts),
+      opts,
+      onEvent,
+    )
   }
 
   // ── Streams (SPEC §7.6) ──────────────────────────────────────────────────

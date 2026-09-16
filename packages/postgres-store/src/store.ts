@@ -64,6 +64,14 @@ import {
   streamArtifactInput,
   validateStreamParts,
 } from 'autobuild/store-adapter'
+
+/**
+ * The held-read poll cadence for event waits (AUT-334): a held
+ * `getEvents`/`getRepoEvents` re-queries the database at most once per
+ * second — the hosted per-query budget — so an append by another connection
+ * is observed at the next poll, i.e. within about one second.
+ */
+export const EVENT_WAIT_POLL_MS = 1000
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -329,18 +337,27 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  async getEvents(slug: string, sinceSeq = 0): Promise<AbEvent[]> {
-    if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
-    const rows: Row[] = await this.sql`SELECT * FROM events WHERE build = ${slug}
-      AND seq > ${sinceSeq} ORDER BY seq`
-    return rows.map((row) => ({
-      build: String(row.build),
-      seq: num(row.seq),
-      ts: iso(row.ts),
-      actor: json(row.actor),
-      type: String(row.type),
-      payload: json(row.payload),
-    })) as AbEvent[]
+  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+    const read = async (): Promise<AbEvent[]> => {
+      if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
+      const rows: Row[] = await this.sql`SELECT * FROM events WHERE build = ${slug}
+        AND seq > ${sinceSeq} ORDER BY seq`
+      return rows.map((row) => ({
+        build: String(row.build),
+        seq: num(row.seq),
+        ts: iso(row.ts),
+        actor: json(row.actor),
+        type: String(row.type),
+        payload: json(row.payload),
+      })) as AbEvent[]
+    }
+    return readEventsWithWait({
+      read,
+      waitSeconds: opts?.waitSeconds,
+      // Hosted budget: no held request polls the database faster than once
+      // per second (AUT-334).
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
@@ -784,18 +801,29 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
-    if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
-    const rows: Row[] = await this
-      .sql`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${sinceSeq} ORDER BY seq`
-    return rows.map((row) => ({
-      repo: String(row.repo),
-      seq: num(row.seq),
-      ts: iso(row.ts),
-      actor: json(row.actor),
-      type: String(row.type),
-      payload: json(row.payload),
-    })) as RepositoryEvent[]
+  async getRepoEvents(
+    repo: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<RepositoryEvent[]> {
+    const read = async (): Promise<RepositoryEvent[]> => {
+      if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
+      const rows: Row[] = await this
+        .sql`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${sinceSeq} ORDER BY seq`
+      return rows.map((row) => ({
+        repo: String(row.repo),
+        seq: num(row.seq),
+        ts: iso(row.ts),
+        actor: json(row.actor),
+        type: String(row.type),
+        payload: json(row.payload),
+      })) as RepositoryEvent[]
+    }
+    return readEventsWithWait({
+      read,
+      waitSeconds: opts?.waitSeconds,
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
