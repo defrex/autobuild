@@ -3,6 +3,18 @@ import { jwt, mcp } from 'better-auth/plugins'
 import { Pool } from 'pg'
 import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
+/** The pinned 1.4.18 MCP plugin's provider-metadata endpoint
+ * (getMCPProviderMetadata, backing /.well-known/oauth-authorization-server)
+ * hardcodes jwks_uri `<baseURL>/mcp/jwks` — an endpoint that does not exist —
+ * and then spreads the TOP-LEVEL `metadata` of the options it receives, but
+ * MCPOptions omits the field: its declared shape only carries it under
+ * oidcConfig, which flows to the protected-resource document alone
+ * (getMCPProtectedResourceMetadata reads oidcConfig?.metadata). The runtime
+ * test in auth.test.ts pins this plugin behavior. */
+type McpPluginOptions = Parameters<typeof mcp>[0] & {
+  metadata?: { jwks_uri: string }
+}
+
 /** Admission policy is deliberately exported so provider callbacks can be
  * tested without OAuth or a database. */
 export function admittedUser<T extends { email: string }>(
@@ -20,6 +32,31 @@ export interface CreateWebAuthOptions {
   /** Test hook: shorten the MCP access-token life so the refresh flow can be
    * driven end to end without waiting out the production hour. */
   accessTokenExpiresIn?: number
+}
+
+/** The MCP plugin's options, carrying the jwks_uri override through BOTH
+ * channels the pinned plugin reads (see McpPluginOptions for the seam).
+ * Extracted so the shape stays a typed value — no cast, so excess-property
+ * checking still rejects unknown fields. */
+function mcpPluginOptions(
+  config: ReturnType<typeof parseWebAuthEnv>,
+  options?: CreateWebAuthOptions,
+): McpPluginOptions {
+  return {
+    loginPage: '/sign-in',
+    resource: config.mcpResource,
+    metadata: { jwks_uri: `${config.baseURL}/api/auth/jwks` },
+    oidcConfig: {
+      loginPage: '/sign-in',
+      consentPage: '/oauth/consent',
+      useJWTPlugin: true,
+      allowDynamicClientRegistration: true,
+      metadata: { jwks_uri: `${config.baseURL}/api/auth/jwks` },
+      ...(options?.accessTokenExpiresIn !== undefined
+        ? { accessTokenExpiresIn: options.accessTokenExpiresIn }
+        : {}),
+    },
+  }
 }
 
 export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuthOptions) {
@@ -61,24 +98,19 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       } satisfies BetterAuthPlugin,
       // The MCP plugin turns this app into an OAuth 2.1 authorization server
       // and protected resource for /mcp; the jwt companion signs its tokens
-      // and serves /api/auth/jwks. The jwks_uri override points discovery at
-      // the endpoint that actually exists (the plugin would otherwise
-      // advertise <baseURL>/mcp/jwks).
+      // and serves /api/auth/jwks. The pinned plugin would advertise the
+      // nonexistent <baseURL>/mcp/jwks in both metadata documents, so the
+      // jwks_uri override is fed through BOTH channels the plugin reads:
+      // getMCPProviderMetadata (authorization-server document) spreads the
+      // top-level `metadata` of these options, while
+      // getMCPProtectedResourceMetadata (protected-resource document) reads
+      // oidcConfig?.metadata. Both carry the same value — the endpoint that
+      // actually exists — so the two documents agree; if a future plugin
+      // version reads the other channel, the same value still flows, and if
+      // the top-level spread disappears, the auth.test.ts regression test
+      // fails loudly instead of silently re-advertising /mcp/jwks.
       jwt(),
-      mcp({
-        loginPage: '/sign-in',
-        resource: config.mcpResource,
-        oidcConfig: {
-          loginPage: '/sign-in',
-          consentPage: '/oauth/consent',
-          useJWTPlugin: true,
-          allowDynamicClientRegistration: true,
-          metadata: { jwks_uri: `${config.baseURL}/api/auth/jwks` },
-          ...(options?.accessTokenExpiresIn !== undefined
-            ? { accessTokenExpiresIn: options.accessTokenExpiresIn }
-            : {}),
-        },
-      }),
+      mcp(mcpPluginOptions(config, options)),
     ],
     socialProviders: {
       github: {
