@@ -1,4 +1,7 @@
-import { createHostedStoreService, parseHostedStoreEnv } from '@autobuild/hosted-store-service'
+import {
+  createHostedStoreService,
+  parseHostedStoreEnv,
+} from '@defrex/autobuild-hosted-store-service'
 
 const config = parseHostedStoreEnv(process.env)
 const service = createHostedStoreService({ env: process.env })

@@ -1,5 +1,6 @@
 import semver from 'semver'
 import type { ExecResult } from '../ports/workspace/git-worktree'
+import { registryBaseUrl, registryVersionUrl } from '../registry'
 import { defaultDistRoot } from './init'
 import { addUpgradeSelfUpdatePaths, UPGRADE_COMMIT_CONTEXT_ENV } from './upgrade-commit'
 import {
@@ -7,6 +8,7 @@ import {
   readDistributionIdentity,
   type BunForgeInstallation,
   type DistributionIdentity,
+  type ManagedInstallation,
 } from './installation'
 
 export const SELF_UPDATE_HANDOFF_ENV = 'AB_SELF_UPDATE_HANDOFF'
@@ -27,6 +29,45 @@ export type SelfUpdateResult =
   | { kind: 'handoff'; exitCode: number }
   | { kind: 'failed' }
 
+/** Registry metadata read seam: one GET returning status and body text. */
+export type RegistryLookup = (
+  url: string,
+  options: { signal?: AbortSignal },
+) => Promise<{ status: number; body: string }>
+
+export { registryBaseUrl, registryVersionUrl } from '../registry'
+
+const fetchRegistry: RegistryLookup = async (url, options) => {
+  const response = await fetch(url, {
+    headers: { accept: 'application/json' },
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
+  return { status: response.status, body: await response.text() }
+}
+
+/** Parse a registry version document into its exact semver version. */
+export function registryVersion(response: { status: number; body: string }): string {
+  if (response.status !== 200) {
+    throw new Error(`npm registry returned HTTP ${response.status}`)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(response.body)
+  } catch (error) {
+    throw new Error(
+      `npm registry returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  const version =
+    typeof parsed === 'object' && parsed !== null && 'version' in parsed
+      ? (parsed as { version?: unknown }).version
+      : undefined
+  if (typeof version !== 'string' || semver.valid(version) !== version) {
+    throw new Error('npm registry document has no exact semver version')
+  }
+  return version
+}
+
 export interface SelfUpdateOptions {
   targetRepo: string
   version?: string
@@ -35,6 +76,8 @@ export interface SelfUpdateOptions {
   stdout: (line: string) => void
   stderr: (line: string) => void
   command?: SelfUpdateCommand
+  /** Registry read seam for npm-channel installs. */
+  registry?: RegistryLookup
   /** Baseline captured before this function may rewrite a local owner project. */
   upgradeCommitContextPath?: string
   /** Forward the operator's commit opt-out to the replacement binary. */
@@ -140,6 +183,51 @@ export interface AvailableReleaseOptions {
   distRoot?: string
   signal?: AbortSignal
   command?: SelfUpdateCommand
+  registry?: RegistryLookup
+  env?: Record<string, string | undefined>
+}
+
+/** Resolve a published version for a managed install: the GitHub Release for
+ * a `github:` forge install, or the registry version document for an npm
+ * install. Throws on any lookup or parse failure. */
+async function publishedVersion(
+  install: ManagedInstallation,
+  requested: string | undefined,
+  seams: {
+    command: SelfUpdateCommand
+    registry: RegistryLookup
+    env: Record<string, string | undefined> | undefined
+    signal?: AbortSignal
+  },
+): Promise<string> {
+  if (install.channel === 'github') {
+    const release = await seams.command(['gh', 'api', releaseApiPath(install, requested)], {
+      ...(seams.signal === undefined ? {} : { signal: seams.signal }),
+    })
+    if (release.exitCode !== 0) {
+      throw new Error(commandFailure('resolving the GitHub release', release))
+    }
+    const resolved = releaseVersion(release.stdout)
+    if (requested !== undefined && resolved !== requested) {
+      throw new Error(`GitHub returned v${resolved} for requested release v${requested}`)
+    }
+    return resolved
+  }
+  const url = registryVersionUrl(registryBaseUrl(seams.env), install.packageName, requested)
+  const resolved = registryVersion(
+    await seams.registry(url, seams.signal === undefined ? {} : { signal: seams.signal }),
+  )
+  if (requested !== undefined && resolved !== requested) {
+    throw new Error(`npm registry returned ${resolved} for requested version ${requested}`)
+  }
+  return resolved
+}
+
+/** The specifier Bun installs for a resolved version on the install's channel. */
+export function updateDependency(install: ManagedInstallation, version: string): string {
+  return install.channel === 'github'
+    ? `github:${install.owner}/${install.repository}#v${version}`
+    : `${install.packageName}@${version}`
 }
 
 /** Silently determine whether this installation has a newer published release.
@@ -149,6 +237,7 @@ export async function availableRelease(
   options: AvailableReleaseOptions = {},
 ): Promise<string | undefined> {
   const command = options.command ?? processCommand
+  const registry = options.registry ?? fetchRegistry
   try {
     if (signalAborted(options.signal)) return undefined
     const distRoot = options.distRoot ?? defaultDistRoot()
@@ -168,13 +257,20 @@ export async function availableRelease(
       distRoot,
       globalBin: globalBin.stdout.trim(),
     })
-    if (inspection.kind !== 'bun-forge' || signalAborted(options.signal)) return undefined
+    if (
+      (inspection.kind !== 'bun-forge' && inspection.kind !== 'npm-registry') ||
+      signalAborted(options.signal)
+    ) {
+      return undefined
+    }
     const install = inspection.installation
-    const release = await command(['gh', 'api', releaseApiPath(install)], {
-      signal: options.signal,
+    const published = await publishedVersion(install, undefined, {
+      command,
+      registry,
+      env: options.env,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
-    if (release.exitCode !== 0 || signalAborted(options.signal)) return undefined
-    const published = releaseVersion(release.stdout)
+    if (signalAborted(options.signal)) return undefined
     return semver.gt(published, install.version) ? published : undefined
   } catch {
     return undefined
@@ -186,6 +282,7 @@ export async function availableRelease(
  * one legal continuation: a fresh process from the replaced distribution. */
 export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdateResult> {
   const command = options.command ?? processCommand
+  const registry = options.registry ?? fetchRegistry
   const invoke: SelfUpdateCommand = async (argv, commandOptions) => {
     try {
       return await command(argv, commandOptions)
@@ -232,33 +329,21 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
     distRoot,
     globalBin: globalBinResult.stdout.trim(),
   })
-  if (inspection.kind !== 'bun-forge') {
+  if (inspection.kind !== 'bun-forge' && inspection.kind !== 'npm-registry') {
     return explicit ? fail(options, inspection.reason) : warn(options, inspection.reason)
   }
   const install = inspection.installation
 
-  const apiPath = releaseApiPath(install, requested)
-  const release = await invoke(['gh', 'api', apiPath], {})
-  if (release.exitCode !== 0) {
-    const reason = commandFailure(
-      `resolving ${requested === undefined ? 'latest' : `v${requested}`} release`,
-      release,
-    )
-    if (explicit) {
-      options.stderr(`self-update failed: ${reason}`)
-      return { kind: 'failed' }
-    }
-    return warn(options, reason)
-  }
-
   let resolved: string
   try {
-    resolved = releaseVersion(release.stdout)
-    if (requested !== undefined && resolved !== requested) {
-      throw new Error(`GitHub returned v${resolved} for requested release v${requested}`)
-    }
+    resolved = await publishedVersion(install, requested, {
+      command: invoke,
+      registry,
+      env: options.env,
+    })
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
+    const detail = error instanceof Error ? error.message : String(error)
+    const reason = `resolving ${requested === undefined ? 'latest' : `v${requested}`} release: ${detail}`
     if (explicit) {
       options.stderr(`self-update failed: ${reason}`)
       return { kind: 'failed' }
@@ -275,7 +360,7 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
     return { kind: 'continue' }
   }
 
-  const dependency = `github:${install.owner}/${install.repository}#v${resolved}`
+  const dependency = updateDependency(install, resolved)
   let updateCommand: string[]
   if (install.scope === 'global') {
     options.stdout(`Updating Autobuild's global Bun installation to v${resolved}.`)

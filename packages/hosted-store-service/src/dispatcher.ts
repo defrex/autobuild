@@ -26,11 +26,11 @@
  * operator servers.
  */
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { normalizeGitRemoteUrl } from 'autobuild/origin'
-import type { Clock } from 'autobuild/plugin-sdk'
-import { spawnExec } from 'autobuild/git-worktree'
-import { abDispatch, type DispatchOpts } from 'autobuild/cli'
-import { mintToken } from 'autobuild/remote-store'
+import { normalizeGitRemoteUrl } from '@defrex/autobuild/origin'
+import type { Clock } from '@defrex/autobuild/plugin-sdk'
+import { spawnExec } from '@defrex/autobuild/git-worktree'
+import { abDispatch, type DispatchOpts } from '@defrex/autobuild/cli'
+import { mintToken } from '@defrex/autobuild/remote-store'
 import { parseHostedStoreEnv, type HostedStoreEnv } from './config'
 
 /** The service environment the dispatcher reads. Secrets are only ever taken

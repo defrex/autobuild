@@ -3,6 +3,18 @@
 ## Unreleased
 
 - [#379](https://github.com/defrex/autobuild/pull/379) — Fix the MCP plugin's metadata typing gap; drop the workaround
+- [#378](https://github.com/defrex/autobuild/pull/378) — Make `ab wait` long-poll on remote stores (AUT-368)
+
+## v0.8.0 — 2026-09-16
+
+This release moves the Autobuild CLI onto npm as the scoped package @defrex/autobuild, with web dependencies split out of core and extensions now resolved from the installation itself. The ab upgrade command and guest tarballs are sourced from the registry, and each release ends with a bun publish step. Existing installs that came from GitHub migrate once by removing the old global package and adding @defrex/autobuild in its place.
+
+- [#377](https://github.com/defrex/autobuild/pull/377) — Distribute the CLI as `@defrex/autobuild` on npm: scoped package names, web dependencies out of core, extensions resolved from the installation, registry-based `ab upgrade`, registry guest tarballs, and `bun publish` at the end of a release. Existing `github:` installs migrate once with `bun remove -g autobuild && bun add -g @defrex/autobuild`.
+
+## v0.7.0 — 2026-09-16
+
+This release moves Autobuild off the developer's machine: builds now run in Vercel Sandbox with configured runtime provisioning, failure-safe recovery, and cleanup, while a hosted dispatcher runs on a per-minute cron with per-repository forge credentials, sandboxed harvest, and a serverless PostgreSQL store behind an authenticated hosted service. The core was restructured into a Bun workspace with a new BuildStore stream primitive, operator sessions, and every build session streamed as AI SDK UI message parts, which power a live read-only session view and the new ab watch and ab wait commands. An agent tool registry is exposed over MCP both on stdio and as a hosted endpoint secured with Better Auth OAuth, backed by per-operator credential-free sandboxes. The web dashboard gained authenticated hosting, a versioned operator control API, and a round of design refinements, and the auto-merge gate now handles unknown, dirty, and unprotected-branch states correctly.
+
 - [#375](https://github.com/defrex/autobuild/pull/375) — Give EVENT_WAIT_POLL_MS a single canonical definition by importing the core constant in the Postgres store
 - [#374](https://github.com/defrex/autobuild/pull/374) — Tolerate scheduler jitter in remote teardown poll-count assertion
 - [#373](https://github.com/defrex/autobuild/pull/373) — Pace memory store's held event reads at the event-wait budget
@@ -19,6 +31,7 @@
 - [#360](https://github.com/defrex/autobuild/pull/360) — Add ab wait — block until a build reaches a condition (AUT-333)
 - [#361](https://github.com/defrex/autobuild/pull/361) — Close stale-provider sandbox trails with an unconfirmed release at idle settlement
 - [#359](https://github.com/defrex/autobuild/pull/359) — Correct the hosted MCP endpoint header comment: stateless GET serves SSE 200, not 405
+- [#358](https://github.com/defrex/autobuild/pull/358) — Wire the hosted live suites into the test-postgres step
 - [#357](https://github.com/defrex/autobuild/pull/357) — Add a bounded wait to the remote build-event reads
 - [#356](https://github.com/defrex/autobuild/pull/356) — Add per-operator credential-free sandboxes behind registry tools
 - [#355](https://github.com/defrex/autobuild/pull/355) — Serve the tool registry over hosted MCP with Better Auth OAuth
@@ -119,6 +132,21 @@
 - [#238](https://github.com/defrex/autobuild/pull/238) — Keep plugin SDK tests compatible with isolated installs
 - [#237](https://github.com/defrex/autobuild/pull/237) — Document the Bun workspace migration
 - [#236](https://github.com/defrex/autobuild/pull/236) — Move Autobuild's core implementation into the private `packages/core` Bun workspace while retaining the root package as the compatibility distribution
+- Bump the Postgres BuildStore schema to v6 so a deployed v5 database migrates
+- Let a bundled hosted dispatcher provision sandboxes
+- Authenticate hosted sandbox calls with the request's OIDC token
+- Log every hosted dispatcher invocation to the runtime logs
+- Resolve the distribution root without import.meta.dir
+- Recognize GitHub's unprotected-branch response in the auto-merge gate probe
+- Delete a Vercel sandbox even when its stop call times out
+- List Vercel Sandbox snapshots with the API's maximum page size
+- Survive interrupted wait long-polls on Vercel Sandbox executions
+- Launch a build through the runtime that owns its workspace
+- Reap and release workspaces only through their owning provider
+- Locate the Vercel sandbox checkout through the session cwd
+- Document safe staging for tickets with blockers
+- Run the database migration inside the hosted deploy build
+- Accept DATABASE_URL and make the hosted service deployable on Vercel
 
 ## v0.6.0 — 2026-08-28
 

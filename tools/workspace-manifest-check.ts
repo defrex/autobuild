@@ -126,8 +126,8 @@ export async function validateWorkspaceManifests(root: string): Promise<Workspac
     }
   }
 
-  const core = manifests.find((entry) => entry.manifest.name === '@autobuild/core')
-  if (core === undefined) throw new Error('workspace @autobuild/core is required')
+  const core = manifests.find((entry) => entry.manifest.name === '@defrex/autobuild-core')
+  if (core === undefined) throw new Error('workspace @defrex/autobuild-core is required')
   const rootDependencies = stringMap(
     rootManifest.manifest.dependencies,
     'package.json dependencies',

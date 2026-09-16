@@ -34,9 +34,9 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import type { ToolEntry } from 'autobuild/operator-api'
-import { OperatorApiClient, OperatorApiError, TOOLS } from 'autobuild/operator-api'
-import { AUTOBUILD_VERSION, mintToken } from 'autobuild/remote-store'
+import type { ToolEntry } from '@defrex/autobuild/operator-api'
+import { OperatorApiClient, OperatorApiError, TOOLS } from '@defrex/autobuild/operator-api'
+import { AUTOBUILD_VERSION, mintToken } from '@defrex/autobuild/remote-store'
 import { isAllowedEmail, normalizeEmail } from './config'
 import type { WebAuth } from './auth'
 import type { WebAuthConfig } from './config'

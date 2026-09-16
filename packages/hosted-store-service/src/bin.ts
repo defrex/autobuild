@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { mintToken } from 'autobuild/remote-store'
-import { writePrebuiltDistributionArchive } from 'autobuild/distribution'
+import { mintToken } from '@defrex/autobuild/remote-store'
+import { writePrebuiltDistributionArchive } from '@defrex/autobuild/distribution'
 
 const USAGE = `Usage:
   ab-hosted-store mint operator (--ttl-seconds N | --expires-at ISO-8601)

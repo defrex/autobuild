@@ -787,6 +787,12 @@ export async function packageAutobuildDistribution(): Promise<Uint8Array> {
       )
     }
     for (const entry of files as string[]) {
+      // npm `files` entries may be negated globs (for example
+      // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
+      // published package). Only positive entries name a path to stage: the
+      // negations stay in the staged manifest and `bun pm pack` applies them,
+      // so the packed set still excludes those paths.
+      if (entry.startsWith('!')) continue
       const target = join(staging, entry)
       await mkdir(dirname(target), { recursive: true })
       await cp(join(distributionRoot(), entry), target, {

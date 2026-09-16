@@ -1,5 +1,5 @@
 import { GetObjectCommand, NoSuchKey, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
-import type { BlobStore } from 'autobuild/plugin-sdk'
+import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
 
 export interface S3BlobStoreOptions {
   client: Pick<S3Client, 'send'>

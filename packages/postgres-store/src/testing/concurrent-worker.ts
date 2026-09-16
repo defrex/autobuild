@@ -1,4 +1,4 @@
-import { MemoryBlobStore, sampleEventWrite } from 'autobuild/plugin-sdk'
+import { MemoryBlobStore, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
 import { openPostgresBuildStore } from '../store'
 
 async function main(): Promise<void> {

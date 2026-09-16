@@ -241,9 +241,12 @@ under the preceding table.
 
 Repository-path specifiers resolve from the config-bearing root, which is the
 immutable build worktree in scoped phases. npm package specifiers resolve from
-the consuming main checkout's installed dependencies, independent of local
-store/worktree placement; missing packages fail and are never installed
-automatically. Specifier strings must be unique: an exact repeat fails config
+the consuming main checkout's installed dependencies first, then from the
+Autobuild installation the CLI runs from, so an extension installed next to
+the CLI (`bun add -g @defrex/autobuild-<extension>`) loads without being added
+to the repository; a repository copy wins over an installed one, and missing
+packages fail and are never installed automatically. Specifier strings must be
+unique: an exact repeat fails config
 validation before resolution or evaluation, identifies the repeated value and
 both positions, and tells the operator to remove or deduplicate it. Distinct
 specifiers remain separate declarations; if they register the same adapter
@@ -874,10 +877,11 @@ It works outside a repository, needs no config or `AB_*` session, and performs
 no network request.
 
 **`ab upgrade <target> [--no-self-update | --version <semver>]`** updates only
-when explicitly invoked. By default it resolves the latest full GitHub Release
-from the repository recorded by the running Bun forge install (including a
-fork), installs it with the matching local/global Bun mechanism, then hands off
-to that replacement binary. The fresh process therefore supplies both skill
+when explicitly invoked. By default it resolves the latest published version on
+the installation's channel — the npm registry for a registry install, or the
+latest full GitHub Release from the repository recorded by a Bun forge install
+(including a fork) — installs it with the matching local/global Bun mechanism,
+then hands off to that replacement binary. The fresh process therefore supplies both skill
 defaults and merge logic. `--version` selects an exact release, including an
 older one; `--no-self-update` merges against the installed distribution. Source
 checkouts are never mutated and still merge installed skills, even with an

@@ -10,7 +10,7 @@ import {
   sampleEventWrite,
   type BlobStore,
   type StreamPart,
-} from 'autobuild/plugin-sdk'
+} from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
 import { EVENT_WAIT_POLL_MS, openPostgresBuildStore } from './store'
 

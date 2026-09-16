@@ -5,8 +5,8 @@ import {
   describeBuildStoreContract,
   sampleBuildInput,
   systemClock,
-} from 'autobuild/plugin-sdk'
-import { AuthError, RemoteBuildStore, mintToken } from 'autobuild/remote-store'
+} from '@defrex/autobuild/plugin-sdk'
+import { AuthError, RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
 import { humanActor, type Via } from '../../core/src/events/envelope'
 import { migratePostgres } from '../../postgres-store/src/schema'
 import { openPostgresBuildStore } from '../../postgres-store/src/store'

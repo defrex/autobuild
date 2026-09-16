@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { OperatorBuildControlRequest } from 'autobuild/operator-api'
+import type { OperatorBuildControlRequest } from '@defrex/autobuild/operator-api'
 import type { Selection } from './BuildsView'
 import {
   answerModeKeyAction,
