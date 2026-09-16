@@ -21,13 +21,17 @@
  * re-implemented here.
  */
 import type { ZodType } from 'zod'
-import { EventValidationError, type EventWrite } from '../../events/catalog'
-import type { RepositoryEventWrite } from '../../events/repository'
+import { EventValidationError, type AbEvent, type EventWrite } from '../../events/catalog'
+import type { RepositoryEvent, RepositoryEventWrite } from '../../events/repository'
 import type { SessionEventWrite } from '../../events/sessions'
 import type { Via } from '../../events/envelope'
 import { systemClock, type BuildStore, type Clock } from '../types'
 import type { StreamOutcome, StreamPart, StreamScope } from '../streams/types'
-import { StreamBatchTooLargeError, StreamClosedError } from '../streams/types'
+import {
+  MAX_STREAM_WAIT_SECONDS,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+} from '../streams/types'
 import {
   appendStreamBodySchema,
   closeStreamBodySchema,
@@ -63,6 +67,11 @@ export interface StoreServerOptions {
   clock?: Clock
   /** Maximum decoded size of each artifact. Unlimited when omitted. */
   maxArtifactBytes?: number
+  /** Ceiling for a held event read (`wait` on the two event routes), in
+   * whole seconds. Larger requested values clamp to this, never reject;
+   * the default is the stream-wait ceiling (30). Hosted deployments set a
+   * smaller ceiling to fit the routes' function-duration limit. */
+  maxEventWaitSeconds?: number
   /** Observes unexpected backing-store failures without changing their wire response. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
@@ -122,6 +131,28 @@ function intParam(url: URL, name: string): number | undefined {
   return value
 }
 
+/**
+ * The `wait` parameter's own grammar (AUT-334): one or more ASCII digits —
+ * deliberately stricter than the lenient `since`/`rev` parse above; anything
+ * else (empty, whitespace, hex, signs, decimals) is `400 validation`. Values
+ * above the server's documented ceiling clamp to it; magnitudes beyond a
+ * safe integer are simply above the ceiling. Absence is the immediate form.
+ */
+function digitsParam(url: URL, name: string, ceiling: number): number | undefined {
+  const raw = url.searchParams.get(name)
+  if (raw === null) return undefined
+  if (!/^[0-9]+$/.test(raw)) {
+    throw new RequestError(
+      400,
+      'validation',
+      `query parameter "${name}" must be a whole number of seconds, got "${raw}"`,
+    )
+  }
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value > ceiling) return ceiling
+  return value
+}
+
 function streamScopesEqual(a: StreamScope, b: StreamScope): boolean {
   return (
     a.kind === b.kind &&
@@ -136,6 +167,7 @@ function streamScopesEqual(a: StreamScope, b: StreamScope): boolean {
 export function createStoreServer(opts: StoreServerOptions): StoreServer {
   const { store } = opts
   const clock = opts.clock ?? systemClock
+  const maxEventWaitSeconds = opts.maxEventWaitSeconds ?? MAX_STREAM_WAIT_SECONDS
 
   /**
    * D8 gate. `buildScope` is the slug being addressed, or `'*'` for admin
@@ -313,8 +345,20 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const actor = enforceVia(scope, body.actor)
         return json(201, await store.appendRepo(repo, { ...body, actor } as RepositoryEventWrite))
       }
-      case 'GET events':
-        return json(200, await store.getRepoEvents(repo, intParam(url, 'since') ?? 0))
+      case 'GET events': {
+        const since = intParam(url, 'since') ?? 0
+        const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
+        return json(
+          200,
+          await withDisconnect(
+            req,
+            store.getRepoEvents(repo, since, {
+              ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            }),
+            (): RepositoryEvent[] => [],
+          ),
+        )
+      }
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
         authorizeSession(scope, body.event.actor)
@@ -516,7 +560,18 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
-        return json(200, await store.getEvents(slug, intParam(url, 'since') ?? 0))
+        const since = intParam(url, 'since') ?? 0
+        const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
+        return json(
+          200,
+          await withDisconnect(
+            req,
+            store.getEvents(slug, since, {
+              ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            }),
+            (): AbEvent[] => [],
+          ),
+        )
       }
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
@@ -739,6 +794,29 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
     }
     return buildRoute(req, url, slug, segments.slice(2).join('/'), scope)
+  }
+
+  /** A held read must not outlive its client. When the peer disconnects, Bun
+   * keeps the handler promise pending — which would stall `server.stop()` —
+   * so a held read races the request's abort signal and resolves empty; the
+   * response to a disconnected client is discarded either way. */
+  function withDisconnect<T>(req: Request, read: Promise<T>, empty: () => T): Promise<T> {
+    const signal = req.signal
+    if (signal.aborted) return Promise.resolve(empty())
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => resolve(empty())
+      signal.addEventListener('abort', onAbort, { once: true })
+      read.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort)
+          resolve(value)
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+      )
+    })
   }
 
   function errorResponse(error: unknown): Response {

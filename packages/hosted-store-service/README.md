@@ -87,6 +87,16 @@ Each artifact is content-by-value and limited to **1,048,576 decoded bytes (1
 MiB)**. Base64 and JSON make the HTTP body larger. A larger deposit receives a
 JSON 413 error naming that ceiling and does not mutate the store.
 
+Each event read also accepts a bounded wait (`?since=N&wait=S` on the build and
+repository event routes): when nothing newer than `since` exists, the server
+holds the request until such an event is appended or `S` seconds elapse, then
+answers. `wait` is one or more ASCII digits (whole seconds); any other form is a
+400 validation error, and a value above the hosted ceiling of **25 seconds** is
+clamped to 25, never rejected. The ceiling must stay under the machine routes'
+`maxDuration` of 60 s (`app/builds/[[...path]]/route.ts` and
+`app/repos/[[...path]]/route.ts`), which exists to cover the hold; raise the
+two together if you change either.
+
 ## Deploy to Vercel
 
 1. Import this repository and select its repository root as the project root.

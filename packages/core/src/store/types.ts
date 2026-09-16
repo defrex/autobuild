@@ -173,8 +173,16 @@ export type Unsubscribe = () => void
 export interface SubscribeOptions {
   /** Deliver events with seq strictly greater than this (default 0 = all). */
   fromSeq?: number
-  /** Poll interval for the v2.0 polling implementation (§7.2). */
+  /** Poll interval for the v2.0 polling implementation (§7.2). In bounded-wait
+   * mode (`waitSeconds` set) it is the floor between request *starts* —
+   * elapsed request time counts toward the gap. */
   pollMs?: number
+  /** Bounded-wait window in whole seconds. When set against a store whose
+   * event reads honor the bound (an `http(s)` store's server holds the
+   * request), each poll cycle issues one held request instead of polling
+   * every `pollMs`; delivery latency drops to about one server-side poll.
+   * The adapter clamps at its own ceiling; it never rejects. */
+  waitSeconds?: number
 }
 
 export interface BuildStore {
@@ -229,8 +237,24 @@ export interface BuildStore {
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }>
 
-  /** Events with seq strictly greater than `sinceSeq` (default 0), in order. */
-  getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
+  /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
+   * When nothing newer exists and `opts.waitSeconds` is given (whole
+   * seconds; clamped at the adapter's ceiling, never rejected), the adapter
+   * honors the bound: it returns no later than the bound and as soon as an
+   * event with `seq > sinceSeq` is appended; when such events already exist
+   * it returns immediately. Omitting `waitSeconds` (or 0) is the immediate
+   * form.
+   *
+   * `opts.signal` lets a caller cancel the held read before its bound (a
+   * watcher torn down mid-hold). An adapter MAY return early — rejecting
+   * with the abort or resolving empty — when the signal fires; it MUST NOT
+   * wait past the bound because of it, and ignoring the signal entirely is
+   * conforming (local adapters' holds are short). */
+  getEvents(
+    slug: string,
+    sinceSeq?: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]>
 
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>
   /** Latest revision when `rev` is omitted; null if kind (or rev) absent. */
@@ -272,8 +296,14 @@ export interface BuildStore {
   }>
   /** Same atomic-deposit and ordering contracts as `appendWithArtifacts`:
    * the batch event is validated before any retention prune of artifacts in
-   * the same deposit batch (AUT-322), and an invalid event leaves no trace. */
-  getRepoEvents(repo: string, sinceSeq?: number): Promise<RepositoryEvent[]>
+   * the same deposit batch (AUT-322), and an invalid event leaves no trace.
+   * The optional bounded wait mirrors `getEvents` exactly, including the
+   * cancellation signal's may-return-early rule. */
+  getRepoEvents(
+    repo: string,
+    sinceSeq?: number,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<RepositoryEvent[]>
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>

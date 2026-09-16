@@ -201,3 +201,69 @@ test('ab mcp fails closed inside a phase session, before any MCP traffic', async
   expect(malformedErr).toContain('cannot run inside a phase session')
   expect(malformedOut).toBe('')
 })
+
+test('with [orchestrator] enabled the six sandbox tools advertise and one round trip works', async () => {
+  // A real local git checkout with a main branch: the git-worktree sandbox
+  // provisions a detached worktree from it.
+  const gitInit = Bun.spawn(['git', 'init', '-q', '-b', 'main', '.'], {
+    cwd: tmp,
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
+  if ((await gitInit.exited) !== 0) throw new Error('git init failed')
+  const commit = Bun.spawn(
+    [
+      'git',
+      '-c',
+      'user.email=ab@test.invalid',
+      '-c',
+      'user.name=ab-test',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'seed',
+    ],
+    { cwd: tmp, env: bareEnv(), stdout: 'ignore', stderr: 'ignore' },
+  )
+  if ((await commit.exited) !== 0) throw new Error('git commit failed')
+  await Bun.write(
+    join(tmp, 'autobuild.toml'),
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[orchestrator]\nenabled = true\n',
+  )
+  await seed()
+  const client = await connect()
+  try {
+    const { tools } = await client.listTools()
+    expect(tools).toHaveLength(TOOL_NAMES + 6)
+    const names = tools.map((tool) => tool.name).sort()
+    for (const name of [
+      'sandbox.exec',
+      'sandbox.start',
+      'sandbox.wait',
+      'sandbox.read_file',
+      'sandbox.write_file',
+      'sandbox.reset',
+    ]) {
+      expect(names).toContain(name)
+    }
+    const exec = tools.find((tool) => tool.name === 'sandbox.exec')!
+    expect(exec.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false })
+    const reset = tools.find((tool) => tool.name === 'sandbox.reset')!
+    expect(reset.annotations).toMatchObject({ destructiveHint: true })
+
+    const roundTrip = await client.callTool({
+      name: 'sandbox.exec',
+      arguments: { repo: await realpath(tmp), command: 'echo round-trip' },
+    })
+    expect(roundTrip.isError).toBeUndefined()
+    const body = JSON.parse((roundTrip.content as { text: string }[])[0]!.text) as {
+      exitCode: number
+      stdout: string
+    }
+    expect(body).toMatchObject({ exitCode: 0 })
+    expect(body.stdout).toContain('round-trip')
+  } finally {
+    await client.close()
+  }
+})

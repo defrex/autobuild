@@ -74,6 +74,7 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from './in
 import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
 import { openHarvestExecutions } from './harvest-execution-state'
 import type { RepositoryEvent } from '../events/repository'
+import { sandboxStates } from './sandbox-state'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
 import { settlePublicationBeforeRelease } from './publication-loss'
 
@@ -344,6 +345,10 @@ export interface TickReport {
   harvestCompleted: number
   harvestEscalated: number
   harvestFailed: number
+  /** Operator sandboxes idly stopped this tick (AUT-340). */
+  sandboxIdleStops: number
+  /** Contained idle-settlement failures this tick; retried next tick. */
+  sandboxSettleFailures: number
 }
 
 export function emptyTickReport(): TickReport {
@@ -378,6 +383,8 @@ export function emptyTickReport(): TickReport {
     harvestCompleted: 0,
     harvestEscalated: 0,
     harvestFailed: 0,
+    sandboxIdleStops: 0,
+    sandboxSettleFailures: 0,
   }
 }
 
@@ -682,6 +689,8 @@ export class Dispatcher {
     if (this.outOfBudget(opts)) return report
     await this.settleHarvestExecutions(opts)
     if (this.outOfBudget(opts)) return report
+    await this.settleOrchestratorSandboxes(report, opts)
+    if (this.outOfBudget(opts)) return report
     await this.janitor(report, launched, opts)
     if (this.outOfBudget(opts)) return report
     await this.recoverDispatches(report, launched, paused, opts)
@@ -893,6 +902,89 @@ export class Dispatcher {
       } catch {
         // An unobservable harvest execution must not stall the rest of the
         // settlement stage; the next tick retries it.
+      }
+    }
+  }
+
+  /** Durable idle settlement for operator sandboxes (AUT-340), staged after
+   * harvest settlement: every journal-live environment whose latest evidence
+   * is older than `[orchestrator].sandbox.idleMinutes` is stopped through the
+   * provider (snapshot kept) and closed with a dispatcher-authored fact.
+   * Because activity evidence is durably journaled, this one rule also
+   * settles the orphan case — a dead `ab mcp` process stops appending
+   * activity, so the next tick idles its environment out, exactly as harvest
+   * executions are settled. The stage is a no-op unless `[orchestrator]` is
+   * enabled and the wired provider hosts the capability; `unsupported`
+   * providers (local worktrees) are skipped silently. */
+  private async settleOrchestratorSandboxes(
+    report: TickReport,
+    opts: TickOpts = {},
+  ): Promise<void> {
+    const config = this.deps.config
+    if (config.orchestrator?.enabled !== true) return
+    const capability = this.deps.workspaces.orchestratorSandbox
+    if (capability === undefined) return
+    const providerName = this.deps.workspaces.name
+    let events: RepositoryEvent[]
+    try {
+      events = await this.repositoryEvents()
+    } catch {
+      // A repository with no journal yet has nothing to settle.
+      return
+    }
+    const idleMs = config.orchestrator.sandbox.idleMinutes * 60_000
+    for (const environment of sandboxStates(events)) {
+      if (environment.state !== 'live') continue
+      if (environment.provider !== providerName) continue
+      // Budget gate: once spent, stop settling further environments; the
+      // next tick retries what remains.
+      if (this.outOfBudget(opts)) break
+      const lastEvidence = Date.parse(environment.lastEvidenceTs)
+      if (Number.isFinite(lastEvidence) && this.deps.clock().getTime() - lastEvidence < idleMs) {
+        continue
+      }
+      try {
+        const outcome = await capability.stop({
+          operator: environment.operator,
+          environmentId: environment.environmentId,
+        })
+        if (outcome.outcome === 'unsupported') continue
+        if (outcome.outcome === 'stopped') {
+          await this.deps.store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'orchestrator.sandbox.stopped',
+            payload: {
+              operator: environment.operator,
+              environmentId: environment.environmentId,
+              reason: 'idle',
+            },
+          })
+          report.sandboxIdleStops += 1
+        } else {
+          // The environment vanished without a stop (expired, reaped, or a
+          // dead host): close the orphan's trail with an unconfirmed-purge
+          // release fact, dispatcher-authored exactly as
+          // `harvest.execution.released` is.
+          await this.deps.store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'orchestrator.sandbox.released',
+            payload: {
+              operator: environment.operator,
+              environmentId: environment.environmentId,
+              snapshots: {
+                outcome: 'unknown',
+                error: 'environment absent at idle settlement',
+              },
+            },
+          })
+          report.sandboxIdleStops += 1
+        }
+      } catch (error) {
+        // Contained: the next tick retries this environment.
+        report.sandboxSettleFailures += 1
+        report.janitorDiagnostics.push(
+          `operator sandbox ${environment.environmentId}: idle settlement failed — ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     }
   }

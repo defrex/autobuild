@@ -25,7 +25,11 @@ export {
   assertTicketSchema,
   migratePostgres,
 } from './schema'
-export { openPostgresBuildStore, PostgresBuildStore } from './store'
+export {
+  EVENT_WAIT_POLL_MS,
+  openPostgresBuildStore,
+  PostgresBuildStore,
+} from './store'
 export type { PostgresBuildStoreOptions } from './store'
 export {
   openPostgresTicketDatabase,
