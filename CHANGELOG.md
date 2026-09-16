@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#360](https://github.com/defrex/autobuild/pull/360) — Add ab wait — block until a build reaches a condition (AUT-333)
 - [#361](https://github.com/defrex/autobuild/pull/361) — Close stale-provider sandbox trails with an unconfirmed release at idle settlement
 - [#359](https://github.com/defrex/autobuild/pull/359) — Correct the hosted MCP endpoint header comment: stateless GET serves SSE 200, not 405
 - [#357](https://github.com/defrex/autobuild/pull/357) — Add a bounded wait to the remote build-event reads
