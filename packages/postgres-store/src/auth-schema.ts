@@ -1,8 +1,19 @@
 import type { SQL } from 'bun'
 
 /** Better Auth 1.4.18 core + MCP/OIDC/JWT plugin PostgreSQL schema. Changes to
- * the pinned auth package must deliberately update this marker and DDL. */
-export const AUTH_SCHEMA_VERSION = 2
+ * the pinned auth package must deliberately update this marker and DDL.
+ *
+ * v3 notes the plugin's declared-schema drift: the pinned 1.4.18 MCP plugin's
+ * DCR endpoint writes `authenticationScheme`
+ * (node_modules/better-auth/dist/plugins/mcp/index.mjs:595) but its declared
+ * `oauthApplication` schema (dist/plugins/oidc-provider/schema.mjs) omits
+ * the field, so the adapter factory's transformInput drops it before either
+ * adapter persists it. Verified dropped, not rejected: the Postgres-gated
+ * MCP e2e passed 9/9 pre-fix and a live memory-adapter DCR probe stored a
+ * row with no `authenticationScheme`. The field declaration in
+ * hosted-store-service's createWebAuth restores it; this column persists it.
+ * Patching the plugin upstream is out of scope. */
+export const AUTH_SCHEMA_VERSION = 3
 
 /** The frozen v1 DDL, kept verbatim so a deployed v1 marker's checksum can be
  * recognized and upgraded in place (see migratePostgres). */
@@ -41,10 +52,10 @@ export const AUTH_SCHEMA_V1_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(AUTH_SCHEMA_V1_DDL)
   .digest('hex')
 
-/** v2 adds the four MCP-plugin tables (jwks from the jwt companion): column
- * names are exactly the camelCase quoted identifiers Better Auth's pg adapter
- * writes. */
-export const AUTH_SCHEMA_DDL = `
+/** The frozen v2 DDL, kept verbatim so a deployed v2 marker's checksum can be
+ * recognized and upgraded in place (see migratePostgres). Byte-identical to
+ * the v2 AUTH_SCHEMA_DDL via the shared v1 interpolation above. */
+export const AUTH_SCHEMA_V2_DDL = `
 ${AUTH_SCHEMA_V1_DDL}
 CREATE TABLE IF NOT EXISTS jwks (
   id text PRIMARY KEY, "publicKey" text NOT NULL, "privateKey" text NOT NULL,
@@ -57,6 +68,55 @@ CREATE TABLE IF NOT EXISTS "oauthApplication" (
   disabled boolean NOT NULL DEFAULT false,
   "userId" text REFERENCES "user"(id) ON DELETE CASCADE,
   "createdAt" timestamp NOT NULL, "updatedAt" timestamp NOT NULL
+);
+CREATE INDEX IF NOT EXISTS oauthApplication_user_id_idx ON "oauthApplication" ("userId");
+CREATE TABLE IF NOT EXISTS "oauthAccessToken" (
+  id text PRIMARY KEY, "accessToken" text NOT NULL UNIQUE,
+  "refreshToken" text NOT NULL UNIQUE, "accessTokenExpiresAt" timestamp NOT NULL,
+  "refreshTokenExpiresAt" timestamp NOT NULL,
+  "clientId" text NOT NULL REFERENCES "oauthApplication"("clientId") ON DELETE CASCADE,
+  "userId" text REFERENCES "user"(id) ON DELETE CASCADE,
+  scopes text NOT NULL, "createdAt" timestamp NOT NULL, "updatedAt" timestamp NOT NULL
+);
+CREATE INDEX IF NOT EXISTS oauthAccessToken_client_id_idx ON "oauthAccessToken" ("clientId");
+CREATE INDEX IF NOT EXISTS oauthAccessToken_user_id_idx ON "oauthAccessToken" ("userId");
+CREATE TABLE IF NOT EXISTS "oauthConsent" (
+  id text PRIMARY KEY, "clientId" text NOT NULL
+    REFERENCES "oauthApplication"("clientId") ON DELETE CASCADE,
+  "userId" text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  scopes text NOT NULL, "createdAt" timestamp NOT NULL, "updatedAt" timestamp NOT NULL,
+  "consentGiven" boolean NOT NULL
+);
+CREATE INDEX IF NOT EXISTS oauthConsent_user_id_idx ON "oauthConsent" ("userId");`.trim()
+
+export const AUTH_SCHEMA_V2_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(AUTH_SCHEMA_V2_DDL)
+  .digest('hex')
+
+/** v2 adds the four MCP-plugin tables (jwks from the jwt companion): column
+ * names are exactly the camelCase quoted identifiers Better Auth's pg adapter
+ * writes.
+ *
+ * v3 adds the nullable `authenticationScheme` column to `oauthApplication`
+ * (see the header marker): legacy rows legitimately lack the field, so NULL
+ * means "field absent" (the builds.repo_origin precedent) — NOT NULL DEFAULT
+ * would invent scheme values for existing clients. The column rides last so
+ * fresh databases assert identically to v2 databases upgraded by the guarded
+ * ALTER in migratePostgres (the streams.creation_seq precedent). */
+export const AUTH_SCHEMA_DDL = `
+${AUTH_SCHEMA_V1_DDL}
+CREATE TABLE IF NOT EXISTS jwks (
+  id text PRIMARY KEY, "publicKey" text NOT NULL, "privateKey" text NOT NULL,
+  "createdAt" timestamp NOT NULL, "expiresAt" timestamp
+);
+CREATE TABLE IF NOT EXISTS "oauthApplication" (
+  id text PRIMARY KEY, name text NOT NULL, icon text, metadata text,
+  "clientId" text NOT NULL UNIQUE, "clientSecret" text,
+  "redirectUrls" text NOT NULL, type text NOT NULL,
+  disabled boolean NOT NULL DEFAULT false,
+  "userId" text REFERENCES "user"(id) ON DELETE CASCADE,
+  "createdAt" timestamp NOT NULL, "updatedAt" timestamp NOT NULL,
+  "authenticationScheme" text
 );
 CREATE INDEX IF NOT EXISTS oauthApplication_user_id_idx ON "oauthApplication" ("userId");
 CREATE TABLE IF NOT EXISTS "oauthAccessToken" (
@@ -139,6 +199,9 @@ export async function assertAuthSchema(sql: SQL): Promise<void> {
       'userId',
       'createdAt',
       'updatedAt',
+      // Rides last: the guarded v2→v3 ALTER appends it at the end, so
+      // migrated and fresh databases assert identically.
+      'authenticationScheme',
     ],
     oauthAccessToken: [
       'id',
