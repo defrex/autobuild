@@ -11,7 +11,14 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { PhaseSessionError } from '../store/phase-session'
 import { textContent } from '../store/types'
-import { artifactDownload, artifactGet, artifactPut, parseArtifactSpec } from './artifact'
+import type { StreamPart } from '../store/streams/types'
+import {
+  artifactDownload,
+  artifactDownloadRepo,
+  artifactGet,
+  artifactPut,
+  parseArtifactSpec,
+} from './artifact'
 import { makeEnv, seedStore } from './testkit'
 
 let tmp: string
@@ -433,5 +440,217 @@ describe('artifact download', () => {
       /non-empty <kind>/,
     )
     expect(opens).toBe(0)
+  })
+})
+
+describe('artifact download-repo', () => {
+  /** A repo-scoped stream run through the real lifecycle: the finalized
+   * document is deposited as `stream:<id>` rev 0 on the repository scope. */
+  async function closedRepoStream(parts: StreamPart[]): Promise<string> {
+    const record = await store.createStream({ kind: 'repo', repo: resolve(tmp) }, 'session:hs_1')
+    await store.appendStreamParts(record.id, parts)
+    await store.closeStream(record.id, 'completed')
+    return record.id
+  }
+
+  test('selects the explicit store, forwards the opaque token, pins revisions, closes, and writes exact bytes', async () => {
+    let closeCount = 0
+    store.close = async () => {
+      closeCount += 1
+    }
+    await store.ensureRepo(resolve(tmp))
+    const repoStream = await closedRepoStream([{ type: 'start', messageId: 'm_1' }])
+    const first = new Uint8Array([137, 80, 78, 71, 0, 255])
+    await store.putRepoArtifact(resolve(tmp), { kind: 'visual:wide', content: first })
+    const opens: Array<{ ref: string; token?: string }> = []
+    const output = join(tmp, 'downloads', 'wide.png')
+
+    const result = await artifactDownloadRepo({
+      targetRepo: tmp,
+      env: {
+        AB_STORE: 'https://ignored.invalid',
+        AB_TOKEN: ' scoped-token ',
+      },
+      exec: spawnExec,
+      spec: 'visual:wide@0',
+      outputPath: output,
+      storeRef: 'explicit-store',
+      openStore: (ref, token) => {
+        opens.push({ ref, ...(token !== undefined ? { token } : {}) })
+        return store
+      },
+    })
+
+    expect(opens).toEqual([{ ref: resolve(tmp, 'explicit-store'), token: ' scoped-token ' }])
+    expect(result.artifact.meta.revision).toBe(0)
+    expect(result.outputPath).toBe(output)
+    expect(new Uint8Array(await readFile(output))).toEqual(first)
+    expect(closeCount).toBe(1)
+
+    // A `stream:<id>` kind deposited by a real close cycle round-trips the
+    // exact finalized document bytes, latest when @rev is omitted.
+    const streamOutput = join(tmp, 'downloads', 'stream.json')
+    const finalized = await artifactDownloadRepo({
+      targetRepo: tmp,
+      env: { AB_STORE: 'https://store.example.invalid/api' },
+      exec: spawnExec,
+      spec: `stream:${repoStream}`,
+      outputPath: streamOutput,
+      openStore: () => store,
+    })
+    expect(finalized.artifact.meta.kind).toBe(`stream:${repoStream}`)
+    const stored = await store.getRepoArtifact(resolve(tmp), `stream:${repoStream}`)
+    expect(new Uint8Array(await readFile(streamOutput))).toEqual(stored!.content)
+    expect(JSON.parse(await Bun.file(streamOutput).text())).toEqual([
+      { id: 'm_1', role: 'assistant', parts: [] },
+    ])
+    expect(closeCount).toBe(2)
+  })
+
+  test('unknown repository, absent refs, and malformed specs fail without creating output', async () => {
+    let closeCount = 0
+    store.close = async () => {
+      closeCount += 1
+    }
+    const output = join(tmp, 'should-not-exist.bin')
+    const common = {
+      targetRepo: tmp,
+      env: {},
+      exec: spawnExec,
+      outputPath: output,
+      openStore: () => store,
+    }
+
+    // No repository record exists yet: the checkout's identity resolves, the
+    // store just does not know it.
+    await expect(artifactDownloadRepo({ ...common, spec: 'stream:st_x' })).rejects.toThrow(
+      `no repository "${resolve(tmp)}" in this store`,
+    )
+
+    await store.ensureRepo(resolve(tmp))
+    await store.putRepoArtifact(resolve(tmp), { kind: 'stream:st_1', content: 'doc' })
+    await expect(artifactDownloadRepo({ ...common, spec: 'stream:st_9' })).rejects.toThrow(
+      /no "stream:st_9" artifact in repository .*available refs: stream:st_1@0/s,
+    )
+    await expect(artifactDownloadRepo({ ...common, spec: 'stream:st_1@7' })).rejects.toThrow(
+      /no "stream:st_1" artifact at rev 7 in repository/s,
+    )
+    expect(await Bun.file(output).exists()).toBe(false)
+    expect(closeCount).toBe(3)
+  })
+
+  test('validates the artifact argument before opening a store', async () => {
+    let opens = 0
+    await expect(
+      artifactDownloadRepo({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        spec: '  ',
+        outputPath: join(tmp, 'unused'),
+        openStore: () => {
+          opens += 1
+          return store
+        },
+      }),
+    ).rejects.toThrow(/non-empty <kind>/)
+    await expect(
+      artifactDownloadRepo({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        spec: 'stream@latest',
+        outputPath: join(tmp, 'unused'),
+        openStore: () => {
+          opens += 1
+          return store
+        },
+      }),
+    ).rejects.toThrow(/invalid artifact ref/)
+    expect(opens).toBe(0)
+  })
+
+  test('ambient build identity is denied; ambient Harvest identity reads only its own repository', async () => {
+    const repo = resolve(tmp)
+    await store.ensureRepo(repo)
+    const bytes = new Uint8Array([0, 1, 2, 255])
+    await store.putRepoArtifact(repo, { kind: 'stream:st_own', content: bytes })
+    const foreignOutput = join(tmp, 'foreign.bin')
+
+    // A build-scoped ambient handle treats repository resources as admin.
+    const deniedOutput = join(tmp, 'denied.bin')
+    await expect(
+      artifactDownloadRepo({
+        targetRepo: tmp,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_BUILD: 'ambient',
+          AB_PHASE: 'implement@1',
+          AB_SESSION: 's_phase',
+        },
+        exec: spawnExec,
+        spec: 'stream:st_own',
+        outputPath: deniedOutput,
+        openStore: () => store,
+      }),
+    ).rejects.toBeInstanceOf(PhaseSessionError)
+    expect(await Bun.file(deniedOutput).exists()).toBe(false)
+
+    // Own-repo Harvest reads succeed through the scoped repo handle.
+    const ownOutput = join(tmp, 'own.bin')
+    await artifactDownloadRepo({
+      targetRepo: tmp,
+      env: {
+        AB_STORE: '/phase/store',
+        AB_REPO: repo,
+        AB_HARVEST: 'h_1',
+        AB_PHASE: 'synthesize@1',
+        AB_SESSION: 'hs_1',
+      },
+      exec: spawnExec,
+      spec: 'stream:st_own',
+      outputPath: ownOutput,
+      openStore: () => store,
+    })
+    expect(new Uint8Array(await readFile(ownOutput))).toEqual(bytes)
+
+    // A Harvest identity naming a foreign repository fails the own-repo gate.
+    await expect(
+      artifactDownloadRepo({
+        targetRepo: tmp,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_REPO: '/other/repo',
+          AB_HARVEST: 'h_1',
+          AB_PHASE: 'synthesize@1',
+          AB_SESSION: 'hs_1',
+        },
+        exec: spawnExec,
+        spec: 'stream:st_own',
+        outputPath: foreignOutput,
+        openStore: () => store,
+      }),
+    ).rejects.toBeInstanceOf(PhaseSessionError)
+    expect(await Bun.file(foreignOutput).exists()).toBe(false)
+  })
+
+  test('the build-scoped command still rejects a repo-scoped stream through its unchanged path', async () => {
+    await store.ensureRepo(resolve(tmp))
+    const streamId = await closedRepoStream([{ type: 'start', messageId: 'm_1' }])
+    await store.createBuild({ slug: 'unrelated', repo: resolve(tmp) })
+    const output = join(tmp, 'should-not-exist.bin')
+
+    await expect(
+      artifactDownload({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        build: 'unrelated',
+        spec: `stream:${streamId}`,
+        outputPath: output,
+        openStore: () => store,
+      }),
+    ).rejects.toThrow(new RegExp(`no "stream:${streamId}" artifact in build "unrelated"`))
+    expect(await Bun.file(output).exists()).toBe(false)
   })
 })

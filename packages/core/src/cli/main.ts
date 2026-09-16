@@ -19,7 +19,7 @@ import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
 import { reduceBuild } from '../kernel/reducer'
-import { artifactDownload, artifactGet, artifactPut } from './artifact'
+import { artifactDownload, artifactDownloadRepo, artifactGet, artifactPut } from './artifact'
 import { multiFlag, parseArgs, stringFlag, type ParsedArgs } from './args'
 import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
 import {
@@ -117,15 +117,15 @@ export const SESSIONLESS_COMMANDS = new Set([
 ])
 
 /** Nested namespaces can mix operator and phase forms. `artifact download`
- * uses operator-sessionless routing plus ambient-aware read authority; put/get
- * remain phase-only. */
+ * and its repository-scoped sibling `download-repo` use operator-sessionless
+ * routing plus ambient-aware read authority; put/get remain phase-only. */
 export function isSessionlessInvocation(argv: readonly string[]): boolean {
   const command = argv[0]
   return (
     command === undefined ||
     recognizeHelpRequest(argv) !== undefined ||
     SESSIONLESS_COMMANDS.has(command) ||
-    (command === 'artifact' && argv[1] === 'download') ||
+    (command === 'artifact' && (argv[1] === 'download' || argv[1] === 'download-repo')) ||
     (command === 'harvest' && argv[1] === 'status')
   )
 }
@@ -1160,6 +1160,36 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     case 'artifact': {
       const [sub, ...more] = rest
+      if (sub === 'download-repo') {
+        const usage =
+          'usage: ab artifact download-repo <kind>[@rev] --output <file> [--store <ref>] (§8.2)'
+        const parsed = parseArgs(more, { output: 'value', store: 'value' }, usage)
+        const [spec] = parsed.positionals
+        const outputPath = stringFlag(parsed, 'output')
+        if (spec === undefined || parsed.positionals.length !== 1 || outputPath === undefined) {
+          throw new Error(usage)
+        }
+        const storeRef = stringFlag(parsed, 'store')
+        if (deps.exec === undefined) {
+          throw new Error(
+            "'ab artifact download-repo' needs an exec seam — this is a wiring bug in the ab binary",
+          )
+        }
+        const downloaded = await artifactDownloadRepo({
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec,
+          spec,
+          outputPath,
+          ...(storeRef !== undefined ? { storeRef } : {}),
+          ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+        })
+        stdout(
+          `downloaded ${downloaded.artifact.meta.kind}@${downloaded.artifact.meta.revision} to ${downloaded.outputPath}`,
+        )
+        return 0
+      }
+
       if (sub === 'download') {
         const usage =
           'usage: ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>] (§8.2)'
@@ -1253,7 +1283,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stdout(textContent(artifact))
         return 0
       }
-      throw new Error('usage: ab artifact <put|get|download> … (§8.2)')
+      throw new Error('usage: ab artifact <put|get|download|download-repo> … (§8.2)')
     }
 
     case 'observe': {

@@ -462,6 +462,7 @@ describe('SESSIONLESS_COMMANDS', () => {
 
   test('only artifact download is sessionless inside the mixed artifact namespace', () => {
     expect(isSessionlessInvocation(['artifact', 'download'])).toBe(true)
+    expect(isSessionlessInvocation(['artifact', 'download-repo'])).toBe(true)
     expect(isSessionlessInvocation(['artifact', 'put'])).toBe(false)
     expect(isSessionlessInvocation(['artifact', 'get'])).toBe(false)
     expect(isSessionlessInvocation(['artifact'])).toBe(false)
@@ -1721,6 +1722,21 @@ describe('runCli — artifact and observe', () => {
     }
   })
 
+  test('artifact download-repo validates its nested grammar', async () => {
+    for (const argv of [
+      ['artifact', 'download-repo'],
+      ['artifact', 'download-repo', 'stream:st_1', 'stream:st_2'],
+      ['artifact', 'download-repo', 'stream:st_1', '--output'],
+      ['artifact', 'download-repo', 'stream:st_1', '--output', '--store'],
+      ['artifact', 'download-repo', 'stream:st_1', '--unknown', 'x'],
+      ['artifact', 'download-repo', 'stream:st_1', '--output', 'x', '--attach'],
+    ]) {
+      const d = deps()
+      expect(await runCli(argv, d)).toBe(1)
+      expect(d.err.join('\n')).toContain('usage: ab artifact download-repo')
+    }
+  })
+
   test('--attach is scoped to artifact put', async () => {
     const d = deps()
     expect(await runCli(['artifact', 'get', 'spec', '--attach'], d)).toBe(1)
@@ -1730,7 +1746,7 @@ describe('runCli — artifact and observe', () => {
   test('artifact with a bad subcommand prints usage and exits 1', async () => {
     const d = deps()
     expect(await runCli(['artifact', 'list'], d)).toBe(1)
-    expect(d.err.join('\n')).toContain('usage: ab artifact <put|get|download>')
+    expect(d.err.join('\n')).toContain('usage: ab artifact <put|get|download|download-repo>')
   })
 
   test('observe requires --kind', async () => {

@@ -9,7 +9,7 @@ import { basename, dirname, resolve } from 'node:path'
 import { agentActor } from '../events/envelope'
 import { prAttachmentSchema } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
+import type { Artifact, ArtifactMeta, BuildStore, RepositoryArtifact } from '../store/types'
 import type { CliEnv } from './env'
 import { buildInRepository } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
@@ -171,6 +171,67 @@ export async function artifactDownload(
       throw new Error(
         `no "${kind}" artifact${rev !== undefined ? ` at rev ${rev}` : ''} in ` +
           `build "${opts.build}" — available refs: ${refs.join(', ') || '(none)'}`,
+      )
+    }
+
+    const outputPath = resolve(opts.targetRepo, opts.outputPath)
+    await mkdir(dirname(outputPath), { recursive: true })
+    await writeFile(outputPath, artifact.content)
+    return { artifact, outputPath }
+  })
+}
+
+export interface ArtifactDownloadRepoOpts {
+  /** Current checkout; the repository identity is the resolved main worktree. */
+  targetRepo: string
+  env: Record<string, string | undefined>
+  exec: Exec
+  spec: string
+  outputPath: string
+  /** Explicit --store; precedence remains flag > AB_STORE > local default. */
+  storeRef?: string
+  /** Adapter seam for local/remote selection tests. */
+  openStore?: StoreOpener
+}
+
+export interface ArtifactDownloadRepoResult {
+  artifact: RepositoryArtifact
+  outputPath: string
+}
+
+/** Repository-scoped sibling of {@link artifactDownload}: retrieves exact
+ * bytes of an artifact deposited on the repository journal's scope — the
+ * finalized `stream:<id>` documents of harvest session streams among any other
+ * repo artifact kind. No stream allowlist: symmetric with the build command,
+ * and `stream:` kinds sit outside the retention family, so rev 0 is stable.
+ * Read authority (§8.2): operator-wide without ambient identity; with a
+ * complete ambient Harvest identity the scoped repo handle permits only its
+ * own repository; a complete ambient build identity is denied (repository
+ * resources are admin to a build-scoped handle), mirroring the cross-resource
+ * rule the build path enforces in the other direction. Remote handles keep
+ * token-backed server authorization. */
+export async function artifactDownloadRepo(
+  opts: ArtifactDownloadRepoOpts,
+): Promise<ArtifactDownloadRepoResult> {
+  const { kind, rev } = parseArtifactSpec(opts.spec)
+  if (kind.trim() === '') {
+    throw new Error("'ab artifact download-repo' requires a non-empty <kind>[@rev]")
+  }
+  return withAmbientReadStore(opts, async (context) => {
+    const repo = context.repo
+    const record = await context.store.getRepo(repo)
+    if (record === null) {
+      throw new Error(
+        `no repository "${repo}" in this store — run 'ab harvest status' or pass --store <ref>`,
+      )
+    }
+    const artifact = await context.store.getRepoArtifact(repo, kind, rev)
+    if (artifact === null) {
+      const available = await context.store.listRepoArtifacts(repo)
+      const refs = available.map((meta) => `${meta.kind}@${meta.revision}`)
+      throw new Error(
+        `no "${kind}" artifact${rev !== undefined ? ` at rev ${rev}` : ''} in ` +
+          `repository "${repo}" — available refs: ${refs.join(', ') || '(none)'}`,
       )
     }
 
