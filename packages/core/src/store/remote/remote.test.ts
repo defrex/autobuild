@@ -46,6 +46,31 @@ describeBuildStoreContract('remote (HTTP → MemoryBuildStore)', async (opts) =>
   return { store, cleanup: server.stop }
 })
 
+// The same wire, but the server authorizes with a via-less admin token — the
+// hosted harness's posture (SPEC §15.1). `viaAuthority: {}` tells the via
+// contract that delegated writes reject with 403 AuthError before catalog
+// validation, so the pinned 403 branch runs in every unit run, not only in
+// the self-skipping live suite. The clock stays on the backing store; the
+// token's exp is checked against the server's system clock, so it is minted
+// far in the real future.
+describeBuildStoreContract('remote (HTTP → MemoryBuildStore, via-less token)', async (opts) => {
+  const backing = new MemoryBuildStore({
+    ...(opts?.clock ? { clock: opts.clock } : {}),
+    ...(opts?.retention ? { retention: opts.retention } : {}),
+  })
+  const secret = 'contract-secret'
+  const server = startStoreServer({ store: backing, secret })
+  const store = new RemoteBuildStore({
+    url: server.url,
+    token: mintToken(secret, {
+      build: '*',
+      session: '*',
+      exp: Date.now() + 100 * 365 * 24 * 60 * 60 * 1000,
+    }),
+  })
+  return { store, viaAuthority: {}, cleanup: server.stop }
+})
+
 // ── Tokens (D8) ──────────────────────────────────────────────────────────────
 
 describe('scoped tokens (D8)', () => {
