@@ -4,6 +4,7 @@ import {
   humanActor,
   createBuildScopedStore,
   createSessionScopedStore,
+  EVENT_WAIT_POLL_MS,
   normalizeOperator,
   pollingSubscribe,
   systemClock,
@@ -64,27 +65,18 @@ import {
   streamArtifactInput,
   validateStreamParts,
 } from 'autobuild/store-adapter'
-
-/**
- * The held-read poll cadence for event waits (AUT-334): a held event read —
- * `getEvents`, `getRepoEvents`, or `getSessionEvents` — re-queries the
- * database at most once per second — the hosted per-query budget — so an
- * append by another connection is observed at the next poll: typically
- * within about one second, worst case one poll interval plus the query
- * round-trip. Held *stream* reads are excluded: they are presentation
- * content and intentionally poll at the ~25 ms `STREAM_WAIT_POLL_MS`
- * cadence (core `wait.ts`). The nominal bound is deliberate — a hard ≤1 s
- * worst case would need Postgres LISTEN/NOTIFY wake-on-append, one
- * dedicated connection per held request on a pooled provider (Neon), a
- * cost considered and declined (see the PR record).
- */
-export const EVENT_WAIT_POLL_MS = 1000
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
   revisionsToPrune,
 } from 'autobuild/store-adapter'
 import { assertSchema } from './schema'
+
+// The held-read poll cadence for event waits — a re-export of the canonical
+// core constant (AUT-388), not a second definition. See core
+// `store/streams/wait.ts` for the budget's semantics and the AUT-334
+// rationale for why the bound is nominal rather than hard.
+export { EVENT_WAIT_POLL_MS }
 
 type Row = Record<string, unknown>
 type Tx = SQL
