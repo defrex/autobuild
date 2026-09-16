@@ -16,6 +16,7 @@ import type { SessionEventWrite } from '../events/sessions'
 import { reduceSession, type SessionState, type SessionTurn } from '../sessions/reducer'
 import type { StreamRead } from '../store/streams/types'
 import type { BuildStore, SessionRecord } from '../store/types'
+import type { OperatorSandboxService } from './sandbox'
 
 export class OperatorSessionError extends Error {
   constructor(
@@ -168,6 +169,7 @@ export async function archiveOperatorSession(
   repo: string,
   sid: string,
   user: string,
+  sandbox?: OperatorSandboxService,
 ): Promise<void> {
   const record = await requireSession(store, repo, sid)
   requireOwner(record, user, 'archive')
@@ -180,6 +182,28 @@ export async function archiveOperatorSession(
     type: 'session.archived',
     payload: {},
   })
+  // When the archive leaves the operator with no open session for this
+  // repository, their sandbox environment is released (snapshot purge,
+  // journal fact). The service derives the environment via its pure
+  // describe — never provisioning — and a never-provisioned operator is a
+  // no-op. Contained: a release failure must not fail an accepted archive.
+  if (sandbox !== undefined) {
+    const sessions = await store.listSessions(repo)
+    const open: SessionRecord[] = []
+    for (const session of sessions) {
+      if (session.operator !== user) continue
+      const sessionState = reduceSession(await store.getSessionEvents(session.id))
+      if (sessionState.status !== 'archived') open.push(session)
+    }
+    if (open.length === 0) {
+      try {
+        await sandbox.release(user, { repo })
+      } catch {
+        // The archive already succeeded; the environment stays journaled and
+        // the dispatcher's idle settlement stops it later.
+      }
+    }
+  }
 }
 
 export async function readOperatorTurnStream(
