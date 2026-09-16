@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
+import { KERNEL } from '../events/envelope'
 import type { EventType } from '../events/payloads'
 import { sampleBuildInput, sampleEventWrite } from '../store/contract'
 import { MemoryBuildStore } from '../store/memory'
@@ -8,11 +9,13 @@ import {
   autoMergeDeferralRef,
   classifyAutoMergeEnable,
   currentAutoMergeDeferral,
+  currentDeferralObservation,
   hasAutoMergeDeferralObservation,
   mergeStateStatuses,
   recordAutoMergeDeferralObservation,
   type MergeGatePresence,
 } from './auto-merge'
+import { autoMergeDeferralClasses } from '../ports/types'
 
 describe('classifyAutoMergeEnable', () => {
   const expected = {
@@ -44,6 +47,20 @@ const DEFERRAL_REASON = {
   code: 'repository-auto-merge-disabled',
   detail: 'allow_auto_merge=false',
 } as const
+
+describe('autoMergeDeferralClasses', () => {
+  test('pins the closed classification of the deferral-code union', () => {
+    expect(autoMergeDeferralClasses).toEqual({
+      'github-plan-limitation': 'human-actionable',
+      'repository-auto-merge-disabled': 'human-actionable',
+      'unproven-gate-state': 'human-actionable',
+      'merge-conflicts': 'pipeline-resolved',
+      'mergeability-uncomputed': 'pipeline-resolved',
+      'local-base-checkout-dirty': 'human-actionable',
+      'local-git-identity-missing': 'human-actionable',
+    })
+  })
+})
 
 class InterleavingStore extends MemoryBuildStore {
   private interleave = true
@@ -81,18 +98,63 @@ class ConditionalBarrierStore extends MemoryBuildStore {
 }
 
 describe('currentAutoMergeDeferral', () => {
-  const observation = (pr: number, commandSeq: number, summary: string): AbEvent =>
+  const observation = (pr: number, commandSeq: number, summary: string, seq?: number): AbEvent =>
     ({
       build: 'build-1',
-      seq: commandSeq + 1,
+      seq: seq ?? commandSeq + 1,
       ts: '2026-01-01T00:00:00.000Z',
       ...autoMergeDeferralObservation(
         { code: 'repository-auto-merge-disabled', detail: summary },
         pr,
         commandSeq,
-        `obs_${commandSeq}`,
+        `obs_${seq ?? commandSeq + 1}`,
       ),
     }) as AbEvent
+
+  const reconcileDone = (seq: number): AbEvent =>
+    ({
+      build: 'build-1',
+      seq,
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: { kind: 'agent', role: 'reconcile', session: 's_reconcile' },
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'sha-merge', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    }) as AbEvent
+
+  const finalizeDone = (seq: number, headSha: string): AbEvent =>
+    ({
+      build: 'build-1',
+      seq,
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 42, url: 'https://example.test/42', headSha } },
+    }) as AbEvent
+
+  const prMerged = (seq: number): AbEvent =>
+    ({
+      build: 'build-1',
+      seq,
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: { kind: 'dispatcher' },
+      type: 'pr.merged',
+      payload: { sha: 'squash-42' },
+    }) as AbEvent
+
+  const prClosed = (seq: number): AbEvent =>
+    ({
+      build: 'build-1',
+      seq,
+      ts: '2026-01-01T00:00:00.000Z',
+      actor: { kind: 'dispatcher' },
+      type: 'pr.closed',
+      payload: {},
+    }) as AbEvent
+
+  const state = {
+    pr: { number: 42, url: 'https://example.test/42', headSha: 'head' },
+    autoMerge: { requested: true, commandSeq: 17 },
+  }
 
   test('returns the complete provider-bearing summary for the current pending enable', () => {
     const github = observation(42, 17, 'allow_auto_merge=false')
@@ -142,6 +204,76 @@ describe('currentAutoMergeDeferral', () => {
         autoMerge: { requested: false, commandSeq: 19 },
       }),
     ).toBeUndefined()
+  })
+
+  test('a reconcile.completed after the observation supersedes it until consent is re-examined', () => {
+    expect(
+      currentAutoMergeDeferral(
+        [observation(42, 17, 'stale provider detail'), reconcileDone(19)],
+        state,
+      ),
+    ).toBeUndefined()
+  })
+
+  test('a fresh observation after the reconcile.completed is the current summary', () => {
+    expect(
+      currentAutoMergeDeferral(
+        [
+          observation(42, 17, 'stale provider detail', 18),
+          reconcileDone(19),
+          observation(42, 17, 'fresh provider detail', 20),
+        ],
+        state,
+      ),
+    ).toContain('fresh provider detail')
+  })
+
+  test('a finalize.completed naming a new head supersedes the observation', () => {
+    expect(
+      currentAutoMergeDeferral(
+        [
+          finalizeDone(17, 'head-1'),
+          observation(42, 17, 'old detail', 18),
+          finalizeDone(19, 'head-2'),
+        ],
+        state,
+      ),
+    ).toBeUndefined()
+  })
+
+  test('a finalize.completed that adopted the same PR at the same head keeps the observation', () => {
+    // With and without a baseline finalize.completed before the observation —
+    // the second shape is the §8.7 retry that honors a pre-existing marker.
+    expect(
+      currentAutoMergeDeferral(
+        [finalizeDone(17, 'head-1'), observation(42, 17, 'detail', 18), finalizeDone(19, 'head-1')],
+        state,
+      ),
+    ).toContain('detail')
+    expect(
+      currentAutoMergeDeferral(
+        [observation(42, 17, 'detail', 17), finalizeDone(19, 'head-1')],
+        state,
+      ),
+    ).toContain('detail')
+  })
+
+  test('a merged or closed PR ends the deferral even while consent is pending', () => {
+    expect(
+      currentAutoMergeDeferral([observation(42, 17, 'provider detail'), prMerged(19)], state),
+    ).toBeUndefined()
+    expect(
+      currentAutoMergeDeferral([observation(42, 17, 'provider detail'), prClosed(19)], state),
+    ).toBeUndefined()
+  })
+
+  test('the shared predicate underlies both the projection and the dedupe', () => {
+    const superseded = [observation(42, 17, 'detail', 18), reconcileDone(19)]
+    expect(currentDeferralObservation(superseded, 42, 17)).toBeUndefined()
+    expect(hasAutoMergeDeferralObservation(superseded, 42, 17)).toBe(false)
+    const current = [observation(42, 17, 'detail', 18)]
+    expect(currentDeferralObservation(current, 42, 17)?.payload.summary).toContain('detail')
+    expect(hasAutoMergeDeferralObservation(current, 42, 17)).toBe(true)
   })
 })
 
@@ -197,22 +329,24 @@ describe('auto-merge deferral observations', () => {
     expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
   })
 
-  test('a merge-conflicts deferral records the exact conflict-naming summary', async () => {
-    const reason = {
-      code: 'merge-conflicts',
-      detail:
-        "GitHub reports mergeable_state 'DIRTY' for PR #42 — the head branch has merge conflicts " +
-        "with 'main'; update the branch or resolve the conflicts and the pending consent will be " +
-        're-examined on a later tick. Native auto-merge was not enabled',
-    } as const
-    const write = autoMergeDeferralObservation(reason, 42, 17, 'obs_conflicts')
-    expect(write.payload.summary).toBe(
-      'Auto-merge gate could not apply consent for PR #42: the PR has merge conflicts with its ' +
-        "base branch — GitHub reports mergeable_state 'DIRTY' for PR #42 — the head branch has " +
-        "merge conflicts with 'main'; update the branch or resolve the conflicts and the pending " +
-        'consent will be re-examined on a later tick. Native auto-merge was not enabled',
-    )
-    expect(write.payload.refs).toEqual([autoMergeDeferralRef(42, 17)])
+  test('a pipeline-owned or transient deferral records nothing and leaves consent pending', async () => {
+    for (const code of ['merge-conflicts', 'mergeability-uncomputed'] as const) {
+      const slug = `deferral-${code}`
+      const store = new MemoryBuildStore()
+      await store.createBuild(sampleBuildInput(slug))
+
+      const recorded = await recordAutoMergeDeferralObservation(
+        store,
+        slug,
+        { code, detail: `forge detail for ${code}` },
+        42,
+        17,
+        `obs_${code}`,
+      )
+
+      expect(recorded).toBeNull()
+      expect(await store.getEvents(slug)).toEqual([])
+    }
   })
 
   test('a single writer records a newly encountered deferral', async () => {
@@ -315,5 +449,43 @@ describe('auto-merge deferral observations', () => {
     expect(events).toHaveLength(2)
     expect(hasAutoMergeDeferralObservation(events, 42, 17)).toBe(true)
     expect(hasAutoMergeDeferralObservation(events, 42, 18)).toBe(true)
+  })
+
+  test('a head-changing event supersedes the marker so the gate can re-record', async () => {
+    const store = new MemoryBuildStore()
+    await store.createBuild(sampleBuildInput('deferral-superseded'))
+    await store.append(
+      'deferral-superseded',
+      autoMergeDeferralObservation(DEFERRAL_REASON, 42, 17, 'obs_old'),
+    )
+    expect(
+      hasAutoMergeDeferralObservation(await store.getEvents('deferral-superseded'), 42, 17),
+    ).toBe(true)
+
+    await store.append('deferral-superseded', {
+      actor: { kind: 'agent', role: 'reconcile', session: 's_reconcile' },
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'sha-merge', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    })
+    expect(
+      hasAutoMergeDeferralObservation(await store.getEvents('deferral-superseded'), 42, 17),
+    ).toBe(false)
+
+    const reRecorded = await recordAutoMergeDeferralObservation(
+      store,
+      'deferral-superseded',
+      DEFERRAL_REASON,
+      42,
+      17,
+      'obs_renewed',
+    )
+    expect(reRecorded).not.toBeNull()
+    const events = await store.getEvents('deferral-superseded')
+    expect(events.map((event) => event.type)).toEqual([
+      'observation.recorded',
+      'reconcile.completed',
+      'observation.recorded',
+    ])
+    expect(hasAutoMergeDeferralObservation(events, 42, 17)).toBe(true)
   })
 })
