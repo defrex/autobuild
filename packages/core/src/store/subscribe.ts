@@ -21,7 +21,7 @@ export const DEFAULT_POLL_MS = 250
 
 export type SubscribeRead = (
   sinceSeq: number,
-  opts?: { waitSeconds?: number },
+  opts?: { waitSeconds?: number; signal?: AbortSignal },
 ) => Promise<AbEvent[]>
 
 export function pollingSubscribe(
@@ -67,18 +67,30 @@ export function pollingSubscribe(
   // Bounded-wait mode: one held request in flight at a time (the loop is
   // sequential, so polls never overlap); request starts spaced at least
   // `pollMs` apart. A throw from the read (store unreachable) ends the cycle
-  // and is retried after the gap, like the interval loop.
+  // and is retried after the gap, like the interval loop. Each cycle carries
+  // an abort signal so unsubscribe also cancels a held request — otherwise a
+  // long-poll subscription could leave a request dangling for a whole wait
+  // window after the caller stopped listening.
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS
+  let inFlightRead: AbortController | undefined
   void (async (): Promise<void> => {
     while (!stopped) {
       inFlight = true
       const started = Date.now()
+      const controller = new AbortController()
+      inFlightRead = controller
       try {
-        deliver(await getEvents(lastSeq, { waitSeconds: opts.waitSeconds }))
+        deliver(
+          await getEvents(lastSeq, {
+            waitSeconds: opts.waitSeconds,
+            signal: controller.signal,
+          }),
+        )
       } catch {
         // Store unreachable — retry after the gap (§8.7).
       } finally {
         inFlight = false
+        inFlightRead = undefined
       }
       if (stopped) break
       const elapsed = Date.now() - started
@@ -88,5 +100,6 @@ export function pollingSubscribe(
 
   return () => {
     stopped = true
+    inFlightRead?.abort()
   }
 }

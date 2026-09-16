@@ -889,16 +889,19 @@ Four shipped behaviors do not add `BuildStore` routes:
   `options.fromSeq ?? 0`, delivers increasing sequence numbers exactly once
   within that subscription, does not overlap polls, and ignores a polling
   error, retrying on the next cycle. Calling the returned unsubscribe
-  function stops future delivery. There is no repository subscribe method.
-  Its cadence follows `options.waitSeconds` (AUT-334): without it, it polls
-  immediately and then every `options.pollMs ?? 250` as before. With it, each
-  cycle issues one held request (`wait=<waitSeconds>`, so the server honors
-  the section 3 bound) and then gap-fills so request *starts* stay at least
-  `options.pollMs ?? 250` apart, elapsed request time counting toward the
-  gap — one request per wait window on a quiet stream against a holding
-  server, degrading to exactly the interval rate against a server that
-  answers immediately. Delivery order and exactly-once semantics are
-  identical in both modes.
+  function stops future delivery and aborts an in-flight held request. There
+  is no repository subscribe method.
+  Its cadence follows `options.waitSeconds` (AUT-334), which defaults to the
+  client's bounded window (25 s, `REMOTE_EVENT_WAIT_SECONDS`) when the caller
+  omits it — so a plain `subscribe` holds one request per wait window on a
+  quiet stream, and `waitSeconds: 0` restores the immediate interval loop
+  (one read, then one read per `options.pollMs ?? 250`). With a positive
+  `waitSeconds`, each cycle issues one held request (`wait=<waitSeconds>`, so
+  the server honors the section 3 bound) and then gap-fills so request
+  *starts* stay at least `options.pollMs ?? 250` apart, elapsed request time
+  counting toward the gap — degrading to exactly the interval rate against a
+  server that answers immediately. Delivery order and exactly-once semantics
+  are identical in all modes.
 - `RemoteBuildStore.close()` is a no-op. The remote server owns its backing
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and

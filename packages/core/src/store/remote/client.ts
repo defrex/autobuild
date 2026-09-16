@@ -172,7 +172,12 @@ export class RemoteBuildStore implements BuildStore {
     return `/sessions/${encodeURIComponent(id)}`
   }
 
-  private async raw(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
+  private async raw(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     const headers: Record<string, string> = {
       [AUTOBUILD_VERSION_HEADER]: this.identity.autobuildVersion,
       [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: this.identity.protocolVersion,
@@ -183,6 +188,7 @@ export class RemoteBuildStore implements BuildStore {
       method,
       headers,
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     })
   }
 
@@ -218,8 +224,9 @@ export class RemoteBuildStore implements BuildStore {
     path: string,
     schema: { parse: (data: unknown) => T },
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<T> {
-    const response = await this.raw(method, path, body)
+    const response = await this.raw(method, path, body, signal)
     if (!response.ok) throw await this.toError(response)
     return schema.parse(await response.json())
   }
@@ -309,13 +316,19 @@ export class RemoteBuildStore implements BuildStore {
     }
   }
 
-  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+  async getEvents(
+    slug: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]> {
     const params = new URLSearchParams({ since: String(sinceSeq) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
     const events = await this.requestJson(
       'GET',
       `${this.buildPath(slug)}/events?${params}`,
       eventListSchema,
+      undefined,
+      opts?.signal,
     )
     return events as unknown as AbEvent[]
   }
@@ -438,7 +451,7 @@ export class RemoteBuildStore implements BuildStore {
   async getRepoEvents(
     repo: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
     const params = new URLSearchParams({ since: String(sinceSeq) })
     if (opts?.waitSeconds !== undefined) params.set('wait', String(opts.waitSeconds))
@@ -446,6 +459,8 @@ export class RemoteBuildStore implements BuildStore {
       'GET',
       `${this.repoPath(repo)}/events?${params}`,
       repositoryEventListSchema,
+      undefined,
+      opts?.signal,
     )
     return events as unknown as RepositoryEvent[]
   }
@@ -641,9 +656,15 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {
+    // Default to the bounded-wait window (AUT-334): a plain `subscribe` on a
+    // quiet stream costs one held request per wait window, not one request
+    // per `pollMs`. Callers may pass their own `waitSeconds` (or 0 to force
+    // the immediate interval loop); a server that ignores the parameter
+    // answers immediately and the cadence degrades to the old request rate.
+    const { waitSeconds = REMOTE_EVENT_WAIT_SECONDS, ...rest } = opts
     return pollingSubscribe(
       (since, pollOpts) => this.getEvents(slug, since, pollOpts),
-      opts,
+      { ...rest, waitSeconds: waitSeconds > 0 ? waitSeconds : undefined },
       onEvent,
     )
   }

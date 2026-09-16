@@ -722,6 +722,39 @@ describe('event wait over the wire', () => {
       await server.stop()
     }
   })
+
+  test('plain subscribe defaults to the bounded wait: one held request per wait window', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      let eventReads = 0
+      const countingFetch = (async (input, init) => {
+        if (typeof input === 'string' && input.includes('/events?')) eventReads += 1
+        return fetch(input, init)
+      }) as typeof fetch
+      const client = new RemoteBuildStore({
+        url: server.url,
+        fetchFn: countingFetch,
+      })
+      await client.createBuild(sampleBuildInput('wait-subscribe'))
+      // No waitSeconds: the default bounded window applies. With pollMs 10
+      // an interval loop would fire dozens of reads during the hold; the
+      // held request stays in flight, so the quiet window costs exactly one.
+      const received: number[] = []
+      const unsubscribe = client.subscribe('wait-subscribe', { pollMs: 10 }, (event) =>
+        received.push(event.seq),
+      )
+      await Bun.sleep(400)
+      expect(eventReads).toBe(1)
+      const event = await client.append('wait-subscribe', sampleEventWrite('wake'))
+      await Bun.sleep(400)
+      unsubscribe()
+      expect(received).toEqual([event.seq])
+      // The held request resolved on the append and the next one began.
+      expect(eventReads).toBe(2)
+    } finally {
+      await server.stop()
+    }
+  })
 })
 
 // ── Stream wire specifics (SPEC §7.6) ────────────────────────────────────

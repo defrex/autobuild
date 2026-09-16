@@ -21,8 +21,8 @@
  * re-implemented here.
  */
 import type { ZodType } from 'zod'
-import { EventValidationError, type EventWrite } from '../../events/catalog'
-import type { RepositoryEventWrite } from '../../events/repository'
+import { EventValidationError, type AbEvent, type EventWrite } from '../../events/catalog'
+import type { RepositoryEvent, RepositoryEventWrite } from '../../events/repository'
 import type { SessionEventWrite } from '../../events/sessions'
 import type { Via } from '../../events/envelope'
 import { systemClock, type BuildStore, type Clock } from '../types'
@@ -350,9 +350,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
-          await store.getRepoEvents(repo, since, {
-            ...(wait !== undefined ? { waitSeconds: wait } : {}),
-          }),
+          await withDisconnect(
+            req,
+            store.getRepoEvents(repo, since, {
+              ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            }),
+            (): RepositoryEvent[] => [],
+          ),
         )
       }
       case 'POST deposits': {
@@ -560,9 +564,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
-          await store.getEvents(slug, since, {
-            ...(wait !== undefined ? { waitSeconds: wait } : {}),
-          }),
+          await withDisconnect(
+            req,
+            store.getEvents(slug, since, {
+              ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            }),
+            (): AbEvent[] => [],
+          ),
         )
       }
       case 'POST deposits': {
@@ -786,6 +794,29 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
     }
     return buildRoute(req, url, slug, segments.slice(2).join('/'), scope)
+  }
+
+  /** A held read must not outlive its client. When the peer disconnects, Bun
+   * keeps the handler promise pending — which would stall `server.stop()` —
+   * so a held read races the request's abort signal and resolves empty; the
+   * response to a disconnected client is discarded either way. */
+  function withDisconnect<T>(req: Request, read: Promise<T>, empty: () => T): Promise<T> {
+    const signal = req.signal
+    if (signal.aborted) return Promise.resolve(empty())
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => resolve(empty())
+      signal.addEventListener('abort', onAbort, { once: true })
+      read.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort)
+          resolve(value)
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+      )
+    })
   }
 
   function errorResponse(error: unknown): Response {
