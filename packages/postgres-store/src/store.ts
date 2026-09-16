@@ -924,12 +924,16 @@ export class PostgresBuildStore implements BuildStore {
       else if (scope.kind === 'repo') await this.lockRepo(tx, scope.repo)
       else await this.lockSession(tx, scope.session)
       await this.pruneStreamChunksLocked(tx, scope)
+      // Store-assigned monotonic creation sequence (the listStreams
+      // same-timestamp tiebreak): the sequence is concurrency-safe and never
+      // repeats, so ties order by assignment. Streams are never deleted
+      // (retention prunes stream_chunks only), so the counter is never reused.
       await tx`INSERT INTO streams
-        (id, scope_kind, build, repo, session, label, format, status, created_at)
+        (id, scope_kind, build, repo, session, label, format, status, creation_seq, created_at)
         VALUES (${id}, ${scope.kind}, ${scope.kind === 'build' ? scope.build : null},
           ${scope.kind === 'repo' ? scope.repo : null},
           ${scope.kind === 'session' ? scope.session : null},
-          ${label}, ${STREAM_FORMAT}, 'open', ${ts})`
+          ${label}, ${STREAM_FORMAT}, 'open', nextval('streams_creation_seq'), ${ts})`
       return this.streamRecord(await this.lockStream(tx, id))
     })
   }
@@ -1090,6 +1094,8 @@ export class PostgresBuildStore implements BuildStore {
   async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
     const owner =
       scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
+    // Pinned tiebreak (store/types.ts): createdAt ascending, then the
+    // store-assigned monotonic creation sequence — never the random id.
     const rows: Row[] = await this.sql`
       SELECT * FROM streams
       WHERE scope_kind = ${scope.kind}
@@ -1098,7 +1104,7 @@ export class PostgresBuildStore implements BuildStore {
           OR (scope_kind = 'repo' AND repo = ${scope.kind === 'repo' ? owner : null})
           OR (scope_kind = 'session' AND session = ${scope.kind === 'session' ? owner : null})
         )
-      ORDER BY created_at, id`
+      ORDER BY created_at, creation_seq`
     return rows.map((row) => this.streamRecord(row))
   }
 

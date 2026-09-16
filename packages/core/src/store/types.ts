@@ -375,7 +375,14 @@ export interface BuildStore {
   /** The stream record, or null when the id is unknown. */
   getStream(streamId: string): Promise<StreamRecord | null>
 
-  /** Every stream in `scope`, oldest first. */
+  /** Every stream in `scope` in creation order: `createdAt` ascending, with
+   * same-millisecond ties broken by a store-assigned monotonic creation
+   * sequence — never by the random `st_<uuid>` id. The counter is assigned at
+   * `createStream`, is never reused (streams are never deleted — retention
+   * prunes `stream_chunks` only), and is not part of `StreamRecord`. This
+   * makes the returned order a function of the creation history alone, so
+   * every adapter (memory, SQLite, Postgres, remote) returns the same order
+   * for the same creation history. */
   listStreams(scope: StreamScope): Promise<StreamRecord[]>
 
   close(): Promise<void>

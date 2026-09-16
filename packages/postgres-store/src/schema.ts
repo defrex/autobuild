@@ -347,6 +347,7 @@ CREATE TABLE IF NOT EXISTS session_artifacts (
   metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
   PRIMARY KEY (session, kind, revision)
 );
+CREATE SEQUENCE IF NOT EXISTS streams_creation_seq;
 CREATE TABLE IF NOT EXISTS streams (
   id text PRIMARY KEY, scope_kind text NOT NULL,
   build text REFERENCES builds(slug) ON DELETE CASCADE,
@@ -355,6 +356,7 @@ CREATE TABLE IF NOT EXISTS streams (
   outcome text, artifact_kind text, artifact_revision bigint,
   artifact_blob_ref text, created_at timestamptz NOT NULL, closed_at timestamptz,
   session text REFERENCES sessions(id) ON DELETE CASCADE,
+  creation_seq bigint NOT NULL,
   CONSTRAINT streams_scope_kind_check CHECK (scope_kind IN ('build','repo','session')),
   CONSTRAINT streams_status_check CHECK (status IN ('open','closed')),
   CONSTRAINT streams_scope_exactly_one_check CHECK (
@@ -511,9 +513,12 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['artifact_blob_ref', 'text', false],
     ['created_at', 'timestamp with time zone', true],
     ['closed_at', 'timestamp with time zone', false],
-    // The session column rides last: the guarded v2→v3 ALTER adds it at the
-    // end, so migrated and fresh databases assert identically.
+    // The session column rides last-but-one and the creation-order tiebreak
+    // column rides last: the guarded v2→v3 ALTER adds session at the end and
+    // the guarded tiebreak ALTERs append creation_seq after it, so migrated
+    // and fresh databases assert identically.
     ['session', 'text', false],
+    ['creation_seq', 'bigint', true],
   ],
   stream_chunks: [
     ['stream', 'text', true],
@@ -756,6 +761,34 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
   }
 }
 
+/** The guarded streams.creation_seq upgrade, shared by every pre-v5 marker
+ * branch whose database carries a pre-existing streams table (v2, v3, v4).
+ * The idempotent full DDL above has already created the
+ * streams_creation_seq sequence; the column is added only when missing, with
+ * a (created_at, id)-ordered backfill — legacy same-millisecond ties are
+ * genuinely unorderable, so any total order consistent with createdAt is
+ * acceptable — SET NOT NULL, and the sequence positioned above the backfilled
+ * values so the next nextval continues the counter without collision. */
+const STREAMS_CREATION_SEQ_MIGRATION = `
+  DO $$ BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'streams'
+        AND column_name = 'creation_seq'
+    ) THEN
+      ALTER TABLE streams ADD COLUMN creation_seq bigint;
+      WITH numbered AS (
+        SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn FROM streams
+      )
+      UPDATE streams SET creation_seq = numbered.rn
+        FROM numbered WHERE streams.id = numbered.id;
+      ALTER TABLE streams ALTER COLUMN creation_seq SET NOT NULL;
+      PERFORM setval('streams_creation_seq',
+        (SELECT COALESCE(MAX(creation_seq), 0) FROM streams) + 1, false);
+    END IF;
+  END $$;
+`
+
 export async function migratePostgres(url: string): Promise<void> {
   const sql = new SQL(url)
   try {
@@ -790,19 +823,11 @@ export async function migratePostgres(url: string): Promise<void> {
         const version = Number(marker.version)
         if (version === SCHEMA_VERSION) {
           if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('marker is incompatible')
-        } else if (version === 4 && marker.checksum === SCHEMA_V4_CHECKSUM) {
-          // v4 → v5: the guarded repo_origin column above is the only delta;
-          // a v4 database already has every v5 table and column. Promote the
-          // marker in this transaction.
-          await tx`UPDATE ab_schema_migrations
-            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
-              applied_at = ${new Date().toISOString()}
-            WHERE singleton = true`
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
           // v1 → v5: the idempotent full DDL above already applied the deltas
           // (the stream tables and the session tables); v1 databases never had
           // a streams or sessions table, so the full DDL created them with the
-          // session column, the widened CHECKs, and the creation_seq column.
+          // session column, the widened CHECKs, and both creation_seq columns.
           // The guarded repo_origin ALTER above covered builds. Promote the
           // marker in this transaction.
           await tx`UPDATE ab_schema_migrations
@@ -812,8 +837,8 @@ export async function migratePostgres(url: string): Promise<void> {
         } else if (version === 2 && marker.checksum === SCHEMA_V2_CHECKSUM) {
           // v2 → v5: the idempotent full DDL above created the session tables
           // (with the creation_seq column); a v2 database's streams table
-          // needs the guarded session column and the widened CHECK
-          // constraints.
+          // needs the guarded session column, the widened CHECK constraints,
+          // and the guarded creation_seq column (shared with v3 and v4).
           await tx.unsafe(`
             DO $$ BEGIN
               IF NOT EXISTS (
@@ -837,19 +862,23 @@ export async function migratePostgres(url: string): Promise<void> {
                 OR (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
               );
           `)
+          await tx.unsafe(STREAMS_CREATION_SEQ_MIGRATION)
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 3 && marker.checksum === SCHEMA_V3_CHECKSUM) {
-          // v3 → v5: the listSessions creation-order tiebreak (store/types.ts).
-          // The idempotent full DDL above created the sessions_creation_seq
-          // sequence; a v3 database's sessions table needs the guarded
-          // creation_seq column, a (created_at, id)-ordered backfill — legacy
-          // same-millisecond ties are genuinely unorderable, so any total
-          // order consistent with createdAt is acceptable — SET NOT NULL, and
-          // the sequence positioned above the backfilled values so the next
-          // nextval continues the counter without collision.
+          // v3 → v5: the listSessions and listStreams creation-order
+          // tiebreaks (store/types.ts). The idempotent full DDL above created
+          // the sessions_creation_seq and streams_creation_seq sequences; a
+          // v3 database's sessions and streams tables need the guarded
+          // creation_seq columns, each with a (created_at, id)-ordered
+          // backfill — legacy same-millisecond ties are genuinely
+          // unorderable, so any total order consistent with createdAt is
+          // acceptable — SET NOT NULL, and the sequence positioned above the
+          // backfilled values so the next nextval continues the counter
+          // without collision. The guarded repo_origin ALTER above covered
+          // builds.
           await tx.unsafe(`
             DO $$ BEGIN
               IF NOT EXISTS (
@@ -869,6 +898,20 @@ export async function migratePostgres(url: string): Promise<void> {
               END IF;
             END $$;
           `)
+          await tx.unsafe(STREAMS_CREATION_SEQ_MIGRATION)
+          await tx`UPDATE ab_schema_migrations
+            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
+        } else if (version === 4 && marker.checksum === SCHEMA_V4_CHECKSUM) {
+          // v4 → v5: the listStreams creation-order tiebreak
+          // (store/types.ts), mirroring the v3→v4 sessions treatment. The
+          // idempotent full DDL above created the streams_creation_seq
+          // sequence; a v4 database's streams table needs the guarded
+          // creation_seq column, backfill, NOT NULL, and sequence continuity
+          // (the shared pre-v5 streams migration). The guarded repo_origin
+          // ALTER above covered builds.
+          await tx.unsafe(STREAMS_CREATION_SEQ_MIGRATION)
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}

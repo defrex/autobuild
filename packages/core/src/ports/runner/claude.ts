@@ -256,11 +256,16 @@ export class ClaudeAgentRunner implements AgentRunner, OneShotCompletion {
   ): Promise<AgentTurnResult> {
     const state = this.liveState(session, 'continue')
     // §10/D8: a continued turn gets this round's AB_PHASE/AB_SESSION while
-    // retaining start-only values. A fresh process env is built below.
-    const turnOpts =
-      opts?.env !== undefined
+    // retaining start-only values. A fresh process env is built below. §9:
+    // it also streams through THIS turn's emitter only — the start turn's
+    // emitter (if any) belongs to its own bracket and never receives this
+    // turn's parts, matching the pi adapter's per-turn forwarding.
+    const turnOpts: AgentStartOpts = {
+      ...(opts?.env !== undefined
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
-        : state.opts
+        : state.opts),
+      stream: opts?.stream,
+    }
     const turn = await this.runTurn(message, turnOpts, { resume: session.id }, opts?.signal)
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)

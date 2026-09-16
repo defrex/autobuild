@@ -1104,7 +1104,16 @@ deterministic fail-safe.
   and closes the stream at the session end boundary — before the
   `session.ended` event lands — with outcome `completed` when the final turn
   completed, `aborted` when it failed or was cancelled. A session that ends on
-  a substituted runtime keeps the stream opened for its own bracket.
+  a substituted runtime keeps the stream opened for its own bracket. The
+  harvest runner does the same for its synthesize and review session brackets
+  with the identical protocol and part vocabulary: streams are scoped
+  `{ kind: 'repo', repo }` instead of build-scoped, `harvest.session.started`
+  carries the returned stream id, `phase` is spelled `harvest:<step>`, each
+  revise round is its own bracket and its own stream, and a closed stream
+  finalizes onto the repository scope. Harvest journal events
+  (`harvest.step.*`, `harvest.proposals.submitted`, `harvest.review.verdict`,
+  and their kin) are deliberately not translated into parts — they are typed
+  journal facts, observable via `ab watch --repository`, not harness output.
 
   The part vocabulary: the stream's first part is always a `data-ab-session`
   part naming the session id, role, runner, model, phase, and round; each
@@ -1825,9 +1834,17 @@ response with no proven ruleset gate still fails closed with a reason naming
 the missing subsection.
 
 Inability to prove or apply auto-merge is nonfatal pipeline plumbing, not a PR
-creation failure: finalize still records the open PR and completes, consent
-stays pending for later janitor polls, and the first non-transient refusal for
-that PR and consent command records one kernel-authored follow-up. A repository
+creation failure: finalize still records the open PR and completes, and consent
+stays pending for later janitor polls, which re-examine it. Deferrals divide by
+who resolves them. Merge conflicts and not-yet-computed mergeability are
+pipeline-owned: a conflict re-enters the pipeline through `pr.conflicted` and
+reconcile (below), and uncomputed mergeability resolves on a later poll —
+neither records anything, and the reconcile step on the build row is the only
+indication. A kernel-authored follow-up is recorded only for a deferral a
+person must fix: the first such refusal for that PR and consent command records
+one follow-up while the PR is open, and a later `reconcile.completed` or
+`finalize.completed` supersedes it — the projection shows nothing until the
+gate re-examines consent and records a fresh one. A repository
 with native auto-merge disabled is left open for a human; Autobuild never
 changes the setting. The local-git forge has no external gate or native
 setting: consent produces the same inspected-head guarded squash candidate,
