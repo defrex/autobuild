@@ -1327,6 +1327,18 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     })
 
     describe('subscribe (§7.2 — polling delivery)', () => {
+      /** Delivery latency is adapter-dependent, not part of the contract: the
+       * remote client's bounded wait (AUT-334) degrades to the backing
+       * store's held-read poll budget — 25 ms on memory, up to
+       * EVENT_WAIT_POLL_MS = 1 s on the hosted PostgreSQL stack. The windows
+       * below therefore wait a bounded time for the expected events instead
+       * of assuming fixed fast delivery; the assertions themselves are
+       * unchanged. */
+      async function expectDelivery(received: number[], count: number): Promise<void> {
+        const deadline = Date.now() + 4000
+        while (received.length < count && Date.now() < deadline) await Bun.sleep(10)
+      }
+
       test('delivers appended events in order, each exactly once', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('sub-order'))
@@ -1335,10 +1347,10 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             received.push(event.seq)
           })
           await store.append('sub-order', sampleEventWrite('one'))
-          await Bun.sleep(50)
+          await expectDelivery(received, 1)
           await store.append('sub-order', sampleEventWrite('two'))
           await store.append('sub-order', sampleEventWrite('three'))
-          await Bun.sleep(50)
+          await expectDelivery(received, 3)
           unsubscribe()
           expect(received).toEqual([1, 2, 3])
         })
@@ -1354,7 +1366,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             received.push(event.seq),
           )
           await store.append('sub-from', sampleEventWrite('three'))
-          await Bun.sleep(50)
+          await expectDelivery(received, 2)
           unsubscribe()
           expect(received).toEqual([2, 3])
         })
@@ -1368,9 +1380,12 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             received.push(event.seq)
           })
           await store.append('sub-stop', sampleEventWrite('one'))
-          await Bun.sleep(50)
+          await expectDelivery(received, 1)
           unsubscribe()
           await store.append('sub-stop', sampleEventWrite('two'))
+          // Delivery after unsubscribe is impossible client-side (the loop is
+          // stopped and a held read's abort rejects its promise), so a short
+          // fixed window is a sufficient negative proof on every adapter.
           await Bun.sleep(40)
           expect(received).toEqual([1])
         })
