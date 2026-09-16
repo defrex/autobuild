@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#389](https://github.com/defrex/autobuild/pull/389) — Show pinned pipeline source and config rev on web build detail
 - [#386](https://github.com/defrex/autobuild/pull/386) — Reconcile peer-dependency floors left by the hosted-store extraction
 - [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
 - [#384](https://github.com/defrex/autobuild/pull/384) — Pin each build's pipeline config to its own branch (AUT-390)
