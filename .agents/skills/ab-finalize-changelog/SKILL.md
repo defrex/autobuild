@@ -78,6 +78,13 @@ staged diff once more, and create one commit:
 
 ```sh
 git add -- CHANGELOG.md
+# Defensive: finalize commits must never fail on missing or partial identity
+# (an email-only or name-only identity still fails `git commit`). Skip the
+# fallback only when both keys resolve; otherwise set the repo-local identity
+# (.git/config — invisible to the cleanliness guard, no sudo) to the same bot
+# identity as the workspace `git-identity` provisioning step in autobuild.toml.
+{ [ -n "$(git config user.name || true)" ] && [ -n "$(git config user.email || true)" ]; } || \
+  { git config user.name 'autobuild[bot]'; git config user.email 'autobuild[bot]@users.noreply.github.com'; }
 git commit -m "chore: add changelog entry for #<number>" -- CHANGELOG.md
 git status --porcelain
 ```

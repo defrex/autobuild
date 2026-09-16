@@ -3,6 +3,10 @@
 ## Unreleased
 
 - [#341](https://github.com/defrex/autobuild/pull/341) — Document the appendStreamParts rejection precedence divergence
+- [#340](https://github.com/defrex/autobuild/pull/340) — Guarantee a git identity for finalize commits
+- [#338](https://github.com/defrex/autobuild/pull/338) — Add `ab watch`: read-only event streaming with a resumable cursor
+- [#339](https://github.com/defrex/autobuild/pull/339) — Pin the listSessions same-millisecond tiebreak across stores
+- [#337](https://github.com/defrex/autobuild/pull/337) — Land the ab-implement ground-rules rewording in the canonical skill
 - [#336](https://github.com/defrex/autobuild/pull/336) — State close idempotence and the append error surface in SPEC §7.6 (AUT-354)
 - [#334](https://github.com/defrex/autobuild/pull/334) — Read the build-owned config from the store in ab build status
 - [#333](https://github.com/defrex/autobuild/pull/333) — Stream every local build session as AI SDK UI message parts

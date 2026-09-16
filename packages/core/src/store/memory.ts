@@ -732,6 +732,11 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async listSessions(repo: string): Promise<SessionRecord[]> {
+    // Pinned tiebreak (store/types.ts): Map iteration is insertion order and
+    // Map.set on an existing key preserves position, so insertion order *is*
+    // creation order — the store-assigned monotonic creation sequence for
+    // free, no counter needed. Sessions are never deleted, so ties never
+    // reorder over time.
     return [...this.sessions.values()]
       .filter((state) => state.record.repo === repo)
       .map((state) => this.sessionSnapshot(state))

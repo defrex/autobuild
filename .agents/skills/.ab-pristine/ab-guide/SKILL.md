@@ -1441,6 +1441,80 @@ runs, its stream is the live view of the turn; once the session ends the
 stream finalizes into an artifact, and `ab artifact download <slug>
 stream:<id>` retrieves the closed session's finalized document.
 
+**`ab watch [<slug>...] [--repository] [--event <glob>]... [--since <cursor>]
+[--timeout <dur>] [--interval <dur>] [--count <n>] [--json] [--store <ref>]`**
+streams matching events as they land instead of answering once. With no slug it
+follows every nonterminal build in the repository — a build created while the
+watch runs joins it without a restart — and naming one or more slugs watches
+exactly those builds, ending the watch when all of them reach a terminal status.
+`--repository` additionally follows the repository journal; without it,
+repository events are never emitted.
+
+The default filter is the attention set — the events something must wake up
+for. For builds that is exactly: `escalation.raised`, `phase.failed`,
+`infrastructure.failed`, `runner.setup-failed`, `dispatch.failed`,
+`publication.lost`, `finalize.completed`, `pr.conflicted`, `pr.merged`,
+`pr.closed`, `build.completed`, `build.aborted`. For the repository journal:
+`harvest.escalated`, `harvest.failed`, `dispatcher.tick-failed`,
+`dispatcher.config-rejected`, `dispatcher.harvest-runner-failed`. A repeatable
+`--event <glob>` (`escalation.*`, `pr.*`, `*` — `*` matches any run of
+characters, `?` one) replaces that filter, and every glob must match at least
+one known event type or the command fails before reading the store.
+
+With `--json`, stdout is newline-delimited JSON — exactly one object per
+matching event, flushed as soon as it is written — with fields `build` (slug,
+or null for a repository event), `repo` (present only for repository events),
+`event` (the complete durable envelope: build, seq, ts, actor, type, payload),
+`state` (for build events, the reduction after that event: `status`, `phase`,
+`round`, `openEscalations` with their ids and questions, `pr`, `prState`,
+`outcome`; null for repository events), and `cursor`. Without `--json` each
+record is one plain human-readable line. On every exit the last `--json` line
+is a bare `{"cursor": …}` object reflecting the final position even when no
+record matched. Cursors are opaque; resume with `--since <cursor>` and every
+matching event after that cursor is delivered exactly once, in per-stream
+sequence order — including events that landed while no watch was running. A
+cursor from a different repository or store is rejected.
+
+The watch ends with exit 0 when `--timeout` elapses (30 minutes by default;
+`0` unbounded), after `--count <n>` records, or when named builds have all
+gone terminal; with no slugs named, an empty set of active builds does not end
+it. Usage errors, scope violations, unknown slugs, and cursor rejection exit 1
+before any record. A store read that fails after the watch has started is
+reported once on stderr and retried at the next interval without duplicating
+or skipping any event. The default poll interval is 5 seconds for an `http(s)`
+store and 1 second for a local store. The command is read-only — it appends no
+event, takes no lease, creates no record, and starts no work — and deciding
+what to do about a blocker or a merge stays with the caller, not the command.
+Inside a phase, only the ambient build may be watched.
+
+Two recipes cover the common harnesses. First, a line-per-notification tool
+that re-arms periodically (Claude Code's Monitor tool expires after at most 30
+minutes): the cursor is what makes each re-arming lossless — persist the final
+`{"cursor": …}` line and pass it back through `--since` next time:
+
+```sh
+last=$(cat .ab-watch.cursor 2>/dev/null || true)
+ab watch --json --timeout 30m ${last:+--since "$last"} \
+  | awk '/^\{"cursor":/ { cursor = $0; next } { print } \
+          END { if (cursor != "") print cursor > ".ab-watch.cursor" }'
+```
+
+Second, a plain shell loop — the same resume discipline wrapped in `while`:
+
+```sh
+while :; do
+  last=$(cat .ab-watch.cursor 2>/dev/null || true)
+  ab watch --json --timeout 30m ${last:+--since "$last"} \
+    | while IFS= read -r line; do
+        case $line in
+          '{"cursor":'* ) printf '%s\n' "$line" > .ab-watch.cursor ;;
+          * ) echo "$line" ;;  # one JSON record per matching event
+        esac
+      done
+  sleep 1
+done
+```
+
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 durable repository gate and an ordered collection of every unresolved failed
 run plus relevant open/latest context from the same journal the runner resumes.
