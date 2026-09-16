@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#354](https://github.com/defrex/autobuild/pull/354) — Add a read-only session view that streams live dispatch sessions (AUT-337)
 - [#353](https://github.com/defrex/autobuild/pull/353) — Run the TicketSource live suite in the CI live-Postgres step
 - [#350](https://github.com/defrex/autobuild/pull/350) — Wire live Postgres store suites into CI via always-on verify step
 - [#349](https://github.com/defrex/autobuild/pull/349) — Stream harvest sessions and harvest runners as AI SDK UI message parts
