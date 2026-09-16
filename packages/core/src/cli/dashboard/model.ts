@@ -38,6 +38,7 @@
 import type { AbEvent } from '../../events/catalog'
 import type { RepositoryEvent } from '../../events/repository'
 import type { Config } from '../../config/schema'
+import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
 import { currentAutoMergeDeferral } from '../../kernel/auto-merge'
 import { decideNext } from '../../kernel/engine'
@@ -155,6 +156,11 @@ export interface DashboardBuild {
   pr?: { url: string; state: PrLifecycle }
   /** Chronological session history projected from the retained raw log. */
   sessions?: DashboardSession[]
+  /** Which `autobuild.toml` the dispatcher pinned this build's pipeline from,
+   * and the effective-config revision it was deposited under (SPEC §16.1).
+   * Present once an effective-config artifact exists. */
+  pipelineSource?: PipelineSourceMeta
+  effectiveConfigRev?: number
 }
 
 export type DashboardView =

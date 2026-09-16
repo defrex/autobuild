@@ -639,6 +639,19 @@ function detailBody(
   if (ceiling !== undefined) body.push(`  ${ceiling}`)
   if (build.pr !== undefined)
     body.push(`  PR ${build.pr.state}  ${link(build.pr.url, build.pr.url, color)}`)
+  if (build.pipelineSource !== undefined || build.effectiveConfigRev !== undefined) {
+    const commit =
+      build.pipelineSource?.commit !== undefined
+        ? build.pipelineSource.commit.slice(0, 7)
+        : 'unknown'
+    const source =
+      build.pipelineSource !== undefined
+        ? `autobuild.toml@${commit} (${build.pipelineSource.ref})`
+        : 'autobuild.toml@unknown (pre-pin)'
+    const rev =
+      build.effectiveConfigRev !== undefined ? `  config rev ${build.effectiveConfigRev}` : ''
+    body.push(`  pipeline ${source}${rev}`)
+  }
   if (build.abortProgress !== undefined) {
     body.push('', paint('Abort progress', 'bold', color))
     body.push(...wrappedText(build.abortProgress, width, '  '))

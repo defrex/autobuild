@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../../config/load'
 import { KERNEL } from '../../events/envelope'
+import { BUILD_EFFECTIVE_CONFIG_ARTIFACT } from '../../processes/build-execution-state'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
 import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
@@ -43,6 +44,10 @@ class CountingReader implements DashboardBuildReader {
       throw new Error(`scripted read failure for ${slug}`)
     }
     return this.store.getEvents(slug, sinceSeq)
+  }
+
+  async getArtifact(slug: string, kind: string) {
+    return this.store.getArtifact(slug, kind)
   }
 
   resetCalls(): void {
@@ -117,6 +122,27 @@ describe('DashboardBuildPollCache', () => {
     expect(secondRow).toBe(firstRow)
     expect(secondRow).toEqual(firstRow)
     expect((await store.getEvents('silent')).map((event) => event.seq)).toEqual([1])
+  })
+
+  test('decorates a row with the pinned pipeline source and effective-config revision', async () => {
+    const store = new MemoryBuildStore({ clock: () => new Date('2026-07-14T21:00:00.000Z') })
+    await addRunning(store, 'pinned')
+    await store.putArtifact('pinned', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: '{}',
+      metadata: {
+        revision: 2,
+        pipelineSource: { ref: 'base', commit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' },
+      },
+    })
+    const cache = new DashboardBuildPollCache(new CountingReader(store), REPO, CONFIG)
+    const snapshot = await cache.refresh()
+    const pinned = row(snapshot, 'pinned')!
+    expect(pinned.pipelineSource).toEqual({
+      ref: 'base',
+      commit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    })
+    expect(pinned.effectiveConfigRev).toBe(2)
   })
 
   test('a config-only revision reprojects unchanged live streams', async () => {

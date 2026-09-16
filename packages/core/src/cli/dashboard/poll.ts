@@ -1,16 +1,25 @@
 import type { Config } from '../../config/schema'
+import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { AbEvent } from '../../events/catalog'
 import { reduceBuild, type BuildState } from '../../kernel/reducer'
-import type { BuildRecord, StreamRecord, StreamScope } from '../../store/types'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
+} from '../../processes/build-execution-state'
+import type { Artifact, BuildRecord, StreamRecord, StreamScope } from '../../store/types'
 import { projectBuild, type DashboardBuild } from './model'
 
 /** The read-only BuildStore surface needed to construct dashboard build rows.
  * `listStreams` is optional: when present, build-scope records enrich each
- * row's session history with authoritative stream ids and statuses (SPEC §9). */
+ * row's session history with authoritative stream ids and statuses (SPEC §9).
+ * `getArtifact` is optional: when present, the effective-config artifact's
+ * metadata decorates each row with its pinned pipeline source and revision
+ * (SPEC §16.1). */
 export interface DashboardBuildReader {
   listBuilds(): Promise<BuildRecord[]>
   getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
   listStreams?(scope: StreamScope): Promise<StreamRecord[]>
+  getArtifact?(slug: string, kind: string): Promise<Artifact | null>
 }
 
 export interface DashboardPollSnapshot {
@@ -109,6 +118,35 @@ export class DashboardBuildPollCache {
     return snapshot.revision === this.committedRevision
   }
 
+  /** Effective-config artifact metadata for one build (SPEC §16.1), when the
+   * reader exposes the artifact primitive. Failures are display-only. */
+  private async readConfigMeta(
+    slug: string,
+  ): Promise<{ revision?: number; pipelineSource?: PipelineSourceMeta } | undefined> {
+    const getArtifact = this.reader.getArtifact
+    if (getArtifact === undefined) return undefined
+    try {
+      const artifact = await getArtifact.call(this.reader, slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      if (artifact === null) return undefined
+      return parseBuildConfigMetadata(artifact)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Attach the pinned pipeline source and effective-config revision to a
+   * freshly projected row. Display-only; a missing artifact leaves it as-is. */
+  private async decorateBuild(
+    slug: string,
+    build: DashboardBuild | null,
+  ): Promise<DashboardBuild | null> {
+    if (build === null) return null
+    const meta = await this.readConfigMeta(slug)
+    if (meta?.revision !== undefined) build.effectiveConfigRev = meta.revision
+    if (meta?.pipelineSource !== undefined) build.pipelineSource = meta.pipelineSource
+    return build
+  }
+
   refresh(
     config: Config = this.config,
     configRevision = this.configRevision,
@@ -146,12 +184,15 @@ export class DashboardBuildPollCache {
           configChanged
             ? {
                 ...current,
-                build: projectBuild(
-                  record,
-                  current.state,
-                  config,
-                  current.events,
-                  await this.readStreams(record.slug),
+                build: await this.decorateBuild(
+                  record.slug,
+                  projectBuild(
+                    record,
+                    current.state,
+                    config,
+                    current.events,
+                    await this.readStreams(record.slug),
+                  ),
                 ),
               }
             : current,
@@ -169,7 +210,10 @@ export class DashboardBuildPollCache {
         kind: 'live',
         events,
         state,
-        build: projectBuild(record, state, config, events, await this.readStreams(record.slug)),
+        build: await this.decorateBuild(
+          record.slug,
+          projectBuild(record, state, config, events, await this.readStreams(record.slug)),
+        ),
       })
     }
 

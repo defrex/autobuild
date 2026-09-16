@@ -1677,7 +1677,13 @@ describe('abBuildStatus', () => {
     await store.putArtifact('merge-wait', {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
       content: effectiveBuildConfigContent(parseConfig(MINIMAL_CONFIG)),
-      metadata: { revision: 0 },
+      metadata: {
+        revision: 0,
+        pipelineSource: {
+          ref: 'branch-head',
+          commit: 'abc1234def5678901234567890123456789012345',
+        },
+      },
     })
 
     const json: string[] = []
@@ -1693,6 +1699,13 @@ describe('abBuildStatus', () => {
     })
     const parsed = JSON.parse(json.join('\n'))
     expect(parsed.decision).toEqual({ kind: 'awaiting-pr' })
+    // SPEC §16.1 operator visibility: the pinned pipeline source and the
+    // effective-config revision travel in the status projection.
+    expect(parsed.pipelineSource).toEqual({
+      ref: 'branch-head',
+      commit: 'abc1234def5678901234567890123456789012345',
+    })
+    expect(parsed.effectiveConfigRev).toBe(0)
 
     const human: string[] = []
     await abBuildStatus({
@@ -1707,6 +1720,7 @@ describe('abBuildStatus', () => {
     const text = human.join('\n')
     expect(text).toContain('waiting:  on PR')
     expect(text).not.toContain('decision: unavailable')
+    expect(text).toContain('pipeline: autobuild.toml@abc1234 (branch-head)  config rev 0')
   })
 
   test('an unknown slug is an actionable error', async () => {
