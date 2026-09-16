@@ -794,15 +794,6 @@ class DispatchLoop {
     return this.liveConfig.current()
   }
 
-  /** Resolve this build's pinned pipeline source (SPEC §16.1). Any failure —
-   * missing build record, absent forge capability, unreadable branch/base,
-   * malformed TOML — degrades to `undefined` (the legacy fallback), never
-   * failing the deposit. */
-  /** Resolve this build's pinned pipeline source (SPEC §16.1). Never throws:
-   * every failure — missing build record, absent forge capability, unreadable
-   * branch/base, malformed TOML, store read failure — degrades to `source:
-   * undefined` with the failed attempts' reasons, never failing the deposit.
-   * The reasons feed the caller's fallback diagnostic. */
   /** Resolve this build's pinned pipeline source (SPEC §16.1). Never throws:
    * every failure — missing build record, absent forge capability, unreadable
    * branch/base, malformed TOML, store read failure — degrades to `source:
