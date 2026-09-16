@@ -3,18 +3,6 @@ import { jwt, mcp } from 'better-auth/plugins'
 import { Pool } from 'pg'
 import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
-/** The pinned 1.4.18 MCP plugin's provider-metadata endpoint
- * (getMCPProviderMetadata, backing /.well-known/oauth-authorization-server)
- * hardcodes jwks_uri `<baseURL>/mcp/jwks` — an endpoint that does not exist —
- * and then spreads the TOP-LEVEL `metadata` of the options it receives, but
- * MCPOptions omits the field: its declared shape only carries it under
- * oidcConfig, which flows to the protected-resource document alone
- * (getMCPProtectedResourceMetadata reads oidcConfig?.metadata). The runtime
- * test in auth.test.ts pins this plugin behavior. */
-type McpPluginOptions = Parameters<typeof mcp>[0] & {
-  metadata?: { jwks_uri: string }
-}
-
 /** Admission policy is deliberately exported so provider callbacks can be
  * tested without OAuth or a database. */
 export function admittedUser<T extends { email: string }>(
@@ -34,18 +22,15 @@ export interface CreateWebAuthOptions {
   accessTokenExpiresIn?: number
 }
 
-/** The MCP plugin's options, carrying the jwks_uri override through BOTH
- * channels the pinned plugin reads (see McpPluginOptions for the seam).
- * Extracted so the shape stays a typed value — no cast, so excess-property
- * checking still rejects unknown fields. */
+/** The MCP plugin's options. Extracted so the shape stays a typed value —
+ * no cast, so excess-property checking still rejects unknown fields. */
 function mcpPluginOptions(
   config: ReturnType<typeof parseWebAuthEnv>,
   options?: CreateWebAuthOptions,
-): McpPluginOptions {
+): Parameters<typeof mcp>[0] {
   return {
     loginPage: '/sign-in',
     resource: config.mcpResource,
-    metadata: { jwks_uri: `${config.baseURL}/api/auth/jwks` },
     oidcConfig: {
       loginPage: '/sign-in',
       consentPage: '/oauth/consent',
@@ -87,7 +72,10 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       // with no authenticationScheme). This declaration — at the documented
       // plugin-schema extension point, merged in by getAuthTables — restores
       // it, and pairs with the auth-schema v3 column so Postgres DCR
-      // round-trips the field. Patching the plugin is out of scope.
+      // round-trips the field. That drift is separate from the
+      // provider-metadata one and is deliberately worked around here rather
+      // than folded into patches/better-auth@1.4.18.patch, which only fixes
+      // the getMCPProviderMetadata read path.
       {
         id: 'oauth-application-authentication-scheme',
         schema: {
@@ -98,17 +86,18 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       } satisfies BetterAuthPlugin,
       // The MCP plugin turns this app into an OAuth 2.1 authorization server
       // and protected resource for /mcp; the jwt companion signs its tokens
-      // and serves /api/auth/jwks. The pinned plugin would advertise the
-      // nonexistent <baseURL>/mcp/jwks in both metadata documents, so the
-      // jwks_uri override is fed through BOTH channels the plugin reads:
-      // getMCPProviderMetadata (authorization-server document) spreads the
-      // top-level `metadata` of these options, while
-      // getMCPProtectedResourceMetadata (protected-resource document) reads
-      // oidcConfig?.metadata. Both carry the same value — the endpoint that
-      // actually exists — so the two documents agree; if a future plugin
-      // version reads the other channel, the same value still flows, and if
-      // the top-level spread disappears, the auth.test.ts regression test
-      // fails loudly instead of silently re-advertising /mcp/jwks.
+      // and serves /api/auth/jwks. The pinned 1.4.18 plugin hardcodes the
+      // nonexistent <baseURL>/mcp/jwks as jwks_uri in the provider metadata
+      // (getMCPProviderMetadata, backing /.well-known/oauth-authorization-server);
+      // under patches/better-auth@1.4.18.patch its call site instead passes
+      // options?.oidcConfig — the channel the function's declared
+      // (ctx, options?: OIDCOptions) signature already expects — so the single
+      // declared oidcConfig.metadata field feeds BOTH documents: the
+      // authorization-server one and getMCPProtectedResourceMetadata's
+      // protected-resource one. The override is keyed to the exact plugin
+      // version and must be re-derived or dropped on upgrade; if it goes
+      // missing, the auth.test.ts regression test fails loudly instead of
+      // silently re-advertising /mcp/jwks.
       jwt(),
       mcp(mcpPluginOptions(config, options)),
     ],
