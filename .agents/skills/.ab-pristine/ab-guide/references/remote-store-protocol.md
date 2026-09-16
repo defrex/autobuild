@@ -533,6 +533,11 @@ Append semantics, enforced before any mutation:
   naming the ceiling — the same bound and shape as the artifact ceiling.
 - Appending to a closed stream is `409 conflict` (`stream "…" is closed`);
   appending to an unknown stream is `404 not-found`. Neither writes anything.
+- The server resolves and authorizes the stream **before** parsing the append
+  body, so a malformed or oversized batch on an unknown or foreign-scoped
+  stream is `404 not-found`, not `400 validation` — and the `413` ceiling is
+  likewise never reached, since the body is never evaluated. The `400` and
+  `413` rejections apply only after the stream resolves.
 
 Read wait semantics: when no newer chunk exists and the stream is open, the
 server may hold the request up to the parsed `wait` bound in whole seconds,
@@ -760,6 +765,16 @@ The shipped server maps failures as follows:
 Authentication runs before resource lookup, and session authorization runs
 before event catalog validation. A request may therefore receive `401` or
 `403` even if its resource or event body is also invalid.
+
+Stream appends are evaluated in a fixed order — authentication, stream
+resolution and scope authorization, body schema, backing-store validation and
+batch ceiling, closed check — so each earlier rejection masks the later ones:
+a request with both an unknown stream and an invalid body is `404`, and an
+oversized batch addressed to an unknown stream is `404` too (the body, and
+with it the ceiling, is never evaluated). Note this ordering differs from the
+local store adapters, which validate the batch before resolving the stream —
+the streams section of the store specification states both orders
+authoritatively.
 
 A `400` wire-schema rejection performs no backing mutation. A `422` event
 rejection appends no event. For a deposit, either class of validation failure
