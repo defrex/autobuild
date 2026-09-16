@@ -16,10 +16,22 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
   expect(config.tickets.triageState).toBe('Backlog')
   expect(config.pr).toBeUndefined()
   expect(config.commands.lint).toBe('bun run check')
-  expect(config.verify.steps).toEqual(['lint', 'types', 'unit', 'dashboard', 'web-dashboard'])
+  expect(config.verify.steps).toEqual([
+    'lint',
+    'types',
+    'unit',
+    'postgres',
+    'dashboard',
+    'web-dashboard',
+  ])
   expect(config.verify.stepConfigs.lint).toEqual({
     kind: 'check',
     command: 'lint',
+    always: true,
+  })
+  expect(config.verify.stepConfigs.postgres).toEqual({
+    kind: 'check',
+    command: 'test-postgres',
     always: true,
   })
   expect(config.verify.stepConfigs.dashboard).toEqual({
