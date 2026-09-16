@@ -231,6 +231,15 @@ export class OperatorApiClient {
       body: JSON.stringify(request),
     })
   }
+  /** The registry's generic protocol face: execute any tool from the closed
+   * table by name. The body is the tool's input (repo included); failures
+   * parse into OperatorApiError exactly like the typed routes. */
+  callTool(repo: string, tool: string, input: unknown): Promise<unknown> {
+    return this.request(repo, `tools/${encodeURIComponent(tool)}`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
   answer(repo: string, slug: string, request: OperatorAnswerRequest): Promise<BuildControlResult> {
     return this.request(repo, `builds/${encodeURIComponent(slug)}/answer`, {
       method: 'POST',

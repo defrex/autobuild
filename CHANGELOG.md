@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#355](https://github.com/defrex/autobuild/pull/355) — Serve the tool registry over hosted MCP with Better Auth OAuth
 - [#354](https://github.com/defrex/autobuild/pull/354) — Add a read-only session view that streams live dispatch sessions (AUT-337)
 - [#353](https://github.com/defrex/autobuild/pull/353) — Run the TicketSource live suite in the CI live-Postgres step
 - [#351](https://github.com/defrex/autobuild/pull/351) — Make the via-attribution contract transport-aware

@@ -109,6 +109,10 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     ) {
       return 'operator'
     }
+    // The registry's generic tools route (one POST per tool call).
+    if (req.method === 'POST' && rest.length === 2 && rest[0] === 'tools' && rest[1]) {
+      return 'operator'
+    }
     // Operator sessions: collection list/create and the addressed family.
     if (rest[0] === 'sessions') {
       if ((req.method === 'GET' || req.method === 'POST') && rest.length === 1) return 'operator'

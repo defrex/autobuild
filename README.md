@@ -51,7 +51,8 @@ Store, dispatcher, query commands, and that dashboard is the repository's
 normalized origin URL (e.g. `https://github.com/defrex/autobuild`), never a
 checkout path; pre-origin records are not migrated. The web UI uses a server-managed
 session; automation clients can use the versioned [operator API](docs/operator-api.md)
-for the same controls and projections without exposing service credentials.
+for the same controls and projections without exposing service credentials, and
+external MCP agents connect through the [hosted MCP server](docs/mcp.md).
 
 ## Quickstart
 

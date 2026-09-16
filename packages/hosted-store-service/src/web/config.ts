@@ -13,6 +13,9 @@ export interface WebAuthConfig {
   github: { clientId: string; clientSecret: string }
   postgresURL: string
   secureCookies: boolean
+  /** The protected resource the MCP plugin binds tokens to: the deployment's
+   * /mcp URL (AB_WEB_MCP_RESOURCE, defaulting to <baseURL>/mcp). */
+  mcpResource: string
 }
 
 function required(env: WebEnv, name: string): string {
@@ -84,6 +87,27 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
     }
     return normalized
   })
+  const rawMcpResource = env.AB_WEB_MCP_RESOURCE?.trim()
+  let mcpResource = `${url.origin}/mcp`
+  if (rawMcpResource !== undefined && rawMcpResource !== '') {
+    let resource: URL
+    try {
+      resource = new URL(rawMcpResource)
+    } catch {
+      throw new Error('AB_WEB_MCP_RESOURCE must be an absolute http(s) URL')
+    }
+    if (
+      !['http:', 'https:'].includes(resource.protocol) ||
+      resource.username ||
+      resource.password
+    ) {
+      throw new Error('AB_WEB_MCP_RESOURCE must be an absolute http(s) URL without credentials')
+    }
+    if (env.NODE_ENV === 'production' && resource.protocol !== 'https:') {
+      throw new Error('AB_WEB_MCP_RESOURCE must use https in production')
+    }
+    mcpResource = resource.toString().replace(/\/$/, '')
+  }
   return {
     secret,
     baseURL: url.origin,
@@ -96,9 +120,14 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
     },
     postgresURL: resolvePostgresUrl(env),
     secureCookies: url.protocol === 'https:',
+    mcpResource,
   }
 }
 
 export function safeWebConfig(config: WebAuthConfig) {
-  return { providers: [...config.providers], repositories: [...config.repositories] }
+  return {
+    providers: [...config.providers],
+    repositories: [...config.repositories],
+    mcpResource: config.mcpResource,
+  }
 }
