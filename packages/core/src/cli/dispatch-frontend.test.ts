@@ -2,9 +2,28 @@ import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
+import { assembleUIMessageDocument } from '../store/streams/assemble'
+import {
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  sessionPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+} from '../ports/runner/stream-parts'
 import { createTerminalModeController } from './terminal-restore'
 import { projectHarvest, type DashboardModel } from './dashboard/model'
-import { dashboardContentWidth, detailScrollLimit, renderDashboard } from './dashboard/render'
+import {
+  dashboardContentWidth,
+  detailScrollLimit,
+  renderDashboard,
+  stripAnsi,
+} from './dashboard/render'
 import { DispatchFrontend } from './dispatch-frontend'
 import type { DispatchChildResult } from './dispatch-process'
 import type { TerminalInputEvent } from './terminal'
@@ -1332,4 +1351,464 @@ test('frontend elapsed repaint cadence advances while the child remains gated', 
   expect(paints.at(-1)!).toBeGreaterThan(paints[0]!)
   childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
+})
+
+// ── The read-only session view (production frontend path) ───────────────────
+//
+// The capture harness can only drive DispatchLoop; these tests exercise the
+// controller production `ab dispatch` actually runs.
+
+const SESSION_VIEW_PARTS = [
+  sessionPart({ session: 's_watch', role: 'implement', runner: 'pi', phase: 'implement' }),
+  promptPart('watch the limiter'),
+  startPart('m1'),
+  startStepPart(),
+  reasoningStartPart('r1'),
+  reasoningDeltaPart('r1', 'weighing the throttle window'),
+  reasoningEndPart('r1'),
+  textStartPart('t1'),
+  textDeltaPart('t1', 'adding the limiter now'),
+  toolInputPart('c1', 'bash', { command: 'bun test' }),
+]
+
+interface SessionViewHarness {
+  store: MemoryBuildStore
+  slug: string
+  streamId: string
+  press: (event: TerminalInputEvent) => void
+  output: () => string
+  /** The most recent painted frame, escapes stripped. */
+  frame: () => string
+  /** Renderer invocations — one per paint timer tick. */
+  paints: () => number
+  /** Stop the run: interrupt, then release the gated child. */
+  finish: () => Promise<void>
+}
+
+async function seedSessionViewHarness(
+  overrides: {
+    /** Wrap the store (for a slow or pruned readStream). */
+    wrapStore?: (store: MemoryBuildStore) => BuildStore
+    columns?: number
+    rows?: number
+  } = {},
+): Promise<SessionViewHarness> {
+  const repo = '/session-view-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const slug = 'watched'
+  const ticket = { source: 'fake', id: 'AUT-WATCH', title: 'Watched' }
+  await store.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo, ticket, baseBranch: 'main' },
+  })
+  const stream = await store.createStream({ kind: 'build', build: slug }, 'session:s_watch')
+  await store.appendStreamParts(stream.id, SESSION_VIEW_PARTS)
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: {
+      session: 's_watch',
+      role: 'implement',
+      runner: 'pi',
+      phase: 'implement',
+      stream: stream.id,
+    },
+  })
+  const seedRun = (run: string): Promise<unknown> =>
+    store.appendRepoWithArtifacts(
+      repo,
+      [
+        {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            capacity: 2,
+            roles: { default: { runtime: 'claude' } },
+            tickets: { source: 'file', readyState: 'ready' },
+          }),
+        },
+      ],
+      (artifacts) => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 999,
+          effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+          roleWarnings: [],
+        },
+      }),
+    )
+
+  const chunks: string[] = []
+  let handler: ((event: TerminalInputEvent) => void) | undefined
+  let paintCount = 0
+  const childDone = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store: overrides.wrapStore ? overrides.wrapStore(store) : store,
+    env: {},
+    terminal: {
+      write: (chunk: string) => chunks.push(chunk),
+      modes: createTerminalModeController(
+        (chunk: string) => chunks.push(chunk),
+        (chunk: string) => chunks.push(chunk),
+      ),
+      columns: overrides.columns ?? 100,
+      rows: overrides.rows ?? 30,
+      interactive: true,
+    },
+    input: {
+      start: (h) => {
+        handler = h
+        return () => {
+          handler = undefined
+        }
+      },
+    },
+    once: false,
+    resolveDashboardRenderer: () => (model, opts) => {
+      paintCount += 1
+      return renderDashboard(model, opts)
+    },
+    launchChild: ({ run }) => ({
+      completed: seedRun(run).then(() => childDone.promise),
+      async stop() {},
+    }),
+  })
+  const running = frontend.run()
+  return {
+    store,
+    slug,
+    streamId: stream.id,
+    press: (event) => handler?.(event),
+    output: () => stripAnsi(chunks.join('')),
+    frame: () => stripAnsi(chunks.join('').split('\x1b[2J\x1b[1;1H').at(-1) ?? ''),
+    paints: () => paintCount,
+    finish: async () => {
+      handler?.({ type: 'interrupt' })
+      childDone.resolve({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
+      await running
+    },
+  }
+}
+
+test('Enter on a session with a stream opens the read-only session view; every control key is inert', async () => {
+  const h = await seedSessionViewHarness({ rows: 24 })
+  await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
+  const before = await h.store.getEvents(h.slug)
+
+  h.press({ type: 'down' })
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Build  watched'), 'detail view')
+  // The single session is auto-selected; Enter opens its stream view.
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Session  watched'), 'session view')
+  // The first feed poll lands the projection within one poll interval.
+  await waitFor(
+    () => h.frame().includes('Prompt: watch the limiter'),
+    'session projection within one poll',
+  )
+  const frame = h.frame()
+  expect(frame).toContain(`session s_watch · ${h.streamId} · live`)
+  expect(frame).toContain('implement · pi · phase implement')
+  expect(frame).toContain('Prompt: watch the limiter')
+  expect(frame).toContain('~ weighing the throttle window')
+  expect(frame).toContain('adding the limiter now')
+  expect(frame).toContain('bash({"command":"bun test"})')
+  expect(frame).toContain('waiting for output')
+  expect(frame).toContain('following tail')
+
+  // New parts appear within one poll interval (the store poll at POLL_MS).
+  await h.store.appendStreamParts(h.streamId, [
+    toolOutputPart('c1', 'all green'),
+    textDeltaPart('t1', ' with tests'),
+  ])
+  await waitFor(() => h.frame().includes('all green'), 'live parts within one poll')
+  expect(h.frame()).not.toContain('waiting for output')
+
+  // Strictly read-only: every control key appends no store event, opens no
+  // abort confirmation, and leaves the view open.
+  for (const key of [
+    { type: 'text', text: 'm' },
+    { type: 'text', text: 'i' },
+    { type: 'text', text: 'p' },
+    { type: 'text', text: 'r' },
+    { type: 'text', text: 'd' },
+    { type: 'text', text: 'a' },
+    { type: 'text', text: 'h' },
+    { type: 'enter' },
+    { type: 'newline' },
+    { type: 'text', text: 'x' },
+    { type: 'paste', text: 'pasted' },
+  ] as TerminalInputEvent[]) {
+    h.press(key)
+  }
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  expect(await h.store.getEvents(h.slug)).toEqual(before)
+  expect(h.frame()).toContain('Session  watched')
+  expect(h.frame()).not.toContain('Abort watched')
+  // Enter stayed inert: no transcript view opened on top of the session view.
+  expect(h.frame()).not.toContain('Transcript  watched')
+
+  // Follow-and-pause: grow the content beyond the viewport, Up pauses (the
+  // legend flips), Down back at the bottom resumes.
+  await h.store.appendStreamParts(
+    h.streamId,
+    Array.from({ length: 20 }, (_, index) => textDeltaPart(`u${index}`, `extra ${index}`)),
+  )
+  await waitFor(() => h.frame().includes('extra 19'), 'grown content')
+  h.press({ type: 'up' })
+  await waitFor(() => h.frame().includes('(paused)'), 'paused legend')
+  expect(h.frame()).not.toContain('following tail')
+  h.press({ type: 'down' })
+  await waitFor(() => h.frame().includes('following tail'), 'resumed legend')
+
+  // Escape returns to detail with the same session selected.
+  h.press({ type: 'escape' })
+  await waitFor(() => h.frame().includes('Build  watched'), 'back to detail')
+  expect(await h.store.getEvents(h.slug)).toEqual(before)
+
+  await h.finish()
+})
+
+test('a stream closing mid-view shows the outcome, and a pruned log renders the deposited document', async () => {
+  const h = await seedSessionViewHarness()
+  await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
+  h.press({ type: 'down' })
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Build  watched'), 'detail view')
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Session  watched'), 'session view')
+
+  await h.store.closeStream(h.streamId, 'completed')
+  await waitFor(() => h.frame().includes('Stream closed: completed'), 'outcome line')
+  expect(h.frame()).toContain('· closed')
+  // The final content is preserved across the close.
+  expect(h.frame()).toContain('bash({"command":"bun test"})')
+
+  await h.finish()
+})
+
+test('a closed session whose chunks were pruned renders the finalized artifact document', async () => {
+  const h = await seedSessionViewHarness({
+    wrapStore: (inner) =>
+      new Proxy(inner, {
+        get(target, property) {
+          if (property === 'readStream') {
+            return async (streamId: string, opts?: { since?: number }) => {
+              const read = await target.readStream(streamId, opts)
+              return { ...read, chunks: [] }
+            }
+          }
+          const value = Reflect.get(target, property, target) as unknown
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }) as BuildStore,
+  })
+  // Deposit the artifact exactly as closeStream would, then close with no
+  // readable chunks: the view must fall back to the document.
+  const { document } = await assembleUIMessageDocument(SESSION_VIEW_PARTS)
+  await h.store.putArtifact(h.slug, {
+    kind: `stream:${h.streamId}`,
+    content: JSON.stringify(document),
+    metadata: { stream: h.streamId },
+  })
+  await h.store.closeStream(h.streamId, 'completed')
+
+  await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
+  h.press({ type: 'down' })
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Build  watched'), 'detail view')
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Session  watched'), 'session view')
+  await waitFor(() => h.frame().includes('Stream closed: completed'), 'artifact fallback')
+  expect(h.frame()).toContain('adding the limiter now')
+  expect(h.frame()).toContain('bash({"command":"bun test"})')
+
+  await h.finish()
+})
+
+test('the frame keeps painting while a stream read is slow', async () => {
+  let releaseRead!: () => void
+  const gate = new Promise<void>((resolve) => {
+    releaseRead = resolve
+  })
+  const h = await seedSessionViewHarness({
+    wrapStore: (inner) =>
+      new Proxy(inner, {
+        get(target, property) {
+          if (property === 'readStream') {
+            return async (streamId: string, opts?: { since?: number }) => {
+              await gate
+              return target.readStream(streamId, opts)
+            }
+          }
+          const value = Reflect.get(target, property, target) as unknown
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }) as BuildStore,
+  })
+  await waitFor(() => h.output().includes('watched'), 'first dashboard frame')
+  h.press({ type: 'down' })
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Build  watched'), 'detail view')
+  h.press({ type: 'enter' })
+  await waitFor(() => h.output().includes('Session  watched'), 'session view')
+
+  // With the read gated, the paint timer (250 ms) keeps repainting: the
+  // renderer keeps being invoked and the frame chrome stays on screen.
+  const before = h.paints()
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  expect(h.paints()).toBeGreaterThan(before + 1)
+  expect(h.output()).toContain('Session  watched')
+  expect(h.output()).toContain('Esc back')
+  releaseRead()
+
+  // Once released, the next poll applies the read and content lands.
+  await waitFor(() => h.output().includes('bash({"command":"bun test"})'), 'content after read')
+  await h.finish()
+})
+
+test('Enter keeps today’s behavior for sessions without a stream', async () => {
+  const repo = '/no-stream-repo'
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const slug = 'legacy'
+  const ticket = { source: 'fake', id: 'AUT-LEGACY', title: 'Legacy' }
+  await store.createBuild({ slug, repo, ticket, branch: `ab/${slug}` })
+  await store.append(slug, {
+    actor: DISPATCHER,
+    type: 'build.created',
+    payload: { repo, ticket, baseBranch: 'main' },
+  })
+  // An open session without a stream, then an ended one with a transcript.
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: { session: 's_open', role: 'plan', runner: 'pi', phase: 'plan' },
+  })
+  const transcript = await store.appendWithArtifacts(
+    slug,
+    [
+      {
+        kind: 'transcript',
+        content: JSON.stringify({
+          turns: [
+            {
+              prompt: 'draft it',
+              text: 'the plan text',
+              usage: { inputTokens: 1, outputTokens: 1 },
+            },
+          ],
+        }),
+      },
+    ],
+    ([artifact]) => ({
+      actor: KERNEL,
+      type: 'session.ended' as const,
+      payload: {
+        session: 's_open',
+        transcript: { kind: artifact!.kind, rev: artifact!.revision },
+        usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+      },
+    }),
+  )
+  void transcript
+  const seedRun = (run: string): Promise<unknown> =>
+    store.appendRepoWithArtifacts(
+      repo,
+      [
+        {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            capacity: 2,
+            roles: { default: { runtime: 'claude' } },
+            tickets: { source: 'file', readyState: 'ready' },
+          }),
+        },
+      ],
+      (artifacts) => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 999,
+          effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+          roleWarnings: [],
+        },
+      }),
+    )
+
+  const chunks: string[] = []
+  let handler: ((event: TerminalInputEvent) => void) | undefined
+  const childDone = deferred<DispatchChildResult>()
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write: (chunk: string) => chunks.push(chunk),
+      modes: createTerminalModeController(
+        (chunk: string) => chunks.push(chunk),
+        (chunk: string) => chunks.push(chunk),
+      ),
+      columns: 100,
+      rows: 30,
+      interactive: true,
+    },
+    input: {
+      start: (h) => {
+        handler = h
+        return () => {
+          handler = undefined
+        }
+      },
+    },
+    once: false,
+    launchChild: ({ run }) => ({
+      completed: seedRun(run).then(() => childDone.promise),
+      async stop() {},
+    }),
+  })
+  const running = frontend.run()
+  const finish = async (): Promise<void> => {
+    handler?.({ type: 'interrupt' })
+    childDone.resolve({ outcome: 'forced', exitCode: 137, signal: 'SIGKILL' })
+    await running
+  }
+
+  const frames = (): string => stripAnsi(chunks.join(''))
+  await waitFor(() => frames().includes('legacy'), 'first frame')
+  handler?.({ type: 'down' })
+  handler?.({ type: 'enter' })
+  await waitFor(() => frames().includes('Build  legacy'), 'detail view')
+  // The ended session is the only one; Enter renders its transcript exactly
+  // as today.
+  handler?.({ type: 'enter' })
+  await waitFor(() => frames().includes('Transcript  legacy'), 'transcript view')
+  expect(frames()).toContain('Agent: the plan text')
+  handler?.({ type: 'escape' })
+  await waitFor(() => frames().includes('Build  legacy'), 'back to detail')
+
+  // A second, OPEN session without a stream: Enter is the frontend's silent
+  // open-session return — no message, no view change.
+  await store.append(slug, {
+    actor: KERNEL,
+    type: 'session.started',
+    payload: { session: 's_second', role: 'implement', runner: 'pi', phase: 'implement' },
+  })
+  await waitFor(() => frames().includes('implement phase implement'), 'second session row')
+  handler?.({ type: 'right' })
+  handler?.({ type: 'enter' })
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  expect(frames()).not.toContain('Transcript unavailable')
+  expect(frames().includes('Session  legacy')).toBe(false)
+  expect(frames().includes('Build  legacy')).toBe(true)
+
+  await finish()
 })

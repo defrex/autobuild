@@ -58,6 +58,21 @@ import {
   selectOpenWorkspace,
 } from '../processes/build-execution-state'
 import { makeHarvestScanPacket, scanUnclaimedObservations } from '../processes/harvest'
+import {
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  sessionPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textEndPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+} from '../ports/runner/stream-parts'
+import { assembleUIMessageDocument } from '../store/streams/assemble'
 import type { HarvestExecution, HarvestExecutionStart } from '../ports/workspace/harvest-execution'
 import { systemClock, textContent, type BuildStore, type Clock } from '../store/types'
 import { manualClock, steppingClock } from '../testing/fixed'
@@ -7152,6 +7167,278 @@ describe('abDispatch interactive keyboard controls', () => {
 
       expect(await fx.store.getEvents('drilldown-work')).toEqual(before)
       expect(await fx.store.getRepoEvents(fx.origin)).toEqual(repoBefore)
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('Enter on a session with a stream opens the read-only live view; every control key is inert; Escape returns to the same session', async () => {
+    const fx = await makeFixture(readyTicket('T-watch', { title: 'Watch work' }), happyHandlers())
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      // Seed the live session: a build-scope stream plus its session.started
+      // carrier, mid-turn — a prompt, reasoning, answer text, and a tool call
+      // whose output has not landed yet.
+      const stream = await fx.store.createStream(
+        { kind: 'build', build: 'watch-work' },
+        'session:s_watch',
+      )
+      await fx.store.appendStreamParts(stream.id, [
+        sessionPart({
+          session: 's_watch',
+          role: 'implement',
+          runner: 'pi',
+          phase: 'implement',
+          round: 1,
+        }),
+        promptPart('watch the limiter'),
+        startPart('m1'),
+        startStepPart(),
+        reasoningStartPart('r1'),
+        reasoningDeltaPart('r1', 'weighing the throttle window'),
+        reasoningEndPart('r1'),
+        textStartPart('t1'),
+        textDeltaPart('t1', 'adding the limiter now'),
+        toolInputPart('c1', 'bash', { command: 'bun test' }),
+      ])
+      await fx.store.append('watch-work', {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_watch',
+          role: 'implement',
+          runner: 'pi',
+          phase: 'implement',
+          round: 1,
+          stream: stream.id,
+        },
+      })
+
+      const term = fakeTerminal(true, { columns: 160, rows: 20 })
+      run = abDispatch({
+        targetRepo: fx.checkout,
+        env: { USER: 'reader' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: fx.wire,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('watch-work'))
+      input.press('down')
+      await waitFor(() => /^ > .*watch-work/m.test(latestDashboardFrame(term)))
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  watch-work'))
+      // Left/Right selection clamps at the last session — the live one.
+      for (let index = 0; index < 30; index += 1) input.press('right')
+      await waitFor(() => latestPaintedFrame(term).includes(`stream ${stream.id} (open)`))
+
+      const before = await fx.store.getEvents('watch-work')
+      const repoBefore = await fx.store.getRepoEvents(fx.origin)
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Session  watch-work'))
+      const sessionFrame = latestPaintedFrame(term)
+      expect(sessionFrame).toContain(`session s_watch · ${stream.id} · live`)
+      expect(sessionFrame).toContain('implement · pi · phase implement (round 1)')
+      expect(sessionFrame).toContain('Prompt: watch the limiter')
+      expect(sessionFrame).toContain('~ weighing the throttle window')
+      expect(sessionFrame).toContain('adding the limiter now')
+      expect(sessionFrame).toContain('bash({"command":"bun test"})')
+      expect(sessionFrame).toContain('waiting for output')
+      expect(sessionFrame).toContain('following tail')
+
+      // New parts appear within one poll interval while the view is open.
+      await fx.store.appendStreamParts(stream.id, [
+        toolOutputPart('c1', 'all green'),
+        textDeltaPart('t1', ' with tests'),
+      ])
+      await waitFor(() => latestPaintedFrame(term).includes('all green'))
+      expect(latestPaintedFrame(term)).not.toContain('waiting for output')
+
+      // The view is strictly read-only: control keys append nothing, open no
+      // abort confirmation, and leave the view open.
+      for (const key of [
+        'auto-merge',
+        'intake',
+        'pause',
+        'resume',
+        'letter-d',
+        'letter-a',
+        'harvest-gate',
+        'enter',
+      ] as const) {
+        input.press(key)
+      }
+      input.text('x')
+      input.paste('pasted')
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      expect(await fx.store.getEvents('watch-work')).toEqual(before)
+      expect(await fx.store.getRepoEvents(fx.origin)).toEqual(repoBefore)
+      expect(latestPaintedFrame(term)).toContain('Session  watch-work')
+      expect(latestPaintedFrame(term)).not.toContain('Abort watch-work')
+
+      // Up off the tail pauses following (the legend says so); Down back to
+      // the bottom resumes it. Grow the content beyond the 20-row viewport
+      // first so there is a tail to leave.
+      await fx.store.appendStreamParts(
+        stream.id,
+        Array.from({ length: 15 }, (_, index) => textDeltaPart(`u${index}`, `extra ${index}`)),
+      )
+      await waitFor(() => latestPaintedFrame(term).includes('extra 14'))
+      input.press('up')
+      await waitFor(() => latestPaintedFrame(term).includes('(paused)'))
+      expect(latestPaintedFrame(term)).not.toContain('following tail')
+      input.press('down')
+      await waitFor(() => latestPaintedFrame(term).includes('following tail'))
+
+      input.press('escape')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  watch-work'))
+      // The same session stays selected; a selection move reveals its row
+      // within the small viewport.
+      input.press('right')
+      await waitFor(() => latestPaintedFrame(term).includes(`stream ${stream.id} (open)`))
+      expect(latestPaintedFrame(term)).toMatch(/>\s+implement phase implement round 1 runtime pi/)
+      expect(await fx.store.getEvents('watch-work')).toEqual(before)
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a closed session with a pruned chunk log renders the deposited document', async () => {
+    const fx = await makeFixture(readyTicket('T-closed', { title: 'Closed work' }), happyHandlers())
+    let run: Promise<void> | undefined
+    const input = fakeInput()
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: fx.wire,
+      })
+
+      const stream = await fx.store.createStream(
+        { kind: 'build', build: 'closed-work' },
+        'session:s_closed',
+      )
+      const parts = [
+        sessionPart({ session: 's_closed', role: 'plan', runner: 'pi', phase: 'plan' }),
+        promptPart('draft the plan'),
+        startPart('m1'),
+        textStartPart('t1'),
+        textDeltaPart('t1', 'the finalized answer'),
+        textEndPart('t1'),
+        toolInputPart('c1', 'bash', { command: 'ls' }),
+        toolOutputPart('c1', Array.from({ length: 12 }, (_, i) => `row-${i}`).join('\n')),
+      ]
+      await fx.store.appendStreamParts(stream.id, parts)
+      const { document } = await assembleUIMessageDocument(parts)
+      // The retention pruner removed the chunks: the artifact is all that is
+      // left. Deposit it exactly as closeStream would.
+      await fx.store.putArtifact('closed-work', {
+        kind: `stream:${stream.id}`,
+        content: JSON.stringify(document),
+        metadata: { stream: stream.id },
+      })
+      await fx.store.closeStream(stream.id, 'completed')
+      await fx.store.append('closed-work', {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_closed',
+          role: 'plan',
+          runner: 'pi',
+          phase: 'plan',
+          stream: stream.id,
+        },
+      })
+
+      // The proxy stands in for the retention pruner: reads of this stream
+      // return closed with no chunks, forcing the artifact fallback.
+      const pruned = new Proxy(fx.store, {
+        get(target, property) {
+          if (property === 'readStream') {
+            return async (streamId: string, opts?: { since?: number }) => {
+              const read = await target.readStream(streamId, opts)
+              return streamId === stream.id ? { ...read, chunks: [] } : read
+            }
+          }
+          const value = Reflect.get(target, property, target) as unknown
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      }) as typeof fx.store
+      const wired = ((config, opts, state, plugins) => ({
+        ...(
+          fx.wire as unknown as (
+            c: typeof config,
+            o: typeof opts,
+            s: typeof state,
+            p: typeof plugins,
+          ) => DispatchWiring
+        )(config, opts, state, plugins),
+        store: pruned,
+      })) as DispatchOpts['wire']
+
+      const term = fakeTerminal(true, { columns: 160, rows: 24 })
+      run = abDispatch({
+        targetRepo: fx.checkout,
+        env: { USER: 'reader' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 60_000,
+        wire: wired,
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('closed-work'))
+      input.press('down')
+      await waitFor(() => /^ > .*closed-work/m.test(latestDashboardFrame(term)))
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  closed-work'))
+      for (let index = 0; index < 30; index += 1) input.press('right')
+      await waitFor(() => latestPaintedFrame(term).includes(`stream ${stream.id} (closed)`))
+      input.press('enter')
+      await waitFor(() => latestPaintedFrame(term).includes('Session  closed-work'))
+      const frame = latestPaintedFrame(term)
+      expect(frame).toContain('Stream closed: completed')
+      expect(frame).toContain('the finalized answer')
+      // The document path renders the tool output with the row cap.
+      expect(frame).toContain('bash({"command":"ls"})')
+      expect(frame).toContain('… 4 more rows withheld')
+      // No silent empty view: the artifact's content is on screen.
+      expect(frame).toContain('Prompt: draft the plan')
+
+      input.press('escape')
+      await waitFor(() => latestPaintedFrame(term).includes('Build  closed-work'))
       input.press('interrupt')
       await run
       run = undefined

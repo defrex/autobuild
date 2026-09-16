@@ -535,7 +535,12 @@ export class DispatchFrontend {
   private pollSessionFeed(): void {
     const view = this.view
     if (view?.kind !== 'session') return
-    if (view.status !== 'open' && view.error === undefined) return
+    if (view.status !== 'open' && view.error === undefined) {
+      // A closed view is final once its content is in hand; an unloaded one
+      // (a closed session just opened, empty chunk log so far) still needs
+      // its read — which is where the artifact fallback happens too.
+      if (view.source.kind !== 'parts' || view.source.lastSeq !== 0) return
+    }
     const feed = this.sessionFeed
     if (feed === undefined) return
     void feed

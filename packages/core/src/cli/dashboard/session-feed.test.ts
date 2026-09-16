@@ -4,6 +4,7 @@
  * semantics are unit-testable without a terminal.
  */
 import { describe, expect, test } from 'bun:test'
+import type { UIMessage } from 'ai'
 import type { StreamChunk, StreamRead } from '../../store/streams/types'
 import {
   applySessionFeedUpdate,
@@ -104,7 +105,9 @@ describe('SessionStreamFeed', () => {
   })
 
   test('the pruned-chunk fallback reads the deposited document artifact', async () => {
-    const document = [{ id: 'm', role: 'assistant', parts: [{ type: 'text', text: 'final' }] }]
+    const document: UIMessage[] = [
+      { id: 'm', role: 'assistant', parts: [{ type: 'text', text: 'final' }] },
+    ]
     const store = scriptedStore(
       [{ chunks: [], status: 'closed', outcome: 'completed' }],
       [{ content: JSON.stringify(document) }],
@@ -118,7 +121,7 @@ describe('SessionStreamFeed', () => {
   })
 
   test('a closed-session view opened to an empty log falls back to the artifact', async () => {
-    const document = [{ id: 'm', role: 'assistant', parts: [] }]
+    const document: UIMessage[] = [{ id: 'm', role: 'assistant', parts: [] }]
     const store = scriptedStore(
       [{ chunks: [], status: 'closed', outcome: 'aborted' }],
       [{ content: JSON.stringify(document) }],
@@ -156,7 +159,7 @@ describe('SessionStreamFeed', () => {
   test('reads are immediate (waitSeconds: 0), never a long poll', async () => {
     const seen: Array<{ since?: number; waitSeconds?: number } | undefined> = []
     const store = {
-      async readStream(streamId: string, opts?: { since?: number; waitSeconds?: number }) {
+      async readStream(_streamId: string, opts?: { since?: number; waitSeconds?: number }) {
         seen.push(opts)
         return emptyRead('open')
       },
@@ -182,7 +185,7 @@ describe('SessionStreamFeed', () => {
     }
     const feed = new SessionStreamFeed(store, 'build-a')
     const view = sessionView({
-      source: { kind: 'document', document: [{ id: 'm', role: 'assistant', parts: [] }] },
+      source: { kind: 'document', document: [{ id: 'm', role: 'assistant' as const, parts: [] }] },
     })
     expect(await feed.poll(view)).toBeUndefined()
     expect(reads).toBe(0)
@@ -230,7 +233,7 @@ describe('applySessionFeedUpdate (the apply fence)', () => {
   })
 
   test('rejects an update whose polled source no longer matches the view', () => {
-    const document = [{ id: 'm', role: 'assistant', parts: [] }]
+    const document: UIMessage[] = [{ id: 'm', role: 'assistant', parts: [] }]
     const documentView = sessionView({
       source: { kind: 'document', document },
       status: 'closed',

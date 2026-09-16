@@ -125,6 +125,7 @@ function inputSummary(input: unknown): string {
 
 function renderEvents(events: readonly DisplayEvent[], width: number): string[] {
   const lines: string[] = []
+  let headerSeen = false
   let sawContent = false
   let lastWasStep = false
   const push = (...added: string[]): void => {
@@ -158,6 +159,7 @@ function renderEvents(events: readonly DisplayEvent[], width: number): string[] 
   for (const event of events) {
     switch (event.kind) {
       case 'header': {
+        headerSeen = true
         push(headerLine(event.info))
         break
       }
@@ -196,6 +198,9 @@ function renderEvents(events: readonly DisplayEvent[], width: number): string[] 
         break
     }
   }
+  // An absent session header part still leaves a neutral header line, so the
+  // view never opens without naming its bracket.
+  if (!headerSeen) lines.unshift('unknown session')
   return lines
 }
 
@@ -234,6 +239,15 @@ function collectPartEvents(parts: readonly StreamPart[]): DisplayEvent[] {
         : { kind: 'reasoning', text: run.buffer },
     )
   }
+  // A still-open text/reasoning run renders at the position the stream
+  // reached: any other part flushes it, so content that started before a tool
+  // call is never painted after it.
+  const flushOpenRuns = (): void => {
+    flush(openText, 'text')
+    flush(openReasoning, 'reasoning')
+    openText = undefined
+    openReasoning = undefined
+  }
   const open = (
     current: OpenRun | undefined,
     id: unknown,
@@ -248,6 +262,7 @@ function collectPartEvents(parts: readonly StreamPart[]): DisplayEvent[] {
   for (const part of parts) {
     switch (part.type) {
       case 'data-ab-session': {
+        flushOpenRuns()
         const data = part.data
         if (typeof data !== 'object' || data === null) {
           if (!headerSeen) headerSeen = true
@@ -276,6 +291,7 @@ function collectPartEvents(parts: readonly StreamPart[]): DisplayEvent[] {
         break
       }
       case 'data-ab-prompt': {
+        flushOpenRuns()
         const data = part.data
         const text =
           typeof data === 'object' && data !== null
@@ -285,6 +301,7 @@ function collectPartEvents(parts: readonly StreamPart[]): DisplayEvent[] {
         break
       }
       case 'data-ab-truncation': {
+        flushOpenRuns()
         const data = part.data
         const bytes =
           typeof data === 'object' && data !== null
@@ -320,6 +337,7 @@ function collectPartEvents(parts: readonly StreamPart[]): DisplayEvent[] {
         openReasoning = undefined
         break
       case 'tool-input-available': {
+        flushOpenRuns()
         const callId = typeof part.toolCallId === 'string' ? part.toolCallId : ''
         const resolved = outputs.get(callId) ?? {}
         events.push({
@@ -338,21 +356,25 @@ function collectPartEvents(parts: readonly StreamPart[]): DisplayEvent[] {
       }
       case 'start-step':
       case 'finish-step':
+        flushOpenRuns()
         events.push({ kind: 'step' })
         break
       case 'error':
+        flushOpenRuns()
         events.push({
           kind: 'error',
           text: typeof part.errorText === 'string' ? part.errorText : String(part.errorText ?? ''),
         })
         break
       case 'abort':
+        flushOpenRuns()
         events.push({
           kind: 'abort',
           text: typeof part.reason === 'string' ? part.reason : String(part.reason ?? ''),
         })
         break
       default: {
+        flushOpenRuns()
         // Any other `data-*` extension renders legibly; non-data parts of
         // unknown protocol types are ignored.
         if (part.type.startsWith('data-')) events.push({ kind: 'data', name: part.type })

@@ -200,7 +200,7 @@ describe('projectSessionParts', () => {
     const order = [
       lines.findIndex((l) => l.includes('first thought')),
       lines.findIndex((l) => l.startsWith('bash(')),
-      lines.findIndex((l) => l === 'files'),
+      lines.indexOf('files'),
       lines.findIndex((l) => l.includes('the listing')),
     ]
     expect(order.every((index) => index >= 0)).toBe(true)
