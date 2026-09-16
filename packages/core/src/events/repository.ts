@@ -293,7 +293,9 @@ export const orchestratorSandboxEventPayloadSchemas = {
   }),
   /** Full teardown + snapshot purge. Operator-driven (reset, session archive)
    * or dispatcher-authored (closing an orphan's trail whose environment was
-   * already absent at idle settlement). */
+   * already absent at idle settlement, or closing the trail of an idle
+   * environment whose journaled provider no longer matches the wired provider
+   * — both unconfirmed, with the reason recorded in `snapshots.error`). */
   'orchestrator.sandbox.released': z.strictObject({
     operator: z.string().min(1),
     environmentId: z.string().min(1),
