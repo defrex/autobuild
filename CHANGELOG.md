@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#431](https://github.com/defrex/autobuild/pull/431) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0 so dispatcher + hosted-store-service cannot install against a core missing the /operator, /hosted-tickets, and /testing subpaths (AUT-431)
 - [#388](https://github.com/defrex/autobuild/pull/388) — Expose postgres-store schema/store subpath exports and use them in hosted-store-service tests
 - [#386](https://github.com/defrex/autobuild/pull/386) — Reconcile peer-dependency floors left by the hosted-store extraction
 - [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
