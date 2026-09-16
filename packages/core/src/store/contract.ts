@@ -753,6 +753,69 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    // The bounded wait on the event reads (AUT-334): the same clamp and
+    // early-return rules the stream and session reads honor, now on
+    // getEvents and getRepoEvents. Mirrors the stream wait suites below.
+    describe('bounded wait on event reads (AUT-334)', () => {
+      test('events past since return immediately, with or without a wait', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('evt-wait-now'))
+          const event = await store.append('evt-wait-now', sampleEventWrite('one'))
+          const started = Date.now()
+          expect(await store.getEvents('evt-wait-now', 0, { waitSeconds: 5 })).toEqual([event])
+          expect(Date.now() - started).toBeLessThan(500)
+        })
+      })
+
+      test('a quiet stream returns empty no earlier than the bound', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('evt-wait-quiet'))
+          const started = Date.now()
+          expect(await store.getEvents('evt-wait-quiet', 0, { waitSeconds: 1 })).toEqual([])
+          expect(Date.now() - started).toBeGreaterThanOrEqual(950)
+        })
+      })
+
+      test('a quiet stream without wait returns empty immediately (unchanged form)', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('evt-wait-off'))
+          const started = Date.now()
+          expect(await store.getEvents('evt-wait-off', 0)).toEqual([])
+          expect(Date.now() - started).toBeLessThan(500)
+        })
+      })
+
+      test('an append during the wait returns early carrying that event', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('evt-wait-wake'))
+          const pending = store.getEvents('evt-wait-wake', 0, { waitSeconds: 5 })
+          await Bun.sleep(100)
+          const event = await store.append('evt-wait-wake', sampleEventWrite('wake'))
+          expect(await pending).toEqual([event])
+        })
+      })
+
+      test('getRepoEvents honors the same bound, symmetrically', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/evt-wait')
+          const started = Date.now()
+          const pending = store.getRepoEvents('acme/evt-wait', 0, { waitSeconds: 5 })
+          await Bun.sleep(100)
+          const event = await store.appendRepo('acme/evt-wait', harvestStartedWrite('h_wait'))
+          expect(await pending).toEqual([event])
+          // Events past since still answer immediately.
+          expect(Date.now() - started).toBeLessThan(5_000)
+          const immediateStart = Date.now()
+          expect(await store.getRepoEvents('acme/evt-wait', event.seq, { waitSeconds: 1 })).toEqual(
+            [],
+          )
+          // Nothing newer exists, so this is a held read answered at the
+          // bound — the symmetric quiet-stream assertion.
+          expect(Date.now() - immediateStart).toBeGreaterThanOrEqual(950)
+        })
+      })
+    })
+
     describe('artifacts', () => {
       test('revisions are 0-based per kind (§6.3): first deposit rev 0, next rev 1', async () => {
         await withStore(factory, undefined, async (store) => {
