@@ -148,7 +148,7 @@ export function serveRegistry(
           // only learns the client's identity at the initialize handshake.
           const via = typeof ctx.via === 'function' ? ctx.via() : ctx.via
           const value = await registry.call(entry.name, args, {
-            ...ctx,
+            identity: ctx.identity,
             ...(via !== undefined ? { via } : {}),
           })
           return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
