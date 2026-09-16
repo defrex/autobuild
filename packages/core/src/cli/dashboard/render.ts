@@ -30,6 +30,8 @@ import type {
 import { dashboardBuildControl } from './actions'
 import type { DashboardSession } from './detail'
 import type { TranscriptPresentation, TranscriptTurn } from './transcript'
+import { projectSessionDocument, projectSessionParts } from './session-view'
+import type { SessionDashboardView } from './model'
 import { dashboardSelections, sameSelection } from './selection'
 import { displayText, layoutComposer, packAtomic, wrapDisplay } from './composer'
 import { cellWidth, graphemes, padEndCells } from './cells'
@@ -455,6 +457,12 @@ export const DASHBOARD_BUILD_LEGEND =
   'Keys: Up/Down select  Enter details  m auto-merge  p pause  a abort  Ctrl-C quit'
 export const DASHBOARD_QUEUED_BUILD_LEGEND =
   'Keys: Up/Down select  Enter details  d discard  a abort  Ctrl-C quit'
+/** The session view offers ONLY scrolling, back, and quit — it is read-only,
+ * and the legend says so by naming nothing else. */
+export const DASHBOARD_SESSION_LIVE_LEGEND =
+  'Keys: Up/Down scroll (following tail)  Esc back  Ctrl-C quit'
+export const DASHBOARD_SESSION_PAUSED_LEGEND =
+  'Keys: Up/Down scroll (paused)  Esc back  Ctrl-C quit'
 
 function buildLegend(build: DashboardBuild, detail: boolean): string {
   if (build.status === 'aborting' || build.status === 'cleaning') {
@@ -889,6 +897,88 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
   )
 }
 
+/** The session view's full scrollable content: the shared projection's lines,
+ * or the error message in place of them, plus the closed stream's outcome
+ * line. ONE shared derivation for the renderer and the scroll limit so the
+ * tail math cannot drift from the paint. */
+export function sessionContentLines(view: SessionDashboardView, width: number): string[] {
+  if (view.error !== undefined) return wrappedText(view.error, width, '')
+  const lines =
+    view.source.kind === 'parts'
+      ? projectSessionParts(view.source.parts, width)
+      : projectSessionDocument(view.source.document, width)
+  if (view.status === 'closed') {
+    lines.push(`Stream closed: ${view.outcome ?? 'completed'}`)
+  }
+  return lines
+}
+
+/** Maximum process-local session-view offset for the current wrapped viewport.
+ * Mirrors the transcript pair; the session view's chrome is identical. */
+export function sessionScrollLimit(
+  view: SessionDashboardView,
+  terminalWidth: number,
+  height: number,
+  hasUpgradeNotice = false,
+): number {
+  const contentLines = sessionContentLines(view, dashboardContentWidth(terminalWidth)).length
+  // Session chrome is two header rows, the optional upgrade row, two
+  // separators, and controls — the transcript's exact arithmetic.
+  const capacity = Math.max(0, height - 5 - (hasUpgradeNotice ? 1 : 0))
+  return Math.max(0, contentLines - capacity)
+}
+
+export function moveSessionScroll(
+  view: SessionDashboardView,
+  terminalWidth: number,
+  height: number,
+  current: number,
+  delta: number,
+  hasUpgradeNotice = false,
+): number {
+  const limit = sessionScrollLimit(view, terminalWidth, height, hasUpgradeNotice)
+  // Clamp current first: a resize, a feed apply, or state from an older
+  // controller may leave it beyond the freshly wrapped viewport's end.
+  return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
+}
+
+function renderSessionView(model: DashboardModel, opts: RenderOpts): string[] {
+  const view = model.view
+  if (view?.kind !== 'session') return []
+  const { color, width, height } = opts
+  const notice = upgradeNoticeLine(model, color, width)
+  const top = [
+    truncate(`${paint('Session', 'bold', color)}  ${displayText(view.slug)}`, width),
+    truncate(
+      `  session ${displayText(view.sessionId)} · ${displayText(view.stream)} · ${
+        view.status === 'open' ? 'live' : 'closed'
+      }`,
+      width,
+    ),
+    ...(notice === undefined ? [] : [notice]),
+  ]
+  const content = sessionContentLines(view, width).map((line) => truncate(line, width))
+  const controls = truncate(
+    paint(
+      view.follow ? DASHBOARD_SESSION_LIVE_LEGEND : DASHBOARD_SESSION_PAUSED_LEGEND,
+      'dim',
+      color,
+    ),
+    width,
+  )
+  if (height !== undefined && height <= 0) return []
+  if (height !== undefined && height <= top.length) return top.slice(0, height)
+  const capacity = height === undefined ? content.length : Math.max(0, height - top.length - 3)
+  // While following, the view pins to the limit so the tail is tracked as new
+  // content lands; otherwise the stored process-local offset rules.
+  const limit = Math.max(0, content.length - capacity)
+  const scroll = view.follow ? limit : Math.max(0, Math.min(limit, view.scroll))
+  return [...top, '', ...viewport(content, capacity, 0, scroll), '', controls].slice(
+    0,
+    height === undefined ? Number.POSITIVE_INFINITY : height,
+  )
+}
+
 // ── The blocked-build resume panel ───────────────────────────────────────────
 //
 // Answering a blocked build is the ONLY thing that can happen while the prompt
@@ -1246,6 +1336,7 @@ function flattenRows(rows: readonly RenderedDashboardRow[]): string[] {
 function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string[] {
   if (model.view?.kind === 'detail') return renderDetail(model, opts)
   if (model.view?.kind === 'transcript') return renderTranscript(model, opts)
+  if (model.view?.kind === 'session') return renderSessionView(model, opts)
 
   const { color, width, height } = opts
   const selecting = model.selection !== undefined

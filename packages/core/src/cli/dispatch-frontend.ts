@@ -35,6 +35,8 @@ import {
 } from './dashboard/render'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { parseTranscript } from './dashboard/transcript'
+import { applySessionFeedUpdate, SessionStreamFeed } from './dashboard/session-feed'
+import { moveSessionScroll, sessionScrollLimit } from './dashboard/render'
 import { LiveRegion, paintableRows } from './dashboard/live'
 import { createKeyboardProtocol } from './keyboard'
 import type { TerminalInput, TerminalInputEvent, TerminalOut } from './terminal'
@@ -131,6 +133,10 @@ export class DispatchFrontend {
   private model: DashboardModel | undefined
   private selection: DashboardSelection | undefined = { kind: 'global' }
   private view: DashboardView | undefined
+  /** The session view's live-read cycle, created with the view it serves and
+   * discarded on Escape. All read semantics live in the shared feed module —
+   * the same instance contract the DispatchLoop path uses. */
+  private sessionFeed: SessionStreamFeed | undefined
   private resumePrompt: ResumePrompt | undefined
   private abortConfirmation: { slug: string } | undefined
   private accepting = false
@@ -350,9 +356,38 @@ export class DispatchFrontend {
     this.model = projected
     this.syncControls()
     this.paint()
+    // The session view's live-read cycle rides the poll tick: one immediate
+    // read per interval, applied through the action queue under the fence.
+    this.pollSessionFeed()
   }
 
   private moveVertical(delta: number): void {
+    if (this.view?.kind === 'session') {
+      const view = this.view
+      const upgrade = this.model?.availableUpgrade !== undefined
+      const limit = sessionScrollLimit(
+        view,
+        this.opts.terminal.columns,
+        paintableRows(this.opts.terminal.rows),
+        upgrade,
+      )
+      const current = view.follow ? limit : view.scroll
+      const scroll = moveSessionScroll(
+        view,
+        this.opts.terminal.columns,
+        paintableRows(this.opts.terminal.rows),
+        current,
+        delta,
+        upgrade,
+      )
+      let follow = view.follow
+      if (delta < 0 && follow && scroll < limit) follow = false
+      if (delta > 0 && !follow && scroll >= limit) follow = true
+      this.view = { ...view, scroll, follow }
+      this.syncControls()
+      this.paint()
+      return
+    }
     if (this.view?.kind === 'transcript') {
       this.view = {
         ...this.view,
@@ -426,6 +461,28 @@ export class DispatchFrontend {
     const captured = this.view
     const session = this.selectedBuild()?.sessions?.find((item) => item.id === captured.sessionId)
     if (session === undefined) return
+    // The stream branch outranks every transcript outcome: a session with a
+    // stream — open or closed — opens the read-only live view. Sessions
+    // without a stream keep the frontend's existing behavior byte-for-byte
+    // (the silent open-session return, the reclaimed message, the transcript).
+    if (session.stream !== undefined) {
+      this.view = {
+        kind: 'session',
+        slug: captured.slug,
+        sessionId: session.id,
+        stream: session.stream,
+        status: session.streamStatus,
+        source: { kind: 'parts', parts: [], lastSeq: 0 },
+        follow: true,
+        scroll: 0,
+      }
+      this.sessionFeed = new SessionStreamFeed(this.opts.store, captured.slug)
+      this.syncControls()
+      this.paint()
+      // Kick the first read immediately rather than waiting one interval.
+      this.pollSessionFeed()
+      return
+    }
     if (session.status === 'reclaimed') {
       const { message: _message, messageWhileSessionOpen: _fence, ...stable } = captured
       const candidate = {
@@ -471,8 +528,56 @@ export class DispatchFrontend {
     this.paint()
   }
 
+  /** Fire-and-forget live-read cycle for an open session view (or one whose
+   * last read failed). The apply runs through the action queue under the
+   * feed's identity+cursor fence — the same pattern the DispatchLoop path
+   * uses, from the same shared feed module. */
+  private pollSessionFeed(): void {
+    const view = this.view
+    if (view?.kind !== 'session') return
+    if (view.status !== 'open' && view.error === undefined) return
+    const feed = this.sessionFeed
+    if (feed === undefined) return
+    void feed
+      .poll(view)
+      .then((update) => {
+        if (update === undefined) return
+        this.queue(async () => {
+          const next = applySessionFeedUpdate(
+            this.view?.kind === 'session' ? this.view : undefined,
+            update,
+          )
+          if (next === undefined) return
+          const terminal = this.opts.terminal
+          const limit = sessionScrollLimit(
+            next,
+            terminal.columns,
+            paintableRows(terminal.rows),
+            this.model?.availableUpgrade !== undefined,
+          )
+          this.view = {
+            ...next,
+            scroll: next.follow ? limit : Math.min(next.scroll, limit),
+          }
+          this.syncControls()
+          this.paint()
+        })
+      })
+      .catch(() => {
+        // The feed contains its own failures; the next poll retries.
+      })
+  }
+
   private leaveView(): void {
-    if (this.view?.kind === 'transcript') {
+    if (this.view?.kind === 'session') {
+      this.sessionFeed = undefined
+      this.view = {
+        kind: 'detail',
+        slug: this.view.slug,
+        sessionId: this.view.sessionId,
+        scroll: 0,
+      }
+    } else if (this.view?.kind === 'transcript') {
       this.view = {
         kind: 'detail',
         slug: this.view.slug,
@@ -683,6 +788,19 @@ export class DispatchFrontend {
       this.editResume(input)
       return
     }
+    // The session view is strictly read-only: before the abort-confirmation,
+    // Enter, and text branches can be reached, every key except Up/Down
+    // (scroll) and Escape (back) returns without queueing any action. No key
+    // handled in the session view can append an event, and the abort
+    // confirmation cannot be opened from it.
+    if (this.view?.kind === 'session') {
+      if (input.type === 'up' || input.type === 'down') {
+        this.moveVertical(input.type === 'up' ? -1 : 1)
+      } else if (input.type === 'escape') {
+        this.leaveView()
+      }
+      return
+    }
     const enter = input.type === 'enter' || input.type === 'newline'
     if (this.abortConfirmation !== undefined) {
       if (enter) {
@@ -760,6 +878,9 @@ export class DispatchFrontend {
         break
       }
       case 'a':
+        // The session-view gate above already returns for a session view; the
+        // transcript guard predates it. Together they keep the abort
+        // confirmation unreachable from any read-only view.
         if (this.selectedBuild() !== undefined && this.view?.kind !== 'transcript') {
           this.abortConfirmation = { slug: this.selectedBuild()!.slug }
           this.syncControls()
