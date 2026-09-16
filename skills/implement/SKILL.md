@@ -39,11 +39,11 @@ You never push — the push is plumbing that happens when you finish.
    terminal command besides `ab escalate`. If it reports a validation error,
    fix what it names and run it again.
 
-## Rules of the phase
+## Ground rules for this phase
 
-- **Stay inside the spec.** Out-of-scope discoveries — an adjacent bug, a
-  refactor that would help later, missing tests elsewhere — are recorded,
-  not acted on:
+- **The spec bounds your work.** When you spot something outside its scope —
+  a neighbouring bug, a refactor that would pay off later, tests missing
+  elsewhere — log it instead of fixing it:
 
   ```
   ab observe --kind latent-bug --files src/auth.ts "…"
@@ -51,29 +51,31 @@ You never push — the push is plumbing that happens when you finish.
   ab observe --kind followup "…"
   ```
 
-- **Feedback rounds** — a round that carries feedback carries exactly one kind,
-  and it comes before anything else you do. `.ab/context.json`'s `feedback`
-  field says which: `findings` → address every finding in `.ab/findings.json`;
-  the reviewer marks dodged findings as persisting, and persistent chains
-  escalate to a human. `verify` → make the named step's report in `.ab/verify/`
-  pass. `guidance` → `.ab/guidance.json` holds a human operator's answer to the
-  escalation that blocked this build. It may have been raised by you or the
-  reviewer, by the kernel's code-loop stall or policy guards, or by the
-  verify-attempt policy guard after a failed report. The file carries the
-  escalation id and the answer text, it is authoritative for the round, and the
-  code must act on it. The spec stays the contract this
-  phase is measured against, so if the answer and the spec cannot both be
-  satisfied, escalate rather than choose silently. On a guidance round
-  `.ab/findings.json` does not exist and no verify step is routed back — the
-  answer is the whole of your feedback. With no `feedback` field at all, this
-  round has none: build the plan.
-- **Never stage or commit anything under `.ab/`, including with `git add -f`.**
-  It is disposable phase scratch, not part of the build deliverable.
-- **Never rebase, never force-push, never touch the remote.** Local commits
-  only; the boundary push is not yours.
-- If the plan is unimplementable as written (the code contradicts its
-  assumptions), and you cannot satisfy the spec by a reasonable local
-  reading, escalate rather than improvise a redesign:
+- **Handle feedback before anything else.** A round with feedback carries
+  exactly one kind, named by `.ab/context.json`'s `feedback` field:
+  `findings` → resolve every finding in `.ab/findings.json`; findings you
+  dodge come back marked as persisting, and a chain that stays persistent
+  goes to a human. `verify` → get the named step's report in `.ab/verify/`
+  to pass. `guidance` → `.ab/guidance.json` carries a human operator's reply
+  to the escalation that blocked this build. The escalation may have come
+  from you, from the reviewer, from the kernel's code-loop stall or policy
+  guards, or from the verify-attempt policy guard after a failed report.
+  The file pairs the escalation id with the answer text; treat it as
+  authoritative for the round and act on it in the code. The spec remains
+  the contract this phase is measured against — if honoring the answer means
+  breaking the spec, escalate rather than quietly picking one. A guidance
+  round comes with no `.ab/findings.json` and no routed verify step; the
+  answer is the entirety of your feedback. If `feedback` is absent
+  entirely, the round has none: build the plan.
+- **Keep `.ab/` out of every commit.** Never stage or commit it, even with
+  `git add -f`. It is disposable phase scratch, not part of the build
+  deliverable.
+- **Stay off the remote.** Never rebase, never force-push, never touch it.
+  Commits are local-only; the boundary push happens outside your hands.
+- **Escalate a dead-end plan instead of redesigning it.** If the plan cannot
+  be implemented as written — the code contradicts its assumptions — and no
+  reasonable local reading of the spec gets you unstuck, ask rather than
+  improvise:
 
   ```
   ab escalate "…the question…" --refs src/whatever.ts

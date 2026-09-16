@@ -425,6 +425,7 @@ describe('SESSIONLESS_COMMANDS', () => {
     for (const command of [
       'builds',
       'build',
+      'watch',
       'repository',
       'pause',
       'resume',

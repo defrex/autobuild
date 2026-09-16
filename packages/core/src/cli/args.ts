@@ -5,13 +5,14 @@
  * parser deliberately owns only syntax: command-specific positional arity,
  * numeric conversion, and mutually exclusive flags remain with the route.
  */
-export type FlagKind = 'value' | 'boolean'
+/** `'multi'` is a value flag that may repeat: values accumulate in order. */
+export type FlagKind = 'value' | 'boolean' | 'multi'
 
 export type FlagSpec = Readonly<Record<string, FlagKind>>
 
 export interface ParsedArgs {
   positionals: string[]
-  flags: Map<string, string | true>
+  flags: Map<string, string | true | string[]>
 }
 
 export function parseArgs(
@@ -20,7 +21,7 @@ export function parseArgs(
   usage: string,
 ): ParsedArgs {
   const positionals: string[] = []
-  const flags = new Map<string, string | true>()
+  const flags = new Map<string, string | true | string[]>()
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!
@@ -34,7 +35,7 @@ export function parseArgs(
     if (kind === undefined) {
       throw new Error(`unknown flag --${name} — ${usage}`)
     }
-    if (flags.has(name)) {
+    if (kind !== 'multi' && flags.has(name)) {
       throw new Error(`--${name} may be supplied only once — ${usage}`)
     }
     if (kind === 'boolean') {
@@ -48,7 +49,13 @@ export function parseArgs(
         `--${name} requires a value${value !== undefined ? `, got "${value}"` : ''} — ${usage}`,
       )
     }
-    flags.set(name, value)
+    if (kind === 'multi') {
+      const collected = flags.get(name)
+      const previous: string[] = Array.isArray(collected) ? collected : []
+      flags.set(name, [...previous, value])
+    } else {
+      flags.set(name, value)
+    }
     index += 1
   }
 
@@ -58,4 +65,10 @@ export function parseArgs(
 export function stringFlag(parsed: ParsedArgs, name: string): string | undefined {
   const value = parsed.flags.get(name)
   return typeof value === 'string' ? value : undefined
+}
+
+/** Collected values of a repeatable flag, in supply order; `[]` when absent. */
+export function multiFlag(parsed: ParsedArgs, name: string): string[] {
+  const value = parsed.flags.get(name)
+  return Array.isArray(value) ? value : []
 }
