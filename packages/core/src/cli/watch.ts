@@ -693,25 +693,39 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
-      /** One poll cycle: discovery, then per-stream reads. A failed read is
-       * reported once per failure streak, advances nothing, and is retried at
-       * the next interval; a fully successful cycle re-arms the report. */
-      let readFailureReported = false
-      const reportReadFailure = (error: unknown): void => {
-        if (readFailureReported) return
-        readFailureReported = true
-        const message = error instanceof Error ? error.message : String(error)
-        opts.stderr(`ab watch: a store read failed (${message}); retrying at the next interval`)
+      /** A failed read is reported once per failure streak, advances nothing,
+       * and is retried at the next interval (local) or next request (remote);
+       * a success on the same source re-arms the report. Each read source —
+       * per stream task, plus discovery — carries its own streak, so a
+       * persistent failure on one stream interleaved with successes elsewhere
+       * is still reported only once. */
+      const makeFailureStreak = (): {
+        onFailure: (error: unknown) => void
+        onSuccess: () => void
+      } => {
+        let reported = false
+        return {
+          onFailure: (error: unknown): void => {
+            if (reported) return
+            reported = true
+            const message = error instanceof Error ? error.message : String(error)
+            opts.stderr(`ab watch: a store read failed (${message}); retrying at the next interval`)
+          },
+          onSuccess: (): void => {
+            reported = false
+          },
+        }
       }
 
       const tick = async (): Promise<void> => {
+        const streak = makeFailureStreak()
         let allReadsOk = true
         if (slugs.length === 0) {
           try {
             await discoverBuilds()
           } catch (error) {
             allReadsOk = false
-            reportReadFailure(error)
+            streak.onFailure(error)
           }
         }
         for (const stream of [...streams.values()]) {
@@ -721,10 +735,10 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             else await pollRepository(stream)
           } catch (error) {
             allReadsOk = false
-            reportReadFailure(error)
+            streak.onFailure(error)
           }
         }
-        if (allReadsOk) readFailureReported = false
+        if (allReadsOk) streak.onSuccess()
       }
 
       // ── Initial scan ──
@@ -752,7 +766,9 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
       if (repository) {
         if (!(await trackRepository())) {
-          reportReadFailure(new Error(`could not read the repository journal for "${repo}"`))
+          makeFailureStreak().onFailure(
+            new Error(`could not read the repository journal for "${repo}"`),
+          )
         }
       } else if (slugs.length === 0) {
         // Membership discovery also baselines the default watch; a failed
@@ -794,17 +810,18 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         const launched = new Set<string>()
 
         const runStreamTask = async (poll: () => Promise<unknown>): Promise<void> => {
+          const streak = makeFailureStreak()
           while (!stop && !aborted() && now().getTime() < deadline) {
             const started = now().getTime()
             try {
               await poll()
-              readFailureReported = false
+              streak.onSuccess()
               if (namedAllTerminal()) {
                 stop = true
                 return
               }
             } catch (error) {
-              reportReadFailure(error)
+              streak.onFailure(error)
             }
             if (stop || aborted()) return
             const elapsed = now().getTime() - started
@@ -828,12 +845,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         if (slugs.length === 0 && !shouldStop) {
           tasks.push(
             (async (): Promise<void> => {
+              const streak = makeFailureStreak()
               while (!stop && !aborted() && now().getTime() < deadline) {
                 try {
                   await discoverBuilds()
-                  readFailureReported = false
+                  streak.onSuccess()
                 } catch (error) {
-                  reportReadFailure(error)
+                  streak.onFailure(error)
                 }
                 for (const stream of streams.values()) launch(stream)
                 if (stop || aborted()) return

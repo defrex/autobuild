@@ -1039,6 +1039,24 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     ])
   })
 
+  test('a persistent failure on one stream is reported once even as other streams succeed', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    await seedRunningBuild(store, 'b2')
+    // Stream b1 fails on every held read; b2 succeeds each cycle. The
+    // failure report is tracked per stream: b2's successes must not re-arm
+    // b1's streak, or b1's failure would be re-reported every cycle.
+    const { store: fake } = longPollStore(store, (slug) => {
+      if (slug === 'b1') throw new Error('b1 held read failed')
+      return appendEscalation(store, 'b2')
+    })
+    const h = harness(store, { openStore: () => fake })
+    await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1', 'b2'], timeout: '2' })
+    expect(h.err).toEqual([
+      expect.stringContaining('ab watch: a store read failed (b1 held read failed)'),
+    ])
+  })
+
   test('an already-terminal named set ends before any held request', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
