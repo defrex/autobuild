@@ -33,9 +33,6 @@
       "@defrex/autobuild-hosted-store-service/service": [
         "./packages/hosted-store-service/src/service.ts"
       ],
-      "@defrex/autobuild-hosted-store-service/dispatcher": [
-        "./packages/hosted-store-service/src/dispatcher.ts"
-      ],
       "@defrex/autobuild-hosted-store-service/web/auth": [
         "./packages/hosted-store-service/src/web/auth.ts"
       ],
@@ -44,7 +41,9 @@
       ],
       "@defrex/autobuild-hosted-store-service/web/runtime": [
         "./packages/hosted-store-service/src/web/runtime.ts"
-      ]
+      ],
+      "@defrex/autobuild-hosted-dispatcher": ["./packages/hosted-dispatcher/src/index.ts"],
+      "@defrex/autobuild-hosted-dispatcher/runtime": ["./packages/hosted-dispatcher/src/runtime.ts"]
     },
     "allowJs": true,
     "incremental": true,
