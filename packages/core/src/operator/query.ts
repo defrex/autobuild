@@ -1,4 +1,12 @@
+import { composeBuildConfig } from '../config/live'
+import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { configSchema, type Config } from '../config/schema'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
+  parseEffectiveBuildConfig,
+} from '../processes/build-execution-state'
+import type { Artifact } from '../store/types'
 import { detail, statusFilter, summarize, type BuildDetail, type BuildSummary } from '../cli/status'
 import { projectRepositoryStatus, type RepositoryStatus } from '../cli/repository-status'
 import { projectHarvestStatus, type HarvestStatusView } from '../cli/harvest'
@@ -112,6 +120,48 @@ export interface OperatorBuildView {
   dashboardRow: DashboardBuild | null
 }
 
+interface PinnedProjection {
+  config: Config
+  revision?: number
+  pipelineSource?: PipelineSourceMeta
+}
+
+/** Read one build's pinned effective-config artifact (SPEC §16.1): its parsed
+ * build-owned sections composed over the live snapshot's deployment-owned
+ * ones, plus the artifact's metadata projection. Every row must be projected
+ * against the pipeline the build actually runs — the artifact's build-owned
+ * sections — never the dispatcher's live base-branch snapshot, which a pinned
+ * build may never execute. All read failures are display-only: an absent or
+ * malformed artifact degrades to the live config, the pre-pin behavior. */
+async function readPinnedConfig(
+  store: BuildStore,
+  slug: string,
+  live: Config,
+): Promise<PinnedProjection> {
+  let artifact: Artifact | null
+  try {
+    artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+  } catch {
+    artifact = null
+  }
+  if (artifact === null) return { config: live }
+  let config: Config
+  try {
+    config = composeBuildConfig(parseEffectiveBuildConfig(artifact), live)
+  } catch {
+    config = live
+  }
+  return { config, ...parseBuildConfigMetadata(artifact) }
+}
+
+/** Attach the effective-config metadata (SPEC §16.1) to a projected row so an
+ * operator can see which autobuild.toml the build runs under. */
+function decorateWithPinnedMeta(row: DashboardBuild, pinned: PinnedProjection): DashboardBuild {
+  if (pinned.revision !== undefined) row.effectiveConfigRev = pinned.revision
+  if (pinned.pipelineSource !== undefined) row.pipelineSource = pinned.pipelineSource
+  return row
+}
+
 export async function getOperatorBuild(opts: {
   store: BuildStore
   repo: string
@@ -122,8 +172,12 @@ export async function getOperatorBuild(opts: {
   const events = await opts.store.getEvents(opts.slug)
   const state = reduceBuild(events)
   const { config } = await effectiveConfig(opts.store, opts.repo)
-  const dashboardRow = projectBuild(record, state, config, events)
-  return { detail: detail(record, events, opts.now), dashboardRow }
+  const pinned = await readPinnedConfig(opts.store, opts.slug, config)
+  const dashboardRow = projectBuild(record, state, config, events, undefined, pinned.config)
+  return {
+    detail: detail(record, events, opts.now),
+    dashboardRow: dashboardRow === null ? null : decorateWithPinnedMeta(dashboardRow, pinned),
+  }
 }
 
 export async function getRepositoryStatus(
@@ -164,8 +218,9 @@ export async function getOperatorDashboard(opts: {
     const events = await opts.store.getEvents(record.slug)
     const state = reduceBuild(events)
     if (state.status !== 'done' && state.status !== 'aborted') activeCount += 1
-    const row = projectBuild(record, state, config, events)
-    if (row !== null) projected.push(row)
+    const pinned = await readPinnedConfig(opts.store, record.slug, config)
+    const row = projectBuild(record, state, config, events, undefined, pinned.config)
+    if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
   }
   const scan = await scanUnclaimedObservations(opts.store, opts.repo)
   const warningLines = [

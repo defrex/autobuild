@@ -2,10 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  effectiveBuildConfigContent,
+} from '../processes/build-execution-state'
 import { MemoryBuildStore } from '../store/memory'
 import { projectBuild } from '../cli/dashboard/model'
 import {
   getHarvestStatus,
+  getOperatorBuild,
   getOperatorDashboard,
   getRepositoryStatus,
   listOperatorBuilds,
@@ -273,6 +278,80 @@ describe('operator query wiring', () => {
       accumulatedMs: 0,
       runningSince: Date.parse('2026-09-02T00:00:10.000Z'),
     })
+  })
+
+  test('a pinned build projects its own pipeline and carries pipeline-source metadata', async () => {
+    // AUT-366 on the hosted surface: the live base-branch snapshot has an
+    // empty verify universe, but the build's artifact pins a pipeline with an
+    // always-on step. The row's steps must come from the pinned pipeline, and
+    // the row must say which autobuild.toml it runs under (SPEC §16.1).
+    const store = new MemoryBuildStore({ clock })
+    await publishRun(store, 'new', config(7, 11))
+    await createBuild(store, 'active', 'active')
+    const pinnedConfig = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+postgres = "pg-ready"
+
+[verify]
+steps = ["postgres"]
+
+[verify.postgres]
+kind = "check"
+command = "postgres"
+`)
+    await store.putArtifact('active', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedConfig),
+      metadata: {
+        revision: 3,
+        run: 'new',
+        pipelineSource: { ref: 'branch-head', commit: 'a'.repeat(40) },
+      },
+    })
+
+    now = new Date('2026-09-02T00:00:20.000Z')
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    const row = snapshot.model.builds[0]!
+    expect(row.steps.map((step) => step.label)).toContain('verify:postgres')
+    expect(row.effectiveConfigRev).toBe(3)
+    expect(row.pipelineSource).toEqual({ ref: 'branch-head', commit: 'a'.repeat(40) })
+
+    const view = await getOperatorBuild({ store, repo: REPO, slug: 'active', now })
+    expect(view.dashboardRow!.steps.map((step) => step.label)).toContain('verify:postgres')
+    expect(view.dashboardRow!.effectiveConfigRev).toBe(3)
+    expect(view.dashboardRow!.pipelineSource).toEqual({
+      ref: 'branch-head',
+      commit: 'a'.repeat(40),
+    })
+  })
+
+  test('a malformed pinned artifact degrades to the live config but keeps its metadata', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await publishRun(store, 'new', config(7, 11))
+    await createBuild(store, 'active', 'active')
+    await store.putArtifact('active', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: '{not json',
+      metadata: {
+        revision: 2,
+        run: 'new',
+        pipelineSource: { ref: 'base', commit: 'b'.repeat(40) },
+      },
+    })
+
+    now = new Date('2026-09-02T00:00:20.000Z')
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    const row = snapshot.model.builds[0]!
+    // The unparsable pipeline cannot be projected; the live snapshot's (empty)
+    // verify universe is the pre-pin degradation, but the metadata still says
+    // which source the build is pinned to.
+    expect(row.steps.map((step) => step.label)).not.toContain('verify:postgres')
+    expect(row.effectiveConfigRev).toBe(2)
+    expect(row.pipelineSource).toEqual({ ref: 'base', commit: 'b'.repeat(40) })
   })
 
   test('dashboard reports every durable effective-config failure as a typed query error', async () => {
