@@ -717,15 +717,19 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
       }
 
+      // One streak for the whole local loop — the same lifetime the shared
+      // reported flag had before per-source streaks: a persistent read
+      // failure is reported once, and a fully-successful cycle re-arms it.
+      const tickStreak = makeFailureStreak()
+
       const tick = async (): Promise<void> => {
-        const streak = makeFailureStreak()
         let allReadsOk = true
         if (slugs.length === 0) {
           try {
             await discoverBuilds()
           } catch (error) {
             allReadsOk = false
-            streak.onFailure(error)
+            tickStreak.onFailure(error)
           }
         }
         for (const stream of [...streams.values()]) {
@@ -735,10 +739,10 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             else await pollRepository(stream)
           } catch (error) {
             allReadsOk = false
-            streak.onFailure(error)
+            tickStreak.onFailure(error)
           }
         }
-        if (allReadsOk) streak.onSuccess()
+        if (allReadsOk) tickStreak.onSuccess()
       }
 
       // ── Initial scan ──
