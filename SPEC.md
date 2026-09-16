@@ -643,9 +643,15 @@ touched.
 
 Streams are scoped to a build, to a repository, or to an operator session
 (§7.1.1) — the scope vocabulary is closed. Reads are cursor-based
-(`since` sequence) with an optional bounded wait that returns as soon as a
-chunk lands or the stream closes — the resumable live channel every frontend
-would otherwise invent for itself.
+(`since` sequence) with an optional bounded wait (`waitSeconds`, whole
+seconds) that returns as soon as a chunk lands or the stream closes — the
+resumable live channel every frontend would otherwise invent for itself.
+The wait is bounded at `MAX_STREAM_WAIT_SECONDS` = 30: a `waitSeconds` above
+30 clamps to 30, so a request to wait 61 seconds returns no later than 30.
+Every store — the in-memory reference, the SQLite adapter, and the remote
+client/server path — enforces the same clamp, and session-event reads
+(§7.1.1) honor the identical rule so a poll loop cannot drift between the
+two.
 
 **Presentation, never routing.** No kernel, engine, reducer, or dispatcher
 decision reads stream content; outcomes travel only the typed CLI. Writers
