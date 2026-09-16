@@ -181,6 +181,36 @@ describe('OperatorSandboxService', () => {
     }
   })
 
+  test('wait keeps partial output while running, bounded by truncation', async () => {
+    const fx = await fixture()
+    try {
+      await fx.service.exec('ops', { repo: fx.repo, command: 'echo one' })
+      // Streaming providers (the local faces) report the output so far on a
+      // running command; the service must pass it through, not drop it.
+      ;(
+        fx.provider.orchestratorSandbox as unknown as {
+          wait: () => Promise<unknown>
+        }
+      ).wait = async () => ({
+        state: 'running',
+        stdout: 'p'.repeat(70_000),
+        stderr: 'err-so-far',
+      })
+      const result = await fx.service.wait('ops', {
+        repo: fx.repo,
+        commandId: 'sbcmd-x',
+        waitSeconds: 0,
+      })
+      expect(result).toEqual({
+        state: 'running',
+        stdout: `${'p'.repeat(65_536)}\n${SANDBOX_TRUNCATION_MARKER}`,
+        stderr: 'err-so-far',
+      })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
   test('serialization: two overlapping execs on one environment run strictly in order', async () => {
     const fx = await fixture()
     try {

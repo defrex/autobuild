@@ -345,7 +345,21 @@ export async function createOperatorSandboxService(
           commandId: input.commandId,
           waitSeconds,
         })
-        if (result.state === 'running') return { state: 'running' as const }
+        if (result.state === 'running') {
+          // Partial output so far rides on `running` too: providers that
+          // stream (the local faces) supply their buffers here, and Vercel —
+          // which reports output only after exit — supplies none. Truncation
+          // bounds apply to both shapes.
+          return {
+            state: 'running' as const,
+            ...(result.stdout !== undefined
+              ? { stdout: truncateSandboxOutput(result.stdout) }
+              : {}),
+            ...(result.stderr !== undefined
+              ? { stderr: truncateSandboxOutput(result.stderr) }
+              : {}),
+          }
+        }
         return {
           state: 'exited' as const,
           exitCode: result.exitCode,

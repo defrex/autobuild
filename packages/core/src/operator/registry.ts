@@ -829,7 +829,7 @@ export const TOOLS: readonly ToolEntry[] = [
     'sandbox.wait',
     'Wait, bounded (0–300 seconds), on a command started with sandbox.start. Returns state "running" (poll again) or "exited" with the exit code and output so far. Remote providers report command output only after exit, so a running command shows no output there.',
     sandboxWaitInput,
-    '{state, exitCode?, stdout?, stderr?}: the command state and, once exited, its exit code and truncated output streams.',
+    '{state, exitCode?, stdout?, stderr?}: the command state; once exited, its exit code and truncated output streams; while running, the streamed output so far when the provider reports it (Vercel reports output only after exit).',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof sandboxWaitInput>
       return sandboxOf(ctx).wait(attributed(ctx), input)
