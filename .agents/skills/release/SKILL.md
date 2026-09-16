@@ -73,7 +73,8 @@ notes are the exact cut changelog section and uploads the guest distribution
 archive to it; and finally runs `bun publish --access public` for each
 non-private workspace package in dependency order (`@defrex/autobuild`, then
 `@defrex/autobuild-postgres-store`, then
-`@defrex/autobuild-hosted-store-service`).
+`@defrex/autobuild-hosted-store-service`, then
+`@defrex/autobuild-hosted-dispatcher`).
 
 Do not perform any of those steps by hand, and do not add files to the release
 commit — it validates that it contains exactly the changelog, README, and
