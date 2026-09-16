@@ -500,7 +500,7 @@ describe('artifact download-repo', () => {
     })
     expect(finalized.artifact.meta.kind).toBe(`stream:${repoStream}`)
     const stored = await store.getRepoArtifact(resolve(tmp), `stream:${repoStream}`)
-    expect(new Uint8Array(await readFile(streamOutput))).toEqual(stored!.content)
+    expect(new Uint8Array(await readFile(streamOutput))).toEqual(new Uint8Array(stored!.content))
     expect(JSON.parse(await Bun.file(streamOutput).text())).toEqual([
       { id: 'm_1', role: 'assistant', parts: [] },
     ])
