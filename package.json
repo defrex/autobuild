@@ -37,10 +37,15 @@
       "import": "./packages/core/src/store/remote/index.ts",
       "default": "./packages/core/src/store/remote/index.ts"
     },
-    "./operator-api": {
-      "types": "./packages/core/src/operator/index.ts",
-      "import": "./packages/core/src/operator/index.ts",
-      "default": "./packages/core/src/operator/index.ts"
+    "./hosted-tickets": {
+      "types": "./packages/core/src/ports/tickets/hosted-index.ts",
+      "import": "./packages/core/src/ports/tickets/hosted-index.ts",
+      "default": "./packages/core/src/ports/tickets/hosted-index.ts"
+    },
+    "./testing": {
+      "types": "./packages/core/src/testing/index.ts",
+      "import": "./packages/core/src/testing/index.ts",
+      "default": "./packages/core/src/testing/index.ts"
     },
     "./operator-presentation": {
       "types": "./packages/core/src/operator/presentation.ts",
@@ -51,11 +56,6 @@
       "types": "./packages/core/src/ports/tickets/update.ts",
       "import": "./packages/core/src/ports/tickets/update.ts",
       "default": "./packages/core/src/ports/tickets/update.ts"
-    },
-    "./remote-tickets": {
-      "types": "./packages/core/src/ports/tickets/remote-index.ts",
-      "import": "./packages/core/src/ports/tickets/remote-index.ts",
-      "default": "./packages/core/src/ports/tickets/remote-index.ts"
     },
     "./origin": {
       "types": "./packages/core/src/kernel/origin.ts",
@@ -76,6 +76,11 @@
       "types": "./packages/core/src/ports/workspace/distribution-archive.ts",
       "import": "./packages/core/src/ports/workspace/distribution-archive.ts",
       "default": "./packages/core/src/ports/workspace/distribution-archive.ts"
+    },
+    "./operator": {
+      "types": "./packages/core/src/operator/index.ts",
+      "import": "./packages/core/src/operator/index.ts",
+      "default": "./packages/core/src/operator/index.ts"
     }
   },
   "files": [

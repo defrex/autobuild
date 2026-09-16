@@ -5,7 +5,7 @@
  * closed (`events/sessions.ts`), so this function is total over session
  * history; unknown facts cannot exist.
  */
-import type { SessionEvent } from '../events/sessions'
+import type { SessionEvent } from '@defrex/autobuild/remote-store'
 
 export type SessionStatus = 'idle' | 'running' | 'suspended' | 'awaiting-approval' | 'archived'
 export type SessionSuspensionCause = 'budget' | 'approval'

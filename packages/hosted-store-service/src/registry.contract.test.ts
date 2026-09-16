@@ -1,20 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-import { parseConfig } from '../config/load'
-import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
-import { FakeTicketSource } from '../ports/tickets/fake'
-import { MemoryBuildStore } from '../store/memory'
-import { mintToken } from '../store/remote/token'
+import { parseConfig } from '@defrex/autobuild/testing'
+import { DISPATCHER, KERNEL, humanActor } from '@defrex/autobuild/testing'
+import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from '../store/remote/version'
-import { OPERATOR_TOOL_ANNOTATIONS } from './annotations'
-import { buildRegistry, RegistryError, TOOLS } from './registry'
-import { createOperatorServer } from './server'
-import type { BuildStore } from '../store/types'
-import type { OperatorTicketBackend } from './tickets'
+} from '@defrex/autobuild/remote-store'
+import { OPERATOR_TOOL_ANNOTATIONS } from '@defrex/autobuild/operator'
+import { buildRegistry, RegistryError, TOOLS } from '@defrex/autobuild/operator'
+import { createOperatorServer } from './operator-server'
+import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
+import type { OperatorTicketBackend } from '@defrex/autobuild/operator'
 
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
@@ -974,8 +974,8 @@ describe('agent tool registry contract', () => {
 describe('sandbox registry tools (AUT-340)', () => {
   async function sandboxWorld() {
     const world = await seedWorld()
-    const { FakeWorkspaceProvider } = await import('../ports/workspace/fake')
-    const { createOperatorSandboxService } = await import('./sandbox')
+    const { FakeWorkspaceProvider } = await import('@defrex/autobuild/plugin-sdk')
+    const { createOperatorSandboxService } = await import('@defrex/autobuild/testing')
     const { mkdtemp, rm } = await import('node:fs/promises')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')

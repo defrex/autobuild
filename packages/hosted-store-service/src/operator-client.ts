@@ -1,34 +1,33 @@
-import type { BuildControlResult } from '../cli/build-control'
-import type { BulkControlSummary } from '../cli/bulk-control'
-import type { HarvestStatusView } from '../cli/harvest'
-import type { RepositoryStatus } from '../cli/repository-status'
-import type { BuildSummary } from '../cli/status'
-import {
-  AUTOBUILD_VERSION,
-  AUTOBUILD_VERSION_HEADER,
-  REMOTE_STORE_PROTOCOL_VERSION,
-  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from '../store/remote/version'
 import {
   operatorErrorSchema,
+  type BuildControlResult,
+  type BulkControlSummary,
+  type HarvestStatusView,
+  type RepositoryStatus,
+  type BuildSummary,
+  type OperatorBuildView,
+  type OperatorDashboardSnapshot,
+  type OperatorTicketDetail,
+  type OperatorTicketQueue,
   type OperatorAnswerRequest,
   type OperatorBuildControlRequest,
   type OperatorTicketBlockerRequest,
   type OperatorTicketCreateRequest,
   type OperatorTicketMoveRequest,
   type OperatorTicketUpdateRequest,
-} from './protocol'
-import type { OperatorBuildView, OperatorDashboardSnapshot } from './query'
-import type { OperatorTicketDetail, OperatorTicketQueue } from './tickets'
-import type { OperatorSessionView } from './sessions'
-import type { SessionRecord } from '../store/types'
-import type { StreamRead } from '../store/streams/types'
-import type {
-  OperatorSessionApprovalRequest,
-  OperatorSessionCreateRequest,
-  OperatorSessionMessageRequest,
-  OperatorSessionWakeRequest,
-} from './protocol'
+  type OperatorSessionApprovalRequest,
+  type OperatorSessionCreateRequest,
+  type OperatorSessionMessageRequest,
+  type OperatorSessionWakeRequest,
+} from '@defrex/autobuild/operator'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from '@defrex/autobuild/remote-store'
+import type { SessionRecord, StreamRead } from '@defrex/autobuild/plugin-sdk'
+import type { OperatorSessionView } from './operator-sessions'
 
 export class OperatorApiError extends Error {
   constructor(

@@ -1,7 +1,9 @@
 # `@defrex/autobuild-hosted-store-service`
 
 The optional hosted Autobuild service composes the remote BuildStore and the
-full TicketSource HTTP protocol with `@defrex/autobuild-postgres-store`. The root
+full TicketSource HTTP protocol with `@defrex/autobuild-postgres-store`; the
+protocol servers live here while their client half, wire schemas, and token
+minting ship in the `@defrex/autobuild` core package. The root
 Next.js application mounts those machine protocols unchanged and serves the
 cookie-authenticated operator dashboard on the same origin. `server.ts` remains
 the named bare-Bun machine-service entrypoint for non-Next hosts.

@@ -1,21 +1,22 @@
 import { describe, expect, test } from 'bun:test'
-import { abBuildControl, type BuildControlAction } from '../cli/build-control'
-import { abBulkControl } from '../cli/bulk-control'
-import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
-import type { EscalationSource } from '../ontology'
-import type { Exec } from '../ports/workspace/git-worktree'
-import { MemoryBuildStore } from '../store/memory'
-import type { BuildStore } from '../store/types'
+import { abBuildControl } from '@defrex/autobuild/testing'
+import type { BuildControlAction } from '@defrex/autobuild/operator'
+import { abBulkControl } from '@defrex/autobuild/testing'
+import { agentActor, DISPATCHER, KERNEL } from '@defrex/autobuild/testing'
+import type { EscalationSource } from '@defrex/autobuild/testing'
+import type { Exec } from '@defrex/autobuild/testing'
+import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import {
   controlHarvestRun,
   setRepositorySetting,
   toggleHarvestGate,
   toggleRepositorySetting,
-} from './control'
-import { OperatorApiClient } from './client'
-import type { OperatorAnswerRequest, OperatorBuildControlRequest } from './protocol'
-import { createOperatorServer } from './server'
-import { mintToken } from '../store/remote/token'
+} from '@defrex/autobuild/operator'
+import { OperatorApiClient } from './operator-client'
+import type { OperatorAnswerRequest, OperatorBuildControlRequest } from '@defrex/autobuild/operator'
+import { createOperatorServer } from './operator-server'
+import { mintToken } from '@defrex/autobuild/remote-store'
 
 const REPO = '/repo'
 const SLUG = 'contract-build'

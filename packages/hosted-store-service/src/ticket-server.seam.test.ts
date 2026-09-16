@@ -1,15 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import { mintToken } from '../../store/remote/token'
+import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from '../../store/remote/version'
-import { describeTicketSourceContract } from './contract'
-import { FakeTicketSource } from './fake'
-import { HostedTicketSource } from './remote'
-import { createTicketServer } from './remote-server'
+} from '@defrex/autobuild/remote-store'
+import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
+import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
+import { createTicketServer } from './ticket-server'
 
 const secret = 'ticket-test-secret'
 const now = new Date('2026-01-01T00:00:00.000Z')

@@ -67,7 +67,7 @@ import {
 } from '../../core/src/integration/harness'
 import { MemoryBuildStore } from '../../core/src/store/memory'
 import { steppingClock } from '../../core/src/testing/fixed'
-import { OperatorApiClient } from '@defrex/autobuild/operator-api'
+import { OperatorApiClient } from '@defrex/autobuild-hosted-store-service/operator-api'
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
 import type { BuildStore, Clock } from '@defrex/autobuild/plugin-sdk'
 import { createHostedStoreService } from '@defrex/autobuild-hosted-store-service/service'

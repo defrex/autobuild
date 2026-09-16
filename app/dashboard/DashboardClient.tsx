@@ -3,7 +3,7 @@
 import type {
   OperatorAnswerRequest,
   OperatorDashboardSnapshot,
-} from '@defrex/autobuild/operator-api'
+} from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   buildActionAvailability,
   type DashboardBuild,

@@ -70,7 +70,7 @@
         "react-dom": "19.2.4",
       },
       "peerDependencies": {
-        "@defrex/autobuild": ">=0.7.0",
+        "@defrex/autobuild": ">=0.9.0",
       },
       "optionalPeers": [
         "@defrex/autobuild",
