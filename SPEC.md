@@ -446,6 +446,20 @@ role, runner, model, token counts. This one decision produces the analysis
 corpus — prompt improvement, evals against the build skills, replay — as a
 query rather than a project.
 
+Reading session events uses the same contract shape as stream reads (§7.6):
+cursor-based, returning events with `seq` strictly greater than `sinceSeq`
+(default 0) in increasing sequence order, and an optional bounded wait —
+`waitSeconds` in whole seconds — that returns as soon as an event lands and
+no later than the §7.6 bound, with a `waitSeconds` above 30 clamping to 30
+exactly as stream reads do. One asymmetry is deliberate: an event log has no
+closed state, so a session-event read wakes only on an appended event or the
+clamped deadline, never on a close. Every store adapter enforces the same
+rules, so a poll loop cannot drift between stream and session-event reads;
+over the remote protocol the read is
+`GET /sessions/{id}/events?since={n}&wait={n}`, parsed exactly like the
+stream read's ([docs/remote-store-protocol.md](docs/remote-store-protocol.md),
+§5).
+
 ### 7.2 Interface and adapters
 
 Deliberately narrow: build runners need `append(event)`, `putArtifact`,
@@ -643,9 +657,15 @@ touched.
 
 Streams are scoped to a build, to a repository, or to an operator session
 (§7.1.1) — the scope vocabulary is closed. Reads are cursor-based
-(`since` sequence) with an optional bounded wait that returns as soon as a
-chunk lands or the stream closes — the resumable live channel every frontend
-would otherwise invent for itself.
+(`since` sequence) with an optional bounded wait (`waitSeconds`, whole
+seconds) that returns as soon as a chunk lands or the stream closes — the
+resumable live channel every frontend would otherwise invent for itself.
+The wait is bounded at `MAX_STREAM_WAIT_SECONDS` = 30: a `waitSeconds` above
+30 clamps to 30, so a request to wait 61 seconds returns no later than 30.
+Every store — the in-memory reference, the SQLite adapter, and the remote
+client/server path — enforces the same clamp, and session-event reads
+(§7.1.1) honor the identical rule so a poll loop cannot drift between the
+two.
 
 **Presentation, never routing.** No kernel, engine, reducer, or dispatcher
 decision reads stream content; outcomes travel only the typed CLI. Writers

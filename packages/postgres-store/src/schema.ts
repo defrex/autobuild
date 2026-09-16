@@ -6,7 +6,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -200,7 +200,9 @@ CREATE TABLE IF NOT EXISTS repo_artifacts (
 );`.trim()
 export const SCHEMA_V1_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V1_DDL).digest('hex')
 
-export const SCHEMA_DDL = `
+/** The frozen v4 DDL, kept verbatim so a deployed v4 marker's checksum can be
+ * recognized and upgraded in place (see migratePostgres). */
+export const SCHEMA_V4_DDL = `
 CREATE TABLE IF NOT EXISTS ab_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   version integer NOT NULL,
@@ -212,6 +214,90 @@ CREATE TABLE IF NOT EXISTS builds (
   created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
   lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
   heartbeat_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS events (
+  build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (build, seq)
+);
+CREATE TABLE IF NOT EXISTS artifacts (
+  build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (build, kind, revision)
+);
+CREATE TABLE IF NOT EXISTS repo_streams (
+  repo text PRIMARY KEY, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+  lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
+  heartbeat_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS repo_events (
+  repo text NOT NULL REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (repo, seq)
+);
+CREATE TABLE IF NOT EXISTS repo_artifacts (
+  repo text NOT NULL REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (repo, kind, revision)
+);
+CREATE SEQUENCE IF NOT EXISTS sessions_creation_seq;
+CREATE TABLE IF NOT EXISTS sessions (
+  id text PRIMARY KEY,
+  repo text NOT NULL,
+  operator text NOT NULL,
+  title text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  creation_seq bigint NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_events (
+  session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (session, seq)
+);
+CREATE TABLE IF NOT EXISTS session_artifacts (
+  session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (session, kind, revision)
+);
+CREATE TABLE IF NOT EXISTS streams (
+  id text PRIMARY KEY, scope_kind text NOT NULL,
+  build text REFERENCES builds(slug) ON DELETE CASCADE,
+  repo text REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  label text NOT NULL, format text NOT NULL, status text NOT NULL,
+  outcome text, artifact_kind text, artifact_revision bigint,
+  artifact_blob_ref text, created_at timestamptz NOT NULL, closed_at timestamptz,
+  session text REFERENCES sessions(id) ON DELETE CASCADE,
+  CONSTRAINT streams_scope_kind_check CHECK (scope_kind IN ('build','repo','session')),
+  CONSTRAINT streams_status_check CHECK (status IN ('open','closed')),
+  CONSTRAINT streams_scope_exactly_one_check CHECK (
+    (scope_kind = 'build' AND build IS NOT NULL AND repo IS NULL AND session IS NULL)
+    OR (scope_kind = 'repo' AND build IS NULL AND repo IS NOT NULL AND session IS NULL)
+    OR (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
+  )
+);
+CREATE TABLE IF NOT EXISTS stream_chunks (
+  stream text NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, parts jsonb NOT NULL,
+  PRIMARY KEY (stream, seq)
+);`.trim()
+export const SCHEMA_V4_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V4_DDL).digest('hex')
+
+export const SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS ab_schema_migrations (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  version integer NOT NULL,
+  checksum text NOT NULL,
+  applied_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS builds (
+  slug text PRIMARY KEY, repo text NOT NULL, ticket jsonb, branch text,
+  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+  lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
+  heartbeat_at timestamptz, repo_origin text
 );
 CREATE TABLE IF NOT EXISTS events (
   build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
@@ -337,6 +423,10 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['lease_expires_at', 'timestamp with time zone', false],
     ['lease_ttl_ms', 'bigint', false],
     ['heartbeat_at', 'timestamp with time zone', false],
+    // The repo_origin column rides last: the guarded v4→v5 ALTER adds it at
+    // the end, so migrated and fresh databases assert identically (the
+    // sessions.creation_seq and streams.session comments above).
+    ['repo_origin', 'text', false],
   ],
   events: [
     ['build', 'text', true],
@@ -678,21 +768,49 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
       const marker = rows[0]
       if (marker) {
+        // v1–v4 → v5: the guarded builds.repo_origin column runs for EVERY
+        // pre-v5 marker, before the version branches — not only in a v4
+        // branch. `CREATE TABLE IF NOT EXISTS builds` does not alter an
+        // existing builds table, so without this the internal assertSchema
+        // below would fail on every upgraded legacy database. The ALTER is
+        // guarded and idempotent, so re-running it on a v5 database (or a
+        // marker that turns out to be rejected below, which rolls this
+        // transaction back) is a no-op.
+        await tx.unsafe(`
+          DO $$ BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = current_schema() AND table_name = 'builds'
+                AND column_name = 'repo_origin'
+            ) THEN
+              ALTER TABLE builds ADD COLUMN repo_origin text;
+            END IF;
+          END $$;
+        `)
         const version = Number(marker.version)
         if (version === SCHEMA_VERSION) {
           if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('marker is incompatible')
+        } else if (version === 4 && marker.checksum === SCHEMA_V4_CHECKSUM) {
+          // v4 → v5: the guarded repo_origin column above is the only delta;
+          // a v4 database already has every v5 table and column. Promote the
+          // marker in this transaction.
+          await tx`UPDATE ab_schema_migrations
+            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
-          // v1 → v4: the idempotent full DDL above already applied the deltas
+          // v1 → v5: the idempotent full DDL above already applied the deltas
           // (the stream tables and the session tables); v1 databases never had
           // a streams or sessions table, so the full DDL created them with the
           // session column, the widened CHECKs, and the creation_seq column.
-          // Promote the marker in this transaction.
+          // The guarded repo_origin ALTER above covered builds. Promote the
+          // marker in this transaction.
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 2 && marker.checksum === SCHEMA_V2_CHECKSUM) {
-          // v2 → v4: the idempotent full DDL above created the session tables
+          // v2 → v5: the idempotent full DDL above created the session tables
           // (with the creation_seq column); a v2 database's streams table
           // needs the guarded session column and the widened CHECK
           // constraints.
@@ -724,7 +842,7 @@ export async function migratePostgres(url: string): Promise<void> {
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 3 && marker.checksum === SCHEMA_V3_CHECKSUM) {
-          // v3 → v4: the listSessions creation-order tiebreak (store/types.ts).
+          // v3 → v5: the listSessions creation-order tiebreak (store/types.ts).
           // The idempotent full DDL above created the sessions_creation_seq
           // sequence; a v3 database's sessions table needs the guarded
           // creation_seq column, a (created_at, id)-ordered backfill — legacy
