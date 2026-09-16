@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#355](https://github.com/defrex/autobuild/pull/355) — Serve the tool registry over hosted MCP with Better Auth OAuth
 - [#353](https://github.com/defrex/autobuild/pull/353) — Run the TicketSource live suite in the CI live-Postgres step
 - [#350](https://github.com/defrex/autobuild/pull/350) — Wire live Postgres store suites into CI via always-on verify step
 - [#348](https://github.com/defrex/autobuild/pull/348) — Reword stale streaming denials in operator-api.md
