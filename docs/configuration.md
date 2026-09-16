@@ -23,7 +23,11 @@ environment. They are published to npm as separate packages alongside the
 PostgreSQL, or blob-provider dependencies; a project that embeds the adapter
 or the service adds the package it needs (`bun add
 @defrex/autobuild-postgres-store` or `bun add
-@defrex/autobuild-hosted-store-service`). The deployable web application still
+@defrex/autobuild-hosted-store-service`). The cron-driven hosted dispatcher is
+separately published as `@defrex/autobuild-hosted-dispatcher`; a deployment
+opts into building by installing that package, and its `AB_DISPATCHER_*`
+variables are documented in the [hosted-dispatcher runbook](hosted-dispatcher.md),
+not here. The deployable web application still
 runs from a release checkout: choose the compatible tag shown in
 [GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
 revision into a dedicated checkout, and run the idempotent migration there:
