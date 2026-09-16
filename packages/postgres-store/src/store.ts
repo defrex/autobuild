@@ -66,14 +66,17 @@ import {
 } from 'autobuild/store-adapter'
 
 /**
- * The held-read poll cadence for event waits (AUT-334): a held
- * `getEvents`/`getRepoEvents` re-queries the database at most once per
- * second — the hosted per-query budget — so an append by another connection
- * is observed at the next poll: typically within about one second, worst
- * case one poll interval plus the query round-trip. The nominal bound is
- * deliberate — a hard ≤1 s worst case would need Postgres LISTEN/NOTIFY
- * wake-on-append, one dedicated connection per held request on a pooled
- * provider (Neon), a cost considered and declined (see the PR record).
+ * The held-read poll cadence for event waits (AUT-334): a held event read —
+ * `getEvents`, `getRepoEvents`, or `getSessionEvents` — re-queries the
+ * database at most once per second — the hosted per-query budget — so an
+ * append by another connection is observed at the next poll: typically
+ * within about one second, worst case one poll interval plus the query
+ * round-trip. Held *stream* reads are excluded: they are presentation
+ * content and intentionally poll at the ~25 ms `STREAM_WAIT_POLL_MS`
+ * cadence (core `wait.ts`). The nominal bound is deliberate — a hard ≤1 s
+ * worst case would need Postgres LISTEN/NOTIFY wake-on-append, one
+ * dedicated connection per held request on a pooled provider (Neon), a
+ * cost considered and declined (see the PR record).
  */
 export const EVENT_WAIT_POLL_MS = 1000
 import {
@@ -358,8 +361,8 @@ export class PostgresBuildStore implements BuildStore {
     return readEventsWithWait({
       read,
       waitSeconds: opts?.waitSeconds,
-      // Hosted budget: no held request polls the database faster than once
-      // per second (AUT-334), so append-to-wake is typically under one
+      // Hosted budget: no held event request polls the database faster than
+      // once per second (AUT-334), so append-to-wake is typically under one
       // second — worst case one poll interval plus the query round-trip.
       pollMs: EVENT_WAIT_POLL_MS,
     })
@@ -597,7 +600,15 @@ export class PostgresBuildStore implements BuildStore {
         payload: json(row.payload),
       })) as SessionEvent[]
     }
-    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readEventsWithWait({
+      read,
+      waitSeconds: opts?.waitSeconds,
+      // Hosted budget: no held event request polls the database faster than
+      // once per second (AUT-334, AUT-381), so append-to-wake is typically
+      // under one second — worst case one poll interval plus the query
+      // round-trip.
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
   }
 
   private async depositSessionLocked(
