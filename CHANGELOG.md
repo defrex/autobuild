@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#358](https://github.com/defrex/autobuild/pull/358) — Wire the hosted live suites into the test-postgres step
 - [#355](https://github.com/defrex/autobuild/pull/355) — Serve the tool registry over hosted MCP with Better Auth OAuth
 - [#354](https://github.com/defrex/autobuild/pull/354) — Add a read-only session view that streams live dispatch sessions (AUT-337)
 - [#353](https://github.com/defrex/autobuild/pull/353) — Run the TicketSource live suite in the CI live-Postgres step
