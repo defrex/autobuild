@@ -10,6 +10,7 @@ import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
 import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
+import type { SessionStreamEmitter } from '../ports/types'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
@@ -2389,5 +2390,422 @@ describe('HarvestRunner hosted provenance', () => {
     expect(started?.payload.environment).toEqual(environment)
     // The adopted lease is deliberately left held for the owning loop.
     expect((await store.getRepo('/repo'))?.lease?.holder).toBe('host-dispatch-i0')
+  })
+})
+
+// ── Session streams (SPEC §9) ────────────────────────────────────────────────
+
+describe('HarvestRunner session streams (SPEC §9)', () => {
+  type StreamScript = NonNullable<ConstructorParameters<typeof ScriptedAgentRunner>[0]['script']>
+
+  /** Default single-round happy path: producer submits, reviewer approves.
+   * Every turn first appends a probe part through its per-turn emitter —
+   * the wiring under test. */
+  function happyScript(
+    workspace: string,
+    deps: { store: MemoryBuildStore; ids: ReturnType<typeof sequentialIds> },
+  ): StreamScript {
+    return async ({ opts, turn }) => {
+      opts.stream?.append([{ type: 'data-ab-prompt', data: { text: `${opts.skill}@${turn}` } }])
+      const env = resolveHarvestCliEnv(opts.env)
+      const ctx = { store: deps.store, env, workspacePath: workspace, ids: deps.ids }
+      await buildHarvestContext(ctx)
+      if (opts.skill === 'ab-harvest') {
+        const observations = JSON.parse(
+          await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+        ) as Array<{ occurrence: { build: string; seq: number } }>
+        const file = join(workspace, '.ab', `proposals-${turn}.json`)
+        await writeFile(file, JSON.stringify(proposalSet(observations)))
+        await submitHarvestProposals(ctx, file)
+      } else {
+        const notes = join(workspace, '.ab', 'review.md')
+        await writeFile(notes, 'approved\n')
+        await submitHarvestVerdict(ctx, { verdict: 'approve', notes })
+      }
+      return defaultTurnResult('done')
+    }
+  }
+
+  function startedSessionEvents(events: Awaited<ReturnType<MemoryBuildStore['getRepoEvents']>>) {
+    return events.filter((event) => event.type === 'harvest.session.started')
+  }
+
+  /** The finalized document of a closed stream. The memory store prunes
+   * older closed streams' chunks as newer ones open (the content lives in
+   * the artifact), so closed-stream assertions read the artifact. */
+  async function promptTexts(store: MemoryBuildStore, streamId: string): Promise<string[]> {
+    const artifact = await store.getRepoArtifact('/repo', `stream:${streamId}`)
+    expect(artifact).not.toBeNull()
+    const document = JSON.parse(new TextDecoder().decode(artifact!.content)) as Array<{
+      parts: Array<{ type: string; data?: { text?: string } }>
+    }>
+    return document
+      .flatMap((entry) => entry.parts)
+      .filter((part) => part.type === 'data-ab-prompt')
+      .map((part) => part.data!.text!)
+  }
+
+  test('a streaming registration opens one stream per bracket, names it on harvest.session.started, and passes the emitter into the turn', async () => {
+    const workspacePromise = mkdtemp(join(tmpdir(), 'ab-harvest-streams-'))
+    roots.push(await workspacePromise)
+    const workspace = await workspacePromise
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const deps = { store, ids: sequentialIds() }
+    const opened: string[] = []
+    const diagnostics: string[] = []
+    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    await seedObservation(store, 'one', 'first')
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => {
+            opened.push(info.session)
+            return sink.open(`session:${info.session}`)
+          },
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: deps.ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+    }).run()
+    expect(result.outcome).toBe('completed')
+    expect(diagnostics).toEqual([])
+
+    const events = await store.getRepoEvents('/repo')
+    const started = startedSessionEvents(events)
+    expect(started).toHaveLength(2)
+    expect(started.every((event) => typeof event.payload.stream === 'string')).toBe(true)
+    expect(opened).toHaveLength(2)
+    const streams = await store.listStreams({ kind: 'repo', repo: '/repo' })
+    expect(streams).toHaveLength(2)
+    expect(new Set(started.map((event) => event.payload.stream!))).toEqual(
+      new Set(streams.map((record) => record.id)),
+    )
+    // Every stream: first part data-ab-session with the bracket identity,
+    // closed completed, finalized document assembled from the appended
+    // parts, artifact landed on the repo scope.
+    for (const event of started) {
+      const record = streams.find((candidate) => candidate.id === event.payload.stream)
+      expect(record).toBeDefined()
+      expect(record!.status).toBe('closed')
+      expect(record!.outcome).toBe('completed')
+      expect(record!.label).toBe(`session:${event.payload.session}`)
+      const artifact = await store.getRepoArtifact('/repo', `stream:${record!.id}`)
+      expect(artifact).not.toBeNull()
+      const document = JSON.parse(new TextDecoder().decode(artifact!.content))
+      expect(document[0]?.parts?.[0]?.type).toBe('data-ab-session')
+      const first = document[0].parts[0] as { data: Record<string, unknown> }
+      expect(first.data).toMatchObject({
+        session: event.payload.session,
+        role: event.payload.role,
+        runner: event.payload.runner,
+        phase: `harvest:${event.payload.step}`,
+        round: event.payload.round,
+      })
+      // The turn's probe part arrived through the per-turn emitter.
+      expect(await promptTexts(store, record!.id)).toEqual([
+        `${event.payload.role === 'harvest' ? 'ab-harvest' : 'ab-harvest-review'}@1`,
+      ])
+    }
+  })
+
+  test("a continued producer round streams into its own bracket, not the start turn's stream", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-stream-cont-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const tickets = new FakeTicketSource()
+    const ids = sequentialIds()
+    const opened: string[] = []
+    const diagnostics: string[] = []
+    const emitters: Array<SessionStreamEmitter | undefined> = []
+    let reviewRound = 0
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts, turn }) => {
+        emitters.push(opts.stream)
+        opts.stream?.append([{ type: 'data-ab-prompt', data: { text: `${opts.skill}@${turn}` } }])
+        const env = resolveHarvestCliEnv(opts.env)
+        const ctx = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(ctx)
+        if (opts.skill === 'ab-harvest') {
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab', 'observations.json'), 'utf8'),
+          ) as Array<{ occurrence: { build: string; seq: number } }>
+          const file = join(workspace, '.ab', `proposals-${turn}.json`)
+          await writeFile(
+            file,
+            JSON.stringify({
+              proposals: [
+                {
+                  action: 'create',
+                  title: turn === 1 ? 'Initial title' : 'Reviewed title',
+                  whatWhy: 'The observation describes an actionable defect.',
+                  acceptanceCriteria: ['The defect no longer occurs.'],
+                  outOfScope: ['Unrelated cleanup.'],
+                  observations: observations.map((item) => item.occurrence),
+                },
+              ],
+            }),
+          )
+          await submitHarvestProposals(ctx, file)
+        } else {
+          reviewRound += 1
+          const notes = join(workspace, '.ab', `review-${reviewRound}.md`)
+          await writeFile(notes, reviewRound === 1 ? 'revise' : 'approve')
+          if (reviewRound === 1) {
+            const findings = join(workspace, '.ab', 'review-findings.json')
+            await writeFile(
+              findings,
+              JSON.stringify([{ severity: 'important', summary: 'Make the title specific' }]),
+            )
+            await submitHarvestVerdict(ctx, { verdict: 'revise', notes, findings })
+          } else {
+            await submitHarvestVerdict(ctx, { verdict: 'approve', notes })
+          }
+        }
+        return defaultTurnResult('done')
+      },
+    })
+    await seedObservation(store, 'one', 'first')
+    const result = await new HarvestRunner({
+      store,
+      tickets,
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => {
+            opened.push(info.session)
+            return sink.open(`session:${info.session}`)
+          },
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+    }).run()
+    expect(result.outcome).toBe('completed')
+    expect(diagnostics).toEqual([])
+
+    // One continued producer session, two review sessions: four brackets,
+    // four streams, each turn observed its own bracket's emitter.
+    const journals = [...scripted.sessions.values()]
+    const producers = journals.filter((session) => session.opts.skill === 'ab-harvest')
+    expect(producers).toHaveLength(1)
+    expect(producers[0]?.turns).toHaveLength(2)
+    expect(emitters).toHaveLength(4)
+    expect(emitters.every((emitter) => emitter !== undefined)).toBe(true)
+    // The continued (round-2) turn observed a DIFFERENT emitter than round 1.
+    expect(emitters[2]).not.toBe(emitters[0])
+    expect(emitters[2]).not.toBe(emitters[1])
+
+    const events = await store.getRepoEvents('/repo')
+    const started = startedSessionEvents(events)
+    expect(started).toHaveLength(4)
+    const streams = await store.listStreams({ kind: 'repo', repo: '/repo' })
+    expect(streams).toHaveLength(4)
+    expect(new Set(streams.map((record) => record.id))).toEqual(
+      new Set(started.map((event) => event.payload.stream!)),
+    )
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('completed')
+    }
+    // Round-1's stream closed at its deposit, before the continuation ran —
+    // it carries only round-1's probe. Round-2's synthesize stream carries
+    // only round-2's.
+    const synStarted = started.filter((event) => event.payload.step === 'synthesize')
+    expect(synStarted).toHaveLength(2)
+    expect(await promptTexts(store, synStarted[0]!.payload.stream!)).toEqual(['ab-harvest@1'])
+    expect(await promptTexts(store, synStarted[1]!.payload.stream!)).toEqual(['ab-harvest@2'])
+  })
+
+  test('a registration without the capability yields sessions with no stream and no emitter', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-stream-nocap-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const deps = { store, ids: sequentialIds() }
+    const diagnostics: string[] = []
+    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    await seedObservation(store, 'one', 'first')
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: deps.ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+    }).run()
+    expect(result.outcome).toBe('completed')
+    expect(diagnostics).toEqual([])
+
+    const events = await store.getRepoEvents('/repo')
+    for (const event of startedSessionEvents(events)) {
+      expect(event.payload.stream).toBeUndefined()
+    }
+    expect(await store.listStreams({ kind: 'repo', repo: '/repo' })).toHaveLength(0)
+    // No emitter reached the turns either.
+    for (const journal of scripted.sessions.values()) {
+      expect(journal.opts.stream).toBeUndefined()
+    }
+  })
+
+  test('streamSessions: false reproduces the no-stream event log', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-stream-off-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const deps = { store, ids: sequentialIds() }
+    const diagnostics: string[] = []
+    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    await seedObservation(store, 'one', 'first')
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: deps.ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: {
+        heartbeatMs: 100_000,
+        streamSessions: false,
+        onDiagnostic: (message) => diagnostics.push(message),
+      },
+    }).run()
+    expect(result.outcome).toBe('completed')
+    expect(diagnostics).toEqual([])
+
+    const events = await store.getRepoEvents('/repo')
+    for (const event of startedSessionEvents(events)) {
+      expect(event.payload.stream).toBeUndefined()
+    }
+    expect(await store.listStreams({ kind: 'repo', repo: '/repo' })).toHaveLength(0)
+  })
+
+  test('a store whose stream appends always fail lets the run complete with one diagnostic per bracket and aborted closes', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-stream-fail-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const deps = { store, ids: sequentialIds() }
+    const diagnostics: string[] = []
+    const scripted = new ScriptedAgentRunner({ script: happyScript(workspace, deps) })
+    await seedObservation(store, 'one', 'first')
+
+    // Break the append primitive after the streams are created.
+    const failing = new Set<string>()
+    const originalAppend = store.appendStreamParts.bind(store)
+    store.appendStreamParts = async (streamId: string, parts: never) => {
+      if (failing.has(streamId)) throw new Error('store down')
+      return originalAppend(streamId, parts)
+    }
+    const originalCreate = store.createStream.bind(store)
+    store.createStream = async (scope: never, label: never) => {
+      const record = await originalCreate(scope, label)
+      failing.add(record.id)
+      return record
+    }
+
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: deps.ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+    }).run()
+    // The run completes exactly as it would without streams.
+    expect(result.outcome).toBe('completed')
+    // Each bracket's defunct writer reported once and closed aborted.
+    expect(diagnostics).toHaveLength(2)
+    const streams = await store.listStreams({ kind: 'repo', repo: '/repo' })
+    expect(streams).toHaveLength(2)
+    for (const record of streams) {
+      expect(record.status).toBe('closed')
+      expect(record.outcome).toBe('aborted')
+    }
+    // Transcripts were deposited regardless.
+    const events = await store.getRepoEvents('/repo')
+    const ended = events.filter((event) => event.type === 'harvest.session.ended')
+    expect(ended).toHaveLength(2)
+  })
+
+  test('a bracket that ends without its terminal closes its stream aborted', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-stream-noterm-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const deps = { store, ids: sequentialIds() }
+    const diagnostics: string[] = []
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        opts.stream?.append([{ type: 'data-ab-prompt', data: { text: 'no terminal here' } }])
+        return defaultTurnResult('did nothing durable')
+      },
+    })
+    await seedObservation(store, 'one', 'first')
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: scripted,
+          servesModels: [''],
+          openSessionStream: async (sink, info) => sink.open(`session:${info.session}`),
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: deps.ids,
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance',
+      opts: { heartbeatMs: 100_000, onDiagnostic: (message) => diagnostics.push(message) },
+    }).run()
+    expect(result.outcome).toBe('failed')
+    expect(diagnostics).toEqual([])
+
+    const streams = await store.listStreams({ kind: 'repo', repo: '/repo' })
+    expect(streams).toHaveLength(1)
+    expect(streams[0]!.status).toBe('closed')
+    expect(streams[0]!.outcome).toBe('aborted')
+    expect(await promptTexts(store, streams[0]!.id)).toEqual(['no terminal here'])
   })
 })
