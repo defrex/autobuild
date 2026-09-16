@@ -1149,10 +1149,19 @@ describe('prompt teardown of held reads', () => {
       const pollsAtAbort = backing.streamPolls
       controller.abort()
 
+      // The bound is `pollsAtAbort + 1`, not equality (AUT-389): the sample
+      // is wall-clock, taken concurrently with the backing 25 ms poll loop
+      // (readStreamWithWait in streams/wait.ts), so one poll already in
+      // flight can land between the sample and the abort's effect on the
+      // loop — a single slow scheduler tick adds exactly one. The loop
+      // structure bounds the overshoot at one: only one read can be in
+      // flight, and once the abort flag is observed the loop breaks. A
+      // genuinely continuing loop would add ~6 polls per 150 ms window,
+      // which this bound still fails.
       await Bun.sleep(150)
-      expect(backing.streamPolls).toBe(pollsAtAbort)
+      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
       await Bun.sleep(150)
-      expect(backing.streamPolls).toBe(pollsAtAbort)
+      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
       await held
     } finally {
       await server.stop()

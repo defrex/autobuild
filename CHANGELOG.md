@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#374](https://github.com/defrex/autobuild/pull/374) — Tolerate scheduler jitter in remote teardown poll-count assertion
 - [#373](https://github.com/defrex/autobuild/pull/373) — Pace memory store's held event reads at the event-wait budget
 - [#372](https://github.com/defrex/autobuild/pull/372) — Parse stream-read wait strictly with the §9 digits grammar
 - [#371](https://github.com/defrex/autobuild/pull/371) — De-time the subscribe/held-read delivery tests
