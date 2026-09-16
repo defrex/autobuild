@@ -51,7 +51,7 @@
       },
       "peerDependencies": {
         "@defrex/autobuild": ">=0.7.0",
-        "@defrex/autobuild-hosted-store-service": ">=0.7.0",
+        "@defrex/autobuild-hosted-store-service": ">=0.9.0",
       },
     },
     "packages/hosted-store-service": {
