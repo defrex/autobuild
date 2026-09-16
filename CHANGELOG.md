@@ -119,6 +119,21 @@
 - [#238](https://github.com/defrex/autobuild/pull/238) — Keep plugin SDK tests compatible with isolated installs
 - [#237](https://github.com/defrex/autobuild/pull/237) — Document the Bun workspace migration
 - [#236](https://github.com/defrex/autobuild/pull/236) — Move Autobuild's core implementation into the private `packages/core` Bun workspace while retaining the root package as the compatibility distribution
+- Bump the Postgres BuildStore schema to v6 so a deployed v5 database migrates
+- Let a bundled hosted dispatcher provision sandboxes
+- Authenticate hosted sandbox calls with the request's OIDC token
+- Log every hosted dispatcher invocation to the runtime logs
+- Resolve the distribution root without import.meta.dir
+- Recognize GitHub's unprotected-branch response in the auto-merge gate probe
+- Delete a Vercel sandbox even when its stop call times out
+- List Vercel Sandbox snapshots with the API's maximum page size
+- Survive interrupted wait long-polls on Vercel Sandbox executions
+- Launch a build through the runtime that owns its workspace
+- Reap and release workspaces only through their owning provider
+- Locate the Vercel sandbox checkout through the session cwd
+- Document safe staging for tickets with blockers
+- Run the database migration inside the hosted deploy build
+- Accept DATABASE_URL and make the hosted service deployable on Vercel
 
 ## v0.6.0 — 2026-08-28
 

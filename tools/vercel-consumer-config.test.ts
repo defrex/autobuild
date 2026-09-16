@@ -8,9 +8,9 @@ import { vercelSandboxConfigSchema } from '../packages/core/src/config/schema'
 
 const REPO_ROOT = join(import.meta.dir, '..')
 const GLM = 'vercel-ai-gateway/zai/glm-5.3-flash'
-const MUSE = 'vercel-ai-gateway/meta/muse-spark-1.3'
+const DEEPSEEK = 'vercel-ai-gateway/deepseek/deepseek-v4.1-flash'
 const CLAUDE = 'vercel-ai-gateway/anthropic/claude-opus-5'
-const APPROVED_MODELS = [GLM, MUSE, CLAUDE]
+const APPROVED_MODELS = [GLM, DEEPSEEK, CLAUDE]
 
 test('repository dispatches every agent route through provisioned Pi in Vercel Sandbox', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
@@ -47,7 +47,7 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(workspace.runtimeProvisioning).toEqual({
     pi: {
       install: 'npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4',
-      preflight: 'test "$(pi --version)" = "0.84.4"',
+      preflight: 'test "$(pi --version)" = "0.84.4" && pi update --models',
     },
   })
 
@@ -59,10 +59,10 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(effective[0]?.references.length).toBeGreaterThan(0)
 
   const expectedRoutes: Record<string, [string, string, string]> = {
-    default: [GLM, MUSE, CLAUDE],
-    implement: [GLM, MUSE, CLAUDE],
-    'plan-review': [MUSE, GLM, CLAUDE],
-    'code-review': [MUSE, GLM, CLAUDE],
+    default: [GLM, DEEPSEEK, CLAUDE],
+    implement: [GLM, DEEPSEEK, CLAUDE],
+    'plan-review': [DEEPSEEK, GLM, CLAUDE],
+    'code-review': [DEEPSEEK, GLM, CLAUDE],
   }
   for (const [role, expected] of Object.entries(expectedRoutes)) {
     const route = config.roles[role]
