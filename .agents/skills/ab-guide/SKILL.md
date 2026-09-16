@@ -1550,6 +1550,79 @@ while :; do
 done
 ```
 
+**`ab wait [<slug>...] (--for <condition> | --event <glob>)... [--since <cursor>]
+[--timeout <dur>] [--interval <dur>] [--json] [--store <ref>]`** is the blocking
+sibling of `ab watch`: it blocks until a targeted build satisfies a condition,
+prints exactly one record, and exits with a code that tells the caller what
+happened. Target selection matches `ab watch` — no slug targets every
+nonterminal build (builds created while waiting join; an empty or entirely
+terminal set keeps waiting for a build to appear), named slugs target exactly
+those builds, and an unknown slug is an error before waiting begins. Inside a
+phase, only the ambient build may be waited on.
+
+At least one `--for <condition>` or `--event <glob>` is required. The condition
+vocabulary is closed: `blocked`, `paused`, `running`, `done`, `aborted`,
+`terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
+`pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
+`implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and
+`attention` (any event in the `ab watch` attention set). Repeatable `--event`
+globs follow the `ab watch` rules. Multiple values are alternatives: the first
+one satisfied ends the wait — all `--for` values in supply order, then all
+globs in supply order — and the record names what matched.
+
+A status, PR, or phase condition is satisfied when a targeted build's reduction
+has that state — the same projections `ab build status` reports, so `blocked`
+means an open escalation exactly as everywhere else. In the manner of `kubectl
+wait`, a condition that already holds when the command starts returns
+immediately with that build's latest event (`--since` does not suppress this);
+otherwise the first later event whose reduction produces it ends the wait.
+`attention` and `--event` conditions fire only on events appended after the
+command started, or on a cursor-resumed backlog after `--since`.
+
+The record is the `ab watch` record plus a `condition` field naming the
+satisfied `--for` value or `--event` glob. Unlike `ab watch`, there is no
+trailing cursor object: the record's own `cursor` is the final position.
+
+Exit codes: 0 — satisfied, exactly one record printed; 1 — usage errors, scope
+violations, unknown slugs, or a store that cannot be opened at start; 2 —
+slugs were named and every named build went terminal without satisfying any
+condition (one record with `condition` null, showing how the build ended); 3 —
+`--timeout` elapsed (30 minutes by default; `0` unbounded; with `--json`,
+stdout is a bare `{"cursor": …}` object for the final position, plus one line
+on stderr); 4 — interrupted by SIGINT before any condition was satisfied (same
+cursor behavior as 3). The default poll interval and `--interval` match
+`ab watch`. A store read that fails while waiting is reported once on stderr
+and retried without missing or duplicating a condition. The command is
+read-only — it appends no event, takes no lease, and creates no record — and
+deciding what to do about a match stays with the caller's skill.
+
+Two recipes cover the common harnesses. First, a single-wake-up harness
+(Claude Code's background Bash mode re-invokes the agent exactly once, when the
+command exits): run `ab wait` as a background command and let the exit code
+plus the one record be the whole wake-up payload —
+
+```sh
+ab wait --for blocked --json my-build   # exit 0: record says why; 2: it ended; 3: re-arm
+```
+
+Second, a plain blocking call — Codex, Pi, and the shell only expose "run a
+command and wait": run it in the turn and read the record when it returns.
+
+The loop pattern ties the two together: wait, act on the record (answer the
+escalation, inspect the build, merge the PR), then wait again, passing the
+record's `cursor` back through `--since` so no event is ever examined twice:
+
+```sh
+last=$(cat .ab-wait.cursor 2>/dev/null || true)
+record=$(ab wait --for attention --json --timeout 30m ${last:+--since "$last"} my-build)
+code=$?
+cursor=$(printf '%s' "$record" | grep -o '"cursor":"[^"]*"' | cut -d'"' -f4)
+[ -n "$cursor" ] && printf '%s' "$cursor" > .ab-wait.cursor
+# exit 0: $record names the condition in its `condition` field — act on it.
+# exit 2: the build ended without the condition; exit 3: deadline, re-arm.
+```
+
+**`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 **`ab harvest status [--events N] [--json] [--store <ref>]`** projects the
 durable repository gate and an ordered collection of every unresolved failed
 run plus relevant open/latest context from the same journal the runner resumes.
