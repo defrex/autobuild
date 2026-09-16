@@ -471,7 +471,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'GET events': {
         const since = intParam(url, 'since') ?? 0
-        const wait = intParam(url, 'wait')
+        const wait = digitsParam(url, 'wait', maxEventWaitSeconds)
         return json(
           200,
           await withDisconnect(
