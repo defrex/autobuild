@@ -18,7 +18,12 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from 'autobuild/remote-store'
-import { HOSTED_ARTIFACT_MAX_BYTES, parseHostedStoreEnv, type HostedStoreEnv } from './config'
+import {
+  HOSTED_ARTIFACT_MAX_BYTES,
+  HOSTED_EVENT_WAIT_MAX_SECONDS,
+  parseHostedStoreEnv,
+  type HostedStoreEnv,
+} from './config'
 
 type HostedBackend = 'store' | 'tickets' | 'operator'
 
@@ -306,6 +311,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           store,
           secret: config.secret,
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          maxEventWaitSeconds: HOSTED_EVENT_WAIT_MAX_SECONDS,
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
           ...shared,
         })

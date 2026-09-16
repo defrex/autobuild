@@ -17,6 +17,17 @@
  * semantics (in-order, exactly once per stream) are reimplemented locally for
  * the same reason.
  *
+ * Cadence follows the store kind (AUT-334). Against a local store the loop is
+ * the sequential interval tick. Against an `http(s)` store every tracked
+ * stream long-polls instead: one held `getEvents`/`getRepoEvents` request per
+ * stream is always in flight (tasks run concurrently), an appended event is
+ * seen within about a second of its append, and gap-fill keeps request starts
+ * at least `--interval` apart, so a quiet stream costs one request per wait
+ * window — not one per interval. Discovery keeps its interval cadence. Every
+ * stop is prompt: an abort, a tripped --count, an all-terminal named set, or
+ * an elapsed --timeout cancels the in-flight held reads instead of waiting
+ * out a full hold, and a hold never outlives the --timeout deadline.
+ *
  * The cursor is `"v1." + base64url(JSON)` of the per-stream sequence position
  * plus the resolved store reference and repository identity. It is opaque to
  * callers — the format is not part of the contract — and a cursor from a
@@ -38,6 +49,7 @@ import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { PhaseSessionError } from '../store/phase-session'
+import { REMOTE_EVENT_WAIT_SECONDS } from '../store/remote/client'
 import type { BuildRecord } from '../store/types'
 import { resolveAmbientReadSession } from './env'
 import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
@@ -517,6 +529,18 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       let emitted = 0
       let countCursor: string | undefined
       let stop = false
+      // Held reads in flight right now, each with its own controller. When
+      // the watch stops for any reason, every in-flight read is cancelled —
+      // otherwise a stop during a quiet window would wait out a full wait
+      // window (up to the remote hold) before the watch could exit.
+      const inFlightReads = new Set<AbortController>()
+      // Wakes stop-aware gap sleeps the moment the watch stops.
+      const stopController = new AbortController()
+      const requestStop = (): void => {
+        stop = true
+        stopController.abort()
+        for (const controller of inFlightReads) controller.abort()
+      }
 
       const encodeCurrent = (): string =>
         encodeCursor({ v: 1, store: storeRef, repo, streams: { ...positions } })
@@ -535,7 +559,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           // Events read but not delivered because the count tripped stay
           // unprocessed: the next run resumes from THIS record's cursor.
           countCursor = cursor
-          stop = true
+          requestStop()
         }
       }
 
@@ -644,8 +668,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
       }
 
-      const pollBuild = async (stream: BuildStream): Promise<boolean> => {
-        const fresh = await store.getEvents(stream.slug, stream.lastSeq)
+      const pollBuild = async (
+        stream: BuildStream,
+        readOpts?: { waitSeconds?: number; signal?: AbortSignal },
+      ): Promise<boolean> => {
+        const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
           stream.events.push(event)
           processBuildEvent(stream, event, stream.events)
@@ -657,10 +684,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
-      const pollRepository = async (stream: RepositoryStream): Promise<boolean> => {
+      const pollRepository = async (
+        stream: RepositoryStream,
+        readOpts?: { waitSeconds?: number; signal?: AbortSignal },
+      ): Promise<boolean> => {
         // A repository row may be created mid-watch by the first dispatch.
         if ((await store.getRepo(repo)) === null) return true
-        const fresh = await store.getRepoEvents(repo, stream.lastSeq)
+        const fresh = await store.getRepoEvents(repo, stream.lastSeq, readOpts)
         for (const event of fresh) {
           processRepositoryEvent(stream, event)
           if (stop) break
@@ -678,16 +708,34 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
-      /** One poll cycle: discovery, then per-stream reads. A failed read is
-       * reported once per failure streak, advances nothing, and is retried at
-       * the next interval; a fully successful cycle re-arms the report. */
-      let readFailureReported = false
-      const reportReadFailure = (error: unknown): void => {
-        if (readFailureReported) return
-        readFailureReported = true
-        const message = error instanceof Error ? error.message : String(error)
-        opts.stderr(`ab watch: a store read failed (${message}); retrying at the next interval`)
+      /** A failed read is reported once per failure streak, advances nothing,
+       * and is retried at the next interval (local) or next request (remote);
+       * a success on the same source re-arms the report. Each read source —
+       * per stream task, plus discovery — carries its own streak, so a
+       * persistent failure on one stream interleaved with successes elsewhere
+       * is still reported only once. */
+      const makeFailureStreak = (): {
+        onFailure: (error: unknown) => void
+        onSuccess: () => void
+      } => {
+        let reported = false
+        return {
+          onFailure: (error: unknown): void => {
+            if (reported) return
+            reported = true
+            const message = error instanceof Error ? error.message : String(error)
+            opts.stderr(`ab watch: a store read failed (${message}); retrying at the next interval`)
+          },
+          onSuccess: (): void => {
+            reported = false
+          },
+        }
       }
+
+      // One streak for the whole local loop — the same lifetime the shared
+      // reported flag had before per-source streaks: a persistent read
+      // failure is reported once, and a fully-successful cycle re-arms it.
+      const tickStreak = makeFailureStreak()
 
       const tick = async (): Promise<void> => {
         let allReadsOk = true
@@ -696,7 +744,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             await discoverBuilds()
           } catch (error) {
             allReadsOk = false
-            reportReadFailure(error)
+            tickStreak.onFailure(error)
           }
         }
         for (const stream of [...streams.values()]) {
@@ -706,10 +754,10 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             else await pollRepository(stream)
           } catch (error) {
             allReadsOk = false
-            reportReadFailure(error)
+            tickStreak.onFailure(error)
           }
         }
-        if (allReadsOk) readFailureReported = false
+        if (allReadsOk) tickStreak.onSuccess()
       }
 
       // ── Initial scan ──
@@ -737,7 +785,9 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
       if (repository) {
         if (!(await trackRepository())) {
-          reportReadFailure(new Error(`could not read the repository journal for "${repo}"`))
+          makeFailureStreak().onFailure(
+            new Error(`could not read the repository journal for "${repo}"`),
+          )
         }
       } else if (slugs.length === 0) {
         // Membership discovery also baselines the default watch; a failed
@@ -753,11 +803,110 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       // ── The poll loop ──
       const deadline = timeoutMs === 0 ? Number.POSITIVE_INFINITY : now().getTime() + timeoutMs
       const aborted = (): boolean => opts.signal?.aborted === true
-      while (!stop) {
-        if (aborted() || now().getTime() >= deadline || namedAllTerminal()) break
-        await sleep(interval, opts.signal)
-        if (aborted()) break
-        await tick()
+
+      if (!isRemoteStoreRef(storeRef)) {
+        // Local cadence: one sequential tick per interval.
+        while (!stop) {
+          if (aborted() || now().getTime() >= deadline || namedAllTerminal()) break
+          await sleep(interval, opts.signal)
+          if (aborted()) break
+          await tick()
+        }
+      } else {
+        // Remote cadence (AUT-334): one long-poll task per tracked stream,
+        // running concurrently — a quiet stream keeps one held request in
+        // flight, so an appended event arrives within about a second instead
+        // of at the next interval tick. Gap-fill spaces each stream's request
+        // starts at least `interval` apart (elapsed request time counts
+        // toward the gap), so a server that answers immediately still sees
+        // today's request rate. Discovery keeps its interval cadence.
+        // Pre-launch guard mirrors the local loop's top-of-cycle checks: an
+        // already-terminal named set, an elapsed deadline, or an abort ends
+        // the watch before any request.
+        // Every stop is prompt: an external abort, a tripped --count, an
+        // all-terminal named set, or an elapsed --timeout cancels the
+        // in-flight held reads (via `requestStop`) and wakes the gap sleeps
+        // (via `stopController`) instead of waiting out a full hold. The
+        // held read's own bound is additionally capped at the watch's
+        // remaining time budget, so a hold can never outlive the deadline.
+        const shouldStop = stop || aborted() || now().getTime() >= deadline || namedAllTerminal()
+        const tasks: Promise<void>[] = []
+        const launched = new Set<string>()
+
+        /** The wait bound for one held read: the remote default, capped at
+         * the watch's remaining time budget. */
+        const readWaitSeconds = (atMs: number): number => {
+          if (timeoutMs === 0) return REMOTE_EVENT_WAIT_SECONDS
+          const remaining = Math.floor((deadline - atMs) / 1000)
+          return Math.max(0, Math.min(REMOTE_EVENT_WAIT_SECONDS, remaining))
+        }
+
+        const runStreamTask = async (
+          poll: (readOpts: { waitSeconds?: number; signal?: AbortSignal }) => Promise<unknown>,
+        ): Promise<void> => {
+          const streak = makeFailureStreak()
+          while (!stop && !aborted() && now().getTime() < deadline) {
+            const started = now().getTime()
+            const controller = new AbortController()
+            inFlightReads.add(controller)
+            try {
+              await poll({ waitSeconds: readWaitSeconds(started), signal: controller.signal })
+              streak.onSuccess()
+              if (namedAllTerminal()) {
+                requestStop()
+                return
+              }
+            } catch (error) {
+              // A cancelled held read is the watch stopping, not a store
+              // failure — never report it.
+              if (!stop && !aborted() && !controller.signal.aborted) streak.onFailure(error)
+            } finally {
+              inFlightReads.delete(controller)
+            }
+            if (stop || aborted()) return
+            const elapsed = now().getTime() - started
+            if (elapsed < interval) await sleep(interval - elapsed, stopController.signal)
+          }
+        }
+
+        const launch = (stream: Stream): void => {
+          const key = stream.kind === 'build' ? stream.slug : REPO_STREAM_KEY
+          if (launched.has(key)) return
+          launched.add(key)
+          tasks.push(
+            stream.kind === 'build'
+              ? runStreamTask((readOpts) => pollBuild(stream, readOpts))
+              : runStreamTask((readOpts) => pollRepository(stream, readOpts)),
+          )
+        }
+
+        // An external abort (SIGINT) is a stop like any other: it cancels
+        // the in-flight held reads and wakes the gap sleeps.
+        opts.signal?.addEventListener('abort', requestStop, { once: true })
+
+        for (const stream of streams.values()) if (!shouldStop) launch(stream)
+
+        if (slugs.length === 0 && !shouldStop) {
+          tasks.push(
+            (async (): Promise<void> => {
+              const streak = makeFailureStreak()
+              while (!stop && !aborted() && now().getTime() < deadline) {
+                try {
+                  await discoverBuilds()
+                  streak.onSuccess()
+                } catch (error) {
+                  streak.onFailure(error)
+                }
+                for (const stream of streams.values()) launch(stream)
+                if (stop || aborted()) return
+                await sleep(interval, stopController.signal)
+              }
+            })(),
+          )
+        }
+
+        await Promise.all(tasks)
+        opts.signal?.removeEventListener('abort', requestStop)
       }
 
       const finalCursor = countCursor ?? encodeCurrent()

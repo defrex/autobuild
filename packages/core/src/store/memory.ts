@@ -384,9 +384,14 @@ export class MemoryBuildStore implements BuildStore {
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
-  async getEvents(slug: string, sinceSeq = 0): Promise<AbEvent[]> {
-    const state = this.state(slug)
-    return structuredClone(state.events.filter((e) => e.seq > sinceSeq))
+  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+    return readEventsWithWait({
+      read: async () => {
+        const state = this.state(slug)
+        return structuredClone(state.events.filter((e) => e.seq > sinceSeq)) as AbEvent[]
+      },
+      waitSeconds: opts?.waitSeconds,
+    })
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
@@ -595,8 +600,19 @@ export class MemoryBuildStore implements BuildStore {
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
-    return structuredClone(this.repoState(repo).events.filter((event) => event.seq > sinceSeq))
+  async getRepoEvents(
+    repo: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<RepositoryEvent[]> {
+    return readEventsWithWait({
+      read: async () => {
+        return structuredClone(
+          this.repoState(repo).events.filter((event) => event.seq > sinceSeq),
+        ) as RepositoryEvent[]
+      },
+      waitSeconds: opts?.waitSeconds,
+    })
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {

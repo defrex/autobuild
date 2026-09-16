@@ -636,25 +636,30 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
-  async getEvents(slug: string, sinceSeq = 0): Promise<AbEvent[]> {
-    this.requireBuild(slug)
-    const rows = this.db
-      .select()
-      .from(events)
-      .where(and(eq(events.build, slug), gt(events.seq, sinceSeq)))
-      .orderBy(asc(events.seq))
-      .all()
-    return rows.map(
-      (row) =>
-        ({
-          build: row.build,
-          seq: row.seq,
-          ts: row.ts,
-          actor: row.actor,
-          type: row.type,
-          payload: row.payload,
-        }) as AbEvent,
-    )
+  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+    return readEventsWithWait({
+      read: async () => {
+        this.requireBuild(slug)
+        const rows = this.db
+          .select()
+          .from(events)
+          .where(and(eq(events.build, slug), gt(events.seq, sinceSeq)))
+          .orderBy(asc(events.seq))
+          .all()
+        return rows.map(
+          (row) =>
+            ({
+              build: row.build,
+              seq: row.seq,
+              ts: row.ts,
+              actor: row.actor,
+              type: row.type,
+              payload: row.payload,
+            }) as AbEvent,
+        )
+      },
+      waitSeconds: opts?.waitSeconds,
+    })
   }
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
@@ -897,25 +902,34 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
-  async getRepoEvents(repo: string, sinceSeq = 0): Promise<RepositoryEvent[]> {
-    this.requireRepo(repo)
-    const rows = this.db
-      .select()
-      .from(repoEvents)
-      .where(and(eq(repoEvents.repo, repo), gt(repoEvents.seq, sinceSeq)))
-      .orderBy(asc(repoEvents.seq))
-      .all()
-    return rows.map(
-      (row) =>
-        ({
-          repo: row.repo,
-          seq: row.seq,
-          ts: row.ts,
-          actor: row.actor,
-          type: row.type,
-          payload: row.payload,
-        }) as RepositoryEvent,
-    )
+  async getRepoEvents(
+    repo: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number },
+  ): Promise<RepositoryEvent[]> {
+    return readEventsWithWait({
+      read: async () => {
+        this.requireRepo(repo)
+        const rows = this.db
+          .select()
+          .from(repoEvents)
+          .where(and(eq(repoEvents.repo, repo), gt(repoEvents.seq, sinceSeq)))
+          .orderBy(asc(repoEvents.seq))
+          .all()
+        return rows.map(
+          (row) =>
+            ({
+              repo: row.repo,
+              seq: row.seq,
+              ts: row.ts,
+              actor: row.actor,
+              type: row.type,
+              payload: row.payload,
+            }) as RepositoryEvent,
+        )
+      },
+      waitSeconds: opts?.waitSeconds,
+    })
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {

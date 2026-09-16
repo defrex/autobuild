@@ -3,6 +3,14 @@ import { parsePostgresStoreEnv, type PostgresStoreConfig } from '@autobuild/post
 export type HostedStoreEnv = Record<string, string | undefined>
 export const HOSTED_ARTIFACT_MAX_BYTES = 1024 * 1024
 
+/**
+ * Ceiling for a held event read (`wait` on the build/repo event routes), in
+ * whole seconds (AUT-334). Requests above it clamp to 25, never reject. The
+ * value must stay well under the machine routes' `maxDuration` (60 s), which
+ * exists to cover this hold; see packages/hosted-store-service/README.md.
+ */
+export const HOSTED_EVENT_WAIT_MAX_SECONDS = 25
+
 export interface HostedStoreConfig {
   secret: string
   hostname: string
