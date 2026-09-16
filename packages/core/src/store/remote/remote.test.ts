@@ -715,6 +715,55 @@ describe('stream wire specifics', () => {
       await server.stop()
     }
   })
+
+  test('append rejection precedence: an unknown stream is 404 before the body is parsed (SPEC §7.6)', async () => {
+    // The server resolves and authorizes the stream BEFORE readBody, so a
+    // malformed or oversized batch on an unknown stream is 404 not-found —
+    // the deliberate opposite of the local adapters' order, which validate
+    // the batch first (pinned in memory.test.ts and local/store.test.ts).
+    // Both orders write nothing.
+    const backing = new MemoryBuildStore()
+    const server = startStoreServer({ store: backing })
+    const store = new RemoteBuildStore({ url: server.url })
+    try {
+      await store.createBuild(sampleBuildInput('wire-ghost'))
+      const headers = {
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      }
+
+      // Malformed batches (empty; a part without a type) on an unknown
+      // stream: 404 unknown stream, not 400 validation.
+      for (const body of ['{"parts":[]}', '{"parts":[{"delta":"x"}]}']) {
+        const raw = await fetch(`${server.url}/builds/wire-ghost/streams/st_missing/chunks`, {
+          method: 'POST',
+          headers: { ...headers, 'content-type': 'application/json' },
+          body,
+        })
+        expect(raw.status).toBe(404)
+        const payload = (await raw.json()) as { kind: string; error: string }
+        expect(payload.kind).toBe('not-found')
+        expect(payload.error).toContain('unknown stream')
+      }
+
+      // An oversized batch on the same unknown stream is also 404 — the
+      // 413 ceiling is never reached because the body is never evaluated.
+      const oversized = await store
+        .appendStreamParts('st_missing', [
+          { type: 'text-delta', id: 't', delta: 'x'.repeat(1_048_600) },
+        ])
+        .catch((e: unknown) => e)
+      expect(oversized).toBeInstanceOf(Error)
+      expect((oversized as Error).message).toContain('unknown stream')
+      expect((oversized as Error).message).not.toContain('1048576')
+
+      // Nothing was written on either side of the divergence.
+      expect(await store.getStream('st_missing')).toBeNull()
+    } finally {
+      await store.close()
+      await server.stop()
+    }
+  })
 })
 
 // Package/protocol identity is a gate ahead of authentication and lookup.
