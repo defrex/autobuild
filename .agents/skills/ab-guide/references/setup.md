@@ -241,6 +241,19 @@ perspective:
 Local `git-worktree` dispatch keeps working from a checkout exactly as before;
 apart from the identity change, `ab dispatch` behaves as it did.
 
+## Hosted deployment variables
+
+A hosted-store deployment configures its web/auth variables once (see the
+[hosted service README](../../../packages/hosted-store-service/README.md) and
+the complete environment reference): `BETTER_AUTH_URL`,
+`AB_WEB_ALLOWED_EMAILS`, `AB_WEB_REPOSITORIES`, and the optional
+`AB_WEB_MCP_RESOURCE` — the protected resource the hosted
+[MCP server](../../../docs/mcp.md) binds its OAuth tokens to, defaulting to
+`<BETTER_AUTH_URL>/mcp`. Set it only when a proxy or custom domain fronts the
+deployment under a different public URL than `BETTER_AUTH_URL`; the value must
+be an absolute http(s) URL (https in production) or every MCP client's
+discovery binds tokens to the wrong resource.
+
 ## Authoring an agent verifier
 
 A repository-owned agent-verify skill is a verifier, not a reviewer: it drives
