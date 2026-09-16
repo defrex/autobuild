@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#387](https://github.com/defrex/autobuild/pull/387) — Restore client-only over-the-wire coverage for core's remote clients
+- [#386](https://github.com/defrex/autobuild/pull/386) — Reconcile peer-dependency floors left by the hosted-store extraction
 - [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
+- [#384](https://github.com/defrex/autobuild/pull/384) — Pin each build's pipeline config to its own branch (AUT-390)
 - [#383](https://github.com/defrex/autobuild/pull/383) — Move the hosted store, operator, and ticket servers out of core
 - [#382](https://github.com/defrex/autobuild/pull/382) — Align docs with the @defrex/autobuild-hosted-dispatcher package split
 - [#380](https://github.com/defrex/autobuild/pull/380) — Split the hosted dispatcher into @defrex/autobuild-hosted-dispatcher

@@ -40,9 +40,39 @@ function detail(error: unknown): string {
 export class LocalGitForge implements Forge {
   readonly name = 'local-git'
   private readonly exec: Exec
+  /** The repository the optional checkout-less read seam reads from. The
+   * factory passes the served checkout; without it the capability is absent
+   * and callers retain their checkout/git fallbacks. */
+  private readonly repoRoot?: string
 
-  constructor(opts: { exec?: Exec } = {}) {
+  constructor(opts: { exec?: Exec; repoRoot?: string } = {}) {
     this.exec = opts.exec ?? bunExec
+    this.repoRoot = opts.repoRoot
+  }
+
+  /** Current tip of a local branch in the served repository. Throws when the
+   * branch does not exist — the same not-found contract as remote adapters. */
+  async remoteBranchSha(branch: string): Promise<string> {
+    if (this.repoRoot === undefined) {
+      throw new Error('local-git forge has no repository root for remote branch reads')
+    }
+    const result = await this.command(
+      ['rev-parse', '--verify', `refs/heads/${branch}`],
+      this.repoRoot,
+      true,
+    )
+    if (result.exitCode !== 0) throw new Error(`local-git: unknown remote branch ${branch}`)
+    return result.stdout.trim()
+  }
+
+  /** File bytes from the served repository. Ref omitted → the checkout's HEAD.
+   * Throws when the path does not exist at that ref. */
+  async readFile(path: string, ref?: string): Promise<string> {
+    if (this.repoRoot === undefined) {
+      throw new Error('local-git forge has no repository root for file reads')
+    }
+    const result = await this.command(['show', `${ref ?? 'HEAD'}:${path}`], this.repoRoot)
+    return result.stdout
   }
 
   private async command(args: string[], cwd: string, allowFailure = false) {

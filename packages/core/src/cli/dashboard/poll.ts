@@ -1,16 +1,27 @@
 import type { Config } from '../../config/schema'
+import { composeBuildConfig } from '../../config/live'
+import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { AbEvent } from '../../events/catalog'
 import { reduceBuild, type BuildState } from '../../kernel/reducer'
-import type { BuildRecord, StreamRecord, StreamScope } from '../../store/types'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
+  parseEffectiveBuildConfig,
+} from '../../processes/build-execution-state'
+import type { Artifact, BuildRecord, StreamRecord, StreamScope } from '../../store/types'
 import { projectBuild, type DashboardBuild } from './model'
 
 /** The read-only BuildStore surface needed to construct dashboard build rows.
  * `listStreams` is optional: when present, build-scope records enrich each
- * row's session history with authoritative stream ids and statuses (SPEC §9). */
+ * row's session history with authoritative stream ids and statuses (SPEC §9).
+ * `getArtifact` is optional: when present, the effective-config artifact's
+ * metadata decorates each row with its pinned pipeline source and revision
+ * (SPEC §16.1). */
 export interface DashboardBuildReader {
   listBuilds(): Promise<BuildRecord[]>
   getEvents(slug: string, sinceSeq?: number): Promise<AbEvent[]>
   listStreams?(scope: StreamScope): Promise<StreamRecord[]>
+  getArtifact?(slug: string, kind: string): Promise<Artifact | null>
 }
 
 export interface DashboardPollSnapshot {
@@ -109,6 +120,60 @@ export class DashboardBuildPollCache {
     return snapshot.revision === this.committedRevision
   }
 
+  /** Effective-config artifact facts for one build (SPEC §16.1), when the
+   * reader exposes the artifact primitive: the metadata projection plus the
+   * artifact's parsed content. A malformed artifact still yields its metadata
+   * (config absent); all failures are display-only. */
+  private async readEffectiveConfig(
+    slug: string,
+  ): Promise<
+    { revision?: number; pipelineSource?: PipelineSourceMeta; config?: Config } | undefined
+  > {
+    const getArtifact = this.reader.getArtifact
+    if (getArtifact === undefined) return undefined
+    try {
+      const artifact = await getArtifact.call(this.reader, slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      if (artifact === null) return undefined
+      let config: Config | undefined
+      try {
+        config = parseEffectiveBuildConfig(artifact)
+      } catch {
+        config = undefined
+      }
+      return { ...parseBuildConfigMetadata(artifact), config }
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Project one build row against its PINNED pipeline (SPEC §16.1) and
+   * attach the effective-config metadata. The row's verify/finalize steps and
+   * next-action must describe the pipeline the build actually runs — the
+   * artifact's build-owned sections — never the dispatcher's live base-branch
+   * snapshot, which a pinned build may never execute. Deployment-owned
+   * sections (roles/policy) still come from the live snapshot, so a reload
+   * that reaches the build is reflected. A build with no artifact yet (queued
+   * or pre-pin) projects from the live config, the pre-pin behavior. */
+  private async projectRow(
+    record: BuildRecord,
+    state: BuildState,
+    events: AbEvent[],
+    config: Config,
+  ): Promise<DashboardBuild | null> {
+    const [streams, artifact] = await Promise.all([
+      this.readStreams(record.slug),
+      this.readEffectiveConfig(record.slug),
+    ])
+    const pinnedConfig =
+      artifact?.config !== undefined ? composeBuildConfig(artifact.config, config) : undefined
+    const build = projectBuild(record, state, config, events, streams, pinnedConfig)
+    if (build !== null && artifact !== undefined) {
+      if (artifact.revision !== undefined) build.effectiveConfigRev = artifact.revision
+      if (artifact.pipelineSource !== undefined) build.pipelineSource = artifact.pipelineSource
+    }
+    return build
+  }
+
   refresh(
     config: Config = this.config,
     configRevision = this.configRevision,
@@ -146,13 +211,7 @@ export class DashboardBuildPollCache {
           configChanged
             ? {
                 ...current,
-                build: projectBuild(
-                  record,
-                  current.state,
-                  config,
-                  current.events,
-                  await this.readStreams(record.slug),
-                ),
+                build: await this.projectRow(record, current.state, current.events, config),
               }
             : current,
         )
@@ -169,7 +228,7 @@ export class DashboardBuildPollCache {
         kind: 'live',
         events,
         state,
-        build: projectBuild(record, state, config, events, await this.readStreams(record.slug)),
+        build: await this.projectRow(record, state, events, config),
       })
     }
 

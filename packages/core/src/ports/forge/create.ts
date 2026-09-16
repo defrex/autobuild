@@ -47,7 +47,7 @@ export async function createForge(opts: {
         ...(opts.repository !== undefined ? { repository: opts.repository } : {}),
       })
     }
-    if (opts.name === 'local-git') return new LocalGitForge()
+    if (opts.name === 'local-git') return new LocalGitForge({ repoRoot: opts.repoRoot })
     throw new Error(`builtin forge adapter ${JSON.stringify(opts.name)} has no constructor`)
   }
 

@@ -6,9 +6,13 @@ import { ScriptedAgentRunner, defaultTurnResult } from '../ports/runner/fake'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { parseConfig } from './load'
 import {
+  BUILD_OWNED_CONFIG_PATHS,
   CONFIG_RELOAD_CLASSIFICATION,
+  DEPLOYMENT_OWNED_CONFIG_PATHS,
   LiveConfig,
+  composeBuildConfig,
   composeReloadedConfig,
+  deploymentSectionsEqual,
   restartRequiredChanges,
 } from './live'
 import { TOP_LEVEL_KEYS } from './schema'
@@ -233,6 +237,58 @@ describe('live dispatcher config', () => {
 
     expect((await live.refresh(base.replace('capacity = 1', 'capacity = 4'))).kind).toBe('adopted')
     expect(live.current().config.capacity).toBe(4)
+  })
+
+  test('names exactly the build- and deployment-owned config sections', () => {
+    expect([...BUILD_OWNED_CONFIG_PATHS].sort()).toEqual([
+      'commands',
+      'finalize',
+      'verify',
+      'workspace',
+    ])
+    expect([...DEPLOYMENT_OWNED_CONFIG_PATHS].sort()).toEqual(['policy', 'roles'])
+  })
+
+  test('composes build-owned pipeline sections with live deployment sections', () => {
+    const pipeline = parseConfig(`${base}
+[commands]
+lint = "old-lint"
+
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "lint"
+`)
+    const deployment = parseConfig(
+      `${base.replace('capacity = 1', 'capacity = 4').replace('model = "gpt-old"', 'model = "gpt-new"')}\n[policy]\nstallRounds = 9\n`,
+    )
+    const composed = composeBuildConfig(pipeline, deployment)
+    // Build-owned: the pipeline source wins, so a base-branch reload cannot
+    // retarget the verify universe or the deterministic commands.
+    expect(composed.verify.steps).toEqual(['unit'])
+    expect(composed.commands.lint).toBe('old-lint')
+    // Deployment-owned and dispatcher-owned: the live snapshot wins.
+    expect(composed.roles.default?.model).toBe('gpt-new')
+    expect(composed.policy.stallRounds).toBe(9)
+    expect(composed.capacity).toBe(4)
+  })
+
+  test('deploymentSectionsEqual ignores build-owned pipeline changes', () => {
+    const left = parseConfig(base)
+    const deploymentChange = parseConfig(base.replace('model = "gpt-old"', 'model = "gpt-new"'))
+    const pipelineChange = parseConfig(`${base}
+[commands]
+unit = "bun test"
+
+[verify]
+steps = ["unit"]
+[verify.unit]
+kind = "check"
+command = "unit"
+`)
+    expect(deploymentSectionsEqual(left, deploymentChange)).toBe(false)
+    expect(deploymentSectionsEqual(left, pipelineChange)).toBe(true)
   })
 
   test('validates a new route against the startup runtime catalog before publication', async () => {
