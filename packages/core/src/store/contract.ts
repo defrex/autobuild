@@ -1324,6 +1324,54 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('listStreams pins the same-timestamp tiebreak by creation order and isolates by scope', async () => {
+        // The pinned tiebreak (store/types.ts): same-millisecond streams
+        // order by the store-assigned creation sequence — creation order,
+        // never the random st_ id. The clock is injected and NOT advanced for
+        // the first five creations, so they share one timestamp and the
+        // returned order must be creation order on every adapter.
+        const clock = manualClock(CONTRACT_T0)
+        await withStore(factory, { clock }, async (store) => {
+          await store.createBuild(sampleBuildInput('st-tie-a'))
+          await store.createBuild(sampleBuildInput('st-tie-b'))
+          await store.ensureRepo('acme/rate-limiter')
+          const a = await store.createStream({ kind: 'build', build: 'st-tie-a' }, 'first')
+          const a2 = await store.createStream({ kind: 'build', build: 'st-tie-a' }, 'second')
+          const a3 = await store.createStream({ kind: 'build', build: 'st-tie-a' }, 'third')
+          const b = await store.createStream({ kind: 'build', build: 'st-tie-b' }, 'other build')
+          const r = await store.createStream(
+            { kind: 'repo', repo: 'acme/rate-limiter' },
+            'repo journal',
+          )
+          expect([a.createdAt, a2.createdAt, a3.createdAt, b.createdAt, r.createdAt]).toEqual([
+            CONTRACT_T0,
+            CONTRACT_T0,
+            CONTRACT_T0,
+            CONTRACT_T0,
+            CONTRACT_T0,
+          ])
+          expect(
+            (await store.listStreams({ kind: 'build', build: 'st-tie-a' })).map((s) => s.id),
+          ).toEqual([a.id, a2.id, a3.id])
+          expect(
+            (await store.listStreams({ kind: 'build', build: 'st-tie-b' })).map((s) => s.id),
+          ).toEqual([b.id])
+          expect(
+            (await store.listStreams({ kind: 'repo', repo: 'acme/rate-limiter' })).map((s) => s.id),
+          ).toEqual([r.id])
+          // Distinct-timestamp ordering is unchanged.
+          clock.advance(1)
+          const a4 = await store.createStream({ kind: 'build', build: 'st-tie-a' }, 'fourth')
+          clock.advance(1)
+          const a5 = await store.createStream({ kind: 'build', build: 'st-tie-a' }, 'fifth')
+          expect(a4.createdAt > a3.createdAt).toBe(true)
+          expect(a5.createdAt > a4.createdAt).toBe(true)
+          expect(
+            (await store.listStreams({ kind: 'build', build: 'st-tie-a' })).map((s) => s.id),
+          ).toEqual([a.id, a2.id, a3.id, a4.id, a5.id])
+        })
+      })
+
       test('append assigns per-stream sequences from 1, independent across streams, with clock ts and exact parts', async () => {
         const clock = manualClock(CONTRACT_T0)
         await withStore(factory, { clock }, async (store) => {
