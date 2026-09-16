@@ -1,0 +1,272 @@
+import { describe, expect, test } from 'bun:test'
+import {
+  findBoundaryViolations,
+  isScannedTestFile,
+  type PackageBoundaryCheckEnvironment,
+  type PackageBoundaryCheckOutput,
+  resolvesIntoSiblingSrc,
+  runPackageBoundaryCheck,
+  scanWorkspace,
+  type ScannedFile,
+} from './package-boundary-check'
+
+// This file lives in tools/, which the guard never scans (it only scans test
+// files under packages/<pkg>/src/), so the offending specifiers can be spelled
+// out literally.
+const SIBLING_SRC_STORE = '../../postgres-store/src/store'
+const SIBLING_SRC = '../../postgres-store/src'
+
+const PACKAGES = ['core', 'hosted-dispatcher', 'hosted-store-service', 'postgres-store']
+
+const file = (path: string, contents: string): ScannedFile => ({ path, contents })
+
+const scan = (files: ScannedFile[]): string[] =>
+  findBoundaryViolations(files, PACKAGES).map(
+    (violation) => `${violation.path}:${violation.line}: ${violation.specifier}`,
+  )
+
+describe('findBoundaryViolations', () => {
+  test('a clean file has nothing to report', () => {
+    expect(
+      scan([
+        file(
+          'packages/core/src/store/adapter.test.ts',
+          [
+            "import { adapter } from './adapter'",
+            "import { catalog } from '../../events/catalog'",
+            "import { testing } from '@defrex/autobuild/testing'",
+            "import { store } from '@defrex/autobuild-postgres-store/store'",
+            "import { semver } from 'semver'",
+            "import type { Config } from '@defrex/autobuild-hosted-store-service/service'",
+          ].join('\n'),
+        ),
+      ]),
+    ).toEqual([])
+  })
+
+  test('reports the path, line, and specifier of a cross-package src import', () => {
+    const violations = findBoundaryViolations(
+      [file('packages/core/src/a.test.ts', `import { x } from '${SIBLING_SRC_STORE}'\n`)],
+      PACKAGES,
+    )
+
+    expect(violations).toEqual([
+      {
+        path: 'packages/core/src/a.test.ts',
+        line: 1,
+        specifier: SIBLING_SRC_STORE,
+        fromPackage: 'core',
+        toPackage: 'postgres-store',
+      },
+    ])
+  })
+
+  test('catches type-only imports, export … from, dynamic import(), and require()', () => {
+    expect(
+      scan([
+        file(
+          'packages/core/src/a.test.ts',
+          [
+            `import type { T } from '${SIBLING_SRC_STORE}'`,
+            `export { x } from '${SIBLING_SRC_STORE}'`,
+            `const m = import('${SIBLING_SRC_STORE}')`,
+            `const r = require('${SIBLING_SRC_STORE}')`,
+          ].join('\n'),
+        ),
+      ]),
+    ).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:3: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:4: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('catches a side-effect import of a sibling src path', () => {
+    expect(scan([file('packages/core/src/a.test.ts', `import '${SIBLING_SRC_STORE}'\n`)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('catches an extensionless sibling src specifier', () => {
+    expect(
+      scan([file('packages/core/src/a.test.ts', `import { x } from '${SIBLING_SRC}'\n`)]),
+    ).toEqual([`packages/core/src/a.test.ts:1: ${SIBLING_SRC}`])
+  })
+
+  test('catches a specifier inside a multi-line import statement', () => {
+    const contents = ['import {', '  migratePostgres,', `} from '${SIBLING_SRC}/schema'`].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:3: ${SIBLING_SRC}/schema`,
+    ])
+  })
+
+  test('does not flag a relative import that resolves into the same package', () => {
+    expect(
+      scan([
+        file(
+          'packages/core/src/a.test.ts',
+          "import { x } from './x'\nimport { y } from '../src/store/adapter'\n",
+        ),
+      ]),
+    ).toEqual([])
+  })
+
+  test('does not flag a relative path that merely contains a package-name-shaped segment', () => {
+    // From packages/core/src/a/, `../postgres-store/src/x` normalizes to
+    // packages/core/src/postgres-store/src/x — not a real import.
+    expect(
+      scan([
+        file('packages/core/src/a/b.test.ts', "import { x } from '../postgres-store/src/x'\n"),
+      ]),
+    ).toEqual([])
+  })
+
+  test('ignores files outside packages/, so tools/ paths are never flagged', () => {
+    expect(
+      scan([
+        file(
+          'tools/dashboard-capture.test.ts',
+          "import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'\n",
+        ),
+      ]),
+    ).toEqual([])
+  })
+})
+
+describe('resolvesIntoSiblingSrc', () => {
+  test('resolves a specifier landing on a sibling src root itself', () => {
+    expect(resolvesIntoSiblingSrc('packages/core/src/a.test.ts', SIBLING_SRC, PACKAGES)).toEqual({
+      toPackage: 'postgres-store',
+    })
+  })
+
+  test('returns undefined for subpath package imports', () => {
+    expect(
+      resolvesIntoSiblingSrc('packages/core/src/a.test.ts', '@defrex/autobuild/testing', PACKAGES),
+    ).toBeUndefined()
+  })
+})
+
+describe('isScannedTestFile', () => {
+  test('accepts *.test.ts and *.test.tsx under packages/<pkg>/src, including *.live.test.ts', () => {
+    expect(isScannedTestFile('packages/core/src/a.test.ts', PACKAGES)).toBe(true)
+    expect(isScannedTestFile('packages/core/src/a.test.tsx', PACKAGES)).toBe(true)
+    expect(isScannedTestFile('packages/postgres-store/src/store.live.test.ts', PACKAGES)).toBe(true)
+  })
+
+  test('rejects production files, non-src paths, and files outside packages/', () => {
+    expect(isScannedTestFile('packages/core/src/a.ts', PACKAGES)).toBe(false)
+    expect(isScannedTestFile('packages/core/spec/a.test.ts', PACKAGES)).toBe(false)
+    expect(isScannedTestFile('tools/vendored-skills-sync.test.ts', PACKAGES)).toBe(false)
+  })
+})
+
+interface StubFile {
+  bytes: Uint8Array
+}
+
+const text = (contents: string): StubFile => ({
+  bytes: new TextEncoder().encode(contents),
+})
+
+function harness(files: Record<string, StubFile>) {
+  const stdout: string[] = []
+  const stderr: string[] = []
+
+  const env: PackageBoundaryCheckEnvironment = {
+    listWorkspacePackages: async () => PACKAGES,
+    listFilesUnderPackages: async () => Object.keys(files),
+    readFile: async (path) => {
+      const entry = files[path]
+      if (!entry) throw new Error(`unexpected path ${path}`)
+      return entry.bytes
+    },
+  }
+
+  const output: PackageBoundaryCheckOutput = {
+    stdout: (message) => stdout.push(message),
+    stderr: (message) => stderr.push(message),
+  }
+
+  return { env, output, stderr, stdout }
+}
+
+describe('scanWorkspace', () => {
+  test('feeds only packages/<pkg>/src test files to the scanner', async () => {
+    const stub = harness({
+      'packages/core/src/real.test.ts': text('export {}\n'),
+      'packages/core/src/production.ts': text(`import { x } from '${SIBLING_SRC_STORE}'\n`),
+      'packages/core/spec/outside.test.ts': text(`import { x } from '${SIBLING_SRC_STORE}'\n`),
+      'tools/vendored-skills-sync.test.ts': text(
+        "import { readDistSkills } from '../packages/core/src/cli/init'\n",
+      ),
+    })
+
+    const report = await scanWorkspace(stub.env)
+
+    expect(report.scanned).toBe(1)
+    expect(report.violations).toEqual([])
+  })
+
+  test('reports violations found in the collected files', async () => {
+    const stub = harness({
+      'packages/core/src/real.test.ts': text(`import { x } from '${SIBLING_SRC_STORE}'\n`),
+    })
+
+    const report = await scanWorkspace(stub.env)
+
+    expect(report.violations).toHaveLength(1)
+    expect(report.violations[0]?.fromPackage).toBe('core')
+    expect(report.violations[0]?.toPackage).toBe('postgres-store')
+  })
+})
+
+describe('runPackageBoundaryCheck', () => {
+  test('reports every violation on stdout and the convention on stderr', async () => {
+    const stub = harness({
+      'packages/core/src/one.test.ts': text(`import { x } from '${SIBLING_SRC_STORE}'\n`),
+      'packages/hosted-store-service/src/two.test.ts': text(
+        "import { y } from '../../postgres-store/src/migrate'\n",
+      ),
+    })
+
+    expect(await runPackageBoundaryCheck(stub.env, stub.output)).toBe(1)
+    expect(stub.stdout).toEqual([
+      "packages/core/src/one.test.ts:1: specifier '../../postgres-store/src/store' reaches packages/postgres-store/src from core tests\n",
+      "packages/hosted-store-service/src/two.test.ts:1: specifier '../../postgres-store/src/migrate' reaches packages/postgres-store/src from hosted-store-service tests\n",
+    ])
+    expect(stub.stderr.join('')).toContain('subpath exports')
+    expect(stub.stderr.join('')).toContain('2 violation(s) found')
+  })
+
+  test('a clean tree exits 0 with a tally', async () => {
+    const stub = harness({ 'packages/core/src/clean.test.ts': text("import { x } from './x'\n") })
+
+    expect(await runPackageBoundaryCheck(stub.env, stub.output)).toBe(0)
+    expect(stub.stdout).toEqual([
+      'Package boundary check: 1 test files scanned, no cross-package src imports.\n',
+    ])
+    expect(stub.stderr).toEqual([])
+  })
+
+  test('a failing enumeration exits non-zero rather than reporting a clean tree', async () => {
+    const stub = harness({})
+    stub.env.listFilesUnderPackages = async () => {
+      throw new Error('readdir: no such directory')
+    }
+
+    expect(await runPackageBoundaryCheck(stub.env, stub.output)).toBe(1)
+    expect(stub.stderr.join('')).toContain('no such directory')
+  })
+
+  test('a failing read exits non-zero rather than reporting a clean tree', async () => {
+    const stub = harness({ 'packages/core/src/locked.test.ts': text('') })
+    stub.env.readFile = async () => {
+      throw new Error('EACCES: permission denied')
+    }
+
+    expect(await runPackageBoundaryCheck(stub.env, stub.output)).toBe(1)
+    expect(stub.stderr.join('')).toContain('EACCES')
+  })
+})
