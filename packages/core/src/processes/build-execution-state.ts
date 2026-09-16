@@ -1,5 +1,7 @@
 import type { Config } from '../config/schema'
 import { configSchema } from '../config/schema'
+import { BUILD_OWNED_CONFIG_PATHS } from '../config/live'
+import { isPipelineSourceRef, type PipelineSourceMeta } from '../config/pipeline-source'
 import type { AbEvent } from '../events/catalog'
 import type { Artifact, ArtifactInput } from '../store/types'
 
@@ -44,6 +46,41 @@ export function parseEffectiveBuildConfig(artifact: Artifact): Config {
     )
   }
   return result.data
+}
+
+/** Read the artifact metadata's revision + pipeline-source projection. Old
+ * deposits (and externally written ones) carry no `pipelineSource`; status and
+ * the dashboard render that as "unknown (pre-pin)" instead of guessing. */
+export function parseBuildConfigMetadata(artifact: Artifact): {
+  revision?: number
+  pipelineSource?: PipelineSourceMeta
+} {
+  const metadata = artifact.meta.metadata
+  const revision = metadata.revision
+  const raw = metadata.pipelineSource
+  let pipelineSource: PipelineSourceMeta | undefined
+  if (typeof raw === 'object' && raw !== null) {
+    const value = raw as Record<string, unknown>
+    if (isPipelineSourceRef(value.ref)) {
+      pipelineSource = {
+        ref: value.ref,
+        ...(typeof value.commit === 'string' ? { commit: value.commit } : {}),
+      }
+    }
+  }
+  return {
+    ...(typeof revision === 'number' ? { revision } : {}),
+    ...(pipelineSource !== undefined ? { pipelineSource } : {}),
+  }
+}
+
+/** True when two configs' build-owned sections differ — the guest's defensive
+ * guard against a deposit that rewrites the pinned pipeline without a recorded
+ * pipeline-source commit advance. */
+export function buildOwnedSectionsDiffer(a: Config, b: Config): boolean {
+  return BUILD_OWNED_CONFIG_PATHS.some(
+    (path) => JSON.stringify(a[path]) !== JSON.stringify(b[path]),
+  )
 }
 
 /** Latest workspace location not followed by release. Historical events use

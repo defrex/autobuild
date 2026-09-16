@@ -150,6 +150,27 @@ snapshot. Raising capacity can fill the new slots immediately; lowering it
 prevents new claims without terminating builds already above the limit. `ab
 dispatch --once` performs one pass and does not watch or reload.
 
+The sections `autobuild.toml` delivers to a build fall into three ownership
+classes. **Build-owned** sections define the pipeline a build runs — `[verify]`
+with `[verify.<step>]`, `[finalize]` with `[finalize.<step>]`, `[commands]`,
+and `[workspace]` (provider and config, including `provisioning` and
+`runtimeProvisioning`). They are pinned to the build's own branch: the
+dispatcher reads them at the build's recorded base commit, or at its branch
+head once the build has published commits, and records the exact commit in the
+effective-config artifact metadata. **Deployment-owned** sections — `[roles]`
+(runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and
+`[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
+`capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
+dispatcher itself and are never interpreted by the build runner.
+
+Consequently, an accepted base-branch reload re-deposits only the
+deployment-owned sections to active builds; it does not retarget an in-flight
+build's verify universe, finalize steps, commands, or provisioning. A build
+that publishes a pipeline change to its own branch picks it up at its next
+launch, so config changes still flow through the pipeline for the build that
+carries them. In-flight environments are never re-provisioned: a fresh build
+from the new base is the path for a changed provisioning definition.
+
 Every accepted revision is deposited verbatim as a `dispatcher-config`
 repository artifact and referenced by a `dispatcher.config-reloaded` repository
 event. The dashboard reports the reload and reprojects values such as capacity;
@@ -168,10 +189,11 @@ These fields hot-reload:
 | `baseBranch` | Next dispatch or base fallback decision; existing `build.created` facts remain immutable. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
-| `[commands]` | Next setup, verify check, or finalize check selected. |
-| `[verify]` and `[finalize]` | Next engine step selection. An approved plan's stored verify selection remains authoritative. |
-| `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together. |
-| `[policy]` | Next policy, convergence, or agent-session boundary. A running session keeps its captured budget. |
+| `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. A base-branch reload does not retarget an in-flight build. |
+| `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
+| `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
+| `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
+| `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
 
