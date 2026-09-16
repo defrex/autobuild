@@ -691,6 +691,14 @@ input.short {
 .steps li {
   white-space: nowrap;
 }
+/* The trailing reason segment is prose, not a step token: it wraps at word
+ * boundaries (mid-word only as a last resort) so a long no-consent
+ * explanation never pushes a step line past the frame edge, while every step
+ * itself still wraps as a whole. */
+.steps li .reason {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .steps li[data-state="done"] {
   color: var(--step-done);
 }

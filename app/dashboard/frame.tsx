@@ -70,7 +70,7 @@ export function StepLine({
         <li key={step.label} data-state={step.state}>
           <span aria-hidden>{GLYPH[step.state]}</span> {step.label}
           {stepNote(step, now, register)}
-          {stepReason(step)}
+          <span className="reason">{stepReason(step)}</span>
           <span className="sr-only">, {step.state}</span>
         </li>
       ))}
