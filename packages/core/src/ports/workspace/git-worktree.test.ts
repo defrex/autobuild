@@ -735,6 +735,35 @@ describe('GitWorktreeProvider operator sandbox', () => {
     )
   })
 
+  test('setup runs with the scrubbed guest environment, never the host environment', async () => {
+    process.env.AB_SANDBOX_SETUP_CANARY = 'host-canary'
+    try {
+      const scrubProvider = new GitWorktreeProvider({
+        root,
+        sandboxRoot,
+        setupCommand: 'env | sort > env-dump.txt',
+        sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
+        envSource: { PATH: process.env.PATH ?? '', MY_TOOL_CONFIG: 'tool-value' },
+      })
+      const identity = await scrubProvider.orchestratorSandbox.ensure({
+        repo,
+        operator: 'ops-scrub',
+        baseBranch: 'main',
+      })
+      const dump = readFileSync(join(identity.workspacePath, 'env-dump.txt'), 'utf8')
+      // Built from an empty record: a host-only variable never leaks in, and
+      // only PATH plus the forwarded names are present.
+      expect(dump).not.toContain('AB_SANDBOX_SETUP_CANARY')
+      expect(dump).toContain('MY_TOOL_CONFIG=tool-value')
+      expect(dump).toContain('PATH=')
+      for (const name of SANDBOX_FORBIDDEN_ENV) {
+        expect(dump).not.toContain(`${name}=`)
+      }
+    } finally {
+      delete process.env.AB_SANDBOX_SETUP_CANARY
+    }
+  })
+
   test('exec runs commands with a scrubbed environment inside the checkout', async () => {
     const identity = await provider.orchestratorSandbox.ensure({
       repo,

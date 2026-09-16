@@ -553,9 +553,11 @@ export class GitWorktreeProvider implements WorkspaceProvider {
         () => false,
       )
       if (!provisioned && this.setupCommand !== undefined && this.setupCommand.trim() !== '') {
-        const result = await this.exec(['sh', '-c', this.setupCommand], {
-          cwd: identity.workspacePath,
-        })
+        // The setup command runs with the same credential-free guest
+        // environment as every tool exec — never the host environment
+        // wholesale, or a setup script would be a second route to build
+        // state. Unbounded: provisioning may install for a long time.
+        const result = await this.spawnSandboxCommand(this.setupCommand, identity.workspacePath)
         if (result.exitCode !== 0) {
           throw new SandboxOperationError(
             'provision',
@@ -573,20 +575,31 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return identity
   }
 
-  private async sandboxExec(
-    handle: SandboxEnvironmentIdentity,
-    request: SandboxCommandRequest,
+  /** One `sh -c` command inside the sandbox worktree with the credential-free
+   * guest environment (an empty record plus the host PATH and the forwarded
+   * names — never the host environment wholesale). `timeoutSeconds` bounds
+   * the child and kills it past the bound; undefined runs unbounded (the
+   * setup command may install for a long time). */
+  private async spawnSandboxCommand(
+    command: string,
+    cwd: string,
+    timeoutSeconds?: number,
   ): Promise<SandboxCommandResult> {
-    const timeoutSeconds = Math.min(Math.max(request.timeoutSeconds ?? 120, 1), 300)
-    const cwd =
-      request.cwd === undefined ? handle.workspacePath : join(handle.workspacePath, request.cwd)
-    const proc = Bun.spawn(['sh', '-c', request.command], {
+    const proc = Bun.spawn(['sh', '-c', command], {
       cwd,
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
       env: this.sandboxEnv(),
     })
+    if (timeoutSeconds === undefined) {
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      return { exitCode: exitCode ?? -1, stdout, stderr }
+    }
     const timer = AbortSignal.timeout(timeoutSeconds * 1000)
     const exitedOrTimeout = Promise.race([
       proc.exited.then((code) => ({ kind: 'exited' as const, code })),
@@ -620,6 +633,16 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       new Response(proc.stderr).text(),
     ])
     return { exitCode: outcome.code ?? -1, stdout, stderr }
+  }
+
+  private async sandboxExec(
+    handle: SandboxEnvironmentIdentity,
+    request: SandboxCommandRequest,
+  ): Promise<SandboxCommandResult> {
+    const timeoutSeconds = Math.min(Math.max(request.timeoutSeconds ?? 120, 1), 300)
+    const cwd =
+      request.cwd === undefined ? handle.workspacePath : join(handle.workspacePath, request.cwd)
+    return this.spawnSandboxCommand(request.command, cwd, timeoutSeconds)
   }
 
   /** Detached children tracked in-process only; a restarted host reports a
