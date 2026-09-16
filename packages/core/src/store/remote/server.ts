@@ -23,10 +23,10 @@
 import type { ZodType } from 'zod'
 import { EventValidationError, type AbEvent, type EventWrite } from '../../events/catalog'
 import type { RepositoryEvent, RepositoryEventWrite } from '../../events/repository'
-import type { SessionEventWrite } from '../../events/sessions'
+import type { SessionEvent, SessionEventWrite } from '../../events/sessions'
 import type { Via } from '../../events/envelope'
 import { systemClock, type BuildStore, type Clock } from '../types'
-import type { StreamOutcome, StreamPart, StreamScope } from '../streams/types'
+import type { StreamOutcome, StreamPart, StreamRead, StreamScope } from '../streams/types'
 import {
   MAX_STREAM_WAIT_SECONDS,
   StreamBatchTooLargeError,
@@ -473,9 +473,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         const wait = intParam(url, 'wait')
         return json(
           200,
-          await store.getSessionEvents(id, since, {
-            ...(wait !== undefined ? { waitSeconds: wait } : {}),
-          }),
+          await withDisconnect(
+            req,
+            store.getSessionEvents(id, since, {
+              ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            }),
+            (): SessionEvent[] => [],
+          ),
         )
       }
       case 'POST deposits': {
@@ -682,11 +686,25 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if (req.method === 'GET') {
         const since = intParam(url, 'since') ?? 0
         const wait = intParam(url, 'wait')
-        const read = await store.readStream(streamId, {
-          since,
-          ...(wait !== undefined ? { waitSeconds: wait } : {}),
-        })
-        return json(200, read)
+        return json(
+          200,
+          await withDisconnect(
+            req,
+            store.readStream(streamId, {
+              since,
+              ...(wait !== undefined ? { waitSeconds: wait } : {}),
+            }),
+            // The empty read carries the already-fetched record's lifecycle
+            // fields verbatim — the response to a disconnected client is
+            // discarded either way, but the wire schema must still hold.
+            (): StreamRead => ({
+              chunks: [],
+              status: record.status,
+              ...(record.outcome !== undefined ? { outcome: record.outcome } : {}),
+              ...(record.artifact !== undefined ? { artifact: record.artifact } : {}),
+            }),
+          ),
+        )
       }
       return fail(404, 'not-found', `no route: ${req.method} streams/${streamId}/chunks`)
     }
