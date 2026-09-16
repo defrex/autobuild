@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#392](https://github.com/defrex/autobuild/pull/392) — Add a committed package-boundary check for cross-package src test imports
 - [#389](https://github.com/defrex/autobuild/pull/389) — Show pinned pipeline source and config rev on web build detail
 - [#388](https://github.com/defrex/autobuild/pull/388) — Expose postgres-store schema/store subpath exports and use them in hosted-store-service tests
 - [#387](https://github.com/defrex/autobuild/pull/387) — Restore client-only over-the-wire coverage for core's remote clients
