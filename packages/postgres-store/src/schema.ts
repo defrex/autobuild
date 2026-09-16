@@ -3,6 +3,7 @@ import {
   AUTH_SCHEMA_CHECKSUM,
   AUTH_SCHEMA_DDL,
   AUTH_SCHEMA_V1_CHECKSUM,
+  AUTH_SCHEMA_V2_CHECKSUM,
   AUTH_SCHEMA_VERSION,
   assertAuthSchema,
 } from './auth-schema'
@@ -942,6 +943,19 @@ export async function migratePostgres(url: string): Promise<void> {
       const authRows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_auth_schema_migrations WHERE singleton = true FOR UPDATE`
       const authMarker = authRows[0]
+      // v2 → v3: the guarded oauthApplication.authenticationScheme column
+      // runs for EVERY pre-v3 auth marker, before the version branches —
+      // `CREATE TABLE IF NOT EXISTS "oauthApplication"` does not alter an
+      // existing table, so without this the internal assertAuthSchema below
+      // would fail on every upgraded v1/v2 database. Guarded and idempotent
+      // (the builds.repo_origin precedent), so a no-op on fresh installs,
+      // v1 upgrades (full DDL already created the column), and current-v3
+      // reruns. The column rides last in the v3 DDL so fresh and migrated
+      // databases assert identically.
+      await tx.unsafe(`
+        ALTER TABLE "oauthApplication"
+          ADD COLUMN IF NOT EXISTS "authenticationScheme" text;
+      `)
       if (authMarker) {
         const authVersion = Number(authMarker.version)
         if (authVersion === AUTH_SCHEMA_VERSION) {
@@ -949,9 +963,18 @@ export async function migratePostgres(url: string): Promise<void> {
             throw schemaError('auth marker is incompatible')
           }
         } else if (authVersion === 1 && authMarker.checksum === AUTH_SCHEMA_V1_CHECKSUM) {
-          // v1 → v2: the idempotent full DDL above already created the four
-          // MCP-plugin tables (CREATE TABLE IF NOT EXISTS is a no-op on the
-          // existing core tables); promote the marker in this transaction.
+          // v1 → v3: the idempotent full DDL above already created the four
+          // MCP-plugin tables with the column (CREATE TABLE IF NOT EXISTS is
+          // a no-op on the existing core tables); promote the marker in this
+          // transaction.
+          await tx`UPDATE ab_auth_schema_migrations
+            SET version = ${AUTH_SCHEMA_VERSION}, checksum = ${AUTH_SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
+        } else if (authVersion === 2 && authMarker.checksum === AUTH_SCHEMA_V2_CHECKSUM) {
+          // v2 → v3: the guarded ALTER above added the column to the
+          // pre-existing oauthApplication table; promote the marker in this
+          // transaction.
           await tx`UPDATE ab_auth_schema_migrations
             SET version = ${AUTH_SCHEMA_VERSION}, checksum = ${AUTH_SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}

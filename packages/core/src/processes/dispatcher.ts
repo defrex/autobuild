@@ -913,7 +913,13 @@ export class Dispatcher {
    * Because activity evidence is durably journaled, this one rule also
    * settles the orphan case — a dead `ab mcp` process stops appending
    * activity, so the next tick idles its environment out, exactly as harvest
-   * executions are settled. The stage is a no-op unless `[orchestrator]` is
+   * executions are settled. A journal-live environment whose journaled
+   * provider no longer matches the wired provider is likewise dispositioned
+   * once idle: its trail is closed with an unconfirmed release fact (AUT-377)
+   * — never a stop, since this dispatcher cannot reach a provider it is not
+   * wired to — and if the old provider returns, the next operator ensure()
+   * re-provisions and re-brackets the environment, so the disposition is
+   * reachable again. The stage is a no-op unless `[orchestrator]` is
    * enabled and the wired provider hosts the capability; `unsupported`
    * providers (local worktrees) are skipped silently. */
   private async settleOrchestratorSandboxes(
@@ -935,7 +941,6 @@ export class Dispatcher {
     const idleMs = config.orchestrator.sandbox.idleMinutes * 60_000
     for (const environment of sandboxStates(events)) {
       if (environment.state !== 'live') continue
-      if (environment.provider !== providerName) continue
       // Budget gate: once spent, stop settling further environments; the
       // next tick retries what remains.
       if (this.outOfBudget(opts)) break
@@ -944,6 +949,29 @@ export class Dispatcher {
         continue
       }
       try {
+        if (environment.provider !== providerName) {
+          // Provider-mismatch disposition (AUT-377): the journaled provider no
+          // longer matches the wired provider, so environmentIds are out of this
+          // dispatcher's reach and idle settlement would otherwise skip it on
+          // every tick forever. Close the trail with an unconfirmed release —
+          // never a stop: nothing was stopped through a provider this
+          // dispatcher no longer owns. If the provider returns, the next
+          // operator ensure() re-provisions and re-brackets the environment.
+          await this.deps.store.appendRepo(this.deps.repo, {
+            actor: DISPATCHER,
+            type: 'orchestrator.sandbox.released',
+            payload: {
+              operator: environment.operator,
+              environmentId: environment.environmentId,
+              snapshots: {
+                outcome: 'unknown',
+                error: `environment owned by provider "${environment.provider}", not the wired provider "${providerName}" — unreachable at idle settlement`,
+              },
+            },
+          })
+          report.sandboxIdleStops += 1
+          continue
+        }
         const outcome = await capability.stop({
           operator: environment.operator,
           environmentId: environment.environmentId,

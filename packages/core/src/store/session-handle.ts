@@ -202,7 +202,7 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     async getSessionEvents(
       id: string,
       sinceSeq?: number,
-      opts?: { waitSeconds?: number },
+      opts?: { waitSeconds?: number; signal?: AbortSignal },
     ): Promise<SessionEvent[]> {
       own('getSessionEvents', id)
       return store.getSessionEvents(id, sinceSeq, opts)
@@ -241,7 +241,7 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     },
     async readStream(
       streamId: string,
-      opts?: { since?: number; waitSeconds?: number },
+      opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
     ): Promise<StreamRead> {
       await ownStream(streamId)
       return store.readStream(streamId, opts)

@@ -6,7 +6,7 @@
  * default — a real test database that runs everywhere the unit step runs —
  * and, when AB_POSTGRES_TEST_URL is set, the same flow runs against a
  * migrated isolated Postgres schema (production adapter parity, exercising
- * the auth schema v2 DDL end to end).
+ * the auth schema v3 DDL end to end).
  *
  * The client side is the MCP SDK's own OAuth client (client/auth.js) and
  * StreamableHTTPClientTransport, exactly the machinery Claude web, Claude
@@ -521,6 +521,27 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
     const response = await app(toolsListRequest(tokens.access_token!, 4))
     expect(response.status).toBe(403)
   })
+
+  test('DCR persists the authenticationScheme the plugin writes', async () => {
+    // The pinned 1.4.18 MCP plugin's DCR writes `authenticationScheme` but
+    // its declared oauthApplication schema omits it; the file-local plugin
+    // declaration in createWebAuth restores it through the adapter factory.
+    // The registered client used token_endpoint_auth_method 'none'.
+    const row = db.oauthApplication?.find((candidate) => candidate.name === 'e2e-mcp-client')
+    expect(row?.authenticationScheme).toBe('none')
+    // Pin the DCR-carried fields the memory adapter persists, so the
+    // postgres parity block below can assert the two adapters' visible
+    // behavior matches without reaching across describe scopes. (Optional
+    // fields left undefined — icon, userId here — are omitted by the
+    // memory adapter but read back as NULL on Postgres, so only the
+    // defined DCR-carried values are pinned.)
+    expect(row).toMatchObject({
+      name: 'e2e-mcp-client',
+      type: 'public',
+      authenticationScheme: 'none',
+    })
+    expect(row?.redirectUrls).toContain('https://claude.ai/api/mcp/auth_callback')
+  })
 })
 
 const postgresUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
@@ -549,10 +570,29 @@ if (postgresUrl) {
         expect(response.status).toBe(200)
         const { result } = (await response.json()) as { result: { tools: unknown[] } }
         expect(result.tools).toHaveLength(TOOLS.length + 1)
-        // DCR's client row really persisted through the pg adapter.
+        // DCR's client row really persisted through the pg adapter, with the
+        // same authenticationScheme the memory adapter persists (the
+        // registered client used token_endpoint_auth_method 'none'), and the
+        // same column set the memory adapter carries.
         const sql = new SQL(url)
-        const clients = await sql`SELECT name FROM "oauthApplication"`
-        expect(clients.map((row: { name: string }) => row.name)).toContain('e2e-mcp-client')
+        const clients = await sql`SELECT * FROM "oauthApplication"`
+        const names = clients.map((row: { name: string }) => row.name)
+        expect(names).toContain('e2e-mcp-client')
+        const e2e = clients.find((row: { name: string }) => row.name === 'e2e-mcp-client') as
+          | Record<string, unknown>
+          | undefined
+        expect(e2e?.authenticationScheme).toBe('none')
+        // The same DCR-carried fields the memory adapter persists (pinned
+        // by the 'DCR persists the authenticationScheme' test above): the
+        // two adapters' visible behavior matches. Optional fields left
+        // undefined read back as NULL on Postgres, so only the defined
+        // values are compared.
+        expect(e2e).toMatchObject({
+          name: 'e2e-mcp-client',
+          type: 'public',
+          authenticationScheme: 'none',
+        })
+        expect(e2e?.redirectUrls as string).toContain('https://claude.ai/api/mcp/auth_callback')
         await sql.close()
         await pool.end()
       } finally {
@@ -560,7 +600,7 @@ if (postgresUrl) {
         await cleanup.unsafe(`DROP SCHEMA ${schema} CASCADE`)
         await cleanup.close()
       }
-      expect(AUTH_SCHEMA_VERSION).toBe(2)
+      expect(AUTH_SCHEMA_VERSION).toBe(3)
     })
   })
 }

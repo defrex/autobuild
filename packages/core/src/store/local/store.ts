@@ -636,7 +636,11 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
-  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+  async getEvents(
+    slug: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]> {
     return readEventsWithWait({
       read: async () => {
         this.requireBuild(slug)
@@ -659,6 +663,7 @@ export class SqliteBuildStore implements BuildStore {
         )
       },
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
     })
   }
 
@@ -905,7 +910,7 @@ export class SqliteBuildStore implements BuildStore {
   async getRepoEvents(
     repo: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
     return readEventsWithWait({
       read: async () => {
@@ -929,6 +934,7 @@ export class SqliteBuildStore implements BuildStore {
         )
       },
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
     })
   }
 
@@ -1186,7 +1192,7 @@ export class SqliteBuildStore implements BuildStore {
   async getSessionEvents(
     id: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]> {
     const read = async (): Promise<SessionEvent[]> => {
       this.requireSession(id)
@@ -1208,7 +1214,7 @@ export class SqliteBuildStore implements BuildStore {
           }) as SessionEvent,
       )
     }
-    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
   }
 
   /** Runs inside an open transaction — see `depositInTx` for `prune`. */
@@ -1471,7 +1477,7 @@ export class SqliteBuildStore implements BuildStore {
 
   async readStream(
     streamId: string,
-    opts?: { since?: number; waitSeconds?: number },
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const read = async (): Promise<StreamRead> => {
       const row = this.requireStream(streamId)
@@ -1494,7 +1500,7 @@ export class SqliteBuildStore implements BuildStore {
         ...(record.artifact !== undefined ? { artifact: record.artifact } : {}),
       }
     }
-    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {

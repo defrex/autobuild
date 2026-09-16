@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- [#375](https://github.com/defrex/autobuild/pull/375) — Give EVENT_WAIT_POLL_MS a single canonical definition by importing the core constant in the Postgres store
+- [#374](https://github.com/defrex/autobuild/pull/374) — Tolerate scheduler jitter in remote teardown poll-count assertion
+- [#373](https://github.com/defrex/autobuild/pull/373) — Pace memory store's held event reads at the event-wait budget
+- [#372](https://github.com/defrex/autobuild/pull/372) — Parse stream-read wait strictly with the §9 digits grammar
+- [#371](https://github.com/defrex/autobuild/pull/371) — De-time the subscribe/held-read delivery tests
+- [#370](https://github.com/defrex/autobuild/pull/370) — Fix the advertised MCP jwks_uri: point both metadata documents at /api/auth/jwks
+- [#369](https://github.com/defrex/autobuild/pull/369) — Parse session-event wait strictly and clamp to the hosted ceiling
+- [#368](https://github.com/defrex/autobuild/pull/368) — Plumb an AbortSignal through held BuildStore reads (AUT-380)
+- [#367](https://github.com/defrex/autobuild/pull/367) — Poll held Postgres session-event reads at the one-second budget
+- [#366](https://github.com/defrex/autobuild/pull/366) — Persist oauthApplication.authenticationScheme on Postgres DCR (v3)
+- [#365](https://github.com/defrex/autobuild/pull/365) — State the Postgres held-read append-to-wake bound as nominal
+- [#363](https://github.com/defrex/autobuild/pull/363) — Evict finished detached sandbox commands from git-worktree tracking
+- [#362](https://github.com/defrex/autobuild/pull/362) — Fix stale mcp.test.ts title claiming GET 405 instead of pinned SSE 200
+- [#360](https://github.com/defrex/autobuild/pull/360) — Add ab wait — block until a build reaches a condition (AUT-333)
+- [#361](https://github.com/defrex/autobuild/pull/361) — Close stale-provider sandbox trails with an unconfirmed release at idle settlement
+- [#359](https://github.com/defrex/autobuild/pull/359) — Correct the hosted MCP endpoint header comment: stateless GET serves SSE 200, not 405
 - [#358](https://github.com/defrex/autobuild/pull/358) — Wire the hosted live suites into the test-postgres step
 - [#357](https://github.com/defrex/autobuild/pull/357) — Add a bounded wait to the remote build-event reads
 - [#356](https://github.com/defrex/autobuild/pull/356) — Add per-operator credential-free sandboxes behind registry tools

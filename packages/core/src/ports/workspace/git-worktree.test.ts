@@ -818,6 +818,137 @@ describe('GitWorktreeProvider operator sandbox', () => {
     expect((lost as SandboxOperationError).stage).toBe('not-found')
   })
 
+  test('the terminal wait consumes a finished detached command; a second wait fails typed not-found', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const { commandId } = await provider.orchestratorSandbox.start(identity, {
+      command: 'echo consumed',
+    })
+    expect(
+      await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 5 }),
+    ).toEqual({
+      state: 'exited',
+      exitCode: 0,
+      stdout: 'consumed\n',
+      stderr: '',
+    })
+    // Eviction reuses the restarted-host semantics: delivered results are
+    // gone, and re-waiting them is typed not-found, not stale repetition.
+    const again = await provider.orchestratorSandbox
+      .wait(identity, { commandId, waitSeconds: 0 })
+      .catch((e: unknown) => e)
+    expect(again).toBeInstanceOf(SandboxOperationError)
+    expect((again as SandboxOperationError).stage).toBe('not-found')
+  })
+
+  test('running waits do not consume; only the terminal exited wait does', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const { commandId } = await provider.orchestratorSandbox.start(identity, {
+      command: 'sleep 1',
+    })
+    for (let i = 0; i < 2; i++) {
+      expect(
+        await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 0 }),
+      ).toEqual({
+        state: 'running',
+        stdout: '',
+        stderr: '',
+      })
+    }
+    expect(
+      await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 5 }),
+    ).toEqual({
+      state: 'exited',
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    })
+  })
+
+  test('finished-but-never-waited commands are bounded by the retention cap; running entries survive', async () => {
+    const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
+      .MAX_RETAINED_SANDBOX_COMMANDS
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    // Live sentinel: running for the whole test, must never be evicted.
+    const sentinel = await provider.orchestratorSandbox.start(identity, {
+      command: 'sleep 30',
+    })
+    // A burst of fire-and-forget echoes exceeding the cap by a wide margin;
+    // none of them is waited on before the assertions, so only the cap can
+    // bound them.
+    const excess = 20
+    const echoes: string[] = []
+    for (let i = 0; i < cap + excess; i++) {
+      echoes.push(
+        (await provider.orchestratorSandbox.start(identity, { command: 'echo burst' })).commandId,
+      )
+    }
+
+    // No private-access idiom exists in this suite; one-line cast local.
+    const children = (
+      provider as unknown as { sandboxChildren: Map<string, { exitCode: number | null }> }
+    ).sandboxChildren
+
+    // Settle: wait for every echo to have exited (and been stamped) without
+    // calling `wait` — a wait observing `exited` would consume a never-waited
+    // entry and defeat the test. The last exit stamp itself runs the final
+    // cap-eviction pass, so once this settles the map is within bound.
+    const deadline = Date.now() + 10_000
+    const settled = (id: string): boolean => {
+      const tracked = children.get(id)
+      return tracked === undefined || tracked.exitCode !== null
+    }
+    while (Date.now() < deadline && !echoes.every(settled)) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    expect(echoes.every(settled)).toBe(true)
+
+    // The regression guard: with cap enforcement broken on either path
+    // (insert-time or exit-stamp-time), the cap+excess entries remain.
+    expect(children.size).toBeLessThanOrEqual(cap)
+
+    // The oldest `excess` echoes were evicted — typed not-found on wait.
+    for (const id of echoes.slice(0, excess)) {
+      const evicted = await provider.orchestratorSandbox
+        .wait(identity, { commandId: id, waitSeconds: 0 })
+        .catch((e: unknown) => e)
+      expect(evicted).toBeInstanceOf(SandboxOperationError)
+      expect((evicted as SandboxOperationError).stage).toBe('not-found')
+    }
+    // A retained newer echo still delivers its result (and is consumed).
+    const retained = echoes[cap]!
+    expect(
+      await provider.orchestratorSandbox.wait(identity, { commandId: retained, waitSeconds: 5 }),
+    ).toEqual({
+      state: 'exited',
+      exitCode: 0,
+      stdout: 'burst\n',
+      stderr: '',
+    })
+    // The running sentinel is untouched by the cap.
+    expect(
+      await provider.orchestratorSandbox.wait(identity, {
+        commandId: sentinel.commandId,
+        waitSeconds: 0,
+      }),
+    ).toEqual({
+      state: 'running',
+      stdout: '',
+      stderr: '',
+    })
+  })
+
   test('readFile and writeFile are rooted at the checkout and reject escapes', async () => {
     const identity = await provider.orchestratorSandbox.ensure({
       repo,
