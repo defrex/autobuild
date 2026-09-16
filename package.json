@@ -84,6 +84,7 @@
     "!packages/core/src/**/*.test.ts",
     "skills",
     "templates",
+    "patches",
     "LICENSE",
     "README.md",
     "SPEC.md",
@@ -131,5 +132,8 @@
     "husky": "9.1.7",
     "typescript": "5.9.3",
     "vercel": "^59.11.2"
+  },
+  "patchedDependencies": {
+    "better-auth@1.4.18": "patches/better-auth@1.4.18.patch"
   }
 }

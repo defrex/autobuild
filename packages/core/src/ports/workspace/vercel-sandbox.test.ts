@@ -395,6 +395,13 @@ describe('VercelSandboxProvider', () => {
     const extracted = join(tmp, 'autobuild')
     try {
       await writeFile(archivePath, await packageAutobuildDistribution())
+      // The root `files` array excludes test files with a negated glob; the
+      // packer stages the positive entries and `bun pm pack` applies the
+      // negation from the staged manifest, so the packed distribution must not
+      // carry test files.
+      const listing = await spawnExec(['tar', '-tzf', archivePath], { cwd: tmp })
+      expect(listing).toMatchObject({ exitCode: 0, stderr: '' })
+      expect(listing.stdout.split('\n').some((entry) => entry.endsWith('.test.ts'))).toBe(false)
       await mkdir(extracted)
       const unpacked = await spawnExec(
         ['tar', '-xzf', archivePath, '--strip-components=1', '-C', extracted],
