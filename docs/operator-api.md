@@ -109,11 +109,24 @@ The retry object is deliberately bare: adding `text` is a `400 validation`
 rather than silently changing the resolution to guidance. A revision object may
 also carry `ceiling` only to receive the shared `incompatible-answer-options`
 refusal; a ceiling and spec revision cannot be performed together.
-
 The hosted service has no ticket-provider credentials. For ticket-origin
 revision, a trusted caller fetches the current ticket body and supplies it; the
 build must still have a recorded ticket. Revision conformance, lazy retry,
 artifact metadata, event ordering, and refusal rules are the same as the CLI.
+
+## The registry's protocol face: `POST …/tools/{tool}`
+
+One generic route executes any entry of the agent tool registry (the same
+closed table `ab mcp` serves over stdio and the hosted `/mcp` endpoint serves
+over Streamable HTTP): the body is the tool's validated input — `repo`
+included and required to equal the URL's repository — and the response is the
+registry result verbatim. The verified operator token supplies the acting
+identity and, when minted with one, the `via` attribution marker; the body
+never does. Failures keep the shared `{kind,error,code?,progress?}` shape:
+validation is `400`, auth `403`, not-found `404`, conflict and refusal `409`,
+internal `500`. The route adds no authority of its own — it is the registry
+behind the token check — so a tool available here is exactly the tool table,
+and the table's contract suite is the single gate.
 
 ### Success results
 

@@ -114,6 +114,42 @@ describe('hosted store service', () => {
     })
   })
 
+  test('routes the generic tools POST to the operator server', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+    })
+    const token = mintToken(env.AB_STORE_SECRET, {
+      operator: { user: 'Hosted Operator' },
+      via: { kind: 'mcp', client: 'claude' },
+      exp: now.getTime() + 60_000,
+    })
+    const client = new OperatorApiClient({
+      url: 'http://hosted.test',
+      token,
+      fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(
+          input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+        )) as typeof fetch,
+    })
+    // An unclassified route would 404 here — the branch is load-bearing.
+    expect(
+      await client.callTool('acme/repo', 'repository.status', { repo: 'acme/repo' }),
+    ).toMatchObject({ repo: 'acme/repo', intake: true })
+    await client.callTool('acme/repo', 'repository.settings', {
+      repo: 'acme/repo',
+      setting: 'intake',
+      enabled: false,
+    })
+    expect((await backing.getRepoEvents('acme/repo')).at(-1)?.actor).toEqual({
+      kind: 'human',
+      user: 'Hosted Operator',
+      via: { kind: 'mcp', client: 'claude' },
+    })
+  })
+
   test('redacts operator backing failures and reports them with operator context', async () => {
     const failure = new Error('postgres://operator:secret@db.internal/control')
     const backing = new MemoryBuildStore({ clock })

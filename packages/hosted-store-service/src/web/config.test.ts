@@ -21,8 +21,23 @@ describe('web auth configuration', () => {
     expect(safeWebConfig(config)).toEqual({
       providers: ['github'],
       repositories: ['https://github.com/owner/one', 'https://github.com/owner/two'],
+      mcpResource: 'https://operator.example/mcp',
     })
     expect(JSON.stringify(safeWebConfig(config))).not.toContain('secret')
+  })
+
+  test('accepts an explicit MCP resource and rejects unsafe ones', () => {
+    expect(
+      parseWebAuthEnv({ ...env, AB_WEB_MCP_RESOURCE: 'https://mcp.example/mcp' }).mcpResource,
+    ).toBe('https://mcp.example/mcp')
+    expect(() => parseWebAuthEnv({ ...env, AB_WEB_MCP_RESOURCE: '/mcp' })).toThrow()
+    expect(() =>
+      parseWebAuthEnv({
+        ...env,
+        AB_WEB_MCP_RESOURCE: 'http://mcp.example/mcp',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow()
   })
 
   test.each([

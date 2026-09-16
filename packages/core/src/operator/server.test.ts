@@ -12,7 +12,7 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '../store/remote/version'
 import { OperatorApiClient, OperatorApiError } from './client'
-import { createOperatorServer } from './server'
+import { createOperatorServer, REGISTRY_ERROR_STATUS } from './server'
 
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
@@ -551,5 +551,112 @@ describe('session-archive sandbox release hook (AUT-340)', () => {
     const client = operatorClient(secondServer, 'Solo')
     const solo = await client.createSession(repo, { title: 'y' })
     await client.archiveSession(repo, solo.id)
+  })
+})
+
+describe('the generic tools route', () => {
+  const via = { kind: 'mcp', client: 'claude' } as const
+
+  function toolsFetch(server: { fetch(req: Request): Promise<Response> }, token: string) {
+    return async (repoPath: string, tool: string, input?: unknown): Promise<Response> =>
+      server.fetch(
+        new Request(
+          `http://operator.test/operator/v1/repos/${encodeURIComponent(repoPath)}/tools/${tool}`,
+          {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${token}`,
+              [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+              [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+              ...(input !== undefined ? { 'content-type': 'application/json' } : {}),
+            },
+            ...(input !== undefined ? { body: JSON.stringify(input) } : {}),
+          },
+        ),
+      )
+  }
+
+  test('a token carrying via stamps it onto the executed registry writes', async () => {
+    const store = await runningStore()
+    const server = createOperatorServer({ store, secret, clock })
+    const token = mintToken(secret, {
+      operator: { user: 'Ada' },
+      via,
+      exp: now.getTime() + 60_000,
+    })
+    const call = toolsFetch(server, token)
+    const response = await call(repo, 'repository.settings', {
+      repo,
+      setting: 'intake',
+      enabled: false,
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ enabled: false })
+    const event = (await store.getRepoEvents(repo)).at(-1)
+    expect(event?.actor).toEqual({ kind: 'human', user: 'Ada', via })
+
+    // The same route executes any tool from the closed table.
+    const read = await call(repo, 'builds.list', { repo, scope: 'all' })
+    expect(read.status).toBe(200)
+    expect(((await read.json()) as { slug: string }[]).map((build) => build.slug)).toEqual(['demo'])
+  })
+
+  test('a via-less token leaves actors unmarked', async () => {
+    const store = await runningStore()
+    const server = createOperatorServer({ store, secret, clock })
+    const token = mintToken(secret, {
+      operator: { user: 'Ada' },
+      exp: now.getTime() + 60_000,
+    })
+    const call = toolsFetch(server, token)
+    const response = await call(repo, 'notes.write', { repo, document: 'hello' })
+    expect(response.status).toBe(200)
+    const artifact = await store.getRepoArtifact(repo, 'operator-notes')
+    expect(artifact?.meta.metadata).toEqual({ user: 'Ada' })
+  })
+
+  test('unknown tools, mismatched bodies, and refusals keep their failure shapes', async () => {
+    const store = await runningStore()
+    const server = createOperatorServer({ store, secret, clock })
+    const token = mintToken(secret, {
+      operator: { user: 'Ada' },
+      exp: now.getTime() + 60_000,
+    })
+    const call = toolsFetch(server, token)
+
+    // Unknown tool: registry.call refuses not-found → 404.
+    const unknown = await call(repo, 'nope.tool', { repo })
+    expect(unknown.status).toBe(404)
+    expect(await unknown.json()).toMatchObject({ kind: 'not-found' })
+
+    // A body repo that disagrees with the path repository → 400.
+    const mismatch = await call(repo, 'builds.list', { repo: 'acme/other', scope: 'all' })
+    expect(mismatch.status).toBe(400)
+    expect(await mismatch.json()).toMatchObject({ kind: 'validation' })
+
+    // A non-object body → 400.
+    const nonObject = await toolsFetch(server, token)(repo, 'builds.list', ['nope'])
+    expect(nonObject.status).toBe(400)
+
+    // A registry validation refusal → 400 with the registry's message.
+    const invalid = await call(repo, 'builds.list', { repo, scope: 'nope' })
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toMatchObject({ kind: 'validation' })
+
+    // A domain refusal (unknown build) → 404 via the deterministic mapping.
+    const refused = await call(repo, 'builds.get', { repo, slug: 'os_nope' })
+    expect(refused.status).toBe(404)
+    expect(await refused.json()).toMatchObject({ kind: 'not-found' })
+  })
+
+  test('every registry failure kind maps to its documented status', () => {
+    expect(REGISTRY_ERROR_STATUS).toEqual({
+      validation: 400,
+      auth: 403,
+      'not-found': 404,
+      conflict: 409,
+      refusal: 409,
+      internal: 500,
+    })
   })
 })

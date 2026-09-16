@@ -185,7 +185,8 @@ function api(server: { fetch(req: Request): Promise<Response> }) {
   }
 }
 
-/** Tool caller against one world, attributed as the route's operator token. */
+/** Tool caller against one world, attributed as the route's operator token
+ * (the token carries no via claim, so neither does the tool call). */
 function toolFor(world: World) {
   const registry = buildRegistry({
     store: world.store,
@@ -193,7 +194,7 @@ function toolFor(world: World) {
     clock,
   })
   return async (name: string, input: unknown): Promise<object> =>
-    (await registry.call(name, input, { identity: 'Ada', via: 'contract-test' })) as object
+    (await registry.call(name, input, { identity: 'Ada' })) as object
 }
 
 /** Tool failures surface as RegistryError; return the mapped failure body. */
@@ -825,18 +826,19 @@ describe('agent tool registry contract', () => {
   test('attributed writes carry the caller’s identity, and notes.write records via', async () => {
     const world = await seedWorld()
     const registry = buildRegistry({ store: world.store, tickets: world.backend, clock })
+    const via = { kind: 'mcp', client: 'claude' } as const
     await registry.call(
       'repository.settings',
       { repo, setting: 'intake', enabled: false },
-      { identity: 'Grace', via: 'mcp' },
+      { identity: 'Grace', via },
     )
     const event = (await world.store.getRepoEvents(repo)).at(-1)
-    expectEqual(event?.actor, humanActor('Grace'))
+    expectEqual(event?.actor, humanActor('Grace', via))
 
     await registry.call(
       'notes.write',
       { repo, document: 'round 2 notes' },
-      { identity: 'Grace', via: 'mcp' },
+      { identity: 'Grace', via },
     )
     const read = (await registry.call('notes.read', { repo }, { identity: 'Grace' })) as {
       document: string
@@ -844,7 +846,7 @@ describe('agent tool registry contract', () => {
       metadata: unknown
     }
     expect(read.document).toBe('round 2 notes')
-    expectEqual(read.metadata, { user: 'Grace', via: 'mcp' })
+    expectEqual(read.metadata, { user: 'Grace', via })
     expectJsonClean(read)
   })
 
@@ -934,7 +936,7 @@ describe('agent tool registry contract', () => {
     await store.ensureRepo(repo)
     const registry = buildRegistry({ store, clock })
     for (const document of ['v0', 'v1', 'v2']) {
-      await registry.call('notes.write', { repo, document }, { identity: 'Ada', via: 'mcp' })
+      await registry.call('notes.write', { repo, document }, { identity: 'Ada' })
     }
     const revisions = (await store.listRepoArtifacts(repo, 'operator-notes')).map(
       (meta) => meta.revision,

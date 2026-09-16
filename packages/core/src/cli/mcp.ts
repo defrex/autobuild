@@ -11,7 +11,8 @@
  * never drift from the in-process registry the contract suite proves.
  *
  * Identity: the sessionless operator identity the other operator commands use
- * (`buildControlUser` — USER/USERNAME, else "dashboard"), with `via: 'mcp'`.
+ * (`buildControlUser` — USER/USERNAME, else "dashboard"), with a via marker
+ * naming the connected MCP client (learned lazily at the initialize handshake).
  * The server fails closed inside a phase: repository-wide operator authority
  * cannot be narrowed to the ambient build (the §8.2 rule that makes
  * repository-wide `ab builds` fail inside a phase, moved to process start
@@ -22,6 +23,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
+import type { Via } from '../events/envelope'
 import { defaultTriageState } from '../processes/dispatcher'
 import { createWorkspaceProvider } from '../ports/workspace/create'
 import { createTicketSource } from '../ports/tickets/create'
@@ -129,7 +131,7 @@ export async function buildMcpTicketBackend(
 export function serveRegistry(
   registry: OperatorToolRegistry,
   server: McpServer,
-  ctx: { identity?: string; via?: string },
+  ctx: { identity?: string; via?: Via | (() => Via | undefined) },
 ): void {
   for (const entry of registry.entries) {
     server.registerTool(
@@ -144,7 +146,13 @@ export function serveRegistry(
       // path.
       async (args: unknown) => {
         try {
-          const value = await registry.call(entry.name, args, ctx)
+          // A lazy via resolves per call — the stdio server is long-lived and
+          // only learns the client's identity at the initialize handshake.
+          const via = typeof ctx.via === 'function' ? ctx.via() : ctx.via
+          const value = await registry.call(entry.name, args, {
+            identity: ctx.identity,
+            ...(via !== undefined ? { via } : {}),
+          })
           return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
         } catch (error) {
           const body =
@@ -253,7 +261,10 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
     )
     serveRegistry(registry, server, {
       identity: buildControlUser(opts.env),
-      via: 'mcp',
+      // Unlike the hosted stateless server, the stdio server is long-lived:
+      // the initialize handshake populates the client version before any tool
+      // call, so the via marker names the connected client.
+      via: () => ({ kind: 'mcp', client: server.server.getClientVersion()?.name ?? 'stdio' }),
     })
 
     const done = new Promise<void>((resolve) => {

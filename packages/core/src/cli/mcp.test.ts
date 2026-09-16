@@ -150,12 +150,16 @@ test('a mutating call attributes its durable write to the operator identity', as
   }
 
   // The client closed above, and the write is already durable: attributed to
-  // the sessionless operator identity. The spawned environment carries no
-  // USER/USERNAME, so the documented fallback identity applies.
+  // the sessionless operator identity, with the via marker naming the connected
+  // MCP client learned at the initialize handshake.
   const reopened = openLocalStore(storeDir)
   const event = (await reopened.getRepoEvents(await realpath(tmp))).at(-1)
   expect(event?.type).toBe('dispatcher.intake-set')
-  expect(event?.actor).toEqual({ kind: 'human', user: 'dashboard' })
+  expect(event?.actor).toEqual({
+    kind: 'human',
+    user: 'dashboard',
+    via: { kind: 'mcp', client: 'mcp-contract-test' },
+  })
   await reopened.close()
 })
 

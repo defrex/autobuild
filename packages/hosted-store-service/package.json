@@ -30,6 +30,10 @@
     "./web/runtime": {
       "types": "./src/web/runtime.ts",
       "import": "./src/web/runtime.ts"
+    },
+    "./web/mcp": {
+      "types": "./src/web/mcp.ts",
+      "import": "./src/web/mcp.ts"
     }
   },
   "bin": {

@@ -5,6 +5,23 @@ import { bulkControlRepository } from '../packages/core/src/cli/bulk-control'
 import { renderDashboardFrameImage } from '../packages/core/src/cli/dashboard/frame-image'
 import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
 import type { DashboardModel } from '../packages/core/src/cli/dashboard/model'
+import type { StreamPart } from '../packages/core/src/store/streams/types'
+import {
+  errorPart,
+  promptPart,
+  reasoningDeltaPart,
+  reasoningEndPart,
+  reasoningStartPart,
+  sessionPart,
+  startPart,
+  startStepPart,
+  textDeltaPart,
+  textEndPart,
+  textStartPart,
+  toolInputPart,
+  toolOutputPart,
+  truncationPart,
+} from '../packages/core/src/ports/runner/stream-parts'
 import { renderDashboard, stripAnsi } from '../packages/core/src/cli/dashboard/render'
 import type { TerminalInput, TerminalOut } from '../packages/core/src/cli/terminal'
 import { createTerminalModeController } from '../packages/core/src/cli/terminal-restore'
@@ -37,6 +54,19 @@ export interface FrameSpec {
   detail?: { slug: string; scroll: number }
   /** Overlay a transcript presentation containing fixed Unicode evidence. */
   transcript?: { slug: string; sessionId: string }
+  /** Overlay the read-only session view over scripted stream parts. The
+   * harness injects a wire and never reaches DispatchFrontend, so this is
+   * necessarily a renderer-level overlay (like `transcript`) — the production
+   * controller path is covered by dispatch-frontend.test.ts. */
+  session?: {
+    slug: string
+    sessionId: string
+    stream: string
+    status: 'open' | 'closed'
+    outcome?: 'completed' | 'aborted'
+    parts: readonly StreamPart[]
+    follow?: boolean
+  }
   /** Frame-specific evidence this capture exists to show. */
   requires?: readonly string[]
   /** Evidence that must never appear in this frame. */
@@ -56,6 +86,49 @@ const SCRIPTED_BLOCKER = [
 ].join('\n')
 
 const HELD_EVIDENCE = ['repository PAUSED', 'CAP-QUEUED', '(held)', 'QUEUED'] as const
+
+/** Scripted live mid-turn: session header, labelled prompt, a step, reasoning
+ * and answer deltas, and a tool call whose output has not landed yet. */
+const SESSION_LIVE_PARTS: readonly StreamPart[] = [
+  sessionPart({
+    session: 's_live_capture',
+    role: 'implement',
+    runner: 'pi',
+    model: 'zai/glm',
+    phase: 'implement',
+    round: 2,
+  }),
+  promptPart('wire the live session view into the dashboard'),
+  startPart('m1'),
+  startStepPart(),
+  reasoningStartPart('r1'),
+  reasoningDeltaPart('r1', 'the projection owns the vocabulary; the feed owns the reads'),
+  reasoningEndPart('r1'),
+  textStartPart('t1'),
+  textDeltaPart('t1', 'wiring the shared feed into both controllers now'),
+  toolInputPart('c1', 'bash', { command: 'bun test packages/core' }),
+]
+
+/** Scripted closed session: a full part sequence including tool output
+ * exceeding the documented row cap, an error part, and a truncation marker. */
+const SESSION_CLOSED_PARTS: readonly StreamPart[] = [
+  sessionPart({
+    session: 's_closed_capture',
+    role: 'code-review',
+    runner: 'scripted',
+    phase: 'code-review',
+    round: 1,
+  }),
+  promptPart('review the session view diff'),
+  startPart('m1'),
+  textStartPart('t1'),
+  textDeltaPart('t1', 'the review found one boundary worth tightening'),
+  textEndPart('t1'),
+  toolInputPart('c1', 'bash', { command: 'bun test' }),
+  toolOutputPart('c1', Array.from({ length: 12 }, (_, i) => `row-${i}`).join('\n')),
+  truncationPart(4096),
+  errorPart('the provider rate limit was exhausted'),
+]
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
   {
@@ -107,6 +180,50 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
     rows: 20,
     transcript: { slug: 'complete-dashboard-evidence', sessionId: 's_unicode_capture' },
     requires: ['Transcript  complete-dashboard-evidence', `Agent: ${UNICODE_EVIDENCE}`],
+  },
+  {
+    id: 'session-live',
+    scenario: 'mixed',
+    columns: 100,
+    rows: 24,
+    session: {
+      slug: 'complete-dashboard-evidence',
+      sessionId: 's_live_capture',
+      stream: 'st_live_capture',
+      status: 'open',
+      parts: SESSION_LIVE_PARTS,
+      follow: true,
+    },
+    requires: [
+      'Session  complete-dashboard-evidence',
+      'Prompt: wire the live session view into the dashboard',
+      '~ the projection owns the vocabulary; the feed owns the reads',
+      'bash({"command":"bun test packages/core"})',
+      'waiting for output',
+      'following tail',
+    ],
+    forbids: ['ERROR', 'ABORTED', 'Stream closed'],
+  },
+  {
+    id: 'session-closed',
+    scenario: 'mixed',
+    columns: 100,
+    rows: 24,
+    session: {
+      slug: 'complete-dashboard-evidence',
+      sessionId: 's_closed_capture',
+      stream: 'st_closed_capture',
+      status: 'closed',
+      outcome: 'completed',
+      parts: SESSION_CLOSED_PARTS,
+      follow: true,
+    },
+    requires: [
+      'Stream closed: completed',
+      'ERROR: the provider rate limit was exhausted',
+      '… 4 more rows withheld',
+      '… 4096 bytes truncated',
+    ],
   },
   {
     id: 'resume-prompt',
@@ -712,9 +829,11 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
       ? ['Autobuild', 'Harvest', 'plan', 'implement', 'code-review', 'verify:unit', 'merge']
       : spec.transcript !== undefined
         ? ['Transcript', 'complete-dashboard-evidence']
-        : spec.detail === undefined
-          ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
-          : ['Build  plan-blocked-dashboard', 'BLOCKED']
+        : spec.session !== undefined
+          ? ['Session', spec.session.slug]
+          : spec.detail === undefined
+            ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
+            : ['Build  plan-blocked-dashboard', 'BLOCKED']
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(
@@ -809,7 +928,7 @@ async function capturePaint(
           ? warningLines.length > 0
             ? { warningLines }
             : { warningLines: undefined }
-          : spec.detail === undefined && spec.transcript === undefined
+          : spec.detail === undefined && spec.transcript === undefined && spec.session === undefined
             ? { warningLines: [`Unicode warning: ${UNICODE_EVIDENCE}`] }
             : {}),
         ...(spec.detail !== undefined
@@ -832,6 +951,21 @@ async function capturePaint(
                   kind: 'turns' as const,
                   turns: [{ prompt: `Review ${UNICODE_EVIDENCE}`, text: UNICODE_EVIDENCE }],
                 },
+              },
+            }
+          : {}),
+        ...(spec.session !== undefined
+          ? {
+              view: {
+                kind: 'session' as const,
+                slug: spec.session.slug,
+                sessionId: spec.session.sessionId,
+                stream: spec.session.stream,
+                status: spec.session.status,
+                ...(spec.session.outcome !== undefined ? { outcome: spec.session.outcome } : {}),
+                source: { kind: 'parts' as const, parts: [...spec.session.parts], lastSeq: 1 },
+                follow: spec.session.follow ?? true,
+                scroll: 0,
               },
             }
           : {}),
@@ -950,6 +1084,12 @@ export async function captureDashboardFrames(
         '      key legend over the existing scrolled detail view: build name,',
         '      complete blocker through its unique final line, optional-guidance',
         '      note, a two-line field with a visible caret, and its key bindings.',
+        '- [ ] The session-live frame shows the read-only live view mid-turn:',
+        '      session header, labelled prompt, ~-marked reasoning, the tool call',
+        '      still waiting for output, and the following-tail legend.',
+        '- [ ] The session-closed frame shows the closed view: the withheld-row',
+        '      count, the truncation marker, the error line, and the',
+        '      Stream closed: completed outcome line.',
         '',
       ].join('\n'),
     )
