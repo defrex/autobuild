@@ -12,6 +12,8 @@ import {
   SCHEMA_V2_DDL,
   SCHEMA_V3_CHECKSUM,
   SCHEMA_V3_DDL,
+  SCHEMA_V4_CHECKSUM,
+  SCHEMA_V4_DDL,
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
@@ -219,8 +221,11 @@ if (testUrl) {
         // deterministic (created_at, id)-ordered counter per row and
         // otherwise leaves the rows untouched.
         await sql.unsafe(SCHEMA_V3_DDL)
+        // The genuine v3 marker is version 3 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v3 checksum under any other
+        // version is (correctly) rejected as incompatible.
         await sql`INSERT INTO ab_schema_migrations VALUES
-          (true, ${SCHEMA_VERSION - 1}, ${SCHEMA_V3_CHECKSUM}, ${new Date().toISOString()})`
+          (true, 3, ${SCHEMA_V3_CHECKSUM}, ${new Date().toISOString()})`
         for (const id of ['os_legacy-2', 'os_legacy-1']) {
           await sql`INSERT INTO sessions (id, repo, operator, created_at, updated_at)
             VALUES (${id}, 'acme/v3', 'op', ${CONTRACT_T0}, ${CONTRACT_T0})`
@@ -264,6 +269,71 @@ if (testUrl) {
             type: 'message.posted',
             payload: { text: 'hello' },
           })
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v4 database in place: the streams.creation_seq backfill, sequence continuity, and preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v4 database: v4 DDL, v4 marker, plus two
+        // same-millisecond build-scoped streams whose id order is reversed
+        // from insertion order. Legacy ties are genuinely unorderable, so
+        // the pinned insertion order is not asserted — the backfill assigns
+        // a distinct, deterministic (created_at, id)-ordered counter per row
+        // and otherwise leaves the rows untouched.
+        await sql.unsafe(SCHEMA_V4_DDL)
+        // The genuine v4 marker is version 4 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v4 checksum under any other
+        // version is (correctly) rejected as incompatible.
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, 4, ${SCHEMA_V4_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+          VALUES ('v4-build', 'acme/v4', ${CONTRACT_T0}, ${CONTRACT_T0})`
+        for (const id of ['st_legacy-2', 'st_legacy-1']) {
+          await sql`INSERT INTO streams (id, scope_kind, build, label, format, status, created_at)
+            VALUES (${id}, 'build', 'v4-build', 'before', 'ai-ui-message-stream/v1', 'open', ${CONTRACT_T0})`
+        }
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // Both rows survived with distinct backfilled counters, ordered by
+        // (created_at, id) — the lexicographically smaller id lands first
+        // despite being inserted second.
+        const backfilled = await sql`SELECT id, creation_seq FROM streams ORDER BY creation_seq`
+        expect(backfilled.map((row: Row) => [row.id, Number(row.creation_seq)])).toEqual([
+          ['st_legacy-1', 1],
+          ['st_legacy-2', 2],
+        ])
+
+        // The migrated store works end to end: the sequence continues above
+        // the backfill, so a same-millisecond post-migration creation gets a
+        // fresh counter and sorts after both migrated rows.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore(), {
+          clock: () => new Date(CONTRACT_T0),
+        })
+        try {
+          const created = await store.createStream({ kind: 'build', build: 'v4-build' }, 'after')
+          expect(created.createdAt).toBe(CONTRACT_T0)
+          const seqs = await sql`SELECT id, creation_seq FROM streams ORDER BY creation_seq`
+          expect(seqs.map((row: Row) => row.id)).toEqual(['st_legacy-1', 'st_legacy-2', created.id])
+          expect(
+            (await store.listStreams({ kind: 'build', build: 'v4-build' })).map((s) => s.id),
+          ).toEqual(['st_legacy-1', 'st_legacy-2', created.id])
+          await store.appendStreamParts(created.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
         } finally {
           await store.close()
         }
