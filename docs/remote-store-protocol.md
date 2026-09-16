@@ -295,7 +295,7 @@ it to exist. An unknown build returns `404 not-found`.
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
 | `appendIfCurrent` | `POST /builds/{slug}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + build event envelope; stream advanced: `200 null` |
-| `getEvents` | `GET /builds/{slug}/events?since={n}` | optional `since` query value, parsed below; absence defaults to `0` | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
+| `getEvents` | `GET /builds/{slug}/events?since={n}&wait={s}` | optional `since` query value, parsed below; absence defaults to `0`. Optional `wait` in whole seconds, parsed per the event-wait rules below | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
 | `appendWithArtifacts` | `POST /builds/{slug}/deposits` | atomic deposit request | `201` + `{event, artifacts}` |
 | `putArtifact` | `POST /builds/{slug}/artifacts` | artifact input | `201` + build artifact metadata |
 | `getArtifact` | `GET /builds/{slug}/artifacts?kind={kind}&rev={n}` | `kind` is required and nonempty; optional `rev` is parsed below | `200` + artifact read; an absent `rev` parameter selects the latest revision; a missing kind/revision is `200 null` |
@@ -336,6 +336,33 @@ part of this protocol. Retention is enforced server-side inside the store at
 deposit time (bounded pruning of dispatcher run/config artifact revisions),
 not through any endpoint.
 
+### The event-read bounded wait
+
+Both event reads (`getEvents` and, symmetrically, the `getRepoEvents` read of
+section 4) accept an optional `wait` parameter in whole seconds. When at least
+one event with `seq` strictly greater than parsed `since` already exists, the
+response is returned immediately, exactly as without `wait`. Otherwise the
+server may hold the request until such an event is appended or the bound
+elapses, whichever comes first; at the bound it answers `200 []`. Omitting
+`wait` (or `wait=0`) is byte-identical behavior to the immediate form.
+
+`wait` is parsed with a dedicated digits-only grammar — one or more ASCII
+digits — deliberately stricter than the lenient `since`/`rev` conversion above:
+empty, whitespace-padded, hexadecimal, signed, and non-integral values are `400
+validation`, not coerced. Values above the server's documented ceiling are
+clamped to it, never rejected; the shipped self-hosted server's ceiling is 30
+seconds (the stream/session wait ceiling) and the shipped hosted service's is
+25 seconds, stated in its README together with the route `maxDuration` the hold
+requires. A held request's authentication, token scope, and version-skew rules
+are identical to the immediate form: a `401`, `403`, or `409` identity failure
+is answered immediately, never held.
+
+The parameter is purely additive, so the protocol version stays `2`: a server
+that ignores `wait` remains conforming — its immediate empty answers only raise
+the client's request rate — and a client that sends `wait` to such a server
+observes no other difference. This is the same reasoning the stream and session
+waits apply. There is no push transport; a held request is the whole mechanism.
+
 ## 4. Repository-journal operations
 
 Repository journals are separate resources with independent event sequences,
@@ -348,7 +375,7 @@ repository to exist. An unknown repository returns `404 not-found`.
 | `ensureRepo` | `POST /repos` | `{"repo": string}` with a nonempty id | `200` + `RepositoryRecord`; idempotently returns the existing record |
 | `getRepo` | `GET /repos/{repo}` | none | `200` + `RepositoryRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
-| `getRepoEvents` | `GET /repos/{repo}/events?since={n}` | optional `since` query value, parsed as in section 3; absence defaults to `0` | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
+| `getRepoEvents` | `GET /repos/{repo}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
 | `appendRepoWithArtifacts` | `POST /repos/{repo}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using repository shapes |
 | `putRepoArtifact` | `POST /repos/{repo}/artifacts` | artifact input | `201` + repository artifact metadata |
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
@@ -363,7 +390,8 @@ state when the repository already exists. Event sequence numbering starts at 1
 for each repository independently of every build and other repository.
 
 The build-stream query, artifact, ordering, timestamp, and validation rules
-apply symmetrically to repository journals.
+apply symmetrically to repository journals, including the event-read bounded
+wait of section 3.
 
 ## 5. Operator-session operations
 
@@ -753,7 +781,7 @@ The shipped server maps failures as follows:
 
 | Status | `kind` | Meaning |
 |---:|---|---|
-| `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, or a `since`/`rev` value whose JavaScript `Number` conversion is not an integer |
+| `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, a `since`/`rev` value whose JavaScript `Number` conversion is not an integer, or a `wait` value that is not one or more ASCII digits |
 | `401` | `auth` | Missing bearer credentials or an invalid, malformed, badly signed, or expired token |
 | `403` | `auth` | Valid token with the wrong resource scope or event-session attribution |
 | `404` | `not-found` | Unknown route, unsupported method, unknown build, unknown repository, unknown session, or an unknown or foreign-scoped stream |
@@ -832,6 +860,11 @@ For streams, the backing store must additionally maintain:
   batches above the serialized-byte ceiling;
 - the bounded read wait exactly as specified in section 6, including the
   30-second clamp and no wait on closed streams;
+- the bounded wait on the build and repository event reads exactly as
+  specified in section 3, with no per-request database poll faster than once
+  per second (the shipped PostgreSQL adapter polls held reads at
+  `EVENT_WAIT_POLL_MS = 1000`, so an append by another connection is observed
+  within about one second);
 - the atomic close — document assembly, artifact deposit, and the closed
   record visible together or not at all, with the stream left open and
   unwritten when the deposit fails;
@@ -853,11 +886,19 @@ Four shipped behaviors do not add `BuildStore` routes:
   depth; it does not create Store scope.
 - `RemoteBuildStore.subscribe(slug, options, onEvent)` polls
   `GET /builds/{slug}/events?since=<lastSeq>`. It starts with
-  `options.fromSeq ?? 0`, polls immediately and then every
-  `options.pollMs ?? 250`, does not overlap polls, and delivers increasing
-  sequence numbers exactly once within that subscription. A polling error is
-  ignored and retried on the next tick. Calling the returned unsubscribe
+  `options.fromSeq ?? 0`, delivers increasing sequence numbers exactly once
+  within that subscription, does not overlap polls, and ignores a polling
+  error, retrying on the next cycle. Calling the returned unsubscribe
   function stops future delivery. There is no repository subscribe method.
+  Its cadence follows `options.waitSeconds` (AUT-334): without it, it polls
+  immediately and then every `options.pollMs ?? 250` as before. With it, each
+  cycle issues one held request (`wait=<waitSeconds>`, so the server honors
+  the section 3 bound) and then gap-fills so request *starts* stay at least
+  `options.pollMs ?? 250` apart, elapsed request time counting toward the
+  gap — one request per wait window on a quiet stream against a holding
+  server, degrading to exactly the interval rate against a server that
+  answers immediately. Delivery order and exactly-once semantics are
+  identical in both modes.
 - `RemoteBuildStore.close()` is a no-op. The remote server owns its backing
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and

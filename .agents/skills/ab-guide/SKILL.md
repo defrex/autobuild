@@ -1497,9 +1497,15 @@ The watch ends with exit 0 when `--timeout` elapses (30 minutes by default;
 gone terminal; with no slugs named, an empty set of active builds does not end
 it. Usage errors, scope violations, unknown slugs, and cursor rejection exit 1
 before any record. A store read that fails after the watch has started is
-reported once on stderr and retried at the next interval without duplicating
-or skipping any event. The default poll interval is 5 seconds for an `http(s)`
-store and 1 second for a local store. The command is read-only — it appends no
+reported once on stderr and retried without duplicating or skipping any event.
+Against a local store the default cadence polls every 1 second. Against an
+`http(s)` store each tracked stream long-polls instead — one held request per
+stream waits up to 25 seconds for the next event, requests run concurrently,
+and an appended matching event is delivered within about a second of its
+append rather than at the next tick — while `--interval` (default 5 seconds)
+still bounds the spacing between a stream's request starts, so a quiet stream
+costs roughly one request per 25 seconds and a chatty one no more than one
+request per interval. The command is read-only — it appends no
 event, takes no lease, creates no record, and starts no work — and deciding
 what to do about a blocker or a merge stays with the caller, not the command.
 Inside a phase, only the ambient build may be watched.
