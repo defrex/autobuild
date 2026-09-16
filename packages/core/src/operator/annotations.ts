@@ -146,6 +146,42 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'sandbox.exec': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'sandbox.start': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'sandbox.wait': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'sandbox.read_file': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'sandbox.write_file': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
+  'sandbox.reset': {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    approval: 'default',
+  },
 } as const satisfies Record<string, ToolAnnotationsTableEntry>
 
 export type OperatorToolName = keyof typeof OPERATOR_TOOL_ANNOTATIONS

@@ -13,6 +13,7 @@ import type {
 import type { StreamOutcome, StreamPart } from '../store/streams/types'
 import type { BuildExecution } from './workspace/build-execution'
 import type { HarvestExecution } from './workspace/harvest-execution'
+import type { OperatorSandboxExecution } from './workspace/operator-sandbox'
 
 // ── Session streams (SPEC §9) ─────────────────────────────────────────────
 //
@@ -212,6 +213,12 @@ export interface WorkspaceProvider {
    * provision a disposable environment for harvest sessions; its absence
    * keeps harvest running locally in the dispatcher's workspace. */
   readonly harvestExecution?: HarvestExecution
+  /** Optional operator-sandbox host (AUT-340): one persistent,
+   * credential-free environment per operator × repository behind registry
+   * tools. Present on providers that can provision it; absent means the
+   * provider cannot host an operator sandbox, and sandbox tools stay
+   * unavailable over that provider. */
+  readonly orchestratorSandbox?: OperatorSandboxExecution
   /** Trusted dispatcher-only publication capability for remote workspaces. */
   readonly publication?: WorkspacePublication
   /** Optional only for remote/disposable providers. */

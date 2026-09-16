@@ -17,6 +17,14 @@ import type {
   WorkspaceProvisionResult,
   WorkspaceReapOutcome,
 } from '../types'
+import {
+  SandboxOperationError,
+  type OperatorSandboxExecution,
+  type SandboxCommandRequest,
+  type SandboxCommandResult,
+  type SandboxEnvironmentIdentity,
+  type SandboxWaitResult,
+} from './operator-sandbox'
 import type {
   BuildExecution,
   BuildExecutionExit,
@@ -106,6 +114,10 @@ export async function waitForCommandExit(
 export interface VercelCommandLookup {
   exitCode: number | null
   wait(params?: { signal?: AbortSignal }): Promise<{ exitCode: number }>
+  /** Completed-command output, when the concrete handle exposes it (the SDK's
+   * `Command` does; narrow lookups may omit it). Read only after exit. */
+  stdout?(): Promise<string>
+  stderr?(): Promise<string>
 }
 
 export interface VercelSandboxHandle {
@@ -487,6 +499,20 @@ export function harvestSandboxName(origin: string): string {
   return `autobuild-harvest-${digest}`.slice(0, 63)
 }
 
+/** Deterministic operator-sandbox environment name: one per (repository
+ * origin, operator) — the same digest over the two identities with the same
+ * slicing/charset/63-char rules as the build and harvest names. The name is
+ * the get-or-create key and the exact snapshot purge key. */
+export function sandboxEnvironmentName(origin: string, operator: string): string {
+  const digest = createHash('sha256').update(`${origin}\0${operator}`).digest('hex').slice(0, 10)
+  return `autobuild-sandbox-${digest}`.slice(0, 63)
+}
+
+/** Hard ceiling on one operator-sandbox command wait (`exec`'s
+ * `timeoutSeconds` and `wait`'s `waitSeconds`), in seconds. The service
+ * validates against the same bound. */
+export const SANDBOX_MAX_WAIT_SECONDS = 300
+
 async function execOrThrow(
   exec: Exec,
   cmd: string[],
@@ -648,15 +674,20 @@ function redactRuntimeError(error: unknown, env: Record<string, string>): string
   return detail
 }
 
+/** Bootstrap the workspace runtime references with the build path's
+ * install/preflight chain. `env` is the already-resolved guest environment:
+ * callers decide which names a guest may see — the build and harvest paths
+ * forward `[workspace.config].environmentVariables`, while the operator
+ * sandbox passes its credential-free forwarded set only (build-workspace
+ * variables never enter a sandbox). */
 async function bootstrapRuntimes(
   sandbox: VercelSandboxHandle,
   config: VercelSandboxConfig,
-  hostEnv: Record<string, string | undefined>,
+  env: Record<string, string>,
   references: readonly RuntimeReferenceGroup[],
   install: boolean,
   signal?: AbortSignal,
 ): Promise<void> {
-  const env = runtimeEnvironment(config, hostEnv)
   for (const group of [...references].sort((left, right) =>
     left.runtime < right.runtime ? -1 : left.runtime > right.runtime ? 1 : 0,
   )) {
@@ -935,7 +966,7 @@ export async function validateVercelSandbox(
     await bootstrapRuntimes(
       sandbox,
       config,
-      options.env,
+      runtimeEnvironment(config, options.env),
       options.runtimeReferences ?? [],
       true,
       options.signal,
@@ -1140,6 +1171,15 @@ export interface VercelSandboxProviderOptions {
   /** Test seam: the bound on the observation path's wait on a command whose
    * lookup shows no exit. Defaults to `VERCEL_OBSERVE_WAIT_MS`. */
   observeWaitMs?: number
+  /** The repository's raw `[commands].setup` shell string, run once at the end
+   * of a fresh operator-sandbox provision (never on resume). Set once at
+   * construction; never per call. */
+  setupCommand?: string
+  /** Names of non-secret host environment variables forwarded into operator
+   * sandbox commands (provisioning setup, exec, and start alike). The guest
+   * environment is otherwise always built from an empty record — never the
+   * process environment — so no credential can leak in. */
+  sandboxEnvironmentVariables?: readonly string[]
 }
 
 /** Vercel-backed working copy and executor. Completed SDK command output is
@@ -1151,6 +1191,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   readonly name = 'vercel-sandbox'
   readonly buildExecution: BuildExecution
   readonly harvestExecution: HarvestExecution
+  readonly orchestratorSandbox: OperatorSandboxExecution
   readonly publication
   readonly recovery
   private readonly facade: VercelSandboxFacade
@@ -1176,6 +1217,17 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     this.harvestExecution = {
       start: (input) => this.startHarvestExecution(input),
       observe: (identity) => this.observeExecution(identity),
+    }
+    this.orchestratorSandbox = {
+      describe: (input) => this.describeOperatorSandbox(input),
+      ensure: (input) => this.ensureOperatorSandbox(input),
+      exec: (handle, request) => this.sandboxExec(handle, request),
+      start: (handle, request) => this.sandboxStart(handle, request),
+      wait: (handle, input) => this.sandboxWait(handle, input),
+      readFile: (handle, path) => this.sandboxReadFile(handle, path),
+      writeFile: (handle, path, content) => this.sandboxWriteFile(handle, path, content),
+      stop: (input) => this.sandboxStop(input),
+      release: (input) => this.sandboxRelease(input),
     }
     this.recovery = {
       reap: (handle: WorkspaceHandle) => {
@@ -1338,7 +1390,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          this.options.env,
+          runtimeEnvironment(this.options.config, this.options.env),
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1493,7 +1545,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      this.options.env,
+      runtimeEnvironment(this.options.config, this.options.env),
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1748,7 +1800,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          this.options.env,
+          runtimeEnvironment(this.options.config, this.options.env),
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1785,7 +1837,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      this.options.env,
+      runtimeEnvironment(this.options.config, this.options.env),
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1886,6 +1938,509 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     } catch (error) {
       if (isMissingVercelSandbox(error)) return { state: 'lost' }
       throw error
+    }
+  }
+
+  // ── Operator sandbox capability (AUT-340) ─────────────────────────
+  //
+  // One persistent, credential-free environment per operator × repository,
+  // provisioned with the build workspace's chain and exposed only through
+  // the registry's sandbox tools. The environment receives no store, forge,
+  // ticket-provider, or model credential: the guest environment below is
+  // built from an empty record plus forwarded names, and the git read
+  // credential enters only as a network-policy header transform.
+
+  /** The credential-free guest environment: one fresh record per call —
+   * never the process environment — holding exactly the forwarded
+   * `sandboxEnvironmentVariables`. A missing host value is a typed
+   * `environment` failure rather than a silent absence. The toolchain PATH is
+   * deliberately NOT part of the record: the SDK passes env values through
+   * verbatim, so a literal `$PATH` there would never be expanded — the PATH
+   * is prepended inside the guest shell instead (the same channel the build
+   * runner uses). Shared by the setup command and every tool `exec`/`start`. */
+  private sandboxEnv(): Record<string, string> {
+    const env: Record<string, string> = {}
+    for (const name of this.options.sandboxEnvironmentVariables ?? []) {
+      const value = this.options.env[name]
+      if (value === undefined || value === '') {
+        throw new SandboxOperationError(
+          'environment',
+          `operator sandbox environment variable ${name} is not set in the host environment`,
+        )
+      }
+      env[name] = value
+    }
+    return env
+  }
+
+  /** The toolchain PATH as a shell prefix: the guest shell expands `$PATH`
+   * from its own ambient environment, so guests get the autobuild toolchain
+   * ahead of the image's default PATH without the env record ever carrying an
+   * unexpanded literal. */
+  private sandboxPathPrefix(): string {
+    return `PATH=${VERCEL_BUN_BIN_PATH}:${VERCEL_AUTOBUILD_PATH}/bin:$PATH; export PATH; `
+  }
+
+  private async describeOperatorSandbox(input: {
+    operator: string
+  }): Promise<SandboxEnvironmentIdentity> {
+    const origin = cleanGithubOrigin(await this.origin())
+    return {
+      provider: this.name,
+      environmentId: sandboxEnvironmentName(origin.url, input.operator),
+      workspacePath: VERCEL_WORKSPACE_PATH,
+    }
+  }
+
+  /** Provision-or-resume. A persistent sandbox auto-resumes on the first SDK
+   * call that needs a running session, so the reuse path re-checks the
+   * distribution marker exactly as the build reuse path does and then leaves
+   * the session running for the tool call. A fresh provision runs the same
+   * chain as a build workspace and ends by running the repository's setup
+   * command; it leaves the environment running too (the tool call follows
+   * immediately; the idle settlement stops it later). */
+  private async ensureOperatorSandbox(input: {
+    repo: string
+    operator: string
+    baseBranch: string
+  }): Promise<SandboxEnvironmentIdentity> {
+    const origin = cleanGithubOrigin(await this.origin())
+    const name = sandboxEnvironmentName(origin.url, input.operator)
+    const distributionVersion = await (
+      this.options.distributionVersion ?? readDistributionIdentity
+    )()
+    let sandbox = await this.facade.get(name, this.operationSignal())
+    if (sandbox !== null) {
+      const marker = await sandbox.runCommand({
+        cmd: 'test',
+        args: ['-f', VERCEL_PROVISIONED_MARKER],
+      })
+      if (marker.exitCode !== 0) {
+        // A named VM without the marker is a crashed/legacy provisioning
+        // attempt. Never expose its potentially unscrubbed checkout.
+        await sandbox.delete({ signal: this.operationSignal() })
+        sandbox = null
+      } else {
+        const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
+        if (installed !== distributionVersion) {
+          // A reused environment whose installed distribution disagrees with
+          // what the current system would deliver is refreshed in place,
+          // exactly as build guests are. Refresh failure deletes the
+          // environment so the next call rematerializes it cleanly.
+          try {
+            const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+            await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+          } catch (error) {
+            try {
+              this.sessions.set(name, sandbox)
+              await this.reap(name)
+            } catch (deleteError) {
+              throw new AggregateError(
+                [error, deleteError],
+                `operator sandbox ${name} distribution refresh failed and its incomplete environment could not be confirmed deleted`,
+              )
+            }
+            throw error
+          }
+        }
+        const sessionId = sandbox.currentSession?.().sessionId
+        this.sessions.set(name, sandbox)
+        return {
+          provider: this.name,
+          environmentId: name,
+          ...(sessionId !== undefined ? { sessionId } : {}),
+          workspacePath: VERCEL_WORKSPACE_PATH,
+        }
+      }
+    }
+    const head = await this.remoteBranchHead(input.baseBranch, `remote base ${input.baseBranch}`)
+    if (head === null) {
+      throw new SandboxOperationError('provision', `remote base ${input.baseBranch} does not exist`)
+    }
+    const username =
+      this.options.config.gitUsernameEnv === undefined
+        ? undefined
+        : requireVercelEnvironmentValue(this.options.env, this.options.config.gitUsernameEnv)
+    const password =
+      this.options.config.gitPasswordEnv === undefined
+        ? undefined
+        : requireVercelEnvironmentValue(this.options.env, this.options.config.gitPasswordEnv)
+    const readAuth =
+      password === undefined
+        ? undefined
+        : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+    sandbox = await this.facade.create({
+      name,
+      source: {
+        type: 'git',
+        url: origin.url,
+        revision: head,
+        ...(username !== undefined && password !== undefined ? { username, password } : {}),
+      },
+      image: this.options.config.image,
+      resources: { vcpus: this.options.config.vcpus },
+      timeout: this.options.config.timeoutSeconds * 1000,
+      persistent: true,
+      ...(this.options.config.region !== undefined ? { region: this.options.config.region } : {}),
+      ...(this.options.config.failoverRegions.length > 0
+        ? { failoverRegions: this.options.config.failoverRegions }
+        : {}),
+      ...(this.options.config.snapshotExpirationSeconds === undefined
+        ? {}
+        : { snapshotExpiration: this.options.config.snapshotExpirationSeconds * 1000 }),
+      networkPolicy: uploadPackPolicy(origin, readAuth),
+      keepLastSnapshots: { count: VERCEL_KEEP_LAST_SNAPSHOTS, deleteEvicted: true },
+      signal: this.operationSignal(),
+    })
+    try {
+      await relocateCheckout(sandbox, origin.directory)
+      await commandOrThrow(sandbox, {
+        cmd: 'git',
+        args: ['remote', 'set-url', 'origin', origin.url],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+      for (const key of [
+        'credential.helper',
+        'http.extraheader',
+        `http.${origin.url}.extraheader`,
+      ]) {
+        const result = await sandbox.runCommand({
+          cmd: 'git',
+          args: ['config', '--local', '--unset-all', key],
+          cwd: VERCEL_WORKSPACE_PATH,
+        })
+        if (result.exitCode !== 0 && result.exitCode !== 5)
+          throw new Error(`failed to scrub git config ${key}`)
+      }
+      await provisionBun(sandbox, this.options.config.image)
+      await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
+      const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+      await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+      // Repository dependencies precede the setup command; the fixed
+      // bootstrap is the same one build provisioning runs.
+      await commandOrThrow(sandbox, {
+        cmd: 'sh',
+        args: [
+          '-c',
+          `if [ -f bun.lock ] || [ -f bun.lockb ]; then ${VERCEL_BUN_EXECUTABLE} install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; elif [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile; elif [ -f yarn.lock ]; then corepack yarn install --immutable; fi`,
+        ],
+        cwd: VERCEL_WORKSPACE_PATH,
+      })
+      // Runtime provisioning precedes the setup command, exactly as the build
+      // chain orders it. The guest env is the sandbox-forwarded set only: a
+      // runtime provisioning command that needs a build-workspace variable
+      // must have that name added to [orchestrator].sandbox.environmentVariables.
+      const runtimeReferences = currentRuntimeReferences(this.options.runtimeReferences)
+      if (runtimeReferences.length > 0) {
+        await bootstrapRuntimes(
+          sandbox,
+          this.options.config,
+          this.sandboxEnv(),
+          runtimeReferences,
+          true,
+          this.operationSignal(),
+        )
+      }
+      const setupCommand = this.options.setupCommand
+      if (setupCommand !== undefined && setupCommand.trim() !== '') {
+        await readableCommand(sandbox, {
+          cmd: 'sh',
+          args: ['-c', `${this.sandboxPathPrefix()}${setupCommand}`],
+          cwd: VERCEL_WORKSPACE_PATH,
+          env: this.sandboxEnv(),
+        })
+      }
+      await commandOrThrow(sandbox, {
+        cmd: 'touch',
+        args: [VERCEL_PROVISIONED_MARKER],
+      })
+    } catch (error) {
+      // Nothing unrecorded or half-built survives: reap the half-provisioned
+      // environment through the same sessions.set + reap pattern as builds.
+      try {
+        this.sessions.set(name, sandbox)
+        await this.reap(name)
+      } catch (deleteError) {
+        throw new AggregateError(
+          [error, deleteError],
+          `operator sandbox ${name} setup failed and its incomplete environment could not be confirmed deleted`,
+        )
+      }
+      throw error instanceof SandboxOperationError
+        ? error
+        : new SandboxOperationError(
+            'provision',
+            error instanceof Error ? error.message : String(error),
+            { cause: error },
+          )
+    }
+    this.origins.set(name, origin)
+    const sessionId = sandbox.currentSession?.().sessionId
+    this.sessions.set(name, sandbox)
+    return {
+      provider: this.name,
+      environmentId: name,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      workspacePath: VERCEL_WORKSPACE_PATH,
+    }
+  }
+
+  /** Resolve the live handle behind a journal-carried environment id. A
+   * missing environment is a typed `not-found`; the persistent sandbox
+   * auto-resumes on the first SDK call that needs a session. */
+  private async sandboxHandle(handle: SandboxEnvironmentIdentity): Promise<VercelSandboxHandle> {
+    const sandbox = await this.facade.get(handle.environmentId, this.operationSignal())
+    if (sandbox === null) {
+      throw new SandboxOperationError(
+        'not-found',
+        `operator sandbox ${handle.environmentId} no longer exists`,
+      )
+    }
+    this.sessions.set(handle.environmentId, sandbox)
+    return sandbox
+  }
+
+  /** One bounded-wait mechanism shared by `exec` and `wait` (the
+   * `waitForCommandExit` pattern with the caller's deadline): interrupted
+   * long-polls are re-issued until the explicit deadline; any other failure
+   * propagates immediately. `operationTimeoutMs` bounds only handle lookups
+   * and kill — never the wait itself, so a 300 s command is not cut off at
+   * the 30 s operation timeout. */
+  private async waitForSandboxExit(
+    command: Pick<VercelCommand, 'wait'>,
+    deadlineMs: number,
+  ): Promise<{ exitCode: number }> {
+    for (;;) {
+      try {
+        return await command.wait({})
+      } catch (error) {
+        if (!isInterruptedLongPoll(error) || Date.now() > deadlineMs) throw error
+      }
+    }
+  }
+
+  private async sandboxRootedPath(
+    handle: SandboxEnvironmentIdentity,
+    path: string,
+  ): Promise<string> {
+    if (path.includes('\\')) {
+      throw new SandboxOperationError(
+        'exec',
+        `sandbox path ${JSON.stringify(path)} must use "/" separators`,
+      )
+    }
+    return `${handle.workspacePath.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+  }
+
+  private async sandboxLaunch(
+    sandbox: VercelSandboxHandle,
+    request: SandboxCommandRequest,
+  ): Promise<VercelCommand> {
+    const command = (await sandbox.runCommand({
+      cmd: 'sh',
+      // The toolchain PATH is prepended inside the guest shell — the only
+      // channel where `$PATH` expands (the sandbox env doc comment explains
+      // why it cannot ride in the env record).
+      args: ['-c', `${this.sandboxPathPrefix()}${request.command}`],
+      ...(request.cwd !== undefined
+        ? { cwd: `${VERCEL_WORKSPACE_PATH}/${request.cwd.replace(/^\/+/, '')}` }
+        : { cwd: VERCEL_WORKSPACE_PATH }),
+      env: this.sandboxEnv(),
+      detached: true,
+      signal: this.operationSignal(),
+    })) as VercelCommand
+    return command
+  }
+
+  private async sandboxExec(
+    handle: SandboxEnvironmentIdentity,
+    request: SandboxCommandRequest,
+  ): Promise<SandboxCommandResult> {
+    const sandbox = await this.sandboxHandle(handle)
+    const timeoutSeconds = Math.min(
+      Math.max(request.timeoutSeconds ?? 120, 1),
+      SANDBOX_MAX_WAIT_SECONDS,
+    )
+    const command = await this.sandboxLaunch(sandbox, request)
+    const deadline = Date.now() + timeoutSeconds * 1000
+    let exit: { exitCode: number }
+    try {
+      exit = await this.waitForSandboxExit(command, deadline)
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        try {
+          await command.kill('SIGTERM', { abortSignal: this.operationSignal() })
+        } catch {
+          /* already exited */
+        }
+        throw new SandboxOperationError(
+          'exec-timeout',
+          `sandbox command exceeded its ${timeoutSeconds}s bound and was killed`,
+          { cause: error },
+        )
+      }
+      throw new SandboxOperationError(
+        'exec',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      )
+    }
+    const [stdout, stderr] = await Promise.all([
+      command.stdout?.() ?? Promise.resolve(''),
+      command.stderr?.() ?? Promise.resolve(''),
+    ])
+    return { exitCode: exit.exitCode, stdout, stderr }
+  }
+
+  private async sandboxStart(
+    handle: SandboxEnvironmentIdentity,
+    request: SandboxCommandRequest,
+  ): Promise<{ commandId: string }> {
+    const sandbox = await this.sandboxHandle(handle)
+    const command = await this.sandboxLaunch(sandbox, request)
+    return { commandId: command.cmdId }
+  }
+
+  private async sandboxWait(
+    handle: SandboxEnvironmentIdentity,
+    input: { commandId: string; waitSeconds: number },
+  ): Promise<SandboxWaitResult> {
+    const sandbox = await this.sandboxHandle(handle)
+    const waitSeconds = Math.min(Math.max(input.waitSeconds, 0), SANDBOX_MAX_WAIT_SECONDS)
+    const lookup = await sandbox.getCommand(input.commandId, { signal: this.operationSignal() })
+    if (lookup.exitCode !== null) {
+      const [stdout, stderr] = await Promise.all([
+        lookup.stdout?.() ?? Promise.resolve(''),
+        lookup.stderr?.() ?? Promise.resolve(''),
+      ])
+      return { state: 'exited', exitCode: lookup.exitCode, stdout, stderr }
+    }
+    if (waitSeconds === 0) return { state: 'running' }
+    const deadline = Date.now() + waitSeconds * 1000
+    try {
+      const exit = await this.waitForSandboxExit(lookup, deadline)
+      const [stdout, stderr] = await Promise.all([
+        lookup.stdout?.() ?? Promise.resolve(''),
+        lookup.stderr?.() ?? Promise.resolve(''),
+      ])
+      return { state: 'exited', exitCode: exit.exitCode, stdout, stderr }
+    } catch (error) {
+      if (isMissingVercelSandbox(error)) {
+        throw new SandboxOperationError(
+          'not-found',
+          `operator sandbox ${handle.environmentId} no longer exists`,
+          { cause: error },
+        )
+      }
+      // Interrupted-poll exhaustion at the deadline leaves the command
+      // provably unobserved: still running, no output (Vercel reports
+      // output only after exit). Any other failure is real.
+      if (Date.now() >= deadline || isInterruptedLongPoll(error)) return { state: 'running' }
+      throw new SandboxOperationError(
+        'exec',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      )
+    }
+  }
+
+  private async sandboxReadFile(
+    handle: SandboxEnvironmentIdentity,
+    path: string,
+  ): Promise<Uint8Array> {
+    const rooted = await this.sandboxRootedPath(handle, path)
+    // Exec-mechanism read through a byte-preserving channel: `base64` on the
+    // rooted path (the path rides as its own argv element), decoded after
+    // exit. Reading the file through the string `stdout()` channel would
+    // mangle arbitrary binary before the registry's utf8-else-base64 branch
+    // could preserve it; base64 survives that channel exactly, and the
+    // decoder strips the wrapping whitespace GNU base64 inserts.
+    const sandbox = await this.sandboxHandle(handle)
+    const command = (await sandbox.runCommand({
+      cmd: 'base64',
+      args: [rooted],
+      cwd: VERCEL_WORKSPACE_PATH,
+      detached: true,
+      signal: this.operationSignal(),
+    })) as VercelCommand
+    const deadline = Date.now() + 120 * 1000
+    let exit: { exitCode: number }
+    try {
+      exit = await this.waitForSandboxExit(command, deadline)
+    } catch (error) {
+      throw new SandboxOperationError(
+        'exec',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      )
+    }
+    if (exit.exitCode !== 0) {
+      const stderr = await command.stderr?.().catch(() => '')
+      throw new SandboxOperationError(
+        'not-found',
+        `could not read sandbox file ${JSON.stringify(path)}: exit ${exit.exitCode}${stderr ? `: ${stderr.trim()}` : ''}`,
+      )
+    }
+    const stdout = await command.stdout?.().catch(() => '')
+    return new Uint8Array(Buffer.from((stdout ?? '').replace(/\s+/g, ''), 'base64'))
+  }
+
+  private async sandboxWriteFile(
+    handle: SandboxEnvironmentIdentity,
+    path: string,
+    content: Uint8Array,
+  ): Promise<void> {
+    const sandbox = await this.sandboxHandle(handle)
+    const rooted = await this.sandboxRootedPath(handle, path)
+    try {
+      await sandbox.writeFiles([{ path: rooted, content }], {
+        signal: this.operationSignal(),
+      })
+    } catch (error) {
+      throw new SandboxOperationError(
+        'exec',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      )
+    }
+  }
+
+  private async sandboxStop(input: {
+    operator: string
+    environmentId: string
+  }): Promise<{ outcome: 'stopped' | 'absent' | 'unsupported' }> {
+    const sandbox = await this.facade.get(input.environmentId, this.operationSignal())
+    if (sandbox === null) return { outcome: 'absent' }
+    try {
+      await sandbox.stop({ signal: this.operationSignal() })
+    } catch (error) {
+      // A stopped/expired session may reject a stop idempotently; absence is
+      // proven by re-resolution, and any other failure propagates as typed.
+      const stillThere = await this.facade.get(input.environmentId, this.operationSignal())
+      if (stillThere === null) return { outcome: 'absent' }
+      throw new SandboxOperationError(
+        'exec',
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      )
+    }
+    return { outcome: 'stopped' }
+  }
+
+  private async sandboxRelease(input: {
+    repo: string
+    operator: string
+    environmentId: string
+  }): Promise<{
+    snapshots: { outcome: 'confirmed' | 'unknown'; deleted?: number; error?: string }
+  }> {
+    const reap = await this.reap(input.environmentId)
+    return {
+      snapshots: {
+        outcome: reap.snapshots.outcome === 'unknown' ? 'unknown' : 'confirmed',
+        ...(reap.snapshots.deleted !== undefined ? { deleted: reap.snapshots.deleted } : {}),
+        ...(reap.snapshots.error !== undefined ? { error: reap.snapshots.error } : {}),
+      },
     }
   }
 

@@ -777,6 +777,40 @@ Missing plugin credentials name both the selected source and every missing
 variable. If a user asks you to put an API key in `autobuild.toml`, use the
 environment variable instead and say why.
 
+### `[orchestrator]`
+
+Gates the operator-sandbox feature (AUT-340): a persistent, **credential-free**
+environment per operator × repository that an operator agent drives through the
+`sandbox.*` registry tools (`ab mcp`, and every later binding). The whole table
+is **closed to unknown keys** and restart-classified: changing it requires a
+dispatcher restart.
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding and no environment is ever provisioned. |
+| `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
+
+`[orchestrator.sandbox]` fields:
+
+| Field | Default | Allowed / constraints | Effect |
+|---|---|---|---|
+| `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
+| `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
+
+The credential-free rule is structural, not advisory: the environment receives
+no store, forge, ticket-provider, or model credential, and naming any of
+`AB_STORE`, `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY`,
+`VERCEL_OIDC_TOKEN`, `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, or
+`AI_GATEWAY_API_KEY` in `environmentVariables` is a config error. The typed
+operator tools remain the only route to build state from inside the sandbox.
+
+Tool bounds an operator agent should know: `sandbox.exec` waits at most **300
+seconds**; stdout and stderr are each truncated at **65,536 bytes** with a
+`[truncated by autobuild: output exceeded 65536 bytes]` marker; `sandbox.reset`
+and archiving an operator's last session are **destructive** (reset re-provisions
+from the current base head); there is at most **one** environment per operator
+and repository.
+
 ## Setup and upgrades
 
 **`ab init <target> [--force]`** runs *outside* build sessions — it takes a

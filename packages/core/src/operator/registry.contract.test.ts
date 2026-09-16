@@ -785,8 +785,10 @@ describe('agent tool registry contract', () => {
       'tickets.unblock': { repo, id: 'AUT-1', blockerIds: ['AUT-2'] },
       'tickets.move': { repo, id: 'AUT-2', state: 'Todo' },
       'notes.write': { repo, document: 'notes' },
+      // Sandbox tools (absent from this registry without a backend) are
+      // excluded by name so the unknown-tool refusal above is not hit first.
     }
-    for (const name of mutators) {
+    for (const name of mutators.filter((name) => !name.startsWith('sandbox.'))) {
       const error = await registry.call(name, inputs[name]).catch((e) => e)
       expect(error, `${name} must refuse without identity`).toBeInstanceOf(RegistryError)
       expect((error as RegistryError).reason).toBe('no-identity')
@@ -966,5 +968,204 @@ describe('agent tool registry contract', () => {
     const error = await registry.call('sandbox.publish', {}).catch((e) => e)
     expect(error).toBeInstanceOf(RegistryError)
     expect((error as RegistryError).reason).toBe('unknown-tool')
+  })
+})
+
+describe('sandbox registry tools (AUT-340)', () => {
+  async function sandboxWorld() {
+    const world = await seedWorld()
+    const { FakeWorkspaceProvider } = await import('../ports/workspace/fake')
+    const { createOperatorSandboxService } = await import('./sandbox')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-registry-'))
+    const source = await mkdtemp(join(tmpdir(), 'ab-sandbox-registry-src-'))
+    await Bun.write(join(source, 'README.md'), 'hello\n')
+    const provider = new FakeWorkspaceProvider({
+      root: join(workspaces, 'wt'),
+      sandboxRoot: join(workspaces, 'sb'),
+      envSource: { PATH: process.env.PATH ?? '' },
+    })
+    const sandbox = await createOperatorSandboxService({
+      store: world.store,
+      repo: source,
+      provider,
+      sandbox: { idleMinutes: 30, environmentVariables: [] },
+      baseBranch: 'main',
+      clock,
+    })
+    return {
+      world,
+      sandbox,
+      source,
+      async cleanup() {
+        await world.store.close()
+        await rm(workspaces, { recursive: true, force: true })
+        await rm(source, { recursive: true, force: true })
+      },
+    }
+  }
+
+  test('tool↔annotation lockstep covers the six sandbox tools', () => {
+    for (const name of [
+      'sandbox.exec',
+      'sandbox.start',
+      'sandbox.wait',
+      'sandbox.read_file',
+      'sandbox.write_file',
+      'sandbox.reset',
+    ]) {
+      const tool = TOOLS.find((entry) => entry.name === name)
+      expect(tool).toBeDefined()
+      const table = OPERATOR_TOOL_ANNOTATIONS[name as keyof typeof OPERATOR_TOOL_ANNOTATIONS]
+      expect(tool!.approval).toBe('default')
+      expect(tool!.annotations).toEqual({
+        readOnlyHint: table.readOnlyHint,
+        destructiveHint: table.destructiveHint,
+        idempotentHint: table.idempotentHint,
+      })
+    }
+    expect(
+      OPERATOR_TOOL_ANNOTATIONS['sandbox.reset' as keyof typeof OPERATOR_TOOL_ANNOTATIONS]
+        .destructiveHint,
+    ).toBe(true)
+  })
+
+  test('documented bounds ride on the descriptions', () => {
+    for (const [name, bound] of [
+      ['sandbox.exec', '300 seconds'],
+      ['sandbox.exec', '65536 bytes'],
+      ['sandbox.wait', 'only after exit'],
+      ['sandbox.reset', 'Destructively'],
+    ] as const) {
+      expect(
+        TOOLS.find((tool) => tool.name === name)!.description,
+        `${name} must document "${bound}"`,
+      ).toContain(bound)
+    }
+  })
+
+  test('absence is enforced at dispatch too: no backend, no advertisement and no service', async () => {
+    const world = await seedWorld()
+    try {
+      const registry = buildRegistry({ store: world.store, clock })
+      expect(registry.entries.some((tool) => tool.name.startsWith('sandbox.'))).toBe(false)
+      const error = await registry
+        .call('sandbox.exec', { repo, command: 'true' }, { identity: 'Ada' })
+        .catch((e) => e)
+      expect(error).toBeInstanceOf(RegistryError)
+      expect((error as RegistryError).reason).toBe('unknown-tool')
+      expect((error as RegistryError).body).toMatchObject({ kind: 'not-found' })
+    } finally {
+      await world.store.close()
+    }
+  })
+
+  test('with a backend the six tools advertise and execute end to end', async () => {
+    const fx = await sandboxWorld()
+    try {
+      const registry = buildRegistry({ store: fx.world.store, clock, sandbox: fx.sandbox })
+      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(6)
+      const result = (await registry.call(
+        'sandbox.exec',
+        { repo: fx.source, command: 'echo hi' },
+        { identity: 'Ada' },
+      )) as { exitCode: number; stdout: string }
+      expect(result).toMatchObject({ exitCode: 0, stdout: 'hi\n' })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('exec-timeout and not-found failures map to their stage codes; identity is required', async () => {
+    const fx = await sandboxWorld()
+    try {
+      const registry = buildRegistry({ store: fx.world.store, clock, sandbox: fx.sandbox })
+      const noIdentity = await registry
+        .call('sandbox.exec', { repo: fx.source, command: 'true' })
+        .catch((e) => e)
+      expect(noIdentity).toBeInstanceOf(RegistryError)
+      expect((noIdentity as RegistryError).reason).toBe('no-identity')
+
+      const timeout = await registry
+        .call(
+          'sandbox.exec',
+          { repo: fx.source, command: 'sleep 30', timeoutSeconds: 1 },
+          { identity: 'Ada' },
+        )
+        .catch((e) => e)
+      expect(timeout).toBeInstanceOf(RegistryError)
+      expect((timeout as RegistryError).body).toMatchObject({
+        kind: 'refusal',
+        code: 'sandbox-exec-timeout',
+      })
+
+      const unknownCommand = await registry
+        .call(
+          'sandbox.wait',
+          { repo: fx.source, commandId: 'sbcmd-gone', waitSeconds: 0 },
+          { identity: 'Ada' },
+        )
+        .catch((e) => e)
+      expect(unknownCommand).toBeInstanceOf(RegistryError)
+      expect((unknownCommand as RegistryError).body).toMatchObject({
+        kind: 'refusal',
+        code: 'sandbox-not-found',
+      })
+
+      // A tool call naming a foreign repository is refused with the typed
+      // sandbox body, not improvised.
+      const foreign = await registry
+        .call('sandbox.exec', { repo, command: 'true' }, { identity: 'Ada' })
+        .catch((e) => e)
+      expect(foreign).toBeInstanceOf(RegistryError)
+      expect((foreign as RegistryError).body).toMatchObject({
+        kind: 'refusal',
+        code: 'sandbox-exec',
+      })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 20_000)
+
+  test('path-escape refusals carry the typed body; read_file round-trips bytes', async () => {
+    const fx = await sandboxWorld()
+    try {
+      const registry = buildRegistry({ store: fx.world.store, clock, sandbox: fx.sandbox })
+      for (const path of ['../outside', '/abs']) {
+        const error = await registry
+          .call('sandbox.read_file', { repo: fx.source, path }, { identity: 'Ada' })
+          .catch((e) => e)
+        expect(error).toBeInstanceOf(RegistryError)
+        expect((error as RegistryError).body).toMatchObject({ kind: 'refusal' })
+      }
+      const read = (await registry.call(
+        'sandbox.read_file',
+        { repo: fx.source, path: 'README.md' },
+        { identity: 'Ada' },
+      )) as { encoding: string; content: string }
+      expect(read).toEqual({ encoding: 'utf8', content: 'hello\n' })
+      await registry.call(
+        'sandbox.write_file',
+        {
+          repo: fx.source,
+          path: 'out/notes.txt',
+          content: Buffer.from([0, 255]).toString('base64'),
+          encoding: 'base64',
+        },
+        { identity: 'Ada' },
+      )
+      const binary = (await registry.call(
+        'sandbox.read_file',
+        { repo: fx.source, path: 'out/notes.txt' },
+        { identity: 'Ada' },
+      )) as { encoding: string; content: string }
+      expect(binary.encoding).toBe('base64')
+      expect(Buffer.from(binary.content, 'base64')).toEqual(Buffer.from([0, 255]))
+      await registry.call('sandbox.reset', { repo: fx.source }, { identity: 'Ada' })
+    } finally {
+      await fx.cleanup()
+    }
   })
 })
