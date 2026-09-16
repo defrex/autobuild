@@ -8,12 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@vercel/sandbox": "^3.1.0",
         "ai": "^7.0.101",
-        "better-auth": "1.4.18",
         "drizzle-orm": "^0.45.2",
-        "next": "16.1.6",
-        "pg": "8.18.0",
-        "react": "19.2.4",
-        "react-dom": "19.2.4",
         "semver": "^7.7.4",
         "smol-toml": "^1.7.0",
         "zod": "^4.4.3",
@@ -36,41 +31,43 @@
       },
     },
     "packages/core": {
-      "name": "@autobuild/core",
-      "version": "0.6.0",
+      "name": "@defrex/autobuild-core",
+      "version": "0.7.0",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@vercel/sandbox": "^3.1.0",
         "ai": "^7.0.101",
-        "better-auth": "1.4.18",
         "drizzle-orm": "^0.45.2",
-        "next": "16.1.6",
-        "pg": "8.18.0",
-        "react": "19.2.4",
-        "react-dom": "19.2.4",
         "semver": "^7.7.4",
         "smol-toml": "^1.7.0",
         "zod": "^4.4.3",
       },
     },
     "packages/hosted-store-service": {
-      "name": "@autobuild/hosted-store-service",
-      "version": "0.6.0",
+      "name": "@defrex/autobuild-hosted-store-service",
+      "version": "0.7.0",
       "bin": {
         "ab-hosted-store": "./src/bin.ts",
       },
       "dependencies": {
-        "@autobuild/postgres-store": "0.6.0",
+        "@defrex/autobuild-postgres-store": "workspace:*",
+        "@modelcontextprotocol/sdk": "^1.30.0",
         "better-auth": "1.4.18",
+        "next": "16.1.6",
         "pg": "8.18.0",
+        "react": "19.2.4",
+        "react-dom": "19.2.4",
       },
       "peerDependencies": {
-        "autobuild": ">=0.6.0",
+        "@defrex/autobuild": ">=0.7.0",
       },
+      "optionalPeers": [
+        "@defrex/autobuild",
+      ],
     },
     "packages/postgres-store": {
-      "name": "@autobuild/postgres-store",
-      "version": "0.6.0",
+      "name": "@defrex/autobuild-postgres-store",
+      "version": "0.7.0",
       "bin": {
         "ab-postgres-store": "./src/bin.ts",
       },
@@ -79,8 +76,11 @@
         "@vercel/blob": "^2.0.0",
       },
       "peerDependencies": {
-        "autobuild": ">0.6.0",
+        "@defrex/autobuild": ">=0.7.0",
       },
+      "optionalPeers": [
+        "@defrex/autobuild",
+      ],
     },
   },
   "packages": {
@@ -89,12 +89,6 @@
     "@ai-sdk/provider": ["@ai-sdk/provider@4.0.15", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-LIDCrT8xgWVMiVUV13+v9FXPJ8B5uX/5ByEMXxp9Sspr2SyB1PwMSCPshZoI/t+4AgxyZCFEVutdaigCnqje3w=="],
 
     "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.41", "", { "dependencies": { "@ai-sdk/provider": "4.0.15", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8", "undici": "^7.29.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-hSosMII5k33z0buaZ6dugH/g8yIJjPQBILuQvr4ThdiMJxrkiZxFWTgIkvKsT6Dk493JbsnGz5W/q88Y5bR7WA=="],
-
-    "@autobuild/core": ["@autobuild/core@workspace:packages/core"],
-
-    "@autobuild/hosted-store-service": ["@autobuild/hosted-store-service@workspace:packages/hosted-store-service"],
-
-    "@autobuild/postgres-store": ["@autobuild/postgres-store@workspace:packages/postgres-store"],
 
     "@aws-sdk/checksums": ["@aws-sdk/checksums@3.1000.29", "", { "dependencies": { "@aws-sdk/core": "^3.977.9", "@aws-sdk/types": "^3.974.5", "@smithy/core": "^3.33.3", "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-Dtu0gr4dnATZAPwEYbpCsG+MpLM7OAliy2gTepEFQwl1vZ6DL3QMH2FveMa3HLvPsOdhJsPRB3KtxVhph9T75A=="],
 
@@ -159,6 +153,12 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.5", "", { "os": "win32", "cpu": "x64" }, "sha512-bIBFo+n6MIxdNcVFy5CrurbKiZQiUciK3bt8+O9I4wjFZNTfXLpi+giq47522eXqW5NBc9ulx7dR1SlZKi2J5g=="],
 
     "@bytecodealliance/preview2-shim": ["@bytecodealliance/preview2-shim@0.17.6", "", {}, "sha512-n3cM88gTen5980UOBAD6xDcNNL3ocTK8keab21bpx1ONdA+ARj7uD1qoFxOWCyKlkpSi195FH+GeAut7Oc6zZw=="],
+
+    "@defrex/autobuild-core": ["@defrex/autobuild-core@workspace:packages/core"],
+
+    "@defrex/autobuild-hosted-store-service": ["@defrex/autobuild-hosted-store-service@workspace:packages/hosted-store-service"],
+
+    "@defrex/autobuild-postgres-store": ["@defrex/autobuild-postgres-store@workspace:packages/postgres-store"],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 

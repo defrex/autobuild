@@ -16,8 +16,8 @@ example](#complete-example) is valid on its own.
 
 ## Hosted service and PostgreSQL BuildStore environment
 
-The optional `@autobuild/hosted-store-service` and its
-`@autobuild/postgres-store` adapter are configured entirely through the
+The optional `@defrex/autobuild-hosted-store-service` and its
+`@defrex/autobuild-postgres-store` adapter are configured entirely through the
 environment. They are distributed in Autobuild's GitHub releases rather than
 npm, so an ordinary `autobuild` CLI install does not acquire the service,
 PostgreSQL, or blob-provider dependencies. Choose the compatible tag shown in
@@ -66,7 +66,7 @@ secrets, `AB_STORE_SECRET`, database/blob credentials, machine tokens, or OAuth
 account tokens through a `NEXT_PUBLIC_` variable.
 
 The following variables configure the service-side durable adapter (or a direct
-use of `@autobuild/postgres-store`).
+use of `@defrex/autobuild-postgres-store`).
 
 | Variable | Required when | Values / purpose |
 |---|---|---|
@@ -230,7 +230,7 @@ earlier configured plugins are reserved, and declaration order never permits
 shadowing. A collision between distinct plugin declarations continues to name
 the conflicting adapter and both owners.
 
-Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
+Plugin authors import the stable surface from `@defrex/autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
 without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
@@ -248,7 +248,7 @@ create, get, and ready listings so dispatch can correlate Autobuild's durable
 in-flight creations. Legacy tickets may omit it and remain dispatchable.
 
 ```ts
-import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
+import type { AutobuildPluginManifest } from '@defrex/autobuild/plugin-sdk'
 
 export default {
   name: 'acme-integrations',

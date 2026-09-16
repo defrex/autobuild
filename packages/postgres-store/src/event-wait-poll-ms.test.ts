@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { EVENT_WAIT_POLL_MS as fromAdapter } from 'autobuild/store-adapter'
+import { EVENT_WAIT_POLL_MS as fromAdapter } from '@defrex/autobuild/store-adapter'
 import { EVENT_WAIT_POLL_MS as fromStore } from './store'
 
 describe('EVENT_WAIT_POLL_MS unification (AUT-388)', () => {
@@ -11,9 +11,9 @@ describe('EVENT_WAIT_POLL_MS unification (AUT-388)', () => {
     expect(source).not.toMatch(/const\s+EVENT_WAIT_POLL_MS\s*=/)
   })
 
-  test('store.ts imports the core constant via autobuild/store-adapter', () => {
+  test('store.ts imports the core constant via @defrex/autobuild/store-adapter', () => {
     expect(source).toMatch(
-      /import\s*\{[^}]*\bEVENT_WAIT_POLL_MS\b[^}]*\}\s*from\s*'autobuild\/store-adapter'/s,
+      /import\s*\{[^}]*\bEVENT_WAIT_POLL_MS\b[^}]*\}\s*from\s*'@defrex\/autobuild\/store-adapter'/s,
     )
   })
 

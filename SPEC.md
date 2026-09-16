@@ -109,7 +109,7 @@ root, and remain lazy during startup registration. Runtime registrations reuse
 §9's capability-bearing `RuntimeRegistration`; the frozen `AgentRunner`
 interface is not widened.
 
-The host exposes one versioned authoring surface, `autobuild/plugin-sdk`: port
+The host exposes one versioned authoring surface, `@defrex/autobuild/plugin-sdk`: port
 and manifest types, the reusable TicketSource/AgentRunner/WorkspaceProvider/
 Forge/BuildStore/BlobStore contract suites, and fake/reference adapters. Plugin
 production code can use erased type-only imports, with Autobuild present only

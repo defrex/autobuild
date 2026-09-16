@@ -1,4 +1,4 @@
-# `@autobuild/postgres-store`
+# `@defrex/autobuild-postgres-store`
 
 Serverless-safe Autobuild persistence using PostgreSQL and either an
 S3-compatible object store or Vercel Blob. This is a separate package: installing
@@ -39,7 +39,7 @@ winner; every other caller receives `build "<slug>" already exists` rather than
 a raw PostgreSQL uniqueness error.
 
 ```ts
-import { openPostgresBuildStoreFromEnv } from '@autobuild/postgres-store'
+import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
 
 const store = await openPostgresBuildStoreFromEnv(process.env)
 ```
@@ -55,4 +55,4 @@ lifecycle names; the defaults are Triage, Ready, Doing, and Done. Ticket bodies
 are stored as PostgreSQL `text` and returned unchanged.
 
 For an authenticated HTTP deployment of this adapter, see the
-[`@autobuild/hosted-store-service` guide](../hosted-store-service/README.md).
+[`@defrex/autobuild-hosted-store-service` guide](../hosted-store-service/README.md).

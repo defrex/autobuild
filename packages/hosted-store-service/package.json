@@ -1,5 +1,5 @@
 {
-  "name": "@autobuild/hosted-store-service",
+  "name": "@defrex/autobuild-hosted-store-service",
   "version": "0.7.0",
   "type": "module",
   "license": "Apache-2.0",
@@ -40,11 +40,23 @@
     "ab-hosted-store": "./src/bin.ts"
   },
   "peerDependencies": {
-    "autobuild": ">=0.6.0"
+    "@defrex/autobuild": ">=0.7.0"
   },
   "dependencies": {
-    "@autobuild/postgres-store": "workspace:*",
+    "@defrex/autobuild-postgres-store": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-auth": "1.4.18",
-    "pg": "8.18.0"
+    "next": "16.1.6",
+    "pg": "8.18.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependenciesMeta": {
+    "@defrex/autobuild": {
+      "optional": true
+    }
   }
 }

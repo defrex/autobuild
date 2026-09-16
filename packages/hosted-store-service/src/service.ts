@@ -2,22 +2,22 @@ import {
   openPostgresBuildStoreFromEnv,
   openPostgresTicketDatabase,
   type PostgresTicketDatabase,
-} from '@autobuild/postgres-store'
-import { createOperatorServer } from 'autobuild/operator-api'
-import type { BuildStore, Clock, TicketSource } from 'autobuild/plugin-sdk'
+} from '@defrex/autobuild-postgres-store'
+import { createOperatorServer } from '@defrex/autobuild/operator-api'
+import type { BuildStore, Clock, TicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   createTicketServer,
   HOSTED_TICKET_OPERATIONS,
   type HostedTicketContext,
   LinearTicketSource,
-} from 'autobuild/remote-tickets'
+} from '@defrex/autobuild/remote-tickets'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   createStoreServer,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from 'autobuild/remote-store'
+} from '@defrex/autobuild/remote-store'
 import {
   HOSTED_ARTIFACT_MAX_BYTES,
   HOSTED_EVENT_WAIT_MAX_SECONDS,

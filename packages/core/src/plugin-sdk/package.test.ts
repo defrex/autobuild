@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -65,7 +65,7 @@ describe('plugin SDK package surface', () => {
       import type {
         AutobuildPluginManifest,
         PluginFactoryContext,
-      } from 'autobuild/plugin-sdk'
+      } from '@defrex/autobuild/plugin-sdk'
       interface SampleConfig { endpoint: string }
       const manifest = {
         name: 'erased-types',
@@ -93,13 +93,14 @@ describe('plugin SDK package surface', () => {
       JSON.stringify({
         name: 'sample-autobuild-plugin',
         type: 'module',
-        devDependencies: { autobuild: '2.0.0', '@types/bun': '^1.3.14' },
+        devDependencies: { '@defrex/autobuild': '2.0.0', '@types/bun': '^1.3.14' },
       }),
     )
     await writeFile(join(destination, 'plugin.ts'), source)
     const dependencyDir = join(destination, 'node_modules')
     await mkdir(join(dependencyDir, '@types'), { recursive: true })
-    await symlink(root, join(dependencyDir, 'autobuild'), 'dir')
+    await mkdir(join(dependencyDir, '@defrex'), { recursive: true })
+    await symlink(root, join(dependencyDir, '@defrex', 'autobuild'), 'dir')
     await symlink(
       join(root, 'node_modules', '@types', 'bun'),
       join(dependencyDir, '@types', 'bun'),
@@ -133,7 +134,7 @@ describe('plugin SDK package surface', () => {
     }
 
     const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(source)
-    expect(output).not.toContain('autobuild/plugin-sdk')
+    expect(output).not.toContain('@defrex/autobuild/plugin-sdk')
     const built = join(destination, 'plugin.mjs')
     await writeFile(built, output)
     await rm(dependencyDir, { recursive: true, force: true })
@@ -189,7 +190,7 @@ describe('plugin SDK package surface', () => {
       types: './packages/core/src/plugin-sdk/index.ts',
       import: './packages/core/src/plugin-sdk/index.ts',
     })
-    expect(packedManifest.dependencies?.['@autobuild/core']).toBeUndefined()
+    expect(packedManifest.dependencies?.['@defrex/autobuild-core']).toBeUndefined()
 
     const consumer = join(destination, 'consumer')
     await mkdir(consumer)
@@ -199,7 +200,7 @@ describe('plugin SDK package surface', () => {
         name: 'packed-plugin-sdk-consumer',
         private: true,
         type: 'module',
-        dependencies: { autobuild: `file:${archive}` },
+        dependencies: { '@defrex/autobuild': `file:${archive}` },
       }),
     )
     const install = Bun.spawn(['bun', 'install', '--linker', 'isolated'], {
@@ -223,7 +224,7 @@ describe('plugin SDK package surface', () => {
           FakeTicketSource,
           PLUGIN_API_VERSION,
           describeTicketSourceContract,
-        } from 'autobuild/plugin-sdk'
+        } from '@defrex/autobuild/plugin-sdk'
 
         if (PLUGIN_API_VERSION !== '1.5.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
@@ -263,8 +264,11 @@ describe('plugin SDK package surface', () => {
       stderr: 'pipe',
     })
     expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
+    const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+      version: string
+    }
     expect((await new Response(version.stdout).text()).trim()).toBe(
-      'autobuild 0.6.0\nplugin API 1.5.0',
+      `autobuild ${rootManifest.version}\nplugin API 1.5.0`,
     )
 
     const initialized = join(destination, 'initialized')

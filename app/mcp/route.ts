@@ -4,7 +4,7 @@
 // MCP_MAX_WAIT_SECONDS (240 s) so no single request outlives this limit — the
 // same pairing the dispatcher cron route documents
 // (docs/hosted-dispatcher.md, docs/mcp.md).
-import { mcpEndpoint } from '@autobuild/hosted-store-service/web/runtime'
+import { mcpEndpoint } from '@defrex/autobuild-hosted-store-service/web/runtime'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

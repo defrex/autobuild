@@ -1,5 +1,5 @@
-import { resolvePostgresUrl } from '@autobuild/postgres-store/env'
-import { normalizeGitRemoteUrl } from 'autobuild/origin'
+import { resolvePostgresUrl } from '@defrex/autobuild-postgres-store/env'
+import { normalizeGitRemoteUrl } from '@defrex/autobuild/origin'
 
 export type WebAuthProvider = 'github'
 export type WebEnv = Record<string, string | undefined>

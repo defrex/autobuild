@@ -1,4 +1,4 @@
-import { parsePostgresStoreEnv, type PostgresStoreConfig } from '@autobuild/postgres-store'
+import { parsePostgresStoreEnv, type PostgresStoreConfig } from '@defrex/autobuild-postgres-store'
 
 export type HostedStoreEnv = Record<string, string | undefined>
 export const HOSTED_ARTIFACT_MAX_BYTES = 1024 * 1024

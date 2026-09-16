@@ -1,4 +1,4 @@
-import type { OperatorAnswerRequest, OperatorApiClient } from 'autobuild/operator-api'
+import type { OperatorAnswerRequest, OperatorApiClient } from '@defrex/autobuild/operator-api'
 
 export type BuildControlReply = Awaited<ReturnType<OperatorApiClient['controlBuild']>>
 

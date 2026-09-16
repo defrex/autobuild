@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { verifyToken } from 'autobuild/remote-store'
+import { verifyToken } from '@defrex/autobuild/remote-store'
 import { createWebGateway } from './gateway'
 
 const storeSecret = 'store-secret-canary'

@@ -80,7 +80,7 @@ describe('plugin authoring guide', () => {
       expect(reference).toContain(command)
     }
     for (const contract of [
-      'autobuild/plugin-sdk',
+      '@defrex/autobuild/plugin-sdk',
       'contract: { factory, live: true }',
       'AB_RUN_LIVE_PORT_CONTRACTS=1',
       'BuildStore is **not** an in-process manifest map',
@@ -113,8 +113,8 @@ describe('plugin authoring guide', () => {
     roots.push(root)
     await writeFile(join(root, 'autobuild-plugin.ts'), module)
     await writeFile(join(root, 'autobuild.toml'), config)
-    await mkdir(join(root, 'node_modules'), { recursive: true })
-    await symlink(DIST_ROOT, join(root, 'node_modules', 'autobuild'), 'dir')
+    await mkdir(join(root, 'node_modules', '@defrex'), { recursive: true })
+    await symlink(DIST_ROOT, join(root, 'node_modules', '@defrex', 'autobuild'), 'dir')
 
     const git = Bun.spawnSync(['git', 'init', '-q'], { cwd: root })
     expect(git.exitCode).toBe(0)

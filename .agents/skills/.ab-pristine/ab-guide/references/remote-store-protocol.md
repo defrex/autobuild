@@ -5,7 +5,7 @@ This document is the complete normative HTTP contract for Autobuild's remote
 blob store, or service stack; Autobuild does not load in-process `BuildStore`
 plugins. Compatibility means that an Autobuild remote client can use the server
 and the implementation passes the shared `BuildStore` contract exported by
-`autobuild/plugin-sdk`.
+`@defrex/autobuild/plugin-sdk`.
 
 The transport, wire shapes, validation order, atomicity, lease behavior,
 persistence requirements, and conformance bar for the protocol shipped in this
@@ -186,7 +186,7 @@ Those event catalogs evolve with Autobuild's build lifecycle rather than with
 the storage transport. A server therefore must use or faithfully implement the
 catalog from the same Autobuild package version as its client. The public
 `BuildStore` type (including its typed write methods), representative valid
-writes, and unchanged contract suite exported by `autobuild/plugin-sdk` are the
+writes, and unchanged contract suite exported by `@defrex/autobuild/plugin-sdk` are the
 package-versioned compatibility surface. Wire validation remains mandatory even
 in a language that cannot consume those TypeScript types directly.
 
@@ -927,13 +927,13 @@ repository listing, artifact deletion, or server deployment API.
 The compatibility bar is an HTTP-backed `BuildStore` client driving the
 complete `describeBuildStoreContract` suite against a clean server. Both the
 contract function and the `BuildStore` type are public exports from
-`autobuild/plugin-sdk`. A test registration has this shape:
+`@defrex/autobuild/plugin-sdk`. A test registration has this shape:
 
 ```ts
 import {
   describeBuildStoreContract,
   type BuildStore,
-} from 'autobuild/plugin-sdk'
+} from '@defrex/autobuild/plugin-sdk'
 
 describeBuildStoreContract('my remote store', async (opts) => {
   // Start a fresh, isolated server and database for every factory call.

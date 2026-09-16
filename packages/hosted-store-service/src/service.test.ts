@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '../../core/src/store/memory'
-import { OperatorApiClient } from 'autobuild/operator-api'
+import { OperatorApiClient } from '@defrex/autobuild/operator-api'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -8,7 +8,7 @@ import {
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
   mintToken,
-} from 'autobuild/remote-store'
+} from '@defrex/autobuild/remote-store'
 import { HOSTED_ARTIFACT_MAX_BYTES } from './config'
 import { createHostedStoreService } from './service'
 

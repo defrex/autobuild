@@ -8,7 +8,7 @@ conformance or a successful `ab plugin doctor` alone is not certification.
 
 ## 1. Choose the port and preserve its semantics
 
-Import public types only from `autobuild/plugin-sdk`; package-internal module
+Import public types only from `@defrex/autobuild/plugin-sdk`; package-internal module
 paths are not API.
 
 | CLI port | Manifest map | Factory result | Required semantics |
@@ -68,7 +68,7 @@ only types:
 import type {
   AutobuildPluginManifest,
   ForgePluginFactory,
-} from 'autobuild/plugin-sdk'
+} from '@defrex/autobuild/plugin-sdk'
 import { AcmeForge } from '@acme/forge-client'
 
 const createForge: ForgePluginFactory = ({ config, env, repoRoot }) => {
@@ -182,7 +182,7 @@ const manifest = {
 The descriptor's factory returns a `TicketSourceContractFactory`,
 `AgentRunnerContractFactory`, `WorkspaceProviderContractFactory`, or
 `ForgeContractFactory` as appropriate. Use the matching harness types exported
-by `autobuild/plugin-sdk`. The host invokes the unchanged shared suite; do not
+by `@defrex/autobuild/plugin-sdk`. The host invokes the unchanged shared suite; do not
 copy, wrap, skip, or weaken its assertions.
 
 Contract fixtures must isolate resources (UUID-namespaced records, branches,
@@ -227,12 +227,12 @@ Create `autobuild-plugin.ts` with the exact block below.
 
 <!-- plugin-authoring-walkthrough-module:start -->
 ```ts
-import { FakeTicketSource } from 'autobuild/plugin-sdk'
+import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import type {
   AutobuildPluginManifest,
   TicketSourceContractFactory,
   TicketSourcePluginFactory,
-} from 'autobuild/plugin-sdk'
+} from '@defrex/autobuild/plugin-sdk'
 
 const createSource: TicketSourcePluginFactory = () => new FakeTicketSource()
 
