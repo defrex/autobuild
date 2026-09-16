@@ -12,7 +12,13 @@ export { manualClock, steppingClock } from './fixed'
 export { agentActor, DISPATCHER, KERNEL, humanActor, type Via } from '../events/envelope'
 export { EventValidationError } from '../events/catalog'
 export type { EscalationSource } from '../ontology'
-export { abDispatch } from '../cli/dispatch'
+export { abDispatch, type DispatchOpts } from '../cli/dispatch'
+// CLI entry points for the hosted-dispatcher integration test: programmatic
+// `ab` invocation and its environment resolution.
+export { resolveCliEnv } from '../cli/env'
+export { runCli } from '../cli/main'
+// Deterministic id doubles for the hosted-dispatcher integration test.
+export { randomUuids, sequentialIds, type IdSource } from '../ids'
 export { abWatch } from '../cli/watch'
 export { abTicket, type TicketSourceFactory } from '../cli/ticket'
 export { createTerminalModeController } from '../cli/terminal-restore'
@@ -22,13 +28,32 @@ export { createTicketSource } from '../ports/tickets/create'
 export { createOperatorSandboxService } from '../operator/sandbox'
 export { parseConfig } from '../config/load'
 export { spawnExec, type Exec } from '../ports/workspace/git-worktree'
+// Durable guest-launch state readers + the in-process guest runner for the
+// hosted-dispatcher integration test's GuestExecution double, which supervises
+// a real BuildRunner exactly as a real sandbox execution would.
+export {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  diagnosticArtifact,
+  parseEffectiveBuildConfig,
+  selectOpenWorkspace,
+} from '../processes/build-execution-state'
+export {
+  BuildRunner,
+  LeaseHeldError,
+  SetupFailureError,
+} from '../processes/build-runner'
 export { readEventsWithWait } from '../store/streams/wait'
 export { textContent } from '../store/types'
 export {
   CONFIG_TOML,
+  GIT_ID,
+  git,
   happyHandlers,
   makeHarness,
   readyTicket,
   typesOf,
+  writeFileIn,
+  type Cli,
   type E2eHarness,
+  type SkillHandlers,
 } from '../integration/harness'
