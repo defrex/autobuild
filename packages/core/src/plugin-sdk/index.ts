@@ -131,7 +131,14 @@ export { FakeTicketSource } from '../ports/tickets/fake'
 export { validateTicketUpdate } from '../ports/tickets/update'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export { FakeForge } from '../ports/forge/fake'
-export { ScriptedAgentRunner } from '../ports/runner/fake'
+// ScriptContext + defaultTurnResult are the scripted fake's own API: the
+// script callback's context type and its default turn result (needed by the
+// hosted-dispatcher integration test to script guest agents).
+export {
+  defaultTurnResult,
+  ScriptedAgentRunner,
+  type ScriptContext,
+} from '../ports/runner/fake'
 export { MemoryBlobStore, MemoryBuildStore } from '../store/memory'
 
 // Runtime primitives needed by out-of-tree BuildStore adapters.

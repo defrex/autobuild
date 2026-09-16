@@ -19,57 +19,53 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { abDispatch, type DispatchOpts } from '../../core/src/cli/dispatch'
-import { resolveCliEnv } from '../../core/src/cli/env'
-import { runCli } from '../../core/src/cli/main'
-import { createTicketSource } from '../../core/src/ports/tickets/create'
-import { FakeTicketSource } from '../../core/src/ports/tickets/fake'
 import {
+  abDispatch,
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  BuildRunner,
+  createTicketSource,
   defaultTurnResult,
+  diagnosticArtifact,
+  FakeForge,
+  FakeTicketSource,
+  GIT_ID,
+  git,
+  LeaseHeldError,
+  MemoryBuildStore,
+  parseEffectiveBuildConfig,
+  randomUuids,
+  readyTicket,
+  resolveCliEnv,
+  runCli,
   ScriptedAgentRunner,
+  selectOpenWorkspace,
+  sequentialIds,
+  SetupFailureError,
+  spawnExec,
+  steppingClock,
+  typesOf,
+  writeFileIn,
+  type Cli,
+  type DispatchOpts,
+  type IdSource,
   type ScriptContext,
-} from '../../core/src/ports/runner/fake'
-import type { RuntimeRegistry } from '../../core/src/ports/runner/runtime'
-import { FakeForge } from '../../core/src/ports/forge/fake'
+  type SkillHandlers,
+} from '@defrex/autobuild/testing'
 import type {
   BuildExecution,
   BuildExecutionHandle,
   BuildExecutionIdentity,
   BuildExecutionStart,
-} from '../../core/src/ports/workspace/build-execution'
-import type {
+  Clock,
   Forge,
+  RuntimeRegistry,
   TicketSource,
   WorkspaceProvider,
   WorkspaceProvisionResult,
-} from '../../core/src/ports/types'
-import { spawnExec } from '../../core/src/ports/workspace/git-worktree'
-import { randomUuids, sequentialIds, type IdSource } from '../../core/src/ids'
-import {
-  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
-  diagnosticArtifact,
-  parseEffectiveBuildConfig,
-  selectOpenWorkspace,
-} from '../../core/src/processes/build-execution-state'
-import {
-  BuildRunner,
-  LeaseHeldError,
-  SetupFailureError,
-} from '../../core/src/processes/build-runner'
-import {
-  GIT_ID,
-  git,
-  readyTicket,
-  typesOf,
-  writeFileIn,
-  type Cli,
-  type SkillHandlers,
-} from '../../core/src/integration/harness'
-import { MemoryBuildStore } from '../../core/src/store/memory'
-import { steppingClock } from '../../core/src/testing/fixed'
+  BuildStore,
+} from '@defrex/autobuild/plugin-sdk'
 import { OperatorApiClient } from '@defrex/autobuild-hosted-store-service/operator-api'
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
-import type { BuildStore, Clock } from '@defrex/autobuild/plugin-sdk'
 import { createHostedStoreService } from '@defrex/autobuild-hosted-store-service/service'
 import { createDispatcherEndpoint } from './dispatcher'
 
