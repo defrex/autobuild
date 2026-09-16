@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
 - [#383](https://github.com/defrex/autobuild/pull/383) — Move the hosted store, operator, and ticket servers out of core
 - [#382](https://github.com/defrex/autobuild/pull/382) — Align docs with the @defrex/autobuild-hosted-dispatcher package split
 - [#380](https://github.com/defrex/autobuild/pull/380) — Split the hosted dispatcher into @defrex/autobuild-hosted-dispatcher
