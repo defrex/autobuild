@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { DispatchOpts } from '@defrex/autobuild/cli'
 import { verifyToken } from '@defrex/autobuild/remote-store'
-import { parseHostedStoreEnv } from './config'
+import { parseHostedStoreEnv } from '@defrex/autobuild-hosted-store-service'
 import {
   createDispatcherEndpoint,
   createHostedDispatcher,

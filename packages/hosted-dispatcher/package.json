@@ -1,0 +1,41 @@
+{
+  "name": "@defrex/autobuild-hosted-dispatcher",
+  "version": "0.8.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./dispatcher": {
+      "types": "./src/dispatcher.ts",
+      "import": "./src/dispatcher.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime.ts",
+      "import": "./src/runtime.ts"
+    },
+    "./distribution": {
+      "types": "./src/ship-packed-distribution.ts",
+      "import": "./src/ship-packed-distribution.ts"
+    }
+  },
+  "bin": {
+    "ab-hosted-dispatcher": "./src/bin.ts"
+  },
+  "peerDependencies": {
+    "@defrex/autobuild": ">=0.7.0",
+    "@defrex/autobuild-hosted-store-service": ">=0.7.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}

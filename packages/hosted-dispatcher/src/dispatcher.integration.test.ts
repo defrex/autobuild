@@ -70,7 +70,7 @@ import { steppingClock } from '../../core/src/testing/fixed'
 import { OperatorApiClient } from '@defrex/autobuild/operator-api'
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
 import type { BuildStore, Clock } from '@defrex/autobuild/plugin-sdk'
-import { createHostedStoreService } from './service'
+import { createHostedStoreService } from '@defrex/autobuild-hosted-store-service/service'
 import { createDispatcherEndpoint } from './dispatcher'
 
 const storeEnv = {

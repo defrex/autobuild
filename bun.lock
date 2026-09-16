@@ -32,7 +32,7 @@
     },
     "packages/core": {
       "name": "@defrex/autobuild-core",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@vercel/sandbox": "^3.1.0",
@@ -43,9 +43,20 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/hosted-dispatcher": {
+      "name": "@defrex/autobuild-hosted-dispatcher",
+      "version": "0.8.0",
+      "bin": {
+        "ab-hosted-dispatcher": "./src/bin.ts",
+      },
+      "peerDependencies": {
+        "@defrex/autobuild": ">=0.7.0",
+        "@defrex/autobuild-hosted-store-service": ">=0.7.0",
+      },
+    },
     "packages/hosted-store-service": {
       "name": "@defrex/autobuild-hosted-store-service",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "bin": {
         "ab-hosted-store": "./src/bin.ts",
       },
@@ -67,7 +78,7 @@
     },
     "packages/postgres-store": {
       "name": "@defrex/autobuild-postgres-store",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "bin": {
         "ab-postgres-store": "./src/bin.ts",
       },
@@ -154,7 +165,11 @@
 
     "@bytecodealliance/preview2-shim": ["@bytecodealliance/preview2-shim@0.17.6", "", {}, "sha512-n3cM88gTen5980UOBAD6xDcNNL3ocTK8keab21bpx1ONdA+ARj7uD1qoFxOWCyKlkpSi195FH+GeAut7Oc6zZw=="],
 
+    "@defrex/autobuild": ["@defrex/autobuild@0.8.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.30.0", "@vercel/sandbox": "^3.1.0", "ai": "^7.0.101", "drizzle-orm": "^0.45.2", "semver": "^7.7.4", "smol-toml": "^1.7.0", "zod": "^4.4.3" }, "bin": { "ab": "bin/ab.ts" } }, "sha512-c1GELI6NLUR5x1gFesPJIHMZ9nPVNvgLxnRPVzd5F+Vgqcd5KB/BqJpZf+EZjmoN3bFsMInXxqxi66CN7w34Hw=="],
+
     "@defrex/autobuild-core": ["@defrex/autobuild-core@workspace:packages/core"],
+
+    "@defrex/autobuild-hosted-dispatcher": ["@defrex/autobuild-hosted-dispatcher@workspace:packages/hosted-dispatcher"],
 
     "@defrex/autobuild-hosted-store-service": ["@defrex/autobuild-hosted-store-service@workspace:packages/hosted-store-service"],
 
