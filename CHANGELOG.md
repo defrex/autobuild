@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#387](https://github.com/defrex/autobuild/pull/387) — Restore client-only over-the-wire coverage for core's remote clients
 - [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
 - [#383](https://github.com/defrex/autobuild/pull/383) — Move the hosted store, operator, and ticket servers out of core
 - [#382](https://github.com/defrex/autobuild/pull/382) — Align docs with the @defrex/autobuild-hosted-dispatcher package split
