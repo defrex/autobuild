@@ -170,11 +170,12 @@ export function encodeCursor(payload: CursorPayload): string {
 export function decodeCursor(
   cursor: string,
   expected: { store: string; repo: string },
+  opts: { verb: string; usage: string } = { verb: 'watch', usage: WATCH_USAGE },
 ): CursorPayload {
   const malformed = (): Error =>
     new Error(
       'invalid --since cursor: malformed — a cursor is an opaque string emitted by a ' +
-        `previous 'ab watch' run — ${WATCH_USAGE}`,
+        `previous 'ab ${opts.verb}' run — ${opts.usage}`,
     )
   if (!cursor.startsWith(CURSOR_PREFIX)) throw malformed()
   let payload: unknown
@@ -379,6 +380,33 @@ export function renderWatchLine(
   return `${event.ts}  ${label}  ${event.type}  ${summarizeEvent(event, state)}`
 }
 
+// ── The ambient-scope preflight ─────────────────────────────────────────────
+
+/**
+ * Ambient scope, before any store access: inside a phase with a complete
+ * build identity, only the ambient build may be read. The errors are the same
+ * PhaseSessionError shapes the scoped store handle produces for `ab builds` /
+ * `ab build status`, so the message matches exactly. Shared by `ab watch` and
+ * `ab wait`; `repository` is true only for watch's `--repository` form.
+ */
+export function assertReadScope(
+  slugs: readonly string[],
+  opts: { repository: boolean; env: Record<string, string | undefined> },
+): void {
+  const ambient = resolveAmbientReadSession(opts.env)
+  if (ambient !== undefined && 'build' in ambient) {
+    const scope = { kind: 'build' as const, id: ambient.build, session: ambient.session }
+    if (slugs.length === 0 || opts.repository) {
+      throw new PhaseSessionError(scope, 'listBuilds', { kind: 'admin' })
+    }
+    for (const slug of slugs) {
+      if (slug !== ambient.build) {
+        throw new PhaseSessionError(scope, 'getEvents', { kind: 'build', id: slug })
+      }
+    }
+  }
+}
+
 // ── The command shell ────────────────────────────────────────────────────────
 
 export interface AbWatchOpts {
@@ -468,22 +496,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       ? parseDurationMs(opts.interval, { flag: '--interval', usage: WATCH_USAGE })
       : undefined
 
-  // Ambient scope, before any store access: inside a phase with a complete
-  // build identity, only the ambient build may be watched. The errors are the
-  // same PhaseSessionError shapes the scoped store handle produces for
-  // `ab builds` / `ab build status`, so the message matches exactly.
-  const ambient = resolveAmbientReadSession(opts.env)
-  if (ambient !== undefined && 'build' in ambient) {
-    const scope = { kind: 'build' as const, id: ambient.build, session: ambient.session }
-    if (slugs.length === 0 || repository) {
-      throw new PhaseSessionError(scope, 'listBuilds', { kind: 'admin' })
-    }
-    for (const slug of slugs) {
-      if (slug !== ambient.build) {
-        throw new PhaseSessionError(scope, 'getEvents', { kind: 'build', id: slug })
-      }
-    }
-  }
+  // Ambient scope, before any store access.
+  assertReadScope(slugs, { repository, env: opts.env })
 
   // Glob validation needs only the catalogs — before any store access.
   const filters = compileEventGlobs(opts.events ?? [], { repository, usage: WATCH_USAGE })
