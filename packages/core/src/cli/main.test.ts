@@ -426,6 +426,7 @@ describe('SESSIONLESS_COMMANDS', () => {
       'builds',
       'build',
       'watch',
+      'wait',
       'repository',
       'pause',
       'resume',
@@ -457,6 +458,32 @@ describe('SESSIONLESS_COMMANDS', () => {
   test('session commands are absent — they require AB_* and must not route sessionless', () => {
     for (const command of ['context', 'done', 'verdict', 'escalate', 'observe', 'artifact']) {
       expect(SESSIONLESS_COMMANDS.has(command)).toBe(false)
+    }
+  })
+
+  test('every sessionless verb routes to its own command — never phase-required or unknown', async () => {
+    // The gap this closes (f_e67aeaef): a verb in SESSIONLESS_COMMANDS but
+    // missing from the dispatch switch falls through to phase-required
+    // routing outside a phase, i.e. is unreachable as an operator command.
+    // Deps carry no exec seam, so verbs that would do real work fail fast at
+    // their wiring check; verbs whose bare form probes the environment
+    // (init, upgrade, update, models) are excluded — their own tests own
+    // the routing assertion.
+    for (const command of SESSIONLESS_COMMANDS) {
+      if (command.startsWith('-') || ['init', 'upgrade', 'update', 'models'].includes(command)) {
+        continue
+      }
+      const out: string[] = []
+      const err: string[] = []
+      await runCli([command], {
+        workspacePath: '/no/sessionless/dependencies',
+        stdout: (line) => out.push(line),
+        stderr: (line) => err.push(line),
+      })
+      const output = [...out, ...err].join('\n')
+      expect(output).not.toContain(`unknown command "${command}"`)
+      expect(output).not.toContain('runs inside a build session')
+      expect(output).not.toContain('runs inside a harvest agent session')
     }
   })
 
