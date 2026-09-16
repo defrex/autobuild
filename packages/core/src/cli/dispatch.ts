@@ -34,13 +34,19 @@ import {
   LiveConfig,
   type ConfigSnapshot,
 } from '../config/live'
-import { resolvePipelineSource, type PipelineSourceMeta } from '../config/pipeline-source'
+import {
+  isActionablePipelineFailure,
+  resolvePipelineSource,
+  type PipelineSourceFailure,
+  type PipelineSourceMeta,
+} from '../config/pipeline-source'
 import { effectiveRuntimeReferences, roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
 import { loadPlugins } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
-import { DISPATCHER, humanActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
+import type { AbEvent } from '../events/catalog'
 import type { RepositoryEventWrite } from '../events/repository'
 import { randomIds, randomUuids, type IdSource, type UuidSource } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
@@ -792,9 +798,22 @@ class DispatchLoop {
    * missing build record, absent forge capability, unreadable branch/base,
    * malformed TOML — degrades to `undefined` (the legacy fallback), never
    * failing the deposit. */
-  private async resolveBuildPipeline(
-    slug: string,
-  ): Promise<Awaited<ReturnType<typeof resolvePipelineSource>>> {
+  /** Resolve this build's pinned pipeline source (SPEC §16.1). Never throws:
+   * every failure — missing build record, absent forge capability, unreadable
+   * branch/base, malformed TOML, store read failure — degrades to `source:
+   * undefined` with the failed attempts' reasons, never failing the deposit.
+   * The reasons feed the caller's fallback diagnostic. */
+  /** Resolve this build's pinned pipeline source (SPEC §16.1). Never throws:
+   * every failure — missing build record, absent forge capability, unreadable
+   * branch/base, malformed TOML, store read failure — degrades to `source:
+   * undefined` with the failed attempts classified, never failing the
+   * deposit. The failures feed the caller's fallback diagnostic. */
+  private async resolveBuildPipeline(slug: string): Promise<{
+    source: Awaited<ReturnType<typeof resolvePipelineSource>>
+    failures: PipelineSourceFailure[]
+    events: AbEvent[]
+  }> {
+    const failures: PipelineSourceFailure[] = []
     try {
       // The workspace event carries the branch the build was provisioned on;
       // the record's `branch` (when present) is the same fact. Using the event
@@ -802,7 +821,7 @@ class DispatchLoop {
       // extra build-record lookup on the hot launch path.
       const events = await this.wiring.store.getEvents(slug)
       const workspace = selectOpenWorkspace(events)
-      return await resolvePipelineSource({
+      const source = await resolvePipelineSource({
         slug,
         record: { ...(workspace !== null ? { branch: workspace.branch } : {}) },
         events,
@@ -811,9 +830,15 @@ class DispatchLoop {
         checkout: this.opts.targetRepo,
         exec: this.opts.exec,
         ...(workspace !== null ? { workspacePath: workspace.path } : {}),
+        onFailure: (failure) => failures.push(failure),
       })
-    } catch {
-      return undefined
+      return { source, failures, events }
+    } catch (error) {
+      failures.push({
+        kind: 'store',
+        detail: `build-event read failed: ${error instanceof Error ? error.message : String(error)}`,
+      })
+      return { source: undefined, failures, events: [] }
     }
   }
 
@@ -824,12 +849,103 @@ class DispatchLoop {
    * build's own branch at its recorded pipeline-source commit; every other
    * section comes from the live dispatcher snapshot. The source commit travels
    * in the artifact metadata so status can report which autobuild.toml the
-   * build runs under (SPEC §16.1). */
+   * build runs under (SPEC §16.1).
+   *
+   * A failed resolution never rewrites a pinned pipeline: when the build
+   * already has a deposit, its build-owned sections are reused verbatim (the
+   * reload path's rule), because depositing the live base-branch snapshot on a
+   * transient forge/store/git failure is exactly the AUT-366 poisoning. Only
+   * a build with no pinned artifact at all (legacy build, or a first deposit
+   * during an outage) takes the live snapshot. An actionable degradation — a
+   * missing forge capability, a build-branch source that resolved but cannot
+   * be read or parsed, a store failure — files a build-scoped observation
+   * naming the failed attempts; the documented fallbacks (an unpublished
+   * branch, an unreadable legacy base) stay quiet. */
   private async publishBuildConfig(slug: string, snapshot = this.currentConfig()): Promise<void> {
-    const source = await this.resolveBuildPipeline(slug)
-    const config =
-      source === undefined ? snapshot.config : composeBuildConfig(source.config, snapshot.config)
-    await this.depositBuildConfig(slug, snapshot, config, source?.meta)
+    const { source, failures, events } = await this.resolveBuildPipeline(slug)
+    if (source !== undefined) {
+      await this.depositBuildConfig(
+        slug,
+        snapshot,
+        composeBuildConfig(source.config, snapshot.config),
+        source.meta,
+      )
+      return
+    }
+    let reused: PipelineSourceMeta | undefined
+    try {
+      const artifact = await this.wiring.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      if (artifact !== null) {
+        const pinned = parseEffectiveBuildConfig(artifact)
+        reused = parseBuildConfigMetadata(artifact).pipelineSource
+        await this.depositBuildConfig(
+          slug,
+          snapshot,
+          composeBuildConfig(pinned, snapshot.config),
+          reused,
+        )
+      } else {
+        await this.depositBuildConfig(slug, snapshot, snapshot.config)
+      }
+    } catch {
+      // Even the artifact read failed; the live snapshot deposit is the only
+      // option left that keeps the launch alive.
+      await this.depositBuildConfig(slug, snapshot, snapshot.config)
+    }
+    await this.filePipelineFallbackObservation(slug, reused, failures, events)
+  }
+
+  /** File a build-scoped observation when a deposit hit an actionable
+   * pipeline-source failure (SPEC §16.1): the operator must know the deposit
+   * degraded to the last good pipeline or the live snapshot, and why. The
+   * documented fallbacks (unpublished branch, unreadable legacy base) are
+   * normal resolution order and stay quiet. A diagnostic, never a launch
+   * dependency. */
+  private async filePipelineFallbackObservation(
+    slug: string,
+    reused: PipelineSourceMeta | undefined,
+    failures: PipelineSourceFailure[],
+    events: readonly AbEvent[],
+  ): Promise<void> {
+    const actionable = failures.filter(isActionablePipelineFailure)
+    if (actionable.length === 0) return
+    const degradedTo =
+      reused !== undefined
+        ? 'kept the last pinned pipeline' +
+          (reused.commit !== undefined ? ` at ${reused.ref}@${reused.commit}` : ` (${reused.ref})`)
+        : 'deposited the live dispatcher snapshot (legacy fallback)'
+    const summary =
+      `pipeline-source resolution failed; ${degradedTo}. ` +
+      `Failed attempts: ${
+        actionable.map((failure) => `${failure.kind}: ${failure.detail}`).join('; ') ||
+        'none recorded'
+      }`
+    // Deduplicated against the build's log: a parked build re-attaches every
+    // sweep, and an outage must not harvest one identical diagnostic per tick.
+    if (
+      events.some(
+        (event) => event.type === 'observation.recorded' && event.payload.summary === summary,
+      )
+    ) {
+      return
+    }
+    try {
+      await this.wiring.store.append(slug, {
+        // The catalog admits kernel/agent actors for observations (§8.2); the
+        // dispatcher's system-side diagnostic rides the kernel actor, like the
+        // finalize-failure and auto-merge-deferral observations.
+        actor: KERNEL,
+        type: 'observation.recorded',
+        payload: {
+          id: this.wiring.ids('obs'),
+          kind: 'followup',
+          summary,
+          files: ['autobuild.toml'],
+        },
+      })
+    } catch {
+      // The build's pipeline is already deposited; the observation is best-effort.
+    }
   }
 
   private async depositBuildConfig(

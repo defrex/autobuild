@@ -5,7 +5,13 @@ import { join } from 'node:path'
 import type { AbEvent } from '../events/catalog'
 import { FakeForge } from '../ports/forge/fake'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { isPipelineSourceRef, recordedBaseSha, resolvePipelineSource } from './pipeline-source'
+import {
+  isActionablePipelineFailure,
+  isPipelineSourceRef,
+  recordedBaseSha,
+  resolvePipelineSource,
+  type PipelineSourceFailure,
+} from './pipeline-source'
 
 const PIPELINE_A = `
 [tickets]
@@ -115,15 +121,63 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
     forge.seedBranch('ab/b1', 'head1')
     forge.seedFile('head1', 'autobuild.toml', 'not = [valid toml')
     forge.seedFile('base1', 'autobuild.toml', PIPELINE_A)
+    const failures: PipelineSourceFailure[] = []
     const result = await resolvePipelineSource({
       slug: 'b1',
       record: { branch: 'ab/b1' },
       events: [provisioned('base1')],
       mode: 'origin',
       forge,
+      onFailure: (failure) => failures.push(failure),
     })
-    // The unparseable branch head is rejected and the recorded base is used.
-    expect(result?.meta).toEqual({ ref: 'base', commit: 'base1' })
+    // The build's own branch exists but carries an unparseable pipeline, so
+    // the recorded base is not its pipeline either (AUT-366 by another door):
+    // the resolver degrades to undefined and the caller keeps the build's
+    // last good deposit, naming the failed parse.
+    expect(result).toBeUndefined()
+    expect(failures.some((failure) => failure.kind === 'branch-source')).toBe(true)
+  })
+
+  test('a malformed recorded-base file degrades to the legacy fallback with a reason', async () => {
+    const forge = new FakeForge()
+    forge.seedFile('base1', 'autobuild.toml', 'not = [valid toml')
+    const failures: PipelineSourceFailure[] = []
+    const result = await resolvePipelineSource({
+      slug: 'b1',
+      record: { branch: 'ab/b1' },
+      events: [provisioned('base1')],
+      mode: 'origin',
+      forge,
+      onFailure: (failure) => failures.push(failure),
+    })
+    expect(result).toBeUndefined()
+    expect(failures.some((failure) => failure.kind === 'base-source')).toBe(true)
+  })
+
+  test('failed origin reads surface reasons but keep the base/legacy fallback', async () => {
+    const forge = new FakeForge()
+    forge.seedBranch('ab/b1', 'head1')
+    const failures: PipelineSourceFailure[] = []
+    const result = await resolvePipelineSource({
+      slug: 'b1',
+      record: { branch: 'ab/b1' },
+      events: [provisioned('base1')],
+      mode: 'origin',
+      forge,
+      onFailure: (failure) => failures.push(failure),
+    })
+    // Branch head resolves but the file read fails (actionable); no base file
+    // seeded either (legacy fallback).
+    expect(result).toBeUndefined()
+    expect(failures.some((failure) => failure.kind === 'branch-source')).toBe(true)
+    expect(failures.some((failure) => failure.kind === 'base-source')).toBe(true)
+    // An unpublished branch alone is normal resolution order, not actionable.
+    expect(isActionablePipelineFailure({ kind: 'unpublished', detail: 'x' })).toBe(false)
+    expect(isActionablePipelineFailure({ kind: 'base-source', detail: 'x' })).toBe(false)
+    expect(isActionablePipelineFailure({ kind: 'no-base', detail: 'x' })).toBe(false)
+    expect(isActionablePipelineFailure({ kind: 'capability', detail: 'x' })).toBe(true)
+    expect(isActionablePipelineFailure({ kind: 'branch-source', detail: 'x' })).toBe(true)
+    expect(isActionablePipelineFailure({ kind: 'store', detail: 'x' })).toBe(true)
   })
 
   test('checkout mode reads the build branch head and falls back to base after release', async () => {

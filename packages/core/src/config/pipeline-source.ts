@@ -61,6 +61,38 @@ export interface PipelineSourceInput {
   /** Checkout-mode seam: the open build worktree, whose `autobuild.toml` is
    * the branch head. Preferred over `git show` when the file exists. */
   workspacePath?: string
+  /** Optional degradation sink: one failure per read/parse attempt that forced
+   * a fallback, in order. Callers surface the actionable ones as per-build
+   * diagnostics (SPEC §16.1) instead of the resolver throwing. */
+  onFailure?: (failure: PipelineSourceFailure) => void
+}
+
+/** Why a resolution degraded. `unpublished`, `base-source` and `no-base` are
+ * the documented fallback order (a build whose branch is not published yet, a
+ * legacy build with no readable recorded base) — normal operation, quiet.
+ * `capability` and `branch-source` are failures an operator can act on: a
+ * wiring gap, or a build-branch source that resolved but cannot be read or
+ * parsed. */
+export type PipelineSourceFailureKind =
+  | 'capability'
+  | 'unpublished'
+  | 'branch-source'
+  | 'base-source'
+  | 'no-base'
+  | 'store'
+
+export interface PipelineSourceFailure {
+  kind: PipelineSourceFailureKind
+  detail: string
+}
+
+/** The failure kinds worth an operator-facing diagnostic: a wiring gap, a
+ * build-branch source that resolved but cannot be read or parsed, or a store
+ * failure — each something an operator (or the build's author) can fix. */
+export function isActionablePipelineFailure(failure: PipelineSourceFailure): boolean {
+  return (
+    failure.kind === 'capability' || failure.kind === 'branch-source' || failure.kind === 'store'
+  )
 }
 
 /** The recorded base commit of the build's latest workspace. The newest
@@ -99,8 +131,31 @@ async function readCheckoutFile(
   return result.stdout
 }
 
-function pipeline(commit: string, ref: PipelineSourceRef, content: string): PipelineSource {
-  return { meta: { ref, commit }, config: parseConfig(content, `autobuild.toml@${commit}`) }
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Parse a read file into a pipeline source, or `undefined` when the TOML is
+ * malformed. A branch-source parse failure is terminal: the build's own branch
+ * exists but carries an unparseable pipeline, so falling back to the recorded
+ * base would run the build under a pipeline that is not its own — the AUT-366
+ * poisoning by another door. The caller keeps the build's last good deposit
+ * instead (SPEC §16.1). */
+function parsePipeline(
+  commit: string,
+  ref: PipelineSourceRef,
+  content: string,
+  onFailure: (failure: PipelineSourceFailure) => void,
+): PipelineSource | undefined {
+  try {
+    return { meta: { ref, commit }, config: parseConfig(content, `autobuild.toml@${commit}`) }
+  } catch (error) {
+    onFailure({
+      kind: ref === 'branch-head' ? 'branch-source' : 'base-source',
+      detail: `malformed autobuild.toml at ${ref}@${commit}: ${message(error)}`,
+    })
+    return undefined
+  }
 }
 
 /**
@@ -120,72 +175,158 @@ export async function resolvePipelineSource(
   input: PipelineSourceInput,
 ): Promise<PipelineSource | undefined> {
   const { slug, record, events } = input
+  const onFailure = input.onFailure ?? (() => {})
   const branch = buildBranch(record, slug)
   const path = 'autobuild.toml'
 
   if (input.mode === 'origin') {
     const forge = input.forge
-    if (forge === undefined) return undefined
+    if (forge === undefined) {
+      onFailure({ kind: 'capability', detail: 'origin mode with no forge' })
+      return undefined
+    }
     const { remoteBranchSha, readFile: forgeRead } = forge
-    if (remoteBranchSha !== undefined && forgeRead !== undefined) {
+    if (remoteBranchSha === undefined || forgeRead === undefined) {
+      onFailure({
+        kind: 'capability',
+        detail:
+          `forge lacks the ${remoteBranchSha === undefined ? 'remoteBranchSha' : 'readFile'} ` +
+          'capability the pipeline-source read needs',
+      })
+    } else {
+      let head: string | undefined
       try {
-        const head = await remoteBranchSha.call(forge, branch)
-        return pipeline(head, 'branch-head', await forgeRead.call(forge, path, head))
-      } catch {
-        // Branch not yet published (or forge read failed): fall through to the
-        // recorded base commit, which is exactly what the workspace was cut from.
+        head = await remoteBranchSha.call(forge, branch)
+      } catch (error) {
+        // Branch not yet published (or the forge failed): fall through to the
+        // recorded base commit, which is exactly what the workspace was cut
+        // from. Surfaced as `unpublished` either way — the normal order.
+        onFailure({
+          kind: 'unpublished',
+          detail: `forge remoteBranchSha(${branch}) failed: ${message(error)}`,
+        })
+      }
+      if (head !== undefined) {
+        let content: string | undefined
+        try {
+          content = await forgeRead.call(forge, path, head)
+        } catch (error) {
+          // The branch resolved but its file did not come back: an actionable
+          // forge failure, not an unpublished branch.
+          onFailure({
+            kind: 'branch-source',
+            detail: `forge readFile(${path}, ${head}) failed: ${message(error)}`,
+          })
+        }
+        if (content !== undefined) {
+          // A malformed build-branch file is terminal: the build's own branch
+          // exists, so the recorded base is not its pipeline either.
+          return parsePipeline(head, 'branch-head', content, onFailure)
+        }
       }
     }
     const baseSha = recordedBaseSha(events)
-    if (baseSha !== undefined && forgeRead !== undefined) {
-      try {
-        return pipeline(baseSha, 'base', await forgeRead.call(forge, path, baseSha))
-      } catch {
-        // Base file unreadable (legacy logs, deleted history): legacy fallback.
-      }
+    if (baseSha === undefined) {
+      onFailure({ kind: 'no-base', detail: 'no recorded base commit (legacy build)' })
+      return undefined
     }
-    return undefined
+    if (forgeRead === undefined) return undefined
+    let baseContent: string | undefined
+    try {
+      baseContent = await forgeRead.call(forge, path, baseSha)
+    } catch (error) {
+      // Base file unreadable (legacy logs, deleted history): legacy fallback.
+      onFailure({
+        kind: 'base-source',
+        detail: `forge readFile(${path}, base ${baseSha}) failed: ${message(error)}`,
+      })
+      return undefined
+    }
+    return parsePipeline(baseSha, 'base', baseContent, onFailure)
   }
 
   const { checkout, exec, workspacePath } = input
-  if (checkout !== undefined && exec !== undefined) {
-    // The build branch is a ref of the shared repository: it exists from
-    // provision time (cut from base) and survives workspace release, so the
-    // committed head is readable at every launch boundary — including the
-    // relaunch after finalize. The recorded commit is the exact sha read.
-    let head: string | undefined
+  if (checkout === undefined || exec === undefined) {
+    onFailure({ kind: 'capability', detail: 'checkout mode with no checkout or exec seam' })
+    return undefined
+  }
+  // The build branch is a ref of the shared repository: it exists from
+  // provision time (cut from base) and survives workspace release, so the
+  // committed head is readable at every launch boundary — including the
+  // relaunch after finalize. The recorded commit is the exact sha read.
+  let head: string | undefined
+  try {
+    const resolved = await git(['rev-parse', '--verify', `refs/heads/${branch}`], checkout, exec)
+    if (resolved.exitCode === 0) {
+      head = resolved.stdout.trim()
+    } else {
+      // Unpublished branch: the normal order, resolved from the base next.
+      onFailure({
+        kind: 'unpublished',
+        detail: `git rev-parse refs/heads/${branch} failed: ${
+          resolved.stderr.trim() || '(no output)'
+        }`,
+      })
+    }
+  } catch (error) {
+    // Fall through to the recorded base commit.
+    onFailure({
+      kind: 'unpublished',
+      detail: `git rev-parse refs/heads/${branch} failed: ${message(error)}`,
+    })
+  }
+  if (head !== undefined) {
+    // Checkout mode's primary read is the open build worktree's file — it is
+    // the branch head. The committed ref read is the released-workspace
+    // fallback, and the recorded commit stays the resolved branch head.
+    if (workspacePath !== undefined) {
+      try {
+        const content = await readFile(join(workspacePath, path), 'utf8')
+        // A malformed worktree file is terminal: the committed ref carries the
+        // same content, so the recorded base is not the build's pipeline
+        // either. The caller keeps the build's last good deposit.
+        return parsePipeline(head, 'branch-head', content, onFailure)
+      } catch (error) {
+        // Workspace released or unreadable: read the committed branch head.
+        onFailure({
+          kind: 'unpublished',
+          detail: `workspace file ${join(workspacePath, path)} unreadable: ${message(error)}`,
+        })
+      }
+    }
+    let content: string | undefined
     try {
-      const resolved = await git(['rev-parse', '--verify', `refs/heads/${branch}`], checkout, exec)
-      if (resolved.exitCode === 0) head = resolved.stdout.trim()
-    } catch {
-      // Fall through to the recorded base commit.
+      content = await readCheckoutFile(head, path, checkout, exec)
+    } catch (error) {
+      // The ref resolved but its file did not come back: corruption or an
+      // exec failure — actionable, unlike an unpublished branch.
+      onFailure({
+        kind: 'branch-source',
+        detail: `git show ${head}:${path} failed: ${message(error)}`,
+      })
     }
-    if (head !== undefined) {
-      // Checkout mode's primary read is the open build worktree's file — it is
-      // the branch head. The committed ref read is the released-workspace
-      // fallback, and the recorded commit stays the resolved branch head.
-      if (workspacePath !== undefined) {
-        try {
-          const content = await readFile(join(workspacePath, path), 'utf8')
-          return pipeline(head, 'branch-head', content)
-        } catch {
-          // Workspace released or unreadable: read the committed branch head.
-        }
-      }
-      try {
-        return pipeline(head, 'branch-head', await readCheckoutFile(head, path, checkout, exec))
-      } catch {
-        // Branch file unreadable: fall through to base.
-      }
-    }
-    const baseSha = recordedBaseSha(events)
-    if (baseSha !== undefined) {
-      try {
-        return pipeline(baseSha, 'base', await readCheckoutFile(baseSha, path, checkout, exec))
-      } catch {
-        // Base file unreadable: legacy fallback.
-      }
+    if (content !== undefined) {
+      // Malformed committed branch file: terminal, as above.
+      const parsed = parsePipeline(head, 'branch-head', content, onFailure)
+      if (parsed === undefined) return undefined
+      return parsed
     }
   }
-  return undefined
+  const baseSha = recordedBaseSha(events)
+  if (baseSha === undefined) {
+    onFailure({ kind: 'no-base', detail: 'no recorded base commit (legacy build)' })
+    return undefined
+  }
+  let baseContent: string | undefined
+  try {
+    baseContent = await readCheckoutFile(baseSha, path, checkout, exec)
+  } catch (error) {
+    // Base file unreadable: legacy fallback.
+    onFailure({
+      kind: 'base-source',
+      detail: `git show ${baseSha}:${path} failed: ${message(error)}`,
+    })
+    return undefined
+  }
+  return parsePipeline(baseSha, 'base', baseContent, onFailure)
 }
