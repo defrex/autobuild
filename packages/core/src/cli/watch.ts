@@ -17,6 +17,14 @@
  * semantics (in-order, exactly once per stream) are reimplemented locally for
  * the same reason.
  *
+ * Cadence follows the store kind (AUT-334). Against a local store the loop is
+ * the sequential interval tick. Against an `http(s)` store every tracked
+ * stream long-polls instead: one held `getEvents`/`getRepoEvents` request per
+ * stream is always in flight (tasks run concurrently), an appended event is
+ * seen within about a second of its append, and gap-fill keeps request starts
+ * at least `--interval` apart, so a quiet stream costs one request per wait
+ * window — not one per interval. Discovery keeps its interval cadence.
+ *
  * The cursor is `"v1." + base64url(JSON)` of the per-stream sequence position
  * plus the resolved store reference and repository identity. It is opaque to
  * callers — the format is not part of the contract — and a cursor from a
@@ -38,6 +46,7 @@ import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { PhaseSessionError } from '../store/phase-session'
+import { REMOTE_EVENT_WAIT_SECONDS } from '../store/remote/client'
 import type { BuildRecord } from '../store/types'
 import { resolveAmbientReadSession } from './env'
 import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
@@ -644,8 +653,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
       }
 
-      const pollBuild = async (stream: BuildStream): Promise<boolean> => {
-        const fresh = await store.getEvents(stream.slug, stream.lastSeq)
+      const pollBuild = async (
+        stream: BuildStream,
+        readOpts?: { waitSeconds?: number },
+      ): Promise<boolean> => {
+        const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
           stream.events.push(event)
           processBuildEvent(stream, event, stream.events)
@@ -657,10 +669,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
-      const pollRepository = async (stream: RepositoryStream): Promise<boolean> => {
+      const pollRepository = async (
+        stream: RepositoryStream,
+        readOpts?: { waitSeconds?: number },
+      ): Promise<boolean> => {
         // A repository row may be created mid-watch by the first dispatch.
         if ((await store.getRepo(repo)) === null) return true
-        const fresh = await store.getRepoEvents(repo, stream.lastSeq)
+        const fresh = await store.getRepoEvents(repo, stream.lastSeq, readOpts)
         for (const event of fresh) {
           processRepositoryEvent(stream, event)
           if (stop) break
@@ -753,11 +768,82 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       // ── The poll loop ──
       const deadline = timeoutMs === 0 ? Number.POSITIVE_INFINITY : now().getTime() + timeoutMs
       const aborted = (): boolean => opts.signal?.aborted === true
-      while (!stop) {
-        if (aborted() || now().getTime() >= deadline || namedAllTerminal()) break
-        await sleep(interval, opts.signal)
-        if (aborted()) break
-        await tick()
+
+      if (!isRemoteStoreRef(storeRef)) {
+        // Local cadence: one sequential tick per interval.
+        while (!stop) {
+          if (aborted() || now().getTime() >= deadline || namedAllTerminal()) break
+          await sleep(interval, opts.signal)
+          if (aborted()) break
+          await tick()
+        }
+      } else {
+        // Remote cadence (AUT-334): one long-poll task per tracked stream,
+        // running concurrently — a quiet stream keeps one held request in
+        // flight, so an appended event arrives within about a second instead
+        // of at the next interval tick. Gap-fill spaces each stream's request
+        // starts at least `interval` apart (elapsed request time counts
+        // toward the gap), so a server that answers immediately still sees
+        // today's request rate. Discovery keeps its interval cadence.
+        // Pre-launch guard mirrors the local loop's top-of-cycle checks: an
+        // already-terminal named set, an elapsed deadline, or an abort ends
+        // the watch before any request.
+        const shouldStop = stop || aborted() || now().getTime() >= deadline || namedAllTerminal()
+        const heldRead = { waitSeconds: REMOTE_EVENT_WAIT_SECONDS }
+        const tasks: Promise<void>[] = []
+        const launched = new Set<string>()
+
+        const runStreamTask = async (poll: () => Promise<unknown>): Promise<void> => {
+          while (!stop && !aborted() && now().getTime() < deadline) {
+            const started = now().getTime()
+            try {
+              await poll()
+              readFailureReported = false
+              if (namedAllTerminal()) {
+                stop = true
+                return
+              }
+            } catch (error) {
+              reportReadFailure(error)
+            }
+            if (stop || aborted()) return
+            const elapsed = now().getTime() - started
+            if (elapsed < interval) await sleep(interval - elapsed, opts.signal)
+          }
+        }
+
+        const launch = (stream: Stream): void => {
+          const key = stream.kind === 'build' ? stream.slug : REPO_STREAM_KEY
+          if (launched.has(key)) return
+          launched.add(key)
+          tasks.push(
+            stream.kind === 'build'
+              ? runStreamTask(() => pollBuild(stream, heldRead))
+              : runStreamTask(() => pollRepository(stream, heldRead)),
+          )
+        }
+
+        for (const stream of streams.values()) if (!shouldStop) launch(stream)
+
+        if (slugs.length === 0 && !shouldStop) {
+          tasks.push(
+            (async (): Promise<void> => {
+              while (!stop && !aborted() && now().getTime() < deadline) {
+                try {
+                  await discoverBuilds()
+                  readFailureReported = false
+                } catch (error) {
+                  reportReadFailure(error)
+                }
+                for (const stream of streams.values()) launch(stream)
+                if (stop || aborted()) return
+                await sleep(interval, opts.signal)
+              }
+            })(),
+          )
+        }
+
+        await Promise.all(tasks)
       }
 
       const finalCursor = countCursor ?? encodeCurrent()
