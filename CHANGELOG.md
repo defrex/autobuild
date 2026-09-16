@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#347](https://github.com/defrex/autobuild/pull/347) — Record auto-merge deferral observations only for human-actionable deferrals
 - [#340](https://github.com/defrex/autobuild/pull/340) — Guarantee a git identity for finalize commits
 - [#338](https://github.com/defrex/autobuild/pull/338) — Add `ab watch`: read-only event streaming with a resumable cursor
 - [#339](https://github.com/defrex/autobuild/pull/339) — Pin the listSessions same-millisecond tiebreak across stores
