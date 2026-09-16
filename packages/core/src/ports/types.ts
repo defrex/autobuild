@@ -267,6 +267,24 @@ export type AutoMergeDeferralCode =
   | 'local-base-checkout-dirty'
   | 'local-git-identity-missing'
 
+/** How a deferral resolves. `pipeline-resolved` codes are recovered by the
+ * pipeline itself — reconcile for merge conflicts, a later poll for
+ * not-yet-computed mergeability — and record no operator observation.
+ * `human-actionable` codes need a person to fix the named condition and keep
+ * the one-observation-per-PR-and-command rule. Adding a code without choosing
+ * a class is a compile error. */
+export type AutoMergeDeferralClass = 'pipeline-resolved' | 'human-actionable'
+
+export const autoMergeDeferralClasses = {
+  'github-plan-limitation': 'human-actionable',
+  'repository-auto-merge-disabled': 'human-actionable',
+  'unproven-gate-state': 'human-actionable',
+  'merge-conflicts': 'pipeline-resolved',
+  'mergeability-uncomputed': 'pipeline-resolved',
+  'local-base-checkout-dirty': 'human-actionable',
+  'local-git-identity-missing': 'human-actionable',
+} as const satisfies Record<AutoMergeDeferralCode, AutoMergeDeferralClass>
+
 export interface AutoMergeDeferralReason {
   /** Stable machine-readable family used by durable operator observations. */
   code: AutoMergeDeferralCode

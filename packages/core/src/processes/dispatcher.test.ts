@@ -3207,6 +3207,86 @@ describe('Dispatcher janitor', () => {
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
   })
 
+  test('a moved base with requested consent resolves itself and never records an auto-merge observation', async () => {
+    // The AC scenario: finalize opens a PR whose base has moved, the gate
+    // defers with merge-conflicts, the pipeline reconciles and re-verifies,
+    // and native auto-merge lands with no human anywhere — while the log at
+    // no point carries an auto-merge-gate observation.
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    const command = await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+    h.forge.setAutoMergeDeferral(1, {
+      code: 'merge-conflicts',
+      detail:
+        "GitHub reports mergeable_state 'DIRTY' — the head branch has merge conflicts with 'main'; " +
+        'update the branch or resolve the conflicts and the pending consent will be re-examined',
+    })
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+    const gateObservations = async (): Promise<number> =>
+      (await h.store.getEvents(slug)).filter(
+        (event) =>
+          event.type === 'observation.recorded' &&
+          event.payload.refs?.some((ref) => ref.startsWith('auto-merge-gate:')),
+      ).length
+
+    // The conflicted gate deferral re-enters reconcile and records nothing.
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), conflicted: 1 })
+    expect(await gateObservations()).toBe(0)
+
+    // The reconcile epilogue merges the base and verify re-runs in full.
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'base-2' },
+    })
+    await h.store.append(slug, {
+      actor: agentActor('reconcile', 's_reconcile'),
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'sha-merge', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'unit', attempt: 2 },
+    })
+    await h.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'unit', attempt: 2, pass: true },
+    })
+    expect(await gateObservations()).toBe(0)
+
+    // Clean again: the pending consent is re-examined and native auto-merge
+    // is applied without any human action.
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setGatePresence(1, 'present')
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+    const applied = (await h.store.getEvents(slug)).find(
+      (event) => event.type === 'pr.auto-merge-enabled',
+    )
+    expect(applied?.payload).toEqual({ commandSeq: command.seq })
+    expect(await gateObservations()).toBe(0)
+
+    // The forge merges, the janitor observes it, and still nothing is ever
+    // recorded — including between the merge fact and build.completed.
+    h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
+    expect(await h.dispatcher.tick()).toEqual(emptyTickReport())
+    await h.store.releaseLease(slug, 'runner-live')
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+    expect((await h.store.getEvents(slug)).map((event) => event.type).slice(-3)).toEqual([
+      'pr.merged',
+      'workspace.released',
+      'build.completed',
+    ])
+    expect(await gateObservations()).toBe(0)
+  })
+
   test('ungated CLEAN uses guarded squash only while awaiting-pr, then settles by observation', async () => {
     const h = harness()
     const slug = await seedAwaitingPr(h)

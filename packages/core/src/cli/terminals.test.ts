@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { agentActor, humanActor, KERNEL } from '../events/envelope'
-import { autoMergeDeferralObservation } from '../kernel/auto-merge'
+import { autoMergeDeferralObservation, pendingAutoMerge } from '../kernel/auto-merge'
+import { reduceBuild } from '../kernel/reducer'
 import { FakeForge } from '../ports/forge/fake'
 import { GitHubForge } from '../ports/forge/github'
 import type { Finding } from '../ontology'
@@ -1384,6 +1385,49 @@ describe('ab done — finalize', () => {
     )
     expect(observations).toHaveLength(1)
     expect(observations[0]?.payload).toMatchObject({ id: 'obs_existing' })
+  })
+
+  test('a conflicted PR with a pipeline-owned deferral completes finalize and records no observation', async () => {
+    class ConflictedForge extends FakeForge {
+      override async openPr(opts: Parameters<FakeForge['openPr']>[0]) {
+        const pr = await super.openPr(opts)
+        this.setPrState(pr.number, { state: 'open', mergeable: false })
+        this.setAutoMergeDeferral(pr.number, {
+          code: 'merge-conflicts',
+          detail:
+            "GitHub reports mergeable_state 'DIRTY' — the head branch has merge conflicts with 'main'; " +
+            'the conflict re-enters reconcile and the pending consent is re-examined on a later tick',
+        })
+        return pr
+      }
+    }
+    const command = await store.append(BUILD, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await store.putArtifact(BUILD, {
+      kind: 'pr-description',
+      content: '# Add auth rate limiting\n\nBody.\n',
+    })
+    const event = await done(
+      makeDeps({
+        store,
+        env: makeEnv({ phase: 'finalize' }),
+        workspacePath: workspace,
+        forge: new ConflictedForge(),
+      }),
+    )
+
+    expect(event.type).toBe('finalize.completed')
+    const events = await store.getEvents(BUILD)
+    // Pipeline-owned: nothing recorded, consent stays pending for the janitor.
+    expect(events.some((entry) => entry.type === 'observation.recorded')).toBe(false)
+    expect(events.some((entry) => entry.type === 'pr.auto-merge-enabled')).toBe(false)
+    expect(pendingAutoMerge(reduceBuild(events))).toEqual({
+      enabled: true,
+      commandSeq: command.seq,
+    })
   })
 
   test('crash between openPr and the event: the retry ADOPTS the existing PR instead of wedging (§8.7)', async () => {

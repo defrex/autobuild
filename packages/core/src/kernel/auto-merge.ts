@@ -1,6 +1,6 @@
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
-import type { AutoMergeDeferralReason } from '../ports/types'
+import { autoMergeDeferralClasses, type AutoMergeDeferralReason } from '../ports/types'
 import type { BuildStore } from '../store/types'
 import type { BuildState } from './reducer'
 
@@ -104,23 +104,84 @@ export function autoMergeDeferralRef(prNumber: number, commandSeq: number): stri
   return `auto-merge-gate:pr:${prNumber}:command:${commandSeq}`
 }
 
+/**
+ * The one live deferral observation for a PR/consent command, or undefined.
+ * An observation is current only while the PR is open — any `pr.merged` or
+ * `pr.closed` fact in the log ends it — and until later evidence proves the
+ * PR head changed, superseding the recorded condition until the gate
+ * re-examines consent and records a fresh observation. Head-changing evidence
+ * is a `reconcile.completed` (the resolution is a merge commit on the branch)
+ * or a `finalize.completed` whose head differs from the head the observation
+ * was recorded under. The dedupe and the projection share this predicate, so
+ * a stale observation stops suppressing and re-recording after reconcile
+ * works.
+ *
+ * The head at observation time is the newest `finalize.completed` before it:
+ * the record seam always runs right after that event is appended. An
+ * observation with no preceding `finalize.completed` (janitor-recorded seeds,
+ * synthetic logs) takes its head from the FIRST following `finalize.completed`
+ * instead of being superseded by it — the §8.7 retry that adopts the same PR
+ * at the same head must not invalidate the marker it honors. A
+ * `finalize.completed` naming a different head is a rebuilt pipeline
+ * re-finalizing after new commits, and it does make the observation stale.
+ *
+ * Ending currency on any terminal PR fact in the log is safe only because a
+ * build finalizes one PR; if a future feature ever re-finalizes onto a second
+ * PR, revisit.
+ */
+export function currentDeferralObservation(
+  events: AbEvent[],
+  prNumber: number,
+  commandSeq: number,
+): Extract<AbEvent, { type: 'observation.recorded' }> | undefined {
+  const marker = autoMergeDeferralRef(prNumber, commandSeq)
+  let observation: Extract<AbEvent, { type: 'observation.recorded' }> | undefined
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (
+      event !== undefined &&
+      event.type === 'observation.recorded' &&
+      event.payload.refs?.includes(marker) === true
+    ) {
+      observation = event
+      break
+    }
+  }
+  if (observation === undefined) return undefined
+
+  let headAtObservation: string | undefined
+  for (const event of events) {
+    if (event.seq >= observation.seq) break
+    if (event.type === 'finalize.completed') headAtObservation = event.payload.pr.headSha
+  }
+
+  for (const event of events) {
+    if (event.seq <= observation.seq) continue
+    if (event.type === 'pr.merged' || event.type === 'pr.closed') return undefined
+    if (event.type === 'reconcile.completed') return undefined
+    if (event.type === 'finalize.completed') {
+      if (headAtObservation === undefined) headAtObservation = event.payload.pr.headSha
+      else if (event.payload.pr.headSha !== headAtObservation) return undefined
+    }
+  }
+  return observation
+}
+
 export function hasAutoMergeDeferralObservation(
   events: AbEvent[],
   prNumber: number,
   commandSeq: number,
 ): boolean {
-  const marker = autoMergeDeferralRef(prNumber, commandSeq)
-  return events.some(
-    (event) =>
-      event.type === 'observation.recorded' && event.payload.refs?.includes(marker) === true,
-  )
+  return currentDeferralObservation(events, prNumber, commandSeq) !== undefined
 }
 
 /**
  * The exact provider-bearing summary for the current, unapplied enable
  * command. Deferral observations are durable history, so correlation to both
  * the current PR and command is what prevents an old reason from looking live
- * after consent is applied, cancelled, or replaced.
+ * after consent is applied, cancelled, or replaced — and the shared currency
+ * predicate is what keeps a superseded or terminal-PR observation from
+ * looking live at all.
  */
 export function currentAutoMergeDeferral(
   events: AbEvent[],
@@ -128,20 +189,7 @@ export function currentAutoMergeDeferral(
 ): string | undefined {
   const pending = pendingAutoMerge(state)
   if (pending?.enabled !== true || state.pr === undefined) return undefined
-
-  const marker = autoMergeDeferralRef(state.pr.number, pending.commandSeq)
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (
-      event !== undefined &&
-      event.seq > pending.commandSeq &&
-      event.type === 'observation.recorded' &&
-      event.payload.refs?.includes(marker) === true
-    ) {
-      return event.payload.summary
-    }
-  }
-  return undefined
+  return currentDeferralObservation(events, state.pr.number, pending.commandSeq)?.payload.summary
 }
 
 const DEFERRAL_SUMMARIES = {
@@ -157,7 +205,7 @@ const DEFERRAL_SUMMARIES = {
     'local squash requires a configured Git author and committer identity',
 } as const satisfies Record<AutoMergeDeferralReason['code'], string>
 
-/** Kernel-authored durable diagnostic for a non-transient declined consent. */
+/** Kernel-authored durable diagnostic for a human-actionable declined consent. */
 export function autoMergeDeferralObservation(
   reason: AutoMergeDeferralReason,
   prNumber: number,
@@ -179,10 +227,13 @@ export function autoMergeDeferralObservation(
 }
 
 /**
- * Record the one durable diagnostic allowed for a PR/auto-merge command.
- * Every comparison is against the authoritative stream tail. A concurrent
- * unrelated append merely causes a retry; a concurrent matching append makes
- * the next read return without writing a duplicate.
+ * Record the one durable diagnostic allowed for a PR/auto-merge command —
+ * only for a deferral a person must fix. Pipeline-owned and transient codes
+ * (`merge-conflicts`, `mergeability-uncomputed`) resolve through reconcile or
+ * a later poll, so they record nothing: consent stays pending and later ticks
+ * re-examine it. Every comparison is against the authoritative stream tail. A
+ * concurrent unrelated append merely causes a retry; a concurrent matching
+ * append makes the next read return without writing a duplicate.
  */
 export async function recordAutoMergeDeferralObservation(
   store: BuildStore,
@@ -192,6 +243,7 @@ export async function recordAutoMergeDeferralObservation(
   commandSeq: number,
   id: string,
 ): Promise<EventEnvelope<'observation.recorded'> | null> {
+  if (autoMergeDeferralClasses[reason.code] === 'pipeline-resolved') return null
   while (true) {
     const events = await store.getEvents(slug)
     if (hasAutoMergeDeferralObservation(events, prNumber, commandSeq)) return null

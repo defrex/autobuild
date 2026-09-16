@@ -687,3 +687,51 @@ describe('CodexAgentRunner streaming boundary (SPEC §9)', () => {
     expect(bufferedToolInputs[0]!.toolCallId).toBe(bufferedToolOutputs[0]!.toolCallId)
   })
 })
+
+describe('CodexAgentRunner continued-turn stream forwarding (SPEC §9)', () => {
+  test('a continued turn translates through its own per-turn emitter', async () => {
+    const lines = [thread('thread-1'), message('continued text'), completed(2, 1)]
+    const cli = fakeCli([
+      output([thread('thread-1'), message('started text'), completed(1, 1)]),
+      output(lines),
+    ])
+    const runner = new CodexAgentRunner({ runCli: cli.runCli, createSessionId: () => 'synthetic' })
+    const startParts: StreamPart[] = []
+    const { session } = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => startParts.push(...appended) },
+    })
+    const continueParts: StreamPart[] = []
+    await runner.continue(session, '- address findings', {
+      env: { AB_PHASE: 'implement@2', AB_SESSION: 'round-2' },
+      stream: { append: (appended) => continueParts.push(...appended) },
+    })
+
+    // The continued turn emits the same translation sequence as the
+    // equivalent start turn — the per-turn emitter is the only difference.
+    expect(continueParts.map((part) => part.type)).toEqual(startParts.map((part) => part.type))
+    expect(continueParts[0]).toEqual({
+      type: 'data-ab-prompt',
+      data: { text: '- address findings' },
+    })
+    expect(continueParts.at(-1)?.type).toBe('finish')
+  })
+
+  test("a continued turn without an emitter emits nothing, not the start turn's stream", async () => {
+    const cli = fakeCli([
+      output([thread('thread-1'), message('started'), completed(1, 1)]),
+      output([thread('thread-1'), message('continued'), completed(2, 1)]),
+    ])
+    const runner = new CodexAgentRunner({ runCli: cli.runCli, createSessionId: () => 'synthetic' })
+    const startParts: StreamPart[] = []
+    const { session } = await runner.start({
+      ...startOpts(),
+      stream: { append: (appended) => startParts.push(...appended) },
+    })
+    const startPartCount = startParts.length
+    await runner.continue(session, '- address findings')
+
+    // The start emitter received nothing from the continued turn.
+    expect(startParts.length).toBe(startPartCount)
+  })
+})
