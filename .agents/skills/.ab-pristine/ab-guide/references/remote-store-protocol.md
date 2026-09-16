@@ -430,7 +430,7 @@ identity is already the actor.
 | `listSessions` | `GET /repos/{repo}/sessions` | none | `200` + `SessionRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getSession` | `GET /sessions/{id}` | none | `200` + `SessionRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendSessionEvent` | `POST /sessions/{id}/events` | event write | `201` + session event envelope (same envelope shape with `"session"` in place of `"build"`) |
-| `getSessionEvents` | `GET /sessions/{id}/events?since={n}&wait={n}` | optional `since` (default `0`) and `wait` (whole seconds) query values, parsed exactly like the stream read's | `200` + session event envelopes with `seq >` parsed `since`, in increasing sequence order |
+| `getSessionEvents` | `GET /sessions/{id}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + session event envelopes with `seq >` parsed `since`, in increasing sequence order |
 | `appendSessionWithArtifacts` | `POST /sessions/{id}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using session shapes; the substitution algorithm of section 8 applies unchanged |
 | `putSessionArtifact` | `POST /sessions/{id}/artifacts` | artifact input | `201` + session artifact metadata |
 | `getSessionArtifact` | `GET /sessions/{id}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` | `200` + artifact read; missing kind/revision is `200 null` |
@@ -445,8 +445,9 @@ section 6 apply to session-scoped streams unchanged.
 
 Event reads honor the bounded wait: when no newer event exists, the server may
 hold the request up to the parsed `wait` bound in whole seconds, returning as
-soon as an event is appended and no later than the bound; a `wait` above 30
-seconds is clamped to 30. Held session-event reads poll at the hosted
+soon as an event is appended and no later than the bound; a `wait` above the
+event-wait ceiling of section 3 — 30 seconds on the shipped self-hosted server,
+25 on the shipped hosted service — is clamped to it. Held session-event reads poll at the hosted
 one-second budget (`EVENT_WAIT_POLL_MS = 1000`), matching the build and
 repository event reads, so append-to-wake is typically under one second. The
 clamp and early-return semantics are exactly the
