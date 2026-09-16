@@ -37,13 +37,21 @@ export interface AutoMergeDefaultFact {
 
 /** The newest `dispatcher.auto-merge-default-set` fact in the repository
  * journal, or undefined when no default was ever set (the scan runs from the
- * tail because seqs are monotonic, so the first hit is the newest). */
+ * tail because seqs are monotonic, so the first hit is the newest). With
+ * `enabled`, the newest fact *matching that value* — the fact a claim-time
+ * seed built on a stale pre-tick sample must cite, so a newer opposite fact
+ * stays strictly newer than the seed's provenance and the next tick's
+ * fan-out can reconcile it (f_b851c0e8). */
 export function latestAutoMergeDefault(
   events: RepositoryEvent[],
+  enabled?: boolean,
 ): AutoMergeDefaultFact | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
-    if (event?.type === 'dispatcher.auto-merge-default-set') {
+    if (
+      event?.type === 'dispatcher.auto-merge-default-set' &&
+      (enabled === undefined || event.payload.enabled === enabled)
+    ) {
       return { enabled: event.payload.enabled, seq: event.seq, actor: event.actor }
     }
   }
@@ -58,6 +66,12 @@ export function latestAutoMergeDefault(
  */
 export function autoMergeDefaultEligible(state: BuildState): boolean {
   if (state.status === 'done' || state.status === 'aborted') return false
+  // An empty log is a record whose `build.created` has not landed yet (the
+  // crash or one-await window between `createBuild` and the first append):
+  // writing an auto-merge command ahead of the immutable facts would leave the
+  // log unrecoverable — dispatch recovery rejects a log that does not start
+  // with `build.created` (f_647d40be). `lastSeq === 0` is exactly that log.
+  if (state.lastSeq === 0) return false
   return !state.pendingCommands.some((command) => command.command === 'abort')
 }
 

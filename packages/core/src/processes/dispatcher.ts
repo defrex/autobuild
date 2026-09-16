@@ -685,6 +685,15 @@ export class Dispatcher {
     const repoEvents = await this.repositoryEvents()
     const paused = reduceDispatchSettings(repoEvents).paused
     const autoMergeDefault = latestAutoMergeDefault(repoEvents)
+    // The claim-time seed cites the newest fact whose enabled state matches
+    // the launch sample, not blindly the newest fact: the CLI samples
+    // `defaultAutoMerge` from its own earlier read, so an interleaved toggle
+    // can make this tick's read newer-and-opposite. Citing the matching fact
+    // keeps the newer opposite fact strictly ahead of the seed's provenance,
+    // so the fan-out reconciles the build on the next tick instead of the
+    // stale sample out-voting the durable default forever (f_b851c0e8).
+    const autoMergeSeedFact =
+      opts.defaultAutoMerge === true ? latestAutoMergeDefault(repoEvents, true) : undefined
     // Stage 0 — SETTLEMENT: observe foreign executions from durable facts plus
     // provider liveness and settle their completion, lease, and publication.
     // Runs before the janitor so its executionLeaseLive checks see freshly
@@ -715,7 +724,7 @@ export class Dispatcher {
     await this.leaseSweep(report, launched, paused, opts)
     if (this.outOfBudget(opts)) return report
     if (opts.acceptNewWork !== false) {
-      await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeDefault)
+      await this.dispatch(report, launched, autoMergeUser, paused, opts, autoMergeSeedFact)
     }
     // Fire-and-forget by contract: long synthesize/review sessions must not
     // stop janitor, lease sweep, ticket dispatch, or signal handling on later
@@ -2637,7 +2646,7 @@ export class Dispatcher {
     autoMergeUser: string | undefined,
     paused: boolean,
     opts: TickOpts = {},
-    autoMergeDefault: AutoMergeDefaultFact | undefined = undefined,
+    autoMergeSeedFact: AutoMergeDefaultFact | undefined = undefined,
   ): Promise<void> {
     const { store, tickets, config } = this.deps
     // Blocked and paused builds still occupy a slot: their workspaces and
@@ -2791,12 +2800,12 @@ export class Dispatcher {
         body,
         ...(authoredSession !== undefined ? { authoredSession } : {}),
         ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
-        // Claim-time provenance: the durable default fact this claim sampled,
-        // recorded on `build.created` so the fan-out's seq comparison sees the
-        // claim as already answering the current default.
-        ...(opts.defaultAutoMerge === true && autoMergeDefault !== undefined
-          ? { autoMergeDefaultSeq: autoMergeDefault.seq }
-          : {}),
+        // Claim-time provenance: the newest durable default fact that agrees
+        // with the launch sample, recorded on `build.created` so the fan-out's
+        // seq comparison sees the claim as already answering that fact — and
+        // so a newer opposite fact (an interleaved toggle) stays strictly
+        // ahead of it and reconciles this build on the next tick (f_b851c0e8).
+        ...(autoMergeSeedFact !== undefined ? { autoMergeDefaultSeq: autoMergeSeedFact.seq } : {}),
       })
       // Accepted dispatches: durable boundaries recorded. A deferred outcome
       // means the remote provisioning continuation owns the rest.

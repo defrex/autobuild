@@ -6160,4 +6160,57 @@ describe('the durable auto-merge default fans out onto current builds', () => {
       (await h.store.getEvents(slug)).filter((e) => e.type === 'build.auto-merge-requested'),
     ).toHaveLength(1)
   })
+
+  test('a stale-ON launch sample under a newer OFF fact still converges to off (f_b851c0e8)', async () => {
+    // The CLI samples `defaultAutoMerge` from its own pre-tick read; an
+    // interleaved OFF toggle makes this tick's journal read newer-and-
+    // opposite. The seed must cite the newest ON fact (not the newest fact),
+    // so the OFF fact stays strictly ahead of the seed's provenance and the
+    // next tick's fan-out withdraws what the stale sample seeded.
+    const h = harness({ tickets: [readyTicket('T-stale')] })
+    const on = await setDefault(h, true)
+    const off = await setDefault(h, false)
+
+    await h.dispatcher.tick({ defaultAutoMerge: true, autoMergeUser: 'dispatch-op' })
+    const slug = 'add-rate-limiting'
+    const created = (await h.store.getEvents(slug)).find((e) => e.type === 'build.created')!
+    expect(created?.payload).toMatchObject({ autoMergeDefaultSeq: on.seq })
+    const request = (await h.store.getEvents(slug)).find(
+      (e) => e.type === 'build.auto-merge-requested',
+    )!
+    expect(request?.payload).toEqual({ defaultSeq: on.seq })
+
+    // The durable default wins: the build seeded under the stale sample is
+    // reconciled to off on the next tick.
+    await h.dispatcher.tick()
+    const cancels = (await h.store.getEvents(slug)).filter(
+      (e) => e.type === 'build.auto-merge-cancelled',
+    )
+    expect(cancels).toHaveLength(1)
+    expect(cancels[0]?.actor).toEqual({ kind: 'human', user: 'toggle-operator' })
+    expect(cancels[0]?.payload).toEqual({ defaultSeq: off.seq })
+  })
+
+  test('a build record with no build.created yet is not a fan-out target (f_647d40be)', async () => {
+    // The crash or one-await window between `createBuild` and the first
+    // append: an auto-merge command written ahead of `build.created` would
+    // leave the log unrecoverable — dispatch recovery rejects a log that does
+    // not start with the immutable ticket facts.
+    const h = harness({ tickets: [readyTicket('T-ghost', { title: 'ghost-build' })] })
+    await h.store.createBuild({
+      slug: 'ghost-build',
+      repo: REPO,
+      ticket: { source: 'fake', id: 'T-ghost', title: 'ghost-build' },
+      branch: 'ab/ghost-build',
+    })
+    await setDefault(h, true)
+
+    await h.dispatcher.tick()
+    const events = await h.store.getEvents('ghost-build')
+    expect(events.some((e) => e.type.startsWith('build.auto-merge-'))).toBe(false)
+    // Recovery reconstructed the immutable facts first and dispatch proceeded
+    // normally — no `dispatch.failed {stage: 'create'}`.
+    expect(events[0]?.type).toBe('build.created')
+    expect(events.some((e) => e.type === 'dispatch.failed')).toBe(false)
+  })
 })

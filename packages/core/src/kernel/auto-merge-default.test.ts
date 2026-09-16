@@ -28,7 +28,9 @@ const ON: AutoMergeDefaultFact = { enabled: true, seq: 7, actor: operator }
 const OFF: AutoMergeDefaultFact = { enabled: false, seq: 9, actor: operator }
 
 function build(over: Partial<BuildState> = {}): BuildState {
-  const state = reduceBuild([])
+  // A created build: `build.created` has landed, so `lastSeq > 0`. The empty
+  // log (lastSeq 0) is its own excluded case, tested below.
+  const state = { ...reduceBuild([]), lastSeq: 1 }
   return { ...state, ...over }
 }
 
@@ -52,6 +54,29 @@ describe('latestAutoMergeDefault', () => {
     const delegated = humanActor('the-operator', { kind: 'session', id: 'os_1' })
     expect(latestAutoMergeDefault([defaultSet(2, true, delegated)])?.actor).toEqual(delegated)
   })
+
+  test('with an enabled filter, the newest fact matching that value wins', () => {
+    const journal = [defaultSet(3, true), defaultSet(6, false), defaultSet(8, true)]
+    expect(latestAutoMergeDefault(journal, true)).toEqual({
+      enabled: true,
+      seq: 8,
+      actor: operator,
+    })
+    expect(latestAutoMergeDefault(journal, false)).toEqual({
+      enabled: false,
+      seq: 6,
+      actor: operator,
+    })
+    // A journal whose newest ON fact is older than an OFF fact: the filtered
+    // scan is what lets a stale-ON claim seed cite seq 3, leaving the OFF fact
+    // (seq 6) strictly newer than the seed's provenance (f_b851c0e8).
+    expect(latestAutoMergeDefault([defaultSet(3, true), defaultSet(6, false)], true)).toEqual({
+      enabled: true,
+      seq: 3,
+      actor: operator,
+    })
+    expect(latestAutoMergeDefault([defaultSet(6, false)], true)).toBeUndefined()
+  })
 })
 
 describe('autoMergeDefaultEligible', () => {
@@ -69,6 +94,13 @@ describe('autoMergeDefaultEligible', () => {
         }),
       ),
     ).toBe(false)
+  })
+
+  test('a record with no build.created yet — an empty log — is excluded', () => {
+    // The crash or one-await window between `createBuild` and the first
+    // append: an auto-merge command written ahead of `build.created` would
+    // leave the log unrecoverable for dispatch recovery (f_647d40be).
+    expect(autoMergeDefaultEligible(reduceBuild([]))).toBe(false)
   })
 
   test('queued, running, paused, and blocked builds are eligible', () => {
