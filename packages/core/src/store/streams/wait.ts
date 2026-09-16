@@ -37,6 +37,14 @@ export const STREAM_WAIT_POLL_MS = 25
  * the PostgreSQL and memory stores do on all three families (AUT-334/381/383).
  * The SQLite store has not adopted the budget (out of scope for AUT-383), so
  * its held event reads fall back to the stream default until it does.
+ *
+ * The PostgreSQL adapter treats the bound as nominal, not hard: a worst-case
+ * ≤1 s guarantee would need Postgres LISTEN/NOTIFY wake-on-append — one
+ * dedicated connection per held request on a pooled provider (Neon) — a cost
+ * considered and declined (AUT-334). Held event reads there re-query the
+ * database at most once per second, so an append by another connection is
+ * observed at the next poll: typically within about one second, worst case
+ * one poll interval plus the query round-trip.
  */
 export const EVENT_WAIT_POLL_MS = 1000
 
