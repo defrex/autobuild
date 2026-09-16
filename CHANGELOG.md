@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#382](https://github.com/defrex/autobuild/pull/382) — Align docs with the @defrex/autobuild-hosted-dispatcher package split
 - [#380](https://github.com/defrex/autobuild/pull/380) — Split the hosted dispatcher into @defrex/autobuild-hosted-dispatcher
 - [#379](https://github.com/defrex/autobuild/pull/379) — Fix the MCP plugin's metadata typing gap; drop the workaround
 - [#378](https://github.com/defrex/autobuild/pull/378) — Make `ab wait` long-poll on remote stores (AUT-368)
