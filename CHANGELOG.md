@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#360](https://github.com/defrex/autobuild/pull/360) — Add ab wait — block until a build reaches a condition (AUT-333)
+- [#359](https://github.com/defrex/autobuild/pull/359) — Correct the hosted MCP endpoint header comment: stateless GET serves SSE 200, not 405
 - [#357](https://github.com/defrex/autobuild/pull/357) — Add a bounded wait to the remote build-event reads
 - [#356](https://github.com/defrex/autobuild/pull/356) — Add per-operator credential-free sandboxes behind registry tools
 - [#355](https://github.com/defrex/autobuild/pull/355) — Serve the tool registry over hosted MCP with Better Auth OAuth
