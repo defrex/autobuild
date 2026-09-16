@@ -1,7 +1,9 @@
 import { createHostedStoreService } from '../service'
 import { createDispatcherEndpoint } from '../dispatcher'
+import { parseWebAuthEnv } from './config'
 import { webAuth } from './auth'
 import { createWebGateway } from './gateway'
+import { createMcpEndpoint } from './mcp'
 
 let service: ReturnType<typeof createHostedStoreService> | undefined
 export function hostedService() {
@@ -26,4 +28,19 @@ let dispatcher: ReturnType<typeof createDispatcherEndpoint> | undefined
 export function dispatcherEndpoint() {
   dispatcher ??= createDispatcherEndpoint({ env: process.env })
   return dispatcher
+}
+
+let mcp: ReturnType<typeof createMcpEndpoint> | undefined
+/** The MCP endpoint (AUT-341) — the tool registry over Streamable HTTP on
+ * the same origin, authorized by Better Auth's MCP plugin and executed
+ * through the operator protocol in-process. */
+export function mcpEndpoint() {
+  mcp ??= createMcpEndpoint({
+    env: process.env,
+    config: parseWebAuthEnv(process.env),
+    auth: webAuth(),
+    storeSecret: process.env.AB_STORE_SECRET?.trim() ?? '',
+    delegate: (request) => hostedService().fetch(request),
+  })
+  return mcp
 }
