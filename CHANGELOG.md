@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#348](https://github.com/defrex/autobuild/pull/348) — Reword stale streaming denials in operator-api.md
 - [#346](https://github.com/defrex/autobuild/pull/346) — Document the session-event read surface in SPEC (§7.1.1)
 - [#344](https://github.com/defrex/autobuild/pull/344) — Document the 30-second read-wait clamp in SPEC §7.6
 - [#342](https://github.com/defrex/autobuild/pull/342) — Persist repoOrigin in PostgresBuildStore.createBuild (schema v5)
