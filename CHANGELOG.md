@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#384](https://github.com/defrex/autobuild/pull/384) — Pin each build's pipeline config to its own branch (AUT-390)
 - [#375](https://github.com/defrex/autobuild/pull/375) — Give EVENT_WAIT_POLL_MS a single canonical definition by importing the core constant in the Postgres store
 - [#374](https://github.com/defrex/autobuild/pull/374) — Tolerate scheduler jitter in remote teardown poll-count assertion
 - [#373](https://github.com/defrex/autobuild/pull/373) — Pace memory store's held event reads at the event-wait budget
