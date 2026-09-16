@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import {
   MemoryBlobStore,
+  StreamBatchTooLargeError,
   describeBuildStoreContract,
   sampleBuildInput,
   sampleEventWrite,
   type BlobStore,
+  type StreamPart,
 } from 'autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
 import { openPostgresBuildStore } from './store'
@@ -319,6 +321,48 @@ if (testUrl) {
         const record = await closing
         expect(record.status).toBe('closed')
         expect((await store.readStream(b.id)).chunks).toHaveLength(1)
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    })
+
+    // Local-side adapters validate the batch and check the ceiling BEFORE
+    // resolving the stream, so an invalid batch on an unknown stream reports
+    // the validation or ceiling error — not unknown-stream. The remote server
+    // deliberately runs the opposite order (SPEC §7.6); that side is pinned
+    // in core's remote.test.ts. Both orders must write nothing. Runs only
+    // where AB_POSTGRES_TEST_URL is set — the unit verify step does not
+    // exercise it; the order here is otherwise fixed by the SPEC §7.6 text.
+    test('append rejection precedence: an invalid or oversized batch on an unknown stream rejects before any lookup and writes nothing', async () => {
+      const database = await isolatedDatabase()
+      const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+      try {
+        await store.createBuild(sampleBuildInput('st-pg-ghost'))
+
+        const empty = await store.appendStreamParts('st_ghost', []).catch((e: unknown) => e)
+        expect(empty).toBeInstanceOf(Error)
+        expect((empty as Error).message).toContain('stream parts must be a nonempty array')
+
+        const noType = await store
+          .appendStreamParts('st_ghost', [{ delta: 'x' } as unknown as StreamPart])
+          .catch((e: unknown) => e)
+        expect(noType).toBeInstanceOf(Error)
+        expect((noType as Error).message).toContain('must carry a nonempty string "type"')
+        expect((noType as Error).message).not.toContain('unknown stream')
+
+        // Shape-valid (a text-delta with a long delta) so the ceiling — not
+        // part validation — is the rejection observed.
+        const oversized = await store
+          .appendStreamParts('st_ghost', [
+            { type: 'text-delta', id: 't', delta: 'x'.repeat(1_048_600) },
+          ])
+          .catch((e: unknown) => e)
+        expect(oversized).toBeInstanceOf(StreamBatchTooLargeError)
+        expect((oversized as Error).message).toContain('1048576')
+        expect((oversized as Error).message).not.toContain('unknown stream')
+
+        expect(await store.getStream('st_ghost')).toBeNull()
       } finally {
         await store.close()
         await database.cleanup()
