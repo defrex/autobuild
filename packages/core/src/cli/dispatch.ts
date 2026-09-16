@@ -500,6 +500,9 @@ async function defaultWire(
     env: opts.env,
     storeRef: opened.storeRef,
     runtimeReferences: () => runtimeReferences,
+    sandboxSetupCommand: config.commands.setup,
+    sandboxRoot: resolve(join(opened.localStateRoot, 'orchestrator-sandboxes')),
+    sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
     ...providerSeams,
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })

@@ -4,13 +4,14 @@
  * for error paths git itself can't produce on demand.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WorkspaceHandle } from '../types'
 import { describeWorkspaceProviderContract } from './contract'
 import { GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
+import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 
 /** Identity/signing pinned per-invocation so tests ignore user git config. */
 const GIT_ID = [
@@ -674,5 +675,173 @@ describe('GitWorktreeProvider', () => {
     })
     failRemove = true
     expect(flakyProvider.release(handle)).rejects.toThrow(/worktree is locked/)
+  })
+})
+
+describe('GitWorktreeProvider operator sandbox', () => {
+  let repo: string
+  let root: string
+  let sandboxRoot: string
+  let provider: GitWorktreeProvider
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'ab-sandbox-repo-'))
+    root = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-'))
+    sandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-'))
+    await initRepo(repo)
+    provider = new GitWorktreeProvider({
+      root,
+      sandboxRoot,
+      setupCommand: 'echo setup-ran > setup-marker.txt',
+      sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
+      envSource: { PATH: process.env.PATH ?? '', MY_TOOL_CONFIG: 'tool-value' },
+    })
+  })
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
+    await rm(sandboxRoot, { recursive: true, force: true })
+  })
+
+  test('ensure provisions a detached worktree from the base head and runs setup once', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    expect(identity.workspacePath).toBe(identity.environmentId)
+    expect(await run(['git', 'rev-parse', 'HEAD'], identity.workspacePath)).toBe(
+      await run(['git', 'rev-parse', 'refs/heads/main'], repo),
+    )
+    expect(readFileSync(join(identity.workspacePath, 'setup-marker.txt'), 'utf8')).toContain(
+      'setup-ran',
+    )
+
+    // Reuse: the marker and setup are not re-run.
+    const setupAt = statSync(join(identity.workspacePath, 'setup-marker.txt')).mtimeMs
+    const reused = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    expect(reused).toEqual(identity)
+    expect(statSync(join(identity.workspacePath, 'setup-marker.txt')).mtimeMs).toBe(setupAt)
+
+    // describe resolves the same identity without provisioning anything new.
+    expect(await provider.orchestratorSandbox.describe({ repo, operator: 'ops' })).toEqual(identity)
+    expect(await provider.orchestratorSandbox.describe({ repo, operator: 'other' })).not.toEqual(
+      identity,
+    )
+  })
+
+  test('exec runs commands with a scrubbed environment inside the checkout', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const result = await provider.orchestratorSandbox.exec(identity, {
+      command: 'pwd && echo "cfg=$MY_TOOL_CONFIG"',
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(identity.workspacePath)
+    expect(result.stdout).toContain('cfg=tool-value')
+    // Built from an empty record: no credential name, only PATH + forwarded.
+    const envProbe = await provider.orchestratorSandbox.exec(identity, {
+      command: 'env | sort',
+    })
+    for (const name of SANDBOX_FORBIDDEN_ENV) {
+      expect(envProbe.stdout).not.toContain(`${name}=`)
+    }
+    expect(envProbe.stdout).toContain('MY_TOOL_CONFIG=tool-value')
+    expect(envProbe.stdout).toContain('PATH=')
+  })
+
+  test('exec past its timeout fails typed and start/wait round-trips a detached child', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const error = await provider.orchestratorSandbox
+      .exec(identity, { command: 'sleep 5', timeoutSeconds: 1 })
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('exec-timeout')
+
+    const { commandId } = await provider.orchestratorSandbox.start(identity, {
+      command: 'echo streamed-output',
+    })
+    expect(
+      await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 5 }),
+    ).toEqual({
+      state: 'exited',
+      exitCode: 0,
+      stdout: 'streamed-output\n',
+      stderr: '',
+    })
+    // A restarted host loses detached-command tracking: typed not-found.
+    const lost = await provider.orchestratorSandbox
+      .wait(identity, { commandId: 'sbcmd-gone', waitSeconds: 0 })
+      .catch((e: unknown) => e)
+    expect(lost).toBeInstanceOf(SandboxOperationError)
+    expect((lost as SandboxOperationError).stage).toBe('not-found')
+  })
+
+  test('readFile and writeFile are rooted at the checkout and reject escapes', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    await provider.orchestratorSandbox.writeFile(
+      identity,
+      'sub/dir/file.txt',
+      new TextEncoder().encode('bytes!'),
+    )
+    expect(
+      new TextDecoder().decode(
+        await provider.orchestratorSandbox.readFile(identity, 'sub/dir/file.txt'),
+      ),
+    ).toBe('bytes!')
+    expect(await provider.orchestratorSandbox.readFile(identity, 'README.md')).toEqual(
+      new Uint8Array(await readFile(join(identity.workspacePath, 'README.md'))),
+    )
+    for (const escape of ['../outside', '/abs', 'a/../../b']) {
+      const error = await provider.orchestratorSandbox
+        .readFile(identity, escape)
+        .catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+    }
+  })
+
+  test('stop declines honestly; release removes the worktree and reports confirmed', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    expect(
+      await provider.orchestratorSandbox.stop({
+        operator: 'ops',
+        environmentId: identity.environmentId,
+      }),
+    ).toEqual({ outcome: 'unsupported' })
+
+    const released = await provider.orchestratorSandbox.release({
+      repo,
+      operator: 'ops',
+      environmentId: identity.environmentId,
+    })
+    expect(released.snapshots).toEqual({ outcome: 'confirmed' })
+    expect(existsSync(identity.workspacePath)).toBe(false)
+    // Release of a never-provisioned operator is a no-op, not an error.
+    const missing = await provider.orchestratorSandbox.describe({ repo, operator: 'nobody' })
+    await provider.orchestratorSandbox.release({
+      repo,
+      operator: 'nobody',
+      environmentId: missing.environmentId,
+    })
   })
 })

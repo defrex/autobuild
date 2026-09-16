@@ -7,8 +7,18 @@
  * (constitution #2).
  */
 import { mkdir, realpath } from 'node:fs/promises'
+import { createHash, randomBytes } from 'node:crypto'
+import { readFile as fsReadFile, rm, stat, writeFile as fsWriteFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import type { WorkspaceBase } from '../../ontology'
+import {
+  SandboxOperationError,
+  type OperatorSandboxExecution,
+  type SandboxCommandRequest,
+  type SandboxCommandResult,
+  type SandboxEnvironmentIdentity,
+  type SandboxWaitResult,
+} from './operator-sandbox'
 import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
 
 export interface ExecResult {
@@ -96,7 +106,12 @@ function parseWorktreeList(porcelain: string): WorktreeEntry[] {
 
 export class GitWorktreeProvider implements WorkspaceProvider {
   readonly name = 'git-worktree'
+  readonly orchestratorSandbox: OperatorSandboxExecution
   private readonly root: string
+  private readonly sandboxRoot: string
+  private readonly setupCommand: string | undefined
+  private readonly sandboxEnvironmentVariables: readonly string[]
+  private readonly sandboxEnvSource: Record<string, string | undefined>
   /** Canonicalized (symlink-free) root, resolved lazily — git reports
    * worktree paths canonicalized, so comparisons must be too. */
   private rootReal: string | null = null
@@ -106,9 +121,38 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * still-on-disk worktree rediscovers the repo via git-common-dir). */
   private readonly repos = new Map<string, string>()
 
-  constructor(opts: { root: string; exec?: Exec }) {
+  constructor(opts: {
+    root: string
+    exec?: Exec
+    /** Operator-sandbox worktree root; defaults to a sibling of the build
+     * worktree root inside the local state tree. */
+    sandboxRoot?: string
+    /** The repository's raw `[commands].setup` shell string, run once per
+     * fresh operator-sandbox worktree. */
+    setupCommand?: string
+    /** Forwarded non-secret variable names, resolved from `envSource`. */
+    sandboxEnvironmentVariables?: readonly string[]
+    /** Host environment the guest PATH and forwarded names resolve from.
+     * The guest environment is otherwise built from an empty record. */
+    envSource?: Record<string, string | undefined>
+  }) {
     this.root = resolve(opts.root)
+    this.sandboxRoot = resolve(opts.sandboxRoot ?? join(opts.root, '..', 'orchestrator-sandboxes'))
+    this.setupCommand = opts.setupCommand
+    this.sandboxEnvironmentVariables = opts.sandboxEnvironmentVariables ?? []
+    this.sandboxEnvSource = opts.envSource ?? {}
     this.exec = opts.exec ?? spawnExec
+    this.orchestratorSandbox = {
+      describe: (input) => Promise.resolve(this.sandboxIdentity(input.repo, input.operator)),
+      ensure: (input) => this.ensureSandbox(input),
+      exec: (handle, request) => this.sandboxExec(handle, request),
+      start: (handle, request) => this.sandboxStart(handle, request),
+      wait: (handle, input) => this.sandboxWait(handle, input),
+      readFile: (handle, path) => this.sandboxReadFile(handle, path),
+      writeFile: (handle, path, content) => this.sandboxWriteFile(handle, path, content),
+      stop: () => Promise.resolve({ outcome: 'unsupported' as const }),
+      release: (input) => this.sandboxRelease(input),
+    }
   }
 
   private async realRoot(): Promise<string> {
@@ -441,5 +485,297 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     // The common dir is the main repo's `.git`; worktree commands need the
     // repo directory itself (a bare common dir already is one).
     return commonDir.endsWith(`${sep}.git`) ? commonDir.slice(0, -`${sep}.git`.length) : commonDir
+  }
+
+  // ── Operator sandbox capability (AUT-340) ──────────────────────
+  //
+  // One worktree per operator × repository under the local state tree,
+  // provisioned with the repository's setup command; the same registry tools
+  // operate on it. A local worktree has no stop/snapshot lifecycle, so `stop`
+  // declines honestly and the idle settlement skips it.
+
+  private sandboxPath(repo: string, operator: string): string {
+    const digest = createHash('sha256').update(`${repo}\0${operator}`).digest('hex').slice(0, 10)
+    return join(this.sandboxRoot, digest)
+  }
+
+  private sandboxIdentity(repo: string, operator: string): SandboxEnvironmentIdentity {
+    const path = this.sandboxPath(repo, operator)
+    return { provider: this.name, environmentId: path, workspacePath: path }
+  }
+
+  /** The credential-free guest environment: one fresh record per call —
+   * never the host environment wholesale — holding the host PATH plus the
+   * forwarded names. */
+  private sandboxEnv(): Record<string, string> {
+    const env: Record<string, string> = {
+      PATH: this.sandboxEnvSource.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    }
+    for (const name of this.sandboxEnvironmentVariables) {
+      const value = this.sandboxEnvSource[name]
+      if (value === undefined || value === '') {
+        throw new SandboxOperationError(
+          'environment',
+          `operator sandbox environment variable ${name} is not set in the host environment`,
+        )
+      }
+      env[name] = value
+    }
+    return env
+  }
+
+  private async isRegisteredWorktree(path: string, repo: string): Promise<boolean> {
+    const list = await this.git(repo, ['worktree', 'list', '--porcelain'])
+    if (list.exitCode !== 0) return false
+    return parseWorktreeList(list.stdout).some((entry) => resolve(entry.path) === resolve(path))
+  }
+
+  private async ensureSandbox(input: {
+    repo: string
+    operator: string
+    baseBranch: string
+  }): Promise<SandboxEnvironmentIdentity> {
+    const identity = this.sandboxIdentity(input.repo, input.operator)
+    if (await this.isRegisteredWorktree(identity.environmentId, input.repo)) return identity
+    await mkdir(this.sandboxRoot, { recursive: true })
+    const baseHead = await this.resolveCommit(input.repo, `refs/heads/${input.baseBranch}`)
+    await this.gitOrThrow(input.repo, [
+      'worktree',
+      'add',
+      '--detach',
+      identity.environmentId,
+      baseHead,
+    ])
+    try {
+      const marker = join(identity.workspacePath, '.autobuild-sandbox-provisioned')
+      const provisioned = await stat(marker).then(
+        () => true,
+        () => false,
+      )
+      if (!provisioned && this.setupCommand !== undefined && this.setupCommand.trim() !== '') {
+        const result = await this.exec(['sh', '-c', this.setupCommand], {
+          cwd: identity.workspacePath,
+        })
+        if (result.exitCode !== 0) {
+          throw new SandboxOperationError(
+            'provision',
+            `operator sandbox setup failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`}`,
+          )
+        }
+      }
+      await fsWriteFile(marker, '')
+    } catch (error) {
+      // A half-provisioned worktree is removed so the next call starts over.
+      await this.git(input.repo, ['worktree', 'remove', '--force', identity.environmentId])
+      await this.git(input.repo, ['worktree', 'prune'])
+      throw error
+    }
+    return identity
+  }
+
+  private async sandboxExec(
+    handle: SandboxEnvironmentIdentity,
+    request: SandboxCommandRequest,
+  ): Promise<SandboxCommandResult> {
+    const timeoutSeconds = Math.min(Math.max(request.timeoutSeconds ?? 120, 1), 300)
+    const cwd =
+      request.cwd === undefined ? handle.workspacePath : join(handle.workspacePath, request.cwd)
+    const proc = Bun.spawn(['sh', '-c', request.command], {
+      cwd,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: this.sandboxEnv(),
+    })
+    const timer = AbortSignal.timeout(timeoutSeconds * 1000)
+    const exitedOrTimeout = Promise.race([
+      proc.exited.then((code) => ({ kind: 'exited' as const, code })),
+      new Promise<never>((_, reject) => {
+        timer.addEventListener(
+          'abort',
+          () =>
+            reject(
+              new SandboxOperationError(
+                'exec-timeout',
+                `sandbox command exceeded its ${timeoutSeconds}s bound and was killed`,
+              ),
+            ),
+          { once: true },
+        )
+      }),
+    ])
+    const outcome = await exitedOrTimeout.then(
+      (value) => value,
+      (error) => {
+        try {
+          proc.kill('SIGTERM')
+        } catch {
+          /* already exited */
+        }
+        throw error
+      },
+    )
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    return { exitCode: outcome.code ?? -1, stdout, stderr }
+  }
+
+  /** Detached children tracked in-process only; a restarted host reports a
+   * recorded command as gone (`wait` fails typed `not-found`). */
+  private readonly sandboxChildren = new Map<
+    string,
+    {
+      proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
+      stdout: string
+      stderr: string
+      exitCode: number | null
+    }
+  >()
+
+  private trackChildStreams(
+    commandId: string,
+    child: { proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'> },
+  ): void {
+    void (async () => {
+      const reader = child.proc.stdout.getReader()
+      const decoder = new TextDecoder()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        this.sandboxChildren.get(commandId)!.stdout += decoder.decode(value, { stream: true })
+      }
+    })()
+    void (async () => {
+      const reader = child.proc.stderr.getReader()
+      const decoder = new TextDecoder()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        this.sandboxChildren.get(commandId)!.stderr += decoder.decode(value, { stream: true })
+      }
+    })()
+    void child.proc.exited.then((code) => {
+      const tracked = this.sandboxChildren.get(commandId)
+      if (tracked !== undefined) tracked.exitCode = code ?? -1
+    })
+  }
+
+  private async sandboxStart(
+    handle: SandboxEnvironmentIdentity,
+    request: SandboxCommandRequest,
+  ): Promise<{ commandId: string }> {
+    const cwd =
+      request.cwd === undefined ? handle.workspacePath : join(handle.workspacePath, request.cwd)
+    const proc = Bun.spawn(['sh', '-c', request.command], {
+      cwd,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: this.sandboxEnv(),
+    })
+    const commandId = `sbcmd-${randomBytes(8).toString('hex')}`
+    this.sandboxChildren.set(commandId, { proc, stdout: '', stderr: '', exitCode: null })
+    this.trackChildStreams(commandId, { proc })
+    return { commandId }
+  }
+
+  private async sandboxWait(
+    handle: SandboxEnvironmentIdentity,
+    input: { commandId: string; waitSeconds: number },
+  ): Promise<SandboxWaitResult> {
+    const child = this.sandboxChildren.get(input.commandId)
+    if (child === undefined) {
+      throw new SandboxOperationError(
+        'not-found',
+        `unknown sandbox command ${JSON.stringify(input.commandId)}; a restarted host loses detached-command tracking`,
+      )
+    }
+    const deadline = Date.now() + Math.min(Math.max(input.waitSeconds, 0), 300) * 1000
+    while (child.exitCode === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    if (child.exitCode === null)
+      return { state: 'running', stdout: child.stdout, stderr: child.stderr }
+    return {
+      state: 'exited',
+      exitCode: child.exitCode,
+      stdout: child.stdout,
+      stderr: child.stderr,
+    }
+  }
+
+  private async sandboxRootedPath(
+    handle: SandboxEnvironmentIdentity,
+    path: string,
+  ): Promise<string> {
+    if (path.includes('\\') || path.startsWith('/')) {
+      throw new SandboxOperationError(
+        'exec',
+        `sandbox path ${JSON.stringify(path)} must be relative to the checkout and use "/" separators`,
+      )
+    }
+    const rooted = resolve(handle.workspacePath, path)
+    if (
+      rooted !== handle.workspacePath &&
+      !rooted.startsWith(resolve(handle.workspacePath) + sep)
+    ) {
+      throw new SandboxOperationError(
+        'exec',
+        `sandbox path ${JSON.stringify(path)} escapes the checkout`,
+      )
+    }
+    return rooted
+  }
+
+  private async sandboxReadFile(
+    handle: SandboxEnvironmentIdentity,
+    path: string,
+  ): Promise<Uint8Array> {
+    const rooted = await this.sandboxRootedPath(handle, path)
+    try {
+      return new Uint8Array(await fsReadFile(rooted))
+    } catch (error) {
+      throw new SandboxOperationError(
+        'not-found',
+        `could not read sandbox file ${JSON.stringify(path)}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
+  private async sandboxWriteFile(
+    handle: SandboxEnvironmentIdentity,
+    path: string,
+    content: Uint8Array,
+  ): Promise<void> {
+    const rooted = await this.sandboxRootedPath(handle, path)
+    await mkdir(resolve(rooted, '..'), { recursive: true })
+    await fsWriteFile(rooted, content)
+  }
+
+  private async sandboxRelease(input: {
+    repo: string
+    operator: string
+    environmentId: string
+  }): Promise<{ snapshots: { outcome: 'confirmed' } }> {
+    const path = resolve(input.environmentId)
+    const repo = this.repos.get(path) ?? (await this.discoverRepo(path)) ?? input.repo
+    const removed = await this.git(repo, ['worktree', 'remove', '--force', path])
+    if (
+      removed.exitCode !== 0 &&
+      !/is not a working tree|validation failed, cannot remove working tree/i.test(removed.stderr)
+    ) {
+      throw new SandboxOperationError(
+        'release',
+        `could not remove operator sandbox worktree ${path}: ${removed.stderr.trim() || removed.stdout.trim() || `exit ${removed.exitCode}`}`,
+      )
+    }
+    await this.git(repo, ['worktree', 'prune'])
+    await rm(path, { recursive: true, force: true }).catch(() => {})
+    this.repos.delete(path)
+    // A local worktree has no snapshot concept; release is always complete.
+    return { snapshots: { outcome: 'confirmed' } }
   }
 }

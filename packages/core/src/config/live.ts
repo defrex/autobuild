@@ -51,12 +51,12 @@ export const RESTART_REQUIRED_CONFIG_PATHS = [
   'plugins',
   'workspace.provider',
   'workspace.config',
+  'orchestrator',
   'tickets.source',
   'tickets.teamKey',
   'tickets.claimedState',
   'tickets.createState',
   'tickets.dir',
-  'orchestrator',
 ] as const
 export type RestartRequiredConfigPath = (typeof RESTART_REQUIRED_CONFIG_PATHS)[number]
 
