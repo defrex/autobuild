@@ -1191,7 +1191,7 @@ describe('renderDashboard: never color-only', () => {
     expect(rd(detailModel, WIDE).join('\n')).toContain('review round ceiling: plan 12, code 9')
   })
 
-  test('auto-merge intent is conveyed by one common token that is absent when off', () => {
+  test('auto-merge intent is always conveyed by one common token, including off', () => {
     const lines = rd(
       model([
         build({ slug: 'off-row', autoMerge: 'off' }),
@@ -1202,13 +1202,36 @@ describe('renderDashboard: never color-only', () => {
       WIDE,
     )
     const row = (slug: string): string => lines.find((line) => line.includes(slug))!
-    expect(row('off-row')).not.toContain('auto merge')
-    for (const slug of ['requested-row', 'enabled-row', 'cancelling-row']) {
-      expect(row(slug)).toContain('auto merge')
+    for (const slug of ['off-row', 'requested-row', 'enabled-row', 'cancelling-row']) {
+      expect(row(slug)).toContain(`auto merge ${slug.split('-')[0]}`)
     }
+    // State is never conveyed by the absence of a token: off draws its own.
+    expect(row('off-row')).toContain('auto merge off')
     expect(lines.join('\n')).not.toContain('auto requested')
     expect(lines.join('\n')).not.toContain('auto enabled')
     expect(lines.join('\n')).not.toContain('auto cancelling')
+  })
+
+  test('an off token turns red while the repository default reads ON', () => {
+    const mismatch = rd(
+      { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge: true },
+      { color: true, width: 200 },
+    )
+      .join('\n')
+      .split('\n')
+      .find((line) => stripAnsi(line).includes('off-row'))!
+    expect(stripAnsi(mismatch)).toContain('auto merge off')
+    expect(mismatch).toContain('\x1b[31mauto merge off')
+
+    const agrees = rd(
+      { ...model([build({ slug: 'off-row', autoMerge: 'off' })]), defaultAutoMerge: false },
+      { color: true, width: 200 },
+    )
+      .join('\n')
+      .split('\n')
+      .find((line) => stripAnsi(line).includes('off-row'))!
+    expect(stripAnsi(agrees)).toContain('auto merge off')
+    expect(agrees).not.toContain('\x1b[31mauto merge off')
   })
 })
 
@@ -1240,14 +1263,14 @@ describe('renderDashboard: emphasis', () => {
             '[commands].setup "bun install" failed (attempt 2, exit status 1): first line\nsecond\u001b[2J line',
         }),
       ]),
-      { color: false, width: 48 },
+      { color: false, width: 60 },
     ).map(stripAnsi)
     const frame = lines.join('\n')
     expect(frame).toContain('broken-setup')
     expect(frame).toContain('[commands].setup')
     expect(frame).toContain('second\\u{1b}[2J')
     expect(frame).not.toContain('\u001b[2J')
-    expect(lines.every((line) => line.length <= 48)).toBe(true)
+    expect(lines.every((line) => line.length <= 60)).toBe(true)
   })
 
   test('every unresolved blocker gets its own line', () => {
@@ -1293,13 +1316,15 @@ describe('renderDashboard: emphasis', () => {
   })
 
   test('auto merge uses cyan while requested, green when enabled, and yellow while cancelling', () => {
-    expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mauto merge\x1b[0m')
-    expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mauto merge\x1b[0m')
-    expect(colored(build({ autoMerge: 'cancelling' }))).toContain('\x1b[33mauto merge\x1b[0m')
+    expect(colored(build({ autoMerge: 'requested' }))).toContain('\x1b[36mauto merge requested')
+    expect(colored(build({ autoMerge: 'enabled' }))).toContain('\x1b[32mauto merge enabled')
+    expect(colored(build({ autoMerge: 'cancelling' }))).toContain('\x1b[33mauto merge cancelling')
     const offRow = colored(build({ autoMerge: 'off' }))
       .split('\n')
       .find((line) => stripAnsi(line).includes('auth-rate-limit'))!
-    expect(stripAnsi(offRow)).not.toContain('auto merge')
+    // Off (default off here) still renders its token, in the dim tone.
+    expect(stripAnsi(offRow)).toContain('auto merge off')
+    expect(offRow).toContain('\x1b[2mauto merge off')
   })
 })
 
@@ -1535,8 +1560,8 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
       harvest: harvest({ status: 'failed', detail: 'stopped at review after automatic recovery' }),
       selection: { kind: 'build' as const, slug: 'auth-rate-limit' },
     }
-    const lines = rd(dashboard, { color: false, width: 52 })
-    expectInsideGutters(lines, 52)
+    const lines = rd(dashboard, { color: false, width: 64 })
+    expectInsideGutters(lines, 64)
 
     const summary = lines.find((line) => line.includes('Autobuild'))!
     const toggles = lines.find((line) => line.includes('intake ON'))!
@@ -1803,13 +1828,13 @@ describe('renderDashboard: truncation (one rendered line = one physical row)', (
     // ticket id (left column) and the status (right-pinned) are both intact.
     const line = rd(
       model([build({ slug: 'interactive-build-dashboard-for-ab-dispatch', ticketId: 'AB-123' })]),
-      { color: true, width: 40 },
+      { color: true, width: 60 },
     ).find((l) => stripAnsi(l).includes('AB-123'))!
     const plain = stripAnsi(line)
     expect(plain).toContain('AB-123') // ticket id survives
     expect(plain).toContain('RUNNING') // status survives, right-pinned
     expect(plain).toContain('~') // the slug is what got cut
-    expect(plain.length).toBeLessThanOrEqual(40)
+    expect(plain.length).toBeLessThanOrEqual(60)
   })
 
   test('the build legend stays one physical row at a narrow width', () => {

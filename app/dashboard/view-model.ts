@@ -43,6 +43,7 @@ export interface DashboardParityProjection {
       qualifier?: string
       count?: number
       timing?: StepTiming
+      reason?: string
     }>
   }>
   harvest?: {
@@ -62,6 +63,7 @@ export function projectWebParity(model: DashboardModel): DashboardParityProjecti
       ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),
       ...(step.count !== undefined ? { count: step.count } : {}),
       ...(step.timing !== undefined ? { timing: step.timing } : {}),
+      ...(step.reason !== undefined ? { reason: step.reason } : {}),
     }))
   return {
     builds: model.builds.map((build) => ({

@@ -597,6 +597,11 @@ input.short {
 .tokens .am[data-am="cancelling"] {
   color: var(--warn);
 }
+/* The default-on/build-off mismatch: the repository row reads auto merge ON
+ * while this build holds no consent — visible without opening the detail. */
+.tokens .am[data-mismatch] {
+  color: var(--alert);
+}
 .tokens .am[data-am="requested"] {
   color: var(--live);
 }
