@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#351](https://github.com/defrex/autobuild/pull/351) — Make the via-attribution contract transport-aware
 - [#348](https://github.com/defrex/autobuild/pull/348) — Reword stale streaming denials in operator-api.md
 - [#346](https://github.com/defrex/autobuild/pull/346) — Document the session-event read surface in SPEC (§7.1.1)
 - [#345](https://github.com/defrex/autobuild/pull/345) — Pin the listStreams same-timestamp tiebreak across stores
