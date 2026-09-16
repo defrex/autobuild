@@ -1389,8 +1389,9 @@ the existing config.
 
 Re-running init still maintains the `.autobuild/` ignore rule and skill
 installation. `ab upgrade` does not migrate or rewrite `autobuild.toml`; by
-default it first updates a recognized Bun forge distribution and then merges
-vendored skills from that distribution. For a local install, Bun may update the
+default it first updates a recognized Bun installation — from the npm registry
+for a registry install, or from GitHub Releases for a `github:` install — and
+then merges vendored skills from that distribution. For a local install, Bun may update the
 *owning* project's Autobuild dependency in `package.json` and `bun.lock`; this
 package-manager side effect is separate from target-repository configuration.
 Use `ab upgrade --no-self-update` for merge-only behavior.

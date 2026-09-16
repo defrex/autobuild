@@ -2141,15 +2141,20 @@ nonzero.
 **Installation identity** is local to the running distribution. `ab --version`
 reads its package version, Bun-recorded forge commit when present, and the
 independent plugin API version; it needs no repository, config, store, or
-network. A source checkout is identified by its `.git` marker. A movable Bun
-forge install is identified only when the distribution's `.bun-tag`, its owning
-direct `github:owner/repository` dependency, and `bun.lock` record agree. The
-owner/repository is derived from those package-manager records, never hardcoded,
-so a fork install follows its fork. Unknown or contradictory provenance is a
-named refusal, never a guessed install command.
+network. A source checkout is identified by its `.git` marker. A managed Bun
+install has one of two channels, both derived from the owning `package.json`
+dependency and `bun.lock` record, never hardcoded. An npm registry install is
+identified when the direct dependency is a semver range the installed version
+satisfies and the lock resolves that name to the same registry version. A
+movable Bun forge install is identified only when the distribution's
+`.bun-tag`, its owning direct `github:owner/repository` dependency, and
+`bun.lock` record agree; a fork install therefore follows its fork. Unknown or
+contradictory provenance is a named refusal, never a guessed install command.
 
 **Upgrades** run only on explicit `ab upgrade`. By default the command resolves
-the latest full GitHub Release from that installation repository. If newer, it
+the latest published version on the installation's channel: the registry's
+version document for an npm install, or the latest full GitHub Release of the
+installation repository for a forge install. If newer, it
 uses the matching Bun local or global operation to install the release, then
 hands off to a fresh process from the replaced distribution before touching
 skills. Thus both defaults and merge logic come from the new version. A local

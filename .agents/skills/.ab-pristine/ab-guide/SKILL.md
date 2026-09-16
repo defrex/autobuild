@@ -877,10 +877,11 @@ It works outside a repository, needs no config or `AB_*` session, and performs
 no network request.
 
 **`ab upgrade <target> [--no-self-update | --version <semver>]`** updates only
-when explicitly invoked. By default it resolves the latest full GitHub Release
-from the repository recorded by the running Bun forge install (including a
-fork), installs it with the matching local/global Bun mechanism, then hands off
-to that replacement binary. The fresh process therefore supplies both skill
+when explicitly invoked. By default it resolves the latest published version on
+the installation's channel — the npm registry for a registry install, or the
+latest full GitHub Release from the repository recorded by a Bun forge install
+(including a fork) — installs it with the matching local/global Bun mechanism,
+then hands off to that replacement binary. The fresh process therefore supplies both skill
 defaults and merge logic. `--version` selects an exact release, including an
 older one; `--no-self-update` merges against the installed distribution. Source
 checkouts are never mutated and still merge installed skills, even with an

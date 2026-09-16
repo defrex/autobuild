@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ExecResult } from '../ports/workspace/git-worktree'
 import { runCli } from './main'
-import { availableRelease, selfUpdate, type SelfUpdateCommand } from './self-update'
+import {
+  availableRelease,
+  registryVersionUrl,
+  selfUpdate,
+  type RegistryLookup,
+  type SelfUpdateCommand,
+} from './self-update'
 import {
   cleanupUpgradeCommitContext,
   createUpgradeCommitContext,
@@ -19,7 +25,10 @@ afterEach(async () => {
   root = undefined
 })
 
-async function installFixture(scope: 'local' | 'global' = 'local'): Promise<{
+async function installFixture(
+  scope: 'local' | 'global' = 'local',
+  channel: 'github' | 'npm' = 'github',
+): Promise<{
   owner: string
   dist: string
   globalBin: string
@@ -36,24 +45,48 @@ async function installFixture(scope: 'local' | 'global' = 'local'): Promise<{
     JSON.stringify({ name: 'autobuild', version: '2.0.0', bin: { ab: 'bin/ab.ts' } }),
   )
   await writeFile(join(dist, 'bin', 'ab.ts'), '')
-  await writeFile(join(dist, '.bun-tag'), 'a-fork-autobuild-a1b2c3d')
-  await writeFile(
-    join(owner, 'package.json'),
-    JSON.stringify({ dependencies: { autobuild: 'github:a-fork/autobuild#v2.0.0' } }),
-  )
-  await writeFile(
-    join(owner, 'bun.lock'),
-    `{
+  if (channel === 'github') {
+    await writeFile(join(dist, '.bun-tag'), 'a-fork-autobuild-a1b2c3d')
+    await writeFile(
+      join(owner, 'package.json'),
+      JSON.stringify({ dependencies: { autobuild: 'github:a-fork/autobuild#v2.0.0' } }),
+    )
+    await writeFile(
+      join(owner, 'bun.lock'),
+      `{
       "workspaces": { "": { "dependencies": { "autobuild": "github:a-fork/autobuild#v2.0.0", }, }, },
       "packages": { "autobuild": ["autobuild@github:a-fork/autobuild#a1b2c3d", {}, "a-fork-autobuild-a1b2c3d"], },
     }`,
-  )
+    )
+  } else {
+    await writeFile(
+      join(owner, 'package.json'),
+      JSON.stringify({ dependencies: { autobuild: '2.0.0' } }),
+    )
+    await writeFile(
+      join(owner, 'bun.lock'),
+      `{
+      "workspaces": { "": { "dependencies": { "autobuild": "2.0.0", }, }, },
+      "packages": { "autobuild": ["autobuild@2.0.0", "", {}, "sha512-fixture"], },
+    }`,
+    )
+  }
   if (scope === 'global') await symlink(join(dist, 'bin', 'ab.ts'), join(globalBin, 'ab'))
   return { owner, dist, globalBin }
 }
 
 function result(stdout = '', stderr = '', exitCode = 0): ExecResult {
   return { stdout, stderr, exitCode }
+}
+
+function registryDocs(
+  replies: Array<{ status: number; body: string }>,
+  urls: string[],
+): RegistryLookup {
+  return async (url) => {
+    urls.push(url)
+    return replies.shift() ?? { status: 599, body: 'unexpected registry read' }
+  }
 }
 
 function scripted(
@@ -486,5 +519,103 @@ describe('distribution self-update orchestration', () => {
     ).toEqual({ kind: 'continue' })
     expect(commands).toBe(0)
     expect(warnings.join('\n')).toContain('source checkout')
+  })
+})
+
+describe('npm registry channel', () => {
+  test('registry version URLs encode the scope separator and default to latest', () => {
+    expect(registryVersionUrl('https://registry.npmjs.org', '@defrex/autobuild')).toBe(
+      'https://registry.npmjs.org/@defrex%2fautobuild/latest',
+    )
+    expect(registryVersionUrl('https://registry.example.test', 'autobuild', '1.2.3')).toBe(
+      'https://registry.example.test/autobuild/1.2.3',
+    )
+  })
+
+  test('the silent probe reads the registry, never gh, for an npm install', async () => {
+    const fixture = await installFixture('global', 'npm')
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const urls: string[] = []
+    const available = await availableRelease({
+      distRoot: fixture.dist,
+      command: scripted([result(`${fixture.globalBin}\n`)], calls),
+      registry: registryDocs([{ status: 200, body: '{"version":"2.1.0"}' }], urls),
+    })
+    expect(available).toBe('2.1.0')
+    expect(calls.map((call) => call.command)).toEqual([['bun', 'pm', 'bin', '-g']])
+    expect(urls).toEqual(['https://registry.npmjs.org/autobuild/latest'])
+
+    const current = await availableRelease({
+      distRoot: fixture.dist,
+      command: scripted([result(`${fixture.globalBin}\n`)], []),
+      registry: registryDocs([{ status: 200, body: '{"version":"2.0.0"}' }], []),
+    })
+    expect(current).toBeUndefined()
+
+    const failing = await availableRelease({
+      distRoot: fixture.dist,
+      command: scripted([result(`${fixture.globalBin}\n`)], []),
+      registry: registryDocs([{ status: 404, body: '"Not Found"' }], []),
+    })
+    expect(failing).toBeUndefined()
+  })
+
+  test('a global npm install updates through bun add <name>@<version> and hands off', async () => {
+    const fixture = await installFixture('global', 'npm')
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const urls: string[] = []
+    const out: string[] = []
+    const update = await selfUpdate({
+      targetRepo: '/target/repo',
+      distRoot: fixture.dist,
+      env: { PATH: '/bin', NPM_CONFIG_REGISTRY: 'https://registry.example.test/' },
+      command: scripted(
+        [result(`${fixture.globalBin}\n`), result('installed'), result('ab-plan: adopted\n')],
+        calls,
+      ),
+      registry: registryDocs([{ status: 200, body: '{"version":"2.1.0"}' }], urls),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+    expect(update).toEqual({ kind: 'handoff', exitCode: 0 })
+    expect(urls).toEqual(['https://registry.example.test/autobuild/latest'])
+    expect(calls.map((call) => call.command)).toEqual([
+      ['bun', 'pm', 'bin', '-g'],
+      ['bun', 'add', '--global', 'autobuild@2.1.0'],
+      ['bun', join(fixture.dist, 'bin', 'ab.ts'), 'upgrade', '/target/repo'],
+    ])
+    expect(calls[2]?.options.env).toMatchObject({ PATH: '/bin', AB_SELF_UPDATE_HANDOFF: '1' })
+    expect(out).toContain('ab-plan: adopted')
+  })
+
+  test('an exact npm version reads its own document and fails closed when absent', async () => {
+    const fixture = await installFixture('local', 'npm')
+    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const urls: string[] = []
+    const downgrade = await selfUpdate({
+      targetRepo: '/repo',
+      version: '1.9.0',
+      distRoot: fixture.dist,
+      command: scripted([result(`${fixture.globalBin}\n`), result(), result()], calls),
+      registry: registryDocs([{ status: 200, body: '{"version":"1.9.0"}' }], urls),
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(downgrade.kind).toBe('handoff')
+    expect(urls).toEqual(['https://registry.npmjs.org/autobuild/1.9.0'])
+    expect(calls[1]?.command).toEqual(['bun', 'add', '--cwd', fixture.owner, 'autobuild@1.9.0'])
+
+    const errors: string[] = []
+    const missing = await selfUpdate({
+      targetRepo: '/repo',
+      version: '9.9.9',
+      distRoot: fixture.dist,
+      command: scripted([result(`${fixture.globalBin}\n`)], []),
+      registry: registryDocs([{ status: 404, body: '"Not Found"' }], []),
+      stdout: () => {},
+      stderr: (line) => errors.push(line),
+    })
+    expect(missing).toEqual({ kind: 'failed' })
+    expect(errors.join('\n')).toContain('HTTP 404')
   })
 })
