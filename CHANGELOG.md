@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#357](https://github.com/defrex/autobuild/pull/357) — Add a bounded wait to the remote build-event reads
 - [#353](https://github.com/defrex/autobuild/pull/353) — Run the TicketSource live suite in the CI live-Postgres step
 - [#351](https://github.com/defrex/autobuild/pull/351) — Make the via-attribution contract transport-aware
 - [#350](https://github.com/defrex/autobuild/pull/350) — Wire live Postgres store suites into CI via always-on verify step
