@@ -779,7 +779,10 @@ export class Dispatcher {
    * cancel it. Attribution is the toggling human's own actor, exactly as if
    * they had pressed `m` on each row; each command carries the fact's seq so
    * the fan-out is idempotent (a settled build fails `autoMergeDefaultTarget`)
-   * and a per-build override stands until the default is toggled again.
+   * and a per-build override stands until the default is toggled again. A fact
+   * whose value already matches the build's state writes a provenance-only
+   * `build.auto-merge-default-observed` marker instead of a duplicate command,
+   * so the matching fact is recorded as answered (f_28b3fba1).
    *
    * Per build, a compare-and-set loop (the `requestOne` shape from
    * `bulk-control.ts`): the read/reduce/evaluate lives inside the loop, so a
@@ -797,6 +800,15 @@ export class Dispatcher {
         const state = reduceBuild(events)
         const target = autoMergeDefaultTarget(state, fact)
         if (target === undefined) break
+        if (target === 'observed') {
+          const observed = await store.appendIfCurrent(record.slug, state.lastSeq, {
+            actor: DISPATCHER,
+            type: 'build.auto-merge-default-observed',
+            payload: { defaultSeq: fact.seq },
+          })
+          if (observed !== null) break
+          continue
+        }
         const type =
           target === 'request' ? 'build.auto-merge-requested' : 'build.auto-merge-cancelled'
         const appended = await store.appendIfCurrent(record.slug, state.lastSeq, {

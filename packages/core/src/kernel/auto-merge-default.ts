@@ -12,10 +12,13 @@
  * Idempotency vs. per-build overrides: each answering command records the
  * repository `seq` of the default fact that caused it (`defaultSeq`). A tick
  * applies the default to a build only when the newest fact's seq is strictly
- * newer than the build's recorded `defaultSeq` and the build's requested state
- * differs from the default. A global toggle therefore re-applies over a
- * per-build choice, a per-build toggle in between is stable, and pressing the
- * toggle twice appends no duplicate command.
+ * newer than the build's recorded `defaultSeq`. When the build's requested
+ * state already matches the fact, the tick records a provenance-only
+ * `build.auto-merge-default-observed` marker instead of appending a duplicate
+ * command, so a later per-build toggle is not mistaken for staleness and
+ * reverted. A global toggle therefore re-applies over a per-build choice, a
+ * per-build toggle in between is stable, and pressing the toggle twice appends
+ * no duplicate request.
  *
  * Eligibility is expressed against `BuildState`, not `effectiveStatus`
  * (dashboard/model.ts), whose contract is "DISPLAY-ONLY — nothing consults
@@ -75,18 +78,28 @@ export function autoMergeDefaultEligible(state: BuildState): boolean {
   return !state.pendingCommands.some((command) => command.command === 'abort')
 }
 
-/** What one default fact asks of one build, or undefined for "nothing". */
+/** What one default fact asks of one build: a real command, a pure provenance
+ * advance, or `undefined` for "nothing". */
+export type AutoMergeDefaultTarget = 'request' | 'cancel' | 'observed'
+
+/** What one default fact asks of one build, or undefined for "nothing".
+ *
+ * Seq-first: a build whose recorded provenance is already this fact (or newer)
+ * has had its day in court — a per-build toggle made after the fan-out stands
+ * until the default moves again. A build that sampled the default at claim time
+ * carries the fact's seq too, so a fresh claim is not re-fanned on the next
+ * tick.
+ *
+ * When the requested state already matches the fact, the fact still has to be
+ * *recorded* as observed (`'observed'`) so the next tick does not mistake a
+ * later per-build command for staleness: the marker advances `defaultSeq`
+ * without a duplicate request/cancel (f_28b3fba1). */
 export function autoMergeDefaultTarget(
   state: BuildState,
   fact: AutoMergeDefaultFact,
-): 'request' | 'cancel' | undefined {
+): AutoMergeDefaultTarget | undefined {
   if (!autoMergeDefaultEligible(state)) return undefined
-  // Seq-first, then state: a build whose recorded provenance is already this
-  // fact (or newer) has had its day in court — a per-build toggle made after
-  // the fan-out stands until the default moves again. A build that sampled the
-  // default at claim time carries the fact's seq too, so a fresh claim is not
-  // re-fanned on the next tick.
   if ((state.autoMerge.defaultSeq ?? 0) >= fact.seq) return undefined
-  if (state.autoMerge.requested === fact.enabled) return undefined
+  if (state.autoMerge.requested === fact.enabled) return 'observed'
   return fact.enabled ? 'request' : 'cancel'
 }

@@ -138,6 +138,30 @@ describe('dispatch recovery event protocol', () => {
     ).not.toThrow()
   })
 
+  test('the default-observed cursor is a strict dispatcher fact', () => {
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.auto-merge-default-observed',
+        payload: { defaultSeq: 4 },
+      }).payload,
+    ).toEqual({ defaultSeq: 4 })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'build.auto-merge-default-observed',
+        payload: { defaultSeq: 0 },
+      }),
+    ).toThrow(/invalid payload/)
+    expect(() =>
+      validateEventWrite({
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-default-observed',
+        payload: { defaultSeq: 4 },
+      }),
+    ).toThrow(/may not emit/)
+  })
+
   test('discard requests are strict human facts', () => {
     expect(
       validateEventWrite({

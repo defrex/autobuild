@@ -6145,6 +6145,62 @@ describe('the durable auto-merge default fans out onto current builds', () => {
     expect(requests.at(-1)?.actor).toEqual({ kind: 'human', user: 'toggle-operator' })
   })
 
+  test('a per-build request stands when the newest default fact is a no-op', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    // An OFF fact matching the build's already-off state: the tick records it
+    // observed rather than writing a cancel, so the fact is not left
+    // unanswered (f_28b3fba1).
+    await setDefault(h, false)
+    await h.dispatcher.tick()
+    expect(
+      (await h.store.getEvents(slug)).some((e) => e.type === 'build.auto-merge-default-observed'),
+    ).toBe(true)
+    expect(
+      (await h.store.getEvents(slug)).some((e) => e.type === 'build.auto-merge-cancelled'),
+    ).toBe(false)
+
+    // The human's explicit request is not withdrawn by the OFF fact on the
+    // next tick.
+    await h.store.append(slug, {
+      actor: humanActor('row-operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.dispatcher.tick()
+    const events = await h.store.getEvents(slug)
+    expect(events.filter((e) => e.type === 'build.auto-merge-requested')).toHaveLength(1)
+    expect(events.filter((e) => e.type === 'build.auto-merge-cancelled')).toHaveLength(0)
+  })
+
+  test('a per-build cancel stands when a matching ON fact was a no-op', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    // A bare per-build request first (provenance 0)...
+    await h.store.append(slug, {
+      actor: humanActor('row-operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    // ...then an ON fact the build already matches, recorded observed.
+    await setDefault(h, true)
+    await h.dispatcher.tick()
+    expect(
+      (await h.store.getEvents(slug)).some((e) => e.type === 'build.auto-merge-default-observed'),
+    ).toBe(true)
+
+    // The explicit cancel is not turned back into consent on the next tick.
+    await h.store.append(slug, {
+      actor: humanActor('row-operator'),
+      type: 'build.auto-merge-cancelled',
+      payload: {},
+    })
+    await h.dispatcher.tick()
+    const events = await h.store.getEvents(slug)
+    expect(events.filter((e) => e.type === 'build.auto-merge-cancelled')).toHaveLength(1)
+    expect(events.filter((e) => e.type === 'build.auto-merge-requested')).toHaveLength(1)
+  })
+
   test('a build claimed after the ON fact is not re-fanned on later ticks', async () => {
     const h = harness({ tickets: [readyTicket('T-late')] })
     await setDefault(h, true)

@@ -43,6 +43,16 @@ const reasonOnly = z.strictObject({ reason: z.string().optional() })
 const autoMergeCommand = z.strictObject({
   defaultSeq: z.number().int().positive().optional(),
 })
+/** A fan-out reconciliation marker: the repository seq of the newest
+ * `dispatcher.auto-merge-default-set` fact a build has observed when that fact
+ * already matched the build's requested state. It advances the build's
+ * provenance without appending a duplicate request/cancel command, so a later
+ * per-build toggle stands until a strictly newer default fact arrives
+ * (f_28b3fba1). Dispatcher-authored: it records a reconciliation, not a
+ * human command. */
+const autoMergeDefaultObserved = z.strictObject({
+  defaultSeq: z.number().int().positive(),
+})
 const round = z.number().int().positive()
 const attempt = z.number().int().positive()
 const dispatchStage = z.enum(['create', 'workspace', 'spec', 'comment', 'launch'])
@@ -377,6 +387,7 @@ export const eventPayloadSchemas = {
   'build.discard-requested': empty,
   'build.auto-merge-requested': autoMergeCommand,
   'build.auto-merge-cancelled': autoMergeCommand,
+  'build.auto-merge-default-observed': autoMergeDefaultObserved,
   'build.paused': empty,
   'build.resumed': empty,
   'build.aborted': empty,

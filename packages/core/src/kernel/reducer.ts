@@ -457,6 +457,15 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         autoMerge.commandSeq = event.seq
         if (event.payload.defaultSeq !== undefined) autoMerge.defaultSeq = event.payload.defaultSeq
         break
+      case 'build.auto-merge-default-observed':
+        // A no-op fan-out still advances the build's provenance. Without it, a
+        // matching default fact would stay strictly ahead of a bare per-build
+        // command and be re-applied on the next tick, reverting the operator's
+        // explicit choice (f_28b3fba1).
+        if (event.payload.defaultSeq > (autoMerge.defaultSeq ?? 0)) {
+          autoMerge.defaultSeq = event.payload.defaultSeq
+        }
+        break
       case 'build.paused':
         pausedFlag = true
         pending.pause = []

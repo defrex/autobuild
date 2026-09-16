@@ -116,9 +116,30 @@ describe('autoMergeDefaultTarget', () => {
     expect(autoMergeDefaultTarget(state, ON)).toBe('request')
   })
 
-  test('no-ops when the requested state already equals the default', () => {
-    expect(autoMergeDefaultTarget(build({ autoMerge: { requested: true } }), ON)).toBeUndefined()
-    expect(autoMergeDefaultTarget(build({ autoMerge: { requested: false } }), OFF)).toBeUndefined()
+  test('records a matching fact as observed so a later per-build toggle stands', () => {
+    // The state already matches the fact, but the fact is not yet answered:
+    // the tick must advance provenance (as an observed marker, not a duplicate
+    // command), or the next per-build toggle is reverted on the tick after it
+    // (f_28b3fba1).
+    expect(autoMergeDefaultTarget(build({ autoMerge: { requested: true } }), ON)).toBe('observed')
+    expect(autoMergeDefaultTarget(build({ autoMerge: { requested: false } }), OFF)).toBe('observed')
+
+    // A no-op fact recorded as observed, then a bare per-build command that
+    // flips the state: the command stands against the same fact.
+    expect(
+      autoMergeDefaultTarget(build({ autoMerge: { requested: true, defaultSeq: OFF.seq } }), OFF),
+    ).toBeUndefined()
+    expect(
+      autoMergeDefaultTarget(build({ autoMerge: { requested: false, defaultSeq: ON.seq } }), ON),
+    ).toBeUndefined()
+
+    // Provenance already current (or newer): nothing at all.
+    expect(
+      autoMergeDefaultTarget(build({ autoMerge: { requested: true, defaultSeq: ON.seq } }), ON),
+    ).toBeUndefined()
+    expect(
+      autoMergeDefaultTarget(build({ autoMerge: { requested: false, defaultSeq: OFF.seq } }), OFF),
+    ).toBeUndefined()
   })
 
   test('no-ops when the build already answered this fact — the per-build-override case', () => {

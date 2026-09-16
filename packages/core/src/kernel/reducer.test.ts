@@ -954,6 +954,24 @@ describe('reduceBuild: native auto-merge intent and application facts', () => {
     ])
     expect(reduceBuild(log).autoMerge.defaultSeq).toBe(9)
   })
+
+  test('a no-op observation advances provenance without touching the command', () => {
+    const log = toLog([
+      ...prelude(),
+      ev('build.auto-merge-default-observed', { defaultSeq: 5 }), // seq 5
+    ])
+    expect(reduceBuild(log).autoMerge).toEqual({ requested: false, defaultSeq: 5 })
+    // A stale observation never lowers the cursor.
+    expect(
+      reduceBuild(
+        toLog([
+          ...prelude(),
+          ev('build.auto-merge-default-observed', { defaultSeq: 5 }),
+          ev('build.auto-merge-default-observed', { defaultSeq: 2 }),
+        ]),
+      ).autoMerge.defaultSeq,
+    ).toBe(5)
+  })
 })
 
 describe('reduceBuild: abort — accepted intent vs acknowledged (D2)', () => {
