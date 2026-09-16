@@ -496,6 +496,14 @@ function timingFor(
 
 /**
  * `record` + `state` → one dashboard row, or `null` only for terminal builds.
+ *
+ * `config` is the dispatcher's live snapshot; `pinnedConfig` (SPEC §16.1) is
+ * the build's own pipeline — its deposited effective-config artifact's
+ * build-owned sections composed over `config`'s deployment-owned ones. A
+ * build's verify/finalize universe and next-action are decided from the
+ * pinned pipeline: the live snapshot describes the base branch, which a
+ * pinned build may never execute (the AUT-366 class). Absent artifact ⇒ the
+ * live config, the pre-pin behavior.
  */
 export function projectBuild(
   record: BuildRecord,
@@ -503,7 +511,9 @@ export function projectBuild(
   config: Config,
   events: AbEvent[],
   streams?: readonly StreamRecord[],
+  pinnedConfig?: Config,
 ): DashboardBuild | null {
+  const pipeline = pinnedConfig ?? config
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
   const abortProgress =
@@ -669,7 +679,7 @@ export function projectBuild(
   const verifySkipped = (s: string): boolean =>
     cycle.some((r) => r.step === s && r.outcome === 'skipped')
   const verifySatisfied = (s: string): boolean => verifyPassed(s) || verifySkipped(s)
-  const verifyDrained = !cycleFailed && config.verify.steps.every(verifySatisfied)
+  const verifyDrained = !cycleFailed && pipeline.verify.steps.every(verifySatisfied)
 
   // A loop is settled only if its standing approval survived the last restart
   // AND no later producer round reopened it. `approved` alone is a full-log
@@ -719,7 +729,7 @@ export function projectBuild(
   // Finalize ran for the CURRENT spec — NOT `prState !== undefined`, which a
   // spec restart never resets while the engine re-runs finalize from scratch.
   const finalizeDone = state.finalizeCompletedSeq > restartSince
-  const postStepsDrained = config.finalize.steps.every((s) =>
+  const postStepsDrained = pipeline.finalize.steps.every((s) =>
     finalizeSteps.some((f) => f.step === s),
   )
 
@@ -752,7 +762,7 @@ export function projectBuild(
     }),
   ]
 
-  for (const s of config.verify.steps) {
+  for (const s of pipeline.verify.steps) {
     const phase = verifyPhase(s)
     const current = at(phase)
     const stepResults = cycle.filter((r) => r.step === s)
@@ -793,7 +803,7 @@ export function projectBuild(
       timing: timingFor(intervals, 'finalize', restartSince, frozenNow),
     }),
   )
-  for (const s of config.finalize.steps) {
+  for (const s of pipeline.finalize.steps) {
     // Post-steps have no `.started` event, so they carry no timing.
     const done = finalizeSteps.find((f) => f.step === s)
     steps.push(
@@ -861,7 +871,7 @@ export function projectBuild(
               : `exit status ${state.setupFailure.exitStatus}`
           }): ${state.setupFailure.output || '(no output)'}`
 
-  const decision = decideNext(events, config)
+  const decision = decideNext(events, pipeline)
   const mergeWaitReason =
     decision.kind === 'wait' && decision.reason === 'awaiting-pr'
       ? currentAutoMergeDeferral(events, state)
