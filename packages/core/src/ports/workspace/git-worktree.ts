@@ -645,8 +645,20 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     return this.spawnSandboxCommand(request.command, cwd, timeoutSeconds)
   }
 
+  /** Bound on retained finished detached commands. A finished entry whose
+   * result was delivered (`wait` observed `exited`) is consumed immediately;
+   * this cap covers the fire-and-forget case — commands that finish but are
+   * never waited on — so the map (and its retained stdout/stderr strings)
+   * stays bounded at ~cap entries' worth of output regardless of how many
+   * commands the process ever runs. Running entries are never evicted. */
+  private static readonly MAX_RETAINED_SANDBOX_COMMANDS = 50
+
   /** Detached children tracked in-process only; a restarted host reports a
-   * recorded command as gone (`wait` fails typed `not-found`). */
+   * recorded command as gone (`wait` fails typed `not-found`). Eviction uses
+   * the same semantics: the first `wait` that observes `exited` consumes the
+   * entry (a later `wait` on the same id fails typed `not-found`, exactly as
+   * after a restart), and finished-but-never-waited entries are bounded by
+   * `MAX_RETAINED_SANDBOX_COMMANDS`. */
   private readonly sandboxChildren = new Map<
     string,
     {
@@ -656,6 +668,26 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       exitCode: number | null
     }
   >()
+
+  /** Append a chunk to an entry's captured stream, tolerating an entry that
+   * was already evicted (consumed by `wait` or removed by the cap): late
+   * chunks for a delivered command are dropped, never a crash. */
+  private appendChildStream(commandId: string, stream: 'stdout' | 'stderr', chunk: string): void {
+    const tracked = this.sandboxChildren.get(commandId)
+    if (tracked === undefined) return
+    tracked[stream] += chunk
+  }
+
+  /** While the map exceeds the retention cap, delete the oldest finished
+   * entries in insertion order (`Map` iterates in insertion order). Running
+   * entries are never evicted — the live procs themselves are the resource. */
+  private evictFinishedBeyondCap(): void {
+    if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) return
+    for (const [id, tracked] of this.sandboxChildren) {
+      if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) break
+      if (tracked.exitCode !== null) this.sandboxChildren.delete(id)
+    }
+  }
 
   private trackChildStreams(
     commandId: string,
@@ -667,7 +699,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
-        this.sandboxChildren.get(commandId)!.stdout += decoder.decode(value, { stream: true })
+        this.appendChildStream(commandId, 'stdout', decoder.decode(value, { stream: true }))
       }
     })()
     void (async () => {
@@ -676,12 +708,17 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
-        this.sandboxChildren.get(commandId)!.stderr += decoder.decode(value, { stream: true })
+        this.appendChildStream(commandId, 'stderr', decoder.decode(value, { stream: true }))
       }
     })()
     void child.proc.exited.then((code) => {
       const tracked = this.sandboxChildren.get(commandId)
-      if (tracked !== undefined) tracked.exitCode = code ?? -1
+      if (tracked === undefined) return
+      tracked.exitCode = code ?? -1
+      // Enforce the cap on the stamp path too: a burst of fire-and-forget
+      // commands whose exits land after the last start's eviction pass must
+      // still settle within bound.
+      this.evictFinishedBeyondCap()
     })
   }
 
@@ -700,6 +737,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     })
     const commandId = `sbcmd-${randomBytes(8).toString('hex')}`
     this.sandboxChildren.set(commandId, { proc, stdout: '', stderr: '', exitCode: null })
+    this.evictFinishedBeyondCap()
     this.trackChildStreams(commandId, { proc })
     return { commandId }
   }
@@ -721,12 +759,18 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     }
     if (child.exitCode === null)
       return { state: 'running', stdout: child.stdout, stderr: child.stderr }
-    return {
+    // Consume-on-delivery: the terminal `wait` snapshots the result and drops
+    // the entry, so a second `wait` on the same id fails typed `not-found` —
+    // indistinguishable from the restarted-host case. `running` waits never
+    // consume, so poll loops keep working unchanged.
+    const result: SandboxWaitResult = {
       state: 'exited',
       exitCode: child.exitCode,
       stdout: child.stdout,
       stderr: child.stderr,
     }
+    this.sandboxChildren.delete(input.commandId)
+    return result
   }
 
   private async sandboxRootedPath(
