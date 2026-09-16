@@ -17,6 +17,9 @@ export interface CreateWebAuthOptions {
   /** Injectable database for tests (better-auth's memoryAdapter); production
    * opens the pg Pool. */
   database?: NonNullable<Parameters<typeof betterAuth>[0]>['database']
+  /** Test hook: shorten the MCP access-token life so the refresh flow can be
+   * driven end to end without waiting out the production hour. */
+  accessTokenExpiresIn?: number
 }
 
 export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuthOptions) {
@@ -54,6 +57,9 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
           useJWTPlugin: true,
           allowDynamicClientRegistration: true,
           metadata: { jwks_uri: `${config.baseURL}/api/auth/jwks` },
+          ...(options?.accessTokenExpiresIn !== undefined
+            ? { accessTokenExpiresIn: options.accessTokenExpiresIn }
+            : {}),
         },
       }),
     ],
