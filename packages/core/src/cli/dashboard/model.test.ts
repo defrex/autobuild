@@ -1675,6 +1675,37 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(project(log).blockers).toEqual([reason])
   })
 
+  test('a deferral ends at the merge fact — a merged build never lists an auto-merge warning', () => {
+    const reason = 'Auto-merge gate could not apply consent for PR #7: provider detail'
+    const log = toLog([
+      ...withAutoMergeDeferral(throughPr, reason),
+      ev('pr.merged', { sha: 'squash-7' }),
+    ])
+    // The engine still parks on awaiting-pr between the merge fact and
+    // build.completed; the row must not resurrect the deferral there.
+    expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+    expect(project(log).blockers).toEqual([])
+  })
+
+  test('a reconcile.completed after the deferral supersedes it until consent is re-examined', () => {
+    const reason = 'Auto-merge gate could not apply consent for PR #7: provider detail'
+    const log = toLog([
+      ...withAutoMergeDeferral(throughPr, reason),
+      ev('pr.conflicted', { baseSha: 'sha-base-2' }),
+      ev('reconcile.started', { attempt: 1, baseSha: 'sha-base-2' }),
+      ev('reconcile.completed', {
+        mergeCommit: 'sha-merge',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+      ...verifyRun('lint', 2, true),
+      ...verifyRun('test', 2, true),
+    ])
+    // Verify has re-run and the janitor waits to merge; the stale observation
+    // must not surface while the gate has not re-examined consent.
+    expect(decideNext(log, CONFIG)).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+    expect(project(log).blockers).toEqual([])
+  })
+
   test('a pending deferral is suppressed while finalize work or a human gate takes precedence', () => {
     const reason = 'Auto-merge gate deferred — provider-specific detail'
     const finalizeDue = toLog(withAutoMergeDeferral(throughPr, reason))

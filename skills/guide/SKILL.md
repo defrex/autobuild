@@ -1197,6 +1197,15 @@ A build with auto-merge off has no auto-merge token. Requested, enabled, and
 cancelling states all read `auto merge`: cyan means requested locally but not
 yet applied on GitHub, green means native auto-merge is enabled, and yellow
 means cancellation is in flight. The token disappears when cancellation lands.
+Merge conflicts recover automatically: the gate defers, the pipeline re-enters
+reconcile, and verify re-runs before consent is re-examined — the reconcile
+step on the build row is the only indication, and uncomputed mergeability
+resolves the same way on a later poll. The auto-merge gate records a durable
+observation only for a deferral a person must fix (disabled repository
+auto-merge, a dirty local checkout, a missing Git identity, an unproven gate
+state, a plan limitation) — never for a conflict the pipeline resolves itself.
+A recorded deferral stops being shown once the PR merges or closes, or once a
+reconcile or re-finalize supersedes it, until the gate re-examines consent.
 
 ### Durable build controls: CLI and dashboard
 
