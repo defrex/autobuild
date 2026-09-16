@@ -501,7 +501,7 @@ session-attribution dimension — stream parts have no actor.
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
 | `createStream` | `POST /builds/{slug}/streams` and `POST /repos/{repo}/streams` | `{"label": string}` with a nonempty label | `201` + `StreamRecord` |
-| `listStreams` | `GET /builds/{slug}/streams` and `GET /repos/{repo}/streams` | none | `200` + `StreamRecord[]`, oldest first |
+| `listStreams` | `GET /builds/{slug}/streams` and `GET /repos/{repo}/streams` | none | `200` + `StreamRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getStream` | `GET /builds/{slug}/streams/{id}` and `GET /repos/{repo}/streams/{id}` | none | `200` + `StreamRecord`; `404` when unknown **or** scoped to another resource |
 | `appendStreamParts` | `POST /builds/{slug}/streams/{id}/chunks` and `POST /repos/{repo}/streams/{id}/chunks` | `{"parts": [ { "type": nonempty string, … } ]}`, nonempty | `201` + `StreamChunk` |
 | `readStream` | `GET /builds/{slug}/streams/{id}/chunks?since={n}&wait={n}` and the `/repos/{repo}` form | optional `since` (default `0`) and `wait` (whole seconds) query values, parsed exactly like the `since` of section 3 | `200` + read response: chunks with `seq >` parsed `since`, in increasing order |
