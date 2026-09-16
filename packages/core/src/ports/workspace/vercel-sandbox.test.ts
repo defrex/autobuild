@@ -6,7 +6,9 @@ import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
 import { spawnExec, type Exec } from './git-worktree'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
+import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 import {
+  sandboxEnvironmentName,
   VERCEL_AUTOBUILD_PATH,
   VERCEL_BUN_BIN_PATH,
   VERCEL_BUN_EXECUTABLE,
@@ -247,6 +249,9 @@ function harness(
     markerReadback?: string
     /** Optional snapshot-expiry bound threaded to creation. */
     snapshotExpirationSeconds?: number
+    /** Operator-sandbox options threaded to the provider constructor. */
+    setupCommand?: string
+    sandboxEnvironmentVariables?: readonly string[]
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -349,6 +354,10 @@ function harness(
     distributionVersion: async () => '1.2.3',
     // Bounded observation waits resolve in milliseconds, never the 5 s default.
     observeWaitMs: 25,
+    ...(options.setupCommand !== undefined ? { setupCommand: options.setupCommand } : {}),
+    ...(options.sandboxEnvironmentVariables !== undefined
+      ? { sandboxEnvironmentVariables: options.sandboxEnvironmentVariables }
+      : {}),
     runtimeReferences:
       options.runtimeReferences ?? (options.provisionRuntimes ? runtimeReferenceFixtures() : []),
   })
@@ -2332,5 +2341,315 @@ describe('vercelSdkCredentials', () => {
     expect(() => vercelSdkCredentials({ VERCEL_TOKEN: 't', VERCEL_TEAM_ID: 'team' })).toThrow(
       /requires VERCEL_OIDC_TOKEN or VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID/,
     )
+  })
+})
+
+describe('operator sandbox capability', () => {
+  const OPERATOR = 'ops'
+
+  function expectCredentialFree(commands: Array<Record<string, unknown>>): void {
+    for (const name of SANDBOX_FORBIDDEN_ENV) {
+      expect(JSON.stringify(commands)).not.toContain(name)
+    }
+    for (const value of ['forge-secret', 'provider-secret', 'never-copy']) {
+      expect(JSON.stringify(commands)).not.toContain(value)
+    }
+    for (const command of commands) {
+      if (command.env === undefined) continue
+      const env = command.env as Record<string, string>
+      for (const name of SANDBOX_FORBIDDEN_ENV) expect(Object.keys(env)).not.toContain(name)
+      expect(Object.keys(env)).toContain('PATH')
+      expect(env.PATH).toContain(VERCEL_BUN_BIN_PATH)
+    }
+  }
+
+  test('describe resolves the deterministic identity without provisioning', async () => {
+    const h = harness()
+    const identity = await h.provider.orchestratorSandbox.describe({
+      repo: '/repo',
+      operator: OPERATOR,
+    })
+    expect(identity).toEqual({
+      provider: 'vercel-sandbox',
+      environmentId: sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR),
+      workspacePath: VERCEL_WORKSPACE_PATH,
+    })
+    expect(h.creates).toBe(0)
+  })
+
+  test('fresh provision runs the build chain from the base head, then the setup command', async () => {
+    const h = harness({ setupCommand: 'echo setup-ran' })
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(identity.environmentId).toBe(
+      sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR),
+    )
+    expect((h.createInput!.source as { revision: string }).revision).toBe(SHA)
+    expect(h.createInput!.name).toBe(identity.environmentId)
+    expect(h.createInput!.persistent).toBe(true)
+    // No read credential configured: the network policy is the allow-all
+    // default; the read credential itself only ever appears inside the
+    // policy transform, never as a guest variable.
+    expect(h.createInput!.networkPolicy).toBe('allow-all')
+    const setup = h.sandbox.commands.find(
+      (command) => command.cmd === 'sh' && (command.args as string[])?.[1] === 'echo setup-ran',
+    )
+    expect(setup).toBeDefined()
+    expect(setup!.cwd).toBe(VERCEL_WORKSPACE_PATH)
+    expect((setup!.env as Record<string, string>).PATH).toContain(VERCEL_BUN_BIN_PATH)
+    const marker = h.sandbox.commands.findIndex((command) => command.cmd === 'touch')
+    const setupIndex = h.sandbox.commands.indexOf(setup!)
+    expect(setupIndex).toBeLessThan(marker)
+    expect(h.sandbox.provisioned).toBe(true)
+    expectCredentialFree(h.sandbox.commands)
+  })
+
+  test('reuse re-checks the marker only, and a stale distribution is refreshed', async () => {
+    const h = harness()
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const commandCount = h.sandbox.commands.length
+    const resumed = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.commands.slice(commandCount)).toEqual([
+      { cmd: 'test', args: ['-f', VERCEL_PROVISIONED_MARKER] },
+      {
+        cmd: 'cat',
+        args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
+        signal: expect.any(AbortSignal),
+      },
+    ])
+    expect(resumed.sessionId).toBe('session-1')
+
+    // A reused environment whose marker disagrees is refreshed in place.
+    h.sandbox.distributionVersion = '0.0.1'
+    const refreshCommands = h.sandbox.commands.length
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(h.creates).toBe(1)
+    expect(h.sandbox.distributionVersion).toBe('1.2.3')
+    expect(h.sandbox.commands.length).toBeGreaterThan(refreshCommands)
+  })
+
+  test('exec is bounded by its own deadline, re-issuing interrupted long-polls', async () => {
+    const h = harness()
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    let polls = 0
+    h.sandbox.detachedWait = async () => {
+      polls += 1
+      if (polls === 1) {
+        const timeout = new Error('The operation timed out.')
+        timeout.name = 'TimeoutError'
+        throw timeout
+      }
+      return { exitCode: 0 }
+    }
+    const result = await h.provider.orchestratorSandbox.exec(
+      {
+        provider: 'vercel-sandbox',
+        environmentId: sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR),
+        workspacePath: VERCEL_WORKSPACE_PATH,
+      },
+      // 300 s: far past the 30 s operation timeout — the wait must not be
+      // cut off by it, only by the caller's own deadline.
+      { command: 'echo hi', timeoutSeconds: 300 },
+    )
+    expect(result).toMatchObject({ exitCode: 0 })
+    expect(polls).toBeGreaterThanOrEqual(2)
+    const launch = h.sandbox.commands.at(-1) as Record<string, unknown>
+    expect(launch.detached).toBe(true)
+    expect((launch.env as Record<string, string>).PATH).toContain(VERCEL_BUN_BIN_PATH)
+    expectCredentialFree([launch])
+  })
+
+  test('exec past its deadline kills the command and fails typed', async () => {
+    const h = harness()
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    h.sandbox.detachedWait = () => {
+      const timeout = new Error('The operation timed out.')
+      timeout.name = 'TimeoutError'
+      return Promise.reject(timeout)
+    }
+    const error = await h.provider.orchestratorSandbox
+      .exec(
+        {
+          provider: 'vercel-sandbox',
+          environmentId: sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR),
+          workspacePath: VERCEL_WORKSPACE_PATH,
+        },
+        { command: 'sleep 1000', timeoutSeconds: 1 },
+      )
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('exec-timeout')
+    expect(h.sandbox.killSignals.length).toBeGreaterThan(0)
+  }, 20_000)
+
+  test('a real exec failure surfaces as a typed exec error', async () => {
+    const h = harness()
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    h.sandbox.detachedWait = async () => {
+      throw new Error('connection reset by provider')
+    }
+    const error = await h.provider.orchestratorSandbox
+      .exec(
+        {
+          provider: 'vercel-sandbox',
+          environmentId: sandboxEnvironmentName('https://github.com/acme/app.git', OPERATOR),
+          workspacePath: VERCEL_WORKSPACE_PATH,
+        },
+        { command: 'false' },
+      )
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('exec')
+  })
+
+  test('start returns a command id and wait reads the exit and output', async () => {
+    const h = harness()
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const { commandId } = await h.provider.orchestratorSandbox.start(identity, {
+      command: 'bun test',
+    })
+    expect(commandId).toMatch(/^cmd-/)
+    // A zero-second wait observes without waiting: running, no output
+    // (Vercel reports output only after exit).
+    expect(
+      await h.provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 0 }),
+    ).toEqual({
+      state: 'running',
+    })
+    h.sandbox.detachedExits.set(commandId, 3)
+    const finished = await h.provider.orchestratorSandbox.wait(identity, {
+      commandId,
+      waitSeconds: 300,
+    })
+    expect(finished).toMatchObject({ state: 'exited', exitCode: 3 })
+  })
+
+  test('readFile cats the rooted path; writeFile routes through writeFiles', async () => {
+    const h = harness()
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    h.sandbox.detachedWait = async () => ({ exitCode: 0 })
+    const bytes = await h.provider.orchestratorSandbox.readFile(identity, 'src/demo.txt')
+    expect(new TextDecoder().decode(bytes)).toBe('')
+    const cat = [...h.sandbox.commands].reverse().find((command) => command.cmd === 'cat')
+    expect((cat!.args as string[])[0]).toBe(`${VERCEL_WORKSPACE_PATH}/src/demo.txt`)
+    expectCredentialFree([cat!])
+
+    await h.provider.orchestratorSandbox.writeFile(identity, 'out.txt', new Uint8Array([1, 2]))
+    expect(h.sandbox.writes.at(-1)).toEqual({
+      path: `${VERCEL_WORKSPACE_PATH}/out.txt`,
+      content: new Uint8Array([1, 2]),
+    })
+  })
+
+  test('stop ends the session and keeps the sandbox; absent is reported honestly', async () => {
+    const h = harness()
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const stops = h.sandbox.stops
+    expect(
+      await h.provider.orchestratorSandbox.stop({
+        operator: OPERATOR,
+        environmentId: identity.environmentId,
+      }),
+    ).toEqual({ outcome: 'stopped' })
+    expect(h.sandbox.stops).toBe(stops + 1)
+    expect(h.sandbox.deletes).toBe(0)
+    // The snapshot is kept for the next resume.
+    expect(h.sandbox.snapshots.length).toBe(1)
+
+    // An environment the provider cannot resolve is reported absent, not
+    // stopped (a fresh harness whose facade resolves nothing).
+    const absent = harness({ facadeGet: async () => null })
+    expect(
+      await absent.provider.orchestratorSandbox.stop({
+        operator: OPERATOR,
+        environmentId: 'autobuild-sandbox-gone',
+      }),
+    ).toEqual({ outcome: 'absent' })
+  })
+
+  test('release reaps the environment and purges its snapshots', async () => {
+    const h = harness()
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const released = await h.provider.orchestratorSandbox.release({
+      repo: '/repo',
+      operator: OPERATOR,
+      environmentId: identity.environmentId,
+    })
+    expect(released.snapshots.outcome).toBe('confirmed')
+    expect(h.sandbox.deletes).toBe(1)
+    expect(h.sandbox.snapshots).toHaveLength(0)
+  })
+
+  test('a missing forwarded host value fails typed as environment', async () => {
+    const h = harness({
+      setupCommand: 'echo setup-ran',
+      sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
+    })
+    const error = await h.provider.orchestratorSandbox
+      .ensure({ repo: '/repo', operator: OPERATOR, baseBranch: 'main' })
+      .then(() => undefined)
+      .catch((e: unknown) => e)
+    // The environment check fires at the setup command, after provisioning.
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('environment')
+  })
+
+  test('a missing forwarded host value during exec fails typed before any command', async () => {
+    const h = harness({ sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'] })
+    const identity = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    const error = await h.provider.orchestratorSandbox
+      .exec(identity, { command: 'echo hi' })
+      .then(() => undefined)
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('environment')
   })
 })

@@ -72,6 +72,29 @@ export interface SandboxWaitResult {
   stderr?: string
 }
 
+/** Typed failure of one operator-sandbox operation. `stage` names where it
+ * failed so a tool caller sees `sandbox-<stage>` codes; the message carries
+ * the provider's text, redacted of credential values by the service. */
+export class SandboxOperationError extends Error {
+  override readonly name = 'SandboxOperationError'
+
+  constructor(
+    readonly stage:
+      | 'provision'
+      | 'resume'
+      | 'exec'
+      | 'exec-timeout'
+      | 'not-found'
+      | 'environment'
+      | 'reset'
+      | 'release',
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options)
+  }
+}
+
 /** The substitutable seam at the workspace boundary for operator sandboxes.
  * Every environment-deriving operation takes `{ repo, operator }` (plus
  * `baseBranch` for `ensure`) so the one-environment-per-operator×repository
