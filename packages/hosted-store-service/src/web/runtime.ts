@@ -36,7 +36,6 @@ let mcp: ReturnType<typeof createMcpEndpoint> | undefined
  * through the operator protocol in-process. */
 export function mcpEndpoint() {
   mcp ??= createMcpEndpoint({
-    env: process.env,
     config: parseWebAuthEnv(process.env),
     auth: webAuth(),
     storeSecret: process.env.AB_STORE_SECRET?.trim() ?? '',

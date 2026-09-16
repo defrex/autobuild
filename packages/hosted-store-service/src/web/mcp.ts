@@ -33,12 +33,17 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { ToolEntry } from 'autobuild/operator-api'
 import { OperatorApiClient, OperatorApiError, TOOLS } from 'autobuild/operator-api'
 import { AUTOBUILD_VERSION, mintToken } from 'autobuild/remote-store'
-import { isAllowedEmail, normalizeEmail, type WebEnv } from './config'
+import { isAllowedEmail, normalizeEmail } from './config'
 import type { WebAuth } from './auth'
 import type { WebAuthConfig } from './config'
 
 function asFetch(delegate: (request: Request) => Promise<Response>): typeof fetch {
-  return delegate as unknown as typeof fetch
+  // OperatorApiClient calls fetchFn(url, init) with a string URL; the hosted
+  // service's fetch takes a Request.
+  return ((input: string | URL | Request, init?: RequestInit) =>
+    delegate(
+      input instanceof Request ? input : new Request(input, init),
+    )) as unknown as typeof fetch
 }
 
 /** Upper bound for a tool-requested bounded wait (`builds.events`), so no
@@ -57,7 +62,6 @@ export const MCP_SERVER_INSTRUCTIONS = [
 ].join(' ')
 
 export interface McpEndpointOptions {
-  env?: WebEnv
   /** The parsed web auth config (repositories, baseURL, mcpResource). */
   config: WebAuthConfig
   /** The Better Auth instance carrying the MCP plugin. */
@@ -108,7 +112,6 @@ interface McpOperator {
 export function createMcpEndpoint(options: McpEndpointOptions): {
   fetch(request: Request): Promise<Response>
 } {
-  const env = options.env ?? process.env
   const config = options.config
   const now = options.now ?? (() => new Date())
   const entries = options.entries ?? TOOLS
