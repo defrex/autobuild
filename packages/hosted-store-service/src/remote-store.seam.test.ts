@@ -7,29 +7,30 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { EventValidationError, type EventWrite } from '../../events/catalog'
-import { agentActor, DISPATCHER, KERNEL, humanActor, type Via } from '../../events/envelope'
-import { manualClock } from '../../testing/fixed'
+import type { EventWrite } from '@defrex/autobuild/plugin-sdk'
+import { BuildScopeError } from '@defrex/autobuild/plugin-sdk'
 import {
-  buildCreatedWrite,
-  CONTRACT_T0,
-  describeBuildStoreContract,
-  sampleBuildInput,
-  sampleEventWrite,
-} from '../contract'
-import { BuildScopeError } from '../build-scope'
-import { MemoryBuildStore } from '../memory'
-import { StreamBatchTooLargeError, StreamClosedError } from '../streams/types'
-import { textContent } from '../types'
-import { AuthError, RemoteBuildStore } from './client'
-import { createStoreServer, startStoreServer } from './server'
-import { mintToken, verifyToken } from './token'
-import {
+  EventValidationError,
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from './version'
+} from '@defrex/autobuild/remote-store'
+import { agentActor, DISPATCHER, KERNEL, humanActor, type Via } from '@defrex/autobuild/testing'
+import { manualClock, textContent } from '@defrex/autobuild/testing'
+import {
+  buildCreatedWrite,
+  CONTRACT_T0,
+  describeBuildStoreContract,
+  MemoryBuildStore,
+  sampleBuildInput,
+  sampleEventWrite,
+  StreamBatchTooLargeError,
+  StreamClosedError,
+} from '@defrex/autobuild/plugin-sdk'
+import { AuthError, RemoteBuildStore } from '@defrex/autobuild/remote-store'
+import { createStoreServer, startStoreServer } from './remote-store-server'
+import { mintToken, verifyToken } from '@defrex/autobuild/remote-store'
 
 // ── The contract, over the wire ──────────────────────────────────────────────
 //
@@ -906,9 +907,10 @@ describe('stream wait over the wire', () => {
 // away mid-hold — and (AUT-380) the disconnect signal also reaches the
 // backing store's poll loop, so the polls themselves cease.
 
-import { readEventsWithWait, readStreamWithWait } from '../streams/wait'
-import type { SessionEvent } from '../../events/sessions'
-import type { StreamRead } from '../streams/types'
+import { readStreamWithWait } from '@defrex/autobuild/plugin-sdk'
+import { readEventsWithWait } from '@defrex/autobuild/testing'
+import type { SessionEvent } from '@defrex/autobuild/remote-store'
+import type { StreamRead } from '@defrex/autobuild/plugin-sdk'
 
 /**
  * A MemoryBuildStore whose held-read polls are observable. One held HTTP
