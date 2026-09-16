@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#371](https://github.com/defrex/autobuild/pull/371) — De-time the subscribe/held-read delivery tests
 - [#370](https://github.com/defrex/autobuild/pull/370) — Fix the advertised MCP jwks_uri: point both metadata documents at /api/auth/jwks
 - [#369](https://github.com/defrex/autobuild/pull/369) — Parse session-event wait strictly and clamp to the hosted ceiling
 - [#368](https://github.com/defrex/autobuild/pull/368) — Plumb an AbortSignal through held BuildStore reads (AUT-380)

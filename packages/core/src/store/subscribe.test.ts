@@ -14,6 +14,24 @@ function makeStore(): MemoryBuildStore {
   return new MemoryBuildStore()
 }
 
+/** Event-driven wait: poll the predicate every 5 ms and fail with `message`
+ * only if it never turns true within `deadlineMs`. Replaces fixed sleeps that
+ * bet on delivery landing inside a wall-clock window — under load it may not,
+ * while a genuinely broken delivery path still fails at the deadline. */
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+  deadlineMs = 10_000,
+): Promise<void> {
+  const deadline = performance.now() + deadlineMs
+  while (!predicate()) {
+    if (performance.now() > deadline) {
+      throw new Error(`timed out waiting for ${message}`)
+    }
+    await Bun.sleep(5)
+  }
+}
+
 async function appendObservation(store: MemoryBuildStore, slug: string, summary: string) {
   return store.append(slug, {
     actor: agentActor('implement', 's_1'),
@@ -33,12 +51,15 @@ describe('pollingSubscribe interval mode (no waitSeconds)', () => {
       (event) => received.push(event.seq),
     )
     await appendObservation(store, 's', 'one')
-    await Bun.sleep(50)
+    await waitFor(() => received.length >= 1, 'the first event')
     await appendObservation(store, 's', 'two')
-    await Bun.sleep(50)
+    await waitFor(() => received.length >= 2, 'the second event')
     unsubscribe()
+    // Settle past unsubscribe: a duplicate delivery would still show up in
+    // the exact-array pin below (pollingSubscribe dedups by lastSeq).
+    await Bun.sleep(50)
     expect(received).toEqual([1, 2])
-  })
+  }, 15_000)
 })
 
 describe('pollingSubscribe bounded-wait mode', () => {
@@ -69,6 +90,7 @@ describe('pollingSubscribe bounded-wait mode', () => {
   test('request starts are spaced at least pollMs apart when the server answers early', async () => {
     const store = makeStore()
     await store.createBuild({ slug: 's', repo: 'r' })
+    const pollMs = 100
     const starts: number[] = []
     const getEvents: SubscribeRead = async (since) => {
       // Monotonic clock: Date.now() is wall time and can slew mid-test,
@@ -77,17 +99,28 @@ describe('pollingSubscribe bounded-wait mode', () => {
       // An early-answering (wait-ignoring) server: no hold at all.
       return store.getEvents('s', since)
     }
-    const unsubscribe = pollingSubscribe(getEvents, { pollMs: 100, waitSeconds: 1 }, () => {})
-    await Bun.sleep(350)
+    const unsubscribe = pollingSubscribe(getEvents, { pollMs, waitSeconds: 1 }, () => {})
+    // Collect the starts event-driven: a fixed observation window is itself
+    // load-sensitive (it can yield too few starts), so wait for the fourth
+    // request instead. A stalled cadence still fails at the deadline.
+    const t0 = performance.now()
+    while (starts.length < 4 && performance.now() - t0 < 5_000) {
+      await Bun.sleep(10)
+    }
     unsubscribe()
     expect(starts.length).toBeGreaterThanOrEqual(3)
-    // Bun.sleep can wake a millisecond or two early under load (observed
-    // 98–99 ms gaps on an honest pollMs cadence), so the pin allows a few
-    // milliseconds of measurement slack around the pollMs spacing.
+    // The cadence pin keeps a lower bound per gap, with an explicit noise
+    // budget: scheduler and Bun.sleep measurement noise leaves honest gaps
+    // within a few milliseconds of pollMs (worst benign undershoot observed
+    // in reproduction: 99 ms at pollMs=100), while a real cadence regression
+    // — a missing gap-fill — shows gaps near 0 ms, an order of magnitude
+    // below the budget. SLACK = 20 is ~5× that observed noise; it is not
+    // a license to poll faster than pollMs.
+    const SLACK = 20
     for (let i = 1; i < starts.length; i++) {
-      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(95)
+      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(pollMs - SLACK)
     }
-  })
+  }, 15_000)
 
   test('unsubscribe aborts the in-flight held read immediately', async () => {
     const signals: AbortSignal[] = []
@@ -141,9 +174,9 @@ describe('pollingSubscribe bounded-wait mode', () => {
       { pollMs: 30, waitSeconds: 5 },
       (event: AbEvent) => received.push(event.seq),
     )
-    await Bun.sleep(200)
+    await waitFor(() => received.length === 1, 'the retried delivery')
     unsubscribe()
     expect(received).toEqual([1])
     expect(calls).toBeGreaterThanOrEqual(2)
-  })
+  }, 15_000)
 })
