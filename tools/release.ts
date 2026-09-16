@@ -6,7 +6,7 @@ import { inc as incrementSemver, valid as validSemver } from 'semver'
 import {
   MISSING_POSTGRES_URL_MESSAGE,
   POSTGRES_URL_VARIABLES,
-} from '../packages/postgres-store/src/env'
+} from '@defrex/autobuild-postgres-store/env'
 import { readWorkspaceManifests } from './workspace-manifest-check'
 import { distributionAssetName } from '../packages/core/src/ports/workspace/distribution-archive'
 import { packageAutobuildDistribution } from '../packages/core/src/ports/workspace/vercel-sandbox'

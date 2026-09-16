@@ -29,8 +29,8 @@ import { roleKeyWarnings } from '../packages/core/src/config/roles'
 import { DISPATCHER } from '../packages/core/src/events/envelope'
 import type { E2eHarness } from '../packages/core/src/integration/harness'
 import type { BuildStore, Clock } from '../packages/core/src/store/types'
-import { migratePostgres } from '../packages/postgres-store/src/schema'
-import { openPostgresBuildStoreFromEnv } from '../packages/postgres-store/src/config'
+import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
+import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
 import { prepareHappyScenario, prepareScenario } from './dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
