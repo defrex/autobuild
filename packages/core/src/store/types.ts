@@ -103,7 +103,8 @@ export interface RepositoryArtifact {
 /** An operator session: hosted-only durable orchestrator-conversation state
  * (SPEC §7.1.1). The record carries only identity and timestamps; everything
  * else — status, open turn, pending approval, wake settings — is a reduction
- * of the session's own event log (sessions/reducer.ts), never a column. */
+ * of the session's own event log (the hosted package's session-reducer.ts),
+ * never a column. */
 export interface SessionRecord {
   /** Store-assigned (`os_<uuid>`). */
   id: string

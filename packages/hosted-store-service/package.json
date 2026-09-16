@@ -15,6 +15,14 @@
       "types": "./src/service.ts",
       "import": "./src/service.ts"
     },
+    "./operator-api": {
+      "types": "./src/operator-api.ts",
+      "import": "./src/operator-api.ts"
+    },
+    "./remote-tickets": {
+      "types": "./src/remote-tickets.ts",
+      "import": "./src/remote-tickets.ts"
+    },
     "./web/auth": {
       "types": "./src/web/auth.ts",
       "import": "./src/web/auth.ts"
@@ -36,7 +44,7 @@
     "ab-hosted-store": "./src/bin.ts"
   },
   "peerDependencies": {
-    "@defrex/autobuild": ">=0.7.0"
+    "@defrex/autobuild": ">=0.9.0"
   },
   "dependencies": {
     "@defrex/autobuild-postgres-store": "workspace:*",
