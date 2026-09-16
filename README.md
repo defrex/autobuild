@@ -67,7 +67,7 @@ usable on your machine.
 <!-- release-install:start -->
 
 ```sh
-bun add -g github:defrex/autobuild#v0.7.0
+bun add -g @defrex/autobuild@0.8.0
 ```
 
 <!-- release-install:end -->
