@@ -246,10 +246,11 @@ export interface BuildStore {
    * form.
    *
    * `opts.signal` lets a caller cancel the held read before its bound (a
-   * watcher torn down mid-hold). An adapter MAY return early — rejecting
-   * with the abort or resolving empty — when the signal fires; it MUST NOT
-   * wait past the bound because of it, and ignoring the signal entirely is
-   * conforming (local adapters' holds are short). */
+   * watcher or a disconnected peer torn down mid-hold). When the signal
+   * fires, the adapter resolves with its current result — the empty read it
+   * would otherwise keep polling for — and stops polling; it MUST NOT wait
+   * past the bound because of the signal, and a read that finds data before
+   * the abort still returns it. */
   getEvents(
     slug: string,
     sinceSeq?: number,
@@ -298,7 +299,7 @@ export interface BuildStore {
    * the batch event is validated before any retention prune of artifacts in
    * the same deposit batch (AUT-322), and an invalid event leaves no trace.
    * The optional bounded wait mirrors `getEvents` exactly, including the
-   * cancellation signal's may-return-early rule. */
+   * resolve-with-current-result abort contract of `opts.signal`. */
   getRepoEvents(
     repo: string,
     sinceSeq?: number,
@@ -341,11 +342,14 @@ export interface BuildStore {
   /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
    * When nothing newer exists, an adapter honors `waitSeconds` with the
    * same clamp/early-return rules as stream reads (§7.6): whole seconds,
-   * above 30 clamped to 30, returning as soon as an event lands. */
+   * above 30 clamped to 30, returning as soon as an event lands.
+   * `opts.signal` carries the same resolve-with-current-result abort
+   * contract as `getEvents`: on abort the adapter stops polling and resolves
+   * with its current result, never waiting past the bound. */
   getSessionEvents(
     id: string,
     sinceSeq?: number,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]>
   /** Same atomic-deposit and validation-before-prune contracts as
    * `appendWithArtifacts` (D6, AUT-322): the batch event is validated before
@@ -391,8 +395,14 @@ export interface BuildStore {
    * and artifact reference. When no newer chunk exists and the stream is
    * open, an adapter honors `waitSeconds` (whole seconds; above 30 clamped
    * to 30): it returns no later than the bound and as soon as a chunk is
-   * appended or the stream closes. Closed streams never wait. */
-  readStream(streamId: string, opts?: { since?: number; waitSeconds?: number }): Promise<StreamRead>
+   * appended or the stream closes. Closed streams never wait.
+   * `opts.signal` carries the same resolve-with-current-result abort
+   * contract as `getEvents`: on abort the adapter stops polling and resolves
+   * with its current result, never waiting past the bound. */
+  readStream(
+    streamId: string,
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<StreamRead>
 
   /** Close with an outcome. One atomic operation: assemble the chunks into
    * the protocol's `UIMessage[]` document, deposit it as an artifact

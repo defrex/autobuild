@@ -384,13 +384,18 @@ export class MemoryBuildStore implements BuildStore {
     return { event: envelope, artifacts: structuredClone(deposited) }
   }
 
-  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+  async getEvents(
+    slug: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]> {
     return readEventsWithWait({
       read: async () => {
         const state = this.state(slug)
         return structuredClone(state.events.filter((e) => e.seq > sinceSeq)) as AbEvent[]
       },
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
     })
   }
 
@@ -603,7 +608,7 @@ export class MemoryBuildStore implements BuildStore {
   async getRepoEvents(
     repo: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
     return readEventsWithWait({
       read: async () => {
@@ -612,6 +617,7 @@ export class MemoryBuildStore implements BuildStore {
         ) as RepositoryEvent[]
       },
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
     })
   }
 
@@ -780,11 +786,11 @@ export class MemoryBuildStore implements BuildStore {
   async getSessionEvents(
     id: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]> {
     const read = async (): Promise<SessionEvent[]> =>
       structuredClone(this.sessionState(id).events.filter((event) => event.seq > sinceSeq))
-    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
   }
 
   async appendSessionWithArtifacts<T extends SessionEventType>(
@@ -981,7 +987,7 @@ export class MemoryBuildStore implements BuildStore {
 
   async readStream(
     streamId: string,
-    opts?: { since?: number; waitSeconds?: number },
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const read = async (): Promise<StreamRead> => {
       const state = this.streamState(streamId)
@@ -993,7 +999,7 @@ export class MemoryBuildStore implements BuildStore {
         ...(record.artifact !== undefined ? { artifact: structuredClone(record.artifact) } : {}),
       }
     }
-    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {

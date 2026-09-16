@@ -344,7 +344,11 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
-  async getEvents(slug: string, sinceSeq = 0, opts?: { waitSeconds?: number }): Promise<AbEvent[]> {
+  async getEvents(
+    slug: string,
+    sinceSeq = 0,
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
+  ): Promise<AbEvent[]> {
     const read = async (): Promise<AbEvent[]> => {
       if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
       const rows: Row[] = await this.sql`SELECT * FROM events WHERE build = ${slug}
@@ -361,6 +365,7 @@ export class PostgresBuildStore implements BuildStore {
     return readEventsWithWait({
       read,
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
       // Hosted budget: no held event request polls the database faster than
       // once per second (AUT-334), so append-to-wake is typically under one
       // second — worst case one poll interval plus the query round-trip.
@@ -585,7 +590,7 @@ export class PostgresBuildStore implements BuildStore {
   async getSessionEvents(
     id: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<SessionEvent[]> {
     const read = async (): Promise<SessionEvent[]> => {
       if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
@@ -603,6 +608,7 @@ export class PostgresBuildStore implements BuildStore {
     return readEventsWithWait({
       read,
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
       // Hosted budget: no held event request polls the database faster than
       // once per second (AUT-334, AUT-381), so append-to-wake is typically
       // under one second — worst case one poll interval plus the query
@@ -820,7 +826,7 @@ export class PostgresBuildStore implements BuildStore {
   async getRepoEvents(
     repo: string,
     sinceSeq = 0,
-    opts?: { waitSeconds?: number },
+    opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]> {
     const read = async (): Promise<RepositoryEvent[]> => {
       if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
@@ -838,6 +844,7 @@ export class PostgresBuildStore implements BuildStore {
     return readEventsWithWait({
       read,
       waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
       pollMs: EVENT_WAIT_POLL_MS,
     })
   }
@@ -1005,7 +1012,7 @@ export class PostgresBuildStore implements BuildStore {
 
   async readStream(
     streamId: string,
-    opts?: { since?: number; waitSeconds?: number },
+    opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const read = async (): Promise<StreamRead> => {
       const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
@@ -1026,7 +1033,7 @@ export class PostgresBuildStore implements BuildStore {
         ...(record.artifact !== undefined ? { artifact: record.artifact } : {}),
       }
     }
-    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds })
+    return readStreamWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
