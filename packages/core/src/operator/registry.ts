@@ -24,6 +24,7 @@
  */
 import { z } from 'zod'
 import { controlBuild, BuildControlError, type BuildControlAction } from '../cli/build-control'
+import type { Via } from '../events/envelope'
 import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
 import { systemClock, type BuildStore, type Clock } from '../store/types'
 import { TicketOperationError } from '../ports/tickets/operations'
@@ -72,8 +73,10 @@ export interface ToolContext {
   clock: Clock
   /** The caller's attributed identity (the operator user every write names). */
   identity?: string
-  /** Optional binding marker recorded with the caller's identity (e.g. "mcp"). */
-  via?: string
+  /** Optional binding marker recorded with the caller's identity (e.g. which
+   * MCP client executed the call). Only human actors may carry `via`.
+   * (SPEC §15.1) */
+  via?: Via
 }
 
 /** The failure body shape the operator API emits, mapped one-to-one so a tool
@@ -469,6 +472,7 @@ export const TOOLS: readonly ToolEntry[] = [
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
         action,
       })
     },
@@ -487,6 +491,7 @@ export const TOOLS: readonly ToolEntry[] = [
         repo: input.repo,
         slug: input.slug,
         user: attributed(ctx),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
         action,
         ...(readTicketBody !== undefined ? { readTicketBody } : {}),
       })
@@ -515,12 +520,14 @@ export const TOOLS: readonly ToolEntry[] = [
             store: ctx.store,
             repo: input.repo,
             user,
+            ...(ctx.via !== undefined ? { via: ctx.via } : {}),
             setting: input.setting,
           })
         : setRepositorySetting({
             store: ctx.store,
             repo: input.repo,
             user,
+            ...(ctx.via !== undefined ? { via: ctx.via } : {}),
             setting: input.setting,
             enabled: input.enabled,
           })
@@ -537,6 +544,7 @@ export const TOOLS: readonly ToolEntry[] = [
         store: ctx.store,
         repo: input.repo,
         user: attributed(ctx),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
         direction: input.action,
       })
     },
@@ -563,8 +571,19 @@ export const TOOLS: readonly ToolEntry[] = [
       )
       const user = attributed(ctx)
       return input.action === 'toggle-gate'
-        ? toggleHarvestGate({ store: ctx.store, repo: input.repo, user })
-        : controlHarvestRun({ store: ctx.store, repo: input.repo, user, run: input.run })
+        ? toggleHarvestGate({
+            store: ctx.store,
+            repo: input.repo,
+            user,
+            ...(ctx.via !== undefined ? { via: ctx.via } : {}),
+          })
+        : controlHarvestRun({
+            store: ctx.store,
+            repo: input.repo,
+            user,
+            ...(ctx.via !== undefined ? { via: ctx.via } : {}),
+            run: input.run,
+          })
     },
   ),
   defineTool(
@@ -712,6 +731,8 @@ export const TOOLS: readonly ToolEntry[] = [
       const input = raw as z.infer<typeof notesWriteInput>
       const user = attributed(ctx)
       await ctx.store.ensureRepo(input.repo)
+      // The `Via` object serializes into artifact metadata unchanged; no
+      // reader constrains its shape.
       const meta = await ctx.store.putRepoArtifact(input.repo, {
         kind: OPERATOR_NOTES_ARTIFACT,
         content: input.document,

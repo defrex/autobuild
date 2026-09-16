@@ -58,7 +58,7 @@
  * its first consumer. The predicates are nevertheless defined to coincide with
  * what the operator sees, and a unit test pins that agreement.
  */
-import { humanActor, type Actor } from '../events/envelope'
+import { humanActor, type Actor, type Via } from '../events/envelope'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord, BuildStore } from '../store/types'
@@ -161,6 +161,8 @@ export interface BulkControlOpts {
   /** Explicit identity for API callers; CLI/dashboard may retain env. */
   user?: string
   env?: Record<string, string | undefined>
+  /** Delegated-write attribution marker threaded onto the actor. */
+  via?: Via
   direction: BulkDirection
 }
 
@@ -233,7 +235,7 @@ export function bulkControlReport(summary: BulkControlSummary): string {
  */
 export async function bulkControlRepository(opts: BulkControlOpts): Promise<BulkControlSummary> {
   const { store, repo, direction } = opts
-  const actor = humanActor(opts.user?.trim() || buildControlUser(opts.env ?? {}))
+  const actor = humanActor(opts.user?.trim() || buildControlUser(opts.env ?? {}), opts.via)
   const paused = direction === 'pause'
   const intake = direction === 'resume'
 
