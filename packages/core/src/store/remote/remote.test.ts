@@ -811,6 +811,90 @@ describe('event wait over the wire', () => {
   })
 })
 
+// ── The stream-read wait grammar over the wire (AUT-384) ────────────────
+// §9's digits-only grammar is server-wide: the stream chunks GET parses
+// `wait` with the same digitsParam the event routes use (clamped to the
+// 30-second stream ceiling, not the hosted event ceiling), so the protocol
+// document and the code agree.
+
+describe('stream wait over the wire', () => {
+  const headers = {
+    [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+    [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+  }
+
+  test('the stream routes share the digits-only grammar: non-digit wait values are 400 validation', async () => {
+    const server = createStoreServer({ store: new MemoryBuildStore() })
+    await server.fetch(
+      new Request('https://store.test/builds', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(sampleBuildInput('stream-wait-grammar')),
+      }),
+    )
+    const createResponse = await server.fetch(
+      new Request('https://store.test/builds/stream-wait-grammar/streams', {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'g' }),
+      }),
+    )
+    expect(createResponse.status).toBe(201)
+    const { id } = (await createResponse.json()) as { id: string }
+    // The same rejection matrix the event routes pin: negative, decimal,
+    // signed, whitespace-padded, hex, empty, and non-numeric text.
+    for (const raw of ['abc', '0x10', '', ' 1', '1.5', '-1', '+1']) {
+      const response = await server.fetch(
+        new Request(
+          `https://store.test/builds/stream-wait-grammar/streams/${id}/chunks?since=0&wait=${encodeURIComponent(raw)}`,
+          { headers },
+        ),
+      )
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { kind: string }).kind).toBe('validation')
+    }
+    // The top-level route is the same parse site; pin it anyway so the
+    // grammar holds across both route families.
+    const top = await server.fetch(
+      new Request(`https://store.test/streams/${id}/chunks?since=0&wait=-1`, {
+        headers,
+      }),
+    )
+    expect(top.status).toBe(400)
+    expect(((await top.json()) as { kind: string }).kind).toBe('validation')
+  })
+
+  test('digit wait values keep the stream read semantics: immediate answers and the 30-second clamp', async () => {
+    const server = startStoreServer({ store: new MemoryBuildStore() })
+    try {
+      const client = new RemoteBuildStore({ url: server.url })
+      await client.createBuild(sampleBuildInput('stream-wait-happy'))
+      const stream = await client.createStream({ kind: 'build', build: 'stream-wait-happy' }, 'h')
+      await client.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+
+      // wait=5 with a chunk already present answers 200 immediately.
+      const started = Date.now()
+      const read = await client.readStream(stream.id, { since: 0, waitSeconds: 5 })
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(read.chunks).toHaveLength(1)
+      expect(read.status).toBe('open')
+
+      // wait=61 clamps to the 30-second stream ceiling (not the hosted
+      // event ceiling) and the immediate-return path is unchanged.
+      const clamped = await client.readStream(stream.id, { since: 0, waitSeconds: 61 })
+      expect(clamped.chunks).toHaveLength(1)
+      expect(clamped.status).toBe('open')
+
+      // wait=0 on an open, chunk-less read answers immediately, empty.
+      const immediate = await client.readStream(stream.id, { since: 1, waitSeconds: 0 })
+      expect(immediate.chunks).toHaveLength(0)
+      expect(immediate.status).toBe('open')
+    } finally {
+      await server.stop()
+    }
+  })
+})
+
 // ── Prompt teardown of held reads (AUT-375) ─────────────────────────────
 // Client-side: stop/abort must cancel an in-flight held request (the signal
 // reaches the underlying fetch), not wait out the server's hold bound.

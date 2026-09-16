@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#372](https://github.com/defrex/autobuild/pull/372) — Parse stream-read wait strictly with the §9 digits grammar
 - [#371](https://github.com/defrex/autobuild/pull/371) — De-time the subscribe/held-read delivery tests
 - [#370](https://github.com/defrex/autobuild/pull/370) — Fix the advertised MCP jwks_uri: point both metadata documents at /api/auth/jwks
 - [#369](https://github.com/defrex/autobuild/pull/369) — Parse session-event wait strictly and clamp to the hosted ceiling

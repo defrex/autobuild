@@ -688,7 +688,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       if (req.method === 'GET') {
         const since = intParam(url, 'since') ?? 0
-        const wait = intParam(url, 'wait')
+        // §9 grammar: `wait` is digits-only server-wide, clamped to the
+        // 30-second stream ceiling (MAX_STREAM_WAIT_SECONDS, not the hosted
+        // event ceiling of §6's hosted exception).
+        const wait = digitsParam(url, 'wait', MAX_STREAM_WAIT_SECONDS)
         return json(
           200,
           await withDisconnect(
