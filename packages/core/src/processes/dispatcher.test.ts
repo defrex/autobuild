@@ -5830,3 +5830,143 @@ describe('publication loss before workspace release', () => {
     expect(events.some((event) => event.type === 'infrastructure.cleanup-attempted')).toBe(false)
   })
 })
+
+describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
+  async function seedLiveSandbox(
+    h: Harness,
+    opts: { operator?: string; environmentId?: string; provider?: string } = {},
+  ): Promise<void> {
+    await h.store.ensureRepo(REPO)
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('ops'),
+      type: 'orchestrator.sandbox.provisioned',
+      payload: {
+        operator: opts.operator ?? 'ops',
+        environmentId: opts.environmentId ?? 'env-1',
+        provider: opts.provider ?? 'fake',
+        workspacePath: '/env/path',
+      },
+    })
+  }
+
+  test('a live sandbox past the idle threshold is stopped with a dispatcher fact', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h)
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    expect(types).toContain('orchestrator.sandbox.stopped')
+    const stopped = (await h.store.getRepoEvents(REPO)).at(-1)!
+    expect(stopped.actor).toEqual({ kind: 'dispatcher' })
+    expect(stopped.payload).toMatchObject({
+      operator: 'ops',
+      environmentId: 'env-1',
+      reason: 'idle',
+    })
+    expect(report.sandboxIdleStops).toBe(1)
+    expect(report.sandboxSettleFailures).toBe(0)
+  })
+
+  test('a sandbox inside the threshold is left alone', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h)
+    h.clock.advance(10 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    expect(types).not.toContain('orchestrator.sandbox.stopped')
+    expect(report.sandboxIdleStops).toBe(0)
+  })
+
+  test('disabled [orchestrator] makes the stage a no-op', async () => {
+    const h = harness()
+    await seedLiveSandbox(h)
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    expect(types).not.toContain('orchestrator.sandbox.stopped')
+    expect(report.sandboxIdleStops).toBe(0)
+  })
+
+  test('a capability-less provider makes the stage a no-op', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    // The logical-mode fake hosts the capability; strip it to model a
+    // provider without one.
+    const bare = h.workspaces as unknown as Record<string, unknown>
+    delete bare.orchestratorSandbox
+    await seedLiveSandbox(h)
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    expect(types).not.toContain('orchestrator.sandbox.stopped')
+    expect(report.sandboxIdleStops).toBe(0)
+  })
+
+  test('an environment owned by another provider is skipped', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h, { provider: 'other-provider' })
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    expect(report.sandboxIdleStops).toBe(0)
+    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
+      'orchestrator.sandbox.stopped',
+    )
+  })
+
+  test('an absent environment closes the orphan trail with an unconfirmed release fact', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h)
+    const capability = h.workspaces.orchestratorSandbox!
+    ;(capability as unknown as { stop: () => Promise<{ outcome: 'absent' }> }).stop = async () => ({
+      outcome: 'absent',
+    })
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    const last = (await h.store.getRepoEvents(REPO)).at(-1)!
+    expect(last.type).toBe('orchestrator.sandbox.released')
+    expect(last.actor).toEqual({ kind: 'dispatcher' })
+    expect(last.payload).toMatchObject({
+      operator: 'ops',
+      environmentId: 'env-1',
+      snapshots: { outcome: 'unknown', error: 'environment absent at idle settlement' },
+    })
+    expect(report.sandboxIdleStops).toBe(1)
+  })
+
+  test('an unsupported provider is skipped silently', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h)
+    const capability = h.workspaces.orchestratorSandbox!
+    ;(capability as unknown as { stop: () => Promise<{ outcome: 'unsupported' }> }).stop =
+      async () => ({ outcome: 'unsupported' })
+    h.clock.advance(31 * 60 * 1000)
+    const report = await h.dispatcher.tick()
+    expect(report.sandboxIdleStops).toBe(0)
+    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).not.toContain(
+      'orchestrator.sandbox.stopped',
+    )
+  })
+
+  test('a contained settlement failure is reported and retried next tick', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    await seedLiveSandbox(h)
+    const capability = h.workspaces.orchestratorSandbox!
+    let failing = true
+    ;(capability as unknown as { stop: () => Promise<{ outcome: 'stopped' }> }).stop = async () => {
+      if (failing) throw new Error('stop transport failed')
+      return { outcome: 'stopped' }
+    }
+    h.clock.advance(31 * 60 * 1000)
+    const failed = await h.dispatcher.tick()
+    expect(failed.sandboxSettleFailures).toBe(1)
+    expect(failed.sandboxIdleStops).toBe(0)
+    expect(failed.janitorDiagnostics.some((line) => line.includes('idle settlement failed'))).toBe(
+      true,
+    )
+
+    failing = false
+    h.clock.advance(60 * 1000)
+    const retried = await h.dispatcher.tick()
+    expect(retried.sandboxIdleStops).toBe(1)
+    expect(retried.sandboxSettleFailures).toBe(0)
+  })
+})

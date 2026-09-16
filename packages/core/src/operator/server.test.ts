@@ -490,6 +490,70 @@ describe('operator session routes', () => {
   })
 })
 
+describe('session-archive sandbox release hook (AUT-340)', () => {
+  function operatorClient(
+    server: { fetch(req: Request): Promise<Response> },
+    user: string,
+  ): OperatorApiClient {
+    return new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      fetchFn: fetchFor(server),
+    })
+  }
+
+  test('archiving an operator’s last open session releases and journals; one of several does not', async () => {
+    const store = new MemoryBuildStore({ clock })
+    const calls: Array<{ identity: string; repo: string }> = []
+    const sandbox = {
+      release: async (identity: string, input: { repo: string }) => {
+        calls.push({ identity, repo: input.repo })
+      },
+    }
+    const server = createOperatorServer({
+      store,
+      secret,
+      clock,
+      sandbox: sandbox as never,
+    })
+    const ada = operatorClient(server, 'Ada')
+    const first = await ada.createSession(repo, { title: 'one' })
+    const second = await ada.createSession(repo, { title: 'two' })
+
+    // Archiving one of several open sessions does not release.
+    await ada.archiveSession(repo, first.id)
+    expect(calls).toEqual([])
+
+    // Archiving the last open session releases the operator's sandbox.
+    await ada.archiveSession(repo, second.id)
+    expect(calls).toEqual([{ identity: 'Ada', repo }])
+  })
+
+  test('no backend → no release; release of a never-provisioned operator is a silent no-op', async () => {
+    const store = new MemoryBuildStore({ clock })
+    const server = createOperatorServer({ store, secret, clock })
+    const ada = operatorClient(server, 'Ada')
+    const session = await ada.createSession(repo, { title: 'x' })
+    await ada.archiveSession(repo, session.id)
+    expect((await store.listSessions(repo)).length).toBe(1)
+
+    // A never-provisioned operator: the service's release is a no-op, so the
+    // hook must not error even when it fires.
+    const sandbox = {
+      release: async () => undefined,
+    }
+    const secondServer = createOperatorServer({
+      store,
+      secret,
+      clock,
+      sandbox: sandbox as never,
+    })
+    const client = operatorClient(secondServer, 'Solo')
+    const solo = await client.createSession(repo, { title: 'y' })
+    await client.archiveSession(repo, solo.id)
+  })
+})
+
 describe('the generic tools route', () => {
   const via = { kind: 'mcp', client: 'claude' } as const
 

@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
+import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
 import { displayName, effectiveRuntimeReferences, tomlKey } from './roles'
@@ -514,6 +515,31 @@ export const ticketsSchema = z.strictObject({
 })
 export type TicketsConfig = z.infer<typeof ticketsSchema>
 
+// ── [orchestrator] ──────────────────────────────────────────────────────────
+//
+// The operator-agent gate (AUT-340). Absent table ≡ disabled: with `enabled =
+// false` (the default) the sandbox registry tools are absent from every
+// binding and no environment is ever provisioned.
+
+export const orchestratorSandboxSchema = z.strictObject({
+  /** Idle minutes without a sandbox tool call before the dispatcher tick's
+   * janitor stops the environment, keeping its snapshot for the next resume. */
+  idleMinutes: z.number().int().positive().default(30),
+  /** Names of non-secret host environment variables forwarded into the
+   * sandbox (during provisioning/setup and tool exec/start alike). These are
+   * the ONLY non-toolchain environment the sandbox ever sees; forwarding any
+   * store, forge, ticket-provider, model, or Vercel credential name is a
+   * config error. Unset means none. */
+  environmentVariables: z.array(z.string().min(1)).default([]),
+})
+export type OrchestratorSandboxConfig = z.infer<typeof orchestratorSandboxSchema>
+
+export const orchestratorSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  sandbox: orchestratorSandboxSchema.prefault({}),
+})
+export type OrchestratorConfig = z.infer<typeof orchestratorSchema>
+
 // ── Whole file ───────────────────────────────────────────────────────────────
 
 const configRootSchema = z.strictObject({
@@ -548,6 +574,7 @@ const configRootSchema = z.strictObject({
   // therefore include the complete materialized runtime list in its diagnostic.
   roles: openMap('[roles]', roleSchema),
   policy: policySchema.prefault({}),
+  orchestrator: orchestratorSchema.prefault({}),
   // An absent [tickets] table must NOT silently default past the mandatory
   // ready gate. Prefault feeds the file-source identity through ticketsSchema,
   // which deliberately fails on missing `readyState` at `tickets.readyState`.
@@ -728,6 +755,20 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   }
   // Plugin sources receive the existing ticket lifecycle/configuration fields
   // unchanged; adapter-specific validation belongs to their factory.
+
+  // The credential-free sandbox rule (AUT-340): a forwarded variable name may
+  // never name a store, forge, ticket-provider, model, or Vercel credential.
+  if (config.orchestrator.enabled) {
+    config.orchestrator.sandbox.environmentVariables.forEach((name, index) => {
+      if (SANDBOX_FORBIDDEN_ENV.includes(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['orchestrator', 'sandbox', 'environmentVariables', index],
+          message: `environment variable ${JSON.stringify(name)} is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox`,
+        })
+      }
+    })
+  }
 })
 
 export type Config = z.infer<typeof configSchema>

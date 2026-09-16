@@ -555,3 +555,96 @@ describe('repository event catalog', () => {
     ])
   })
 })
+
+describe('operator sandbox facts (AUT-340)', () => {
+  test('tick counters replay with and carry the optional sandbox counters', () => {
+    const tick = {
+      run: 'dispatch-1',
+      queued: 0,
+      counters: { ...tickCounters, sandboxIdleStops: 2, sandboxSettleFailures: 1 },
+      janitorDiagnostics: [],
+      ticketDiagnostics: [],
+      dependencyDiagnostics: [],
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: tick,
+      }).payload,
+    ).toEqual(tick)
+  })
+
+  test('lifecycle facts are human-attributed and carry strict payloads', () => {
+    const provisioned = {
+      operator: 'ops',
+      environmentId: 'autobuild-sandbox-abc123',
+      provider: 'vercel-sandbox',
+      workspacePath: '/vercel/sandbox/workspace',
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.provisioned',
+        payload: provisioned,
+      }).payload,
+    ).toEqual(provisioned)
+    // A dispatcher may not provision on an operator's behalf.
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'orchestrator.sandbox.provisioned',
+        payload: provisioned,
+      }),
+    ).toThrow(/may not emit/)
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.activity',
+        payload: { operator: 'ops', environmentId: 'autobuild-sandbox-abc123', extra: 1 },
+      }),
+    ).toThrow(/invalid payload/)
+  })
+
+  test('stopped is dispatcher-authored; released admits human and dispatcher; reset is human', () => {
+    const operator = { operator: 'ops', environmentId: 'autobuild-sandbox-abc123' }
+    expect(
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'orchestrator.sandbox.stopped',
+        payload: { ...operator, reason: 'idle' },
+      }).payload,
+    ).toEqual({ ...operator, reason: 'idle' })
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.stopped',
+        payload: { ...operator, reason: 'idle' },
+      }),
+    ).toThrow(/may not emit/)
+    const released = { ...operator, snapshots: { outcome: 'confirmed' as const, deleted: 2 } }
+    for (const actor of [humanActor('ops'), DISPATCHER]) {
+      expect(
+        validateRepositoryEventWrite({
+          actor,
+          type: 'orchestrator.sandbox.released',
+          payload: released,
+        }).payload,
+      ).toEqual(released)
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.reset',
+        payload: operator,
+      }).payload,
+    ).toEqual(operator)
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'orchestrator.sandbox.reset',
+        payload: operator,
+      }),
+    ).toThrow(/may not emit/)
+  })
+})

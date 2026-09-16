@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { vercelSandboxConfigSchema, type WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
 import type { WorkspaceProvider } from '../types'
@@ -24,6 +24,13 @@ export interface CreateWorkspaceProviderOptions {
    * absent branch. Absent seams fall back to host `git` from `repoRoot`. */
   origin?: () => Promise<string>
   remoteBranchHead?: (branch: string) => Promise<string | undefined>
+  /** Operator-sandbox options (AUT-340), set once at construction: the raw
+   * `[commands].setup` shell string, the local-state-tree sandbox root, and
+   * the forwarded non-secret variable names. The service never re-receives
+   * setup, root, or variables. */
+  sandboxSetupCommand?: string
+  sandboxRoot?: string
+  sandboxEnvironmentVariables?: readonly string[]
 }
 
 export interface WorkspaceRuntime {
@@ -53,7 +60,14 @@ export async function createWorkspaceProvider(
           '[workspace.config] is not supported by the builtin "git-worktree" provider',
         )
       }
-      return new GitWorktreeProvider({ root: resolve(opts.worktreeRoot) })
+      return new GitWorktreeProvider({
+        root: resolve(opts.worktreeRoot),
+        sandboxRoot:
+          opts.sandboxRoot ?? resolve(join(opts.worktreeRoot, '..', 'orchestrator-sandboxes')),
+        setupCommand: opts.sandboxSetupCommand,
+        sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
+        envSource: opts.env,
+      })
     }
     if (config.provider === 'vercel-sandbox') {
       const parsed = vercelSandboxConfigSchema.safeParse(config.config)
@@ -68,6 +82,8 @@ export async function createWorkspaceProvider(
         storeToken: opts.storeToken,
         repo: resolve(opts.repoRoot),
         runtimeReferences: opts.runtimeReferences ?? [],
+        setupCommand: opts.sandboxSetupCommand,
+        sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
         ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
         ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
       })

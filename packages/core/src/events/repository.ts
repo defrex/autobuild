@@ -71,6 +71,11 @@ const tickCountersSchema = z.strictObject({
    * work this tick. Added with durable supervision; optional so historical
    * tick facts replay. */
   provisioning: z.number().int().nonnegative().optional(),
+  /** Operator sandboxes idly stopped this tick. Added with the operator
+   * sandbox; optional so historical tick facts replay. */
+  sandboxIdleStops: z.number().int().nonnegative().optional(),
+  /** Contained idle-settlement failures this tick; retried next tick. */
+  sandboxSettleFailures: z.number().int().nonnegative().optional(),
   harvestStarted: z.number().int().nonnegative(),
   harvestResumed: z.number().int().nonnegative(),
   harvestCompleted: z.number().int().nonnegative(),
@@ -87,6 +92,7 @@ const restartRequiredConfigPathSchema = z.enum([
   'tickets.claimedState',
   'tickets.createState',
   'tickets.dir',
+  'orchestrator',
 ])
 const restartRequiredConfigPathsSchema = z
   .array(restartRequiredConfigPathSchema)
@@ -252,6 +258,59 @@ export const harvestEventPayloadSchemas = {
   }),
 } as const
 
+/** Operator sandbox lifecycle facts (AUT-340). The provision/resume/activity
+ * facts bracket one environment's usable window and rate-limited activity;
+ * stopped/released/reset close it. Derived state lives in the pure reducer
+ * `processes/sandbox-state.ts`, mirroring harvest execution settlement. */
+export const orchestratorSandboxEventPayloadSchemas = {
+  /** First use of one operator's environment for this repository, or a
+   * post-reset reprovision. Carries the full environment identity. */
+  'orchestrator.sandbox.provisioned': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    provider: z.string().min(1),
+    sessionId: z.string().min(1).optional(),
+    workspacePath: z.string().min(1),
+  }),
+  /** A stopped environment resumed for a later tool call. */
+  'orchestrator.sandbox.resumed': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    provider: z.string().min(1),
+    sessionId: z.string().min(1).optional(),
+  }),
+  /** Rate-limited activity evidence (at most one per 60 s per environment),
+   * the last-evidence input to the dispatcher's idle settlement. */
+  'orchestrator.sandbox.activity': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+  }),
+  /** Dispatcher-authored idle stop: the session ended, the snapshot kept. */
+  'orchestrator.sandbox.stopped': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    reason: z.literal('idle'),
+  }),
+  /** Full teardown + snapshot purge. Operator-driven (reset, session archive)
+   * or dispatcher-authored (closing an orphan's trail whose environment was
+   * already absent at idle settlement). */
+  'orchestrator.sandbox.released': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    snapshots: z.strictObject({
+      outcome: z.enum(['confirmed', 'unknown']),
+      deleted: z.number().int().nonnegative().optional(),
+      error: z.string().min(1).optional(),
+    }),
+  }),
+  /** Destructive reset marker. The following released/provisioned facts
+   * carry the evidence. */
+  'orchestrator.sandbox.reset': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+  }),
+} as const
+
 export const dispatcherStatusEventPayloadSchemas = {
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */
@@ -351,6 +410,7 @@ export const dispatcherSettingEventPayloadSchemas = {
 
 export const repositoryEventPayloadSchemas = {
   ...harvestEventPayloadSchemas,
+  ...orchestratorSandboxEventPayloadSchemas,
   ...dispatcherStatusEventPayloadSchemas,
   ...dispatcherSettingEventPayloadSchemas,
 } as const
@@ -415,6 +475,16 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.completed': ['kernel'],
   'harvest.escalated': ['kernel', 'agent'],
   'harvest.failed': ['kernel'],
+  'orchestrator.sandbox.provisioned': ['human'],
+  'orchestrator.sandbox.resumed': ['human'],
+  'orchestrator.sandbox.activity': ['human'],
+  'orchestrator.sandbox.stopped': ['dispatcher'],
+  // Operator-driven releases (reset, session archive) are human-authored;
+  // the idle settlement's absent path closes an orphan's trail with a
+  // dispatcher-authored released fact, exactly as
+  // `harvest.execution.released` is dispatcher-authored.
+  'orchestrator.sandbox.released': ['human', 'dispatcher'],
+  'orchestrator.sandbox.reset': ['human'],
   'dispatcher.run-started': ['dispatcher'],
   'dispatcher.run-stopped': ['dispatcher'],
   'dispatcher.tick-yielded': ['dispatcher'],

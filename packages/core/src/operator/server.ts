@@ -56,6 +56,7 @@ import {
   readOperatorTurnStream,
   setOperatorWake,
 } from './sessions'
+import type { OperatorSandboxService } from './sandbox'
 import {
   getOperatorTicket,
   listOperatorTickets,
@@ -69,6 +70,11 @@ export interface OperatorServerOptions {
   clock?: Clock
   /** Hosted ticket capability. Omitted deployments retain build-only operator routes. */
   ticketBackend?: OperatorTicketBackend
+  /** Operator-sandbox backend (AUT-340): archiving an operator's last open
+   * session for a repository releases their sandbox environment. The hosted
+   * service does not pass one — the hosted sandbox backend is the later
+   * hosted-transport ticket. */
+  sandbox?: OperatorSandboxService
   /** Observes unexpected backing-store failures without exposing them over HTTP. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
 }
@@ -406,7 +412,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         return json(200, { ok: true })
       }
       if (req.method === 'POST' && rest.length === 3 && rest[2] === 'archive') {
-        await archiveOperatorSession(opts.store, repo, sid, user)
+        await archiveOperatorSession(opts.store, repo, sid, user, opts.sandbox)
         return json(200, { ok: true })
       }
       if (
