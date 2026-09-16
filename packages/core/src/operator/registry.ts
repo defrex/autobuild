@@ -53,6 +53,8 @@ import {
 } from './protocol'
 import { OPERATOR_TOOL_ANNOTATIONS, type OperatorToolName } from './annotations'
 import { answerAction, controlPrechecks, requireRouteBuild, RouteRefusalError } from './requests'
+import { SandboxOperationError } from '../ports/workspace/operator-sandbox'
+import type { OperatorSandboxService } from './sandbox'
 import {
   getOperatorTicket,
   listOperatorTickets,
@@ -74,6 +76,8 @@ export interface ToolContext {
   identity?: string
   /** Optional binding marker recorded with the caller's identity (e.g. "mcp"). */
   via?: string
+  /** The operator-sandbox backend; required only by the sandbox tools. */
+  sandbox?: OperatorSandboxService
 }
 
 /** The failure body shape the operator API emits, mapped one-to-one so a tool
@@ -161,6 +165,17 @@ function ticketsOf(ctx: ToolContext): OperatorTicketBackend {
     })
   }
   return ctx.tickets
+}
+
+/** The sandbox tools need the backend; same refusal shape as `ticketsOf`. */
+function sandboxOf(ctx: ToolContext): OperatorSandboxService {
+  if (ctx.sandbox === undefined) {
+    throw new RouteRefusalError({
+      kind: 'conflict',
+      error: 'operator sandbox backend is not configured',
+    })
+  }
+  return ctx.sandbox
 }
 
 /** Extend every member of a request-union schema with shared routing fields
@@ -339,6 +354,76 @@ const notesWriteInput = z.strictObject({
       'The complete replacement notes document (UTF-8 text); an empty string clears the notes.',
     ),
 })
+
+const sandboxExecInput = z.strictObject({
+  repo: repoField,
+  command: z.string().min(1).describe('Shell command to run inside the operator sandbox.'),
+  cwd: z
+    .string()
+    .optional()
+    .describe(
+      'Working directory for the command, relative to the checkout; defaults to the checkout root. Absolute paths and ".." escapes are refused.',
+    ),
+  timeoutSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(300)
+    .optional()
+    .describe(
+      'Bounded wait for the command, 1-300 seconds (default 120). On expiry the command is killed and the tool fails with code "sandbox-exec-timeout".',
+    ),
+})
+
+const sandboxStartInput = z.strictObject({
+  repo: repoField,
+  command: z
+    .string()
+    .min(1)
+    .describe('Shell command to launch detached inside the operator sandbox.'),
+  cwd: z
+    .string()
+    .optional()
+    .describe(
+      'Working directory for the command, relative to the checkout; defaults to the checkout root. Absolute paths and ".." escapes are refused.',
+    ),
+})
+
+const sandboxWaitInput = z.strictObject({
+  repo: repoField,
+  commandId: z.string().min(1).describe('Command id returned by a previous sandbox.start.'),
+  waitSeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(300)
+    .describe(
+      'Bounded wait, 0-300 seconds. Returns state "running" (no output on remote providers, which report output only after exit) or "exited" with the exit code and output so far.',
+    ),
+})
+
+const sandboxReadFileInput = z.strictObject({
+  repo: repoField,
+  path: z
+    .string()
+    .min(1)
+    .describe('File path relative to the checkout. Absolute paths and ".." escapes are refused.'),
+})
+
+const sandboxWriteFileInput = z.strictObject({
+  repo: repoField,
+  path: z
+    .string()
+    .min(1)
+    .describe('File path relative to the checkout. Absolute paths and ".." escapes are refused.'),
+  content: z.string().describe('File content (see encoding); at most 1 MiB after decoding.'),
+  encoding: z
+    .enum(['utf8', 'base64'])
+    .default('utf8')
+    .describe('How to decode `content`: "utf8" (default) or "base64".'),
+})
+
+const sandboxResetInput = z.strictObject({ repo: repoField })
 
 // ── The closed version-one table ─────────────────────────────────────────────
 
@@ -720,6 +805,73 @@ export const TOOLS: readonly ToolEntry[] = [
       return { revision: meta.revision, blobRef: meta.blobRef, createdAt: meta.createdAt }
     },
   ),
+  defineTool(
+    'sandbox.exec',
+    'Run one shell command inside your operator sandbox: a persistent, credential-free environment provisioned from the repository (first call provisions; later calls reuse it). The command waits at most 300 seconds; on expiry it is killed and the tool fails with code "sandbox-exec-timeout". Stdout and stderr are each truncated at 65,536 bytes with a "[truncated by autobuild: output exceeded 65536 bytes]" marker. The environment holds no store, forge, or model credentials — the typed tools remain the only route to build state.',
+    sandboxExecInput,
+    '{exitCode, stdout, stderr}: the command’s exit status and truncated output streams.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxExecInput>
+      return sandboxOf(ctx).exec(attributed(ctx), input)
+    },
+  ),
+  defineTool(
+    'sandbox.start',
+    'Launch one shell command detached inside your operator sandbox and return immediately. Pair with sandbox.wait to observe it. Calls against one environment are serialized; a detached command is tracked only by the serving process.',
+    sandboxStartInput,
+    '{commandId}: the id to pass to sandbox.wait.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxStartInput>
+      return sandboxOf(ctx).start(attributed(ctx), input)
+    },
+  ),
+  defineTool(
+    'sandbox.wait',
+    'Wait, bounded (0–300 seconds), on a command started with sandbox.start. Returns state "running" (poll again) or "exited" with the exit code and output so far. Remote providers report command output only after exit, so a running command shows no output there.',
+    sandboxWaitInput,
+    '{state, exitCode?, stdout?, stderr?}: the command state and, once exited, its exit code and truncated output streams.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxWaitInput>
+      return sandboxOf(ctx).wait(attributed(ctx), input)
+    },
+  ),
+  defineTool(
+    'sandbox.read_file',
+    'Read one file from your operator sandbox, rooted at the checkout. Absolute paths and ".." escapes are refused.',
+    sandboxReadFileInput,
+    '{encoding, content}: the file bytes — "utf8" when they decode as UTF-8, else "base64".',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxReadFileInput>
+      const bytes = await sandboxOf(ctx).readFile(attributed(ctx), input)
+      const decoded = new TextDecoder('utf-8').decode(bytes)
+      if (!decoded.includes('\uFFFD')) {
+        return { encoding: 'utf8', content: decoded }
+      }
+      return { encoding: 'base64', content: Buffer.from(bytes).toString('base64') }
+    },
+  ),
+  defineTool(
+    'sandbox.write_file',
+    'Write one file inside your operator sandbox, rooted at the checkout (parent directories are created). Absolute paths and ".." escapes are refused; content is bounded at 1 MiB after decoding.',
+    sandboxWriteFileInput,
+    '{path}: the written path, confirming the durable write.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxWriteFileInput>
+      await sandboxOf(ctx).writeFile(attributed(ctx), input)
+      return { path: input.path }
+    },
+  ),
+  defineTool(
+    'sandbox.reset',
+    'Destructively reset your operator sandbox: discard every change, purge the environment and its snapshots, and re-provision fresh from the current base branch head. Use when the environment is wedged or its checkout is dirty beyond repair.',
+    sandboxResetInput,
+    '{ok: true}: the environment was released and re-provisioned from the current base head.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxResetInput>
+      await sandboxOf(ctx).reset(attributed(ctx), input)
+      return { ok: true as const }
+    },
+  ),
 ]
 
 // ── The registry constructor ─────────────────────────────────────────────────
@@ -727,6 +879,9 @@ export const TOOLS: readonly ToolEntry[] = [
 export interface RegistryOptions {
   store: BuildStore
   tickets?: OperatorTicketBackend
+  /** The operator-sandbox backend; when absent the six sandbox tools are
+   * neither advertised nor callable (the compatibility case). */
+  sandbox?: OperatorSandboxService
   clock?: Clock
   /** Constrain every call to this repository identity (the `ab mcp --repo` flag). */
   allowedRepo?: string
@@ -772,6 +927,13 @@ function mapDomainError(error: unknown): RegistryError {
       progress: error.progress,
     })
   }
+  if (error instanceof SandboxOperationError) {
+    return new RegistryError('domain', error.message, {
+      kind: 'refusal',
+      error: error.message,
+      code: `sandbox-${error.stage}`,
+    })
+  }
   if (error instanceof OperatorQueryError) {
     return new RegistryError('domain', error.message, {
       kind: error.code === 'not-found' ? 'not-found' : 'conflict',
@@ -790,14 +952,22 @@ function mapDomainError(error: unknown): RegistryError {
   )
 }
 
-/** Bind the closed table to an opened store (and optional ticket backend).
- * The returned registry is the in-process binding; every other binding is
- * generated from `entries`. */
+/** Bind the closed table to an opened store (and optional ticket and sandbox
+ * backends). The returned registry is the in-process binding; every other
+ * binding is generated from `entries`. Advertisement and dispatch share ONE
+ * table: without a sandbox backend the six sandbox tools are filtered from
+ * `entries` AND from `call()` dispatch, so a binding that cannot provision
+ * sandboxes never advertises or serves them. */
 export function buildRegistry(options: RegistryOptions): OperatorToolRegistry {
+  const sandboxToolNames = new Set(
+    Object.keys(OPERATOR_TOOL_ANNOTATIONS).filter((name) => name.startsWith('sandbox.')),
+  )
+  const table =
+    options.sandbox === undefined ? TOOLS.filter((tool) => !sandboxToolNames.has(tool.name)) : TOOLS
   return {
-    entries: TOOLS,
+    entries: table,
     async call(name, input, partial = {}) {
-      const entry = TOOLS.find((tool) => tool.name === name)
+      const entry = table.find((tool) => tool.name === name)
       if (entry === undefined) {
         throw new RegistryError('unknown-tool', `unknown tool "${name}"`, {
           kind: 'not-found',
@@ -833,9 +1003,11 @@ export function buildRegistry(options: RegistryOptions): OperatorToolRegistry {
         )
       }
       const tickets = partial.tickets ?? options.tickets
+      const sandbox = partial.sandbox ?? options.sandbox
       const ctx: ToolContext = {
         store: partial.store ?? options.store,
         ...(tickets !== undefined ? { tickets } : {}),
+        ...(sandbox !== undefined ? { sandbox } : {}),
         clock: partial.clock ?? options.clock ?? systemClock,
         ...(identity !== undefined ? { identity } : {}),
         ...(partial.via !== undefined ? { via: partial.via } : {}),
