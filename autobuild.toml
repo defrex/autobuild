@@ -29,6 +29,14 @@ apt-get update -qq
 curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
 apt-get install -y -qq /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji fontconfig""" },
   { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/google-chrome-stable BUN_BIN=/opt/autobuild-runtime/node_modules/.bin/bun ./scripts/browser-smoke.sh" },
+  # Finalize steps (and any in-guest git usage) need an attributable identity;
+  # without this, fresh sandboxes fail `git commit` with 'Committer identity
+  # unknown'. System scope so it applies to every user, incl. unprivileged
+  # agent sessions, and survives a workspace re-clone (which wipes
+  # .git/config). Kept last: ordering within provisioning is irrelevant to
+  # readiness (any step failure deletes the sandbox) and appending keeps the
+  # contract-test index assertions stable.
+  { name = "git-identity", command = "git config --system user.name 'autobuild[bot]' && git config --system user.email 'autobuild[bot]@users.noreply.github.com'" },
 ]
 
 [workspace.config.runtimeProvisioning.pi]
