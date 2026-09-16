@@ -29,6 +29,7 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(workspace.provisioning.map(({ name }) => name)).toEqual([
     'system-install',
     'browser-smoke',
+    'git-identity',
   ])
   expect(workspace.provisioning[0]?.command).toContain('google-chrome-stable_current_amd64.deb')
   expect(workspace.provisioning[0]?.command).toContain('fonts-noto-cjk')

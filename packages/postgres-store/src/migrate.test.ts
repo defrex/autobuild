@@ -223,7 +223,10 @@ if (testUrl) {
         await sql.unsafe(SCHEMA_V3_DDL)
         // The genuine v3 marker is version 3 literally: SCHEMA_VERSION moves
         // on with every schema revision, and a v3 checksum under any other
-        // version is (correctly) rejected as incompatible.
+        // version is (correctly) rejected as incompatible. The genuine v4
+        // fixture below covers the streams.creation_seq backfill; on the
+        // next schema revision, add a genuine v5 fixture and retire or
+        // re-pin this one.
         await sql`INSERT INTO ab_schema_migrations VALUES
           (true, 3, ${SCHEMA_V3_CHECKSUM}, ${new Date().toISOString()})`
         for (const id of ['os_legacy-2', 'os_legacy-1']) {

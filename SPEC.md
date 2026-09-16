@@ -619,6 +619,23 @@ status codes — the ceiling as 413, the closed-append rejection above as 409,
 the unknown stream as 404 — and the shipped client rehydrates the same error
 types; `docs/remote-store-protocol.md` specifies the wire surface.
 
+**Rejection precedence is transport-dependent, deliberately.** The store-side
+adapters reject an append in the order part validation, batch-size ceiling,
+unknown stream, closed stream: a malformed or oversized batch addressed to an
+unknown stream id reports the validation error or `StreamBatchTooLargeError`,
+never unknown-stream — the batch is validated and size-checked before the
+per-stream critical section, and the unknown-stream lookup inside it precedes
+the closed check. Over the remote protocol the server resolves and authorizes
+the stream before parsing the request body, so the same request is rejected
+`404 not-found` (`unknown stream "…"`) before the body schema or the ceiling
+is evaluated. Both orders are deliberate: the 404-first order is the server's
+no-existence-leak shape (an unknown stream and a foreign-scoped stream are the
+same 404), while the local order keeps malformed input failing before any
+per-stream synchronization. Writer-facing clients must therefore not assume a
+single precedence across transports — a malformed batch on an unknown stream
+legitimately rejects with different errors by transport — and both orders
+reject before any mutation: no chunk, no sequence number, no artifact.
+
 Chunk retention is deposit-path and count-based, like artifact retention: at
 the next stream create in a scope, every previously closed stream's chunks
 except the most recently closed are deleted; finalized artifacts are never
@@ -626,9 +643,15 @@ touched.
 
 Streams are scoped to a build, to a repository, or to an operator session
 (§7.1.1) — the scope vocabulary is closed. Reads are cursor-based
-(`since` sequence) with an optional bounded wait that returns as soon as a
-chunk lands or the stream closes — the resumable live channel every frontend
-would otherwise invent for itself.
+(`since` sequence) with an optional bounded wait (`waitSeconds`, whole
+seconds) that returns as soon as a chunk lands or the stream closes — the
+resumable live channel every frontend would otherwise invent for itself.
+The wait is bounded at `MAX_STREAM_WAIT_SECONDS` = 30: a `waitSeconds` above
+30 clamps to 30, so a request to wait 61 seconds returns no later than 30.
+Every store — the in-memory reference, the SQLite adapter, and the remote
+client/server path — enforces the same clamp, and session-event reads
+(§7.1.1) honor the identical rule so a poll loop cannot drift between the
+two.
 
 **Presentation, never routing.** No kernel, engine, reducer, or dispatcher
 decision reads stream content; outcomes travel only the typed CLI. Writers

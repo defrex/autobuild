@@ -23,7 +23,7 @@ import {
   sampleEventWrite,
 } from '../contract'
 import { MemoryBlobStore } from '../memory'
-import { StreamClosedError } from '../streams/types'
+import { StreamBatchTooLargeError, StreamClosedError, type StreamPart } from '../streams/types'
 import { textContent, type BlobStore } from '../types'
 import { builds, repoStreams } from './schema'
 import { openLocalStore, SqliteBuildStore } from './store'
@@ -791,6 +791,63 @@ describe('SqliteBuildStore close/append interleaving (AUT-348)', () => {
       const record = await closing
       expect(record.status).toBe('closed')
       expect((await store.readStream(b.id)).chunks).toHaveLength(1)
+    } finally {
+      await store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('SqliteBuildStore append rejection precedence (SPEC §7.6)', () => {
+  // Local-side adapters validate the batch and check the ceiling BEFORE
+  // resolving the stream, so an invalid batch on an unknown stream reports
+  // the validation or ceiling error — not unknown-stream. The remote server
+  // deliberately runs the opposite order (SPEC §7.6); that side is pinned in
+  // remote.test.ts, and the shared contract suite cannot host this test
+  // because it also runs over the remote transport. Both orders must write
+  // nothing.
+  test('an invalid batch on an unknown stream rejects with the part-validation error and writes nothing', async () => {
+    const root = await freshRoot()
+    const store = openLocalStore(root)
+    try {
+      await store.createBuild(sampleBuildInput('st-ghost'))
+
+      const empty = await store.appendStreamParts('st_ghost', []).catch((e: unknown) => e)
+      expect(empty).toBeInstanceOf(Error)
+      expect((empty as Error).message).toContain('stream parts must be a nonempty array')
+
+      const noType = await store
+        .appendStreamParts('st_ghost', [{ delta: 'x' } as unknown as StreamPart])
+        .catch((e: unknown) => e)
+      expect(noType).toBeInstanceOf(Error)
+      expect((noType as Error).message).toContain('must carry a nonempty string "type"')
+      expect((noType as Error).message).not.toContain('unknown stream')
+
+      expect(await store.getStream('st_ghost')).toBeNull()
+    } finally {
+      await store.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('an oversized batch on an unknown stream rejects with StreamBatchTooLargeError and writes nothing', async () => {
+    const root = await freshRoot()
+    const store = openLocalStore(root)
+    try {
+      await store.createBuild(sampleBuildInput('st-ghost-big'))
+
+      // Shape-valid (a text-delta with a long delta) so the ceiling — not
+      // part validation — is the rejection observed.
+      const oversized = await store
+        .appendStreamParts('st_ghost', [
+          { type: 'text-delta', id: 't', delta: 'x'.repeat(1_048_600) },
+        ])
+        .catch((e: unknown) => e)
+      expect(oversized).toBeInstanceOf(StreamBatchTooLargeError)
+      expect((oversized as Error).message).toContain('1048576')
+      expect((oversized as Error).message).not.toContain('unknown stream')
+
+      expect(await store.getStream('st_ghost')).toBeNull()
     } finally {
       await store.close()
       await rm(root, { recursive: true, force: true })

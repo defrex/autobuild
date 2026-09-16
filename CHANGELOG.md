@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#345](https://github.com/defrex/autobuild/pull/345) — Pin the listStreams same-timestamp tiebreak across stores
+- [#344](https://github.com/defrex/autobuild/pull/344) — Document the 30-second read-wait clamp in SPEC §7.6
+- [#341](https://github.com/defrex/autobuild/pull/341) — Document the appendStreamParts rejection precedence divergence
+- [#340](https://github.com/defrex/autobuild/pull/340) — Guarantee a git identity for finalize commits
 - [#338](https://github.com/defrex/autobuild/pull/338) — Add `ab watch`: read-only event streaming with a resumable cursor
 - [#339](https://github.com/defrex/autobuild/pull/339) — Pin the listSessions same-millisecond tiebreak across stores
 - [#337](https://github.com/defrex/autobuild/pull/337) — Land the ab-implement ground-rules rewording in the canonical skill
