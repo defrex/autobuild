@@ -46,6 +46,8 @@ import type { BuildRecord, StreamRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
 import type { TranscriptPresentation } from './transcript'
+import type { UIMessage } from 'ai'
+import type { StreamOutcome, StreamPart } from '../../store/streams/types'
 export { dashboardBuildControl } from './actions'
 export type { DashboardBuildControl } from './actions'
 import {
@@ -175,6 +177,33 @@ export type DashboardView =
       transcript: TranscriptPresentation
       scroll: number
     }
+  | {
+      /** The read-only live/closed stream view. Pure display state: the feed
+       * only appends freshly read chunks to the accumulated array, and stored
+       * parts are never altered. */
+      kind: 'session'
+      slug: string
+      sessionId: string
+      stream: string
+      status: 'open' | 'closed'
+      outcome?: StreamOutcome
+      /** The content source: the accumulated part sequence while chunks are
+       * readable, or the finalized `UIMessage[]` document once chunks are
+       * pruned (or the closed session never had a chunk log). */
+      source:
+        | { kind: 'parts'; parts: StreamPart[]; lastSeq: number }
+        | { kind: 'document'; document: UIMessage[] }
+      /** The last failed read's message, shown in place of content until a
+       * retry succeeds. */
+      error?: string
+      /** Tail-follow mode. True while the operator keeps the viewport at the
+       * bottom; Up away from the bottom pauses it, back to the bottom
+       * resumes. While true the render pins `scroll` to the limit. */
+      follow: boolean
+      scroll: number
+    }
+
+export type SessionDashboardView = Extract<DashboardView, { kind: 'session' }>
 
 export interface ResumeInputView {
   /** The prompt stays bound to this build even while polling re-sorts rows. */

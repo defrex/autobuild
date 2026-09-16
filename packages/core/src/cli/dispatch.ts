@@ -65,6 +65,8 @@ import {
   type DashboardRendererResolver,
 } from './dashboard/render'
 import { parseTranscript } from './dashboard/transcript'
+import { applySessionFeedUpdate, SessionStreamFeed } from './dashboard/session-feed'
+import { moveSessionScroll, sessionScrollLimit } from './dashboard/render'
 import { deleteBefore, insertText, moveCursor, type ComposerMotion } from './dashboard/composer'
 import { dashboardSelections, moveSelection, reconcileSelection } from './dashboard/selection'
 import { LiveRegion, paintableRows } from './dashboard/live'
@@ -631,6 +633,9 @@ class DispatchLoop {
   private selection: DashboardSelection | undefined = { kind: 'global' }
   /** Read-only nested UI state. Omission is the top-level list. */
   private view: DashboardView | undefined
+  /** The session view's live-read cycle, created with the view it serves and
+   * discarded on Escape. All read semantics live in the shared feed module. */
+  private sessionFeed: SessionStreamFeed | undefined
   private warningLine: string | undefined
   /** Process-local, persistent release notice. It never shares the replaceable
    * warning slot and is re-applied to every store projection. */
@@ -989,7 +994,96 @@ class DispatchLoop {
     this.model = effective
   }
 
+  /** Session-view Up/Down: follow-and-pause. Scrolling up off the bottom
+   * pauses tail-following; landing back on the last content row resumes it.
+   * While following, the render pins the offset to the limit, so the effective
+   * current position before a move is that limit. */
+  private moveSessionView(delta: number): void {
+    const view = this.view
+    if (view?.kind !== 'session') return
+    const terminal = this.opts.terminal
+    const upgrade = this.availableUpgrade !== undefined
+    const limit =
+      terminal === undefined
+        ? 0
+        : sessionScrollLimit(view, terminal.columns, paintableRows(terminal.rows), upgrade)
+    const current = view.follow ? limit : view.scroll
+    const scroll =
+      terminal === undefined
+        ? 0
+        : moveSessionScroll(
+            view,
+            terminal.columns,
+            paintableRows(terminal.rows),
+            current,
+            delta,
+            upgrade,
+          )
+    let follow = view.follow
+    if (delta < 0 && follow && scroll < limit) follow = false
+    if (delta > 0 && !follow && scroll >= limit) follow = true
+    this.view = { ...view, scroll, follow }
+    this.syncModelControls()
+    this.paint()
+  }
+
+  /** Clamp a session view's offset against the current viewport and pin it to
+   * the tail while following. Called at feed-apply time, where new content may
+   * have grown (or shrunk) the scrollable range. */
+  private clampSessionView(view: DashboardView): DashboardView {
+    if (view.kind !== 'session') return view
+    const terminal = this.opts.terminal
+    if (terminal === undefined) return { ...view, scroll: 0 }
+    const limit = sessionScrollLimit(
+      view,
+      terminal.columns,
+      paintableRows(terminal.rows),
+      this.availableUpgrade !== undefined,
+    )
+    return { ...view, scroll: view.follow ? limit : Math.min(view.scroll, limit) }
+  }
+
+  /** Fire-and-forget live-read cycle for an open session view (or one whose
+   * last read failed). The apply goes through the serialize queue under the
+   * feed's identity+cursor fence, mirroring the transcript read's pattern. */
+  private pollSessionFeed(): void {
+    const view = this.view
+    if (view?.kind !== 'session') return
+    if (view.status !== 'open' && view.error === undefined) {
+      // A closed view is final once its content is in hand; an unloaded one
+      // (a closed session just opened, empty chunk log so far) still needs
+      // its read — which is where the artifact fallback happens too.
+      if (view.source.kind !== 'parts' || view.source.lastSeq !== 0) return
+    }
+    const feed = this.sessionFeed
+    if (feed === undefined) return
+    void feed
+      .poll(view)
+      .then((update) => {
+        if (update === undefined) return
+        return this.serialize(() => {
+          // The fence rejects anything but the exact session view (and
+          // cursor) this update was polled from.
+          const next = applySessionFeedUpdate(
+            this.view?.kind === 'session' ? this.view : undefined,
+            update,
+          )
+          if (next === undefined) return
+          this.view = this.clampSessionView(next)
+          this.syncModelControls()
+          this.paint()
+        })
+      })
+      .catch(() => {
+        // The feed contains its own failures; the next poll retries.
+      })
+  }
+
   private moveSelection(delta: number): void {
+    if (this.view?.kind === 'session') {
+      this.moveSessionView(delta)
+      return
+    }
     if (this.view?.kind === 'transcript') {
       const terminal = this.opts.terminal
       this.view = {
@@ -1448,7 +1542,7 @@ class DispatchLoop {
       this.paint()
       return
     }
-    if (this.view.kind === 'transcript') return
+    if (this.view.kind === 'transcript' || this.view.kind === 'session') return
 
     const captured = this.view
     const build = this.model?.builds.find((candidate) => candidate.slug === captured.slug)
@@ -1457,6 +1551,27 @@ class DispatchLoop {
       this.view = this.detailMessage(captured, 'No session is selected.')
       this.syncModelControls()
       this.paint()
+      return
+    }
+    // The stream branch outranks every transcript outcome: a session with a
+    // stream — open or closed — opens the read-only live view. Sessions
+    // without a stream fall through to the existing branches unchanged.
+    if (session.stream !== undefined) {
+      this.view = {
+        kind: 'session',
+        slug: captured.slug,
+        sessionId: session.id,
+        stream: session.stream,
+        status: session.streamStatus,
+        source: { kind: 'parts', parts: [], lastSeq: 0 },
+        follow: true,
+        scroll: 0,
+      }
+      this.sessionFeed = new SessionStreamFeed(this.wiring.store, captured.slug)
+      this.syncModelControls()
+      this.paint()
+      // Kick the first read immediately rather than waiting one interval.
+      this.pollSessionFeed()
       return
     }
     if (session.status === 'open') {
@@ -1528,7 +1643,15 @@ class DispatchLoop {
   }
 
   private leaveView(): void {
-    if (this.view?.kind === 'transcript') {
+    if (this.view?.kind === 'session') {
+      this.sessionFeed = undefined
+      this.view = {
+        kind: 'detail',
+        slug: this.view.slug,
+        sessionId: this.view.sessionId,
+        scroll: 0,
+      }
+    } else if (this.view?.kind === 'transcript') {
       this.view = {
         kind: 'detail',
         slug: this.view.slug,
@@ -1678,6 +1801,18 @@ class DispatchLoop {
       this.handleResumeInput(input)
       return
     }
+    // The session view is strictly read-only: before the abort-confirmation
+    // and enterLike branches can be reached, every key except Up/Down (scroll)
+    // and Escape (back) returns without queueing any action. No key handled in
+    // the session view can append an event or open the abort confirmation.
+    if (this.view?.kind === 'session') {
+      if (input.type === 'up' || input.type === 'down') {
+        this.moveSelection(input.type === 'up' ? -1 : 1)
+      } else if (input.type === 'escape') {
+        this.leaveView()
+      }
+      return
+    }
     // Outside the resume prompt `newline` is handled identically to `enter`.
     // That is the structural mitigation for splitting CR from LF: only the
     // composer can tell the two apart, so a terminal that reports Return as LF
@@ -1715,7 +1850,11 @@ class DispatchLoop {
     if (input.type !== 'text') return
     switch (input.text.toLowerCase()) {
       case 'm':
-        if (this.view?.kind !== 'transcript') this.queueAction('auto-merge')
+        // Defense in depth: the session-view gate above already returns for a
+        // session view, and the transcript guard below predates it.
+        if (this.view?.kind !== 'transcript') {
+          this.queueAction('auto-merge')
+        }
         return
       case 'i':
         if (this.view === undefined && this.selection?.kind === 'global') this.queueAction('intake')
@@ -1750,6 +1889,9 @@ class DispatchLoop {
         return
       }
       case 'a': {
+        // Same defense as `m`: the session-view gate above already made this
+        // unreachable from a session view, so the abort confirmation can never
+        // open from one.
         if (this.view?.kind === 'transcript') return
         const slug =
           this.view?.slug ?? (this.selection?.kind === 'build' ? this.selection.slug : undefined)
@@ -2790,6 +2932,9 @@ class DispatchLoop {
     this.model = projected
     this.syncModelControls()
     this.paint()
+    // The session view's live-read cycle rides the poll tick: one immediate
+    // read per interval, applied through the serialize queue under the fence.
+    this.pollSessionFeed()
   }
 
   /**

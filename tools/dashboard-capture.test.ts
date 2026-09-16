@@ -63,6 +63,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'mixed-wide',
     'mixed-narrow',
     'unicode-transcript',
+    'session-live',
+    'session-closed',
     'resume-prompt',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
@@ -103,11 +105,27 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
+    } else if (frame.id.startsWith('session-')) {
+      expect(frame.text).toContain('Session  complete-dashboard-evidence')
+      if (frame.id === 'session-live') {
+        expect(frame.text).toContain('· live')
+        expect(frame.text).toContain('waiting for output')
+        expect(frame.text).toContain('following tail')
+        expect(frame.text).not.toContain('ERROR')
+      } else {
+        expect(frame.text).toContain('Stream closed: completed')
+        expect(frame.text).toContain('more rows withheld')
+        expect(frame.text).toContain('bytes truncated')
+      }
     } else {
       expect(frame.text).toContain('Transcript  complete-dashboard-evidence')
       expect(frame.text).toContain('Agent: naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦')
     }
-    if (frame.id !== 'unicode-transcript' && frame.id !== 'headline-happy-wide') {
+    if (
+      frame.id !== 'unicode-transcript' &&
+      frame.id !== 'headline-happy-wide' &&
+      !frame.id.startsWith('session-')
+    ) {
       expect(frame.text).toContain('BLOCKED')
     }
     expect(frame.text).not.toContain('\x1b')
