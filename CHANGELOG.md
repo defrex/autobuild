@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#378](https://github.com/defrex/autobuild/pull/378) — Make `ab wait` long-poll on remote stores (AUT-368)
+
 ## v0.8.0 — 2026-09-16
 
 This release moves the Autobuild CLI onto npm as the scoped package @defrex/autobuild, with web dependencies split out of core and extensions now resolved from the installation itself. The ab upgrade command and guest tarballs are sourced from the registry, and each release ends with a bun publish step. Existing installs that came from GitHub migrate once by removing the old global package and adding @defrex/autobuild in its place.
