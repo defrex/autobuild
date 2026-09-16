@@ -1115,13 +1115,20 @@ describe('prompt teardown of held reads', () => {
       // The peer goes away mid-hold.
       controller.abort()
 
+      // The bound is `pollsAtAbort + 1`, not equality (AUT-389): the sample
+      // is wall-clock, taken concurrently with the backing 25 ms poll loop
+      // (the counting override delegates to readEventsWithWait without a
+      // pollMs, so it takes the stream default cadence), and one poll
+      // already in flight can land between the sample and the abort's
+      // effect on the loop — a single slow scheduler tick adds exactly one.
+      // The loop structure bounds the overshoot at one: only one read can
+      // be in flight, and once the abort flag is observed the loop breaks.
+      // A genuinely continuing loop adds ~6 polls per 150 ms window, which
+      // this bound still fails.
       await Bun.sleep(150)
-      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      expect(backing.sessionPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
       await Bun.sleep(150)
-      // Equality across two later samples: the poll loop demonstrably
-      // ceased. On unfixed code the count keeps growing through both
-      // samples (a 25 ms poll would add ~12 polls per sample).
-      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      expect(backing.sessionPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
       await held
     } finally {
       await server.stop()
