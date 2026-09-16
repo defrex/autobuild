@@ -954,6 +954,29 @@ class CountingMemoryStore extends MemoryBuildStore {
   }
 }
 
+/**
+ * Wait for a poll counter to settle after the disconnect that was supposed to
+ * stop it: sample every 150 ms until two consecutive samples agree, and
+ * return that settled count. The caller asserts the count stays frozen at the
+ * returned value across further windows. The settle-then-freeze shape (not a
+ * tolerance against the pre-abort sample) is what survives load: the abort
+ * reaches the backing loop only once the server notices the closed socket —
+ * promptly on an idle loop, but with a lag under full-suite load that no
+ * fixed +1 bound can cover, while a genuinely continuing 25 ms loop adds ~6
+ * polls per 150 ms window and can neither settle nor stay frozen.
+ */
+async function settlePolls(count: () => number, deadlineMs = 2_000): Promise<number> {
+  const deadline = Date.now() + deadlineMs
+  let prev = count()
+  while (Date.now() < deadline) {
+    await Bun.sleep(150)
+    const now = count()
+    if (now === prev) return now
+    prev = now
+  }
+  return prev
+}
+
 describe('prompt teardown of held reads', () => {
   const headers = {
     [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -1111,17 +1134,21 @@ describe('prompt teardown of held reads', () => {
       await Bun.sleep(100)
       // The hold is genuinely polling.
       expect(backing.sessionPolls).toBeGreaterThan(0)
-      const pollsAtAbort = backing.sessionPolls
       // The peer goes away mid-hold.
       controller.abort()
 
+      // The count must settle after the disconnect and then stay frozen: on
+      // unfixed code it keeps growing through every window (a 25 ms poll
+      // adds ~6 per 150 ms window), so settling never returns a count that
+      // survives the two frozen windows below. The exact-equality-against-
+      // the-pre-abort-sample form of this assertion flaked under a full-suite
+      // verify run — the socket-close detection lagged the sample past a
+      // tick — which is why the count is settled first (see settlePolls).
+      const settled = await settlePolls(() => backing.sessionPolls)
       await Bun.sleep(150)
-      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      expect(backing.sessionPolls).toBe(settled)
       await Bun.sleep(150)
-      // Equality across two later samples: the poll loop demonstrably
-      // ceased. On unfixed code the count keeps growing through both
-      // samples (a 25 ms poll would add ~12 polls per sample).
-      expect(backing.sessionPolls).toBe(pollsAtAbort)
+      expect(backing.sessionPolls).toBe(settled)
       await held
     } finally {
       await server.stop()
@@ -1146,22 +1173,18 @@ describe('prompt teardown of held reads', () => {
       }).catch(() => undefined)
       await Bun.sleep(100)
       expect(backing.streamPolls).toBeGreaterThan(0)
-      const pollsAtAbort = backing.streamPolls
       controller.abort()
 
-      // The bound is `pollsAtAbort + 1`, not equality (AUT-389): the sample
-      // is wall-clock, taken concurrently with the backing 25 ms poll loop
-      // (readStreamWithWait in streams/wait.ts), so one poll already in
-      // flight can land between the sample and the abort's effect on the
-      // loop — a single slow scheduler tick adds exactly one. The loop
-      // structure bounds the overshoot at one: only one read can be in
-      // flight, and once the abort flag is observed the loop breaks. A
-      // genuinely continuing loop would add ~6 polls per 150 ms window,
-      // which this bound still fails.
+      // Same guarantee, same shape as the session twin above: the count must
+      // settle after the disconnect and then stay frozen. This replaces the
+      // AUT-389 `pollsAtAbort + 1` bound, which assumed the overshoot was one
+      // in-flight poll — the abort's arrival is actually gated on socket-close
+      // detection, whose lag under load no fixed bound covers.
+      const settled = await settlePolls(() => backing.streamPolls)
       await Bun.sleep(150)
-      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
+      expect(backing.streamPolls).toBe(settled)
       await Bun.sleep(150)
-      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 1)
+      expect(backing.streamPolls).toBe(settled)
       await held
     } finally {
       await server.stop()

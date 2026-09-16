@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
@@ -9,6 +9,7 @@ import {
 } from '../packages/postgres-store/src/env'
 import { readWorkspaceManifests } from './workspace-manifest-check'
 import { distributionAssetName } from '../packages/core/src/ports/workspace/distribution-archive'
+import { packageAutobuildDistribution } from '../packages/core/src/ports/workspace/vercel-sandbox'
 
 /** The CLI package name the README install command names. Publishing reads
  * every package's own manifest; this constant only renders the README line. */
@@ -51,6 +52,11 @@ export interface ReleaseDependencies {
   today?: () => string
   /** Test seam; production releases always use the canonical GitHub repository. */
   repositoryUrl?: string
+  /** Test seam; production releases pack the distribution through
+   * `packageAutobuildDistribution`, the chokepoint that strips repo-local
+   * packaging fields (`patchedDependencies`) from the packed manifest so the
+   * published release asset cannot break a consumer's bun install. */
+  packageArchive?: () => Promise<Uint8Array>
 }
 
 export interface ChangelogRelease {
@@ -638,6 +644,7 @@ export async function runRelease(
   const output = dependencies.output ?? defaultOutput
   const today = dependencies.today ?? (() => new Date().toISOString().slice(0, 10))
   const repositoryUrl = dependencies.repositoryUrl ?? CANONICAL_REPOSITORY_URL
+  const packageArchive = dependencies.packageArchive ?? packageAutobuildDistribution
   const arguments_ = parseReleaseArguments(args)
 
   const rootResult = await checked(
@@ -902,7 +909,7 @@ export async function runRelease(
   // Pack and upload the guest distribution archive. Checkout-less dispatch
   // installs the guest Autobuild from this release asset, so a release that
   // omits it breaks origin-mode dispatch (see distribution-archive.ts).
-  await uploadDistributionAsset(run, root, tag, version, output)
+  await uploadDistributionAsset(run, root, tag, version, output, packageArchive)
 
   // Publish last: npm publication cannot be undone, so every earlier step
   // must already have succeeded, and a failure here leaves public refs alone.
@@ -915,22 +922,30 @@ export async function runRelease(
 }
 
 function distributionUploadRecoveryCommand(tag: string): string {
+  // The pack step must go through the production packer — a bare
+  // `bun pm pack` from the repo root would publish a manifest carrying the
+  // repo's `patchedDependencies`, which panics a consumer's bun install
+  // (see `packedManifestOmittedFields` in vercel-sandbox.ts).
   return [
+    '# Run from the repository root.',
     'archive_dir="$(mktemp -d)"',
-    'bun pm pack --ignore-scripts --destination "$archive_dir"',
+    `ARCHIVE_DIR="$archive_dir" bun -e 'const { packageAutobuildDistribution } = await import("./packages/core/src/ports/workspace/vercel-sandbox.ts"); const { distributionAssetName } = await import("./packages/core/src/ports/workspace/distribution-archive.ts"); const { writeFile } = await import("node:fs/promises"); const { version } = await Bun.file("package.json").json(); await writeFile(\`\${process.env.ARCHIVE_DIR}/\${distributionAssetName(version)}\`, await packageAutobuildDistribution());'`,
     `gh release upload ${tag} "$archive_dir/"*.tgz`,
     'rm -rf "$archive_dir"',
   ].join('\n')
 }
 
-/** `bun pm pack` from the source tree, upload the archive to the release,
- * then verify the asset is present with a plausible (nonzero) size. */
+/** Pack the distribution through `packageAutobuildDistribution` (the
+ * production packer, which strips repo-local packaging fields from the packed
+ * manifest), upload the archive to the release, then verify the asset is
+ * present with a plausible (nonzero) size. */
 export async function uploadDistributionAsset(
   run: CommandRunner,
   root: string,
   tag: string,
   version: string,
   output: ReleaseOutput,
+  packageArchive: () => Promise<Uint8Array> = packageAutobuildDistribution,
 ): Promise<void> {
   const expectedAsset = distributionAssetName(version)
   if (!tag.endsWith(version)) {
@@ -942,25 +957,8 @@ export async function uploadDistributionAsset(
   const destination = await mkdtemp(join(tmpdir(), 'autobuild-release-pack-'))
   try {
     output.log(`Packing guest distribution archive (${expectedAsset})`)
-    await checked(
-      run,
-      {
-        command: 'bun',
-        args: ['pm', 'pack', '--ignore-scripts', '--destination', destination],
-        cwd: root,
-      },
-      'could not pack the guest distribution archive',
-    )
-    // The pack derives the archive name from the root manifest's `name`
-    // field, not the version; rename to the published asset layout.
-    const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
-    if (archives.length !== 1) {
-      throw new Error(`expected exactly one packed archive, got ${archives.join(', ') || '(none)'}`)
-    }
     const archivePath = join(destination, expectedAsset)
-    if (archives[0] !== expectedAsset) {
-      await rename(join(destination, archives[0]!), archivePath)
-    }
+    await writeFile(archivePath, await packageArchive())
     await checked(
       run,
       { command: 'gh', args: ['release', 'upload', tag, archivePath], cwd: root },
