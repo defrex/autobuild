@@ -185,6 +185,9 @@ export const harvestEventPayloadSchemas = {
     args: z.array(z.string()).optional(),
     step: z.enum(['synthesize', 'review']),
     round,
+    /** Stream id this session's live view writes to (SPEC §9, session
+     * streams). Optional only so historical journals replay unchanged. */
+    stream: z.string().min(1).optional(),
     substitution: providerSubstitutionSchema.optional(),
   }),
   'harvest.session.ended': z.strictObject({
