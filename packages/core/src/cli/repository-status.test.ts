@@ -76,6 +76,7 @@ describe('ab repository status', () => {
       intake: true,
       paused: false,
       defaultAutoMerge: false,
+      sandboxes: [],
     })
     expect(getRepoEvents).toBe(0)
     expect(await store.getRepo(REPO)).toBeNull()
@@ -99,6 +100,7 @@ describe('ab repository status', () => {
         intake: false,
         paused,
         defaultAutoMerge: true,
+        sandboxes: [],
       })
       expect(await store.getRepoEvents(REPO)).toEqual(before)
     }
@@ -112,6 +114,69 @@ describe('ab repository status', () => {
       'repository pause: OFF',
       'default auto-merge: OFF',
     ])
+  })
+
+  test('operator sandboxes project from the journal; released environments are omitted', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: humanActor('ops'),
+      type: 'orchestrator.sandbox.provisioned',
+      payload: {
+        operator: 'ops',
+        environmentId: 'autobuild-sandbox-abc123',
+        provider: 'vercel-sandbox',
+        workspacePath: '/vercel/sandbox/workspace',
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: humanActor('other'),
+      type: 'orchestrator.sandbox.provisioned',
+      payload: {
+        operator: 'other',
+        environmentId: 'autobuild-sandbox-def456',
+        provider: 'git-worktree',
+        workspacePath: '/state/orchestrator-sandboxes/def456',
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: { kind: 'dispatcher' },
+      type: 'orchestrator.sandbox.stopped',
+      payload: { operator: 'other', environmentId: 'autobuild-sandbox-def456', reason: 'idle' },
+    })
+    const status = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
+    expect(status.sandboxes).toEqual([
+      {
+        operator: 'ops',
+        environmentId: 'autobuild-sandbox-abc123',
+        provider: 'vercel-sandbox',
+        state: 'live',
+        lastEvidenceAt: expect.any(String),
+      },
+      {
+        operator: 'other',
+        environmentId: 'autobuild-sandbox-def456',
+        provider: 'git-worktree',
+        state: 'stopped',
+        lastEvidenceAt: expect.any(String),
+      },
+    ])
+    const lines = renderRepositoryStatus(status)
+    expect(lines).toContain(
+      'operator sandbox autobuild-sandbox-abc123 (vercel-sandbox) — live, idle since ' +
+        status.sandboxes[0]!.lastEvidenceAt,
+    )
+    await store.appendRepo(REPO, {
+      actor: humanActor('ops'),
+      type: 'orchestrator.sandbox.released',
+      payload: {
+        operator: 'ops',
+        environmentId: 'autobuild-sandbox-abc123',
+        snapshots: { outcome: 'confirmed' },
+      },
+    })
+    const after = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
+    expect(after.sandboxes.map((sandbox) => sandbox.operator)).toEqual(['other'])
   })
 
   test('the query leaves repository events and unrelated build state unchanged', async () => {

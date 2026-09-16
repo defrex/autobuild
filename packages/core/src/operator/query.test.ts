@@ -135,6 +135,7 @@ describe('operator query wiring', () => {
       intake: true,
       paused: false,
       defaultAutoMerge: false,
+      sandboxes: [],
     })
     expect(await getHarvestStatus(store, REPO)).toMatchObject({
       repo: REPO,
