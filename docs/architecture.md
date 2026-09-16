@@ -636,6 +636,13 @@ but reported as skipped: live provider access requires credentials/resources
 and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
 
+The two remote clients get client-only unit coverage in core itself:
+`RemoteBuildStore` (`store/remote/client.test.ts`, which also pins scoped-token
+minting/verification) and `HostedTicketSource` (`ports/tickets/remote.test.ts`)
+run against an injected `fetchFn` with responses built from the protocol's wire
+schemas. The full over-the-wire seam suites (client → HTTP → server) run in
+`packages/hosted-store-service` in the same `bun test`.
+
 To run the Linear contract manually against a destructive scratch target:
 
 ```sh
