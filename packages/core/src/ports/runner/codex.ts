@@ -292,10 +292,16 @@ export class CodexAgentRunner implements AgentRunner, OneShotCompletion {
         `${this.name}: cannot continue session "${session.id}" because Codex start failed before thread.started`,
       )
     }
-    const turnOpts =
-      opts?.env !== undefined
+    // §10/D8: a continued turn gets this round's env. §9: it also streams
+    // through THIS turn's emitter only — the start turn's emitter (if any)
+    // belongs to its own bracket and never receives this turn's parts,
+    // matching the pi adapter's per-turn forwarding.
+    const turnOpts: AgentStartOpts = {
+      ...(opts?.env !== undefined
         ? { ...state.opts, env: { ...state.opts.env, ...opts.env } }
-        : state.opts
+        : state.opts),
+      stream: opts?.stream,
+    }
     const turn = await this.runTurn(message, turnOpts, state.nativeThreadId, opts?.signal)
     state.turns.push(this.turnRecord(state.turns.length + 1, message, turn))
     return this.toResult(turn)

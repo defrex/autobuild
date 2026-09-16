@@ -132,11 +132,14 @@ export class ScriptedAgentRunner implements AgentRunner {
     // Mirror the real adapters (§10, D8): the continued turn runs under the
     // refreshed ambient env merged over the start env, so the script's fake
     // CLI resolves exactly what a real agent's `ab` would. The journal keeps
-    // the START opts — they are the session's identity.
+    // the START opts — they are the session's identity. §9: the turn streams
+    // through THIS turn's emitter only — the start turn's emitter (if any)
+    // belongs to its own bracket and never receives this turn's parts.
     const scoped = opts?.env !== undefined ? { ...journal.opts.env, ...opts.env } : journal.opts.env
     const turnOpts = {
       ...journal.opts,
       env: sessionEnv(scoped),
+      stream: opts?.stream,
       ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
     }
 
