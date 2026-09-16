@@ -2,6 +2,7 @@ import { SQL } from 'bun'
 import {
   AUTH_SCHEMA_CHECKSUM,
   AUTH_SCHEMA_DDL,
+  AUTH_SCHEMA_V1_CHECKSUM,
   AUTH_SCHEMA_VERSION,
   assertAuthSchema,
 } from './auth-schema'
@@ -899,10 +900,20 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`SELECT version, checksum FROM ab_auth_schema_migrations WHERE singleton = true FOR UPDATE`
       const authMarker = authRows[0]
       if (authMarker) {
-        if (
-          Number(authMarker.version) !== AUTH_SCHEMA_VERSION ||
-          authMarker.checksum !== AUTH_SCHEMA_CHECKSUM
-        ) {
+        const authVersion = Number(authMarker.version)
+        if (authVersion === AUTH_SCHEMA_VERSION) {
+          if (authMarker.checksum !== AUTH_SCHEMA_CHECKSUM) {
+            throw schemaError('auth marker is incompatible')
+          }
+        } else if (authVersion === 1 && authMarker.checksum === AUTH_SCHEMA_V1_CHECKSUM) {
+          // v1 → v2: the idempotent full DDL above already created the four
+          // MCP-plugin tables (CREATE TABLE IF NOT EXISTS is a no-op on the
+          // existing core tables); promote the marker in this transaction.
+          await tx`UPDATE ab_auth_schema_migrations
+            SET version = ${AUTH_SCHEMA_VERSION}, checksum = ${AUTH_SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
+        } else {
           throw schemaError('auth marker is incompatible')
         }
       } else {

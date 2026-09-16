@@ -2,6 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import { CONTRACT_T0, MemoryBlobStore } from 'autobuild/plugin-sdk'
 
+import {
+  AUTH_SCHEMA_CHECKSUM,
+  AUTH_SCHEMA_V1_CHECKSUM,
+  AUTH_SCHEMA_V1_DDL,
+  AUTH_SCHEMA_VERSION,
+} from './auth-schema'
+
 type Row = Record<string, unknown>
 import {
   MIGRATE_COMMAND,
@@ -372,6 +379,50 @@ if (testUrl) {
         expect((error as Error).message).toContain('table events is missing or mismatched')
         expect((error as Error).message).toContain(MIGRATE_COMMAND)
         await expect(migratePostgres(harness.url)).rejects.toThrow('table events')
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v1 auth database in place: the four MCP-plugin tables, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v1 auth database: v1 DDL, a v1 marker for both the
+        // build-store and auth markers (migratePostgres validates both), plus
+        // a user written before the MCP tables existed.
+        await sql.unsafe(SCHEMA_V1_DDL)
+        await sql.unsafe(AUTH_SCHEMA_V1_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, 1, ${SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO ab_auth_schema_migrations VALUES
+          (true, 1, ${AUTH_SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+          VALUES ('u1', 'Ada', 'ada@example.com', true, ${CONTRACT_T0}, ${CONTRACT_T0})`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_auth_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(AUTH_SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(AUTH_SCHEMA_CHECKSUM)
+
+        // Prior rows survive untouched.
+        const users = await sql`SELECT id FROM "user"`
+        expect(users.map((row: Row) => row.id)).toEqual(['u1'])
+
+        // The new tables work: a dynamically registered client row inserts
+        // and reads back with the exact camelCase columns the plugin writes.
+        await sql`INSERT INTO "oauthApplication"
+          (id, name, "clientId", "clientSecret", "redirectUrls", type, disabled,
+           "createdAt", "updatedAt")
+          VALUES ('c1', 'e2e-mcp-client', 'client-1', 'secret', 'https://claude.ai', 'web',
+                  false, ${CONTRACT_T0}, ${CONTRACT_T0})`
+        const clients = await sql`SELECT name FROM "oauthApplication" WHERE "clientId" = 'client-1'`
+        expect(clients.map((row: Row) => row.name)).toEqual(['e2e-mcp-client'])
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
       } finally {
         await sql.close()
         await harness.cleanup()
