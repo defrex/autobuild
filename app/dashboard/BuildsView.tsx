@@ -29,6 +29,7 @@ import {
   Rule,
   StepLine,
 } from './frame'
+import { pipelineProvenance } from './view-model'
 
 export type Selection = { kind: 'build'; slug: string } | { kind: 'harvest' }
 export type BuildControlAction = OperatorBuildControlRequest['action']
@@ -767,6 +768,12 @@ function BuildDetail({
           </span>
         )}
         {build.alsoPaused && <span className="warn">(paused)</span>}
+        {pipelineProvenance(build) && (
+          <span>
+            <span className="k">pipeline </span>
+            {pipelineProvenance(build)}
+          </span>
+        )}
       </div>
 
       <section className="section">

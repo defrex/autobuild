@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#391](https://github.com/defrex/autobuild/pull/391) — Migrate tools/ scripts onto postgres-store public subpath exports
+- [#389](https://github.com/defrex/autobuild/pull/389) — Show pinned pipeline source and config rev on web build detail
 - [#388](https://github.com/defrex/autobuild/pull/388) — Expose postgres-store schema/store subpath exports and use them in hosted-store-service tests
 - [#387](https://github.com/defrex/autobuild/pull/387) — Restore client-only over-the-wire coverage for core's remote clients
 - [#386](https://github.com/defrex/autobuild/pull/386) — Reconcile peer-dependency floors left by the hosted-store extraction
