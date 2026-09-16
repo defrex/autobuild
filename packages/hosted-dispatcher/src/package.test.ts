@@ -47,8 +47,9 @@ describe('hosted-dispatcher package manifest', () => {
 
   test('peers on @defrex/autobuild >=0.9.0, the first version exporting ./operator, ./hosted-tickets, and ./testing', () => {
     // hosted-store-service@0.9.0's production code imports
-    // @defrex/autobuild/operator, /hosted-tickets, and /testing, and the
-    // dispatcher imports hosted-store-service (dispatcher.ts). The published
+    // @defrex/autobuild/operator and /hosted-tickets; /testing is imported
+    // only by its test files. The dispatcher imports hosted-store-service
+    // (dispatcher.ts). The published
     // 0.8.0 manifest (verified against the registry) exports none of the
     // three — it still carries the pre-#383 ./operator-api and
     // ./remote-tickets names — so every published core version lacks them,
