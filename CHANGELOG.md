@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#353](https://github.com/defrex/autobuild/pull/353) — Run the TicketSource live suite in the CI live-Postgres step
+- [#351](https://github.com/defrex/autobuild/pull/351) — Make the via-attribution contract transport-aware
 - [#350](https://github.com/defrex/autobuild/pull/350) — Wire live Postgres store suites into CI via always-on verify step
 - [#349](https://github.com/defrex/autobuild/pull/349) — Stream harvest sessions and harvest runners as AI SDK UI message parts
 - [#348](https://github.com/defrex/autobuild/pull/348) — Reword stale streaming denials in operator-api.md
