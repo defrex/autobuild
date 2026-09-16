@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { verifyToken } from 'autobuild/remote-store'
+import { verifyToken } from '@defrex/autobuild/remote-store'
 import { mintTokenFromArgs, runPackDistribution, runTokenCli } from './bin'
 
 const now = new Date('2026-09-02T00:00:00.000Z')

@@ -9,7 +9,7 @@ import type { TicketSourceContractFactory } from '../ports/tickets/contract'
 import type { ForgeContractFactory } from '../ports/forge/contract'
 import type { WorkspaceProviderContractFactory } from '../ports/workspace/contract'
 
-/** Version of the in-process plugin contract exposed by `autobuild/plugin-sdk`. */
+/** Version of the in-process plugin contract exposed by `@defrex/autobuild/plugin-sdk`. */
 export const PLUGIN_API_VERSION = '1.5.0' as const
 
 /** Context supplied when a registered adapter or contract fixture is selected. */

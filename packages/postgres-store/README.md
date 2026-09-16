@@ -1,13 +1,18 @@
-# `@autobuild/postgres-store`
+# `@defrex/autobuild-postgres-store`
 
 Serverless-safe Autobuild persistence using PostgreSQL and either an
 S3-compatible object store or Vercel Blob. This is a separate package: installing
-the `autobuild` CLI does not install its database/blob provider dependencies.
+the `@defrex/autobuild` CLI does not install its database/blob provider
+dependencies. A project that embeds the adapter adds it directly:
+
+```sh
+bun add @defrex/autobuild-postgres-store
+```
 
 ## Setup
 
-This adapter is distributed in Autobuild's GitHub releases, not on npm. Choose
-the adapter-compatible tag shown in [GitHub Releases](https://github.com/defrex/autobuild/releases),
+To run the migration from the hosted deployment's own checkout, choose the
+adapter-compatible tag shown in [GitHub Releases](https://github.com/defrex/autobuild/releases),
 then obtain and install that exact repository revision in a dedicated checkout:
 
 ```sh
@@ -39,7 +44,7 @@ winner; every other caller receives `build "<slug>" already exists` rather than
 a raw PostgreSQL uniqueness error.
 
 ```ts
-import { openPostgresBuildStoreFromEnv } from '@autobuild/postgres-store'
+import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
 
 const store = await openPostgresBuildStoreFromEnv(process.env)
 ```
@@ -55,4 +60,4 @@ lifecycle names; the defaults are Triage, Ready, Doing, and Done. Ticket bodies
 are stored as PostgreSQL `text` and returned unchanged.
 
 For an authenticated HTTP deployment of this adapter, see the
-[`@autobuild/hosted-store-service` guide](../hosted-store-service/README.md).
+[`@defrex/autobuild-hosted-store-service` guide](../hosted-store-service/README.md).

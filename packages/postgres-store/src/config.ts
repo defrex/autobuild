@@ -1,5 +1,5 @@
 import { S3Client } from '@aws-sdk/client-s3'
-import type { Clock } from 'autobuild/plugin-sdk'
+import type { Clock } from '@defrex/autobuild/plugin-sdk'
 import { resolvePostgresUrl } from './env'
 import { S3BlobStore } from './s3'
 import { openPostgresBuildStore, type PostgresBuildStore } from './store'

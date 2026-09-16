@@ -1,4 +1,4 @@
-import { webGateway } from '@autobuild/hosted-store-service/web/runtime'
+import { webGateway } from '@defrex/autobuild-hosted-store-service/web/runtime'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

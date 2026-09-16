@@ -16,11 +16,15 @@ example](#complete-example) is valid on its own.
 
 ## Hosted service and PostgreSQL BuildStore environment
 
-The optional `@autobuild/hosted-store-service` and its
-`@autobuild/postgres-store` adapter are configured entirely through the
-environment. They are distributed in Autobuild's GitHub releases rather than
-npm, so an ordinary `autobuild` CLI install does not acquire the service,
-PostgreSQL, or blob-provider dependencies. Choose the compatible tag shown in
+The optional `@defrex/autobuild-hosted-store-service` and its
+`@defrex/autobuild-postgres-store` adapter are configured entirely through the
+environment. They are published to npm as separate packages alongside the
+`@defrex/autobuild` CLI, so a CLI install never acquires the service,
+PostgreSQL, or blob-provider dependencies; a project that embeds the adapter
+or the service adds the package it needs (`bun add
+@defrex/autobuild-postgres-store` or `bun add
+@defrex/autobuild-hosted-store-service`). The deployable web application still
+runs from a release checkout: choose the compatible tag shown in
 [GitHub Releases](https://github.com/defrex/autobuild/releases), clone that exact
 revision into a dedicated checkout, and run the idempotent migration there:
 
@@ -66,7 +70,7 @@ secrets, `AB_STORE_SECRET`, database/blob credentials, machine tokens, or OAuth
 account tokens through a `NEXT_PUBLIC_` variable.
 
 The following variables configure the service-side durable adapter (or a direct
-use of `@autobuild/postgres-store`).
+use of `@defrex/autobuild-postgres-store`).
 
 | Variable | Required when | Values / purpose |
 |---|---|---|
@@ -204,12 +208,17 @@ plugins = ["./plugins/company.ts", "@acme/autobuild-plugin"]
 
 Repository-path specifiers (relative, absolute, and `file:`) resolve from the
 root whose config is being read. In a scoped phase process that root is the
-immutable build worktree. Bare npm package specifiers resolve from the consuming
-repository's main checkout and therefore use its installed dependencies, not
-Autobuild's own installation tree. This package lookup remains stable when a
-relocated local store places a linked worktree outside the checkout. Dispatch
-and sessionless commands use the main checkout for both roots. Missing packages
-fail loading; Autobuild does not install them.
+immutable build worktree. Bare npm package specifiers resolve first from the
+consuming repository's main checkout and therefore use its installed
+dependencies; a package the repository lacks then resolves from Autobuild's own
+installation, so an extension installed next to the CLI (`bun add -g
+@defrex/autobuild-<extension>`) loads without being added to the repository. A
+repository copy always wins over an installed one. This package lookup remains
+stable when a relocated local store places a linked worktree outside the
+checkout. Dispatch and sessionless commands use the main checkout for both
+repository roots. `ab plugin list` reports which root satisfied each package
+(`from=repository` or `from=installation`). Missing packages fail loading;
+Autobuild does not install them.
 
 Every configured specifier string must be unique. An exact repeat fails schema
 validation before any plugin resolves or evaluates; the diagnostic identifies
@@ -230,7 +239,7 @@ earlier configured plugins are reserved, and declaration order never permits
 shadowing. A collision between distinct plugin declarations continues to name
 the conflicting adapter and both owners.
 
-Plugin authors import the stable surface from `autobuild/plugin-sdk`, normally
+Plugin authors import the stable surface from `@defrex/autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
 without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
@@ -248,7 +257,7 @@ create, get, and ready listings so dispatch can correlate Autobuild's durable
 in-flight creations. Legacy tickets may omit it and remain dispatchable.
 
 ```ts
-import type { AutobuildPluginManifest } from 'autobuild/plugin-sdk'
+import type { AutobuildPluginManifest } from '@defrex/autobuild/plugin-sdk'
 
 export default {
   name: 'acme-integrations',
@@ -1384,8 +1393,9 @@ the existing config.
 
 Re-running init still maintains the `.autobuild/` ignore rule and skill
 installation. `ab upgrade` does not migrate or rewrite `autobuild.toml`; by
-default it first updates a recognized Bun forge distribution and then merges
-vendored skills from that distribution. For a local install, Bun may update the
+default it first updates a recognized Bun installation — from the npm registry
+for a registry install, or from GitHub Releases for a `github:` install — and
+then merges vendored skills from that distribution. For a local install, Bun may update the
 *owning* project's Autobuild dependency in `package.json` and `bun.lock`; this
 package-manager side effect is separate from target-repository configuration.
 Use `ab upgrade --no-self-update` for merge-only behavior.

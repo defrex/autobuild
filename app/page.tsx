@@ -1,9 +1,9 @@
-import { webAuth } from '@autobuild/hosted-store-service/web/auth'
+import { webAuth } from '@defrex/autobuild-hosted-store-service/web/auth'
 import {
   isAllowedEmail,
   parseWebAuthEnv,
   safeWebConfig,
-} from '@autobuild/hosted-store-service/web/config'
+} from '@defrex/autobuild-hosted-store-service/web/config'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { DashboardClient } from './dashboard/DashboardClient'

@@ -15,7 +15,14 @@ afterEach(async () => {
   roots = []
 })
 
-async function fixture(options: { git?: 'file' | 'directory'; tag?: string } = {}): Promise<{
+async function fixture(
+  options: {
+    git?: 'file' | 'directory'
+    tag?: string
+    /** npm registry provenance instead of the default github: forge records. */
+    npm?: { dependency: string; lockRecord?: unknown[] }
+  } = {},
+): Promise<{
   owner: string
   dist: string
   globalBin: string
@@ -32,18 +39,33 @@ async function fixture(options: { git?: 'file' | 'directory'; tag?: string } = {
     JSON.stringify({ name: 'autobuild', version: '2.0.0', bin: { ab: 'bin/ab.ts' } }),
   )
   await writeFile(join(dist, 'bin', 'ab.ts'), '')
-  await writeFile(join(dist, '.bun-tag'), options.tag ?? 'fork-owner-repo-name-a1b2c3d')
-  await writeFile(
-    join(owner, 'package.json'),
-    JSON.stringify({ dependencies: { autobuild: 'github:fork-owner/repo-name#main' } }),
-  )
-  await writeFile(
-    join(owner, 'bun.lock'),
-    `{
+  if (options.npm === undefined) {
+    await writeFile(join(dist, '.bun-tag'), options.tag ?? 'fork-owner-repo-name-a1b2c3d')
+    await writeFile(
+      join(owner, 'package.json'),
+      JSON.stringify({ dependencies: { autobuild: 'github:fork-owner/repo-name#main' } }),
+    )
+    await writeFile(
+      join(owner, 'bun.lock'),
+      `{
       "workspaces": { "": { "dependencies": { "autobuild": "github:fork-owner/repo-name#main", }, }, },
       "packages": { "autobuild": ["autobuild@github:fork-owner/repo-name#a1b2c3d", {}, "fork-owner-repo-name-a1b2c3d"], },
     }`,
-  )
+    )
+  } else {
+    const record = options.npm.lockRecord ?? ['autobuild@2.0.0', '', {}, 'sha512-fixture']
+    await writeFile(
+      join(owner, 'package.json'),
+      JSON.stringify({ dependencies: { autobuild: options.npm.dependency } }),
+    )
+    await writeFile(
+      join(owner, 'bun.lock'),
+      `{
+      "workspaces": { "": { "dependencies": { "autobuild": ${JSON.stringify(options.npm.dependency)}, }, }, },
+      "packages": { "autobuild": ${JSON.stringify(record)}, },
+    }`,
+    )
+  }
   if (options.git === 'file') await writeFile(join(dist, '.git'), 'gitdir: elsewhere')
   if (options.git === 'directory') await mkdir(join(dist, '.git'))
   return { owner, dist, globalBin }
@@ -105,6 +127,65 @@ describe('installed distribution identity and Bun provenance', () => {
     const badResult = await inspectInstallation({ distRoot: bad.dist, globalBin: bad.globalBin })
     expect(badResult.kind).toBe('unknown')
     if (badResult.kind === 'unknown') expect(badResult.reason).toContain('.bun-tag')
+  })
+
+  test('recognizes an npm registry install from a satisfied range and a registry lock record', async () => {
+    for (const dependency of ['2.0.0', '^2.0.0', '>=1.5.0 <3']) {
+      const { owner, dist, globalBin } = await fixture({ npm: { dependency } })
+      const result = await inspectInstallation({ distRoot: dist, globalBin })
+      expect(result.kind).toBe('npm-registry')
+      if (result.kind !== 'npm-registry') return
+      expect(result.installation).toMatchObject({
+        channel: 'npm',
+        ownerRoot: owner,
+        dependency,
+        scope: 'local',
+        version: '2.0.0',
+      })
+      expect(result.installation.commit).toBeUndefined()
+    }
+    const global = await fixture({ npm: { dependency: '2.0.0' } })
+    await symlink(join(global.dist, 'bin', 'ab.ts'), join(global.globalBin, 'ab'))
+    const globalResult = await inspectInstallation({
+      distRoot: global.dist,
+      globalBin: global.globalBin,
+    })
+    expect(globalResult.kind === 'npm-registry' && globalResult.installation.scope).toBe('global')
+  })
+
+  test('refuses registry provenance that the range, lock version, or origin contradict', async () => {
+    const unsatisfied = await fixture({ npm: { dependency: '^3.0.0' } })
+    const unsatisfiedResult = await inspectInstallation({
+      distRoot: unsatisfied.dist,
+      globalBin: unsatisfied.globalBin,
+    })
+    expect(unsatisfiedResult.kind).toBe('unknown')
+    if (unsatisfiedResult.kind === 'unknown') {
+      expect(unsatisfiedResult.reason).toContain('npm registry version range')
+    }
+
+    const staleLock = await fixture({
+      npm: { dependency: '^2.0.0', lockRecord: ['autobuild@2.0.1', '', {}, 'sha512-other'] },
+    })
+    const staleResult = await inspectInstallation({
+      distRoot: staleLock.dist,
+      globalBin: staleLock.globalBin,
+    })
+    expect(staleResult.kind).toBe('unknown')
+    if (staleResult.kind === 'unknown')
+      expect(staleResult.reason).toContain('registry version 2.0.0')
+
+    const tarball = await fixture({
+      npm: {
+        dependency: '2.0.0',
+        lockRecord: ['autobuild@2.0.0', 'https://example.test/a.tgz', {}],
+      },
+    })
+    const tarballResult = await inspectInstallation({
+      distRoot: tarball.dist,
+      globalBin: tarball.globalBin,
+    })
+    expect(tarballResult.kind).toBe('unknown')
   })
 
   test('rejects malformed package versions and extra --version arguments', async () => {

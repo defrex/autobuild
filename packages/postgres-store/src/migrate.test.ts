@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
-import { CONTRACT_T0, MemoryBlobStore } from 'autobuild/plugin-sdk'
+import { CONTRACT_T0, MemoryBlobStore } from '@defrex/autobuild/plugin-sdk'
 
 import {
   AUTH_SCHEMA_CHECKSUM,

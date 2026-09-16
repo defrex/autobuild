@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { abTicket } from '../../core/src/cli/ticket'
 import { FakeTicketSource } from '../../core/src/ports/tickets/fake'
 import type { TicketSourceFactory } from '../../core/src/cli/ticket'
-import { mintToken } from 'autobuild/remote-store'
+import { mintToken } from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from './service'
 
 interface ScenarioResult {
