@@ -5,6 +5,7 @@
 - [#415](https://github.com/defrex/autobuild/pull/415) — Stop the package-boundary lint flagging import text in comments
 - [#416](https://github.com/defrex/autobuild/pull/416) — Anchor the dispatcher dependency filter to the exact package name
 - [#412](https://github.com/defrex/autobuild/pull/412) — Remove unused deploymentSectionsEqual and DEPLOYMENT_OWNED_CONFIG_PATHS
+- [#417](https://github.com/defrex/autobuild/pull/417) — Document checkout-mode worktree-dirty provenance in ownership docs
 - [#414](https://github.com/defrex/autobuild/pull/414) — Record honest pipeline-source provenance for dirty checkout worktrees
 - [#411](https://github.com/defrex/autobuild/pull/411) — Reject per-build auto-merge consent while a discard is in flight
 - [#413](https://github.com/defrex/autobuild/pull/413) — Anchor the dispatcher package specifier in the boundary scan
