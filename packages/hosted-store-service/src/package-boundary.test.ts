@@ -216,6 +216,22 @@ export function dispatcherSpecifiers(text: string): string[] {
   return specifiers
 }
 
+/**
+ * Manifest dependency names that denote the dispatcher package. Reuses the
+ * already-anchored `DISPATCHER_SPECIFIER` so the manifest filter and the
+ * import scanner agree on where the package name ends: the exact name
+ * `@defrex/autobuild-hosted-dispatcher` (or, fail-closed, a `/` subpath of
+ * it) is reported, while a name that merely extends the prefix (`-tools`,
+ * `_2`, `2`) is not — the same unbounded-substring over-flagging
+ * `name.includes('hosted-dispatcher')` allowed. Dependency keys are bare
+ * package names, so only the regex's package branch can fire on a real
+ * manifest; the relative branch matching a hypothetical `./dispatcher` key
+ * is inert fail-closed behavior (no such key is a legal package name).
+ */
+export function dispatcherDependencyNames(names: readonly string[]): string[] {
+  return names.filter((name) => DISPATCHER_SPECIFIER.test(name))
+}
+
 describe('hosted-store-service package boundary', () => {
   test('manifest has no dispatcher export and no dispatcher or provider dependency', async () => {
     const manifest = await readManifest()
@@ -224,12 +240,43 @@ describe('hosted-store-service package boundary', () => {
       ...Object.keys(manifest.dependencies ?? {}),
       ...Object.keys(manifest.peerDependencies ?? {}),
     ]
-    expect(dependencyNames.filter((name) => name.includes('hosted-dispatcher'))).toEqual([])
+    expect(dispatcherDependencyNames(dependencyNames)).toEqual([])
     expect(
       dependencyNames.filter(
         (name) => name === '@vercel/sandbox' || name.startsWith('@defrex/autobuild-'),
       ),
     ).toEqual(['@defrex/autobuild-postgres-store'])
+  })
+
+  test('dependency filter is anchored to the exact dispatcher package name', () => {
+    // Positive: the exact dispatcher package name — and, fail-closed, a
+    // subpath-shaped key — is reported.
+    expect(dispatcherDependencyNames(['@defrex/autobuild-hosted-dispatcher'])).toEqual([
+      '@defrex/autobuild-hosted-dispatcher',
+    ])
+    expect(dispatcherDependencyNames(['@defrex/autobuild-hosted-dispatcher/kernel'])).toEqual([
+      '@defrex/autobuild-hosted-dispatcher/kernel',
+    ])
+
+    // The pinned negative case (AUT-449): a dependency whose name merely
+    // extends the dispatcher package prefix is a different package and must
+    // not be reported — the old name.includes('hosted-dispatcher') filter
+    // over-flagged it.
+    expect(dispatcherDependencyNames(['@defrex/autobuild-hosted-dispatcher-tools'])).toEqual([])
+
+    // Other prefix-extending package-name characters stay unreported too.
+    expect(dispatcherDependencyNames(['@defrex/autobuild-hosted-dispatcher_2'])).toEqual([])
+    expect(dispatcherDependencyNames(['@defrex/autobuild-hosted-dispatcher2'])).toEqual([])
+
+    // Legitimate dependency names stay clean.
+    expect(
+      dispatcherDependencyNames([
+        '@defrex/autobuild-postgres-store',
+        '@defrex/autobuild-hosted-store-service',
+        '@defrex/autobuild',
+        'pg',
+      ]),
+    ).toEqual([])
   })
 
   test('no module imports the dispatcher', async () => {
