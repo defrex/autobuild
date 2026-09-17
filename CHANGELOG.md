@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#412](https://github.com/defrex/autobuild/pull/412) — Remove unused deploymentSectionsEqual and DEPLOYMENT_OWNED_CONFIG_PATHS
 - [#417](https://github.com/defrex/autobuild/pull/417) — Document checkout-mode worktree-dirty provenance in ownership docs
 - [#414](https://github.com/defrex/autobuild/pull/414) — Record honest pipeline-source provenance for dirty checkout worktrees
 - [#411](https://github.com/defrex/autobuild/pull/411) — Reject per-build auto-merge consent while a discard is in flight
