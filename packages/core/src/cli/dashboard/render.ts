@@ -250,7 +250,8 @@ function renderStep(step: PipelineStep, color: boolean, now: number): string {
     parts.push(`${formatDuration(elapsedMs)}${count}`)
   }
   const note = parts.length > 0 ? `(${parts.join(', ')})` : ''
-  const text = `${GLYPH[step.state]} ${step.label}${note}`
+  const reason = step.reason !== undefined ? ` — ${step.reason}` : ''
+  const text = `${GLYPH[step.state]} ${step.label}${note}${reason}`
   const painted = paint(text, STEP_COLOR[step.state], color)
   return step.state === 'current' ? paint(painted, 'bold', color) : painted
 }
@@ -307,6 +308,7 @@ function renderBuild(
   widths: Widths,
   selected: boolean,
   selecting: boolean,
+  defaultAutoMerge: boolean,
 ): string[] {
   const { color, width, now } = opts
 
@@ -329,10 +331,22 @@ function renderBuild(
   // right-justifies the status word so it is never truncated and always ends at
   // the frame's right edge (AC 3, AC 5).
   const rightTokens: string[] = []
-  if (build.autoMerge !== 'off') {
+  // The state is ALWAYS drawn — including `off` — so consent is never conveyed
+  // by the absence of a token alone. `off` turns red while the repository
+  // default reads ON: the default-on/build-off mismatch an operator must see
+  // without opening the detail view.
+  {
     const autoColor: ColorName =
-      build.autoMerge === 'enabled' ? 'green' : build.autoMerge === 'requested' ? 'cyan' : 'yellow'
-    rightTokens.push(paint('auto merge', autoColor, color))
+      build.autoMerge === 'enabled'
+        ? 'green'
+        : build.autoMerge === 'requested'
+          ? 'cyan'
+          : build.autoMerge === 'cancelling'
+            ? 'yellow'
+            : defaultAutoMerge
+              ? 'red'
+              : 'dim'
+    rightTokens.push(paint(`auto merge ${build.autoMerge}`, autoColor, color))
   }
   if (build.pr !== undefined) rightTokens.push(link(build.pr.url, `PR ${build.pr.state}`, color))
   // A repository hold changes no build lifecycle state. Keep QUEUED literal
@@ -578,7 +592,8 @@ function detailStep(step: PipelineStep, opts: RenderOpts): string {
     notes.push(formatDuration(elapsed))
   }
   const note = notes.length > 0 ? ` (${notes.join(', ')})` : ''
-  return paint(`${GLYPH[step.state]} ${step.label}${note}`, STEP_COLOR[step.state], color)
+  const reason = step.reason !== undefined ? ` — ${step.reason}` : ''
+  return paint(`${GLYPH[step.state]} ${step.label}${note}${reason}`, STEP_COLOR[step.state], color)
 }
 
 function sessionLines(session: DashboardSession, selected: boolean, opts: RenderOpts): string[] {
@@ -1462,6 +1477,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
             widths,
             sameSelection(selection, model.selection),
             selecting,
+            model.defaultAutoMerge,
           ),
         },
       ]

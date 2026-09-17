@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#399](https://github.com/defrex/autobuild/pull/399) — Verify worktree exec bits in bin-mode-check; add PackageManifest.bin
+- [#398](https://github.com/defrex/autobuild/pull/398) — Fix three distribution-packing tests failing on registry lag
 - [#396](https://github.com/defrex/autobuild/pull/396) — Prevent bin.ts mode flips from failing the finalize preflight
 - [#395](https://github.com/defrex/autobuild/pull/395) — Declare @defrex/autobuild-postgres-store as root devDependency
 - [#394](https://github.com/defrex/autobuild/pull/394) — Correct /testing attribution in core-floor test comment

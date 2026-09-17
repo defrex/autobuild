@@ -5736,14 +5736,17 @@ describe('abDispatch interactive keyboard controls', () => {
           .map((event) => [
             event.actor.kind === 'human' ? event.actor.user : event.actor.kind,
             event.type,
-            event.payload,
+            event.payload.enabled,
+            // A dashboard keypress names the invocation that performed the
+            // write, so the two write paths stay distinguishable in the journal.
+            typeof event.payload.run === 'string' && event.payload.run.length > 0,
           ]),
       ).toEqual([
-        ['operator-a', 'dispatcher.intake-set', { enabled: false }],
-        ['operator-a', 'dispatcher.auto-merge-default-set', { enabled: true }],
-        ['operator-b', 'dispatcher.intake-set', { enabled: true }],
-        ['operator-b', 'dispatcher.auto-merge-default-set', { enabled: false }],
-        ['operator-a', 'dispatcher.intake-set', { enabled: false }],
+        ['operator-a', 'dispatcher.intake-set', false, true],
+        ['operator-a', 'dispatcher.auto-merge-default-set', true, true],
+        ['operator-b', 'dispatcher.intake-set', true, true],
+        ['operator-b', 'dispatcher.auto-merge-default-set', false, true],
+        ['operator-a', 'dispatcher.intake-set', false, true],
       ])
 
       inputA.press('interrupt')
@@ -5863,12 +5866,12 @@ describe('abDispatch interactive keyboard controls', () => {
         {
           actor: { kind: 'human', user: 'harvest-op' },
           type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: true },
+          payload: { enabled: true, run: expect.stringMatching(/-dispatch-/) },
         },
         {
           actor: { kind: 'human', user: 'harvest-op' },
           type: 'dispatcher.auto-merge-default-set',
-          payload: { enabled: false },
+          payload: { enabled: false, run: expect.stringMatching(/-dispatch-/) },
         },
       ])
       for (const slug of ['alpha-work', 'beta-work']) {
@@ -6061,7 +6064,7 @@ describe('abDispatch interactive keyboard controls', () => {
     }
   }, 30_000)
 
-  test('global default seeds only later claims and never overrides per-build cancellation', async () => {
+  test('global default fans out onto in-flight builds, seeds later claims, and a per-build cancel stands until the default moves again', async () => {
     const fx = await makeFixture(
       readyTicket('T-existing-default', { title: 'Existing work' }),
       happyHandlers(),
@@ -6072,7 +6075,8 @@ describe('abDispatch interactive keyboard controls', () => {
     const term = fakeTerminal(true, { columns: 180 })
     try {
       // Establish an in-flight build before this dispatch process chooses its
-      // default. It must remain untouched when global m turns the default on.
+      // default. The ON toggle must fan out onto it, and the OFF toggle must
+      // withdraw — the global row describes what current builds will do.
       await abDispatch({
         targetRepo: fx.checkout,
         env: {},
@@ -6082,7 +6086,7 @@ describe('abDispatch interactive keyboard controls', () => {
         once: true,
         wire: fx.wire,
       })
-      const existingBefore = await fx.store.getEvents('existing-work')
+      // (Snapshot premise removed: the fan-out now writes to this build.)
 
       let sleeps = 0
       run = abDispatch({
@@ -6165,13 +6169,37 @@ describe('abDispatch interactive keyboard controls', () => {
       await run
       run = undefined
 
-      expect(await fx.store.getEvents('existing-work')).toEqual(existingBefore)
+      // The ON fact fanned out onto the in-flight build (the operator never
+      // selected its row); the OFF fact withdrew it. Both commands carry the
+      // toggling operator's attribution and the fact's seq as provenance.
+      const existing = await fx.store.getEvents('existing-work')
+      expect(
+        existing
+          .filter((event) => event.type.startsWith('build.auto-merge'))
+          .map((event) => [event.type, event.actor, event.payload]),
+      ).toEqual([
+        [
+          'build.auto-merge-requested',
+          { kind: 'human', user: 'default-op' },
+          { defaultSeq: expect.any(Number) },
+        ],
+        [
+          'build.auto-merge-cancelled',
+          { kind: 'human', user: 'default-op' },
+          { defaultSeq: expect.any(Number) },
+        ],
+      ])
       const seeded = await fx.store.getEvents('seeded-work')
       expect(seeded.filter((event) => event.type === 'build.auto-merge-requested')).toHaveLength(1)
       expect(seeded.filter((event) => event.type === 'build.auto-merge-cancelled')).toHaveLength(1)
       expect(seeded.find((event) => event.type === 'build.auto-merge-requested')?.actor).toEqual({
         kind: 'human',
         user: 'default-op',
+      })
+      // The claim sampled the ON fact, so its materialized request carries the
+      // fact's seq — the same provenance a fan-out command would record.
+      expect(seeded.find((event) => event.type === 'build.auto-merge-requested')?.payload).toEqual({
+        defaultSeq: expect.any(Number),
       })
       expect(
         (await fx.store.getEvents('unseeded-work')).some(

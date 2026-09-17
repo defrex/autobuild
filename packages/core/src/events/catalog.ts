@@ -67,6 +67,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'build.discard-requested': ['human'],
   'build.auto-merge-requested': ['human'],
   'build.auto-merge-cancelled': ['human'],
+  'build.auto-merge-default-observed': ['dispatcher'],
   'build.paused': ['kernel'],
   'build.resumed': ['kernel'],
   'build.aborted': ['kernel', 'dispatcher'],

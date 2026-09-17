@@ -42,6 +42,7 @@ test('every terminal capture fixture has identical web rows and step facts', asy
             ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),
             ...(step.count !== undefined ? { count: step.count } : {}),
             ...(step.timing !== undefined ? { timing: step.timing } : {}),
+            ...(step.reason !== undefined ? { reason: step.reason } : {}),
           })),
         })),
         ...(frame.model.harvest
@@ -56,6 +57,7 @@ test('every terminal capture fixture has identical web rows and step facts', asy
                   ...(step.qualifier !== undefined ? { qualifier: step.qualifier } : {}),
                   ...(step.count !== undefined ? { count: step.count } : {}),
                   ...(step.timing !== undefined ? { timing: step.timing } : {}),
+                  ...(step.reason !== undefined ? { reason: step.reason } : {}),
                 })),
               },
             }

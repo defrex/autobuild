@@ -221,7 +221,8 @@ Small, independently runnable, crash-safe:
   `build.created` from the immutable record, executes only missing workspace,
   spec, and ticket-notification boundaries, and records each failed attempt as
   `dispatch.failed`. `build.created` retains any claim-time auto-merge
-  attribution until its human-authored command fact is materialized, while
+  attribution and the sampled default fact's seq until the human-authored
+  command fact is materialized, while
   `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
   It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
@@ -936,7 +937,7 @@ sessionless read-only status projection.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
-repository-wide pause, and the claim-time auto-merge default. It uses the same
+repository-wide pause, and the auto-merge default. It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
 pause off, and auto-merge default off; the query does not create that stream,
@@ -1455,12 +1456,15 @@ signal, and error evidence. `--plain`, non-TTY,
 and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 
-Durable operator settings (intake, the repository-wide pause, the claim-time
-auto-merge default, the harvest gate) are repository-journal facts: they
-survive restarts, propagate between dispatchers by ordinary polling, and are
-never optimistically rendered — the UI shows acknowledged state. The
-repository-wide pause holds every queued build: while it is set, no dispatcher
-tick may attach a runner to a build that does not have one yet.
+Durable operator settings (intake, the repository-wide pause, the auto-merge
+default, the harvest gate) are repository-journal facts: they survive restarts,
+propagate between dispatchers by ordinary polling, and are never optimistically
+rendered — the UI shows acknowledged state. The repository-wide pause holds
+every queued build: while it is set, no dispatcher tick may attach a runner to
+a build that does not have one yet. The auto-merge default both seeds new
+claims and, on each change, fans out onto every current non-terminal build of
+the repository as a bulk request or withdrawal attributed to the toggling
+operator (§15.7).
 
 The **operator sandbox** is the third execution kind beside build and harvest
 executions: a persistent, credential-free, per-operator-per-repository

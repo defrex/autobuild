@@ -677,6 +677,7 @@ export class DispatchFrontend {
       repo: this.opts.repo,
       user: buildControlUser(this.opts.env),
       setting: 'intake',
+      run: this.runId,
     })
     await this.report(`dispatcher intake ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
@@ -688,6 +689,7 @@ export class DispatchFrontend {
       repo: this.opts.repo,
       user: buildControlUser(this.opts.env),
       setting: 'auto-merge-default',
+      run: this.runId,
     })
     await this.report(`dispatcher auto-merge default ${event.enabled ? 'ON' : 'OFF'}`)
     await this.renderOnce()
@@ -990,14 +992,14 @@ export class DispatchFrontend {
       await this.opts.store.appendRepo(this.opts.repo, {
         actor,
         type: 'dispatcher.intake-set',
-        payload: { enabled: this.opts.intake },
+        payload: { enabled: this.opts.intake, run: this.runId },
       })
     }
     if (this.opts.defaultAutoMerge !== undefined) {
       await this.opts.store.appendRepo(this.opts.repo, {
         actor,
         type: 'dispatcher.auto-merge-default-set',
-        payload: { enabled: this.opts.defaultAutoMerge },
+        payload: { enabled: this.opts.defaultAutoMerge, run: this.runId },
       })
     }
 

@@ -1711,6 +1711,24 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(build.blockers).toEqual([])
   })
 
+  test('a parked merge step names the missing consent — and requested/enabled do not', () => {
+    const bare = project(toLog(throughPr))
+    expect(stepFor(bare, 'merge')?.reason).toBe(
+      'no auto-merge consent has been requested — request it with m on the build row ' +
+        'or `ab auto-merge auth-rate-limit on`',
+    )
+    const consented = project(toLog([...throughPr, ev('build.auto-merge-requested', {})]))
+    expect(stepFor(consented, 'merge')?.reason).toBeUndefined()
+    const enabled = project(
+      toLog([
+        ...throughPr,
+        ev('build.auto-merge-requested', {}),
+        ev('pr.auto-merge-enabled', { commandSeq: 6 }),
+      ]),
+    )
+    expect(stepFor(enabled, 'merge')?.reason).toBeUndefined()
+  })
+
   test('an awaiting-PR deferral surfaces its complete forge-agnostic provider detail', () => {
     const reason =
       "Auto-merge gate could not apply consent for PR #7: local merge is blocked — error: Entry 'autobuild.toml' not uptodate."

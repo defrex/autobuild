@@ -45,6 +45,7 @@ import {
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferral } from '../kernel/auto-merge'
+import { autoMergeDisplay, type AutoMergeDisplay } from './dashboard/model'
 import { decideNext } from '../kernel/engine'
 import {
   reduceBuild,
@@ -137,6 +138,10 @@ export interface BuildDetail extends BuildSummary {
   /** Current work-owner decision. Open PRs use the build-owned config; ended
    * PRs project the repository completion path directly from durable state. */
   decision?: BuildDecisionProjection
+  /** The build's effective auto-merge display state (off, requested, enabled,
+   * cancelling) — the same projection the dashboards render, so `--json` and
+   * the text agree and `waiting: on PR` can say why it is waiting. */
+  autoMerge: AutoMergeDisplay
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
@@ -294,6 +299,7 @@ export function detail(
     }))
   return {
     ...summary,
+    autoMerge: autoMergeDisplay(state),
     ...(decision !== undefined ? { decision } : {}),
     openEscalations: state.openEscalations,
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
@@ -565,9 +571,11 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     )
   }
   if (d.decision?.kind === 'awaiting-pr') {
-    lines.push(
-      `  waiting:  on PR${d.decision.reason !== undefined ? ` — ${d.decision.reason}` : ''}`,
-    )
+    // The deferral reason (a durable observation about WHY consent could not
+    // be applied) takes precedence; otherwise the auto-merge state itself is
+    // what the parked operator needs — off names the missing consent.
+    const consent = d.decision.reason ?? `auto merge ${d.autoMerge}`
+    lines.push(`  waiting:  on PR — ${consent}`)
   } else if (d.decision?.kind === 'repository-completion') {
     lines.push(
       `  waiting:  repository-level completion after the PR was ${d.decision.prState}; no runner re-attachment is pending`,
