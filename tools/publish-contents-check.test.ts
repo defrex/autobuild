@@ -152,7 +152,14 @@ const postgresFixtureManifest = {
     './store': { types: './src/store.ts', import: './src/store.ts' },
   },
   bin: { 'ab-postgres-store': './src/bin.ts' },
-  files: ['src', 'README.md', '!src/**/*.test.ts', '!src/**/*.test.tsx', '!src/**/*.spec.ts'],
+  files: [
+    'src',
+    'README.md',
+    '!src/**/*.test.ts',
+    '!src/**/*.test.tsx',
+    '!src/**/*.spec.ts',
+    '!src/testing/**',
+  ],
 }
 
 const hostedFixtureManifest = {
@@ -346,6 +353,7 @@ describe('deriveRuledPackages', () => {
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
       'src/**/*.spec.ts',
+      'src/testing/**',
     ])
     expect(postgresRuling.directory).toBe('packages/postgres-store')
 
@@ -553,6 +561,14 @@ describe('evaluatePackedPaths', () => {
   test('a top-level file added to the postgres-store directory is an extra, named by path', () => {
     const violations = evaluatePackedPaths(parsePackedPaths(postgresLeakedListing), postgresRuling)
     expect(violations).toEqual([{ kind: 'extra', path: 'scratch.ts' }])
+  })
+
+  test('the test-only src/testing/ helper is an extra under the postgres ruling (AUT-500)', () => {
+    const paths = parsePackedPaths(postgresHappyListing).concat([
+      'src/testing/concurrent-worker.ts',
+    ])
+    const violations = evaluatePackedPaths(paths, postgresRuling)
+    expect(violations).toEqual([{ kind: 'extra', path: 'src/testing/concurrent-worker.ts' }])
   })
 
   test('a manifest target absent from the listing fails with missing-target, named by path', () => {
@@ -863,7 +879,7 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490)')
+    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490, extended by AUT-500)')
     expect(combined).toContain('scratch.ts')
     expect(captured.stderr.join('')).toContain(
       'violation(s) against the @defrex/autobuild-postgres-store tarball ruling',
@@ -939,7 +955,7 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490)')
+    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490, extended by AUT-500)')
     expect(combined).toContain('no non-empty `files` allowlist')
     expect(captured.stderr.join('')).toContain('1 packed-contents violation(s)')
     // No ruling can be derived, so the package is not packed at all.
@@ -1077,12 +1093,21 @@ describe('the real sub-package manifests', () => {
     '!src/**/*.spec.ts',
   ]
 
+  // postgres-store alone carries the AUT-500 negation; the other two
+  // sub-packages must keep pinning the AUT-490 shape exactly.
+  const POSTGRES_AUT_500_FILES = [...AUT_490_BROADENED_FILES, '!src/testing/**']
+  const AUT_500_FILES_BY_DIRECTORY: Record<string, string[]> = {
+    'hosted-dispatcher': AUT_490_BROADENED_FILES,
+    'hosted-store-service': AUT_490_BROADENED_FILES,
+    'postgres-store': POSTGRES_AUT_500_FILES,
+  }
+
   for (const directory of ['hosted-dispatcher', 'hosted-store-service', 'postgres-store']) {
     test(`packages/${directory}/package.json's files allowlist carries the broadened AUT-490 negations exactly`, () => {
       const manifest = JSON.parse(
         readFileSync(join(REPO_ROOT, 'packages', directory, 'package.json'), 'utf8'),
       ) as { files?: unknown }
-      expect(manifest.files).toEqual(AUT_490_BROADENED_FILES)
+      expect(manifest.files).toEqual(AUT_500_FILES_BY_DIRECTORY[directory])
     })
   }
 })

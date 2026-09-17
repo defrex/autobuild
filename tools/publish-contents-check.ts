@@ -162,9 +162,12 @@ const HOSTED_STORE_SERVICE_RULING =
   "'files' allowlist in packages/hosted-store-service/package.json and this check together."
 
 const POSTGRES_STORE_RULING =
-  'Ruling (AUT-473, extended by AUT-490): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
+  'Ruling (AUT-473, extended by AUT-490, extended by AUT-500): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
   'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, and src/**/*.spec.ts files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The allowlist pins the publishable surface by manifest ' +
+  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. By AUT-500 the src/testing/ tree is also ' +
+  'test-only dev surface (its helpers are consumed only by the live suites, e.g. ' +
+  'src/store.live.test.ts spawning src/testing/concurrent-worker.ts) and is excluded from the tarball by the !src/testing/** ' +
+  'negation. The allowlist pins the publishable surface by manifest ' +
   'rather than by directory layout: a future top-level file in packages/postgres-store (a ' +
   'scratch script, a live-test fixture, a dotenv file, an editor artifact) must not ride into ' +
   'the tarball. If the ruling changes, update the ' +
