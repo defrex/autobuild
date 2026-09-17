@@ -24,7 +24,18 @@ tarball is deliberate, not an oversight.
 
 The service and PostgreSQL adapter are published to npm
 (`@defrex/autobuild-hosted-store-service`, `@defrex/autobuild-postgres-store`)
-separately from the `@defrex/autobuild` CLI. The deployable web application
+separately from the `@defrex/autobuild` CLI. Their published `src/` trees
+import `@defrex/autobuild` subpaths (`./operator`, `./hosted-tickets`,
+`./testing` among them) that exist only from `@defrex/autobuild` 0.9.0 —
+published 0.8.0 predates the renames and lacks them — so the manifest's
+optional peer dependency `"@defrex/autobuild": ">=0.9.0"` is the
+machine-readable form of that floor; install the service only against a
+provider that satisfies it.
+`tools/publish-imports-check.ts` in the repository `check` gate pins this
+coupling where releases are cut: it packs every publishable package, stages
+the tarballs into a scratch `node_modules` layout, and fails when a packed
+file imports a `@defrex/autobuild` subpath the packed provider does not
+export. The deployable web application
 runs from a release checkout: clone the compatible release tag and install it
 as shown in the [complete environment reference](../../docs/configuration.md),
 then migrate the database (the migration is idempotent):
