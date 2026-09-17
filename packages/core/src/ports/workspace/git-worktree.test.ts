@@ -949,6 +949,31 @@ describe('GitWorktreeProvider operator sandbox', () => {
     })
   })
 
+  test('a grandchild inheriting the pipe bounds the exit stamp without truncating it', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    // `sleep 2 &` keeps the stdout write end open ~2s past `sh`'s own exit,
+    // so the reader drain — EOF — lands long after the child is gone. The
+    // exit stamp must land within the drain grace (not the grandchild's
+    // lifetime, so a `waitSeconds: 1` deadline still observes `exited` where
+    // an unbounded drain wait would report `running`), and must carry what
+    // the child wrote before exiting.
+    const { commandId } = await provider.orchestratorSandbox.start(identity, {
+      command: 'sleep 2 & echo held-open',
+    })
+    expect(
+      await provider.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 1 }),
+    ).toEqual({
+      state: 'exited',
+      exitCode: 0,
+      stdout: 'held-open\n',
+      stderr: '',
+    })
+  })
+
   test('readFile and writeFile are rooted at the checkout and reject escapes', async () => {
     const identity = await provider.orchestratorSandbox.ensure({
       repo,

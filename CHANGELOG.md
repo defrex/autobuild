@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#444](https://github.com/defrex/autobuild/pull/444) — Widen the published-imports guard beyond .ts/.tsx packed files
+- [#443](https://github.com/defrex/autobuild/pull/443) — Reject releases below a dependent's declared peer floor (AUT-480)
+- [#441](https://github.com/defrex/autobuild/pull/441) — End bin-mode-check's success message with a newline
 - [#439](https://github.com/defrex/autobuild/pull/439) — Widen the rule-on-docs AC3 sweep's include patterns to *.ts
 - [#438](https://github.com/defrex/autobuild/pull/438) — Resolve the @defrex/autobuild@0.8.0 npm export skew (AUT-476)
 - [#440](https://github.com/defrex/autobuild/pull/440) — Guard repo-local skill docs' asset refs; fix vendored-scope comment
