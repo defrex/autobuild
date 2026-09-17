@@ -167,17 +167,35 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  * there too, deliberately — a type-only import still makes `tsc` resolve the
  * specifier, so a published tarball can depend on an export the provider does
  * not ship even when nothing loads it at runtime.
+ *
+ * Supported script kinds span TS, TSX, JS, and JSX (the widened set the
+ * published-imports guard now scans). The `transpileModule` diagnostics pass
+ * labels the virtual file by kind — `module.tsx` for TSX, `module.jsx` for
+ * JSX, `module.js` for JS, `module.ts` otherwise — so JSX parses (its
+ * parsing is driven by the kind-aware fileName) and JS is not mislabeled as
+ * TypeScript; `createSourceFile` keeps its explicit `scriptKind` argument, so
+ * the label there stays inert. TS and TSX inputs take the same paths as
+ * before this mapping existed: byte-identical behavior for the boundary gate.
  */
 export function collectSpecifiers(
   contents: string,
   scriptKind: ts.ScriptKind = ts.ScriptKind.TS,
 ): CollectedSpecifier[] {
   // The gate must parse with the same script kind as the extractor below:
-  // without a `.tsx` fileName the transpiler parses JSX as plain TS and a
-  // valid `.test.tsx` would fail closed as `<unparseable module>`.
+  // without a kind-appropriate fileName the transpiler parses JSX as plain
+  // TS and a valid `.test.tsx`/`.jsx` would fail closed as
+  // `<unparseable module>`; a JS kind is labeled `.js` so its contents are
+  // not parsed as TypeScript. TS/TSX outcomes are unchanged.
   const { diagnostics } = ts.transpileModule(contents, {
     reportDiagnostics: true,
-    fileName: scriptKind === ts.ScriptKind.TSX ? 'module.tsx' : 'module.ts',
+    fileName:
+      scriptKind === ts.ScriptKind.TSX
+        ? 'module.tsx'
+        : scriptKind === ts.ScriptKind.JSX
+          ? 'module.jsx'
+          : scriptKind === ts.ScriptKind.JS
+            ? 'module.js'
+            : 'module.ts',
   })
   if ((diagnostics ?? []).some((d) => d.category === ts.DiagnosticCategory.Error)) {
     return [{ specifier: UNPARSEABLE_MODULE, line: 1 }]
