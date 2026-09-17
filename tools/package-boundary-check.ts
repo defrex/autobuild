@@ -115,9 +115,9 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  * - Deliberate widening — the regexes matched none of these forms:
  *   `require.call/apply(…)` at the pinned positions; optional-call
  *   `require?.('…')` and type-argument `require<Foo>('…')`, which ride the
- *   same pinned `arguments[0]` slot (the optional-chaining token lives on the
- *   call and the type arguments on the callee, so both parse as require-ish
- *   calls). These last two are contrived, pre-existing coverage unchanged by
+ *   same pinned `arguments[0]` slot (the optional-chaining token and the
+ *   type arguments both sit on the call, so the callee stays a bare
+ *   require-ish expression). These last two are contrived, pre-existing coverage unchanged by
  *   the parser work, and fail-closed in the same way every widening here is:
  *   they can only add offenders, never remove one. The originating plan's
  *   "no widening" out-of-scope line governed *policy* — which imports are
