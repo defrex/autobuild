@@ -43,10 +43,11 @@ const DISPATCHER_SPECIFIER = /^(\.\/dispatcher$)|(^@defrex\/autobuild-hosted-dis
 /**
  * Extract dispatcher specifiers from a module's text, across every import form
  * that could load it: static `from` specifiers (including `export ... from`),
- * bare side-effect `import '...'`, dynamic `import('...')`, and `require('...')`
- * (defensively; the package is ESM and has no require today). A static-only
- * scan would let a side-effect or dynamic import silently reintroduce the
- * dispatcher's kernel/provider closure.
+ * bare side-effect `import '...'`, dynamic `import('...')` with either a quoted
+ * or a template-literal specifier, and `require('...')` (defensively; the
+ * package is ESM and has no require today). A static-only scan would let a
+ * side-effect or dynamic import silently reintroduce the dispatcher's
+ * kernel/provider closure.
  */
 export function dispatcherSpecifiers(text: string): string[] {
   const specifiers: string[] = []
@@ -54,6 +55,7 @@ export function dispatcherSpecifiers(text: string): string[] {
     /from\s+['"]([^'"]+)['"]/g, // static import/export-from
     /\bimport\s+['"]([^'"]+)['"]/g, // side-effect import
     /\bimport\s*\(\s*['"]([^'"]+)['"]/g, // dynamic import()
+    /\bimport\s*\(\s*`([^`]+)`/g, // dynamic import() with a template-literal specifier
     /\brequire\s*\(\s*['"]([^'"]+)['"]/g, // require() if one ever appears
   ]
   for (const pattern of patterns) {
@@ -111,6 +113,15 @@ describe('hosted-store-service package boundary', () => {
 )`,
       ),
     ).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers('const m = await import(`./dispatcher`)')).toEqual(['./dispatcher'])
+    expect(
+      dispatcherSpecifiers('const m = await import(`@defrex/autobuild-hosted-dispatcher`)'),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher'])
+    expect(
+      dispatcherSpecifiers(
+        `const m = await import(\`@defrex/autobuild-hosted-dispatcher/\${name}\`)`,
+      ),
+    ).toEqual([`@defrex/autobuild-hosted-dispatcher/\${name}`])
 
     // Negative controls: legitimate specifiers stay clean.
     expect(
@@ -119,5 +130,16 @@ describe('hosted-store-service package boundary', () => {
     expect(dispatcherSpecifiers("import './service'")).toEqual([])
     expect(dispatcherSpecifiers("void import('@defrex/autobuild-postgres-store')")).toEqual([])
     expect(dispatcherSpecifiers("import { x } from '@defrex/autobuild'")).toEqual([])
+
+    // Backtick specifiers unrelated to the dispatcher stay clean; interpolation
+    // alone is not a false positive.
+    expect(dispatcherSpecifiers('void import(`./service`)')).toEqual([])
+    expect(dispatcherSpecifiers('import(`@defrex/autobuild-postgres-store`)')).toEqual([])
+    expect(dispatcherSpecifiers(`import(\`./\${name}\`)`)).toEqual([])
+
+    // Limitation, by design: a dynamic import whose specifier is a bare
+    // variable (`import(pkgVar)`) or whose text is reshaped by interpolation
+    // (e.g. `import(`./dispatch${kind}`)`) cannot be caught by text matching
+    // and stays outside this scan's claimed reach.
   })
 })
