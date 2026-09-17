@@ -9,6 +9,17 @@ unchanged and serves the cookie-authenticated operator dashboard on the same
 origin. `server.ts` in this package remains the named bare-Bun
 machine-service entrypoint for non-Next hosts.
 
+Only this package's `src/` tree and this README publish to npm: every
+consumer of the published package imports through the manifest's `exports`
+and `bin`, all of which live under `src/`. The manifest's `files` allowlist
+pins the tarball to exactly that, and `bun tools/publish-contents-check.ts`
+in the repository `check` gate fails when anything else would ship — in
+particular the internal `.impeccable/` surface brief. The Next.js `app/`
+tree, `server.ts`, the Next/Vercel configuration files, and `.impeccable/`
+are release-checkout/Vercel surface — read from this repository at deploy
+time, never from the package npm installs — and their absence from the
+tarball is deliberate, not an oversight.
+
 ## Configure and run locally
 
 The service and PostgreSQL adapter are published to npm

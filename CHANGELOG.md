@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#436](https://github.com/defrex/autobuild/pull/436) — Pin comment-interleaved require/import positions in boundary tests
+- [#433](https://github.com/defrex/autobuild/pull/433) — Restrict the hosted-store-service npm tarball to src/ and README
 - [#432](https://github.com/defrex/autobuild/pull/432) — Add --no-install to vercel-builds bunx preflight
 - [#430](https://github.com/defrex/autobuild/pull/430) — Pin setup.md parity and doc Pi version against autobuild.toml
 - [#429](https://github.com/defrex/autobuild/pull/429) — Make the vercel-builds skill's vercel CLI independent of bunfig.toml
