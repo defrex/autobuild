@@ -209,6 +209,25 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.result.diagnostics.happy.buildEventsAfter).toEqual(
     first.result.diagnostics.happy.buildEventsBefore,
   )
+  // The seeded journal is the pinned fixture: a repeated consecutive event
+  // would shift every subsequent seq. A future legitimately repeated event
+  // (retry, parallel step) must revisit this tripwire rather than append
+  // blindly.
+  for (const events of Object.values(first.result.diagnostics.happy.buildEventsAfter)) {
+    for (const [index, type] of events.entries()) {
+      expect(events[index - 1]).not.toBe(type)
+    }
+  }
+  expect(
+    first.result.diagnostics.happy.buildEventsAfter['cache-warm-on-deploy'].filter(
+      (type) => type === 'verify.started',
+    ),
+  ).toHaveLength(1)
+  expect(
+    first.result.diagnostics.happy.buildEventsAfter['parallel-verify-steps'].filter(
+      (type) => type === 'verify.started',
+    ),
+  ).toHaveLength(1)
   expect(first.result.diagnostics.happy.repoJournalUnchanged).toBe(true)
   expect(first.result.diagnostics.happy.forgePolls).toBeGreaterThan(0)
   expect(first.result.diagnostics.happy.autoMergeCalls).toBe(0)
