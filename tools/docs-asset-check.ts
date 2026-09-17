@@ -13,6 +13,24 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * and cost a hand-retouch before an agent's observation caught it. It is
  * repository-local tooling, not product surface, exactly as
  * `product-name-check.ts` is.
+ *
+ * The scan scope is exactly `isShippedDocument`: Markdown under a
+ * `package.json` `files` entry. Nothing else is ever scanned — in
+ * particular `.agents/skills/**` (every vendored SKILL.md and reference
+ * document, and the `.ab-pristine/` records) is out of scope, however
+ * plausible a target it looks like for a `docs/assets` lint. Ruled on
+ * build `rule-on-docs` (AUT-469): a skill document is not shipped surface,
+ * so a reference from one can neither keep an asset alive nor count as
+ * broken here — an image only a skill mentions is still an orphan by this
+ * check's convention. Widening was rejected because it would trade the
+ * mechanically derived `files` set for hand-maintained scope plus a
+ * hand-maintained `.ab-pristine/` exclusion (pristine copies are `ab
+ * upgrade`'s three-way-merge baselines and must never be edited to satisfy
+ * a finding). Canonical skill documents have their own reference guard,
+ * `skill-self-containment.test.ts`; vendored `.agents/skills` copies carry
+ * no equivalent guard, and that gap is accepted by this ruling, not hidden
+ * by it. A plan or reviewer must not claim this check validates SKILL.md
+ * files.
  */
 
 const ASSET_PREFIX = 'docs/assets/'
@@ -44,6 +62,10 @@ export type DocsAssetFinding =
  * `packages/core/src/cli/skill-self-containment.test.ts`. Counting it is vacuous rather than
  * wrong, and deriving the set mechanically from `files` cannot fall out of date
  * the way a hand-maintained list would.
+ *
+ * Vendored agent skills (`.agents/skills/**`, including `.ab-pristine/`)
+ * are outside `files` and therefore never scanned — deliberately, not by
+ * omission; see the module comment for the ruling.
  */
 export function isShippedDocument(path: string, packageFiles: readonly string[]): boolean {
   if (!path.toLowerCase().endsWith('.md')) {

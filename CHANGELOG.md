@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#438](https://github.com/defrex/autobuild/pull/438) — Resolve the @defrex/autobuild@0.8.0 npm export skew (AUT-476)
+- [#437](https://github.com/defrex/autobuild/pull/437) — End publish-contents-check's success message with a newline
 - [#435](https://github.com/defrex/autobuild/pull/435) — Extend Pi version cross-check to every install-literal pin
+- [#434](https://github.com/defrex/autobuild/pull/434) — State docs-asset-check's shipped-docs-only document scope ruling
 - [#433](https://github.com/defrex/autobuild/pull/433) — Restrict the hosted-store-service npm tarball to src/ and README
 - [#432](https://github.com/defrex/autobuild/pull/432) — Add --no-install to vercel-builds bunx preflight
 - [#430](https://github.com/defrex/autobuild/pull/430) — Pin setup.md parity and doc Pi version against autobuild.toml
