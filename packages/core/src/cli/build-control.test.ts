@@ -1432,6 +1432,112 @@ describe('controlBuild — shared durable controls', () => {
     await running.close()
   })
 
+  test('an active build with an in-flight discard refuses auto-merge consent in both directions', async () => {
+    for (const action of [{ kind: 'auto-merge-on' }, { kind: 'auto-merge-off' }] as const) {
+      // The raced-runner-attachment shape: the discard landed in the queued
+      // window before the runner attached, leaving a running build that
+      // carries the unsettled request. A queued build cannot reach this guard
+      // (`activeState` fires first — the last case below pins that).
+      const store = await makeStore()
+      await store.append(SLUG, {
+        actor: { kind: 'human', user: 'discard-op' },
+        type: 'build.discard-requested',
+        payload: {},
+      })
+      const before = await store.getEvents(SLUG)
+
+      await expect(
+        controlBuild({
+          store,
+          repo: REPO,
+          slug: SLUG,
+          env: { USER: 'operator' },
+          action: { ...action },
+        }),
+      ).rejects.toMatchObject({ code: 'discard-pending' })
+      expect(await store.getEvents(SLUG)).toEqual(before)
+      await store.close()
+    }
+  })
+
+  test('toggle-auto-merge refuses consent on an in-flight discard, both directions', async () => {
+    for (const consented of [false, true]) {
+      // Symmetric with the fan-out's direction-blind exclusion: the guard
+      // fires before the toggle resolves its direction, so a consent-recorded
+      // build (consent predates the discard) is refused exactly like a fresh one.
+      const store = await makeStore()
+      if (consented) {
+        await store.append(SLUG, {
+          actor: { kind: 'human', user: 'operator' },
+          type: 'build.auto-merge-requested',
+          payload: {},
+        })
+      }
+      await store.append(SLUG, {
+        actor: { kind: 'human', user: 'discard-op' },
+        type: 'build.discard-requested',
+        payload: {},
+      })
+      const before = await store.getEvents(SLUG)
+
+      await expect(
+        controlBuild({
+          store,
+          repo: REPO,
+          slug: SLUG,
+          env: { USER: 'operator' },
+          action: { kind: 'toggle-auto-merge' },
+        }),
+      ).rejects.toMatchObject({ code: 'discard-pending' })
+      expect(await store.getEvents(SLUG)).toEqual(before)
+      await store.close()
+    }
+  })
+
+  test('a queued build with an in-flight discard still rejects consent as inactive', async () => {
+    // Precedence: `activeState` fires before the discard guard, so the queued
+    // window keeps its existing error.
+    const store = await makeStore({ active: false })
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'discard-op' },
+      type: 'build.discard-requested',
+      payload: {},
+    })
+    const before = await store.getEvents(SLUG)
+
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: { USER: 'operator' },
+        action: { kind: 'auto-merge-on' },
+      }),
+    ).rejects.toMatchObject({ code: 'inactive' })
+    expect(await store.getEvents(SLUG)).toEqual(before)
+    await store.close()
+  })
+
+  test('pause and resume stay available while a discard is in flight', async () => {
+    // The guard is consent-specific: other controls keep their existing shape.
+    const store = await makeStore()
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'discard-op' },
+      type: 'build.discard-requested',
+      payload: {},
+    })
+
+    const paused = await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: { USER: 'operator' },
+      action: { kind: 'pause' },
+    })
+    expect(paused).toMatchObject({ kind: 'command', command: 'pause' })
+    await store.close()
+  })
+
   test('rejects missing, cross-repository, and unblocked targets while abort accepts queued', async () => {
     const store = await makeStore()
     await expect(

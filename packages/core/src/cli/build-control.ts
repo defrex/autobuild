@@ -8,7 +8,12 @@
  */
 import type { AbEvent } from '../events/catalog'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
-import { reduceBuild, type BuildState, type OpenEscalation } from '../kernel/reducer'
+import {
+  reduceBuild,
+  discardInFlight,
+  type BuildState,
+  type OpenEscalation,
+} from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { specConformance } from '../spec-standard'
@@ -107,6 +112,7 @@ export type BuildControlErrorCode =
   | 'missing-authorization'
   | 'no-longer-active'
   | 'abort-pending'
+  | 'discard-pending'
   | 'review-round-ceiling-unavailable'
   | 'incompatible-answer-options'
 
@@ -224,6 +230,29 @@ function reviewRoundLimitEscalation(
 
 function hasPendingAbort(state: BuildState): boolean {
   return state.pendingCommands.some((command) => command.command === 'abort')
+}
+
+function discardPending(slug: string): BuildControlError {
+  return new BuildControlError(
+    'discard-pending',
+    `build "${slug}" has an outstanding discard request; auto-merge consent was not recorded. ` +
+      'The discard settles only when the build terminalizes — nothing was appended. ' +
+      'If the discard raced with runner attachment and you still want the change, ' +
+      'merge the PR manually.',
+  )
+}
+
+/** Ruling (AUT-445): per-build auto-merge consent on a build with an
+ * outstanding discard request is rejected. This is the fan-out's discard
+ * exclusion (`autoMergeDefaultEligible`'s discard clause, AUT-418) applied to
+ * explicit consent — direction-blind, like that clause: `checkPr` merges on
+ * recorded consent without consulting the discard, so allowance would merge a
+ * live build whose journal holds unsettled discard intent. Both controls call
+ * the same `discardInFlight` predicate from kernel/reducer.ts, so they cannot
+ * diverge silently. Runs after `activeState`: a queued build (where the
+ * discard normally sits) still reports the existing `inactive` error. */
+function rejectDiscardPendingConsent(slug: string, state: BuildState): void {
+  if (discardInFlight(state)) throw discardPending(slug)
 }
 
 function abortPending(slug: string): BuildControlError {
@@ -422,6 +451,13 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
   }
 
   activeState(opts.slug, state)
+  if (
+    opts.action.kind === 'auto-merge-on' ||
+    opts.action.kind === 'auto-merge-off' ||
+    opts.action.kind === 'toggle-auto-merge'
+  ) {
+    rejectDiscardPendingConsent(opts.slug, state)
+  }
   switch (opts.action.kind) {
     case 'pause':
     case 'resume':
