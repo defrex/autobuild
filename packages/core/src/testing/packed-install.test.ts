@@ -104,26 +104,77 @@ describe('installPackedDistribution', () => {
     expect(sleeps).toEqual([])
   })
 
-  test('shares the cooldown: a lag failure after the window retries with no sleep', async () => {
-    const first = scriptedRun([
-      { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
-      { stdout: 'installed', exitCode: 0 },
-    ])
+  test('re-anchors on a second independent lag window instead of flooring the delay to zero', async () => {
+    const sleeps: number[] = []
+    let now = 0
+    const clock = () => now
+    const sleep = async (ms: number) => {
+      sleeps.push(ms)
+    }
+
+    // A distinct lag event begins after the first window has fully elapsed
+    // (the reported bug scenario at and beyond the 330s boundary): it must pay
+    // its own full window, not a zero-length delay from the stale anchor. Each
+    // case is an independent process: first lag at t = 0, second at `start`.
+    const cases = [REGISTRY_LAG_RETRY_DELAY_MS, REGISTRY_LAG_RETRY_DELAY_MS + 10_000]
+    for (const [index, start] of cases.entries()) {
+      const cooldown = {}
+      now = 0
+      sleeps.length = 0
+      const first = scriptedRun([
+        { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
+        { stdout: 'installed', exitCode: 0 },
+      ])
+      await installPackedDistribution([], '/a', {
+        run: first.run,
+        cooldown,
+        clock,
+        sleep,
+      })
+      expect(sleeps).toEqual([REGISTRY_LAG_RETRY_DELAY_MS])
+
+      now = start
+      sleeps.length = 0
+      const second = scriptedRun([
+        { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
+        { stdout: `installed ${index}`, exitCode: 0 },
+      ])
+      const result = await installPackedDistribution([], '/later', {
+        run: second.run,
+        cooldown,
+        clock,
+        sleep,
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(second.invocations).toHaveLength(2)
+      expect(second.invocations[1]?.cmd).toEqual(['bun', 'install', '--no-cache'])
+      expect(sleeps).toEqual([REGISTRY_LAG_RETRY_DELAY_MS])
+    }
+  })
+
+  test('shares the cooldown within an unelapsed window: sleeps only the remainder', async () => {
+    const cooldown = {}
     const sleeps: number[] = []
     let now = 0
     const options = {
+      cooldown,
       clock: () => now,
       sleep: async (ms: number) => {
         sleeps.push(ms)
       },
     }
 
+    const first = scriptedRun([
+      { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
+      { stdout: 'installed', exitCode: 0 },
+    ])
     await installPackedDistribution([], '/a', { run: first.run, ...options })
     expect(sleeps).toEqual([REGISTRY_LAG_RETRY_DELAY_MS])
 
-    // The window has already been crossed by the time the second packing test
-    // fails with the same signature: no further sleep, immediate retry.
-    now = REGISTRY_LAG_RETRY_DELAY_MS
+    // Still inside the first lag's window: the second install shares the
+    // remainder and keeps the original anchor.
+    now = 100_000
     const second = scriptedRun([
       { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
       { stdout: 'installed', exitCode: 0 },
@@ -133,6 +184,45 @@ describe('installPackedDistribution', () => {
     expect(result.exitCode).toBe(0)
     expect(second.invocations).toHaveLength(2)
     expect(second.invocations[1]?.cmd).toEqual(['bun', 'install', '--no-cache'])
+    expect(sleeps).toEqual([REGISTRY_LAG_RETRY_DELAY_MS, REGISTRY_LAG_RETRY_DELAY_MS - 100_000])
+  })
+
+  test('injected cooldown state makes the delay math order-independent', async () => {
+    const sleeps: number[] = []
+    const sleep = async (ms: number) => {
+      sleeps.push(ms)
+    }
+
+    // Two calls with separate injected state each pay the full window,
+    // regardless of order; neither sees the other's anchor.
+    for (const cwd of ['/a', '/b']) {
+      const run = scriptedRun([
+        { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
+        { stdout: 'installed', exitCode: 0 },
+      ])
+      await installPackedDistribution([], cwd, {
+        run: run.run,
+        cooldown: {},
+        clock: () => 0,
+        sleep,
+      })
+    }
+    expect(sleeps).toEqual([REGISTRY_LAG_RETRY_DELAY_MS, REGISTRY_LAG_RETRY_DELAY_MS])
+
+    // Deliberately stale injected state (older than the window) — the exact
+    // production bug scenario, expressed through the seam — pays the full
+    // window instead of flooring the delay to 0.
+    const stale = scriptedRun([
+      { stderr: OBSERVED_GATEWAY_LAG, exitCode: 1 },
+      { stdout: 'installed', exitCode: 0 },
+    ])
+    sleeps.length = 0
+    await installPackedDistribution([], '/stale', {
+      run: stale.run,
+      cooldown: { since: -REGISTRY_LAG_RETRY_DELAY_MS },
+      clock: () => 0,
+      sleep,
+    })
     expect(sleeps).toEqual([REGISTRY_LAG_RETRY_DELAY_MS])
   })
 
