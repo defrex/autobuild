@@ -29,10 +29,13 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  * `@defrex/autobuild-hosted-dispatcher` (`@defrex/autobuild-core` is
  * `private: true` and excluded).
  *
- * The two store rulings carry their rulings' pinned prose:
+ * The three sub-package rulings carry their rulings' pinned prose:
  *
  * - AUT-463 — `@defrex/autobuild-hosted-store-service` ships exactly
- *   `package.json`, `README.md`, and `src/**`. The ruling exists because
+ *   `package.json`, `README.md`, and `src/**` — with the AUT-490 exception that
+ *   every `*.test.ts` file under `src/` (written as the negation
+ *   `!src/**` + `*.test.ts` in the manifest; this also covers the
+ *   `*.live.test.ts` suites) does not publish. The ruling exists because
  *   AUT-409's move of the operator web app into the service package silently
  *   added `app/`, `server.ts`, `next.config.ts`, `vercel.json`,
  *   `tsconfig.json`, `next-env.d.ts`, and the internal
@@ -48,12 +51,24 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   the exact failure mode the move created.
  * - AUT-473 — `@defrex/autobuild-postgres-store` declares the same shape
  *   (`files: ["src", "README.md"]`) so its tarball ships exactly
- *   `package.json`, `README.md`, and `src/**` by manifest rather than by
+ *   `package.json`, `README.md`, and `src/**` — again with the AUT-490
+ *   test-file exception — by manifest rather than by
  *   directory layout. Its directory today carries only `src/`, so the tarball
  *   was correct by accident of layout; deny-by-default keeps a future
  *   top-level addition (a scratch script, a live-test fixture, a dotenv file,
  *   an editor artifact) out of the tarball unless the allowlist and this check
  *   are updated together.
+ * - AUT-490 — none of the three sub-packages' tarballs carries test files:
+ *   each `files` allowlist negates every `*.test.ts` file under `src/`
+ *   (manifest entry `!src/**` + `*.test.ts`; under the matcher's
+ *   within-segment `*`, this also denies the `*.live.test.ts` suites). This is
+ *   a deliberate ruling, not a leak: the root package takes the same stance
+ *   (its `packages/core/src` test files are negated the same way), the tests
+ *   are written for `bun test`
+ *   (not a declared runtime dependency of the packages), and the live suites
+ *   additionally need a Postgres URL and env a consumer installing from npm
+ *   cannot have. If a sub-package's ruling changes, update its 'files'
+ *   allowlist and this check together.
  *
  * Every ruling is read out of its package's declared `files` allowlist, so
  * ruling and manifest cannot drift apart:
@@ -136,19 +151,30 @@ export interface TarballRuling {
 }
 
 const HOSTED_STORE_SERVICE_RULING =
-  'Ruling (AUT-463): the @defrex/autobuild-hosted-store-service npm tarball ships exactly ' +
-  'package.json, README.md, and src/**. The Next.js app/ tree, server.ts, next.config.ts, ' +
+  'Ruling (AUT-463, extended by AUT-490): the @defrex/autobuild-hosted-store-service npm tarball ships exactly ' +
+  'package.json, README.md, and src/** — except src/**/*.test.ts files (which covers the ' +
+  '*.live.test.ts suites too): test files are dev-only surface and do not publish. The Next.js app/ tree, server.ts, next.config.ts, ' +
   'vercel.json, tsconfig.json, next-env.d.ts, and the internal .impeccable/ surface brief are ' +
   'release-checkout/Vercel surface and must not publish. If the ruling changes, update the ' +
   "'files' allowlist in packages/hosted-store-service/package.json and this check together."
 
 const POSTGRES_STORE_RULING =
-  'Ruling (AUT-473): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
-  'package.json, README.md, and src/**. The allowlist pins the publishable surface by manifest ' +
+  'Ruling (AUT-473, extended by AUT-490): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
+  'package.json, README.md, and src/** — except src/**/*.test.ts files (which covers the ' +
+  '*.live.test.ts suites too): test files are dev-only surface and do not publish. The allowlist pins the publishable surface by manifest ' +
   'rather than by directory layout: a future top-level file in packages/postgres-store (a ' +
   'scratch script, a live-test fixture, a dotenv file, an editor artifact) must not ride into ' +
   'the tarball. If the ruling changes, update the ' +
   "'files' allowlist in packages/postgres-store/package.json and this check together."
+
+const DISPATCHER_RULING =
+  'Ruling (AUT-490): the @defrex/autobuild-hosted-dispatcher npm tarball ships exactly ' +
+  'package.json, README.md, and src/** — except src/**/*.test.ts files (which covers the ' +
+  '*.live.test.ts suites too): test files are dev-only surface and do not publish. They are ' +
+  'written for `bun test` and are dead weight for consumers; the root package takes the same ' +
+  'stance, and a deliberate negation keeps the surface from drifting wider by accident. If ' +
+  'the ruling changes, update the ' +
+  "'files' allowlist in packages/hosted-dispatcher/package.json and this check together."
 
 /** The missing-surface sentence the pre-widening check printed for `src/`;
  * the store rulings keep it verbatim (their legacy wording is pinned). */
@@ -156,7 +182,7 @@ const MISSING_SRC_SURFACE_MESSAGE =
   'no src/ file is packed; the ruling requires the src/ tree (every exports and bin target lives there)'
 
 /**
- * Rulings whose prose their rulings pinned (AUT-463/AUT-473), keyed by npm
+ * Rulings whose prose their rulings pinned (AUT-463/AUT-473/AUT-490), keyed by npm
  * name. Every other publishable package gets the generic derived template, so
  * a newly publishable package is guarded without anyone extending this map.
  */
@@ -169,6 +195,10 @@ const PINNED_RULING_PROSE: Readonly<
   },
   '@defrex/autobuild-postgres-store': {
     ruling: POSTGRES_STORE_RULING,
+    missingSurfaceMessages: { src: MISSING_SRC_SURFACE_MESSAGE },
+  },
+  '@defrex/autobuild-hosted-dispatcher': {
+    ruling: DISPATCHER_RULING,
     missingSurfaceMessages: { src: MISSING_SRC_SURFACE_MESSAGE },
   },
 }

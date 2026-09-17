@@ -149,7 +149,7 @@ const postgresFixtureManifest = {
     './store': { types: './src/store.ts', import: './src/store.ts' },
   },
   bin: { 'ab-postgres-store': './src/bin.ts' },
-  files: ['src', 'README.md'],
+  files: ['src', 'README.md', '!src/**/*.test.ts'],
 }
 
 const hostedFixtureManifest = {
@@ -169,7 +169,7 @@ const hostedFixtureManifest = {
     './web/mcp': { types: './src/web/mcp.ts', import: './src/web/mcp.ts' },
   },
   bin: { 'ab-hosted-store': './src/bin.ts' },
-  files: ['src', 'README.md'],
+  files: ['src', 'README.md', '!src/**/*.test.ts'],
 }
 
 const dispatcherFixtureManifest = {
@@ -190,7 +190,7 @@ const dispatcherFixtureManifest = {
     },
   },
   bin: { 'ab-hosted-dispatcher': './src/bin.ts' },
-  files: ['src', 'README.md'],
+  files: ['src', 'README.md', '!src/**/*.test.ts'],
 }
 
 const fakeWorkspaceManifests = (): { path: string; text: string }[] => [
@@ -321,13 +321,24 @@ describe('deriveRuledPackages', () => {
     expect(rootRuling.directory).toBe('.')
 
     expect(postgresRuling.allowedSurfaces).toEqual(['src', 'README.md'])
-    expect(postgresRuling.deniedPackedPatterns).toEqual([])
+    expect(postgresRuling.deniedPackedPatterns).toEqual(['src/**/*.test.ts'])
     expect(postgresRuling.directory).toBe('packages/postgres-store')
+
+    expect(hostedRuling.allowedSurfaces).toEqual(['src', 'README.md'])
+    expect(hostedRuling.deniedPackedPatterns).toEqual(['src/**/*.test.ts'])
+
+    expect(dispatcherRuling.allowedSurfaces).toEqual(['src', 'README.md'])
+    expect(dispatcherRuling.deniedPackedPatterns).toEqual(['src/**/*.test.ts'])
   })
 
-  test('the store rulings keep their pinned prose; the rest derive theirs', () => {
-    expect(hostedRuling.ruling).toContain('Ruling (AUT-463)')
-    expect(postgresRuling.ruling).toContain('Ruling (AUT-473)')
+  test('the store rulings keep their pinned prose; the dispatcher is pinned to AUT-490; the rest derive theirs', () => {
+    expect(hostedRuling.ruling).toContain('Ruling (AUT-463')
+    expect(postgresRuling.ruling).toContain('Ruling (AUT-473')
+    expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490)')
+    // The AUT-490 ruling is recorded in all three sub-package rulings.
+    expect(hostedRuling.ruling).toContain('AUT-490')
+    expect(postgresRuling.ruling).toContain('AUT-490')
+    expect(dispatcherRuling.ruling).toContain('AUT-490')
     expect(rootRuling.ruling).toContain('Ruling (derived from the manifest)')
     expect(rootRuling.ruling).toContain('@defrex/autobuild')
     expect(rootRuling.ruling).toContain('package.json')
@@ -445,6 +456,32 @@ describe('evaluatePackedPaths', () => {
       rootRuling,
     )
     expect(violations).toEqual([{ kind: 'extra', path: 'packages/core/src/cli/args.test.ts' }])
+  })
+
+  test('every packed test file is an extra under the AUT-490 sub-package rulings, named by path', () => {
+    for (const ruling of [dispatcherRuling, hostedRuling, postgresRuling]) {
+      const withTests = [
+        'package.json',
+        'README.md',
+        'src/index.ts',
+        'src/index.test.ts',
+        'src/index.live.test.ts',
+        'src/web/mcp.test.ts',
+      ]
+      const violations = evaluatePackedPaths(withTests, ruling)
+      expect(violations).toEqual([
+        { kind: 'extra', path: 'src/index.test.ts' },
+        { kind: 'extra', path: 'src/index.live.test.ts' },
+        { kind: 'extra', path: 'src/web/mcp.test.ts' },
+      ])
+    }
+  })
+
+  test('a sub-package listing without test files passes, and non-test files under src/ remain allowed', () => {
+    for (const ruling of [dispatcherRuling, hostedRuling, postgresRuling]) {
+      const withoutTests = ['package.json', 'README.md', 'src/index.ts', 'src/web/mcp.ts']
+      expect(evaluatePackedPaths(withoutTests, ruling)).toEqual([])
+    }
   })
 
   test('a listing missing src/ fails with missing-surface, naming the entry, not silently', () => {
@@ -666,13 +703,13 @@ describe('runPublishContentsCheck', () => {
       '@defrex/autobuild pack contents match the ruling: package.json, README.md, and 11 allowlisted file(s).',
     )
     expect(stdout).toContain(
-      '@defrex/autobuild-hosted-dispatcher pack contents match the ruling: package.json, README.md, and 5 src/ file(s).',
+      '@defrex/autobuild-hosted-dispatcher pack contents match the ruling: package.json, README.md, and 5 allowlisted file(s).',
     )
     expect(stdout).toContain(
-      '@defrex/autobuild-hosted-store-service pack contents match the ruling: package.json, README.md, and 9 src/ file(s).',
+      '@defrex/autobuild-hosted-store-service pack contents match the ruling: package.json, README.md, and 9 allowlisted file(s).',
     )
     expect(stdout).toContain(
-      '@defrex/autobuild-postgres-store pack contents match the ruling: package.json, README.md, and 5 src/ file(s).',
+      '@defrex/autobuild-postgres-store pack contents match the ruling: package.json, README.md, and 5 allowlisted file(s).',
     )
     // The success message must terminate its line like the failure paths do,
     // so terminal output stops concatenating with the next shell output.
@@ -748,6 +785,33 @@ describe('runPublishContentsCheck', () => {
     )
   })
 
+  test('a packed test file in a sub-package listing fails with the AUT-490 ruling text, and the other packages still pass', async () => {
+    const { output, captured } = capture()
+    const packages = conformingPackages().map((fake) =>
+      fake.directory === dispatcherDirectory
+        ? {
+            ...fake,
+            listing: listingFor([...dispatcherConformPaths, 'src/dispatcher.test.ts']),
+          }
+        : fake,
+    )
+    const { environment } = fakeEnvironment(packages)
+    const exitCode = await runPublishContentsCheck(environment, output)
+    expect(exitCode).toBe(1)
+    const stdout = captured.stdout.join('')
+    expect(stdout).toContain('src/dispatcher.test.ts')
+    expect(stdout).toContain('Ruling (AUT-490)')
+    expect(captured.stderr.join('')).toContain(
+      'packed-contents violation(s) against the @defrex/autobuild-hosted-dispatcher tarball ruling',
+    )
+    // One failing package never hides another: the rest still pass.
+    expect(stdout).toContain('@defrex/autobuild pack contents match the ruling')
+    expect(stdout).toContain('@defrex/autobuild-postgres-store pack contents match the ruling')
+    expect(stdout).toContain(
+      '@defrex/autobuild-hosted-store-service pack contents match the ruling',
+    )
+  })
+
   test('a top-level file leaking into the postgres tarball fails with the AUT-473 ruling text', async () => {
     const { output, captured } = capture()
     const packages = conformingPackages().map((fake) =>
@@ -757,7 +821,7 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-473)')
+    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490)')
     expect(combined).toContain('scratch.ts')
     expect(captured.stderr.join('')).toContain(
       'violation(s) against the @defrex/autobuild-postgres-store tarball ruling',
@@ -774,7 +838,7 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-463)')
+    expect(combined).toContain('Ruling (AUT-463, extended by AUT-490)')
     expect(combined).toContain('.impeccable/surfaces/app-dashboard-dashboardclient-tsx.md')
     expect(combined).toContain('server.ts')
     expect(combined).toContain('@defrex/autobuild-postgres-store pack contents match the ruling')
@@ -833,7 +897,7 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-473)')
+    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490)')
     expect(combined).toContain('no non-empty `files` allowlist')
     expect(captured.stderr.join('')).toContain('1 packed-contents violation(s)')
     // No ruling can be derived, so the package is not packed at all.
