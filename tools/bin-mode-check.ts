@@ -11,10 +11,10 @@ import { readWorkspaceManifests, type WorkspaceManifest } from './workspace-mani
  * executable (0755 under a common umask such as 0022; git records only the
  * executable bit) when it creates the `node_modules/.bin` symlinks, and it
  * re-marks them on every install — including no-change re-runs. A bin source
- * committed 100644
- * therefore surfaces as an uncommitted 100644→100755 mode change in every
- * fresh checkout, and a mode-only change fails the finalize preflight's
- * clean-tree check (`requireFinalizeWorktreeClean`). Git maps a regular file
+ * committed 100644 therefore surfaces as an uncommitted 100644→100755 mode
+ * change in every fresh checkout, and a mode-only change fails the finalize
+ * preflight's clean-tree check (`requireFinalizeWorktreeClean`). Git maps a
+ * regular file
  * to index mode 100755 iff the owner execute bit is set, so the index alone
  * cannot see the other dirty direction: a bin source committed 100755 whose
  * working-tree file loses that bit shows as a 100755→100644 mode change in
