@@ -148,6 +148,9 @@ describe('bin mode invariants', () => {
     expect(output.stdout.join('')).toContain(relative(fixtureResult, fixtureResult.rootBin))
     expect(output.stdout.join('')).toContain(relative(fixtureResult, fixtureResult.workspaceBin))
     expect(output.stdout.join('')).toContain('executable working-tree files')
+    // The success message must terminate its line like the failure paths do,
+    // so terminal output stops concatenating with the next shell output.
+    expect(output.stdout.join('').endsWith('\n')).toBe(true)
   })
 
   test('fails with the mechanism message when a bin source is committed 100644', async () => {
@@ -160,6 +163,8 @@ describe('bin mode invariants', () => {
     expect(message).toContain('bun install marks bin-entry sources executable')
     expect(message).toContain('finalize preflight')
     expect(message).toContain('Commit the executable bit')
+    // Failure paths already ended with a newline; pin that convention too.
+    expect(output.stderr.join('').endsWith('\n')).toBe(true)
   })
 
   test('fails with the tracking message when a bin source is untracked', async () => {
