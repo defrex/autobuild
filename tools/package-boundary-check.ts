@@ -22,8 +22,10 @@ import { repoRoot } from './git-tracked'
  * position that could load a sibling package's src is still collected with an
  * exact AST line number. Coverage relative to the raw-text regexes this
  * replaces is enumerated precisely in `collectSpecifiers`' doc comment below —
- * including a deliberate `require.call/apply` widening (the regexes matched no
- * such form) and a deliberate narrowing (leading-literal concatenation
+ * including deliberate widenings the regexes matched no such form of
+ * (`require.call/apply`, plus the contrived but fail-closed optional-call
+ * `require?.('…')` and type-argument `require<Foo>('…')` forms) and a
+ * deliberate narrowing (leading-literal concatenation
  * specifiers, which the regexes did match). A file that does not parse fails
  * closed: it yields a
  * single `<unparseable module>` sentinel violation rather than being silently
@@ -111,10 +113,17 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  * named rather than papered over:
  *
  * - Deliberate widening — the regexes matched none of these forms:
- *   `require.call/apply(…)` at the pinned positions. The originating plan's
+ *   `require.call/apply(…)` at the pinned positions; optional-call
+ *   `require?.('…')` and type-argument `require<Foo>('…')`, which ride the
+ *   same pinned `arguments[0]` slot (the optional-chaining token and the
+ *   type arguments both sit on the call, so the callee stays a bare
+ *   require-ish expression). These last two are contrived, pre-existing coverage unchanged by
+ *   the parser work, and fail-closed in the same way every widening here is:
+ *   they can only add offenders, never remove one. The originating plan's
  *   "no widening" out-of-scope line governed *policy* — which imports are
  *   forbidden at the boundary — and that policy is unchanged; form coverage is
- *   a separate axis, and it does widen here for call/apply.
+ *   a separate axis, and it does widen here for call/apply, optional call,
+ *   and type arguments.
  * - Narrowings vs the regexes: a leading-literal concatenation specifier
  *   (`require('./x' + suffix)`, `import('./x' + suffix)` — the regexes matched
  *   the leading literal, which is not a specifier literal and is no longer
