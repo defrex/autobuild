@@ -8,6 +8,7 @@ export interface PackageManifest {
   workspaces?: unknown
   engines?: unknown
   dependencies?: unknown
+  bin?: unknown
 }
 
 export interface WorkspaceManifest {
