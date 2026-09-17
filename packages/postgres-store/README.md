@@ -9,6 +9,16 @@ dependencies. A project that embeds the adapter adds it directly:
 bun add @defrex/autobuild-postgres-store
 ```
 
+Only this package's `src/` tree and this README publish to npm: every
+consumer of the published package imports through the manifest's `exports`
+and `bin`, all of which live under `src/`. The manifest's `files` allowlist
+pins the tarball to exactly that, and `bun tools/publish-contents-check.ts`
+in the repository `check` gate fails when anything else would ship. The
+deny-by-default allowlist is deliberate: a future top-level file in this
+package (a scratch script, a live-test fixture, a dotenv file, an editor
+artifact) stays out of the tarball unless the allowlist and the check are
+updated together.
+
 ## Setup
 
 To run the migration from the hosted deployment's own checkout, choose the
