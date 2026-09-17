@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#420](https://github.com/defrex/autobuild/pull/420) — Collect only specifier-position literals in the boundary guard
+- [#419](https://github.com/defrex/autobuild/pull/419) — Rule on the type-only-import divergence between boundary scanners
 - [#418](https://github.com/defrex/autobuild/pull/418) — Make the cumulative-latency scenario-deadline test jitter-tolerant
 - [#415](https://github.com/defrex/autobuild/pull/415) — Stop the package-boundary lint flagging import text in comments
 - [#416](https://github.com/defrex/autobuild/pull/416) — Anchor the dispatcher dependency filter to the exact package name

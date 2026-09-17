@@ -282,6 +282,13 @@ describe('findBoundaryViolations', () => {
   })
 
   test('fully type-only import and export forms stay flagged (documented divergence)', () => {
+    // Ruled behavior: this guard enforces a source-convention boundary — a
+    // fully type-only import still makes tsc resolve types from the sibling's
+    // src and still couples the test to sibling internals, so it violates the
+    // convention exactly like a runtime import and stays flagged. The
+    // store-service dispatcher scan excludes these same forms on purpose (its
+    // boundary is runtime-load; erased imports load nothing) — the divergence
+    // between the two scanners is deliberate, not drift.
     expect(
       scan([
         file(
