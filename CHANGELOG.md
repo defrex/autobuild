@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#446](https://github.com/defrex/autobuild/pull/446) — Guard every publishable workspace manifest's packed contents (AUT-481)
 - [#444](https://github.com/defrex/autobuild/pull/444) — Widen the published-imports guard beyond .ts/.tsx packed files
 - [#443](https://github.com/defrex/autobuild/pull/443) — Reject releases below a dependent's declared peer floor (AUT-480)
 - [#442](https://github.com/defrex/autobuild/pull/442) — Declare an explicit files allowlist for postgres-store (AUT-473)
