@@ -888,11 +888,27 @@ describe('GitWorktreeProvider operator sandbox', () => {
     // none of them is waited on before the assertions, so only the cap can
     // bound them.
     const excess = 20
+    // This burst forks more short-lived shells than any other test in the
+    // suite, and a verify run executes it concurrently with the other verify
+    // steps — a load under which a fork can transiently fail (EAGAIN/ENOMEM)
+    // before the burst's own eviction mechanics are ever exercised (observed
+    // once as a ~60ms failure in a verify unit run; never locally across
+    // repeated full-suite runs, including with lint and typecheck running
+    // concurrently). A failed `start` in this window is an environment
+    // condition, not the behavior under test (the retention cap), so retry
+    // each start once after a beat: a deterministic start regression still
+    // fails on the retry.
+    const startBurstCommand = async (command: string): Promise<string> => {
+      try {
+        return (await provider.orchestratorSandbox.start(identity, { command })).commandId
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        return (await provider.orchestratorSandbox.start(identity, { command })).commandId
+      }
+    }
     const echoes: string[] = []
     for (let i = 0; i < cap + excess; i++) {
-      echoes.push(
-        (await provider.orchestratorSandbox.start(identity, { command: 'echo burst' })).commandId,
-      )
+      echoes.push(await startBurstCommand('echo burst'))
     }
 
     // No private-access idiom exists in this suite; one-line cast local.
