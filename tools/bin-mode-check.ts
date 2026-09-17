@@ -7,9 +7,11 @@ import { readWorkspaceManifests, type WorkspaceManifest } from './workspace-mani
  * Fails when a `bin` entry target is not git-tracked at mode 100755, or when
  * its working-tree file is missing or has lost the owner execute bit.
  *
- * Bun's installer chmods the source files behind `bin` manifest entries to
- * 0777 when it creates the `node_modules/.bin` symlinks, and it re-chmods on
- * every install — including no-change re-runs. A bin source committed 100644
+ * Bun's installer marks the source files behind `bin` manifest entries
+ * executable (0755 under a common umask such as 0022; git records only the
+ * executable bit) when it creates the `node_modules/.bin` symlinks, and it
+ * re-marks them on every install — including no-change re-runs. A bin source
+ * committed 100644
  * therefore surfaces as an uncommitted 100644→100755 mode change in every
  * fresh checkout, and a mode-only change fails the finalize preflight's
  * clean-tree check (`requireFinalizeWorktreeClean`). Git maps a regular file
@@ -172,19 +174,21 @@ function describeViolation(violation: BinModeViolation): string {
   switch (violation.kind) {
     case 'mode':
       return (
-        `${entry.target}: ${label} is committed ${violation.mode}; bun install chmods ` +
-        'bin-entry sources to 0777 when creating node_modules/.bin symlinks (and re-chmods ' +
-        'on every install, including no-change re-runs), so a 100644 bin source surfaces ' +
-        'as an uncommitted 100644→100755 mode change in every fresh checkout and fails ' +
-        "the finalize preflight's clean-tree check. Commit the executable bit " +
-        '(chmod +x and commit).'
+        `${entry.target}: ${label} is committed ${violation.mode}; bun install marks ` +
+        'bin-entry sources executable (0755 under a common umask such as 0022; git ' +
+        'records only the executable bit) when it creates node_modules/.bin symlinks ' +
+        '(and re-marks on every install, including no-change re-runs), so a 100644 ' +
+        'bin source surfaces as an uncommitted 100644→100755 mode change in every ' +
+        "fresh checkout and fails the finalize preflight's clean-tree check. Commit " +
+        'the executable bit (chmod +x and commit).'
       )
     case 'untracked':
       return (
         `${entry.target}: ${label} is not tracked by git; bun install creates ` +
-        'node_modules/.bin symlinks to every bin-entry source and chmods them to 0777, so ' +
-        "an untracked bin source always fails the finalize preflight's clean-tree check. " +
-        'Track the file and commit the executable bit (chmod +x and commit).'
+        'node_modules/.bin symlinks to every bin-entry source and marks them ' +
+        'executable, so an untracked bin source always fails the finalize ' +
+        "preflight's clean-tree check. Track the file and commit the executable " +
+        'bit (chmod +x and commit).'
       )
     case 'worktree-mode':
       return (

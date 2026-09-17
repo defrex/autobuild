@@ -157,7 +157,7 @@ describe('bin mode invariants', () => {
     const message = output.stdout.join('')
     expect(message).toContain('committed 100644')
     expect(message).toContain('@fixture/svc#svc-cli')
-    expect(message).toContain('bun install chmods bin-entry sources to 0777')
+    expect(message).toContain('bun install marks bin-entry sources executable')
     expect(message).toContain('finalize preflight')
     expect(message).toContain('Commit the executable bit')
   })
