@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
+- [#458](https://github.com/defrex/autobuild/pull/458) — Guard the workspace's mirrored react pins against drift
 - [#457](https://github.com/defrex/autobuild/pull/457) — Skip getOperatorBuild's pinned-config read for null-row builds
 - [#456](https://github.com/defrex/autobuild/pull/456) — Rule AUT-490: exclude test files from sub-package tarballs
 - [#455](https://github.com/defrex/autobuild/pull/455) — Fix publish-contents-check's duplicated header sentence and describeSurface's LICENSE rendering
