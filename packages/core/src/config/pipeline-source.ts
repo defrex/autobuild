@@ -19,10 +19,10 @@ import type { Config } from './schema'
 /** Which fact the pinned pipeline was read from. `legacy-fallback` marks the
  * no-migration path: no recorded base (or an unreadable one), so the deposit
  * is the dispatcher's live snapshot exactly as before this change.
- * `worktree-dirty` marks the checkout-mode worktree read whose bytes do not
- * match the resolved branch head (uncommitted edits, or a file never
- * committed): no commit is recorded, because attributing worktree content to
- * the branch-head commit would be false provenance. */
+ * `worktree-dirty` marks the checkout-mode worktree read whose git-normalized
+ * content does not match the resolved branch head (uncommitted edits, or a
+ * file never committed): no commit is recorded, because attributing worktree
+ * content to the branch-head commit would be false provenance. */
 export type PipelineSourceRef = 'branch-head' | 'base' | 'legacy-fallback' | 'worktree-dirty'
 
 const PIPELINE_SOURCE_REFS: readonly PipelineSourceRef[] = [
@@ -295,20 +295,35 @@ export async function resolvePipelineSource(
     if (workspacePath !== undefined) {
       try {
         const content = await readFile(join(workspacePath, path), 'utf8')
-        // The worktree file may carry uncommitted edits, so its bytes are only
-        // the branch head's when they match the committed blob exactly. Equal →
-        // attribute to the head commit as before; divergent (or unreadable at
-        // head, e.g. never committed) → `worktree-dirty` with no commit: the
-        // provenance declines to attribute worktree bytes to any commit.
-        // A comparison-read failure is caught here, not by the committed-ref
-        // fallback below — it degrades to dirty, never to a different source.
-        let committed: string | undefined
+        // The worktree file may carry uncommitted edits, so it is only the
+        // branch head's when git sees no difference between them. Compare
+        // git-normalized identity, not raw bytes: the stored blob can differ
+        // textually from the worktree file (core.autocrlf, eol attributes)
+        // while carrying the same content, so byte equality against `git show`
+        // output would misclassify a clean worktree as dirty. Hash the
+        // worktree file the way git would store it — `git hash-object` run in
+        // the workspace applies the same clean conversion as check-in — and
+        // compare against the committed blob's oid. Equal → attribute to the
+        // head commit as before; different bytes, a file the head never
+        // carried, or any failed comparison (a non-git workspace, a transient
+        // git error) → `worktree-dirty` with no commit: the provenance
+        // declines to attribute worktree bytes to any commit. A comparison
+        // failure is caught here, not by the committed-ref fallback below —
+        // it degrades to dirty, never to a different source.
+        let clean = false
         try {
-          committed = await readCheckoutFile(head, path, checkout, exec)
+          const [committedBlob, worktreeBlob] = await Promise.all([
+            git(['rev-parse', '--verify', `${head}:${path}`], checkout, exec),
+            exec(['git', 'hash-object', '--', path], { cwd: workspacePath }),
+          ])
+          clean =
+            committedBlob.exitCode === 0 &&
+            worktreeBlob.exitCode === 0 &&
+            committedBlob.stdout.trim() === worktreeBlob.stdout.trim()
         } catch {
-          committed = undefined
+          clean = false
         }
-        if (committed === content) {
+        if (clean) {
           // A malformed worktree file is terminal: the committed ref carries the
           // same content, so the recorded base is not the build's pipeline
           // either. The caller keeps the build's last good deposit.

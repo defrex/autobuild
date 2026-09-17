@@ -236,6 +236,7 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
       const baseSha = await git(dir, ['rev-parse', 'HEAD'])
       await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
       await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+      await git(dir, ['worktree', 'add', '--detach', '-q', workspace, 'ab/b1'])
 
       // The workspace file differs from the committed head: dirty. The
       // provenance must not attribute worktree bytes to the branch-head
@@ -273,9 +274,10 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
       await git(dir, ['add', '-A'])
       await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'head'])
       const headSha = await git(dir, ['rev-parse', 'HEAD'])
+      await git(dir, ['worktree', 'add', '--detach', '-q', workspace, 'ab/b1'])
 
-      // The workspace carries the head commit's bytes: provenance is exactly
-      // the branch-head commit, as before this change.
+      // The workspace carries the head commit's content: provenance is
+      // exactly the branch-head commit, as before this change.
       await writeFile(join(workspace, 'autobuild.toml'), PIPELINE_B)
       const result = await resolvePipelineSource({
         slug: 'b1',
@@ -294,20 +296,58 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
     }
   })
 
+  test('a clean worktree stays clean under eol conversion (core.autocrlf)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pipeline-'))
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-workspace-'))
+    try {
+      await git(dir, ['init', '-q', '-b', 'main'])
+      // With autocrlf the worktree file carries CRLF while the stored blob is
+      // LF-normalized: a byte comparison against `git show` output would call
+      // this clean worktree dirty. The git-normalized comparison (the blob's
+      // oid vs the worktree file hashed through the same clean conversion)
+      // must keep the branch-head attribution.
+      await git(dir, ['config', 'core.autocrlf', 'true'])
+      await writeFile(join(dir, 'autobuild.toml'), PIPELINE_A)
+      await git(dir, ['add', '-A'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'base'])
+      const baseSha = await git(dir, ['rev-parse', 'HEAD'])
+      await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+      const headSha = await git(dir, ['rev-parse', 'HEAD'])
+      await git(dir, ['worktree', 'add', '--detach', '-q', workspace, 'ab/b1'])
+
+      await writeFile(join(workspace, 'autobuild.toml'), PIPELINE_A.replace(/\n/g, '\r\n'))
+      const result = await resolvePipelineSource({
+        slug: 'b1',
+        record: { branch: 'ab/b1' },
+        events: [provisioned(baseSha)],
+        mode: 'checkout',
+        checkout: dir,
+        exec: spawnExec,
+        workspacePath: workspace,
+      })
+      expect(result?.meta).toEqual({ ref: 'branch-head', commit: headSha })
+      expect(result?.config.verify.steps).toEqual(['a'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
   test('a worktree file that was never committed degrades to worktree-dirty', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ab-pipeline-'))
     const workspace = await mkdtemp(join(tmpdir(), 'ab-workspace-'))
     try {
       await git(dir, ['init', '-q', '-b', 'main'])
-      await writeFile(join(dir, 'autobuild.toml'), PIPELINE_A)
-      await git(dir, ['add', '-A'])
-      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'base'])
+      // An empty root commit: the branch head's tree never carried
+      // autobuild.toml, so the committed-blob read (`rev-parse head:path`)
+      // fails. The comparison must degrade to dirty — not crash, not fall
+      // through to the committed-ref or base fallback.
+      await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'base'])
       const baseSha = await git(dir, ['rev-parse', 'HEAD'])
-      // The branch head exists but never carried autobuild.toml: the
-      // comparison read fails, which must degrade to dirty — not crash, not
-      // fall through to the committed-ref or base fallback.
       await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
       await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+      await git(dir, ['worktree', 'add', '--detach', '-q', workspace, 'ab/b1'])
 
       await writeFile(join(workspace, 'autobuild.toml'), PIPELINE_B)
       const result = await resolvePipelineSource({
@@ -338,6 +378,7 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
       const baseSha = await git(dir, ['rev-parse', 'HEAD'])
       await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
       await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+      await git(dir, ['worktree', 'add', '--detach', '-q', workspace, 'ab/b1'])
 
       // The build's own (dirty) worktree carries an unparseable pipeline: the
       // recorded base is not the build's pipeline either, so the resolver
