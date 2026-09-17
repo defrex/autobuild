@@ -767,8 +767,19 @@ async function preflightBun(sandbox: VercelSandboxHandle, image: string): Promis
  * repo's better-auth patch declaration breaks any consumer that installs
  * autobuild next to better-auth. The packed artifact ships no patched
  * package, so the declaration is stripped from the packed manifest while the
- * repo manifest keeps it for workspace installs. */
-const packedManifestOmittedFields = ['patchedDependencies'] as const
+ * repo manifest keeps it for workspace installs.
+ *
+ * `devDependencies` is stripped for two reasons. First, the workspace link
+ * specifiers it may carry (for example the root's
+ * `@defrex/autobuild-postgres-store: workspace:*`) cannot be resolved in the
+ * staging tree — it stages only the manifest's `files` set, with no
+ * `bun.lock`, no `node_modules`, and no workspace packages — so `bun pm pack`
+ * fails there with "Failed to resolve workspace version". Second, the guest
+ * installs the distribution with `bun install --production --ignore-scripts`,
+ * which ignores devDependencies entirely; the packed artifact ships no
+ * dev-only tooling, so the declaration is dead weight in the packed manifest
+ * while the repo manifest keeps it for workspace installs. */
+const packedManifestOmittedFields = ['patchedDependencies', 'devDependencies'] as const
 
 export async function packageAutobuildDistribution(): Promise<Uint8Array> {
   const staging = await mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))

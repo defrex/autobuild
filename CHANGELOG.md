@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#398](https://github.com/defrex/autobuild/pull/398) — Fix three distribution-packing tests failing on registry lag
+- [#396](https://github.com/defrex/autobuild/pull/396) — Prevent bin.ts mode flips from failing the finalize preflight
+- [#395](https://github.com/defrex/autobuild/pull/395) — Declare @defrex/autobuild-postgres-store as root devDependency
 - [#394](https://github.com/defrex/autobuild/pull/394) — Correct /testing attribution in core-floor test comment
 - [#393](https://github.com/defrex/autobuild/pull/393) — Harden store-service boundary scan to all dispatcher import forms
 - [#392](https://github.com/defrex/autobuild/pull/392) — Add a committed package-boundary check for cross-package src test imports
