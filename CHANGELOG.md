@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#441](https://github.com/defrex/autobuild/pull/441) — End bin-mode-check's success message with a newline
 - [#436](https://github.com/defrex/autobuild/pull/436) — Pin comment-interleaved require/import positions in boundary tests
 - [#437](https://github.com/defrex/autobuild/pull/437) — End publish-contents-check's success message with a newline
 - [#435](https://github.com/defrex/autobuild/pull/435) — Extend Pi version cross-check to every install-literal pin
