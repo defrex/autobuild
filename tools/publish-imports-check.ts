@@ -54,9 +54,16 @@ import { collectSpecifiers, UNPARSEABLE_MODULE } from './package-boundary-check'
  *    other suffix (`.json`, `.md`, `.map`, …) is skipped — is scanned with
  *    `collectSpecifiers` from package-boundary-check.ts — the same
  *    parser-based, comment-safe, fail-closed scanner the test-boundary gate
- *    uses. A packed file that does not parse as its own kind (for example JSX
- *    text in a packed `.js` file) is an `unparseable-file` violation, never a
- *    silent skip. Specifiers are filtered to exact `@defrex/autobuild` or
+ *    uses. A packed file that does not parse as its own kind is an
+ *    `unparseable-file` violation, never a silent skip — for example, an HTML
+ *    comment or a legacy octal literal in a packed `.js` file (Error TS1109
+ *    /TS1005 and TS1121 respectively under typescript@5.9.3). The boundary is
+ *    the opposite for JSX-shaped text: TypeScript's JS parser accepts
+ *    JSX-shaped expressions (as type assertions/comparisons) with no
+ *    Error-category diagnostic, and `require()`/`import()` specifiers inside
+ *    JSX children/attributes are still collected, so JSX-shaped content in a
+ *    packed `.js` file is scanned, not failed. Specifiers are filtered to
+ *    exact `@defrex/autobuild` or
  *    `@defrex/autobuild/<sub>` (never `@defrex/autobuild-hosted-store-service/…`
  *    or `@defrex/autobuild-postgres-store/…`).
  * 5. Each collected specifier passes a static assertion first — it must be an
