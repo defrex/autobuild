@@ -1093,6 +1093,144 @@ describe('GitWorktreeProvider operator sandbox', () => {
     }
   })
 
+  test('a pending newer stamp does not block eviction of older stamped finished entries', async () => {
+    // Own provider with a large drain grace so the pending command’s stamp
+    // is gated by its grandchild’s lifetime (drain EOF wins the race at ~2s),
+    // not by the 250ms default — stamp timing is controlled, not lucky.
+    const slowRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-newer-'))
+    const slowSandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-newer-'))
+    try {
+      const slowProvider = new GitWorktreeProvider({
+        root: slowRoot,
+        sandboxRoot: slowSandboxRoot,
+        exitDrainGraceMs: 5000,
+      })
+      const identity = await slowProvider.orchestratorSandbox.ensure({
+        repo,
+        operator: 'ops-newer',
+        baseBranch: 'main',
+      })
+      const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
+        .MAX_RETAINED_SANDBOX_COMMANDS
+
+      // Live sentinel: running for the whole test, never evictable.
+      const sentinel = await slowProvider.orchestratorSandbox.start(identity, {
+        command: 'sleep 30',
+      })
+      // A burst of fast echoes settling the map exactly at the cap; every
+      // one stamps within ~ms of its start.
+      const echoes: string[] = []
+      for (let i = 0; i < cap - 1; i++) {
+        echoes.push(
+          (await slowProvider.orchestratorSandbox.start(identity, { command: 'echo burst' }))
+            .commandId,
+        )
+      }
+      // The pending command is NEWER than the burst: its child exits in ~ms,
+      // but the `sleep 2 &` grandchild holds the pipe write end, so the
+      // drain-gated stamp lands ~2s later — long after every echo’s stamp.
+      const delayed = await slowProvider.orchestratorSandbox.start(identity, {
+        command: 'sleep 2 & echo held-open',
+      })
+
+      // No private-access idiom exists in this suite; one-line cast local.
+      const children = (
+        slowProvider as unknown as {
+          sandboxChildren: Map<
+            string,
+            {
+              proc: { exitCode: number | null; signalCode: NodeJS.Signals | null }
+              exitCode: number | null
+            }
+          >
+        }
+      ).sandboxChildren
+
+      // The same synchronous-exit probe the eviction pass reads. Poll it
+      // until the pending command has exited but not yet been stamped, and
+      // only then insert the newer burst — so every over-cap pass below
+      // deterministically sees a pending stamp in the map.
+      const exitedUnstamped = (id: string): boolean => {
+        const tracked = children.get(id)
+        return (
+          tracked !== undefined &&
+          tracked.exitCode === null &&
+          (tracked.proc.exitCode !== null || tracked.proc.signalCode !== null)
+        )
+      }
+      const pendingDeadline = Date.now() + 5000
+      while (Date.now() < pendingDeadline && !exitedUnstamped(delayed.commandId)) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(exitedUnstamped(delayed.commandId)).toBe(true)
+
+      // More fast echoes after the pending command, pushing the map past the
+      // cap while the pending stamp has not landed: the echoes before the
+      // pending entry are unambiguously older finished entries.
+      const newer: string[] = []
+      for (let i = 0; i < 10; i++) {
+        newer.push(
+          (await slowProvider.orchestratorSandbox.start(identity, { command: 'echo burst' }))
+            .commandId,
+        )
+      }
+
+      // Settle: wait for every echo to be stamped without calling `wait` on
+      // any (a terminal wait would consume the entry and defeat the test).
+      const stamped = (id: string): boolean => children.get(id)?.exitCode !== null
+      const stampDeadline = Date.now() + 5000
+      while (Date.now() < stampDeadline && ![...echoes, ...newer].every(stamped)) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect([...echoes, ...newer].every(stamped)).toBe(true)
+      // The pending command is still exited-but-unstamped at the settled
+      // boundary, so the eviction choice below was made with a pending
+      // stamp in the map.
+      expect(exitedUnstamped(delayed.commandId)).toBe(true)
+
+      // The pending NEWER stamp must not block eviction of the older stamped
+      // echoes: the map is trimmed back to the cap (a whole-pass deferral
+      // held all cap + 11 entries here), and the pending entry itself is
+      // untouched. Exactly the oldest `newer.length + 1` echoes were evicted:
+      // 61 entries (sentinel + burst + pending + newer) trim to the cap by
+      // deleting the oldest stamped entries, and the walk reaches the cap
+      // before it reaches the pending command.
+      expect(children.size).toBe(cap)
+      expect(children.has(delayed.commandId)).toBe(true)
+      for (const id of echoes.slice(0, newer.length + 1)) {
+        const evicted = await slowProvider.orchestratorSandbox
+          .wait(identity, { commandId: id, waitSeconds: 0 })
+          .catch((e: unknown) => e)
+        expect(evicted).toBeInstanceOf(SandboxOperationError)
+        expect((evicted as SandboxOperationError).stage).toBe('not-found')
+      }
+      for (const id of [...echoes.slice(newer.length + 1), ...newer]) {
+        expect(children.has(id)).toBe(true)
+      }
+      // The pending entry is still exited-but-unstamped to any observer: the
+      // wait neither consumes it nor reports it gone.
+      const pending = await slowProvider.orchestratorSandbox.wait(identity, {
+        commandId: delayed.commandId,
+        waitSeconds: 0,
+      })
+      expect(pending.state).toBe('running')
+      // The running sentinel is untouched by the cap.
+      expect(
+        await slowProvider.orchestratorSandbox.wait(identity, {
+          commandId: sentinel.commandId,
+          waitSeconds: 0,
+        }),
+      ).toEqual({
+        state: 'running',
+        stdout: '',
+        stderr: '',
+      })
+    } finally {
+      await rm(slowRoot, { recursive: true, force: true })
+      await rm(slowSandboxRoot, { recursive: true, force: true })
+    }
+  })
+
   test('a grandchild inheriting the pipe bounds the exit stamp without truncating it', async () => {
     const identity = await provider.orchestratorSandbox.ensure({
       repo,
