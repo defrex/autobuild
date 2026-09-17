@@ -7,6 +7,7 @@
  * drift into a shape the shipped loader rejects.
  */
 import { describe, expect, test } from 'bun:test'
+import { stringify } from 'smol-toml'
 import { type Dirent, readdirSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
@@ -50,10 +51,31 @@ const [doc, guide, readme, setupDoc, guideSetup, autobuildToml] = await Promise.
   readFile(AUTOBUILD_PATH, 'utf8'),
 ])
 
-/** Render a value as a TOML basic-string assignment, matching the doc fence bytes. */
+/**
+ * Render a value as a TOML basic-string assignment, matching the doc fence
+ * bytes.
+ *
+ * Contract: single-line basic strings only. Escaping is smol-toml's canonical
+ * basic-string form — the same library that parses these files — so the
+ * helper is a general TOML basic-string renderer: backslash, double quote,
+ * and every control character are escaped, with the compact \b/\t/\f/\n/\r
+ * forms where defined and `\uXXXX` (lowercase hex) otherwise, DEL included.
+ * Non-ASCII passes through raw, as in TOML and the doc fences.
+ *
+ * Multi-line/triple-quoted TOML values are out of contract: doc fences
+ * render a multi-line command as a triple-quoted block whose bytes this
+ * one-line renderer can never match, so a raw line break throws instead of
+ * deriving expectation bytes that can only mismatch. The suite must not
+ * call this helper with a multi-line value; the guard makes a violation
+ * loud. `key` must be a bare key (today's call sites: install, preflight).
+ */
 function tomlBasicStringLine(key: string, value: string): string {
-  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  return `${key} = "${escaped}"`
+  if (/[\n\r]/.test(value)) {
+    throw new Error(
+      `tomlBasicStringLine(${key}): value contains a line break — the helper renders single-line TOML basic strings only; multi-line/triple-quoted values are out of contract`,
+    )
+  }
+  return stringify({ [key]: value }).replace(/\n$/, '')
 }
 
 /**
@@ -538,6 +560,38 @@ describe('Vercel runtime provisioning documentation', () => {
       uncovered,
       'the Pi-pin walk lost install/preflight coverage of enumerated sites; a line shape changed — update the pinned regexes deliberately',
     ).toEqual([])
+  })
+})
+
+describe('tomlBasicStringLine — basic-string rendering', () => {
+  test('derives the delivered install/preflight lines byte-identically', () => {
+    expect(
+      tomlBasicStringLine(
+        'install',
+        'npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4',
+      ),
+    ).toBe(
+      'install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"',
+    )
+    expect(
+      tomlBasicStringLine('preflight', 'test "$(pi --version)" = "0.84.4" && pi update --models'),
+    ).toBe('preflight = "test \\"$(pi --version)\\" = \\"0.84.4\\" && pi update --models"')
+    expect(tomlBasicStringLine('k', '')).toBe('k = ""')
+  })
+
+  test('escapes control characters per the TOML basic-string rules', () => {
+    // Pinned forms are smol-toml stringify's canonical forms: compact \t
+    // where defined, lowercase-hex \uXXXX otherwise (DEL included).
+    expect(tomlBasicStringLine('k', 'a\tb\u007Fc\u000Bd')).toBe('k = "a\\tb\\u007fc\\u000bd"')
+  })
+
+  test('escapes backslash and quote', () => {
+    expect(tomlBasicStringLine('k', 'a\\b"c')).toBe('k = "a\\\\b\\"c"')
+  })
+
+  test('refuses multi-line values instead of deriving unmatchable bytes', () => {
+    expect(() => tomlBasicStringLine('k', 'one\ntwo')).toThrow(/single-line/)
+    expect(() => tomlBasicStringLine('k', 'one\rtwo')).toThrow(/single-line/)
   })
 })
 
