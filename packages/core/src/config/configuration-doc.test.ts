@@ -38,13 +38,21 @@ const SETUP_DOC_PATH = join(ROOT, 'docs', 'setup.md')
 const GUIDE_PATH = join(ROOT, 'skills', 'guide', 'SKILL.md')
 const GUIDE_SETUP_PATH = join(ROOT, 'skills', 'guide', 'references', 'setup.md')
 const README_PATH = join(ROOT, 'README.md')
-const [doc, guide, readme, setupDoc, guideSetup] = await Promise.all([
+const AUTOBUILD_PATH = join(ROOT, 'autobuild.toml')
+const [doc, guide, readme, setupDoc, guideSetup, autobuildToml] = await Promise.all([
   readFile(DOC_PATH, 'utf8'),
   readFile(GUIDE_PATH, 'utf8'),
   readFile(README_PATH, 'utf8'),
   readFile(SETUP_DOC_PATH, 'utf8'),
   readFile(GUIDE_SETUP_PATH, 'utf8'),
+  readFile(AUTOBUILD_PATH, 'utf8'),
 ])
+
+/** Render a value as a TOML basic-string assignment, matching the doc fence bytes. */
+function tomlBasicStringLine(key: string, value: string): string {
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  return `${key} = "${escaped}"`
+}
 
 function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -222,11 +230,18 @@ describe('Vercel runtime provisioning documentation', () => {
   test('pins the delivered preflight example in every canonical surface', () => {
     // The delivered runtimeProvisioning preflight refreshes the model catalog
     // (`&& pi update --models`); a bare exact-version preflight copied from
-    // these surfaces would silently lose that refresh. The version is derived
-    // from each surface's own install line so the pin cannot stale on a
-    // version bump, and a surface whose install line cannot be parsed fails
-    // loudly. The expected literal keeps the raw TOML `\"` escape bytes of
-    // the files (hence the doubled backslashes in the source).
+    // these surfaces would silently lose that refresh. Both expected lines are
+    // derived from autobuild.toml's [workspace.config.runtimeProvisioning.pi]
+    // block — the delivered configuration — so any change to the shipped
+    // install or preflight command without a matching doc update fails here,
+    // in either direction. The helper re-escapes into TOML basic-string form,
+    // reproducing the raw `\"` escape bytes the doc fences use.
+    const config = parseConfig(autobuildToml)
+    const pi = vercelSandboxConfigSchema.parse(config.workspace.config).runtimeProvisioning.pi
+    if (pi === undefined) {
+      throw new Error('autobuild.toml has no [workspace.config.runtimeProvisioning.pi] block')
+    }
+
     const surfaces = [
       ['docs/configuration.md Vercel Sandbox', headingSection(doc, 3, 'Vercel Sandbox')],
       ['docs/setup.md', setupDoc],
@@ -236,19 +251,14 @@ describe('Vercel runtime provisioning documentation', () => {
 
     for (const [location, surface] of surfaces) {
       expect(surface, `${location} is missing`).toBeDefined()
-      const version =
-        /install = "npm install --global --ignore-scripts @earendil-works\/pi-coding-agent@([^"\\\s]+)"/.exec(
-          surface!,
-        )?.[1]
-      if (version === undefined) {
-        throw new Error(`${location} does not pin a pi-coding-agent version on its install line`)
-      }
+      expect(
+        surface,
+        `${location} install example drifted from the delivered runtimeProvisioning command`,
+      ).toContain(tomlBasicStringLine('install', pi.install))
       expect(
         surface,
         `${location} preflight example drifted from the delivered runtimeProvisioning command`,
-      ).toContain(
-        `preflight = "test \\"$(pi --version)\\" = \\"${version}\\" && pi update --models"`,
-      )
+      ).toContain(tomlBasicStringLine('preflight', pi.preflight))
     }
   })
 })
