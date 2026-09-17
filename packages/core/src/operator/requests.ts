@@ -4,9 +4,10 @@
  *
  * This module is registry-owned on purpose: the operator API routes were
  * declared out of scope for the registry ticket, so the parity between a
- * tool and its route is *proven* by the contract suite (registry.contract
- * .test.ts) rather than obtained by extraction. Every refusal text here is
- * load-bearing — it must stay byte-identical to `operator/server.ts` so the
+ * tool and its route is *proven* by the contract suite
+ * (packages/hosted-store-service/src/registry.contract.test.ts) rather than
+ * obtained by extraction. Every refusal text here is load-bearing — it must
+ * stay byte-identical to the hosted package's `operator-server.ts` so the
  * suite's full-body comparisons hold.
  */
 import { reduceBuild } from '../kernel/reducer'
@@ -34,7 +35,8 @@ export class RouteRefusalError extends Error {
   }
 }
 
-/** `requireRouteBuild` (operator/server.ts): 404 unless the slug exists and
+/** `requireRouteBuild` (the hosted package's operator-server.ts): 404 unless
+ * the slug exists and
  * belongs to the named repository. */
 export async function requireRouteBuild(
   store: BuildStore,
@@ -61,7 +63,7 @@ export function parseArtifactRevision(raw: string): number {
 /**
  * The route's control-request prechecks: build existence/repo, then the
  * pending-state checks for pause and cancel-pause. Byte-identical to the
- * `POST …/control` branch in operator/server.ts.
+ * `POST …/control` branch in the hosted package's operator-server.ts.
  */
 export async function controlPrechecks(
   store: BuildStore,
@@ -97,7 +99,8 @@ export async function controlPrechecks(
 
 /**
  * The route's answer request → `BuildControlAction` translation, byte-identical
- * to the `POST …/answer` branch in operator/server.ts. The ticket-origin body
+ * to the `POST …/answer` branch in the hosted package's operator-server.ts.
+ * The ticket-origin body
  * reader travels separately, exactly as the route passes `readTicketBody`.
  */
 export function answerAction(request: OperatorAnswerRequest): {

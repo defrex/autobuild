@@ -1,50 +1,57 @@
 import type { ZodType } from 'zod'
-import { controlBuild, BuildControlError, type BuildControlAction } from '../cli/build-control'
-import { bulkControlRepository, BulkWalkError } from '../cli/bulk-control'
-import { effectiveStatus } from '../cli/dashboard/model'
-import type { Via } from '../events/envelope'
-import { reduceBuild } from '../kernel/reducer'
-import { systemClock, type BuildStore, type Clock } from '../store/types'
-import { tokenResource, verifyToken } from '../store/remote/token'
+import { systemClock, type BuildStore, type Clock } from '@defrex/autobuild/plugin-sdk'
 import {
+  tokenResource,
+  verifyToken,
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from '../store/remote/version'
+} from '@defrex/autobuild/remote-store'
 import {
   answerRequestSchema,
   buildControlRequestSchema,
+  BuildControlError,
+  type BuildControlAction,
   buildListScopeSchema,
+  buildRegistry,
   bulkControlRequestSchema,
+  bulkControlRepository,
+  BulkWalkError,
+  controlBuild,
+  controlHarvestRun,
+  effectiveStatus,
+  getHarvestStatus,
+  getOperatorBuild,
+  getOperatorDashboard,
+  getOperatorTicket,
+  getRepositoryStatus,
   harvestControlRequestSchema,
+  listOperatorBuilds,
+  listOperatorTickets,
+  mutateOperatorTicket,
+  OperatorControlError,
+  OperatorQueryError,
+  reduceBuild,
+  RegistryError,
+  type OperatorToolRegistry,
   sessionApprovalRequestSchema,
   sessionCreateRequestSchema,
   sessionMessageRequestSchema,
   sessionWakeRequestSchema,
+  setRepositorySetting,
   settingRequestSchema,
+  type OperatorSandboxService,
+  type OperatorTicketBackend,
+  TicketOperationError,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
   ticketMoveRequestSchema,
   ticketUpdateRequestSchema,
-} from './protocol'
-import {
-  controlHarvestRun,
-  OperatorControlError,
-  setRepositorySetting,
   toggleHarvestGate,
   toggleRepositorySetting,
-} from './control'
-import {
-  getHarvestStatus,
-  getOperatorBuild,
-  getOperatorDashboard,
-  getRepositoryStatus,
-  listOperatorBuilds,
-  OperatorQueryError,
-} from './query'
-import { TicketOperationError } from '../ports/tickets/operations'
-import { buildRegistry, RegistryError, type OperatorToolRegistry } from './registry'
+  type Via,
+} from '@defrex/autobuild/operator'
 import {
   answerOperatorApproval,
   archiveOperatorSession,
@@ -55,14 +62,7 @@ import {
   postOperatorMessage,
   readOperatorTurnStream,
   setOperatorWake,
-} from './sessions'
-import type { OperatorSandboxService } from './sandbox'
-import {
-  getOperatorTicket,
-  listOperatorTickets,
-  mutateOperatorTicket,
-  type OperatorTicketBackend,
-} from './tickets'
+} from './operator-sessions'
 
 export interface OperatorServerOptions {
   store: BuildStore

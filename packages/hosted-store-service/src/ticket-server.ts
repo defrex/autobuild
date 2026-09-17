@@ -1,18 +1,19 @@
-import type { TicketSource } from '../types'
-import { systemClock, type Clock } from '../../store/types'
-import type { ErrorBody, ErrorKind } from '../../store/remote/protocol'
-import { tokenResource, verifyToken } from '../../store/remote/token'
+import { systemClock, type Clock, type TicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
+  tokenResource,
+  verifyToken,
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-} from '../../store/remote/version'
+  type ErrorBody,
+  type ErrorKind,
+} from '@defrex/autobuild/remote-store'
 import {
   hostedTicketRequestSchemas,
   type HostedTicketContext,
   type HostedTicketOperation,
-} from './remote-protocol'
+} from '@defrex/autobuild/hosted-tickets'
 
 export interface TicketServerOptions {
   secret: string

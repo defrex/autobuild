@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { agentActor, humanActor } from '../events/envelope'
-import type { SessionEvent, SessionEventWrite } from '../events/sessions'
-import { reduceSession, type SessionState } from './reducer'
+import { agentActor, humanActor } from '@defrex/autobuild/testing'
+import type { SessionEvent, SessionEventWrite } from '@defrex/autobuild/remote-store'
+import { reduceSession, type SessionState } from './session-reducer'
 
 const OPERATOR = humanActor('operator')
 const RUNNER = agentActor('orchestrator', 'os_turn')

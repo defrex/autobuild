@@ -42,14 +42,14 @@ async function findArchive(root: string): Promise<string> {
   } catch {
     throw new Error(
       `no ${DIST_DIRECTORY}/ directory under ${root} — run ` +
-        '`bun packages/hosted-store-service/src/bin.ts pack-distribution` before building',
+        '`bun packages/hosted-dispatcher/src/bin.ts pack-distribution` before building',
     )
   }
   const archives = entries.filter((name) => /^autobuild-.+\.tgz$/.test(name)).sort()
   if (archives.length === 0) {
     throw new Error(
       `no autobuild-*.tgz in ${DIST_DIRECTORY}/ — run ` +
-        '`bun packages/hosted-store-service/src/bin.ts pack-distribution` before building',
+        '`bun packages/hosted-dispatcher/src/bin.ts pack-distribution` before building',
     )
   }
   if (archives.length > 1) {
@@ -72,7 +72,7 @@ async function readTrace(path: string): Promise<string[]> {
   } catch {
     throw new Error(
       `missing Next.js trace file ${path} — run this tool after \`next build\`; ` +
-        'if the dispatch route was renamed, update tools/ship-packed-distribution.ts',
+        'if the dispatch route was renamed, update packages/hosted-dispatcher/src/ship-packed-distribution.ts',
     )
   }
   const parsed: unknown = JSON.parse(raw)

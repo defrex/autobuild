@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- [#395](https://github.com/defrex/autobuild/pull/395) — Declare @defrex/autobuild-postgres-store as root devDependency
+- [#394](https://github.com/defrex/autobuild/pull/394) — Correct /testing attribution in core-floor test comment
+- [#393](https://github.com/defrex/autobuild/pull/393) — Harden store-service boundary scan to all dispatcher import forms
+- [#392](https://github.com/defrex/autobuild/pull/392) — Add a committed package-boundary check for cross-package src test imports
+- [#391](https://github.com/defrex/autobuild/pull/391) — Migrate tools/ scripts onto postgres-store public subpath exports
+- [#390](https://github.com/defrex/autobuild/pull/390) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0
+- [#431](https://github.com/defrex/autobuild/pull/431) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0 so dispatcher + hosted-store-service cannot install against a core missing the /operator, /hosted-tickets, and /testing subpaths (AUT-431)
+- [#389](https://github.com/defrex/autobuild/pull/389) — Show pinned pipeline source and config rev on web build detail
+- [#388](https://github.com/defrex/autobuild/pull/388) — Expose postgres-store schema/store subpath exports and use them in hosted-store-service tests
+- [#387](https://github.com/defrex/autobuild/pull/387) — Restore client-only over-the-wire coverage for core's remote clients
+- [#386](https://github.com/defrex/autobuild/pull/386) — Reconcile peer-dependency floors left by the hosted-store extraction
+- [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
+- [#384](https://github.com/defrex/autobuild/pull/384) — Pin each build's pipeline config to its own branch (AUT-390)
+- [#383](https://github.com/defrex/autobuild/pull/383) — Move the hosted store, operator, and ticket servers out of core
+- [#382](https://github.com/defrex/autobuild/pull/382) — Align docs with the @defrex/autobuild-hosted-dispatcher package split
+- [#380](https://github.com/defrex/autobuild/pull/380) — Split the hosted dispatcher into @defrex/autobuild-hosted-dispatcher
+- [#379](https://github.com/defrex/autobuild/pull/379) — Fix the MCP plugin's metadata typing gap; drop the workaround
+- [#378](https://github.com/defrex/autobuild/pull/378) — Make `ab wait` long-poll on remote stores (AUT-368)
+
 ## v0.8.0 — 2026-09-16
 
 This release moves the Autobuild CLI onto npm as the scoped package @defrex/autobuild, with web dependencies split out of core and extensions now resolved from the installation itself. The ab upgrade command and guest tarballs are sourced from the registry, and each release ends with a bun publish step. Existing installs that came from GitHub migrate once by removing the old global package and adding @defrex/autobuild in its place.

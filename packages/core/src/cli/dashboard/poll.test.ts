@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../../config/load'
 import { KERNEL } from '../../events/envelope'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  effectiveBuildConfigContent,
+} from '../../processes/build-execution-state'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
 import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
@@ -43,6 +47,10 @@ class CountingReader implements DashboardBuildReader {
       throw new Error(`scripted read failure for ${slug}`)
     }
     return this.store.getEvents(slug, sinceSeq)
+  }
+
+  async getArtifact(slug: string, kind: string) {
+    return this.store.getArtifact(slug, kind)
   }
 
   resetCalls(): void {
@@ -117,6 +125,69 @@ describe('DashboardBuildPollCache', () => {
     expect(secondRow).toBe(firstRow)
     expect(secondRow).toEqual(firstRow)
     expect((await store.getEvents('silent')).map((event) => event.seq)).toEqual([1])
+  })
+
+  test('decorates a row with the pinned pipeline source and effective-config revision', async () => {
+    const store = new MemoryBuildStore({ clock: () => new Date('2026-07-14T21:00:00.000Z') })
+    await addRunning(store, 'pinned')
+    await store.putArtifact('pinned', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: '{}',
+      metadata: {
+        revision: 2,
+        pipelineSource: { ref: 'base', commit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' },
+      },
+    })
+    const cache = new DashboardBuildPollCache(new CountingReader(store), REPO, CONFIG)
+    const snapshot = await cache.refresh()
+    const pinned = row(snapshot, 'pinned')!
+    expect(pinned.pipelineSource).toEqual({
+      ref: 'base',
+      commit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    })
+    expect(pinned.effectiveConfigRev).toBe(2)
+  })
+
+  test('projects a pinned build from its artifact pipeline, not the live snapshot', async () => {
+    // The artifact pins a verify universe the live dispatcher snapshot (the
+    // base branch) does not carry — the AUT-366 divergence. The row's steps
+    // must come from the pinned pipeline; deployment-owned sections (policy)
+    // still come from the live snapshot.
+    const store = new MemoryBuildStore()
+    await addRunning(store, 'pinned')
+    await addRunning(store, 'fresh')
+    const pinnedConfig = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+postgres = "pg-ready"
+
+[verify]
+steps = ["postgres"]
+
+[verify.postgres]
+kind = "check"
+command = "postgres"
+
+[policy]
+stallRounds = 9
+`)
+    await store.putArtifact('pinned', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedConfig),
+      metadata: {
+        revision: 1,
+        pipelineSource: { ref: 'branch-head', commit: 'a'.repeat(40) },
+      },
+    })
+    const cache = new DashboardBuildPollCache(new CountingReader(store), REPO, CONFIG)
+    const snapshot = await cache.refresh()
+    // The pinned build renders its own verify step; the unpinned build — same
+    // lifecycle, no artifact — renders the live config's (empty) universe.
+    expect(row(snapshot, 'pinned')!.steps.map((step) => step.label)).toContain('verify:postgres')
+    expect(row(snapshot, 'fresh')!.steps.map((step) => step.label)).not.toContain('verify:postgres')
   })
 
   test('a config-only revision reprojects unchanged live streams', async () => {

@@ -39,8 +39,10 @@ import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
+import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferral } from '../kernel/auto-merge'
 import { autoMergeDisplay, type AutoMergeDisplay } from './dashboard/model'
@@ -160,6 +162,11 @@ export interface BuildDetail extends BuildSummary {
   lastEvent?: { type: string; seq: number; ts: string; actor: Actor }
   /** Present only with `--events <n>`: the newest n, chronological. */
   events?: AbEvent[]
+  /** Which `autobuild.toml` the build's pinned pipeline was read from, and the
+   * effective-config artifact revision it was deposited under (SPEC §16.1).
+   * Absent when no effective-config artifact has been deposited. */
+  pipelineSource?: PipelineSourceMeta
+  effectiveConfigRev?: number
   outcome?: BuildOutcome
 }
 
@@ -499,6 +506,16 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(`  review round ceiling: ${ceilings.join(', ')}`)
   }
   lines.push(`  updated:  ${d.updatedAt} (${relativeTime(d.updatedAt, now)})`)
+  if (d.pipelineSource !== undefined || d.effectiveConfigRev !== undefined) {
+    const source =
+      d.pipelineSource !== undefined
+        ? `autobuild.toml@${
+            d.pipelineSource.commit !== undefined ? d.pipelineSource.commit.slice(0, 7) : 'unknown'
+          } (${d.pipelineSource.ref})`
+        : 'autobuild.toml@unknown (pre-pin)'
+    const rev = d.effectiveConfigRev !== undefined ? `  config rev ${d.effectiveConfigRev}` : ''
+    lines.push(`  pipeline: ${source}${rev}`)
+  }
 
   // Its own line, never folded into status: a running build with an expired
   // lease is the case this exists to make visible.
@@ -893,7 +910,22 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     } catch {
       streams = undefined
     }
-    const d = detail(record, events, now, opts.events, decision, streams)
+    const projected = detail(record, events, now, opts.events, decision, streams)
+    // Operator visibility (SPEC §16.1): which autobuild.toml the build's
+    // pinned pipeline came from, alongside the effective-config revision.
+    const configArtifact = await context.store.getArtifact(
+      opts.slug,
+      BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+    )
+    const configMeta =
+      configArtifact !== null ? parseBuildConfigMetadata(configArtifact) : undefined
+    const d: BuildDetail = {
+      ...projected,
+      ...(configMeta?.revision !== undefined ? { effectiveConfigRev: configMeta.revision } : {}),
+      ...(configMeta?.pipelineSource !== undefined
+        ? { pipelineSource: configMeta.pipelineSource }
+        : {}),
+    }
     if (opts.json === true) {
       opts.stdout(JSON.stringify(d, null, 2))
       return

@@ -211,7 +211,7 @@ export async function fetchDistributionReleaseAsset(
 }
 
 /** Directory, relative to a distribution root, where a deployment ships the
- * archive it packed at build time (`ab-hosted-store pack-distribution`). A
+ * archive it packed at build time (`ab-hosted-dispatcher pack-distribution`). A
  * bundled deployment — the hosted service on Vercel — has neither `bun` nor a
  * source tree at runtime, so the archive must be produced while both exist
  * and carried into the function bundle. */

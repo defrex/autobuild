@@ -55,11 +55,14 @@ describe('advertised jwks_uri resolves (AUT-369)', () => {
 
   test('the authorization-server metadata advertises the JWKS endpoint that exists', async () => {
     // Regression canary: the pinned 1.4.18 MCP plugin hardcodes
-    // `<baseURL>/mcp/jwks` (an endpoint that 404s) in
-    // getMCPProviderMetadata and only spreads the TOP-LEVEL `metadata` of
-    // the mcp() options — a field MCPOptions omits. If a plugin upgrade
-    // drops that spread, this fails loudly instead of re-advertising a
-    // dead jwks_uri.
+    // `<baseURL>/mcp/jwks` (an endpoint that 404s) in getMCPProviderMetadata
+    // because its call site passes the whole MCPOptions while the function
+    // spreads TOP-LEVEL options?.metadata. patches/better-auth@1.4.18.patch
+    // fixes the call site to pass options?.oidcConfig — the channel the
+    // function's declared (ctx, options?: OIDCOptions) signature already
+    // expects — so the override flows from the declared oidcConfig.metadata
+    // alone. If the patch goes missing or a plugin upgrade drops it, this
+    // fails loudly instead of re-advertising a dead jwks_uri.
     const response = await auth.handler(
       new Request(`${ORIGIN}/api/auth/.well-known/oauth-authorization-server`),
     )

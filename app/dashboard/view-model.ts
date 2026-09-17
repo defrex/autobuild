@@ -84,6 +84,26 @@ export function projectWebParity(model: DashboardModel): DashboardParityProjecti
   }
 }
 
+/**
+ * The build's pinned pipeline provenance, mirroring the terminal detail body's
+ * `pipeline` line (SPEC §16.1): `autobuild.toml@{commit} ({ref}) · config rev
+ * {rev}`. `undefined` when the build carries neither field (it ran pre-pin or
+ * on the dispatcher's live base-branch config), so the detail omits the entry
+ * rather than rendering an empty or misleading value.
+ */
+export function pipelineProvenance(build: DashboardBuild): string | undefined {
+  if (build.pipelineSource === undefined && build.effectiveConfigRev === undefined) return undefined
+  const commit =
+    build.pipelineSource?.commit !== undefined ? build.pipelineSource.commit.slice(0, 7) : 'unknown'
+  const source =
+    build.pipelineSource !== undefined
+      ? `autobuild.toml@${commit} (${build.pipelineSource.ref})`
+      : 'autobuild.toml@unknown (pre-pin)'
+  const rev =
+    build.effectiveConfigRev !== undefined ? ` · config rev ${build.effectiveConfigRev}` : ''
+  return `${source}${rev}`
+}
+
 export function formatElapsed(timing: StepTiming | undefined, now = Date.now()): string {
   const ms = elapsedMilliseconds(timing, now)
   if (ms === undefined) return ''

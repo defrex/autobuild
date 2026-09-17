@@ -3,7 +3,7 @@
 import type {
   OperatorAnswerRequest,
   OperatorBuildControlRequest,
-} from '@defrex/autobuild/operator-api'
+} from '@defrex/autobuild-hosted-store-service/operator-api'
 import {
   buildActionAvailability,
   type DashboardBuild,
@@ -29,6 +29,7 @@ import {
   Rule,
   StepLine,
 } from './frame'
+import { pipelineProvenance } from './view-model'
 
 export type Selection = { kind: 'build'; slug: string } | { kind: 'harvest' }
 export type BuildControlAction = OperatorBuildControlRequest['action']
@@ -768,6 +769,12 @@ function BuildDetail({
           </span>
         )}
         {build.alsoPaused && <span className="warn">(paused)</span>}
+        {pipelineProvenance(build) && (
+          <span>
+            <span className="k">pipeline </span>
+            {pipelineProvenance(build)}
+          </span>
+        )}
       </div>
 
       <section className="section">

@@ -11,12 +11,11 @@
  * store stays neutral; the API is the gatekeeper — writes of any kind to an
  * archived session are refusals here, not store errors.
  */
-import { humanActor } from '../events/envelope'
-import type { SessionEventWrite } from '../events/sessions'
-import { reduceSession, type SessionState, type SessionTurn } from '../sessions/reducer'
-import type { StreamRead } from '../store/streams/types'
-import type { BuildStore, SessionRecord } from '../store/types'
-import type { OperatorSandboxService } from './sandbox'
+import { humanActor } from '@defrex/autobuild/operator'
+import type { SessionEventWrite } from '@defrex/autobuild/remote-store'
+import { reduceSession, type SessionState, type SessionTurn } from './session-reducer'
+import type { StreamRead, BuildStore, SessionRecord } from '@defrex/autobuild/plugin-sdk'
+import type { OperatorSandboxService } from '@defrex/autobuild/operator'
 
 export class OperatorSessionError extends Error {
   constructor(

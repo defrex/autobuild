@@ -54,7 +54,11 @@ Git installation never requires a separately published core package.
 `packages/core` owns the CLI, kernel, adapters, shared types, dashboard
 projection, plugin SDK, and reusable contract suites. The optional
 `packages/hosted-store-service` workspace composes the public remote-server
-surface with `packages/postgres-store`; neither package enters an ordinary CLI
+surface with `packages/postgres-store`; the separate optional
+`packages/hosted-dispatcher` workspace owns the cron-driven hosted dispatcher
+(the `/api/dispatch` route driver, the deploy-time `pack-distribution` command,
+and the packed-distribution trace helper) and peers on both the core and the
+store service. Neither package enters an ordinary CLI
 installation's runtime dependency closure. `tools/` is repository-only
 maintainer tooling. All workspace manifests share one version because the
 remote-store protocol requires matching client and server versions.
@@ -72,6 +76,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/store/` | BuildStore contract spanning builds, the repository journal, and operator sessions; interface-enforced build, operator-session, and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, tests, and deployment guide | §7.2, §18 |
+| `packages/hosted-dispatcher/` | The optional cron-driven hosted dispatcher: endpoint driver, deploy-time `pack-distribution` binary, packed-distribution trace helper, tests, and operator guide | §7.2, §12, §18 |
 | `server.ts`, `vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
@@ -92,7 +97,12 @@ remote-store protocol requires matching client and server versions.
 ## Key boundaries
 
 **Hosted store service.** `@defrex/autobuild/remote-store` is the supported protocol
-server/client/token export. The hosted workspace validates its environment,
+export for the remote store's client half, wire schemas, and token minting; the
+protocol servers (the remote BuildStore HTTP server, the operator API server,
+and the hosted ticket-source server) ship in
+`@defrex/autobuild-hosted-store-service`, which builds against core's
+`remote-store`, `operator`, and `hosted-tickets` subpaths only. The hosted
+workspace validates its environment,
 serves health without touching persistence, and lazily retains one
 `openPostgresBuildStoreFromEnv` promise per warm process. Its Fetch handler has
 no Vercel branch; root `server.ts` is the sole `Bun.serve()` composition point.
@@ -625,6 +635,13 @@ GitHub, and real-runtime AgentRunner registrations are present in the same run
 but reported as skipped: live provider access requires credentials/resources
 and an explicit opt-in. When
 adding an adapter, start from its contract suite, not only the interface.
+
+The two remote clients get client-only unit coverage in core itself:
+`RemoteBuildStore` (`store/remote/client.test.ts`, which also pins scoped-token
+minting/verification) and `HostedTicketSource` (`ports/tickets/remote.test.ts`)
+run against an injected `fetchFn` with responses built from the protocol's wire
+schemas. The full over-the-wire seam suites (client → HTTP → server) run in
+`packages/hosted-store-service` in the same `bun test`.
 
 To run the Linear contract manually against a destructive scratch target:
 

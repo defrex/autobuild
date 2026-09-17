@@ -11,7 +11,7 @@
  * in one pass.
  */
 import { describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, realpath, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -54,6 +54,7 @@ import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/bui
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   diagnosticArtifact,
+  parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
   selectOpenWorkspace,
 } from '../processes/build-execution-state'
@@ -2400,6 +2401,217 @@ args = ["--naming-style", "concise"]
   }, 30_000)
 })
 
+/** Drive one build through a paused+resume cycle with the pipeline-source
+ * reads poisoned at the resume re-attach — the second `publishBuildConfig` a
+ * whole-pipeline execution otherwise never exercises. `mode` picks which read
+ * fails: `transient-base-read` (the branch does not resolve and the recorded
+ * base is unreadable — the documented fallback order, quiet) or
+ * `branch-source-read` (the branch resolves but its file cannot be read —
+ * actionable). Returns what the run deposited and diagnosed. */
+async function runPipelineFallbackScenario(
+  mode: 'transient-base-read' | 'branch-source-read',
+): Promise<{
+  finalizeCompleted: boolean
+  postgresVerifyStarts: number
+  fallbackObservations: Array<{ summary: string }>
+  pinned:
+    | {
+        meta: ReturnType<typeof parseBuildConfigMetadata>
+        deposited: ReturnType<typeof parseEffectiveBuildConfig>
+      }
+    | undefined
+}> {
+  const handlers = happyHandlers()
+  const implement = handlers.implement!
+  let releaseImplement!: () => void
+  const implementGate = new Promise<void>((resolve) => {
+    releaseImplement = resolve
+  })
+  let markImplementStarted!: () => void
+  const implementStarted = new Promise<void>((resolve) => {
+    markImplementStarted = resolve
+  })
+  handlers.implement = async (cli) => {
+    markImplementStarted()
+    await implementGate
+    return implement(cli)
+  }
+  const clock = manualClock()
+  const fx = await makeFixture(
+    readyTicket('T-pipeline-fallback'),
+    handlers,
+    DISPATCH_CONFIG_TOML,
+    clock,
+  )
+  const stop = new AbortController()
+  // The base branch gains an always-on verify step while the build is in
+  // flight, so the LIVE dispatcher snapshot and the build's pinned pipeline
+  // diverge — the divergence a failed resolution must not deposit.
+  const baseWithPostgres = DISPATCH_CONFIG_TOML.replace(
+    'test = "test -f ok.marker"',
+    'test = "test -f ok.marker"\npostgres = "test -f postgres.marker"',
+  )
+    .replace('steps = ["unit"]', 'steps = ["unit", "postgres"]')
+    .replace('stallRounds = 3', 'stallRounds = 7')
+    .concat('\n[verify.postgres]\nkind = "check"\ncommand = "postgres"\nalways = true\n')
+  // The checkout-mode resolver's reads are git through the dispatcher's exec:
+  // fail exactly them to simulate the read failure. `transient-base-read`
+  // fails rev-parse (unpublished branch) plus the base `git show`;
+  // `branch-source-read` lets the branch resolve but fails its `git show`.
+  let poison = false
+  const poisonedExec: Exec = async (cmd, opts) => {
+    if (
+      poison &&
+      cmd[0] === 'git' &&
+      (cmd[1] === 'show' ||
+        (mode === 'transient-base-read' &&
+          cmd[1] === 'rev-parse' &&
+          cmd.slice(2).some((arg) => arg.startsWith('refs/heads/'))))
+    ) {
+      return { stdout: '', stderr: 'poisoned pipeline-source read', exitCode: 1 }
+    }
+    return spawnExec(cmd, opts)
+  }
+  let slug: string | undefined
+  let workspacePath: string | undefined
+  let pausedHandled = false
+  let resumed = false
+  let observed = false
+  try {
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: poisonedExec,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      signal: stop.signal,
+      intervalMs: 1,
+      // The watch loop is sequential (tick, then sleep), so this hook must
+      // return quickly and advance the scenario one step per call; the build
+      // child drives its own pipeline between ticks, but the lease sweep that
+      // forces the second launch only runs on ticks.
+      sleep: async () => {
+        if (slug === undefined) {
+          await implementStarted
+          slug = (await fx.store.listBuilds())[0]?.slug
+          await writeFile(join(fx.checkout, 'autobuild.toml'), baseWithPostgres)
+          // Park the build at the next boundary so the paused+resume cycle
+          // forces a SECOND launch (a fresh publishBuildConfig) — the whole
+          // pipeline otherwise runs in one execution with a single deposit.
+          await fx.store.append(slug!, {
+            actor: humanActor('operator'),
+            type: 'build.pause-requested',
+            payload: {},
+          })
+          releaseImplement()
+          return
+        }
+        const events = await fx.store.getEvents(slug)
+        if (!pausedHandled) {
+          // The runner acknowledges the pause at its next boundary and
+          // parks; the execution ends. Break the branch-source read (the
+          // open worktree's file leaves and the committed `git show` fails),
+          // then queue the resume and age past the lease/grace window so the
+          // sweep re-attaches on the next tick — a fresh launch whose deposit
+          // must survive the poisoned reads.
+          if (events.some((event) => event.type === 'build.paused')) {
+            if (mode === 'branch-source-read') {
+              const open = selectOpenWorkspace(events)
+              if (open !== null) {
+                workspacePath = open.path
+                await rename(
+                  join(open.path, 'autobuild.toml'),
+                  join(open.path, 'autobuild.toml.pinned-test'),
+                )
+              }
+            }
+            poison = true
+            await fx.store.append(slug, {
+              actor: humanActor('operator'),
+              type: 'build.resume-requested',
+              payload: {},
+            })
+            clock.advance(61_000)
+            pausedHandled = true
+          }
+          return
+        }
+        if (!resumed) {
+          // The re-attach (and its poisoned deposit) precedes the resumed
+          // runner's own acknowledgement. The transient case files no
+          // diagnostic, so the resume itself ends its poisoned window; the
+          // actionable case waits for the observation.
+          if (events.some((event) => event.type === 'build.resumed')) {
+            resumed = true
+            if (mode === 'transient-base-read') {
+              poison = false
+              observed = true
+            }
+          }
+          return
+        }
+        if (!observed) {
+          const followup = events.find(
+            (event) =>
+              event.type === 'observation.recorded' &&
+              event.payload.kind === 'followup' &&
+              event.payload.summary.includes('pipeline-source resolution failed'),
+          )
+          if (mode === 'branch-source-read') {
+            if (followup === undefined) return
+            // The diagnostic is on the log: put the branch source back.
+            if (workspacePath !== undefined) {
+              await rename(
+                join(workspacePath, 'autobuild.toml.pinned-test'),
+                join(workspacePath, 'autobuild.toml'),
+              )
+            }
+          } else if (followup !== undefined) {
+            // The quiet fallback went loud — stop the poisoning and let the
+            // assertions fail on the recorded observation.
+          } else {
+            return
+          }
+          poison = false
+          observed = true
+          return
+        }
+        if (events.some((event) => event.type === 'finalize.completed')) stop.abort()
+      },
+      wire: fx.wire,
+    })
+
+    const events = await fx.store.getEvents(slug!)
+    const artifact = await fx.store.getArtifact(slug!, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+    return {
+      finalizeCompleted: events.some((event) => event.type === 'finalize.completed'),
+      postgresVerifyStarts: events.filter(
+        (event) => event.type === 'verify.started' && event.payload.step === 'postgres',
+      ).length,
+      fallbackObservations: events
+        .filter(
+          (event) =>
+            event.type === 'observation.recorded' &&
+            event.payload.kind === 'followup' &&
+            (event.payload as { summary: string }).summary.includes(
+              'pipeline-source resolution failed',
+            ),
+        )
+        .map((event) => ({ summary: (event.payload as { summary: string }).summary })),
+      pinned:
+        artifact === null
+          ? undefined
+          : {
+              meta: parseBuildConfigMetadata(artifact),
+              deposited: parseEffectiveBuildConfig(artifact),
+            },
+    }
+  } finally {
+    stop.abort()
+    await fx.cleanup()
+  }
+}
+
 describe('abDispatch watch build-runner coordination', () => {
   test('kernel shutdown stops and awaits every active build execution before returning', async () => {
     const fx = await makeFixture(
@@ -3256,6 +3468,132 @@ describe('abDispatch watch build-runner coordination', () => {
       stop.abort()
       await fx.cleanup()
     }
+  }, 30_000)
+
+  test('pins a build pipeline to its own branch across a base-branch reload (AUT-366)', async () => {
+    const handlers = happyHandlers()
+    const implement = handlers.implement!
+    let releaseImplement!: () => void
+    const implementGate = new Promise<void>((resolve) => {
+      releaseImplement = resolve
+    })
+    let markImplementStarted!: () => void
+    const implementStarted = new Promise<void>((resolve) => {
+      markImplementStarted = resolve
+    })
+    handlers.implement = async (cli) => {
+      markImplementStarted()
+      await implementGate
+      return implement(cli)
+    }
+    const fx = await makeFixture(readyTicket('T-pinned-pipeline'), handlers)
+    const stop = new AbortController()
+    // The base branch gains an always-on verify step after this build's base
+    // was cut — exactly what blocked AUT-366. Its command/script do not exist
+    // in the build's branch, so running it would fail verify.
+    const baseWithPostgres = DISPATCH_CONFIG_TOML.replace(
+      'test = "test -f ok.marker"',
+      'test = "test -f ok.marker"\npostgres = "test -f postgres.marker"',
+    )
+      .replace('steps = ["unit"]', 'steps = ["unit", "postgres"]')
+      .replace('stallRounds = 3', 'stallRounds = 7')
+      .concat('\n[verify.postgres]\nkind = "check"\ncommand = "postgres"\nalways = true\n')
+    let slug: string | undefined
+    let sleeps = 0
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await implementStarted
+            slug = (await fx.store.listBuilds())[0]?.slug
+            await writeFile(join(fx.checkout, 'autobuild.toml'), baseWithPostgres)
+          } else if (sleeps === 2) {
+            releaseImplement()
+          } else {
+            await waitFor(async () => {
+              if (slug === undefined) return false
+              return (await fx.store.getEvents(slug)).some(
+                (event) => event.type === 'finalize.completed',
+              )
+            }, 10_000)
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      expect(slug).toBeDefined()
+      const events = await fx.store.getEvents(slug!)
+      expect(events.some((event) => event.type === 'finalize.completed')).toBe(true)
+      // The base-branch step never entered this build's verify universe.
+      expect(
+        events.filter(
+          (event) => event.type === 'verify.started' && event.payload.step === 'postgres',
+        ),
+      ).toHaveLength(0)
+      // The artifact records the pinned pipeline source and keeps the pipeline
+      // sections the build's own branch carried.
+      const artifact = await fx.store.getArtifact(slug!, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      expect(artifact).not.toBeNull()
+      const meta = parseBuildConfigMetadata(artifact!)
+      expect(meta.pipelineSource?.ref).toBe('branch-head')
+      expect(meta.pipelineSource?.commit).toMatch(/^[0-9a-f]{40}$/)
+      // The reload re-deposited (revision advanced) and delivered the
+      // deployment-owned policy change...
+      expect(meta.revision).toBeGreaterThanOrEqual(1)
+      const deposited = parseEffectiveBuildConfig(artifact!)
+      expect(deposited.policy.stallRounds).toBe(7)
+      // ...while the build-owned pipeline stayed pinned to the build branch.
+      expect(deposited.verify.steps).toEqual(['unit'])
+      expect(deposited.commands.postgres).toBeUndefined()
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a pipeline-source resolution failure never rewrites a pinned pipeline (AUT-366)', async () => {
+    const outcome = await runPipelineFallbackScenario('transient-base-read')
+    expect(outcome.finalizeCompleted).toBe(true)
+    expect(outcome.postgresVerifyStarts).toBe(0)
+    // A transient git failure during resolution degraded to the documented
+    // fallback (an unpublished branch or an unreadable legacy base is normal
+    // resolution order), which files no diagnostic — but the deposit still
+    // kept the build's own pinned pipeline and the recorded source.
+    expect(outcome.fallbackObservations).toHaveLength(0)
+    expect(outcome.pinned).toBeDefined()
+    expect(outcome.pinned?.meta.pipelineSource?.ref).toBe('branch-head')
+    expect(outcome.pinned?.meta.pipelineSource?.commit).toMatch(/^[0-9a-f]{40}$/)
+    expect(outcome.pinned?.deposited.verify.steps).toEqual(['unit'])
+    expect(outcome.pinned?.deposited.commands.postgres).toBeUndefined()
+    // The live divergence still reached deployment-owned sections.
+    expect(outcome.pinned?.deposited.policy.stallRounds).toBe(7)
+  }, 30_000)
+
+  test('an actionable pipeline-source failure keeps the pinned pipeline and files an observation', async () => {
+    const outcome = await runPipelineFallbackScenario('branch-source-read')
+    expect(outcome.finalizeCompleted).toBe(true)
+    expect(outcome.postgresVerifyStarts).toBe(0)
+    // The branch resolved but its source could not be read: the deposit kept
+    // the last pinned pipeline (never the live base snapshot) and diagnosed
+    // the failure on the build's log, naming the degraded deposit.
+    expect(outcome.fallbackObservations).toHaveLength(1)
+    expect(outcome.fallbackObservations[0]?.summary).toContain('pipeline-source resolution failed')
+    expect(outcome.fallbackObservations[0]?.summary).toContain('kept the last pinned pipeline')
+    expect(outcome.fallbackObservations[0]?.summary).toContain('branch-source')
+    expect(outcome.pinned).toBeDefined()
+    expect(outcome.pinned?.meta.pipelineSource?.ref).toBe('branch-head')
+    expect(outcome.pinned?.deposited.verify.steps).toEqual(['unit'])
+    expect(outcome.pinned?.deposited.commands.postgres).toBeUndefined()
+    expect(outcome.pinned?.deposited.policy.stallRounds).toBe(7)
   }, 30_000)
 
   test('stale-lease polling cannot open competing sessions for one phase attempt', async () => {
