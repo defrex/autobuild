@@ -207,10 +207,11 @@ ab ticket list --state Todo --json
 ab init --validate
 ```
 
-The two vercel CLI calls run from `packages/hosted-store-service` because that package declares the
-`vercel` devDependency; `bunx` resolves the declared binary from there under either hoisted or
-isolated linking, whereas a root-level `vercel` command only resolves through the hoisted linker
-override in `bunfig.toml`. Both invocations carry `--no-install`, placed between `bunx` and the
+The two vercel CLI calls run from `packages/hosted-store-service` because only that package declares
+the `vercel` devDependency, and `bunx` resolves a declared binary from the package that declares it;
+nothing at the root resolves a root-level `vercel` command under any linker — the root manifest
+declares no `vercel` dependency, and since the old `bunfig.toml` hoisted-linker override was retired,
+nothing hoists one into root `node_modules` either. Both invocations carry `--no-install`, placed between `bunx` and the
 package name (bunx only parses its own flags there — after the package name the flag would be
 forwarded to vercel and the silent-install fallback would return). With `--no-install`, a missing
 local vercel binary fails the preflight visibly instead of bunx silently installing an unpinned
