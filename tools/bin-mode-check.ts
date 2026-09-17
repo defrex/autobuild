@@ -236,7 +236,7 @@ export async function runBinModeCheck(
     if (violations.length === 0) {
       output.stdout(
         `Bin entries tracked at 100755 with executable working-tree files (${entries.length}): ` +
-          `${targets.join(', ') || 'none declared'}`,
+          `${targets.join(', ') || 'none declared'}\n`,
       )
       return 0
     }
