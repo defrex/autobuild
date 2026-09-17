@@ -65,11 +65,11 @@
     "packages/*/src",
     "bin",
     "tools",
-    "server.ts",
+    "packages/hosted-store-service/server.ts",
     "drizzle.config.ts",
-    "app",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    "packages/hosted-store-service/app",
+    "packages/hosted-store-service/.next/types/**/*.ts",
+    "packages/hosted-store-service/.next/dev/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }
