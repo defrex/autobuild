@@ -34,7 +34,7 @@ export type BinModeViolation =
   | { kind: 'conflict'; entry: BinEntry; modes: readonly string[] }
 
 function binEntries(manifest: WorkspaceManifest): Iterable<[string, unknown]> {
-  const bin = (manifest.manifest as { bin?: unknown }).bin
+  const bin = manifest.manifest.bin
   if (bin === undefined) return []
   if (typeof bin !== 'object' || bin === null || Array.isArray(bin)) {
     throw new Error(`${manifest.path}: bin must be an object mapping command names to paths`)
