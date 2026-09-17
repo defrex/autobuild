@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#433](https://github.com/defrex/autobuild/pull/433) — Restrict the hosted-store-service npm tarball to src/ and README
 - [#429](https://github.com/defrex/autobuild/pull/429) — Make the vercel-builds skill's vercel CLI independent of bunfig.toml
 - [#427](https://github.com/defrex/autobuild/pull/427) — Derive the doc preflight pin from autobuild.toml's runtimeProvisioning.pi
 - [#426](https://github.com/defrex/autobuild/pull/426) — Move the operator web app into the hosted store service package
