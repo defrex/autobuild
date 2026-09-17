@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#402](https://github.com/defrex/autobuild/pull/402) — Widen store-service boundary scan to template-literal dynamic imports
 - [#399](https://github.com/defrex/autobuild/pull/399) — Verify worktree exec bits in bin-mode-check; add PackageManifest.bin
 - [#398](https://github.com/defrex/autobuild/pull/398) — Fix three distribution-packing tests failing on registry lag
 - [#396](https://github.com/defrex/autobuild/pull/396) — Prevent bin.ts mode flips from failing the finalize preflight
