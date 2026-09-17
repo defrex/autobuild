@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#428](https://github.com/defrex/autobuild/pull/428) — Document comment-interleaved argument positions in the boundary guard
 - [#424](https://github.com/defrex/autobuild/pull/424) — Complete the boundary-guard coverage statement's widening list
 - [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
 - [#422](https://github.com/defrex/autobuild/pull/422) — Enumerate all worktree-dirty triggers in the provenance docs
