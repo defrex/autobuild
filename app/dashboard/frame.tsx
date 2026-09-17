@@ -46,6 +46,13 @@ export function stepNote(step: PipelineStep, now: number, register: 'row' | 'det
   return parts.length > 0 ? `(${parts.join(', ')})` : ''
 }
 
+/** The step's display-only reason — the parked merge step's no-consent
+ * explanation — as its own ` — … ` segment after the parenthetical, so the web
+ * steps say the same words as the terminal's `renderStep`/`detailStep`. */
+export function stepReason(step: PipelineStep): string {
+  return step.reason !== undefined ? ` — ${step.reason}` : ''
+}
+
 export function StepLine({
   steps,
   now,
@@ -63,6 +70,7 @@ export function StepLine({
         <li key={step.label} data-state={step.state}>
           <span aria-hidden>{GLYPH[step.state]}</span> {step.label}
           {stepNote(step, now, register)}
+          <span className="reason">{stepReason(step)}</span>
           <span className="sr-only">, {step.state}</span>
         </li>
       ))}

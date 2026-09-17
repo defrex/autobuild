@@ -552,6 +552,7 @@ function BuildRow({
             type="button"
             className="word am"
             data-am={row.autoMerge}
+            data-mismatch={model.defaultAutoMerge && row.autoMerge === 'off' ? true : undefined}
             disabled={answering || pending !== undefined || !autoMergeAvailable}
             aria-label={`Auto merge ${row.autoMerge} for ${row.slug}`}
             aria-pressed={autoMergeOn}

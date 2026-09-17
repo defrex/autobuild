@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
 import { spawnExec, type Exec } from './git-worktree'
+import { installPackedDistribution } from '../../testing/packed-install'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 import {
@@ -408,15 +409,16 @@ describe('VercelSandboxProvider', () => {
         { cwd: tmp },
       )
       expect(unpacked).toMatchObject({ exitCode: 0, stderr: '' })
-      const installed = await spawnExec(['bun', 'install', '--production', '--ignore-scripts'], {
-        cwd: extracted,
-      })
+      const installed = await installPackedDistribution(
+        ['--production', '--ignore-scripts'],
+        extracted,
+      )
       expect(installed.exitCode).toBe(0)
       expect(installed.stderr).not.toContain('husky')
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }
-  }, 120_000)
+  }, 600_000)
 
   test('classifies the real SDK not-found and stale-snapshot response shapes only', () => {
     expect(isMissingVercelSandbox({ response: { status: 404 } })).toBe(true)

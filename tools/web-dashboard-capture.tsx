@@ -20,6 +20,7 @@ import type {
   DashboardModel,
   TranscriptPresentation,
 } from '@defrex/autobuild/operator-presentation'
+import { autoMergeConsentReason } from '../packages/core/src/cli/dashboard/model'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -161,6 +162,18 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     height: 1200,
     requires: ['auto merge enabled', 'Actions', 'ABORT', 'RESUME'],
     forbids: ['AUTO MERGE', 'DETAILS', 'CLOSE'],
+  },
+  {
+    id: 'builds-parked-no-consent-wide',
+    width: 1440,
+    height: 1300,
+    requires: [
+      'merge(waiting)',
+      'no auto-merge consent has been requested',
+      '`ab auto-merge complete-dashboard-evidence on`',
+      'auto merge off',
+    ],
+    forbids: ['BLOCKED', 'QUEUED', '(held)'],
   },
   {
     id: 'builds-mixed-selected-narrow',
@@ -387,6 +400,48 @@ function selectedBuildModel(
   }
 }
 
+/** The observed default-on/parked-off state: one build parked on an open PR
+ * whose merge step carries the shared projection's no-consent reason, under a
+ * repository default that reads ON. The web row and the open detail must say
+ * the same words the terminal renders (f_b163d7ca). */
+function parkedNoConsentModel(source: DashboardModel): DashboardModel {
+  const origin = source.builds[0]
+  if (origin === undefined) {
+    throw new Error('web dashboard capture: the mixed model has no build to park')
+  }
+  return {
+    ...source,
+    repositoryPaused: false,
+    harvestPaused: false,
+    harvest: undefined,
+    defaultAutoMerge: true,
+    builds: [
+      {
+        ...origin,
+        status: 'running',
+        alsoPaused: false,
+        dispatch: undefined,
+        sessions: undefined,
+        blockers: [],
+        autoMerge: 'off',
+        pr: { url: 'https://forge.example/pr/3', state: 'open' },
+        steps: [
+          { label: 'plan', state: 'done', timing: { accumulatedMs: 61_000 } },
+          { label: 'implement', state: 'done', count: 1, timing: { accumulatedMs: 232_000 } },
+          { label: 'code-review', state: 'done', timing: { accumulatedMs: 45_000 } },
+          { label: 'verify:test', state: 'done', timing: { accumulatedMs: 88_000 } },
+          {
+            label: 'merge',
+            state: 'current',
+            qualifier: 'waiting',
+            reason: autoMergeConsentReason(origin.slug),
+          },
+        ],
+      },
+    ],
+  }
+}
+
 function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
   switch (spec.id) {
     case 'builds-loading-wide':
@@ -448,6 +503,15 @@ function frameNode(spec: WebFrameSpec, models: WebFixtureModels): ReactNode {
       const selection = blockedSelection(models.mixed)
       const model = selectedBuildModel(models.mixed, selection, { autoMerge: 'enabled' })
       return shell(builds(model, { selection, detailOpen: true }), { model })
+    }
+    case 'builds-parked-no-consent-wide': {
+      const model = parkedNoConsentModel(models.mixed)
+      const parked = model.builds[0]
+      if (parked === undefined) throw new Error('parked model has no build')
+      return shell(
+        builds(model, { selection: { kind: 'build', slug: parked.slug }, detailOpen: true }),
+        { model },
+      )
     }
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
@@ -795,6 +859,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Hover and focus frames: the selected lane is bold, a different fine-pointer preview lane is regular weight, and the focus frame visibly outlines the title. No 390px frame carries a preview marker.',
     '- [ ] `builds-mixed-selected-narrow.png` shows the open detail with its Actions section (ABORT and RESUME) directly under the kv line, unclipped at 390px.',
     '- [ ] Direct controls: every title has a slug-qualified detail name and expanded state. Every row visibly shows auto merge OFF, REQUESTED, ENABLED, or CANCELLING in its state color; compare `builds-mixed-rest-wide.png` and `builds-auto-merge-on-wide.png`. The indicator and title do not duplicate the Actions words.',
+    '- [ ] `builds-parked-no-consent-wide.png` shows a build parked on an open PR: the row pipeline and the open detail both read `merge(waiting)` followed by the shared no-consent reason ("no auto-merge consent has been requested — request it with m … or `ab auto-merge <slug> on`"), and the row\'s `auto merge OFF` token is visibly marked as disagreeing with the control line\'s `auto merge ON`.',
     '- [ ] `builds-mixed-paused-wide.png` shows the paused build open with ABORT / RESUME under its Actions heading; no control or state token clips or overlaps at either viewport.',
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row with no rule above it and one dim rule below, carrying Actions, Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     "- [ ] Answer frames: the open detail's Actions section shows a red `!` blocker line, a focused one-row optional-guidance field, then only `SUBMIT` and `CANCEL`; no `RESUME`, `ABORT`, auto-merge, or detail accessible names for that row. Empty submission is identified as retry; the narrow frame remains unclipped. The full answer composer stays further down the detail.",
