@@ -49,21 +49,27 @@ Every sandbox installs the Autobuild distribution the launching dispatcher
 runs. A local dispatcher packs it from its source checkout with `bun pm pack`;
 a bundled deployment has neither `bun` nor a source tree at runtime, so it
 must pack the archive while both exist — in its build step — and carry it into
-the function bundle:
+the function bundle. The script lives in the hosted store service package
+(`packages/hosted-store-service/package.json`), whose directory is the Next.js
+project directory and the deployment build's working directory:
 
 ```json
-{ "scripts": { "deploy:build": "bun packages/hosted-dispatcher/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun packages/hosted-dispatcher/src/ship-packed-distribution.ts" } }
+{ "scripts": { "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts" } }
 ```
 
 `pack-distribution` (the `ab-hosted-dispatcher` bin) writes
 `.autobuild-dist/autobuild-<version>.tgz` under the
-distribution root (`--root DIR` overrides). The Next.js config's
+distribution root (`--root DIR` overrides) — this deployment passes
+`--root .`, because the packer's default root is the repository's distribution
+root while the trace step below and the Next config's
 `outputFileTracingIncludes: { '/api/dispatch': ['./.autobuild-dist/**'] }`
-records the intent to include that directory in the cron route's bundle, but
+resolve against the deployment build's working directory, where the archive
+must land beside the built output. The Next.js config's
+`outputFileTracingIncludes` records the intent to include that directory in the cron route's bundle, but
 Next 16's default Turbopack builds never apply `outputFileTracingIncludes`
 (only webpack builds do), so a deployment cannot rely on the config alone. The
 autobuild-api pipeline therefore ends `deploy:build` with a post-build trace
-step (`bun packages/hosted-dispatcher/src/ship-packed-distribution.ts`) that appends the archive to the
+step (`bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts`) that appends the archive to the
 dispatch route's `route.js.nft.json` — the trace file Vercel's Next builder
 consumes when assembling the function bundle — and fails the deploy loudly if
 nothing was packed or the trace file is missing. A deployment using this

@@ -22,7 +22,7 @@
  *   docker exec ab-dev-minio sh -c 'mc alias set local http://localhost:9000 abdev abdevsecret123 && mc mb --ignore-existing local/autobuild-dev'
  */
 import { randomBytes, createHmac } from 'node:crypto'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { SQL } from 'bun'
 import type { Config } from '../packages/core/src/config/schema'
 import { roleKeyWarnings } from '../packages/core/src/config/roles'
@@ -338,7 +338,9 @@ async function serve(): Promise<void> {
   console.log(`web app:  ${WEB_ORIGIN}/`)
 
   const child = Bun.spawn(['bun', 'run', '--bun', 'next', 'dev', '-p', String(WEB_PORT)], {
-    cwd: REPO_ROOT,
+    // The Next.js project directory is the hosted store service package (AUT-409);
+    // `next dev` must run there so its config, tsconfig, and .next/ resolve.
+    cwd: join(REPO_ROOT, 'packages', 'hosted-store-service'),
     env: { ...process.env, ...env },
     stdout: 'inherit',
     stderr: 'inherit',
