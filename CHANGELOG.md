@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#418](https://github.com/defrex/autobuild/pull/418) — Make the cumulative-latency scenario-deadline test jitter-tolerant
 - [#412](https://github.com/defrex/autobuild/pull/412) — Remove unused deploymentSectionsEqual and DEPLOYMENT_OWNED_CONFIG_PATHS
 - [#414](https://github.com/defrex/autobuild/pull/414) — Record honest pipeline-source provenance for dirty checkout worktrees
 - [#411](https://github.com/defrex/autobuild/pull/411) — Reject per-build auto-merge consent while a discard is in flight
