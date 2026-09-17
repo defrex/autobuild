@@ -38,7 +38,13 @@ const WEB_PORT = 3100
 const SIGN_IN_PORT = 3199
 const WEB_ORIGIN = `http://localhost:${WEB_PORT}`
 const IDENTITY = process.env.AB_WEB_DEV_EMAIL ?? 'operator@example.com'
-const REPOSITORIES = { happy: 'example/happy', mixed: 'example/mixed' } as const
+// Repository identities are normalized https:// origins (see the web
+// config's AB_WEB_REPOSITORIES validation); short `owner/name` spellings
+// fail that parse and break every page that reads the config.
+const REPOSITORIES = {
+  happy: 'https://github.com/example/happy',
+  mixed: 'https://github.com/example/mixed',
+} as const
 const COOKIE_NAME = 'better-auth.session_token'
 const SESSION_TOKEN_FILE = resolve(REPO_ROOT, '.autobuild', 'web-dev-session-token')
 

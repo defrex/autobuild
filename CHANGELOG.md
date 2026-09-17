@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#451](https://github.com/defrex/autobuild/pull/451) — Retire the bunfig.toml hoisted-linker override
+- [#450](https://github.com/defrex/autobuild/pull/450) — Seed normalized https origins in web-dashboard-dev's devEnv
+- [#449](https://github.com/defrex/autobuild/pull/449) — Make tomlBasicStringLine a general TOML basic-string renderer
 - [#448](https://github.com/defrex/autobuild/pull/448) — Make evictFinishedBeyondCap's retention order stamp-independent
 - [#447](https://github.com/defrex/autobuild/pull/447) — Pin collectSpecifiers' JS fileName mapping; fix guard example (AUT-484)
 - [#446](https://github.com/defrex/autobuild/pull/446) — Guard every publishable workspace manifest's packed contents (AUT-481)
