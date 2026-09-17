@@ -653,6 +653,14 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * commands the process ever runs. Running entries are never evicted. */
   private static readonly MAX_RETAINED_SANDBOX_COMMANDS = 50
 
+  /** Bound on how long the exit stamp waits for the stdout/stderr pipe
+   * readers to drain after the process exits. A normal child closes its
+   * pipes on exit and drains immediately; a grandchild that inherited the
+   * write end (e.g. `sleep 30 &`) keeps the pipe open long past the
+   * child's exit, so the grace bounds the stamp instead of stalling the
+   * delivered `exited` result until the grandchild dies. */
+  private static readonly SANDBOX_EXIT_DRAIN_GRACE_MS = 250
+
   /** Detached children tracked in-process only; a restarted host reports a
    * recorded command as gone (`wait` fails typed `not-found`). Eviction uses
    * the same semantics: the first `wait` that observes `exited` consumes the
@@ -693,25 +701,39 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     commandId: string,
     child: { proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'> },
   ): void {
-    void (async () => {
-      const reader = child.proc.stdout.getReader()
-      const decoder = new TextDecoder()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        this.appendChildStream(commandId, 'stdout', decoder.decode(value, { stream: true }))
-      }
-    })()
-    void (async () => {
-      const reader = child.proc.stderr.getReader()
-      const decoder = new TextDecoder()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        this.appendChildStream(commandId, 'stderr', decoder.decode(value, { stream: true }))
-      }
-    })()
-    void child.proc.exited.then((code) => {
+    const drained = Promise.all([
+      (async () => {
+        const reader = child.proc.stdout.getReader()
+        const decoder = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          this.appendChildStream(commandId, 'stdout', decoder.decode(value, { stream: true }))
+        }
+      })(),
+      (async () => {
+        const reader = child.proc.stderr.getReader()
+        const decoder = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          this.appendChildStream(commandId, 'stderr', decoder.decode(value, { stream: true }))
+        }
+      })(),
+    ]).catch(() => {})
+    void child.proc.exited.then(async (code) => {
+      // Stamp `exited` only once the pipe readers have drained what the
+      // child wrote, so a terminal `wait` never snapshots truncated output —
+      // under load the exit can otherwise be observed before the readers
+      // finish appending (seen as a flaky empty `stdout` in the retention
+      // test's full-suite run). The grace bounds the stamp when a grandchild
+      // keeps the write end open past the child's own exit.
+      await Promise.race([
+        drained,
+        new Promise((resolve) =>
+          setTimeout(resolve, GitWorktreeProvider.SANDBOX_EXIT_DRAIN_GRACE_MS),
+        ),
+      ])
       const tracked = this.sandboxChildren.get(commandId)
       if (tracked === undefined) return
       tracked.exitCode = code ?? -1
