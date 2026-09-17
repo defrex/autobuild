@@ -411,6 +411,20 @@ describe('collectSpecifiers', () => {
     expect(collected.some((entry) => entry.specifier === UNPARSEABLE_MODULE)).toBe(false)
   })
 
+  test('ScriptKind.JS labels the diagnostics pass module.js: TS-only syntax in a JS-kind input fails closed', () => {
+    // The only observable effect of the ScriptKind.JS -> 'module.js' arm of
+    // collectSpecifiers' transpile fileName mapping: TS-only syntax in a
+    // JS-kind input is a parse error (TS8010 under typescript@5.9.3), so the
+    // collector fails closed with the sentinel. Under the pre-AUT-479 label
+    // ('module.ts') the same input produces no Error diagnostic — verified —
+    // so this result fails if the mapping ever reverts; detection alone (JS
+    // as a syntactic subset of TS) could not discriminate. A future
+    // TypeScript that stops emitting the diagnostic fails this pin on
+    // purpose: re-verify and re-pin, as the spec prescribes.
+    const collected = collectSpecifiers('const x: number = 1', ts.ScriptKind.JS)
+    expect(collected).toEqual([{ specifier: UNPARSEABLE_MODULE, line: 1 }])
+  })
+
   test('ScriptKind.JSX collects the import from a file containing JSX', () => {
     const contents = [
       "import { Widget } from './widget'",
