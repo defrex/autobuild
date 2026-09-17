@@ -23,11 +23,12 @@ import { repoRoot } from './git-tracked'
  * exact AST line number. Coverage relative to the raw-text regexes this
  * replaces is enumerated precisely in `collectSpecifiers`' doc comment below —
  * including deliberate widenings the regexes matched no such form of
- * (`require.call/apply`, plus the contrived but fail-closed optional-call
- * `require?.('…')` and type-argument `require<Foo>('…')` forms) and a
- * deliberate narrowing (leading-literal concatenation
- * specifiers, which the regexes did match). A file that does not parse fails
- * closed: it yields a
+ * (`require.call/apply`, the contrived but fail-closed optional-call
+ * `require?.('…')` and type-argument `require<Foo>('…')` forms, and the
+ * comment-interleaved `require(/* c *&#47; './x')` /
+ * `import(/* c *&#47; './x')` argument positions) and a deliberate narrowing (leading-literal
+ * concatenation specifiers, which the regexes did match). A file that does
+ * not parse fails closed: it yields a
  * single `<unparseable module>` sentinel violation rather than being silently
  * skipped, so ambiguity always errs toward flagging.
  *
@@ -124,6 +125,17 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  *   forbidden at the boundary — and that policy is unchanged; form coverage is
  *   a separate axis, and it does widen here for call/apply, optional call,
  *   and type arguments.
+ * - Deliberate widening — comment-interleaved argument positions:
+ *   `require(/* c *&#47; './x')` and `import(/* c *&#47; './x')`, a line or block
+ *   comment between the call name/paren and the specifier. The parser collects
+ *   the specifier because comments are trivia and never occupy an argument
+ *   slot — the string literal is still the pinned `arguments[0]` — while the
+ *   replaced regexes' `\s*\(\s*['"]` shape needed a quote directly after the
+ *   call paren, so they matched none of these forms. Like every widening here
+ *   it is fail-closed (it can only add offenders, never remove one), and the
+ *   input is contrived and effectively unreachable; recorded so the
+ *   parser/regex asymmetry is deliberate and known (observation
+ *   `obs_3feb4cae`, build `complete-the-package`).
  * - Narrowings vs the regexes: a leading-literal concatenation specifier
  *   (`require('./x' + suffix)`, `import('./x' + suffix)` — the regexes matched
  *   the leading literal, which is not a specifier literal and is no longer
