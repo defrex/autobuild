@@ -108,7 +108,10 @@ export function collectUnclaimedObservations(input: {
 
   for (const record of input.records) {
     if (record.repo !== input.repo) continue
-    const events = input.eventsByBuild.get(record.slug) ?? []
+    const events = input.eventsByBuild.get(record.slug)
+    if (events === undefined) {
+      throw new Error(`eventsByBuild is missing an entry for build "${record.slug}"`)
+    }
     for (const event of events) {
       if (event.type === 'pr.merged') {
         merges.push({ build: record.slug, ts: event.ts })
