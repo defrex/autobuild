@@ -8,6 +8,7 @@ export interface PackageManifest {
   workspaces?: unknown
   engines?: unknown
   dependencies?: unknown
+  devDependencies?: unknown
   peerDependencies?: unknown
   private?: unknown
   bin?: unknown
@@ -109,6 +110,36 @@ function bunEngine(entry: WorkspaceManifest): string {
   return bun
 }
 
+/**
+ * Dependency names whose exact pins are deliberately duplicated between the
+ * root `package.json` (for `tools/web-dashboard-capture.tsx`) and
+ * `packages/hosted-store-service/package.json` (for the hosted store app): the
+ * two manifests' pins for these names must move in lockstep, because under
+ * Bun's isolated linker a skew gives the capture tool its own react copy
+ * (two React instances, subtle capture-tool breakage).
+ */
+const mirroredReactPins = ['react', 'react-dom', '@types/react', '@types/react-dom']
+
+function pinnedVersion(manifest: PackageManifest, name: string): string | undefined {
+  const dependencies =
+    typeof manifest.dependencies === 'object' && manifest.dependencies !== null
+      ? (manifest.dependencies as Record<string, unknown>)
+      : undefined
+  const devDependencies =
+    typeof manifest.devDependencies === 'object' && manifest.devDependencies !== null
+      ? (manifest.devDependencies as Record<string, unknown>)
+      : undefined
+  for (const section of [dependencies, devDependencies]) {
+    const version = section?.[name]
+    if (typeof version === 'string') return version
+  }
+  return undefined
+}
+
+function describe(value: string | undefined): string {
+  return value ?? 'not pinned'
+}
+
 export async function validateWorkspaceManifests(root: string): Promise<WorkspaceManifest[]> {
   const manifests = await readWorkspaceManifests(root)
   const rootManifest = manifests[0]!
@@ -143,6 +174,22 @@ export async function validateWorkspaceManifests(root: string): Promise<Workspac
     if (coreDependencies[name] !== rootDependencies[name]) {
       throw new Error(
         `${core.path}: dependency ${name} must match root (${rootDependencies[name] ?? 'missing'}; found ${coreDependencies[name] ?? 'missing'})`,
+      )
+    }
+  }
+
+  const hostedStore = manifests.find(
+    (entry) => entry.manifest.name === '@defrex/autobuild-hosted-store-service',
+  )
+  if (hostedStore === undefined) {
+    throw new Error('workspace @defrex/autobuild-hosted-store-service is required')
+  }
+  for (const name of mirroredReactPins) {
+    const rootPin = pinnedVersion(rootManifest.manifest, name)
+    const hostedPin = pinnedVersion(hostedStore.manifest, name)
+    if (rootPin !== hostedPin) {
+      throw new Error(
+        `package.json and ${hostedStore.path}: ${name} pin drift (root ${describe(rootPin)}; hosted-store-service ${describe(hostedPin)}): the workspace react pins must move in lockstep — tools/web-dashboard-capture.tsx must resolve the same react copy as the hosted store app under Bun's isolated linker`,
       )
     }
   }
