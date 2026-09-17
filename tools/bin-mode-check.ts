@@ -1,17 +1,25 @@
+import { stat } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { repoRoot } from './git-tracked'
 import { readWorkspaceManifests, type WorkspaceManifest } from './workspace-manifest-check'
 
 /**
- * Fails when a `bin` entry target is not git-tracked at mode 100755.
+ * Fails when a `bin` entry target is not git-tracked at mode 100755, or when
+ * its working-tree file is missing or has lost the owner execute bit.
  *
  * Bun's installer chmods the source files behind `bin` manifest entries to
  * 0777 when it creates the `node_modules/.bin` symlinks, and it re-chmods on
  * every install — including no-change re-runs. A bin source committed 100644
  * therefore surfaces as an uncommitted 100644→100755 mode change in every
  * fresh checkout, and a mode-only change fails the finalize preflight's
- * clean-tree check (`requireFinalizeWorktreeClean`). The executable bit is
- * genuinely intended — every bin source is a shebang'd CLI entry — so the
+ * clean-tree check (`requireFinalizeWorktreeClean`). Git maps a regular file
+ * to index mode 100755 iff the owner execute bit is set, so the index alone
+ * cannot see the other dirty direction: a bin source committed 100755 whose
+ * working-tree file loses that bit shows as a 100755→100644 mode change in
+ * `git status` while the index still reads 100755. The check therefore also
+ * stats every tracked target and requires the owner execute bit — the same
+ * evidence git itself uses when it reports the file dirty. The executable bit
+ * is genuinely intended — every bin source is a shebang'd CLI entry — so the
  * stable state is committing it, and this check is how the invariant stays
  * true before a build reaches finalize.
  */
@@ -31,6 +39,7 @@ export interface BinEntry {
 export type BinModeViolation =
   | { kind: 'untracked'; entry: BinEntry }
   | { kind: 'mode'; entry: BinEntry; mode: string }
+  | { kind: 'worktree-mode'; entry: BinEntry; indexMode: string }
   | { kind: 'conflict'; entry: BinEntry; modes: readonly string[] }
 
 function binEntries(manifest: WorkspaceManifest): Iterable<[string, unknown]> {
@@ -107,9 +116,39 @@ export async function trackedModes(
   return modes
 }
 
+/**
+ * Working-tree executability for each supplied repo-root-relative path, by
+ * git's accounting: git maps a regular file to index mode 100755 iff the owner
+ * execute bit is set (`ce_permissions()` in read-cache.c), so group/other
+ * execute bits without the owner bit still count as non-executable — git
+ * reports such a file as a 100755→100644 mode change. A missing file maps to
+ * `false` (the same dirty state as a cleared bit); any other stat error
+ * propagates so `runBinModeCheck`'s fail-closed catch reports it.
+ */
+export async function worktreeExecutability(
+  root: string,
+  paths: readonly string[],
+): Promise<Map<string, boolean>> {
+  const executability = new Map<string, boolean>()
+  for (const path of paths) {
+    try {
+      const stats = await stat(join(root, path))
+      executability.set(path, (stats.mode & 0o100) !== 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        executability.set(path, false)
+        continue
+      }
+      throw error
+    }
+  }
+  return executability
+}
+
 export function evaluateBinModes(
   entries: readonly BinEntry[],
   modes: Map<string, readonly string[]>,
+  executability: ReadonlyMap<string, boolean>,
 ): BinModeViolation[] {
   const violations: BinModeViolation[] = []
   for (const entry of entries) {
@@ -120,6 +159,8 @@ export function evaluateBinModes(
       violations.push({ kind: 'conflict', entry, modes: stages })
     } else if (stages[0] !== '100755') {
       violations.push({ kind: 'mode', entry, mode: stages[0] ?? '' })
+    } else if (executability.get(entry.target) !== true) {
+      violations.push({ kind: 'worktree-mode', entry, indexMode: stages[0] })
     }
   }
   return violations
@@ -144,6 +185,14 @@ function describeViolation(violation: BinModeViolation): string {
         'node_modules/.bin symlinks to every bin-entry source and chmods them to 0777, so ' +
         "an untracked bin source always fails the finalize preflight's clean-tree check. " +
         'Track the file and commit the executable bit (chmod +x and commit).'
+      )
+    case 'worktree-mode':
+      return (
+        `${entry.target}: ${label} is committed ${violation.indexMode} but its working-tree ` +
+        'file is missing or has lost the owner execute bit; git status reports a ' +
+        `${violation.indexMode}→100644 mode change, which fails the finalize preflight's ` +
+        'clean-tree check. Restore the executable bit (chmod +x); do not stage the mode ' +
+        'change.'
       )
     case 'conflict':
       return (
@@ -174,15 +223,16 @@ export async function runBinModeCheck(
   let entries: BinEntry[]
   try {
     entries = await collectBinEntries(root)
-    const modes = await trackedModes(
-      root,
-      entries.map((entry) => entry.target),
-    )
-    const violations = evaluateBinModes(entries, modes)
+    const targets = entries.map((entry) => entry.target)
+    const [modes, executability] = await Promise.all([
+      trackedModes(root, targets),
+      worktreeExecutability(root, targets),
+    ])
+    const violations = evaluateBinModes(entries, modes, executability)
     if (violations.length === 0) {
       output.stdout(
-        `Bin entries tracked at 100755 (${entries.length}): ` +
-          `${entries.map((entry) => entry.target).join(', ') || 'none declared'}`,
+        `Bin entries tracked at 100755 with executable working-tree files (${entries.length}): ` +
+          `${targets.join(', ') || 'none declared'}`,
       )
       return 0
     }

@@ -7,6 +7,7 @@ import {
   evaluateBinModes,
   runBinModeCheck,
   trackedModes,
+  worktreeExecutability,
 } from './bin-mode-check'
 
 const temporary: string[] = []
@@ -46,6 +47,10 @@ async function git(
 async function fixture(options?: {
   rootBinMode?: number
   workspaceBinMode?: number
+  /** Working-tree chmod for the bin sources, applied after the commit (the
+   * `*BinMode` options above are applied before it). */
+  worktreeRootBinMode?: number
+  worktreeWorkspaceBinMode?: number
   trackRootBin?: boolean
   trackWorkspaceBin?: boolean
   extraWorkspaceBins?: Record<string, { content: string; mode?: number; track?: boolean }>
@@ -106,6 +111,10 @@ async function fixture(options?: {
   if (options && options.trackWorkspaceBin === false) {
     await writeFile(workspaceBin, '#!/usr/bin/env bun\n')
   }
+  if (options?.worktreeRootBinMode !== undefined) await chmod(rootBin, options.worktreeRootBinMode)
+  if (options?.worktreeWorkspaceBinMode !== undefined) {
+    await chmod(workspaceBin, options.worktreeWorkspaceBinMode)
+  }
   return { root, rootBin, workspaceBin }
 }
 
@@ -138,6 +147,7 @@ describe('bin mode invariants', () => {
     expect(output.stderr).toEqual([])
     expect(output.stdout.join('')).toContain(relative(fixtureResult, fixtureResult.rootBin))
     expect(output.stdout.join('')).toContain(relative(fixtureResult, fixtureResult.workspaceBin))
+    expect(output.stdout.join('')).toContain('executable working-tree files')
   })
 
   test('fails with the mechanism message when a bin source is committed 100644', async () => {
@@ -182,6 +192,49 @@ describe('bin mode invariants', () => {
     expect(message).toContain('committed 100644')
   })
 
+  test('fails when the index is 100755 but the working tree lost the executable bit', async () => {
+    const fixtureResult = await fixture({ worktreeWorkspaceBinMode: 0o644 })
+    const { output, run } = capture()
+    expect(await run(fixtureResult.root)).toBe(1)
+    const message = output.stdout.join('')
+    expect(message).toContain('@fixture/svc#svc-cli')
+    expect(message).toContain('100755')
+    expect(message).toContain('working-tree file is missing or has lost the owner execute bit')
+    expect(message).toContain('chmod +x')
+    expect(message).toContain('do not stage the mode change')
+  })
+
+  test('fails when only group and other execute bits remain (owner bit cleared)', async () => {
+    // A 0655 worktree file maps to index mode 100644 in git's accounting even
+    // though some execute bits are set: git tracks only the owner bit, so git
+    // status reports a 100755→100644 mode change. An any-execute-bit (0o111)
+    // predicate would call this clean and miss the dirty state.
+    const fixtureResult = await fixture({ worktreeWorkspaceBinMode: 0o0655 })
+    const { output, run } = capture()
+    expect(await run(fixtureResult.root)).toBe(1)
+    const message = output.stdout.join('')
+    expect(message).toContain('@fixture/svc#svc-cli')
+    expect(message).toContain('owner execute bit')
+  })
+
+  test('maps working-tree executability by the owner execute bit', async () => {
+    const fixtureResult = await fixture({ worktreeWorkspaceBinMode: 0o0655 })
+    const rootBin = relative(fixtureResult, fixtureResult.rootBin)
+    const workspaceBin = relative(fixtureResult, fixtureResult.workspaceBin)
+    const absent = 'packages/svc/src/absent.ts'
+    const executability = await worktreeExecutability(fixtureResult.root, [
+      rootBin,
+      workspaceBin,
+      absent,
+    ])
+    expect(executability.get(rootBin)).toBe(true)
+    expect(executability.get(workspaceBin)).toBe(false)
+    expect(executability.get(absent)).toBe(false)
+    await chmod(fixtureResult.workspaceBin, 0o644)
+    const cleared = await worktreeExecutability(fixtureResult.root, [workspaceBin])
+    expect(cleared.get(workspaceBin)).toBe(false)
+  })
+
   test('fails closed when a bin target escapes the repository root', async () => {
     const fixtureResult = await fixture()
     await writeFile(
@@ -201,10 +254,18 @@ describe('bin mode invariants', () => {
     const modes = await trackedModes(fixtureResult.root, [target])
     expect(modes.get(target)).toEqual(['100755'])
     expect(
-      evaluateBinModes([{ manifestPath: 'p', packageName: 'p', name: 'n', target }], modes),
+      evaluateBinModes(
+        [{ manifestPath: 'p', packageName: 'p', name: 'n', target }],
+        modes,
+        new Map([[target, true]]),
+      ),
     ).toEqual([])
     expect(
-      evaluateBinModes([{ manifestPath: 'p', packageName: 'p', name: 'n', target }], new Map()),
+      evaluateBinModes(
+        [{ manifestPath: 'p', packageName: 'p', name: 'n', target }],
+        new Map(),
+        new Map(),
+      ),
     ).toEqual([
       { kind: 'untracked', entry: { manifestPath: 'p', packageName: 'p', name: 'n', target } },
     ])
@@ -212,12 +273,26 @@ describe('bin mode invariants', () => {
       evaluateBinModes(
         [{ manifestPath: 'p', packageName: 'p', name: 'n', target }],
         new Map([[target, ['100644', '100755']]]),
+        new Map(),
       ),
     ).toEqual([
       {
         kind: 'conflict',
         entry: { manifestPath: 'p', packageName: 'p', name: 'n', target },
         modes: ['100644', '100755'],
+      },
+    ])
+    expect(
+      evaluateBinModes(
+        [{ manifestPath: 'p', packageName: 'p', name: 'n', target }],
+        modes,
+        new Map([[target, false]]),
+      ),
+    ).toEqual([
+      {
+        kind: 'worktree-mode',
+        entry: { manifestPath: 'p', packageName: 'p', name: 'n', target },
+        indexMode: '100755',
       },
     ])
   })
