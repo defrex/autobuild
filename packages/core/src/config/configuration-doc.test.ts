@@ -10,6 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
+  type RuntimeProvisioningEntry,
   finalizeAgentStepSchema,
   finalizeCheckStepSchema,
   imageHostSchema,
@@ -52,6 +53,37 @@ const [doc, guide, readme, setupDoc, guideSetup, autobuildToml] = await Promise.
 function tomlBasicStringLine(key: string, value: string): string {
   const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
   return `${key} = "${escaped}"`
+}
+
+/**
+ * Version pinned by a raw-text setup.md install line. Applies only to the raw
+ * doc surfaces — the AUT-455 regex shape expects the literal
+ * `install = "npm install …"` prefix that exists only in the file text.
+ */
+function versionFromDocInstallLine(surface: string, location: string): string {
+  const version =
+    /install = "npm install --global --ignore-scripts @earendil-works\/pi-coding-agent@([^"\\\s]+)"/.exec(
+      surface,
+    )?.[1]
+  if (version === undefined) {
+    throw new Error(`${location} does not pin a pi-coding-agent version on its install line`)
+  }
+  return version
+}
+
+/**
+ * Version pinned by a parsed runtimeProvisioning install command. Applies only
+ * to `parseConfig` output — parsed values carry no TOML `install = "` line
+ * prefix, so the doc helper above must never be applied to them.
+ */
+function versionFromInstallCommand(command: string): string {
+  const version = /@earendil-works\/pi-coding-agent@([^"\\\s]+)/.exec(command)?.[1]
+  if (version === undefined) {
+    throw new Error(
+      `runtimeProvisioning install command does not pin a pi-coding-agent version: ${command}`,
+    )
+  }
+  return version
 }
 
 function escapeRegex(literal: string): string {
@@ -260,6 +292,51 @@ describe('Vercel runtime provisioning documentation', () => {
         `${location} preflight example drifted from the delivered runtimeProvisioning command`,
       ).toContain(tomlBasicStringLine('preflight', pi.preflight))
     }
+  })
+
+  test('keeps the two setup.md copies byte-identical', () => {
+    // docs/setup.md and the skill reference are checked-in duplicates: the
+    // skill copy ships verbatim inside the guide skill, so any one-sided edit
+    // silently diverges what user repos read. Full-file parity is the chosen
+    // granularity — the strongest option, and the one that makes any single
+    // copy edit fail.
+    expect(
+      setupDoc,
+      'docs/setup.md and skills/guide/references/setup.md drifted apart; apply the edit to both copies',
+    ).toBe(guideSetup)
+  })
+
+  test("cross-checks the doc Pi version against autobuild.toml's runtimeProvisioning install line", () => {
+    // AUT-455's pin derives each surface's version from its own install line,
+    // so a bump that updates every doc copy but stales autobuild.toml (or the
+    // reverse) passes everywhere. This test is the cross-check: the raw-text
+    // doc install lines are pinned against the parsed repository config, and
+    // the config's own preflight is pinned against its install line so every
+    // version literal in the doc examples matches autobuild.toml.
+    const parsed = parseConfig(autobuildToml, AUTOBUILD_PATH)
+    const config = parsed.workspace.config as {
+      runtimeProvisioning?: Record<string, RuntimeProvisioningEntry>
+    }
+    const pi = config.runtimeProvisioning?.pi
+    if (pi === undefined) {
+      throw new Error('autobuild.toml is missing [workspace.config.runtimeProvisioning.pi]')
+    }
+    const version = versionFromInstallCommand(pi.install)
+    for (const [location, surface] of [
+      ['docs/setup.md', setupDoc],
+      ['skills/guide/references/setup.md', guideSetup],
+    ] as const) {
+      expect(
+        versionFromDocInstallLine(surface, location),
+        `${location} install-line version drifted from autobuild.toml's runtimeProvisioning.pi install line`,
+      ).toBe(version)
+    }
+    // The parsed preflight carries real `"` characters (the TOML `\\"` escape
+    // bytes are unescaped by parsing), so match plain quotes around the
+    // interpolated version — never the raw-file `\\"` form.
+    expect(pi.preflight, 'autobuild.toml preflight drifted from its own install line').toContain(
+      `= "${version}"`,
+    )
   })
 })
 
