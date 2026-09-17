@@ -107,7 +107,7 @@
     "capture:readme-headline": "bun tools/readme-headline.ts",
     "release": "bun tools/release.ts",
     "postgres:migrate": "bun packages/postgres-store/src/bin.ts migrate",
-    "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/workspace-manifest-check.ts && bun tools/bin-mode-check.ts",
+    "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/workspace-manifest-check.ts && bun tools/package-boundary-check.ts && bun tools/bin-mode-check.ts",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
     "test": "bun test packages/*/src tools bin app",
@@ -124,6 +124,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",
+    "@defrex/autobuild-postgres-store": "workspace:*",
     "@resvg/resvg-js": "2.6.2",
     "@types/bun": "^1.3.14",
     "@types/node": "^24.0.0",
