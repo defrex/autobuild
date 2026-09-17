@@ -101,6 +101,149 @@ describe('findBoundaryViolations', () => {
     ])
   })
 
+  test('import text inside a line comment is not an offender', () => {
+    expect(
+      scan([file('packages/core/src/a.test.ts', `// import { x } from '${SIBLING_SRC_STORE}'\n`)]),
+    ).toEqual([])
+  })
+
+  test('a block/JSDoc comment documenting a forbidden import and commented-out code are clean', () => {
+    const contents = [
+      '/**',
+      ` * The old boundary breach was \`import { store } from '${SIBLING_SRC_STORE}'\`;`,
+      ' * it now goes through the public subpath export.',
+      ' */',
+      `// import { store } from '${SIBLING_SRC_STORE}'`,
+      "import { store } from '@defrex/autobuild-postgres-store/store'",
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
+  })
+
+  test('import text inside a string literal or template-literal interior is clean', () => {
+    const contents = [
+      `const hint = "import { x } from '${SIBLING_SRC_STORE}' to load the store"`,
+      `const doc = 'see import { x } from "${SIBLING_SRC_STORE}"'`,
+      `const usage = \`import { x } from '${SIBLING_SRC_STORE}' when wiring manually\``,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
+  })
+
+  test('comment and string text does not mask a real sibling-src import in the same file', () => {
+    const contents = [
+      `// import { x } from '${SIBLING_SRC_STORE}'`,
+      `const hint = "from '${SIBLING_SRC_STORE}'"`,
+      `import { x } from '${SIBLING_SRC_STORE}'`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:3: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('a dynamic import inside a template interpolation is still flagged', () => {
+    // `${…}` is real code, not template interior: the parser descends into it.
+    const contents = `const message = \`load it: \${import('${SIBLING_SRC_STORE}')}\`\n`
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('a template-literal specifier is not collected (coverage preserved)', () => {
+    // The raw-text regexes this scanner replaces never matched template
+    // specifiers, and widening would change coverage.
+    const contents = `const m = import(\`\${'${SIBLING_SRC_STORE}'}\`)\n`
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
+  })
+
+  test('an unparseable file fails closed with the sentinel violation', () => {
+    const contents = "import { from '../../postgres-store/src/store'\n"
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      'packages/core/src/a.test.ts:1: <unparseable module>',
+    ])
+  })
+
+  test('a valid JSX .test.tsx is not misreported as unparseable', () => {
+    // The parse gate uses the file's script kind, so JSX parses as JSX.
+    const contents = [
+      'export const C = () => <div>store</div>',
+      `const hint = "import { x } from '${SIBLING_SRC_STORE}'"`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.tsx', contents)])).toEqual([])
+  })
+
+  test('a real sibling-src import in a JSX .test.tsx is still flagged', () => {
+    const contents = [
+      'export const C = () => <div/>',
+      `import { x } from '${SIBLING_SRC_STORE}'`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.tsx', contents)])).toEqual([
+      `packages/core/src/a.test.tsx:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('import-equals and require-ish forms are still flagged', () => {
+    expect(
+      scan([
+        file(
+          'packages/core/src/a.test.ts',
+          [
+            `import x = require('${SIBLING_SRC_STORE}')`,
+            `const m = module.require('${SIBLING_SRC_STORE}')`,
+            `const d = require.call(null, '${SIBLING_SRC_STORE}')`,
+            `const e = require.apply(null, ['${SIBLING_SRC_STORE}'])`,
+            `const f = new require('${SIBLING_SRC_STORE}')`,
+          ].join('\n'),
+        ),
+      ]),
+    ).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:3: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:4: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:5: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('fully type-only import and export forms stay flagged (documented divergence)', () => {
+    expect(
+      scan([
+        file(
+          'packages/core/src/a.test.ts',
+          [
+            `import type { T } from '${SIBLING_SRC_STORE}'`,
+            `export type { T } from '${SIBLING_SRC_STORE}'`,
+          ].join('\n'),
+        ),
+      ]),
+    ).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('type-position import() — import type nodes — are still flagged', () => {
+    // `import('…').Type` and `typeof import('…')` parse as an ImportTypeNode,
+    // not a call; the raw-text regexes this scanner replaces matched the
+    // import(…) text wherever it appeared, so type nodes stay flagged too.
+    const contents = [
+      `type Store = import('${SIBLING_SRC_STORE}').Store`,
+      `type Mod = typeof import('${SIBLING_SRC_STORE}')`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('an import() type reference inside a string is clean while a real one is flagged', () => {
+    const contents = [
+      `const hint = "type Store = import('${SIBLING_SRC_STORE}').Store"`,
+      `type Store = import('${SIBLING_SRC_STORE}').Store`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
   test('does not flag a relative import that resolves into the same package', () => {
     expect(
       scan([
@@ -238,6 +381,15 @@ describe('runPackageBoundaryCheck', () => {
     ])
     expect(stub.stderr.join('')).toContain('subpath exports')
     expect(stub.stderr.join('')).toContain('2 violation(s) found')
+  })
+
+  test('an unparseable test file fails the run and names the file on stdout', async () => {
+    const stub = harness({ 'packages/core/src/broken.test.ts': text("import { from 'x'\n") })
+
+    expect(await runPackageBoundaryCheck(stub.env, stub.output)).toBe(1)
+    expect(stub.stdout).toEqual([
+      "packages/core/src/broken.test.ts:1: specifier '<unparseable module>' reaches <unknown> from core tests\n",
+    ])
   })
 
   test('a clean tree exits 0 with a tally', async () => {
