@@ -3,6 +3,7 @@ import { composeBuildConfig } from '../config/live'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import { detail as projectDetail } from '../cli/status'
 import { reduceBuild } from '../kernel/reducer'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
@@ -333,7 +334,12 @@ command = "postgres"
     expect(row.effectiveConfigRev).toBe(3)
     expect(row.pipelineSource).toEqual({ ref: 'branch-head', commit: 'a'.repeat(40) })
 
-    const view = await getOperatorBuild({ store, repo: REPO, slug: 'active', now })
+    // AUT-496: one getOperatorBuild call on a row-rendering build reads the
+    // pinned artifact exactly once.
+    const counting = countingStore(store)
+    const view = await getOperatorBuild({ store: counting.store, repo: REPO, slug: 'active', now })
+    expect(counting.counts.get('getArtifact')).toBe(1)
+    expect(counting.artifactSlugs).toEqual(['active'])
     expect(view.dashboardRow!.steps.map((step) => step.label)).toContain('verify:postgres')
     expect(view.dashboardRow!.effectiveConfigRev).toBe(3)
     expect(view.dashboardRow!.pipelineSource).toEqual({
@@ -723,6 +729,72 @@ command = "postgres"
     for (const method of MUTATING_STORE_METHODS) {
       expect(counting.counts.get(method) ?? 0).toBe(0)
     }
+  })
+
+  test('a terminal done build skips the pinned effective-config read in getOperatorBuild', async () => {
+    // AUT-496 (AC 1): a terminal build whose dashboardRow is null must not
+    // read its pinned effective-config artifact — the read's result could
+    // never be surfaced. The visible result (detail) is identical to today's.
+    const raw = await seedDashboardStore()
+    await raw.putArtifact('merged', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedPipelineConfig()),
+      metadata: { revision: 5, run: 'new' },
+    })
+    const counting = countingStore(raw) // seeding used the raw store; counts start empty
+
+    const view = await getOperatorBuild({ store: counting.store, repo: REPO, slug: 'merged', now })
+    expect(view.dashboardRow).toBeNull()
+
+    // The pinned artifact is never fetched.
+    expect(counting.counts.get('getArtifact') ?? 0).toBe(0)
+    expect(counting.artifactSlugs).not.toContain('merged')
+
+    // The visible result is identical to the legacy projection: the detail is
+    // the plain status projection, and nothing else about it changed.
+    const record = (await raw.getBuild('merged'))!
+    const events = await raw.getEvents('merged')
+    expect(view.detail).toEqual(projectDetail(record, events, now))
+
+    // Full read budget for one getOperatorBuild call on a done build.
+    expect(counting.counts.get('getBuild')).toBe(1)
+    expect(counting.counts.get('getEvents')).toBe(1)
+    expect(counting.counts.get('getRepo')).toBe(1)
+    expect(counting.counts.get('getRepoEvents')).toBe(1)
+    expect(counting.counts.get('getRepoArtifact')).toBe(1)
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+  })
+
+  test('a terminal aborted build still reads and surfaces its pinned config in getOperatorBuild', async () => {
+    // AUT-496 (AC 2 boundary): aborted builds are terminal but project a
+    // non-null `cleaning` row, so the gate must NOT skip their pinned read.
+    const raw = await seedDashboardStore()
+    await raw.putArtifact('aborted', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedPipelineConfig()),
+      metadata: {
+        revision: 5,
+        run: 'new',
+        pipelineSource: { ref: 'base', commit: 'b'.repeat(40) },
+      },
+    })
+    const counting = countingStore(raw)
+
+    const view = await getOperatorBuild({ store: counting.store, repo: REPO, slug: 'aborted', now })
+    // An aborted build renders a cleaning row with no steps at all
+    // (`projectBuild`'s abortProgress early return), so a pinned-step
+    // assertion here can never pass — the decoration is the visible proof.
+    expect(view.dashboardRow).not.toBeNull()
+    expect(view.dashboardRow!.status).toBe('cleaning')
+    expect(view.dashboardRow!.steps).toEqual([])
+    expect(view.dashboardRow!.effectiveConfigRev).toBe(5)
+    expect(view.dashboardRow!.pipelineSource).toEqual({ ref: 'base', commit: 'b'.repeat(40) })
+
+    // The boundary guard: the pinned artifact was read exactly once.
+    expect(counting.counts.get('getArtifact')).toBe(1)
+    expect(counting.artifactSlugs).toEqual(['aborted'])
   })
 
   test('a snapshot for a repository the store has never seen answers as today and writes nothing', async () => {
