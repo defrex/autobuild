@@ -376,6 +376,63 @@ command = "postgres"
   // (`effectiveConfig`, `scanUnclaimedObservations`, `projectBuild`,
   // `buildDashboardFromProjected`) so the differential test survives the
   // refactor unchanged.
+  // ── AUT-486 counting fixtures ───────────────────────────────────────
+  //
+  // A Proxy that counts every invoked method of the memory store. Each method
+  // is applied bound to the raw instance, so internal adapter calls are not
+  // double-counted and the counts name exactly the store calls one snapshot
+  // makes (ACs 2–5).
+  const MUTATING_STORE_METHODS = [
+    'ensureRepo',
+    'createBuild',
+    'append',
+    'appendIfCurrent',
+    'appendWithArtifacts',
+    'putArtifact',
+    'claimLease',
+    'heartbeat',
+    'releaseLease',
+    'appendRepo',
+    'appendRepoWithArtifacts',
+    'putRepoArtifact',
+    'claimRepoLease',
+    'heartbeatRepo',
+    'releaseRepoLease',
+    'createSession',
+    'appendSessionEvent',
+    'appendSessionWithArtifacts',
+    'putSessionArtifact',
+    'createStream',
+    'appendStreamParts',
+    'closeStream',
+  ] as const
+
+  function countingStore(store: MemoryBuildStore): {
+    store: BuildStore
+    counts: Map<string, number>
+    eventSlugs: string[]
+    artifactSlugs: string[]
+  } {
+    const counts = new Map<string, number>()
+    const eventSlugs: string[] = []
+    const artifactSlugs: string[] = []
+    const target = store as unknown as Record<string, unknown>
+    const proxy = new Proxy(target, {
+      get(t, prop) {
+        if (typeof prop === 'symbol') return Reflect.get(t, prop, t)
+        const value = t[prop]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          counts.set(prop, (counts.get(prop) ?? 0) + 1)
+          if (prop === 'getEvents') eventSlugs.push(args[0] as string)
+          if (prop === 'getArtifact') artifactSlugs.push(args[0] as string)
+          return (value as (...a: unknown[]) => unknown).apply(t, args)
+        }
+      },
+    })
+    return { store: proxy as unknown as BuildStore, counts, eventSlugs, artifactSlugs }
+  }
+
   interface PinnedProjection {
     config: Config
     revision?: number
@@ -619,6 +676,65 @@ command = "postgres"
       'which spec scope?',
     ])
     expect(snapshot.model.builds.find((build) => build.slug === 'merged')).toBeUndefined()
+  })
+
+  test('one snapshot reads each history once, the journal once, and writes nothing', async () => {
+    // More finished builds than rendered rows: five `done` builds, one of them
+    // carrying a pinned artifact that must NOT be fetched.
+    const raw = await seedDashboardStore(4)
+    await raw.putArtifact('finished-1', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedPipelineConfig()),
+      metadata: { revision: 5, run: 'new' },
+    })
+    const repoBuilds = [
+      'aborted',
+      'blocked',
+      'finished-1',
+      'finished-2',
+      'finished-3',
+      'finished-4',
+      'merged',
+      'queued',
+      'running',
+    ]
+    const rowBuilds = ['aborted', 'blocked', 'queued', 'running']
+
+    const counting = countingStore(raw)
+    counting.counts.clear() // seeding used the raw store; count the snapshot only
+    const snapshot = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
+    expect(snapshot.model.builds.map((build) => build.slug)).toEqual(rowBuilds)
+
+    // Read bounds: one journal read, one listing, one history read per repo
+    // build (each slug exactly once), and pinned-config reads only for builds
+    // that render a row (ACs 2–4).
+    expect(counting.counts.get('listBuilds')).toBe(1)
+    expect(counting.counts.get('getRepo')).toBe(1)
+    expect(counting.counts.get('getRepoEvents')).toBe(1)
+    expect(counting.counts.get('getRepoArtifact')).toBe(1)
+    expect(counting.eventSlugs).toHaveLength(repoBuilds.length)
+    expect([...counting.eventSlugs].sort()).toEqual(repoBuilds)
+    expect(counting.counts.get('getArtifact')).toBe(rowBuilds.length)
+    expect([...counting.artifactSlugs].sort()).toEqual(rowBuilds)
+    // The done build's pinned artifact is never fetched.
+    expect(counting.artifactSlugs).not.toContain('finished-1')
+
+    // No store writes, including creating or locking the repository record (AC 5).
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+  })
+
+  test('a snapshot for a repository the store has never seen answers as today and writes nothing', async () => {
+    const raw = new MemoryBuildStore({ clock })
+    const counting = countingStore(raw)
+    await expect(
+      getOperatorDashboard({ store: counting.store, repo: REPO, clock }),
+    ).rejects.toMatchObject({ code: 'effective-config-unavailable' })
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+    expect(await raw.getRepo(REPO)).toBeNull()
   })
 
   test('dashboard reports every durable effective-config failure as a typed query error', async () => {
