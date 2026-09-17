@@ -17,7 +17,10 @@ in the repository `check` gate fails when anything else would ship. The
 deny-by-default allowlist is deliberate: a future top-level file in this
 package (a scratch script, a live-test fixture, a dotenv file, an editor
 artifact) stays out of the tarball unless the allowlist and the check are
-updated together.
+updated together. The `src/testing/` helpers are test-only surface — their
+sole consumer is the live test suite — and are excluded from the tarball by
+the `!src/testing/**` negation (AUT-500), so a surface pass does not re-flag
+them.
 
 ## Setup
 
