@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#449](https://github.com/defrex/autobuild/pull/449) — Make tomlBasicStringLine a general TOML basic-string renderer
 - [#447](https://github.com/defrex/autobuild/pull/447) — Pin collectSpecifiers' JS fileName mapping; fix guard example (AUT-484)
 - [#445](https://github.com/defrex/autobuild/pull/445) — Fix skill-docs-asset-check's inline-code mention recognition
 - [#444](https://github.com/defrex/autobuild/pull/444) — Widen the published-imports guard beyond .ts/.tsx packed files
