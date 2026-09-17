@@ -43,9 +43,20 @@ async function sourceFiles(directory: string): Promise<string[]> {
  * not slip past the scan — while a name that merely begins with `dispatcher`
  * (`./dispatcherish`, `./dispatcher-utils`) does not match: the boundary is
  * the dispatcher module itself, not any name that starts with it.
+ *
+ * The package branch is anchored the same way at package-name granularity: it
+ * matches the exact package name `@defrex/autobuild-hosted-dispatcher` or its
+ * `/` subpaths — including raw template text whose next character after the
+ * name is `/` (a subpath), `$` from an interpolation (which can resolve to the
+ * real dispatcher at runtime, so it stays flagged — fail-closed), or
+ * end-of-string — and does not match a name that merely extends the prefix
+ * with a package-name character (`-tools`, `_x`, `2`, `.js`). The boundary is
+ * the npm package-name alphabet, not merely end-of-string or `/`: anything a
+ * package name could continue with means the specifier is a different, longer
+ * package name.
  */
 const DISPATCHER_SPECIFIER =
-  /^(?:\.\/dispatcher(?:$|[./]))|(?:^@defrex\/autobuild-hosted-dispatcher)/
+  /^(?:\.\/dispatcher(?:$|[./]))|(?:^@defrex\/autobuild-hosted-dispatcher(?:$|[^A-Za-z0-9._-]))/
 
 /**
  * Parser-based extraction of dispatcher specifiers — NOT regex-based. The
@@ -314,6 +325,24 @@ describe('hosted-store-service package boundary', () => {
     expect(dispatcherSpecifiers("import './dispatcher-utils'")).toEqual([])
     expect(dispatcherSpecifiers("const m = await import('./dispatcherish')")).toEqual([])
     expect(dispatcherSpecifiers("const m = await import('./dispatcher-utils')")).toEqual([])
+
+    // The same boundary rule at package-name granularity: a package whose name
+    // merely extends the dispatcher package prefix is a different package and
+    // must not be flagged, in any import form.
+    expect(
+      dispatcherSpecifiers("import { x } from '@defrex/autobuild-hosted-dispatcher-tools'"),
+    ).toEqual([])
+    expect(
+      dispatcherSpecifiers("const m = await import('@defrex/autobuild-hosted-dispatcher-tools')"),
+    ).toEqual([])
+    expect(dispatcherSpecifiers('require(`@defrex/autobuild-hosted-dispatcher-tools`)')).toEqual([])
+    // Fail-closed: an interpolation directly after the package name can resolve
+    // to the real dispatcher at runtime, so the raw text stays flagged.
+    expect(
+      dispatcherSpecifiers(
+        `const m = await import(\`@defrex/autobuild-hosted-dispatcher\${path}\`)`,
+      ),
+    ).toEqual([`@defrex/autobuild-hosted-dispatcher\${path}`])
 
     // Limitation, by design: a dynamic import whose specifier is a bare
     // variable (`import(pkgVar)`) or whose text is reshaped by interpolation
