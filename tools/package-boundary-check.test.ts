@@ -139,6 +139,35 @@ describe('findBoundaryViolations', () => {
     ])
   })
 
+  test('comment-interleaved require/import argument positions are still flagged (documented widening)', () => {
+    // The header doc comment's "comment-interleaved argument positions"
+    // widening: comments are trivia and never occupy an argument slot, so the
+    // string literal is still the pinned arguments[0] and is reported with its
+    // real text and line — the regexes this parser replaced never matched
+    // these forms at all.
+    const contents = [
+      `const r = require(/* c */ '${SIBLING_SRC_STORE}')`,
+      `const m = import(/* c */ '${SIBLING_SRC_STORE}')`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('comment text is never the specifier, and an allowed specifier in an interleaved position is clean', () => {
+    // An implementation that misread comment text as the specifier would flag
+    // the sibling-src path inside the block comments below; the real argument
+    // in every case here is the allowed './x' literal.
+    const contents = [
+      "const a = require(/* c */ './x')",
+      "const b = import(/* c */ './x')",
+      `const c = require(/* '${SIBLING_SRC_STORE}' */ './x')`,
+      `const d = import(/* '${SIBLING_SRC_STORE}' */ './x')`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
+  })
+
   test('a dynamic import inside a template interpolation is still flagged', () => {
     // `${…}` is real code, not template interior: the parser descends into it.
     const contents = `const message = \`load it: \${import('${SIBLING_SRC_STORE}')}\`\n`
