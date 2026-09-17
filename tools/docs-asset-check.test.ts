@@ -261,6 +261,30 @@ describe('scanDocsAssets', () => {
     expect(await scanDocsAssets(shipped.env)).toEqual([])
   })
 
+  test('a vendored skill document is out of scan scope in both directions (shipped-docs-only ruling)', async () => {
+    // The targets resolve to `docs/assets/…` from each document's directory
+    // (three `../` from readme-headline, four from the pristine copy), so any
+    // widening of the scan scope to skill documents flips both expectations.
+    // A link from a skill document neither keeps a tracked asset alive…
+    const alive = harness({
+      'docs/assets/x.png': binary,
+      '.agents/skills/readme-headline/SKILL.md': '![frame](../../../docs/assets/x.png)\n',
+    })
+
+    expect(await scanDocsAssets(alive.env)).toEqual([
+      { kind: 'orphan', asset: 'docs/assets/x.png' },
+    ])
+
+    // …nor earns a broken finding when its target is untracked.
+    const gone = harness({
+      '.agents/skills/readme-headline/SKILL.md': '![frame](../../../docs/assets/gone.png)\n',
+      '.agents/skills/.ab-pristine/ab-guide/SKILL.md':
+        '![frame](../../../../docs/assets/also-gone.png)\n',
+    })
+
+    expect(await scanDocsAssets(gone.env)).toEqual([])
+  })
+
   test('orphan policy covers images only, and matches the extension case-insensitively', async () => {
     const stub = harness({
       'docs/assets/notes.txt': 'not rendered by anything\n',
