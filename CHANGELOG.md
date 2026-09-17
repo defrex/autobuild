@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#454](https://github.com/defrex/autobuild/pull/454) — Serialize the web dashboard's snapshot refreshes
 - [#452](https://github.com/defrex/autobuild/pull/452) — Rule the store-service scan's subtree collection deliberate (AUT-456)
 - [#451](https://github.com/defrex/autobuild/pull/451) — Retire the bunfig.toml hoisted-linker override
 - [#450](https://github.com/defrex/autobuild/pull/450) — Seed normalized https origins in web-dashboard-dev's devEnv
