@@ -37,9 +37,15 @@ async function sourceFiles(directory: string): Promise<string[]> {
 
 /**
  * Specifiers that would load the dispatcher. Applied to every import form the
- * scanner recognizes.
+ * scanner recognizes. The relative branch also matches extensioned
+ * (`./dispatcher.js`) and subpath (`./dispatcher/index.js`) forms of the
+ * dispatcher module — re-adding the module under an explicit extension must
+ * not slip past the scan — while a name that merely begins with `dispatcher`
+ * (`./dispatcherish`, `./dispatcher-utils`) does not match: the boundary is
+ * the dispatcher module itself, not any name that starts with it.
  */
-const DISPATCHER_SPECIFIER = /^(\.\/dispatcher$)|(^@defrex\/autobuild-hosted-dispatcher)/
+const DISPATCHER_SPECIFIER =
+  /^(?:\.\/dispatcher(?:$|[./]))|(?:^@defrex\/autobuild-hosted-dispatcher)/
 
 /**
  * Parser-based extraction of dispatcher specifiers — NOT regex-based. The
@@ -227,6 +233,18 @@ describe('hosted-store-service package boundary', () => {
       './dispatcher',
     ])
 
+    // Extensioned and subpath forms of the relative dispatcher specifier are
+    // flagged too — re-adding the module under an explicit extension must not
+    // slip past the scan.
+    expect(dispatcherSpecifiers("import './dispatcher.js'")).toEqual(['./dispatcher.js'])
+    expect(dispatcherSpecifiers("import x from './dispatcher/index.js'")).toEqual([
+      './dispatcher/index.js',
+    ])
+    expect(dispatcherSpecifiers("export * from './dispatcher.js'")).toEqual(['./dispatcher.js'])
+    expect(dispatcherSpecifiers("const m = await import('./dispatcher.js')")).toEqual([
+      './dispatcher.js',
+    ])
+
     // Negative controls: legitimate specifiers stay clean.
     expect(
       dispatcherSpecifiers("import { store } from '@defrex/autobuild-postgres-store'"),
@@ -240,6 +258,13 @@ describe('hosted-store-service package boundary', () => {
     expect(dispatcherSpecifiers('void import(`./service`)')).toEqual([])
     expect(dispatcherSpecifiers('import(`@defrex/autobuild-postgres-store`)')).toEqual([])
     expect(dispatcherSpecifiers(`import(\`./\${name}\`)`)).toEqual([])
+
+    // A name that merely begins with `dispatcher` is not the dispatcher module;
+    // the extensioned/subpath widening must not over-flag these.
+    expect(dispatcherSpecifiers("import './dispatcherish'")).toEqual([])
+    expect(dispatcherSpecifiers("import './dispatcher-utils'")).toEqual([])
+    expect(dispatcherSpecifiers("const m = await import('./dispatcherish')")).toEqual([])
+    expect(dispatcherSpecifiers("const m = await import('./dispatcher-utils')")).toEqual([])
 
     // Limitation, by design: a dynamic import whose specifier is a bare
     // variable (`import(pkgVar)`) or whose text is reshaped by interpolation
