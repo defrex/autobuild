@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#457](https://github.com/defrex/autobuild/pull/457) — Skip getOperatorBuild's pinned-config read for null-row builds
 - [#454](https://github.com/defrex/autobuild/pull/454) — Serialize the web dashboard's snapshot refreshes
 - [#455](https://github.com/defrex/autobuild/pull/455) — Fix publish-contents-check's duplicated header sentence and describeSurface's LICENSE rendering
 - [#453](https://github.com/defrex/autobuild/pull/453) — Remove the dashboard snapshot's duplicate reads and per-refresh write
