@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#445](https://github.com/defrex/autobuild/pull/445) — Fix skill-docs-asset-check's inline-code mention recognition
 - [#441](https://github.com/defrex/autobuild/pull/441) — End bin-mode-check's success message with a newline
 - [#439](https://github.com/defrex/autobuild/pull/439) — Widen the rule-on-docs AC3 sweep's include patterns to *.ts
 - [#438](https://github.com/defrex/autobuild/pull/438) — Resolve the @defrex/autobuild@0.8.0 npm export skew (AUT-476)
