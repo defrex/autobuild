@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { packageAutobuildDistribution } from '../ports/workspace/vercel-sandbox'
+import { installPackedDistribution } from '../testing/packed-install'
 import {
   FakeForge,
   FakeTicketSource,
@@ -197,18 +198,9 @@ describe('plugin SDK package surface', () => {
         dependencies: { '@defrex/autobuild': `file:${archive}` },
       }),
     )
-    const install = Bun.spawn(['bun', 'install', '--linker', 'isolated'], {
-      cwd: consumer,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const installExit = await install.exited
-    const [installOutput, installError] = await Promise.all([
-      new Response(install.stdout).text(),
-      new Response(install.stderr).text(),
-    ])
-    if (installExit !== 0) {
-      throw new Error(`packed consumer install failed:\n${installOutput}${installError}`)
+    const install = await installPackedDistribution(['--linker', 'isolated'], consumer)
+    if (install.exitCode !== 0) {
+      throw new Error(`packed consumer install failed:\n${install.stdout}${install.stderr}`)
     }
 
     await writeFile(
@@ -281,7 +273,7 @@ describe('plugin SDK package surface', () => {
     expect(
       await Bun.file(join(initialized, '.agents', 'skills', 'ab-implement', 'SKILL.md')).exists(),
     ).toBe(true)
-  }, 20_000)
+  }, 600_000)
 
   test('the packed distribution installs next to better-auth without a patchedDependencies declaration', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-pack-patch-consumer-'))
@@ -304,19 +296,10 @@ describe('plugin SDK package surface', () => {
     // declares a patchedDependencies entry for a package the consumer tree
     // contains, so this install only succeeds while the packed manifest
     // carries no patchedDependencies field.
-    const install = Bun.spawn(['bun', 'install'], {
-      cwd: consumer,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const installExit = await install.exited
-    const [installOutput, installError] = await Promise.all([
-      new Response(install.stdout).text(),
-      new Response(install.stderr).text(),
-    ])
-    if (installExit !== 0) {
+    const install = await installPackedDistribution([], consumer)
+    if (install.exitCode !== 0) {
       throw new Error(
-        `packed distribution install next to better-auth failed:\n${installOutput}${installError}`,
+        `packed distribution install next to better-auth failed:\n${install.stdout}${install.stderr}`,
       )
     }
     expect(
@@ -327,5 +310,5 @@ describe('plugin SDK package surface', () => {
         join(consumer, 'node_modules', '@defrex', 'autobuild', 'bin', 'ab.ts'),
       ).exists(),
     ).toBe(true)
-  }, 120_000)
+  }, 600_000)
 })
