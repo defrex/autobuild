@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#441](https://github.com/defrex/autobuild/pull/441) — End bin-mode-check's success message with a newline
+- [#439](https://github.com/defrex/autobuild/pull/439) — Widen the rule-on-docs AC3 sweep's include patterns to *.ts
+- [#438](https://github.com/defrex/autobuild/pull/438) — Resolve the @defrex/autobuild@0.8.0 npm export skew (AUT-476)
+- [#440](https://github.com/defrex/autobuild/pull/440) — Guard repo-local skill docs' asset refs; fix vendored-scope comment
 - [#436](https://github.com/defrex/autobuild/pull/436) — Pin comment-interleaved require/import positions in boundary tests
 - [#437](https://github.com/defrex/autobuild/pull/437) — End publish-contents-check's success message with a newline
 - [#435](https://github.com/defrex/autobuild/pull/435) — Extend Pi version cross-check to every install-literal pin
