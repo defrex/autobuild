@@ -236,8 +236,46 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
       const baseSha = await git(dir, ['rev-parse', 'HEAD'])
       await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
       await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+
+      // The workspace file differs from the committed head: dirty. The
+      // provenance must not attribute worktree bytes to the branch-head
+      // commit — it records `worktree-dirty` with no commit at all.
+      await writeFile(join(workspace, 'autobuild.toml'), PIPELINE_B)
+      const result = await resolvePipelineSource({
+        slug: 'b1',
+        record: { branch: 'ab/b1' },
+        events: [provisioned(baseSha)],
+        mode: 'checkout',
+        checkout: dir,
+        exec: spawnExec,
+        workspacePath: workspace,
+      })
+      expect(result?.meta).toEqual({ ref: 'worktree-dirty' })
+      expect(result?.meta).not.toHaveProperty('commit')
+      expect(result?.config.verify.steps).toEqual(['b'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('checkout mode attributes a clean worktree file to the branch-head commit', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pipeline-'))
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-workspace-'))
+    try {
+      await git(dir, ['init', '-q', '-b', 'main'])
+      await writeFile(join(dir, 'autobuild.toml'), PIPELINE_A)
+      await git(dir, ['add', '-A'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'base'])
+      const baseSha = await git(dir, ['rev-parse', 'HEAD'])
+      await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
+      await writeFile(join(dir, 'autobuild.toml'), PIPELINE_B)
+      await git(dir, ['add', '-A'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'head'])
       const headSha = await git(dir, ['rev-parse', 'HEAD'])
 
+      // The workspace carries the head commit's bytes: provenance is exactly
+      // the branch-head commit, as before this change.
       await writeFile(join(workspace, 'autobuild.toml'), PIPELINE_B)
       const result = await resolvePipelineSource({
         slug: 'b1',
@@ -250,6 +288,75 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
       })
       expect(result?.meta).toEqual({ ref: 'branch-head', commit: headSha })
       expect(result?.config.verify.steps).toEqual(['b'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('a worktree file that was never committed degrades to worktree-dirty', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pipeline-'))
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-workspace-'))
+    try {
+      await git(dir, ['init', '-q', '-b', 'main'])
+      await writeFile(join(dir, 'autobuild.toml'), PIPELINE_A)
+      await git(dir, ['add', '-A'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'base'])
+      const baseSha = await git(dir, ['rev-parse', 'HEAD'])
+      // The branch head exists but never carried autobuild.toml: the
+      // comparison read fails, which must degrade to dirty — not crash, not
+      // fall through to the committed-ref or base fallback.
+      await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+
+      await writeFile(join(workspace, 'autobuild.toml'), PIPELINE_B)
+      const result = await resolvePipelineSource({
+        slug: 'b1',
+        record: { branch: 'ab/b1' },
+        events: [provisioned(baseSha)],
+        mode: 'checkout',
+        checkout: dir,
+        exec: spawnExec,
+        workspacePath: workspace,
+      })
+      expect(result?.meta).toEqual({ ref: 'worktree-dirty' })
+      expect(result?.config.verify.steps).toEqual(['b'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  test('a malformed dirty worktree file is a terminal branch-source failure', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pipeline-'))
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-workspace-'))
+    try {
+      await git(dir, ['init', '-q', '-b', 'main'])
+      await writeFile(join(dir, 'autobuild.toml'), PIPELINE_A)
+      await git(dir, ['add', '-A'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '-m', 'base'])
+      const baseSha = await git(dir, ['rev-parse', 'HEAD'])
+      await git(dir, ['checkout', '-q', '-b', 'ab/b1'])
+      await git(dir, [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'head'])
+
+      // The build's own (dirty) worktree carries an unparseable pipeline: the
+      // recorded base is not the build's pipeline either, so the resolver
+      // degrades to undefined with an actionable branch-source failure.
+      await writeFile(join(workspace, 'autobuild.toml'), 'not = [valid toml')
+      const failures: PipelineSourceFailure[] = []
+      const result = await resolvePipelineSource({
+        slug: 'b1',
+        record: { branch: 'ab/b1' },
+        events: [provisioned(baseSha)],
+        mode: 'checkout',
+        checkout: dir,
+        exec: spawnExec,
+        workspacePath: workspace,
+        onFailure: (failure) => failures.push(failure),
+      })
+      expect(result).toBeUndefined()
+      expect(failures.some((failure) => failure.kind === 'branch-source')).toBe(true)
+      expect(failures.some((failure) => failure.detail.includes('worktree-dirty'))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
       await rm(workspace, { recursive: true, force: true })
@@ -289,6 +396,7 @@ describe('resolvePipelineSource (SPEC §16.1)', () => {
     expect(isPipelineSourceRef('branch-head')).toBe(true)
     expect(isPipelineSourceRef('base')).toBe(true)
     expect(isPipelineSourceRef('legacy-fallback')).toBe(true)
+    expect(isPipelineSourceRef('worktree-dirty')).toBe(true)
     expect(isPipelineSourceRef('elsewhere')).toBe(false)
     expect(isPipelineSourceRef(3)).toBe(false)
   })
