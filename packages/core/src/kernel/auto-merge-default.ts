@@ -89,7 +89,9 @@ export function autoMergeDefaultEligible(state: BuildState): boolean {
   // already asked to discard. Direction-blind, like the abort clause — an
   // OFF fan-out skipping it withdraws nothing that survives the settlement.
   // Shared predicate: the per-build consent guard (build-control.ts) applies
-  // the same exclusion, so the two controls cannot diverge silently.
+  // the same exclusion to consent-recording writes. A per-build OFF withdrawal
+  // stays available there — revocation only shrinks the merge set — which is a
+  // stated, directional divergence, not a silent one.
   if (discardInFlight(state)) return false
   return !state.pendingCommands.some((command) => command.command === 'abort')
 }
