@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#408](https://github.com/defrex/autobuild/pull/408) — Extract the consent page's named/unnamed paragraph copy into one site
 - [#405](https://github.com/defrex/autobuild/pull/405) — Include git diff output in finalize-preflight dirty-worktree failure records
 - [#402](https://github.com/defrex/autobuild/pull/402) — Widen store-service boundary scan to template-literal dynamic imports
 - [#400](https://github.com/defrex/autobuild/pull/400) — Re-anchor the packed-install retry cooldown per lag window
