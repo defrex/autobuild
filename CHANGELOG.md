@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#400](https://github.com/defrex/autobuild/pull/400) — Re-anchor the packed-install retry cooldown per lag window
 - [#398](https://github.com/defrex/autobuild/pull/398) — Fix three distribution-packing tests failing on registry lag
 - [#396](https://github.com/defrex/autobuild/pull/396) — Prevent bin.ts mode flips from failing the finalize preflight
 - [#395](https://github.com/defrex/autobuild/pull/395) — Declare @defrex/autobuild-postgres-store as root devDependency
