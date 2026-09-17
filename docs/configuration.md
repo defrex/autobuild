@@ -41,7 +41,9 @@ DATABASE_URL=postgres://… bun run postgres:migrate
 
 Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
 `postgres:migrate` script is relative to that pinned checkout. A hosted build
-can run the same step itself: `bun run deploy:build` migrates against the
+can run the same step itself: `bun run deploy:build` — run from the hosted
+store service package directory (`packages/hosted-store-service`), the Next.js
+project directory — migrates against the
 deployment's database URL, logs the host it prepared, and then builds the web
 application, failing the build when no database URL is configured or the
 schema is incompatible. The database
