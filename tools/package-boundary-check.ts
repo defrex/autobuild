@@ -20,7 +20,12 @@ import { repoRoot } from './git-tracked'
  * import-shaped text inside a line or block comment, a string literal, or a
  * template-literal interior can never produce an offender, while every import
  * position that could load a sibling package's src is still collected with an
- * exact AST line number. A file that does not parse fails closed: it yields a
+ * exact AST line number. Coverage relative to the raw-text regexes this
+ * replaces is enumerated precisely in `collectSpecifiers`' doc comment below —
+ * including a deliberate `require.call/apply` widening (the regexes matched no
+ * such form) and a deliberate narrowing (leading-literal concatenation
+ * specifiers, which the regexes did match). A file that does not parse fails
+ * closed: it yields a
  * single `<unparseable module>` sentinel violation rather than being silently
  * skipped, so ambiguity always errs toward flagging.
  *
@@ -75,24 +80,53 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
 
 /**
  * Parser-based specifier extraction: every string-literal module specifier at
- * a real import position, with its 1-based line. Flagged forms — exactly the
- * forms the raw-text regexes this replaces matched, no wider:
+ * a real import position, with its 1-based line. Collection is by specifier
+ * position: a string literal is collected only when it sits in the exact
+ * specifier slot of a collected call/import — never merely somewhere inside a
+ * call's argument subtree — so an option-bag value, a second argument, or a
+ * computed argument such as `require(path.join(__dirname, './x'))` is not an
+ * offender, and a nested collected call (`require(require('./x'))`) is
+ * collected exactly once by its own visit.
  *
- * - import declarations with a string-literal specifier, including side-effect
- *   `import '…'` and fully type-only `import type …` (see the header comment);
- * - export declarations with a string-literal specifier (`export … from`,
- *   including type-only re-exports);
- * - `import x = require('…')` external-module-reference string literals;
+ * Pinned specifier positions (a string is collected iff it is a StringLiteral
+ * at one of these slots):
+ *
+ * - import declarations: `moduleSpecifier` — including side-effect `import '…'`
+ *   and fully type-only `import type …` (see the header comment);
+ * - export declarations with a module specifier (`export … from`, including
+ *   type-only re-exports): `moduleSpecifier`;
+ * - `import x = require('…')`: the external-module-reference's expression;
  * - dynamic `import(…)` and require-ish calls (`require(…)`, `x.require(…)`,
- *   `require.call/apply(…)`, `new require(…)`) — string-literal arguments
- *   only, collected from the whole argument subtree so composite arguments
- *   (`require.apply(null, ['./x'])`) are caught too. Template-literal
- *   specifiers are deliberately not collected: the regexes never matched them,
- *   and widening would change coverage.
- * - type-position `import(…)` — `import('…').Type` and `typeof import('…')` —
- *   whose string-literal argument is collected from the import type node; the
- *   raw-text regexes matched the import(…) text wherever it appeared, so type
- *   nodes stay flagged too (template-literal *types* were never matched).
+ *   `new require(…)`): `arguments[0]`;
+ * - `require.call(recv, '…')`: `arguments[1]`;
+ * - `require.apply(recv, ['…', …])`: element 0 of the `arguments[1]` array
+ *   literal;
+ * - type-position `import(…)` — `import('…').Type` and `typeof import('…')`:
+ *   the import type node's string-literal argument (the raw-text regexes
+ *   matched the import(…) text wherever it appeared, so type nodes stay
+ *   flagged too).
+ *
+ * Coverage relative to the four raw-text regexes this replaces (`from '…'`,
+ * `import '…'`, `import(…)`, `require('…')`), with the deliberate movements
+ * named rather than papered over:
+ *
+ * - Deliberate widening — the regexes matched none of these forms:
+ *   `require.call/apply(…)` at the pinned positions. The originating plan's
+ *   "no widening" out-of-scope line governed *policy* — which imports are
+ *   forbidden at the boundary — and that policy is unchanged; form coverage is
+ *   a separate axis, and it does widen here for call/apply.
+ * - Narrowings vs the regexes: a leading-literal concatenation specifier
+ *   (`require('./x' + suffix)`, `import('./x' + suffix)` — the regexes matched
+ *   the leading literal, which is not a specifier literal and is no longer
+ *   collected), and regex text-shaped false positives such as a
+ *   `.import('./x')` method call, whose text the `\bimport\s*\(\s*['"]`
+ *   pattern matched. (A `.from('./x')` method call was never flagged: the
+ *   `from` regex needs a quote directly after `from`.)
+ * - Narrowings vs the pre-fix argument-subtree walk only, not vs the regexes —
+ *   the regexes never matched any apply form at all: `require.apply` array
+ *   elements past the first.
+ * - Pre-existing non-coverage, preserved unchanged: template-literal
+ *   specifiers, matched by neither the regexes nor the pre-fix walk.
  *
  * Because specifiers are scoped to import positions, text inside a comment,
  * a string literal, or a template-literal interior can never yield a
@@ -129,21 +163,16 @@ function collectSpecifiers(
   const lineOf = (node: ts.Node): number =>
     sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
 
-  // Collect every string literal in a call-argument subtree. Only subtrees
-  // rooted at real call positions are walked, so string or template interiors
-  // elsewhere in the file can never yield a specifier. Template-literal
-  // arguments are skipped whole — interpolation included — because the
-  // raw-text regexes this scanner replaces never matched past a backtick.
-  const collectStringLiterals = (node: ts.Node): void => {
-    if (ts.isStringLiteral(node)) {
-      specifiers.push({ specifier: node.text, line: lineOf(node) })
-      return
-    }
-    if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) return
-    node.forEachChild(collectStringLiterals)
-  }
-  const collectFromArguments = (args: readonly ts.Expression[]): void => {
-    for (const argument of args) collectStringLiterals(argument)
+  // Specifier-position collection: collect the string literal sitting in a
+  // collected call's specifier slot, never the surrounding argument subtree.
+  // A non-string argument (including a template literal — the raw-text regexes
+  // this scanner replaces never matched past a backtick) yields nothing.
+  const stringLiteralAt = (expression: ts.Expression | undefined): ts.StringLiteral | undefined =>
+    expression !== undefined && ts.isStringLiteral(expression) ? expression : undefined
+  const collectSpecifierAt = (expression: ts.Expression | undefined): void => {
+    const literal = stringLiteralAt(expression)
+    if (literal === undefined) return
+    specifiers.push({ specifier: literal.text, line: lineOf(literal) })
   }
 
   const visit = (node: ts.Node): void => {
@@ -185,21 +214,36 @@ function collectSpecifiers(
       }
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        collectFromArguments(node.arguments)
+        // Dynamic `import(…)`: only the specifier slot, `arguments[0]`.
+        collectSpecifierAt(node.arguments[0])
       } else if (isRequireishExpression(node.expression)) {
-        collectFromArguments(node.arguments)
+        collectSpecifierAt(node.arguments[0])
       } else if (
         ts.isPropertyAccessExpression(node.expression) &&
         (node.expression.name.text === 'call' || node.expression.name.text === 'apply') &&
         isRequireishExpression(node.expression.expression)
       ) {
-        // `require.call(...)` / `require.apply(...)` — the subtree walk also
-        // catches `require.apply(null, ['./x'])` through the array literal.
-        collectFromArguments(node.arguments)
+        // `require.call(recv, '…')`: the specifier is the first argument after
+        // the receiver. `require.apply(recv, ['…', …])`: element 0 of the
+        // arguments array literal — a deliberate widening over the regexes,
+        // which never matched any call/apply form; elements past the first
+        // are not specifiers and are not collected (a narrowing vs the pre-fix
+        // subtree walk only).
+        const argsOrReceiver = node.arguments[1]
+        if (node.expression.name.text === 'apply') {
+          // Only an array-literal second argument carries a specifier, and
+          // only its element 0 (narrow past a SpreadElement: not an array
+          // literal, nothing collected).
+          if (argsOrReceiver !== undefined && ts.isArrayLiteralExpression(argsOrReceiver)) {
+            collectSpecifierAt(argsOrReceiver.elements[0])
+          }
+        } else {
+          collectSpecifierAt(argsOrReceiver)
+        }
       }
     } else if (ts.isNewExpression(node) && isRequireishExpression(node.expression)) {
-      // `new require(...)`.
-      collectFromArguments(node.arguments ?? [])
+      // `new require(...)`: only the specifier slot, `arguments[0]`.
+      collectSpecifierAt(node.arguments?.[0])
     }
     node.forEachChild(visit)
   }
@@ -257,13 +301,21 @@ export function findBoundaryViolations(
     for (const { specifier, line } of collectSpecifiers(file.contents, scriptKindOf(file.path))) {
       if (specifier === UNPARSEABLE_MODULE) {
         if (fromPackage !== undefined) {
+          // Pinned sentinel shape: an unparseable scanned file yields exactly
+          // one full Violation — { path: file.path, line: 1, specifier:
+          // '<unparseable module>', fromPackage, toPackage: '<unknown>' }.
+          // fromPackage is owningPackageOf(file.path, packages): files outside
+          // every workspace package are never reported, sentinel included.
+          // toPackage is the literal '<unknown>' because an unparseable file
+          // names no target — the whole file is the offender and parsing it is
+          // the fix. runPackageBoundaryCheck is unchanged and prints the target
+          // raw through its existing UNPARSEABLE_MODULE special case, so
+          // srcPrefixOf never sees the sentinel.
           violations.push({
             path: file.path,
             line,
             specifier,
             fromPackage,
-            // An unparseable file names no target; the whole file is the
-            // offender and parsing it is the fix.
             toPackage: '<unknown>',
           })
         }
