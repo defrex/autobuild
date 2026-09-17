@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#416](https://github.com/defrex/autobuild/pull/416) — Anchor the dispatcher dependency filter to the exact package name
+- [#412](https://github.com/defrex/autobuild/pull/412) — Remove unused deploymentSectionsEqual and DEPLOYMENT_OWNED_CONFIG_PATHS
 - [#414](https://github.com/defrex/autobuild/pull/414) — Record honest pipeline-source provenance for dirty checkout worktrees
 - [#411](https://github.com/defrex/autobuild/pull/411) — Reject per-build auto-merge consent while a discard is in flight
 - [#413](https://github.com/defrex/autobuild/pull/413) — Anchor the dispatcher package specifier in the boundary scan
