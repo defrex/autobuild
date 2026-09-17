@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#396](https://github.com/defrex/autobuild/pull/396) — Prevent bin.ts mode flips from failing the finalize preflight
 - [#394](https://github.com/defrex/autobuild/pull/394) — Correct /testing attribution in core-floor test comment
 - [#393](https://github.com/defrex/autobuild/pull/393) — Harden store-service boundary scan to all dispatcher import forms
 - [#391](https://github.com/defrex/autobuild/pull/391) — Migrate tools/ scripts onto postgres-store public subpath exports
