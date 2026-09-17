@@ -34,12 +34,16 @@ import { createRuntimeResolver } from '../ports/runner/routing'
 
 const ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 const DOC_PATH = join(ROOT, 'docs', 'configuration.md')
+const SETUP_DOC_PATH = join(ROOT, 'docs', 'setup.md')
 const GUIDE_PATH = join(ROOT, 'skills', 'guide', 'SKILL.md')
+const GUIDE_SETUP_PATH = join(ROOT, 'skills', 'guide', 'references', 'setup.md')
 const README_PATH = join(ROOT, 'README.md')
-const [doc, guide, readme] = await Promise.all([
+const [doc, guide, readme, setupDoc, guideSetup] = await Promise.all([
   readFile(DOC_PATH, 'utf8'),
   readFile(GUIDE_PATH, 'utf8'),
   readFile(README_PATH, 'utf8'),
+  readFile(SETUP_DOC_PATH, 'utf8'),
+  readFile(GUIDE_SETUP_PATH, 'utf8'),
 ])
 
 function escapeRegex(literal: string): string {
@@ -213,6 +217,39 @@ describe('Vercel runtime provisioning documentation', () => {
     expect(section).toContain('@earendil-works/pi-coding-agent@0.84.4')
     expect(section).toContain('AI_GATEWAY_API_KEY')
     expect(section).toContain('plugin')
+  })
+
+  test('pins the delivered preflight example in every canonical surface', () => {
+    // The delivered runtimeProvisioning preflight refreshes the model catalog
+    // (`&& pi update --models`); a bare exact-version preflight copied from
+    // these surfaces would silently lose that refresh. The version is derived
+    // from each surface's own install line so the pin cannot stale on a
+    // version bump, and a surface whose install line cannot be parsed fails
+    // loudly. The expected literal keeps the raw TOML `\"` escape bytes of
+    // the files (hence the doubled backslashes in the source).
+    const surfaces = [
+      ['docs/configuration.md Vercel Sandbox', headingSection(doc, 3, 'Vercel Sandbox')],
+      ['docs/setup.md', setupDoc],
+      ['skills/guide/SKILL.md', guide],
+      ['skills/guide/references/setup.md', guideSetup],
+    ] as const
+
+    for (const [location, surface] of surfaces) {
+      expect(surface, `${location} is missing`).toBeDefined()
+      const version =
+        /install = "npm install --global --ignore-scripts @earendil-works\/pi-coding-agent@([^"\\\s]+)"/.exec(
+          surface!,
+        )?.[1]
+      if (version === undefined) {
+        throw new Error(`${location} does not pin a pi-coding-agent version on its install line`)
+      }
+      expect(
+        surface,
+        `${location} preflight example drifted from the delivered runtimeProvisioning command`,
+      ).toContain(
+        `preflight = "test \\"$(pi --version)\\" = \\"${version}\\" && pi update --models"`,
+      )
+    }
   })
 })
 
