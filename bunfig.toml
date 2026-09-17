@@ -1,9 +1,0 @@
-# The operator web app lives in the hosted store service package, which
-# declares its dependencies (next, react, better-auth, pg). The hoisted linker
-# stays because repository-root tooling (`tools/web-dashboard-capture.tsx`,
-# `tools/web-dashboard.test.ts`) imports react/react-dom/server without
-# declaring them, and under the isolated linker those imports stop resolving.
-# Retiring the override means moving that tooling into a package that declares
-# its dependencies first — separate work.
-[install]
-linker = "hoisted"
