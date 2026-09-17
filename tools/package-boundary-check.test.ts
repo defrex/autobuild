@@ -161,6 +161,25 @@ describe('findBoundaryViolations', () => {
     ])
   })
 
+  test('a valid JSX .test.tsx is not misreported as unparseable', () => {
+    // The parse gate uses the file's script kind, so JSX parses as JSX.
+    const contents = [
+      'export const C = () => <div>store</div>',
+      `const hint = "import { x } from '${SIBLING_SRC_STORE}'"`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.tsx', contents)])).toEqual([])
+  })
+
+  test('a real sibling-src import in a JSX .test.tsx is still flagged', () => {
+    const contents = [
+      'export const C = () => <div/>',
+      `import { x } from '${SIBLING_SRC_STORE}'`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.tsx', contents)])).toEqual([
+      `packages/core/src/a.test.tsx:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
   test('import-equals and require-ish forms are still flagged', () => {
     expect(
       scan([
@@ -197,6 +216,30 @@ describe('findBoundaryViolations', () => {
       ]),
     ).toEqual([
       `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('type-position import() — import type nodes — are still flagged', () => {
+    // `import('…').Type` and `typeof import('…')` parse as an ImportTypeNode,
+    // not a call; the raw-text regexes this scanner replaces matched the
+    // import(…) text wherever it appeared, so type nodes stay flagged too.
+    const contents = [
+      `type Store = import('${SIBLING_SRC_STORE}').Store`,
+      `type Mod = typeof import('${SIBLING_SRC_STORE}')`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+      `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('an import() type reference inside a string is clean while a real one is flagged', () => {
+    const contents = [
+      `const hint = "type Store = import('${SIBLING_SRC_STORE}').Store"`,
+      `type Store = import('${SIBLING_SRC_STORE}').Store`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
       `packages/core/src/a.test.ts:2: ${SIBLING_SRC_STORE}`,
     ])
   })

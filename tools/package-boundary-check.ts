@@ -77,6 +77,10 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  *   (`require.apply(null, ['./x'])`) are caught too. Template-literal
  *   specifiers are deliberately not collected: the regexes never matched them,
  *   and widening would change coverage.
+ * - type-position `import(…)` — `import('…').Type` and `typeof import('…')` —
+ *   whose string-literal argument is collected from the import type node; the
+ *   raw-text regexes matched the import(…) text wherever it appeared, so type
+ *   nodes stay flagged too (template-literal *types* were never matched).
  *
  * Because specifiers are scoped to import positions, text inside a comment,
  * a string literal, or a template-literal interior can never yield a
@@ -84,13 +88,21 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  * import inside `${…}` is still flagged.
  *
  * Fail-closed: a file with a category-Error parse diagnostic yields the
- * `<unparseable module>` sentinel (line 1) instead of being skipped.
+ * `<unparseable module>` sentinel (line 1) instead of being skipped. The gate
+ * parses with the file's script kind, so valid JSX in a `.test.tsx` is not a
+ * diagnostic and cannot trip the sentinel.
  */
 function collectSpecifiers(
   contents: string,
   scriptKind: ts.ScriptKind = ts.ScriptKind.TS,
 ): CollectedSpecifier[] {
-  const { diagnostics } = ts.transpileModule(contents, { reportDiagnostics: true })
+  // The gate must parse with the same script kind as the extractor below:
+  // without a `.tsx` fileName the transpiler parses JSX as plain TS and a
+  // valid `.test.tsx` would fail closed as `<unparseable module>`.
+  const { diagnostics } = ts.transpileModule(contents, {
+    reportDiagnostics: true,
+    fileName: scriptKind === ts.ScriptKind.TSX ? 'module.tsx' : 'module.ts',
+  })
   if ((diagnostics ?? []).some((d) => d.category === ts.DiagnosticCategory.Error)) {
     return [{ specifier: UNPARSEABLE_MODULE, line: 1 }]
   }
@@ -149,6 +161,16 @@ function collectSpecifiers(
         specifier: node.moduleReference.expression.text,
         line: lineOf(node.moduleReference.expression),
       })
+    } else if (ts.isImportTypeNode(node)) {
+      // Type-position `import(…)`: `import('…').Type` and `typeof import('…')`
+      // parse as an ImportTypeNode, not a call, and the raw-text regexes this
+      // scanner replaces matched the import(…) text wherever it appeared — so
+      // the type node's string-literal argument stays flagged. Template-literal
+      // type arguments were never matched and are not collected.
+      const { argument } = node
+      if (ts.isLiteralTypeNode(argument) && ts.isStringLiteral(argument.literal)) {
+        specifiers.push({ specifier: argument.literal.text, line: lineOf(argument.literal) })
+      }
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         collectFromArguments(node.arguments)
