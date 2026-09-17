@@ -112,6 +112,37 @@ const DISPATCHER_SPECIFIER =
  * each scanner's comment documents it, so do not silently align one with the
  * other.
  *
+ * Ruling on collection semantics: this scan collects dispatcher specifiers
+ * from argument subtrees — dynamic `import(...)` walks the first argument's
+ * subtree (the specifier expression), while require-family calls
+ * (`require(...)` and any `x.require(...)`, `require.call(...)` /
+ * `require.apply(...)`, `new require(...)`) walk every argument's subtree —
+ * whereas `tools/package-boundary-check.ts` (the package-boundary lint)
+ * collects only specifier-position string literals (its AUT-452 tightening,
+ * #420). The divergence is deliberate, not drift; do not silently align in
+ * either direction. The narrowing was right for the tools guard: its match
+ * class — any relative specifier into a sibling package's src tree — and its
+ * pre-fix all-arguments dynamic-import walk made non-specifier strings
+ * (option-bag values, second arguments, child-process argv) realistic false
+ * offenders there. This scan's match class is the dispatcher module itself
+ * (`DISPATCHER_SPECIFIER`), and its dynamic-import branch already collects
+ * only the specifier argument's subtree, so a false positive requires a
+ * dispatcher-naming string in a require-family argument position — and that
+ * side is latent (no `require` binding is in scope in this ESM package), so
+ * the walk's fail-closed breadth (second arguments and option bags on
+ * require-ish calls, apply-array elements past the first, concatenated
+ * templates inside the specifier argument) is defense-in-depth that costs
+ * nothing real: a missed load at this deployment boundary is silent, while a
+ * false positive is a loud, trivially fixable test failure. A strict
+ * specifier-position narrowing would also drop the pinned
+ * concatenation-template coverage (`` require(`./dispatcher` + suffix) ``,
+ * `` import(`./dispatcher` + suffix) ``). On the template axis there is a
+ * second deliberate divergence on the collection axis (type-only imports are
+ * ruled separately above): template specifiers are collected here (raw source
+ * text, interpolation included) but not by the tools guard, which collects
+ * only string literals. A collection-semantics change in either module is
+ * re-ruled in both; fixtures in this file pin both directions.
+ *
  * Fail-closed edges: a file that fails to parse (syntactic errors) yields the
  * `<unparseable module>` sentinel so the tree walk reports the whole file as
  * an offender rather than skipping it; ambiguity errs toward flagging.
@@ -150,7 +181,9 @@ export function dispatcherSpecifiers(text: string): string[] {
    * and the require forms so both report template-literal specifiers the same
    * way: raw source text between the backticks, interpolation included. Only
    * subtrees rooted at real call positions are walked, so string or template
-   * interiors elsewhere in the file can never yield an offender.
+   * interiors elsewhere in the file can never yield an offender. This walk is
+   * deliberate — see the collection-semantics ruling in the scanner doc
+   * comment above (the tools guard collects specifier positions instead).
    */
   const collectFromArgument = (argument: ts.Expression): void => {
     const visitArgument = (n: ts.Node): void => {
@@ -213,7 +246,8 @@ export function dispatcherSpecifiers(text: string): string[] {
       ) {
         // `require.call(...)` / `require.apply(...)` — the subtree walk also
         // catches `require.apply(null, ['./dispatcher'])` through the array
-        // literal.
+        // literal. Deliberate — see the collection-semantics ruling in the
+        // scanner doc comment above.
         for (const argument of node.arguments) collectFromArgument(argument)
       }
     } else if (ts.isNewExpression(node) && isRequireishExpression(node.expression)) {
@@ -447,6 +481,45 @@ describe('hosted-store-service package boundary', () => {
     // `require['call'](...)` are beyond the recorded forms.
     expect(dispatcherSpecifiers("const f = require.bind(null, './dispatcher')")).toEqual([])
     expect(dispatcherSpecifiers("require['call'](null, './dispatcher')")).toEqual([])
+  })
+
+  test('argument-subtree collection is ruled deliberate: require-side non-specifier dispatcher strings still report', () => {
+    // These fixtures pin the ruled collection semantics in both directions —
+    // a future narrowing of the require-family walk (→ `[]`) or a widening of
+    // the dynamic-import walk (→ `['./dispatcher']`) fails here and forces a
+    // re-ruling in both modules (this scan and tools/package-boundary-check.ts,
+    // which collects specifier positions only — see both modules' comments).
+
+    // Second-argument/option-bag class: the require-family branches walk every
+    // argument's subtree, so a dispatcher-naming string in a non-specifier
+    // position is still collected (fail-closed defense-in-depth on latent
+    // require forms).
+    expect(dispatcherSpecifiers("require('./service', { fallback: './dispatcher' })")).toEqual([
+      './dispatcher',
+    ])
+    expect(dispatcherSpecifiers("module.require('./service', { log: './dispatcher' })")).toEqual([
+      './dispatcher',
+    ])
+    // apply-array element past the first — #420 narrowed exactly this in the
+    // tools guard.
+    expect(dispatcherSpecifiers("require.apply(null, ['./service', './dispatcher'])")).toEqual([
+      './dispatcher',
+    ])
+
+    // Negative controls: `./service`/`./helper` never match
+    // DISPATCHER_SPECIFIER, so the arrays stay empty.
+    expect(dispatcherSpecifiers("require('./service', { fallback: './helper' })")).toEqual([])
+    expect(dispatcherSpecifiers("require.apply(null, ['./service', './helper'])")).toEqual([])
+
+    // The corrected non-coverage: the dynamic-import branch collects only the
+    // specifier argument's subtree, so an option-bag string stays unreported —
+    // the recorded divergence from the observation. Widening this walk is a
+    // single-sided edit that must be re-ruled in both modules.
+    expect(
+      dispatcherSpecifiers(
+        "await import('./service', { with: { type: 'json' }, fallback: './dispatcher' })",
+      ),
+    ).toEqual([])
   })
 
   test('dispatcher-import text inside comments or strings is not an offender', () => {
