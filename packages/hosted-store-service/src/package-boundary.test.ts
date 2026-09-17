@@ -56,8 +56,12 @@ const DISPATCHER_SPECIFIER = /^(\.\/dispatcher$)|(^@defrex\/autobuild-hosted-dis
  * bindings like `import { type T } from '...'`, which `verbatimModuleSyntax`
  * preserves as `import {} from '...'` / `export {} from '...'` and therefore
  * still executes the module), bare side-effect `import '...'`, dynamic
- * `import('...')`, and `require('...')` (defensively; the package is ESM and
- * has no require today).
+ * `import('...')` with either a quoted or a template-literal specifier (a
+ * template-literal specifier is reported as its raw source text, interpolation
+ * included — `` import(`@defrex/autobuild-hosted-dispatcher/${name}`) `` is
+ * flagged), and `require('...')` (defensively; the package is ESM and has no
+ * require today). A scan that missed side-effect or dynamic forms would let
+ * the dispatcher's kernel/provider closure silently reintroduce itself.
  *
  * Intentionally not flagged: the fully type-only forms `import type { T } from
  * '...'` and `export type { T } from '...'` — both are erased even under
@@ -114,8 +118,24 @@ export function dispatcherSpecifiers(text: string): string[] {
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const argument = node.arguments[0]
-        if (argument && ts.isStringLiteral(argument) && DISPATCHER_SPECIFIER.test(argument.text)) {
-          specifiers.push(argument.text)
+        if (argument && ts.isStringLiteral(argument)) {
+          if (DISPATCHER_SPECIFIER.test(argument.text)) specifiers.push(argument.text)
+        } else if (argument) {
+          // Dynamic import with a template-literal specifier (or any argument
+          // expression containing one): the raw source text between the
+          // backticks is reported, interpolation included (e.g.
+          // `@defrex/autobuild-hosted-dispatcher/${name}`), so the
+          // dispatcher-prefix check sees exactly what the source names. The
+          // parser keeps this scoped to real import positions — a template
+          // literal elsewhere in the file is never an import.
+          const visitTemplates = (n: ts.Node): void => {
+            if (ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) {
+              const raw = n.getText(sourceFile).slice(1, -1)
+              if (DISPATCHER_SPECIFIER.test(raw)) specifiers.push(raw)
+            }
+            n.forEachChild(visitTemplates)
+          }
+          visitTemplates(argument)
         }
       } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
         const argument = node.arguments[0]
@@ -189,6 +209,24 @@ describe('hosted-store-service package boundary', () => {
       './dispatcher',
     ])
 
+    // Template-literal dynamic import specifiers are flagged too — plain,
+    // package, and interpolated forms. An interpolated specifier is reported
+    // as its raw text, so the dispatcher prefix is still caught.
+    expect(dispatcherSpecifiers('const m = await import(`./dispatcher`)')).toEqual(['./dispatcher'])
+    expect(
+      dispatcherSpecifiers('const m = await import(`@defrex/autobuild-hosted-dispatcher`)'),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher'])
+    expect(
+      dispatcherSpecifiers(
+        `const m = await import(\`@defrex/autobuild-hosted-dispatcher/\${name}\`)`,
+      ),
+    ).toEqual([`@defrex/autobuild-hosted-dispatcher/\${name}`])
+    // A template specifier shaped by a surrounding expression is flagged too —
+    // any backtick text inside a dynamic import() argument is examined.
+    expect(dispatcherSpecifiers('const m = await import(`./dispatcher` + suffix)')).toEqual([
+      './dispatcher',
+    ])
+
     // Negative controls: legitimate specifiers stay clean.
     expect(
       dispatcherSpecifiers("import { store } from '@defrex/autobuild-postgres-store'"),
@@ -196,6 +234,17 @@ describe('hosted-store-service package boundary', () => {
     expect(dispatcherSpecifiers("import './service'")).toEqual([])
     expect(dispatcherSpecifiers("void import('@defrex/autobuild-postgres-store')")).toEqual([])
     expect(dispatcherSpecifiers("import { x } from '@defrex/autobuild'")).toEqual([])
+
+    // Backtick specifiers unrelated to the dispatcher stay clean; interpolation
+    // alone is not a false positive.
+    expect(dispatcherSpecifiers('void import(`./service`)')).toEqual([])
+    expect(dispatcherSpecifiers('import(`@defrex/autobuild-postgres-store`)')).toEqual([])
+    expect(dispatcherSpecifiers(`import(\`./\${name}\`)`)).toEqual([])
+
+    // Limitation, by design: a dynamic import whose specifier is a bare
+    // variable (`import(pkgVar)`) or whose text is reshaped by interpolation
+    // (e.g. `import(`./dispatch${kind}`)`) cannot be resolved statically
+    // and stays outside this scan's claimed reach.
   })
 
   test('dispatcher-import text inside comments or strings is not an offender', () => {
