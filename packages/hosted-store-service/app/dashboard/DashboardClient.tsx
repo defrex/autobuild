@@ -23,6 +23,7 @@ import {
 } from './BuildsView'
 import { answerRequest, classifyAnswerReply, classifyControlReply } from './control-reply'
 import { clockText, LoadingControls } from './frame'
+import { createDashboardRefresher, type DashboardRefresher } from './refresh'
 import { OperatorShell } from './Shell'
 import { reconcileDashboard } from './view-model'
 
@@ -123,16 +124,17 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   const [pending, setPending] = useState<string>()
   const [now, setNow] = useState(Date.now())
   const [transcript, setTranscript] = useState<TranscriptPresentation>()
-  const sequence = useRef(0)
+  const [pollPending, setPollPending] = useState(false)
   const answerPending = useRef(false)
+  const refresherRef = useRef<DashboardRefresher | undefined>(undefined)
 
-  const poll = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!repo) return
-      const current = ++sequence.current
-      try {
-        const next = await api.dashboard(repo, signal)
-        if (current !== sequence.current) return
+  // The refresher owns the poll loop and lives for the component's lifetime, so
+  // it must be created before the repository effect below hands it a repo.
+  useEffect(() => {
+    const refresher = createDashboardRefresher({
+      fetch: api.dashboard,
+      visible: () => !document.hidden,
+      onSnapshot: (next) => {
         setSnapshot((old) => ({ ...next, model: reconcileDashboard(old?.model, next.model) }))
         setAnswerStep((step) => {
           if (!step || answerPending.current) return step
@@ -140,25 +142,30 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           return build && build.blockers.length > 0 ? step : undefined
         })
         setError(undefined)
-      } catch (cause) {
-        if (!signal?.aborted) setError(cause instanceof Error ? cause.message : String(cause))
-      }
-    },
-    [repo],
-  )
+      },
+      onError: setError,
+      onPendingChange: setPollPending,
+    })
+    refresherRef.current = refresher
+    const onVisibility = () => refresher.onVisibilityChange()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      refresher.dispose()
+      refresherRef.current = undefined
+    }
+  }, [])
 
+  const requestRefresh = useCallback(() => refresherRef.current?.request() ?? Promise.resolve(), [])
+
+  // A repository change resets local view state and hands the refresher the new
+  // repo, which aborts any in-flight work for the previous one.
   useEffect(() => {
     setSnapshot(undefined)
     setTranscript(undefined)
     setHoverPreview(undefined)
-    const controller = new AbortController()
-    void poll(controller.signal)
-    const timer = window.setInterval(() => void poll(controller.signal), 2000)
-    return () => {
-      controller.abort()
-      window.clearInterval(timer)
-    }
-  }, [poll])
+    refresherRef.current?.setRepo(repo)
+  }, [repo])
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -177,10 +184,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     setError(undefined)
     try {
       await operation()
-      await poll()
+      await requestRefresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
-      await poll()
+      await requestRefresh()
     } finally {
       setPending(undefined)
       releaseSelection()
@@ -229,10 +236,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
         } else if (result.kind === 'unexpected') {
           actionError = result.text
         }
-        await poll()
+        await requestRefresh()
       } catch (cause) {
         actionError = cause instanceof Error ? cause.message : String(cause)
-        await poll()
+        await requestRefresh()
       } finally {
         if (actionError !== undefined) setError(actionError)
         setPending(undefined)
@@ -266,10 +273,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       try {
         const result = classifyAnswerReply(slug, await api.answerBuild(repo, slug, body))
         if (result.kind === 'unexpected') actionError = result.text
-        await poll()
+        await requestRefresh()
       } catch (cause) {
         actionError = cause instanceof Error ? cause.message : String(cause)
-        await poll()
+        await requestRefresh()
       } finally {
         if (actionError !== undefined) setError(actionError)
         setPending(undefined)
@@ -299,10 +306,10 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
           setAnswerStep(undefined)
           releaseSelection()
         } else actionError = result.text
-        await poll()
+        await requestRefresh()
       } catch (cause) {
         actionError = cause instanceof Error ? cause.message : String(cause)
-        await poll()
+        await requestRefresh()
       } finally {
         if (actionError !== undefined) setError(actionError)
         answerPending.current = false
@@ -425,7 +432,7 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       repositories={repositories}
       identity={identity}
       clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
-      pending={pending !== undefined}
+      pending={pending !== undefined || pollPending}
       error={error}
       onRepo={(next) => {
         if (answerPending.current) return
