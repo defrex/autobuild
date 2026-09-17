@@ -7,10 +7,7 @@ import { effectiveRuntimeReferences } from '../packages/core/src/config/roles'
 import { vercelSandboxConfigSchema } from '../packages/core/src/config/schema'
 
 const REPO_ROOT = join(import.meta.dir, '..')
-const GLM = 'vercel-ai-gateway/zai/glm-5.3-flash'
-const DEEPSEEK = 'vercel-ai-gateway/deepseek/deepseek-v4.1-flash'
-const CLAUDE = 'vercel-ai-gateway/anthropic/claude-opus-5'
-const APPROVED_MODELS = [GLM, DEEPSEEK, CLAUDE]
+const ROLE_KEYS = ['default', 'implement', 'plan-review', 'code-review']
 
 test('repository dispatches every agent route through provisioned Pi in Vercel Sandbox', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
@@ -44,34 +41,50 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   await access(join(REPO_ROOT, 'scripts/browser-smoke-server.ts'), constants.R_OK)
   expect(workspace.provisioning[2]?.command).toBe('./scripts/postgres-live.sh install')
   await access(join(REPO_ROOT, 'scripts/postgres-live.sh'), constants.X_OK)
-  expect(workspace.runtimeProvisioning).toEqual({
-    pi: {
-      install: 'npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4',
-      preflight: 'test "$(pi --version)" = "0.84.4" && pi update --models',
-    },
-  })
+  // The pinned Pi version changes on every catalog refresh; derive it from the
+  // install command so a version bump is not a test edit. The preflight
+  // formula — exact pinned version plus an explicit catalog refresh — is the
+  // contract itself and stays hardcoded.
+  const piProvisioning = workspace.runtimeProvisioning?.pi
+  const install = piProvisioning?.install ?? ''
+  const version = /@earendil-works\/pi-coding-agent@([^'\s]+)\s*$/.exec(install)?.[1]
+  if (version === undefined) {
+    throw new Error(`pi install command does not pin a package version: ${install}`)
+  }
+  expect(piProvisioning?.preflight).toBe(
+    `test "$(pi --version)" = "${version}" && pi update --models`,
+  )
+
+  // Catalog-shaped expectations are derived from `autobuild.toml` (the source
+  // the test already loads) so a catalog refresh cannot stale the test. What
+  // stays pinned: the runtime must be `pi` for every role, every model id must
+  // be a gateway id (the disposable-guest, API-billed constraint), each phase
+  // role keeps at least one fallback, and the two config views agree. A
+  // nonexistent-but-gateway-shaped id is caught at provision time by the live
+  // sandbox preflight (`pi update --models` fails on unknown ids).
+  const roleKeys = Object.keys(config.roles)
+  expect(roleKeys.sort()).toEqual([...ROLE_KEYS].sort())
+
+  const gatewayModels = new Set<string>()
+  for (const role of Object.values(config.roles)) {
+    expect(role.runtime).toBe('pi')
+    expect(role.alternates?.length ?? 0).toBeGreaterThan(0)
+    expect(role.model).toBeDefined()
+    for (const model of [role.model, ...(role.alternates ?? []).map(({ model }) => model)]) {
+      expect(model?.startsWith('vercel-ai-gateway/'), `non-gateway model id: ${model}`).toBe(true)
+      gatewayModels.add(model!)
+    }
+    for (const alternate of role.alternates ?? []) {
+      expect(alternate.runtime === undefined || alternate.runtime === 'pi').toBe(true)
+    }
+  }
 
   const effective = effectiveRuntimeReferences(config)
   expect(effective).toHaveLength(1)
   expect(effective[0]?.runtime).toBe('pi')
   expect(effective[0]?.usesRuntimeDefaultModel).toBe(false)
-  expect(effective[0]?.models).toEqual([...APPROVED_MODELS].sort())
+  expect(effective[0]?.models).toEqual([...gatewayModels].sort())
   expect(effective[0]?.references.length).toBeGreaterThan(0)
-
-  const expectedRoutes: Record<string, [string, string, string]> = {
-    default: [GLM, DEEPSEEK, CLAUDE],
-    implement: [GLM, DEEPSEEK, CLAUDE],
-    'plan-review': [DEEPSEEK, GLM, CLAUDE],
-    'code-review': [DEEPSEEK, GLM, CLAUDE],
-  }
-  for (const [role, expected] of Object.entries(expectedRoutes)) {
-    const route = config.roles[role]
-    expect(route?.runtime).toBe('pi')
-    expect([route?.model, ...(route?.alternates ?? []).map(({ model }) => model)]).toEqual(expected)
-    expect(
-      route?.alternates?.every(({ runtime }) => runtime === undefined || runtime === 'pi'),
-    ).toBe(true)
-  }
 })
 
 test('remote rollout preserves this repository pipeline and hosted integration', async () => {

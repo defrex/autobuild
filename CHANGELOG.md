@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#422](https://github.com/defrex/autobuild/pull/422) — Enumerate all worktree-dirty triggers in the provenance docs
+- [#421](https://github.com/defrex/autobuild/pull/421) — Harden vercel-consumer-config test against catalog drift
 - [#419](https://github.com/defrex/autobuild/pull/419) — Rule on the type-only-import divergence between boundary scanners
 - [#418](https://github.com/defrex/autobuild/pull/418) — Make the cumulative-latency scenario-deadline test jitter-tolerant
 - [#415](https://github.com/defrex/autobuild/pull/415) — Stop the package-boundary lint flagging import text in comments
