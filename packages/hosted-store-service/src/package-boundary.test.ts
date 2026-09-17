@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import ts from 'typescript'
 
 /**
  * The store service hosts state only: after the hosted dispatcher moved to
@@ -41,29 +42,111 @@ async function sourceFiles(directory: string): Promise<string[]> {
 const DISPATCHER_SPECIFIER = /^(\.\/dispatcher$)|(^@defrex\/autobuild-hosted-dispatcher)/
 
 /**
- * Extract dispatcher specifiers from a module's text, across every import form
- * that could load it: static `from` specifiers (including `export ... from`),
- * bare side-effect `import '...'`, dynamic `import('...')` with either a quoted
- * or a template-literal specifier, and `require('...')` (defensively; the
- * package is ESM and has no require today). A static-only scan would let a
- * side-effect or dynamic import silently reintroduce the dispatcher's
- * kernel/provider closure.
+ * Parser-based extraction of dispatcher specifiers — NOT regex-based. The
+ * parser is the TypeScript compiler's own AST (the same parser that implements
+ * this repo's `verbatimModuleSyntax: true` emit), so the guard models exactly
+ * the module loads the repo's own toolchain can produce. Because a real parser
+ * scopes specifiers to import statements, dispatcher-import text confined to a
+ * line or block comment, a string/template-literal interior, or a
+ * regex-literal body can never yield an offender (a leading `#!` shebang is
+ * comment trivia to the parser, not an import).
+ *
+ * Flagged: every import form that survives emit as a module load — static
+ * `from` specifiers (including `export ... from` and inline type-only named
+ * bindings like `import { type T } from '...'`, which `verbatimModuleSyntax`
+ * preserves as `import {} from '...'` / `export {} from '...'` and therefore
+ * still executes the module), bare side-effect `import '...'`, dynamic
+ * `import('...')` with either a quoted or a template-literal specifier (a
+ * template-literal specifier is reported as its raw source text, interpolation
+ * included — `` import(`@defrex/autobuild-hosted-dispatcher/${name}`) `` is
+ * flagged), and `require('...')` (defensively; the package is ESM and has no
+ * require today). A scan that missed side-effect or dynamic forms would let
+ * the dispatcher's kernel/provider closure silently reintroduce itself.
+ *
+ * Intentionally not flagged: the fully type-only forms `import type { T } from
+ * '...'` and `export type { T } from '...'` — both are erased even under
+ * `verbatimModuleSyntax` and cannot load the dispatcher.
+ *
+ * Fail-closed edges: a file that fails to parse (syntactic errors) yields the
+ * `<unparseable module>` sentinel so the tree walk reports the whole file as
+ * an offender rather than skipping it; ambiguity errs toward flagging.
  */
+const UNPARSEABLE_MODULE = '<unparseable module>'
+
 export function dispatcherSpecifiers(text: string): string[] {
-  const specifiers: string[] = []
-  const patterns = [
-    /from\s+['"]([^'"]+)['"]/g, // static import/export-from
-    /\bimport\s+['"]([^'"]+)['"]/g, // side-effect import
-    /\bimport\s*\(\s*['"]([^'"]+)['"]/g, // dynamic import()
-    /\bimport\s*\(\s*`([^`]+)`/g, // dynamic import() with a template-literal specifier
-    /\brequire\s*\(\s*['"]([^'"]+)['"]/g, // require() if one ever appears
-  ]
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const specifier = match[1]!
-      if (DISPATCHER_SPECIFIER.test(specifier)) specifiers.push(specifier)
-    }
+  const { diagnostics } = ts.transpileModule(text, { reportDiagnostics: true })
+  if ((diagnostics ?? []).some((d) => d.category === ts.DiagnosticCategory.Error)) {
+    return [UNPARSEABLE_MODULE]
   }
+  const sourceFile = ts.createSourceFile(
+    'module.ts',
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  )
+  const specifiers: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      // `import type ...` is fully erased; every other import declaration
+      // (including `import { type T } ...`) survives verbatimModuleSyntax
+      // emit and loads the module.
+      if (
+        node.importClause?.isTypeOnly !== true &&
+        DISPATCHER_SPECIFIER.test(node.moduleSpecifier.text)
+      ) {
+        specifiers.push(node.moduleSpecifier.text)
+      }
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      // `export type ... from` is fully erased; `export { type T } from`,
+      // `export * from`, and `export * as ns from` all survive emit.
+      node.isTypeOnly !== true &&
+      DISPATCHER_SPECIFIER.test(node.moduleSpecifier.text)
+    ) {
+      specifiers.push(node.moduleSpecifier.text)
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(node.moduleReference.expression) &&
+      DISPATCHER_SPECIFIER.test(node.moduleReference.expression.text)
+    ) {
+      // `import x = require('...')` — no type-only erasure exists for it.
+      specifiers.push(node.moduleReference.expression.text)
+    } else if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const argument = node.arguments[0]
+        if (argument && ts.isStringLiteral(argument)) {
+          if (DISPATCHER_SPECIFIER.test(argument.text)) specifiers.push(argument.text)
+        } else if (argument) {
+          // Dynamic import with a template-literal specifier (or any argument
+          // expression containing one): the raw source text between the
+          // backticks is reported, interpolation included (e.g.
+          // `@defrex/autobuild-hosted-dispatcher/${name}`), so the
+          // dispatcher-prefix check sees exactly what the source names. The
+          // parser keeps this scoped to real import positions — a template
+          // literal elsewhere in the file is never an import.
+          const visitTemplates = (n: ts.Node): void => {
+            if (ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) {
+              const raw = n.getText(sourceFile).slice(1, -1)
+              if (DISPATCHER_SPECIFIER.test(raw)) specifiers.push(raw)
+            }
+            n.forEachChild(visitTemplates)
+          }
+          visitTemplates(argument)
+        }
+      } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+        const argument = node.arguments[0]
+        if (argument && ts.isStringLiteral(argument) && DISPATCHER_SPECIFIER.test(argument.text)) {
+          specifiers.push(argument.text)
+        }
+      }
+    }
+    node.forEachChild(visit)
+  }
+  visit(sourceFile)
   return specifiers
 }
 
@@ -96,7 +179,7 @@ describe('hosted-store-service package boundary', () => {
     expect(offenders).toEqual([])
   })
 
-  test('scan flags side-effect and dynamic dispatcher imports, not just static ones', () => {
+  test('scan flags every import form that could load the dispatcher', () => {
     // Positive: every import form that could load the dispatcher is flagged.
     expect(
       dispatcherSpecifiers("import { kernel } from '@defrex/autobuild-hosted-dispatcher/kernel'"),
@@ -113,6 +196,22 @@ describe('hosted-store-service package boundary', () => {
 )`,
       ),
     ).toEqual(['./dispatcher'])
+    // Re-export forms load the dispatcher too.
+    expect(dispatcherSpecifiers("export * from './dispatcher'")).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers("export { kernel } from './dispatcher'")).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers("export * as ns from './dispatcher'")).toEqual(['./dispatcher'])
+
+    // Evasion guard: a real dynamic import inside a template interpolation is
+    // still flagged even though the surrounding text is a template literal.
+    // (The `\${` escapes keep the fixture's interpolation out of this file's
+    // own syntax; the fixture text still carries a real `${...}`.)
+    expect(dispatcherSpecifiers(`const x = \`\${await import('./dispatcher')}\``)).toEqual([
+      './dispatcher',
+    ])
+
+    // Template-literal dynamic import specifiers are flagged too — plain,
+    // package, and interpolated forms. An interpolated specifier is reported
+    // as its raw text, so the dispatcher prefix is still caught.
     expect(dispatcherSpecifiers('const m = await import(`./dispatcher`)')).toEqual(['./dispatcher'])
     expect(
       dispatcherSpecifiers('const m = await import(`@defrex/autobuild-hosted-dispatcher`)'),
@@ -122,6 +221,11 @@ describe('hosted-store-service package boundary', () => {
         `const m = await import(\`@defrex/autobuild-hosted-dispatcher/\${name}\`)`,
       ),
     ).toEqual([`@defrex/autobuild-hosted-dispatcher/\${name}`])
+    // A template specifier shaped by a surrounding expression is flagged too —
+    // any backtick text inside a dynamic import() argument is examined.
+    expect(dispatcherSpecifiers('const m = await import(`./dispatcher` + suffix)')).toEqual([
+      './dispatcher',
+    ])
 
     // Negative controls: legitimate specifiers stay clean.
     expect(
@@ -139,7 +243,121 @@ describe('hosted-store-service package boundary', () => {
 
     // Limitation, by design: a dynamic import whose specifier is a bare
     // variable (`import(pkgVar)`) or whose text is reshaped by interpolation
-    // (e.g. `import(`./dispatch${kind}`)`) cannot be caught by text matching
+    // (e.g. `import(`./dispatch${kind}`)`) cannot be resolved statically
     // and stays outside this scan's claimed reach.
+  })
+
+  test('dispatcher-import text inside comments or strings is not an offender', () => {
+    // The ticket: raw text matching would flag documentation and
+    // commented-out code. The parser scopes specifiers to import statements,
+    // so none of these can load the dispatcher.
+    expect(dispatcherSpecifiers("// import './dispatcher'")).toEqual([])
+    expect(dispatcherSpecifiers("// import '@defrex/autobuild-hosted-dispatcher'")).toEqual([])
+    expect(
+      dispatcherSpecifiers(
+        `/*
+import './dispatcher'
+*/`,
+      ),
+    ).toEqual([])
+    expect(
+      dispatcherSpecifiers(
+        `/**
+ * @see import '@defrex/autobuild-hosted-dispatcher'
+ */
+export const x = 1`,
+      ),
+    ).toEqual([])
+    expect(dispatcherSpecifiers(`const hint = "import './dispatcher' to load the kernel"`)).toEqual(
+      [],
+    )
+    expect(dispatcherSpecifiers(`const hint = 'import "./dispatcher" to load the kernel'`)).toEqual(
+      [],
+    )
+    expect(dispatcherSpecifiers(`const doc = "see import './dispatcher'"`)).toEqual([])
+    expect(
+      dispatcherSpecifiers(`const doc = \`import './dispatcher' when wiring the kernel manually\``),
+    ).toEqual([])
+  })
+
+  test('regex-literal bodies and division never mask or fake an import', () => {
+    // Regression guards for the hand-rolled-mask desync classes that
+    // motivated the parser pivot: a real parser resolves regex-vs-division
+    // from grammar, so none of these can desync the scan.
+    expect(dispatcherSpecifiers("const re = /[/*]/\nimport './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+    expect(dispatcherSpecifiers("const re = /\\/\\//; import './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+    expect(dispatcherSpecifiers("const re = /[/]/; import './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+    expect(dispatcherSpecifiers("const re = /it's/; import './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+    expect(dispatcherSpecifiers("if (cond) /[/*]/.test(s)\nimport './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+    expect(dispatcherSpecifiers("if (cond) /[//]/.test(s); import './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+    expect(
+      dispatcherSpecifiers(
+        "const x = a / b * 'A/B' ; import './dispatcher' ; const z = 'C'\nconst w = 'D'",
+      ),
+    ).toEqual(['./dispatcher'])
+    // A regex whose body contains dispatcher-import text is not an import.
+    expect(dispatcherSpecifiers("const re = /import '\\.\\/dispatcher'/")).toEqual([])
+  })
+
+  test('fail-closed edges: unparseable files are flagged, shebangs are inert', () => {
+    // A file the parser cannot read is reported wholesale rather than
+    // silently skipped.
+    expect(dispatcherSpecifiers('const x = = =')).toEqual(['<unparseable module>'])
+    // A shebang is comment trivia to the parser; it cannot hide an import.
+    expect(dispatcherSpecifiers("#!/usr/bin/env bun\nimport './dispatcher'")).toEqual([
+      './dispatcher',
+    ])
+  })
+
+  test('inline type-only named imports are flagged: verbatimModuleSyntax preserves them', () => {
+    // The repo's tsconfig pins `verbatimModuleSyntax: true`, under which the
+    // inline type-only form is NOT erased: tsc and esbuild both emit
+    // `import {} from '...'` / `export {} from '...'`, which still loads the
+    // module and executes its side effects. Flagging it is fail-closed.
+    expect(
+      dispatcherSpecifiers("import { type T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/types'])
+    expect(
+      dispatcherSpecifiers(
+        "import { type T, type U } from '@defrex/autobuild-hosted-dispatcher/types'",
+      ),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/types'])
+    expect(
+      dispatcherSpecifiers(
+        "import { kernel, type T } from '@defrex/autobuild-hosted-dispatcher/kernel'",
+      ),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/kernel'])
+    expect(
+      dispatcherSpecifiers("export { type T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/types'])
+  })
+
+  test('fully type-only imports are intentionally not flagged', () => {
+    // Intentional narrowing: `import type` / `export type ... from` are fully
+    // erased — even under this repo's `verbatimModuleSyntax: true` — and
+    // cannot load the dispatcher, so the parser does not report them. (The
+    // inline `{ type T }` form is different: it survives emit and IS flagged —
+    // see the dedicated fixture above.)
+    expect(
+      dispatcherSpecifiers("import type { T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual([])
+    expect(
+      dispatcherSpecifiers("import type * as ns from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual([])
+    expect(
+      dispatcherSpecifiers("export type { T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual([])
   })
 })
