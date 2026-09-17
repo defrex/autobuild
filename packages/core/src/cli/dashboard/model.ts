@@ -105,6 +105,12 @@ export interface PipelineStep {
   /** Absent ⇒ the step has never run in the current spec scope ⇒ no time is
    * shown (AC 6). The renderer composes the elapsed segment from this. */
   timing?: StepTiming
+  /** Display-only, like `qualifier`, and never consulted for routing: the
+   * parked merge step's no-consent explanation — why nothing will happen
+   * without operator action, and which control unblocks it. Attached when the
+   * build is current at merge with effective auto-merge off; the terminal
+   * row/detail and the web row/detail render the same words. */
+  reason?: string
 }
 
 export type DashboardSelection =
@@ -335,6 +341,18 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
   return 'cancelling'
 }
 
+/** The shared no-consent wording for a build parked on an open PR. One string
+ * so the terminal row/detail and the web row/detail say the same words, and
+ * so it names the per-build control that unblocks the parked build. */
+export function autoMergeConsentReason(slug: string): string {
+  return (
+    `no auto-merge consent has been requested — request it with m on the build row or ` +
+    '`ab auto-merge ' +
+    slug +
+    ' on`'
+  )
+}
+
 /**
  * One step, built through one helper so the precedence rule cannot be applied
  * inconsistently: **`current > done > provisional > pending`**. In particular,
@@ -348,6 +366,7 @@ interface StepExtra {
   qualifier?: 'failed' | 'skipped' | 'waiting'
   count?: number
   timing?: StepTiming
+  reason?: string
 }
 
 function step(label: string, done: boolean, current: boolean, extra: StepExtra = {}): PipelineStep {
@@ -363,6 +382,7 @@ function step(label: string, done: boolean, current: boolean, extra: StepExtra =
     ...(extra.qualifier !== undefined ? { qualifier: extra.qualifier } : {}),
     ...(extra.count !== undefined ? { count: extra.count } : {}),
     ...(extra.timing !== undefined ? { timing: extra.timing } : {}),
+    ...(extra.reason !== undefined ? { reason: extra.reason } : {}),
   }
 }
 
@@ -855,6 +875,17 @@ export function projectBuild(
       ? { accumulatedMs: Math.max(0, frozenNow - lastMs) }
       : { accumulatedMs: 0, runningSince: lastMs }
   steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
+  const autoMerge = autoMergeDisplay(state)
+  // The parked no-consent reason: a merge-current build whose effective
+  // auto-merge state is off will never merge without operator action, and the
+  // step must say so (and name the control) wherever the pipeline renders.
+  // Display-only; the deferral `mergeWaitReason` stays in `blockers`.
+  if (mergeCurrent && autoMerge === 'off') {
+    steps[steps.length - 1] = {
+      ...steps[steps.length - 1]!,
+      reason: autoMergeConsentReason(record.slug),
+    }
+  }
 
   const setupError =
     state.infrastructureFailure !== undefined
@@ -891,7 +922,7 @@ export function projectBuild(
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
-    autoMerge: autoMergeDisplay(state),
+    autoMerge,
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),

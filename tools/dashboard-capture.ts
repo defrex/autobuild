@@ -483,6 +483,11 @@ async function seedHappyBuild(
   harness: E2eHarness,
   build: (typeof HAPPY_BUILDS)[number],
   observation: boolean,
+  /** seq of the journal's `dispatcher.auto-merge-default-set {enabled: true}`
+   * fact, written before the builds were seeded. Each happy build is seeded
+   * with the consent the fan-out would otherwise have to settle on its first
+   * dispatch pass (which would mutate the journal the capture pins). */
+  autoMergeDefaultSeq: number | undefined,
 ): Promise<{ observationSeq?: number }> {
   const ticket = { source: 'fake', id: build.id, title: build.title }
   const workspacePath = join(harness.tmp, 'happy-workspaces', build.slug)
@@ -523,6 +528,25 @@ async function seedHappyBuild(
     type: 'runner.attached',
     payload: { instance: `capture-${build.slug}`, host: 'dashboard-capture' },
   })
+
+  // Settled auto-merge consent under the ON default, exactly as the fan-out
+  // would have written it (human-attributed, answering the journal fact by
+  // seq). Seeding — rather than letting the capture's real dispatch pass
+  // reconcile — is what keeps the pinned build journals byte-stable.
+  if (autoMergeDefaultSeq !== undefined) {
+    const request = await harness.store.append(build.slug, {
+      actor: humanActor('dashboard-capture'),
+      type: 'build.auto-merge-requested',
+      payload: { defaultSeq: autoMergeDefaultSeq },
+    })
+    if (build.stage === 'merged') {
+      await harness.store.append(build.slug, {
+        actor: DISPATCHER,
+        type: 'pr.auto-merge-enabled',
+        payload: { commandSeq: request.seq },
+      })
+    }
+  }
 
   let observationSeq: number | undefined
   if (observation) {
@@ -664,6 +688,11 @@ async function seedHappyBuild(
           type: 'verify.started',
           payload: { step: 'unit', attempt: 1 },
         })
+        await harness.store.append(build.slug, {
+          actor: KERNEL,
+          type: 'verify.started',
+          payload: { step: 'unit', attempt: 1 },
+        })
         if (build.stage === 'merged') {
           await harness.store.append(build.slug, {
             actor: KERNEL,
@@ -709,13 +738,9 @@ export async function prepareHappyScenario(): Promise<HappyScenario> {
 
   try {
     const observations: Array<{ build: string; seq: number }> = []
-    for (const [index, build] of HAPPY_BUILDS.entries()) {
-      const seeded = await seedHappyBuild(harness, build, index < 3)
-      if (seeded.observationSeq !== undefined) {
-        observations.push({ build: build.slug, seq: seeded.observationSeq })
-      }
-    }
-
+    // Repository settings are written BEFORE the builds: the ON default's seq
+    // is what each build's seeded consent answers, so the capture's real
+    // dispatch pass finds every build already settled and mutates nothing.
     harness.forge.setPrState(41, { state: 'open', mergeable: null })
     await harness.store.ensureRepo(harness.origin)
     const operator = humanActor('dashboard-capture')
@@ -729,11 +754,17 @@ export async function prepareHappyScenario(): Promise<HappyScenario> {
       type: 'dispatcher.pause-set',
       payload: { enabled: false },
     })
-    await harness.store.appendRepo(harness.origin, {
+    const autoMergeDefault = await harness.store.appendRepo(harness.origin, {
       actor: operator,
       type: 'dispatcher.auto-merge-default-set',
       payload: { enabled: true },
     })
+    for (const [index, build] of HAPPY_BUILDS.entries()) {
+      const seeded = await seedHappyBuild(harness, build, index < 3, autoMergeDefault.seq)
+      if (seeded.observationSeq !== undefined) {
+        observations.push({ build: build.slug, seq: seeded.observationSeq })
+      }
+    }
     const started = await harness.store.appendRepoWithArtifacts(
       harness.origin,
       [{ kind: 'harvest-scan', content: '{"scenario":"happy"}\n' }],

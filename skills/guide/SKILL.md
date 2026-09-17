@@ -1214,16 +1214,19 @@ on its first paint; clearing the hold removes both on the next poll. The hold
 survives a restart and is not defeated by re-running `ab dispatch`.
 
 `--auto-merge` and `--no-auto-merge` similarly set the durable repository
-claim-time default; omission reuses stored state, falling back to OFF only when
+auto-merge default; omission reuses stored state, falling back to OFF only when
 no fact exists. The forms are mutually exclusive independently of the intake
 pair. Global-row `m` re-reads current state, appends the opposite value, and
 posts a dispatcher notice. When on, each fresh dispatcher claim records the
 existing human-authored `build.auto-merge-requested` fact immediately after
 `build.created` and before runner launch. The first visible build frame therefore
-carries `auto merge`. This is a creation-time seed, not policy: changes never
-touch existing builds, resumed/adopted logs or other creation paths never sample
-it, and build-row `m` remains independent (a seeded build can be cancelled while
-the global default stays on). Both repository settings are independently
+carries `auto merge`. The default is also a bulk action over current builds:
+on each change the dispatcher reconciles every non-terminal build against the
+newest fact, requesting consent when it turns on and withdrawing it when it
+turns off, attributed to the toggling operator exactly as a row keypress would
+be. A per-build toggle overrides its build's state until the global row is
+toggled again, so a seeded or fanned build can still be cancelled while the
+global default stays on. Both repository settings are independently
 last-write-wins by event sequence. They are stored in the BuildStore, not in
 `autobuild.toml`; propagation uses polling, not a push channel.
 
@@ -1249,10 +1252,13 @@ settles every exhaustion barrier. Exhaustion and escalation remain terminal.
 Escalation's row is dismissed only by a post-terminal human resume request
 followed by its later kernel acknowledgement, never by the request alone.
 
-A build with auto-merge off has no auto-merge token. Requested, enabled, and
-cancelling states all read `auto merge`: cyan means requested locally but not
-yet applied on GitHub, green means native auto-merge is enabled, and yellow
-means cancellation is in flight. The token disappears when cancellation lands.
+Every build row renders an explicit `auto merge <state>` token, including off:
+cyan means requested locally but not yet applied on GitHub, green means native
+auto-merge is enabled, yellow means cancellation is in flight, and dim means
+off — turning red while the repository default reads ON, so the
+consent mismatch is visible without opening the detail view. A build parked on
+an open PR with no consent carries the reason on its merge step, naming the
+per-build control that requests it.
 Merge conflicts recover automatically: the gate defers, the pipeline re-enters
 reconcile, and verify re-runs before consent is re-examined — the reconcile
 step on the build row is the only indication, and uncomputed mergeability
