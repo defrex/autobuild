@@ -65,7 +65,15 @@ export function latestAutoMergeDefault(
  * A build the default may still act on: not terminal, and not on its way out.
  * A pending abort (an explicit request or an accepted escalation answer) must
  * never receive consent — a merge landing mid-abort is exactly the race this
- * clause exists to close.
+ * clause exists to close. The same holds for an outstanding discard request:
+ * `discardRequest` is present exactly while the build is non-terminal and its
+ * discard is unsettled, and the reducer settles it only by terminal completion
+ * — consent recorded inside that window can merge a build the operator already
+ * asked to discard (in the raced-runner-attachment case the discard is inert
+ * for a running build, and the recorded consent later drives the merge in
+ * `checkPr`). Direction-blind like the abort clause: the build terminalizes
+ * imminently either way. If discard ever grows a mid-flight settlement event,
+ * this predicate must be revisited.
  */
 export function autoMergeDefaultEligible(state: BuildState): boolean {
   if (state.status === 'done' || state.status === 'aborted') return false
@@ -75,6 +83,12 @@ export function autoMergeDefaultEligible(state: BuildState): boolean {
   // log unrecoverable — dispatch recovery rejects a log that does not start
   // with `build.created` (f_647d40be). `lastSeq === 0` is exactly that log.
   if (state.lastSeq === 0) return false
+  // An outstanding discard request is the same "on its way out" shape as a
+  // pending abort: it settles only by terminal completion (reducer.ts), so
+  // consent recorded inside that window can merge a build the operator
+  // already asked to discard. Direction-blind, like the abort clause — an
+  // OFF fan-out skipping it withdraws nothing that survives the settlement.
+  if (state.discardRequest !== undefined) return false
   return !state.pendingCommands.some((command) => command.command === 'abort')
 }
 
