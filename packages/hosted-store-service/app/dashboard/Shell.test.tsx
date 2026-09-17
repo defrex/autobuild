@@ -84,3 +84,28 @@ test('shell places the account menu in the masthead, closed at rest', () => {
   expect(header).not.toContain('sign out')
   expect(header).not.toContain('class="clock"')
 })
+
+test('pending renders the clock slack state and rest does not', () => {
+  const render = (pending: boolean): string =>
+    renderToStaticMarkup(
+      <OperatorShell
+        repo="example/repository"
+        repositories={['example/repository']}
+        identity="operator@example.com"
+        pending={pending}
+        onRepo={noop}
+        onSignOut={noop}
+        controls={<span data-testid="dispatcher-controls">queue 0 intake ON</span>}
+      >
+        <p>build content</p>
+      </OperatorShell>,
+    )
+
+  const pendingClock = render(true).match(/<span class="clock"[^>]*>/)?.[0]
+  expect(pendingClock).toBeDefined()
+  expect(pendingClock).toContain('data-pending')
+
+  const restClock = render(false).match(/<span class="clock"[^>]*>/)?.[0]
+  expect(restClock).toBeDefined()
+  expect(restClock).not.toContain('data-pending')
+})
