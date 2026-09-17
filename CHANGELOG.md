@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#395](https://github.com/defrex/autobuild/pull/395) — Declare @defrex/autobuild-postgres-store as root devDependency
+- [#394](https://github.com/defrex/autobuild/pull/394) — Correct /testing attribution in core-floor test comment
 - [#393](https://github.com/defrex/autobuild/pull/393) — Harden store-service boundary scan to all dispatcher import forms
+- [#392](https://github.com/defrex/autobuild/pull/392) — Add a committed package-boundary check for cross-package src test imports
 - [#391](https://github.com/defrex/autobuild/pull/391) — Migrate tools/ scripts onto postgres-store public subpath exports
 - [#390](https://github.com/defrex/autobuild/pull/390) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0
 - [#431](https://github.com/defrex/autobuild/pull/431) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0 so dispatcher + hosted-store-service cannot install against a core missing the /operator, /hosted-tickets, and /testing subpaths (AUT-431)
