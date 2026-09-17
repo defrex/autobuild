@@ -26,7 +26,7 @@
  * precedent `bulk-control.ts` set for the pause/resume walk.
  */
 import type { RepositoryEvent } from '../events/repository'
-import type { BuildState } from './reducer'
+import { discardInFlight, type BuildState } from './reducer'
 
 /** One `dispatcher.auto-merge-default-set` fact, resolved. `actor` is the
  * event's actor — the human who toggled, `via` marker included — and is the
@@ -88,7 +88,11 @@ export function autoMergeDefaultEligible(state: BuildState): boolean {
   // consent recorded inside that window can merge a build the operator
   // already asked to discard. Direction-blind, like the abort clause — an
   // OFF fan-out skipping it withdraws nothing that survives the settlement.
-  if (state.discardRequest !== undefined) return false
+  // Shared predicate: the per-build consent guard (build-control.ts) applies
+  // the same exclusion to consent-recording writes. A per-build OFF withdrawal
+  // stays available there — revocation only shrinks the merge set — which is a
+  // stated, directional divergence, not a silent one.
+  if (discardInFlight(state)) return false
   return !state.pendingCommands.some((command) => command.command === 'abort')
 }
 

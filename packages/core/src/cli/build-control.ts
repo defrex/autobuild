@@ -8,7 +8,12 @@
  */
 import type { AbEvent } from '../events/catalog'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
-import { reduceBuild, type BuildState, type OpenEscalation } from '../kernel/reducer'
+import {
+  reduceBuild,
+  discardInFlight,
+  type BuildState,
+  type OpenEscalation,
+} from '../kernel/reducer'
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { specConformance } from '../spec-standard'
@@ -107,6 +112,7 @@ export type BuildControlErrorCode =
   | 'missing-authorization'
   | 'no-longer-active'
   | 'abort-pending'
+  | 'discard-pending'
   | 'review-round-ceiling-unavailable'
   | 'incompatible-answer-options'
 
@@ -224,6 +230,78 @@ function reviewRoundLimitEscalation(
 
 function hasPendingAbort(state: BuildState): boolean {
   return state.pendingCommands.some((command) => command.command === 'abort')
+}
+
+function discardPending(slug: string): BuildControlError {
+  return new BuildControlError(
+    'discard-pending',
+    `build "${slug}" has an outstanding discard request; auto-merge consent was not recorded. ` +
+      'The discard settles only when the build terminalizes — nothing was appended. ' +
+      'If the discard raced with runner attachment and you still want the change, ' +
+      'merge the PR manually.',
+  )
+}
+
+/** Record or withdraw per-build auto-merge consent — the write path for
+ * `auto-merge-on`, `auto-merge-off`, and `toggle-auto-merge`.
+ *
+ * Ruling (AUT-445): recording consent on a build with an outstanding discard
+ * request is rejected — the fan-out's discard exclusion
+ * (`autoMergeDefaultEligible`'s discard clause, AUT-418) applied to explicit
+ * consent. Both controls call the same `discardInFlight` predicate from
+ * kernel/reducer.ts, so they cannot diverge silently. Withdrawing consent (OFF)
+ * is deliberately still allowed: `checkPr` honors revocation before anything
+ * else, so an OFF strictly shrinks the merge set, and it is the only way to
+ * withdraw consent recorded before the discard (a fan-out or claim-time seed) —
+ * refusing it would leave that discard-contradicting consent driving the merge
+ * anyway. The fan-out is direction-blind because it is a queue cleaner that
+ * withdraws nothing that survives the settlement; this guard is directional on
+ * purpose, and the divergence is stated here rather than left accidental.
+ *
+ * The guard runs inside a compare-and-append loop (the `appendIfCurrent` idiom
+ * the fan-out's dispatcher loop and `bulkControlRepository` already use), so a
+ * discard request that lands between the guard's read and this append cannot
+ * slip past it: the CAS misses, the loop re-reduces the log, and the guard
+ * fires on the fresh state. The toggle's direction is re-resolved from the
+ * re-read state each attempt. `activeState` runs before the guard on every
+ * attempt: a queued build (where the discard normally sits) still reports the
+ * existing `inactive` error. */
+async function appendConsentCommand(
+  store: BuildStore,
+  slug: string,
+  user: string,
+  action: 'auto-merge-on' | 'auto-merge-off' | 'toggle-auto-merge',
+  via?: Via,
+): Promise<BuildControlResult> {
+  while (true) {
+    const state = reduceBuild(await store.getEvents(slug))
+    activeState(slug, state)
+    const command =
+      action === 'toggle-auto-merge'
+        ? state.autoMerge.requested
+          ? 'auto-merge-off'
+          : 'auto-merge-on'
+        : action
+    if (command === 'auto-merge-on' && discardInFlight(state)) throw discardPending(slug)
+    const actor = humanActor(user, via)
+    // Written out rather than selected into a variable so `appendIfCurrent`'s
+    // `T extends EventType` infers a concrete payload type in each branch.
+    const appended =
+      command === 'auto-merge-on'
+        ? await store.appendIfCurrent(slug, state.lastSeq, {
+            actor,
+            type: 'build.auto-merge-requested',
+            payload: {},
+          })
+        : await store.appendIfCurrent(slug, state.lastSeq, {
+            actor,
+            type: 'build.auto-merge-cancelled',
+            payload: {},
+          })
+    if (appended !== null) return { kind: 'command', slug, command, event: appended }
+    // The stream advanced under us (a racing discard, a fan-out write, a
+    // runner acknowledgement): loop to re-read and re-check before writing.
+  }
 }
 
 function abortPending(slug: string): BuildControlError {
@@ -425,9 +503,14 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
   switch (opts.action.kind) {
     case 'pause':
     case 'resume':
+      return appendCommand(opts.store, opts.slug, user, opts.action.kind, opts.via)
+
     case 'auto-merge-on':
     case 'auto-merge-off':
-      return appendCommand(opts.store, opts.slug, user, opts.action.kind, opts.via)
+    case 'toggle-auto-merge':
+      // Consent has its own guarded, compare-and-append write path; the
+      // outer `activeState` above only short-circuits the common inactive case.
+      return appendConsentCommand(opts.store, opts.slug, user, opts.action.kind, opts.via)
 
     case 'dashboard-pause': {
       const pendingPause = state.pendingCommands.some((command) => command.command === 'pause')
@@ -463,15 +546,6 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
       }
       return appendCommand(opts.store, opts.slug, user, 'resume', opts.via)
     }
-
-    case 'toggle-auto-merge':
-      return appendCommand(
-        opts.store,
-        opts.slug,
-        user,
-        state.autoMerge.requested ? 'auto-merge-off' : 'auto-merge-on',
-        opts.via,
-      )
 
     case 'answer': {
       const captured =
