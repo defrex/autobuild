@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#428](https://github.com/defrex/autobuild/pull/428) — Document comment-interleaved argument positions in the boundary guard
+- [#427](https://github.com/defrex/autobuild/pull/427) — Derive the doc preflight pin from autobuild.toml's runtimeProvisioning.pi
 - [#426](https://github.com/defrex/autobuild/pull/426) — Move the operator web app into the hosted store service package
 - [#424](https://github.com/defrex/autobuild/pull/424) — Complete the boundary-guard coverage statement's widening list
 - [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
