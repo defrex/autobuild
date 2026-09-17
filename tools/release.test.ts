@@ -680,7 +680,7 @@ describe('release orchestration', () => {
 })
 
 describe('distribution asset upload', () => {
-  test('uploads the production-packed archive whose manifest omits patchedDependencies', async () => {
+  test('uploads the production-packed archive whose manifest omits patchedDependencies and devDependencies', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'autobuild-release-upload-'))
     temporaryDirectories.push(destination)
     const logs: string[] = []
@@ -722,12 +722,18 @@ describe('distribution asset upload', () => {
     })
     const packedManifest = JSON.parse(await new Response(manifestProcess.stdout).text()) as {
       patchedDependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
     }
     expect(await manifestProcess.exited).toBe(0)
     // The published release asset must not carry the repo's
     // patchedDependencies declaration: a consumer installing it next to
     // better-auth panics bun (finding f_812bb6b5).
     expect(packedManifest.patchedDependencies).toBeUndefined()
+    // Nor its devDependencies: the guest installs --production (which ignores
+    // them), and the workspace-link specifiers they may carry are unresolvable
+    // in the packer's staging tree. The staging pack fails outright if a
+    // workspace specifier ever leaks into the packed manifest.
+    expect(packedManifest.devDependencies).toBeUndefined()
     expect(logs.join('\n')).toContain('Uploaded autobuild-2.0.1.tgz (1234 bytes)')
   }, 60_000)
 })
