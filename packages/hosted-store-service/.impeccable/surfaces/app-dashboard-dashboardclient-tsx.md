@@ -1,8 +1,8 @@
 ---
 version: 1
-slug: "ed-store-service-app-dashboard-dashboardclient-tsx"
-primary_target: "packages/hosted-store-service/app/dashboard/DashboardClient.tsx"
-related_targets: ["packages/hosted-store-service/app/dashboard/BuildsView.tsx","packages/hosted-store-service/app/sign-in/SignIn.tsx","packages/hosted-store-service/app/layout.tsx","packages/hosted-store-service/app/globals.css"]
+slug: "app-dashboard-dashboardclient-tsx"
+primary_target: "app/dashboard/DashboardClient.tsx"
+related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/layout.tsx","app/globals.css"]
 ---
 
 # Operator web app
