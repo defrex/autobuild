@@ -36,7 +36,8 @@
   },
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "!src/**/*.test.ts"
   ],
   "publishConfig": {
     "access": "public"
