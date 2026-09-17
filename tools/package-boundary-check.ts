@@ -63,12 +63,15 @@ export interface Violation {
   toPackage: string
 }
 
-const UNPARSEABLE_MODULE = '<unparseable module>'
-
-interface CollectedSpecifier {
+export interface CollectedSpecifier {
   specifier: string
   line: number
 }
+
+/** Sentinel specifier for a file that does not parse (see `collectSpecifiers`).
+ * Exported so the published-imports scan can detect the shape without
+ * duplicating the literal. */
+export const UNPARSEABLE_MODULE = '<unparseable module>'
 
 /**
  * Expressions that denote `require` itself: the bare identifier, or a property
@@ -158,8 +161,14 @@ const isRequireishExpression = (node: ts.Expression): boolean =>
  * `<unparseable module>` sentinel (line 1) instead of being skipped. The gate
  * parses with the file's script kind, so valid JSX in a `.test.tsx` is not a
  * diagnostic and cannot trip the sentinel.
+ * Exported for the second consumer, the published-imports scan
+ * (tools/publish-imports-check.ts), which scans published packages' packed
+ * files for `@defrex/autobuild/*` specifiers; type-only forms stay collected
+ * there too, deliberately — a type-only import still makes `tsc` resolve the
+ * specifier, so a published tarball can depend on an export the provider does
+ * not ship even when nothing loads it at runtime.
  */
-function collectSpecifiers(
+export function collectSpecifiers(
   contents: string,
   scriptKind: ts.ScriptKind = ts.ScriptKind.TS,
 ): CollectedSpecifier[] {
