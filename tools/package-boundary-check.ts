@@ -47,6 +47,19 @@ import { repoRoot } from './git-tracked'
  * there would be a pure false positive. The two scanners therefore differ on
  * type-only handling by design, not by drift — each comment names the other;
  * do not "fix" one to match the other without re-ruling here.
+ *
+ * Ruling on collection semantics: this guard collects only specifier-position
+ * string literals (`collectSpecifiers`), while the store-service dispatcher
+ * scan retains argument-subtree collection deliberately (its dynamic-import
+ * branch walks only the specifier argument's subtree; its require-family
+ * calls, `require.call/apply`, and `new require` walk every argument's
+ * subtree). That scan's match class is the dispatcher module itself, and its
+ * dynamic-import branch already collects only the specifier argument's
+ * subtree, so the walk's residual false-positive surface is a
+ * dispatcher-naming string in a require-family argument — a side that is
+ * latent there (no `require` binding is in scope in that ESM package). The
+ * walk is that deployment boundary's documented fail-closed posture; do not
+ * narrow the store-service scan without re-ruling here.
  */
 
 export interface ScannedFile {
