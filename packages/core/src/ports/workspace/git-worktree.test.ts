@@ -880,35 +880,41 @@ describe('GitWorktreeProvider operator sandbox', () => {
       operator: 'ops',
       baseBranch: 'main',
     })
-    // Live sentinel: running for the whole test, must never be evicted.
-    const sentinel = await provider.orchestratorSandbox.start(identity, {
-      command: 'sleep 30',
-    })
-    // A burst of fire-and-forget echoes exceeding the cap by a wide margin;
-    // none of them is waited on before the assertions, so only the cap can
-    // bound them.
-    const excess = 20
     // This burst forks more short-lived shells than any other test in the
     // suite, and a verify run executes it concurrently with the other verify
     // steps — a load under which a fork can transiently fail (EAGAIN/ENOMEM)
     // before the burst's own eviction mechanics are ever exercised (observed
-    // once as a ~60ms failure in a verify unit run; never locally across
-    // repeated full-suite runs, including with lint and typecheck running
+    // once as a ~60ms failure in a verify unit run, and a second verify run
+    // failed the same way at ~61ms even with a single 50ms retry: the fork
+    // pressure persisted past that first beat; never locally across repeated
+    // full-suite runs, including with lint and typecheck running
     // concurrently). A failed `start` in this window is an environment
     // condition, not the behavior under test (the retention cap), so retry
-    // each start once after a beat: a deterministic start regression still
-    // fails on the retry.
-    const startBurstCommand = async (command: string): Promise<string> => {
-      try {
-        return (await provider.orchestratorSandbox.start(identity, { command })).commandId
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 50))
-        return (await provider.orchestratorSandbox.start(identity, { command })).commandId
+    // each start with escalating backoff — a deterministic start regression
+    // still fails on every attempt.
+    const startDelays = [50, 100, 200, 400]
+    const startRetrying = async (command: string): Promise<string> => {
+      for (;;) {
+        try {
+          return (await provider.orchestratorSandbox.start(identity, { command })).commandId
+        } catch (error) {
+          const delay = startDelays.shift()
+          if (delay === undefined) throw error
+          await new Promise((resolve) => setTimeout(resolve, delay))
+        }
       }
     }
+    // Live sentinel: running for the whole test, must never be evicted. The
+    // same retry wrapper as the burst: its start is one fork in the same
+    // load window and is equally exposed to a transient fork failure.
+    const sentinel = await startRetrying('sleep 30')
+    // A burst of fire-and-forget echoes exceeding the cap by a wide margin;
+    // none of them is waited on before the assertions, so only the cap can
+    // bound them.
+    const excess = 20
     const echoes: string[] = []
     for (let i = 0; i < cap + excess; i++) {
-      echoes.push(await startBurstCommand('echo burst'))
+      echoes.push(await startRetrying('echo burst'))
     }
 
     // No private-access idiom exists in this suite; one-line cast local.
@@ -959,7 +965,7 @@ describe('GitWorktreeProvider operator sandbox', () => {
     // The running sentinel is untouched by the cap.
     expect(
       await provider.orchestratorSandbox.wait(identity, {
-        commandId: sentinel.commandId,
+        commandId: sentinel,
         waitSeconds: 0,
       }),
     ).toEqual({
