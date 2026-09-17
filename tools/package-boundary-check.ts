@@ -22,11 +22,23 @@ import { repoRoot } from './git-tracked'
  * position that could load a sibling package's src is still collected with an
  * exact AST line number. A file that does not parse fails closed: it yields a
  * single `<unparseable module>` sentinel violation rather than being silently
- * skipped, so ambiguity always errs toward flagging. This aligns the guard
- * with the store-service dispatcher scan's approach, with one deliberate
- * divergence: fully type-only forms (`import type …`, `export type … from`)
- * remain flagged here because the raw-text regexes this replaces flagged them,
- * and changing which imports the guard forbids is out of scope.
+ * skipped, so ambiguity always errs toward flagging.
+ *
+ * Ruling on fully type-only forms (`import type …`, `export type … from`):
+ * they stay flagged here, deliberately — this guard enforces a
+ * **source-convention boundary** on test files, and the harm it polices is
+ * *coupling to sibling internals*, not runtime load. A type-only import still
+ * makes `tsc` resolve types from the sibling's `src`, still extends editor
+ * navigation and refactoring blast radius across the boundary, and still
+ * bypasses the public/testing subpath-export convention — so it violates the
+ * convention exactly as much as a runtime import. The store-service
+ * dispatcher scan (`packages/hosted-store-service/src/package-boundary.test.ts`)
+ * excludes these same forms on purpose: it guards a **runtime deployment
+ * boundary** (no module may load the dispatcher's kernel/provider closure in
+ * a deployment), and a fully erased import loads nothing, so flagging it
+ * there would be a pure false positive. The two scanners therefore differ on
+ * type-only handling by design, not by drift — each comment names the other;
+ * do not "fix" one to match the other without re-ruling here.
  */
 
 export interface ScannedFile {
