@@ -683,11 +683,8 @@ async function seedHappyBuild(
     } else {
       await completeCodeRound(build.stage === 'code-review' ? 'current' : 'approve')
       if (build.stage !== 'code-review') {
-        await harness.store.append(build.slug, {
-          actor: KERNEL,
-          type: 'verify.started',
-          payload: { step: 'unit', attempt: 1 },
-        })
+        // Exactly one start: the seeded journal is the pinned fixture, and a
+        // duplicate append would shift every subsequent event's seq.
         await harness.store.append(build.slug, {
           actor: KERNEL,
           type: 'verify.started',
