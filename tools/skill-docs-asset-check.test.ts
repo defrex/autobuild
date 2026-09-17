@@ -126,6 +126,37 @@ describe('skillDocsAssetMentions', () => {
     ])
   })
 
+  test('a ./-prefixed inline-code mention is repo-root-relative like the bare form', () => {
+    expect(skillDocsAssetMentions(document('writes to `./docs/assets/x.png`.\n'))).toEqual([
+      { target: './docs/assets/x.png', resolved: 'docs/assets/x.png' },
+    ])
+  })
+
+  test('a .././ mixture resolves like its plain ../ form', () => {
+    expect(skillDocsAssetMentions(document('see `../../.././docs/assets/x.png`\n'))).toEqual([
+      { target: '../../.././docs/assets/x.png', resolved: 'docs/assets/x.png' },
+    ])
+  })
+
+  test('a trailing-slash mention names a directory and is deliberately ignored', () => {
+    for (const contents of [
+      'screenshots in `docs/assets/screenshots/`.\n',
+      'screenshots in `./docs/assets/x/`.\n',
+      'screenshots in `../../../docs/assets/screenshots/`.\n',
+    ]) {
+      expect(skillDocsAssetMentions(document(contents)), contents).toEqual([])
+    }
+  })
+
+  test('the widened ./ prefix keeps the tail of a longer path from becoming a mention', () => {
+    for (const contents of [
+      'served from `static/./docs/assets/gone.png` today\n',
+      'fetched from `host./docs/assets/gone.png` today\n',
+    ]) {
+      expect(skillDocsAssetMentions(document(contents)), contents).toEqual([])
+    }
+  })
+
   test('a fenced code block is sample text and is never scanned', () => {
     const contents = '```\ndocs/assets/gone.png\n```\n'
     expect(skillDocsAssetMentions(document(contents))).toEqual([])
@@ -214,6 +245,42 @@ describe('findSkillDocsAssetProblems', () => {
         resolved: 'docs/assets/gone.png',
       },
     ])
+  })
+
+  test('a ./-prefixed inline-code mention of an untracked asset is broken, naming the written form', () => {
+    const findings = findSkillDocsAssetProblems(
+      [],
+      [
+        {
+          path: '.agents/skills/readme-headline/SKILL.md',
+          contents: 'writes `./docs/assets/gone.png`.\n',
+        },
+      ],
+    )
+
+    expect(findings).toEqual([
+      {
+        kind: 'broken',
+        document: '.agents/skills/readme-headline/SKILL.md',
+        target: './docs/assets/gone.png',
+        resolved: 'docs/assets/gone.png',
+      },
+    ])
+  })
+
+  test('a directory mention with a trailing slash is ignored, not reported broken', () => {
+    for (const contents of [
+      'screenshots in `docs/assets/screenshots/`.\n',
+      'screenshots in `./docs/assets/x/`.\n',
+      'screenshots in `../../../docs/assets/screenshots/`.\n',
+    ]) {
+      const findings = findSkillDocsAssetProblems(
+        [],
+        [{ path: '.agents/skills/readme-headline/SKILL.md', contents }],
+      )
+
+      expect(findings, contents).toEqual([])
+    }
   })
 
   test('a tracked link target passes and an untracked one is broken', () => {
