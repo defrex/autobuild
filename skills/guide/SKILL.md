@@ -337,7 +337,7 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 
 [workspace.config.runtimeProvisioning.pi]
 install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
-preflight = "test \"$(pi --version)\" = \"0.84.4\""
+preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 ```
 
 `timeoutSeconds` is required (60–86400; Hobby currently caps at 2700), `vcpus`

@@ -42,11 +42,16 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   expect(workspace.provisioning[2]?.command).toBe('./scripts/postgres-live.sh install')
   await access(join(REPO_ROOT, 'scripts/postgres-live.sh'), constants.X_OK)
   // The pinned Pi version changes on every catalog refresh; derive it from the
-  // install command so a version bump is not a test edit. The preflight
-  // formula — exact pinned version plus an explicit catalog refresh — is the
-  // contract itself and stays hardcoded.
+  // install command so a version bump is not a test edit. The install prefix —
+  // `npm install --global --ignore-scripts`, whose --ignore-scripts safety flag
+  // must not silently disappear — and the preflight formula — exact pinned
+  // version plus an explicit catalog refresh — are the contract itself and
+  // stay hardcoded.
   const piProvisioning = workspace.runtimeProvisioning?.pi
   const install = piProvisioning?.install ?? ''
+  expect(install).toMatch(
+    /^npm install --global --ignore-scripts @earendil-works\/pi-coding-agent@/,
+  )
   const version = /@earendil-works\/pi-coding-agent@([^'\s]+)\s*$/.exec(install)?.[1]
   if (version === undefined) {
     throw new Error(`pi install command does not pin a package version: ${install}`)
