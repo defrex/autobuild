@@ -109,7 +109,7 @@ test('remote rollout preserves this repository pipeline and hosted integration',
   expect(config.verify.stepConfigs['web-dashboard']).toMatchObject({
     kind: 'agent',
     skill: 'verify-web-dashboard',
-    paths: expect.arrayContaining(['app/**']),
+    paths: expect.arrayContaining(['packages/hosted-store-service/app/**']),
   })
   expect(config.finalize.steps).toEqual(['changelog'])
   expect(config.finalize.stepConfigs.changelog).toEqual({
