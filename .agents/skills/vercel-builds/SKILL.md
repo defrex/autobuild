@@ -202,10 +202,15 @@ ab models vercel-ai-gateway
 ab models vercel-ai-gateway --available
 ab repository status --json
 ab ticket list --state Todo --json
-vercel whoami
-vercel project inspect "$VERCEL_PROJECT_ID" --scope "$VERCEL_TEAM_ID"
+(cd packages/hosted-store-service && bunx vercel whoami)
+(cd packages/hosted-store-service && bunx vercel project inspect "$VERCEL_PROJECT_ID" --scope "$VERCEL_TEAM_ID")
 ab init --validate
 ```
+
+The two vercel CLI calls run from `packages/hosted-store-service` because that package declares the
+`vercel` devDependency; `bunx` resolves the declared binary from there under either hoisted or
+isolated linking, whereas a root-level `vercel` command only resolves through the hoisted linker
+override in `bunfig.toml`.
 
 The validation report must name `vercel-sandbox`, Pi 0.84.4, all three configured gateway models,
 `system-install`, `browser-smoke`, repository setup, and hosted Store access. It must also report
