@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#430](https://github.com/defrex/autobuild/pull/430) — Pin setup.md parity and doc Pi version against autobuild.toml
 - [#424](https://github.com/defrex/autobuild/pull/424) — Complete the boundary-guard coverage statement's widening list
 - [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
 - [#425](https://github.com/defrex/autobuild/pull/425) — Deduplicate type-only-import rationale comment in boundary test
