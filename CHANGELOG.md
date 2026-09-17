@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#442](https://github.com/defrex/autobuild/pull/442) — Declare an explicit files allowlist for postgres-store (AUT-473)
 - [#440](https://github.com/defrex/autobuild/pull/440) — Guard repo-local skill docs' asset refs; fix vendored-scope comment
 - [#436](https://github.com/defrex/autobuild/pull/436) — Pin comment-interleaved require/import positions in boundary tests
 - [#437](https://github.com/defrex/autobuild/pull/437) — End publish-contents-check's success message with a newline
