@@ -52,7 +52,8 @@ function asFetch(delegate: (request: Request) => Promise<Response>): typeof fetc
 
 /** Upper bound for a tool-requested bounded wait (`builds.events`), so no
  * single MCP request outlives the route's function duration limit — see the
- * pairing with `maxDuration` in app/mcp/route.ts and the dispatcher route's
+ * pairing with `maxDuration` in app/mcp/route.ts (the Next.js app tree under
+ * this package) and the dispatcher route's
  * documentation. The registry's own schema currently caps waits lower; this
  * binding-side clamp is the guard that holds if that cap rises. */
 export const MCP_MAX_WAIT_SECONDS = 240

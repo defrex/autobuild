@@ -42,14 +42,14 @@ async function findArchive(root: string): Promise<string> {
   } catch {
     throw new Error(
       `no ${DIST_DIRECTORY}/ directory under ${root} — run ` +
-        '`bun packages/hosted-dispatcher/src/bin.ts pack-distribution` before building',
+        '`bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .` before building',
     )
   }
   const archives = entries.filter((name) => /^autobuild-.+\.tgz$/.test(name)).sort()
   if (archives.length === 0) {
     throw new Error(
       `no autobuild-*.tgz in ${DIST_DIRECTORY}/ — run ` +
-        '`bun packages/hosted-dispatcher/src/bin.ts pack-distribution` before building',
+        '`bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .` before building',
     )
   }
   if (archives.length > 1) {

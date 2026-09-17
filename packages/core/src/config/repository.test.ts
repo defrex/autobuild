@@ -48,7 +48,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     kind: 'agent',
     skill: 'verify-web-dashboard',
     paths: [
-      'app/**',
+      'packages/hosted-store-service/app/**',
       'tools/web-dashboard-capture.tsx',
       '.agents/skills/verify-web-dashboard/SKILL.md',
       'DESIGN.md',

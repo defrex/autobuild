@@ -1,8 +1,15 @@
+import { resolve } from 'node:path'
 import type { NextConfig } from 'next'
 
 const config: NextConfig = {
   serverExternalPackages: ['better-auth', 'pg'],
-  turbopack: { root: process.cwd() },
+  // Turbopack's root must be the workspace root (this package directory is two
+  // levels below it) so module resolution spans the monorepo. Next loads this
+  // TypeScript config by transpiling it to CommonJS, where `import.meta` is a
+  // syntax error — so the root is derived from `cwd`, which is this package
+  // directory in every invocation (`bun run dev`/`build` from the package
+  // directory, Vercel building with the Root Directory as cwd).
+  turbopack: { root: resolve(process.cwd(), '..', '..') },
   // RFC 9728 discovery must exist at the origin root: MCP clients discover
   // the authorization server from `/.well-known/oauth-protected-resource` at
   // the resource URL's origin before falling back to path-based probes. The

@@ -112,9 +112,10 @@ Only `verify:*` and `finalize:*` are configurable extension points. Agents inter
 ## Working on the dashboards
 
 Two frontends read the same event log: the terminal dashboard in
-`packages/core/src/cli/dashboard/` and the operator web app in `app/`. Both are
+`packages/core/src/cli/dashboard/` and the operator web app in
+`packages/hosted-store-service/app/`. Both are
 product code, and the web app has a recorded design system. Any change under
-`app/**` is design work as well as engineering work:
+`packages/hosted-store-service/app/**` is design work as well as engineering work:
 
 - **Invoke the `impeccable` skill before editing UI.** Run
   `.agents/skills/impeccable/scripts/impeccable context --target <file>` from
@@ -124,7 +125,7 @@ product code, and the web app has a recorded design system. Any change under
   code. Use its refinement commands (`polish`, `adapt`, `harden`, `clarify`,
   `critique`, `audit`) as the task calls for them.
 - **`DESIGN.md` is the visual authority.** Extend the recorded system through
-  the tokens in `app/globals.css`, the cell grid, and the named rules. Never
+  the tokens in `packages/hosted-store-service/app/globals.css`, the cell grid, and the named rules. Never
   add a second face, a second size, a hairline border, a shadow, a gradient,
   an icon set, or an emoji glyph.
 - **Visual-world changes are human decisions.** Replacing the recorded world,
@@ -138,7 +139,7 @@ product code, and the web app has a recorded design system. Any change under
   Chromium into `.ab/web-dashboard-frames/`; open every PNG before finishing.
   The `web-dashboard` verify step runs the same capture through the
   repository-local `verify-web-dashboard` skill for any build that touches
-  `app/**`. The terminal dashboard keeps its own `dashboard` step and
+  `packages/hosted-store-service/app/**`. The terminal dashboard keeps its own `dashboard` step and
   `readme-headline` check.
 - **Parity is the vocabulary, not the pixels.** A change to what a row says
   belongs in the shared projection under `packages/core/src/cli/dashboard/`,

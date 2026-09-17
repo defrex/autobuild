@@ -18,10 +18,12 @@ node_modules/
 .env*
 
 # impeccable design skill: downloaded platform binary and transient round state
+# (surface briefs are committed; the rest is per-machine state, wherever the
+# skill's project root resolves for the file being worked on)
 .agents/skills/impeccable/scripts/bin/
 .claude/skills/impeccable/scripts/bin/
-.impeccable/questions/
-.impeccable/review/
-.impeccable/build/
-.impeccable/mocks/
-.impeccable/hook.cache.json
+**/.impeccable/questions/
+**/.impeccable/review/
+**/.impeccable/build/
+**/.impeccable/mocks/
+**/.impeccable/hook.cache.json

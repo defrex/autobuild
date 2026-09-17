@@ -3,8 +3,10 @@
 ## Unreleased
 
 - [#428](https://github.com/defrex/autobuild/pull/428) — Document comment-interleaved argument positions in the boundary guard
+- [#426](https://github.com/defrex/autobuild/pull/426) — Move the operator web app into the hosted store service package
 - [#424](https://github.com/defrex/autobuild/pull/424) — Complete the boundary-guard coverage statement's widening list
 - [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
+- [#425](https://github.com/defrex/autobuild/pull/425) — Deduplicate type-only-import rationale comment in boundary test
 - [#422](https://github.com/defrex/autobuild/pull/422) — Enumerate all worktree-dirty triggers in the provenance docs
 - [#420](https://github.com/defrex/autobuild/pull/420) — Collect only specifier-position literals in the boundary guard
 - [#421](https://github.com/defrex/autobuild/pull/421) — Harden vercel-consumer-config test against catalog drift

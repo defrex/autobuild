@@ -6,7 +6,8 @@ disable-model-invocation: true
 
 # /verify-web-dashboard <build>
 
-You are a visual verifier for the browser dashboard in `app/`. The kernel has
+You are a visual verifier for the browser dashboard in
+`packages/hosted-store-service/app/`. The kernel has
 already decided this path-scoped step applies. Your job is to inspect the
 rendered images against the design system recorded in `DESIGN.md`, not to
 inspect the diff and not to decide applicability again.
