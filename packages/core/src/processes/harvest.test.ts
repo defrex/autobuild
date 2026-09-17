@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import type { AbEvent } from '../events/catalog'
 import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import { MemoryBuildStore } from '../store/memory'
 import {
   artifactRef,
+  collectUnclaimedObservations,
   evaluateHarvestPressure,
   harvestProposalKey,
   makeHarvestScanPacket,
@@ -326,6 +328,36 @@ describe('harvest deterministic scan and ledger', () => {
     expect(listReads).toBe(1)
     expect(eventReads).toBe(2)
   })
+  test('the pure core matches the store-reading scan over the same contents', async () => {
+    const store = new MemoryBuildStore()
+    await observation(store, 'a', 'a1')
+    await observation(store, 'b', 'b1')
+    await observation(store, 'c', 'c1')
+    await store.createBuild({ slug: 'merged', repo: '/repo' })
+    await store.append('merged', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: 'abc123' },
+    })
+    await claim(store, 'h_1', [{ build: 'c', seq: 1 }])
+
+    const harvestEvents = await store.getRepoEvents('/repo')
+    const records = await store.listBuilds()
+    const eventsByBuild = new Map<string, AbEvent[]>()
+    for (const record of records) {
+      if (record.repo !== '/repo') continue
+      eventsByBuild.set(record.slug, await store.getEvents(record.slug))
+    }
+    expect(
+      collectUnclaimedObservations({
+        repo: '/repo',
+        records,
+        eventsByBuild,
+        harvestEvents,
+      }),
+    ).toEqual(await scanUnclaimedObservations(store, '/repo'))
+  })
+
   test('projects distinct origin lifecycle without querying foreign sources', async () => {
     const tickets = new FakeTicketSource([
       {

@@ -1,6 +1,7 @@
 import { composeBuildConfig } from '../config/live'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { configSchema, type Config } from '../config/schema'
+import type { AbEvent } from '../events/catalog'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   parseBuildConfigMetadata,
@@ -18,7 +19,7 @@ import {
 } from '../cli/dashboard/model'
 import { reduceBuild } from '../kernel/reducer'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { scanUnclaimedObservations } from '../processes/harvest'
+import { collectUnclaimedObservations } from '../processes/harvest'
 import type { BuildStore, Clock } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
@@ -211,18 +212,36 @@ export async function getOperatorDashboard(opts: {
   clock: Clock
 }): Promise<OperatorDashboardSnapshot> {
   const { config, repositoryEvents, status } = await effectiveConfig(opts.store, opts.repo)
+  const records = await opts.store.listBuilds()
   const projected: DashboardBuild[] = []
+  const eventsByBuild = new Map<string, AbEvent[]>()
   let activeCount = 0
-  for (const record of await opts.store.listBuilds()) {
+  for (const record of records) {
     if (record.repo !== opts.repo) continue
     const events = await opts.store.getEvents(record.slug)
+    eventsByBuild.set(record.slug, events)
     const state = reduceBuild(events)
     if (state.status !== 'done' && state.status !== 'aborted') activeCount += 1
+    // A done build projects no row (`effectiveStatus` maps only `done` outside
+    // the visible set), so its pinned effective-config artifact — fetched and
+    // then discarded on every refresh before AUT-486 — is not read at all.
+    // Every row-rendering build still gets its pinned pipeline and metadata.
+    if (state.status === 'done') continue
     const pinned = await readPinnedConfig(opts.store, record.slug, config)
     const row = projectBuild(record, state, config, events, undefined, pinned.config)
     if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
   }
-  const scan = await scanUnclaimedObservations(opts.store, opts.repo)
+  // The unclaimed-observation scan runs over the journal `effectiveConfig`
+  // already returned and the per-build histories the loop already loaded:
+  // each build's history and the repository journal are read once per
+  // snapshot (AUT-486). The pure core writes nothing — a snapshot performs no
+  // store writes and never creates or locks the repository record.
+  const scan = collectUnclaimedObservations({
+    repo: opts.repo,
+    records,
+    eventsByBuild,
+    harvestEvents: repositoryEvents,
+  })
   const warningLines = [
     ...status.roleWarnings,
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),

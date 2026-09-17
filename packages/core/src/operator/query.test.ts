@@ -1,20 +1,33 @@
 import { describe, expect, test } from 'bun:test'
+import { composeBuildConfig } from '../config/live'
 import { parseConfig } from '../config/load'
+import type { Config } from '../config/schema'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   effectiveBuildConfigContent,
+  parseBuildConfigMetadata,
+  parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
+import { scanUnclaimedObservations } from '../processes/harvest'
 import { MemoryBuildStore } from '../store/memory'
-import { projectBuild } from '../cli/dashboard/model'
+import type { Artifact, BuildStore, Clock } from '../store/types'
 import {
+  buildDashboardFromProjected,
+  projectBuild,
+  type DashboardBuild,
+} from '../cli/dashboard/model'
+import type { PipelineSourceMeta } from '../config/pipeline-source'
+import {
+  effectiveConfig,
   getHarvestStatus,
   getOperatorBuild,
   getOperatorDashboard,
   getRepositoryStatus,
   listOperatorBuilds,
   OperatorQueryError,
+  type OperatorDashboardSnapshot,
 } from './query'
 
 const REPO = '/repo'
@@ -352,6 +365,376 @@ command = "postgres"
     expect(row.steps.map((step) => step.label)).not.toContain('verify:postgres')
     expect(row.effectiveConfigRev).toBe(2)
     expect(row.pipelineSource).toEqual({ ref: 'base', commit: 'b'.repeat(40) })
+  })
+
+  // ── AUT-486 characterization fixtures ────────────────────────────────────
+  //
+  // `legacySnapshot` below is a verbatim copy of today's `getOperatorDashboard`
+  // body (and of its module-private `readPinnedConfig`/`decorateWithPinnedMeta`
+  // helpers): the legacy algorithm whose output the snapshot rewrite must not
+  // change. It reads the same exported seams the real query reads
+  // (`effectiveConfig`, `scanUnclaimedObservations`, `projectBuild`,
+  // `buildDashboardFromProjected`) so the differential test survives the
+  // refactor unchanged.
+  // ── AUT-486 counting fixtures ───────────────────────────────────────
+  //
+  // A Proxy that counts every invoked method of the memory store. Each method
+  // is applied bound to the raw instance, so internal adapter calls are not
+  // double-counted and the counts name exactly the store calls one snapshot
+  // makes (ACs 2–5).
+  const MUTATING_STORE_METHODS = [
+    'ensureRepo',
+    'createBuild',
+    'append',
+    'appendIfCurrent',
+    'appendWithArtifacts',
+    'putArtifact',
+    'claimLease',
+    'heartbeat',
+    'releaseLease',
+    'appendRepo',
+    'appendRepoWithArtifacts',
+    'putRepoArtifact',
+    'claimRepoLease',
+    'heartbeatRepo',
+    'releaseRepoLease',
+    'createSession',
+    'appendSessionEvent',
+    'appendSessionWithArtifacts',
+    'putSessionArtifact',
+    'createStream',
+    'appendStreamParts',
+    'closeStream',
+  ] as const
+
+  function countingStore(store: MemoryBuildStore): {
+    store: BuildStore
+    counts: Map<string, number>
+    eventSlugs: string[]
+    artifactSlugs: string[]
+  } {
+    const counts = new Map<string, number>()
+    const eventSlugs: string[] = []
+    const artifactSlugs: string[] = []
+    const target = store as unknown as Record<string, unknown>
+    const proxy = new Proxy(target, {
+      get(t, prop) {
+        if (typeof prop === 'symbol') return Reflect.get(t, prop, t)
+        const value = t[prop]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          counts.set(prop, (counts.get(prop) ?? 0) + 1)
+          if (prop === 'getEvents') eventSlugs.push(args[0] as string)
+          if (prop === 'getArtifact') artifactSlugs.push(args[0] as string)
+          return (value as (...a: unknown[]) => unknown).apply(t, args)
+        }
+      },
+    })
+    return { store: proxy as unknown as BuildStore, counts, eventSlugs, artifactSlugs }
+  }
+
+  interface PinnedProjection {
+    config: Config
+    revision?: number
+    pipelineSource?: PipelineSourceMeta
+  }
+
+  async function legacyReadPinnedConfig(
+    store: BuildStore,
+    slug: string,
+    live: Config,
+  ): Promise<PinnedProjection> {
+    let artifact: Artifact | null
+    try {
+      artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+    } catch {
+      artifact = null
+    }
+    if (artifact === null) return { config: live }
+    let config: Config
+    try {
+      config = composeBuildConfig(parseEffectiveBuildConfig(artifact), live)
+    } catch {
+      config = live
+    }
+    return { config, ...parseBuildConfigMetadata(artifact) }
+  }
+
+  function legacyDecorate(row: DashboardBuild, pinned: PinnedProjection): DashboardBuild {
+    if (pinned.revision !== undefined) row.effectiveConfigRev = pinned.revision
+    if (pinned.pipelineSource !== undefined) row.pipelineSource = pinned.pipelineSource
+    return row
+  }
+
+  async function legacySnapshot(opts: {
+    store: BuildStore
+    repo: string
+    clock: Clock
+  }): Promise<OperatorDashboardSnapshot> {
+    const { config, repositoryEvents, status } = await effectiveConfig(opts.store, opts.repo)
+    const projected: DashboardBuild[] = []
+    let activeCount = 0
+    for (const record of await opts.store.listBuilds()) {
+      if (record.repo !== opts.repo) continue
+      const events = await opts.store.getEvents(record.slug)
+      const state = reduceBuild(events)
+      if (state.status !== 'done' && state.status !== 'aborted') activeCount += 1
+      const pinned = await legacyReadPinnedConfig(opts.store, record.slug, config)
+      const row = projectBuild(record, state, config, events, undefined, pinned.config)
+      if (row !== null) projected.push(legacyDecorate(row, pinned))
+    }
+    const scan = await scanUnclaimedObservations(opts.store, opts.repo)
+    const warningLines = [
+      ...status.roleWarnings,
+      ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
+    ]
+    const model = buildDashboardFromProjected(
+      projected,
+      {
+        repo: opts.repo,
+        queued: status.queued ?? 0,
+        activeCount,
+        capacity: config.capacity,
+        observationCount: scan.observations.length,
+        observationLimit: config.policy.harvestThreshold,
+        ...(status.availableUpgrade !== undefined
+          ? { availableUpgrade: status.availableUpgrade }
+          : {}),
+        ...(warningLines.length > 0 ? { warningLines } : {}),
+      },
+      repositoryEvents,
+    )
+    return {
+      generatedAt: opts.clock().toISOString(),
+      model,
+      settingsHeader: {
+        intake: !model.drained,
+        repositoryPaused: model.repositoryPaused,
+        defaultAutoMerge: model.defaultAutoMerge,
+        harvestPaused: model.harvestPaused,
+      },
+    }
+  }
+
+  function pinnedPipelineConfig() {
+    return parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+postgres = "pg-ready"
+
+[verify]
+steps = ["postgres"]
+
+[verify.postgres]
+kind = "check"
+command = "postgres"
+`)
+  }
+
+  async function recordObservation(
+    store: MemoryBuildStore,
+    slug: string,
+    id: string,
+    summary: string,
+  ): Promise<number> {
+    await store.append(slug, {
+      actor: agentActor('implement', `observation-${id}`),
+      type: 'observation.recorded',
+      payload: { id, kind: 'followup', summary },
+    })
+    const events = await store.getEvents(slug)
+    return events.findLast((event) => event.type === 'observation.recorded')!.seq
+  }
+
+  /** Running, blocked, queued, merged (terminal, no row), and aborted builds
+   * with claimed and unclaimed observations, a pinned pipeline, journal
+   * warnings, and settings facts: every lifecycle shape the snapshot's store
+   * traffic touches. The open harvest run claims one observation. */
+  async function seedDashboardStore(extraDoneBuilds = 0): Promise<MemoryBuildStore> {
+    const store = new MemoryBuildStore({ clock })
+    await publishRun(store, 'new', config(7, 11), ['role warning'])
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run: 'new',
+        queued: 2,
+        counters,
+        janitorDiagnostics: [],
+        ticketDiagnostics: [],
+        creationDiagnostics: [],
+        dependencyDiagnostics: [],
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.operator-reported',
+      payload: { run: 'new', level: 'warning', message: 'operator warning' },
+    })
+    await store.appendRepo(REPO, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.auto-merge-default-set',
+      payload: { enabled: true },
+    })
+
+    // Running build: one unclaimed observation, and a pinned effective-config
+    // artifact so a rendered row carries pinned pipeline metadata.
+    await createBuild(store, 'running', 'active')
+    await store.putArtifact('running', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedPipelineConfig()),
+      metadata: {
+        revision: 3,
+        run: 'new',
+        pipelineSource: { ref: 'branch-head', commit: 'a'.repeat(40) },
+      },
+    })
+    await store.append('running', { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+    await recordObservation(store, 'running', 'obs-running', 'unclaimed on the running build')
+
+    // Blocked build: its observation is claimed by the open harvest run below.
+    await createBuild(store, 'blocked', 'active')
+    await store.append('blocked', {
+      actor: KERNEL,
+      type: 'escalation.raised',
+      payload: { id: 'esc-1', phase: 'plan', source: 'agent', question: 'which spec scope?' },
+    })
+    const claimedSeq = await recordObservation(
+      store,
+      'blocked',
+      'obs-claimed',
+      'claimed by the open run',
+    )
+
+    // Queued build: one unclaimed observation.
+    await createBuild(store, 'queued', 'queued')
+    await recordObservation(store, 'queued', 'obs-queued', 'unclaimed on the queued build')
+
+    // Merged build: terminal `done`, renders no row.
+    await createBuild(store, 'merged', 'done')
+
+    // Aborted build: renders as `cleaning`, carries an unclaimed observation.
+    await createBuild(store, 'aborted', 'active')
+    await store.append('aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
+    await recordObservation(store, 'aborted', 'obs-aborted', 'unclaimed after abort')
+
+    for (let index = 1; index <= extraDoneBuilds; index += 1) {
+      const slug = `finished-${index}`
+      await createBuild(store, slug, 'done')
+    }
+
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'harvest-1',
+        observations: [{ build: 'blocked', seq: claimedSeq }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    })
+    return store
+  }
+
+  test('the dashboard snapshot is byte-identical to the legacy algorithm over every lifecycle shape', async () => {
+    const store = await seedDashboardStore()
+    const legacy = await legacySnapshot({ store, repo: REPO, clock })
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    expect(snapshot).toEqual(legacy)
+
+    // Explicit assertions on the snapshot's shape, so a future change that
+    // makes BOTH paths drift together still fails here (AC 1).
+    expect(snapshot.generatedAt).toBe(now.toISOString())
+    expect(snapshot.settingsHeader).toEqual({
+      intake: true,
+      repositoryPaused: false,
+      defaultAutoMerge: true,
+      harvestPaused: false,
+    })
+    expect(snapshot.model.builds.map((build) => build.slug)).toEqual([
+      'aborted',
+      'blocked',
+      'queued',
+      'running',
+    ])
+    expect(snapshot.model.queued).toBe(2)
+    expect(snapshot.model.active).toEqual({ current: 3, limit: 7 })
+    expect(snapshot.model.observations).toEqual({ current: 3, limit: 11 })
+    expect(snapshot.model.warningLines).toEqual(['role warning', 'operator warning'])
+    const statuses = new Map(snapshot.model.builds.map((build) => [build.slug, build.status]))
+    expect(statuses.get('running')).toBe('running')
+    expect(statuses.get('blocked')).toBe('blocked')
+    expect(statuses.get('queued')).toBe('queued')
+    expect(statuses.get('aborted')).toBe('cleaning')
+    const pinnedRow = snapshot.model.builds.find((build) => build.slug === 'running')!
+    expect(pinnedRow.effectiveConfigRev).toBe(3)
+    expect(pinnedRow.pipelineSource).toEqual({ ref: 'branch-head', commit: 'a'.repeat(40) })
+    expect(pinnedRow.steps.map((step) => step.label)).toContain('verify:postgres')
+    expect(snapshot.model.builds.find((build) => build.slug === 'blocked')?.blockers).toEqual([
+      'which spec scope?',
+    ])
+    expect(snapshot.model.builds.find((build) => build.slug === 'merged')).toBeUndefined()
+  })
+
+  test('one snapshot reads each history once, the journal once, and writes nothing', async () => {
+    // More finished builds than rendered rows: five `done` builds, one of them
+    // carrying a pinned artifact that must NOT be fetched.
+    const raw = await seedDashboardStore(4)
+    await raw.putArtifact('finished-1', {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(pinnedPipelineConfig()),
+      metadata: { revision: 5, run: 'new' },
+    })
+    const repoBuilds = [
+      'aborted',
+      'blocked',
+      'finished-1',
+      'finished-2',
+      'finished-3',
+      'finished-4',
+      'merged',
+      'queued',
+      'running',
+    ]
+    const rowBuilds = ['aborted', 'blocked', 'queued', 'running']
+
+    const counting = countingStore(raw)
+    counting.counts.clear() // seeding used the raw store; count the snapshot only
+    const snapshot = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
+    expect(snapshot.model.builds.map((build) => build.slug)).toEqual(rowBuilds)
+
+    // Read bounds: one journal read, one listing, one history read per repo
+    // build (each slug exactly once), and pinned-config reads only for builds
+    // that render a row (ACs 2–4).
+    expect(counting.counts.get('listBuilds')).toBe(1)
+    expect(counting.counts.get('getRepo')).toBe(1)
+    expect(counting.counts.get('getRepoEvents')).toBe(1)
+    expect(counting.counts.get('getRepoArtifact')).toBe(1)
+    expect(counting.eventSlugs).toHaveLength(repoBuilds.length)
+    expect([...counting.eventSlugs].sort()).toEqual(repoBuilds)
+    expect(counting.counts.get('getArtifact')).toBe(rowBuilds.length)
+    expect([...counting.artifactSlugs].sort()).toEqual(rowBuilds)
+    // The done build's pinned artifact is never fetched.
+    expect(counting.artifactSlugs).not.toContain('finished-1')
+
+    // No store writes, including creating or locking the repository record (AC 5).
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+  })
+
+  test('a snapshot for a repository the store has never seen answers as today and writes nothing', async () => {
+    const raw = new MemoryBuildStore({ clock })
+    const counting = countingStore(raw)
+    await expect(
+      getOperatorDashboard({ store: counting.store, repo: REPO, clock }),
+    ).rejects.toMatchObject({ code: 'effective-config-unavailable' })
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+    expect(await raw.getRepo(REPO)).toBeNull()
   })
 
   test('dashboard reports every durable effective-config failure as a typed query error', async () => {
