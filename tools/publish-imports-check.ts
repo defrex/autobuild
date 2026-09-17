@@ -47,13 +47,18 @@ import { collectSpecifiers, UNPARSEABLE_MODULE } from './package-boundary-check'
  *    `<tmp>/<scratch>/node_modules/<name>/<packed path>` layout (extraction of
  *    a tarball is exactly files at their packed relative paths), read from the
  *    repository tree. The scratch root is removed in a `finally`.
- * 4. Every packed `.ts`/`.tsx` file of every dependent (every publishable
- *    package except the provider) is scanned with `collectSpecifiers` from
- *    package-boundary-check.ts — the same parser-based, comment-safe,
- *    fail-closed scanner the test-boundary gate uses. Specifiers are filtered
- *    to exact `@defrex/autobuild` or `@defrex/autobuild/<sub>` (never
- *    `@defrex/autobuild-hosted-store-service/…` or
- *    `@defrex/autobuild-postgres-store/…`).
+ * 4. Every packed file of every dependent (every publishable package except
+ *    the provider) whose suffix maps to a script kind — `.ts`, `.tsx`, `.mts`,
+ *    `.cts` (including their `.d.ts`/`.d.mts`/`.d.cts` declaration variants),
+ *    `.js`, `.mjs`, `.cjs`, and `.jsx`; matching is case-sensitive, and every
+ *    other suffix (`.json`, `.md`, `.map`, …) is skipped — is scanned with
+ *    `collectSpecifiers` from package-boundary-check.ts — the same
+ *    parser-based, comment-safe, fail-closed scanner the test-boundary gate
+ *    uses. A packed file that does not parse as its own kind (for example JSX
+ *    text in a packed `.js` file) is an `unparseable-file` violation, never a
+ *    silent skip. Specifiers are filtered to exact `@defrex/autobuild` or
+ *    `@defrex/autobuild/<sub>` (never `@defrex/autobuild-hosted-store-service/…`
+ *    or `@defrex/autobuild-postgres-store/…`).
  * 5. Each collected specifier passes a static assertion first — it must be an
  *    exact key of the provider manifest's `exports` map (`.` for the bare
  *    name, `./<sub>` otherwise). That assertion is a fast pre-filter with a
@@ -89,6 +94,30 @@ const RULING =
   'the service and dispatcher declare optional peerDependency @defrex/autobuild >= 0.9.0, and ' +
   'no import is rewritten anywhere. This check pins the coupling where releases are cut: a ' +
   'published package may import only @defrex/autobuild subpaths the packed provider exports.'
+
+/** The script kind a packed file's suffix scans as, or `undefined` when the
+ * file is not scanned at all. The scanned set is the TypeScript family
+ * (`.ts`, `.tsx`, `.mts`, `.cts` — the declaration variants `.d.ts`/`.d.mts`/
+ * `.d.cts` are covered by their suffixes) plus the JavaScript family
+ * (`.js`, `.mjs`, `.cjs`) and JSX JavaScript (`.jsx`, symmetric with the
+ * already-scanned `.tsx`). Matching is case-sensitive, like the `\.tsx?$`
+ * filter this mapping replaced, so `.JS` or `.TS` is not scanned. The kinds
+ * follow TypeScript's own `getScriptKindFromFileName`. Before this mapping,
+ * only `\.tsx?$` files were scanned, so a packed dependent shipping a `.js`/
+ * `.mjs`/`.cjs`/`.jsx` — or even a `.mts`/`.cts` — file importing a provider
+ * subpath was silently skipped (AUT-479).
+ */
+export function packedScriptKind(path: string): ts.ScriptKind | undefined {
+  if (path.endsWith('.ts') || path.endsWith('.mts') || path.endsWith('.cts')) {
+    return ts.ScriptKind.TS
+  }
+  if (path.endsWith('.tsx')) return ts.ScriptKind.TSX
+  if (path.endsWith('.js') || path.endsWith('.mjs') || path.endsWith('.cjs')) {
+    return ts.ScriptKind.JS
+  }
+  if (path.endsWith('.jsx')) return ts.ScriptKind.JSX
+  return undefined
+}
 
 /** True for exactly `@defrex/autobuild` and `@defrex/autobuild/<sub>` — never
  * for `@defrex/autobuild-hosted-store-service/…` or the other sibling names. */
@@ -169,7 +198,9 @@ export interface PublishImportsReport {
   violations: PublishImportsViolation[]
   /** Publishable packages whose packed listings were checked. */
   packedPackages: number
-  /** Packed dependent `.ts`/`.tsx` files scanned for provider specifiers. */
+  /** Packed dependent files scanned for provider specifiers — those whose
+   * suffix `packedScriptKind` maps to a script kind (the TS family, the JS
+   * family, and `.jsx`). */
   scannedFiles: number
   /** Specifiers that passed the static assertion and were resolution-probed. */
   probedSpecifiers: number
@@ -194,7 +225,8 @@ function packRequest(env: PublishImportsCheckEnvironment, directory: string): Pa
 
 /**
  * Packs every publishable package, stages the packed layouts, scans the
- * dependents' packed TypeScript files for provider specifiers, and probes
+ * dependents' packed script files (the `packedScriptKind` set) for provider
+ * specifiers, and probes
  * resolution. Structural failures (manifest enumeration, a missing or
  * ambiguous provider, a failed provider pack) throw; per-package pack failures
  * and every specifier/target finding are collected as violations — the caller
@@ -317,10 +349,11 @@ export async function scanPublishedImports(
       }
 
       if (entry.name === PROVIDER_PACKAGE) continue // the provider cannot be skewed against itself
-      for (const relativePath of entry.packedPaths.filter((path) => /\.tsx?$/.test(path))) {
+      for (const relativePath of entry.packedPaths) {
+        const scriptKind = packedScriptKind(relativePath)
+        if (scriptKind === undefined) continue
         const bytes = await env.readFile(join(env.repoRoot, entry.directory, relativePath))
         const contents = new TextDecoder().decode(bytes)
-        const scriptKind = relativePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
         const collected = collectSpecifiers(contents, scriptKind)
         scannedFiles += 1
         const stagedFile = stagedPathOf(entry.name, relativePath)
