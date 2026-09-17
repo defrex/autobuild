@@ -4,6 +4,7 @@
 
 - [#456](https://github.com/defrex/autobuild/pull/456) — Rule AUT-490: exclude test files from sub-package tarballs
 - [#455](https://github.com/defrex/autobuild/pull/455) — Fix publish-contents-check's duplicated header sentence and describeSurface's LICENSE rendering
+- [#454](https://github.com/defrex/autobuild/pull/454) — Serialize the web dashboard's snapshot refreshes
 - [#453](https://github.com/defrex/autobuild/pull/453) — Remove the dashboard snapshot's duplicate reads and per-refresh write
 - [#452](https://github.com/defrex/autobuild/pull/452) — Rule the store-service scan's subtree collection deliberate (AUT-456)
 - [#451](https://github.com/defrex/autobuild/pull/451) — Retire the bunfig.toml hoisted-linker override
