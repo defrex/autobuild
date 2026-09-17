@@ -208,7 +208,7 @@ export async function runPublishContentsCheck(
   if (violations.length === 0) {
     const srcCount = paths.filter((path) => path.startsWith(`${requiredPackedPrefix}`)).length
     output.stdout(
-      `Hosted-store-service pack contents match the ruling: package.json, README.md, and ${srcCount} src/ file(s).`,
+      `Hosted-store-service pack contents match the ruling: package.json, README.md, and ${srcCount} src/ file(s).\n`,
     )
     return 0
   }
