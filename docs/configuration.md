@@ -157,7 +157,11 @@ and `[workspace]` (provider and config, including `provisioning` and
 `runtimeProvisioning`). They are pinned to the build's own branch: the
 dispatcher reads them at the build's recorded base commit, or at its branch
 head once the build has published commits, and records the exact commit in the
-effective-config artifact metadata. **Deployment-owned** sections — `[roles]`
+effective-config artifact metadata. In checkout mode the worktree read is the
+exception: when the workspace's `autobuild.toml` has uncommitted edits, the
+deposit records the source `worktree-dirty` with no commit — the build still
+runs the worktree bytes, but provenance declines to attribute them to any
+commit. **Deployment-owned** sections — `[roles]`
 (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and
 `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
 `capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
