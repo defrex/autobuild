@@ -27,10 +27,11 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * hand-maintained `.ab-pristine/` exclusion (pristine copies are `ab
  * upgrade`'s three-way-merge baselines and must never be edited to satisfy
  * a finding). Canonical skill documents have their own reference guard,
- * `skill-self-containment.test.ts`; vendored `.agents/skills` copies carry
- * no equivalent guard, and that gap is accepted by this ruling, not hidden
- * by it. A plan or reviewer must not claim this check validates SKILL.md
- * files.
+ * `skill-self-containment.test.ts`, and the vendored `.agents/skills` copies of those
+ * canonical skills inherit it through the byte-for-byte mirroring in
+ * `tools/vendored-skills-sync.test.ts`. Repo-local skills (no canonical inventory entry)
+ * are guarded by `tools/skill-docs-asset-check.ts`. A plan or reviewer must not claim this
+ * check validates SKILL.md files.
  *
  * Re-verifying that nothing in-repo restates the false claim this ruling
  * answers is a grep sweep (build `rule-on-docs`'s AC3), and that sweep must
@@ -104,8 +105,12 @@ export function isImageAsset(path: string): boolean {
  * A reference's target as written and where it lands, repo-root-relative.
  * `undefined` for anything that cannot name a tracked file: a scheme, a
  * bare fragment, or an empty remainder.
+ *
+ * Exported for `tools/skill-docs-asset-check.ts`, this resolution's second
+ * consumer, so a skill document's references land exactly where a shipped
+ * document's do.
  */
-function resolveTarget(documentPath: string, rawTarget: string): string | undefined {
+export function resolveTarget(documentPath: string, rawTarget: string): string | undefined {
   // Any scheme at all — `https:`, `mailto:`, `data:`. None can name a path in
   // this repository, and `[a-z0-9+.-]*` cannot cross a `/`, so a relative path
   // containing a colon is still resolved.
