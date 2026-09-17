@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import type { WorkspaceManifest } from './workspace-manifest-check'
 import {
   normalizeClaudeSummary,
   parseReleaseArguments,
+  peerFloorRefusalMessage,
+  peerFloorViolations,
   README_INSTALL_END,
   README_INSTALL_START,
   renderReleasedChangelog,
@@ -18,6 +21,7 @@ import {
   type CommandRequest,
   type CommandResult,
   type CommandRunner,
+  type PeerFloorViolation,
   type ReleaseOutput,
   publishablePackages,
   publishRecoveryCommand,
@@ -76,7 +80,13 @@ ${README_INSTALL_END}
 `
 
 async function createFixture(
-  overrides: { config?: string; changelog?: string } = {},
+  overrides: {
+    config?: string
+    changelog?: string
+    /** Extra workspace manifests to write and commit, as repo-relative
+     * manifest paths; the shared fixture stays peer-free. */
+    extraPackages?: { path: string; text: string }[]
+  } = {},
 ): Promise<Fixture> {
   const parent = await mkdtemp(join(tmpdir(), 'autobuild-release-'))
   temporaryDirectories.push(parent)
@@ -99,6 +109,11 @@ async function createFixture(
     ),
     writeFile(join(root, 'CHANGELOG.md'), overrides.changelog ?? fixtureChangelog),
     writeFile(join(root, 'README.md'), fixtureReadme),
+    ...(overrides.extraPackages ?? []).map((extra) =>
+      mkdir(join(root, dirname(extra.path)), { recursive: true }).then(() =>
+        writeFile(join(root, extra.path), extra.text),
+      ),
+    ),
   ])
   await command(root, 'git', ['add', '.'])
   await command(root, 'git', ['commit', '-m', 'initial'])
@@ -184,12 +199,13 @@ async function expectReleaseFailure(
   root: string,
   expected: RegExp,
   testHarness = harness(),
+  args: readonly string[] = ['--patch'],
 ): Promise<void> {
   const beforeHead = (await command(root, 'git', ['rev-parse', 'HEAD'])).stdout
   const beforeStatus = (await command(root, 'git', ['status', '--porcelain'])).stdout
   let error: unknown
   try {
-    await runRelease(['--patch'], root, {
+    await runRelease(args, root, {
       run: testHarness.run,
       output: testHarness.output,
       today: () => '2026-07-27',
@@ -269,6 +285,187 @@ describe('release transforms', () => {
     expect(replacePackageVersion('{\n  "version": "2.0.0"\n}\n', '2.1.0')).toBe(
       '{\n  "version": "2.1.0"\n}\n',
     )
+  })
+})
+
+describe('peer floor guard', () => {
+  function manifestEntry(path: string, manifest: Record<string, unknown>): WorkspaceManifest {
+    return {
+      path,
+      text: JSON.stringify(manifest),
+      manifest: manifest as WorkspaceManifest['manifest'],
+    }
+  }
+
+  function dependentManifest(range: string): string {
+    return `{\n  "name": "@fixture/dep",\n  "version": "2.0.0",\n  "peerDependencies": {\n    "fixture": "${range}"\n  }\n}\n`
+  }
+
+  test('flags a requested version below a declared peer floor, and passes compliant versions', () => {
+    const manifests = [
+      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
+      manifestEntry('packages/service/package.json', {
+        name: '@fixture/service',
+        version: '0.8.0',
+        peerDependencies: { fixture: '>=0.9.0' },
+        peerDependenciesMeta: { fixture: { optional: true } },
+      }),
+    ]
+    expect(peerFloorViolations(manifests, ['fixture'], '0.8.1')).toEqual([
+      { manifestPath: 'packages/service/package.json', peerName: 'fixture', range: '>=0.9.0' },
+    ] satisfies PeerFloorViolation[])
+    expect(peerFloorViolations(manifests, ['fixture'], '0.9.0')).toEqual([])
+    expect(peerFloorViolations(manifests, ['fixture'], '1.0.0')).toEqual([])
+  })
+
+  test('ignores peers on names this release does not publish and private dependents', () => {
+    const manifests = [
+      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
+      manifestEntry('packages/service/package.json', {
+        name: '@fixture/service',
+        version: '0.8.0',
+        peerDependencies: { 'unrelated-package': '>=99.0.0' },
+      }),
+      manifestEntry('packages/private/package.json', {
+        name: '@fixture/private',
+        version: '0.8.0',
+        private: true,
+        peerDependencies: { fixture: '<0.8.0' },
+      }),
+    ]
+    expect(peerFloorViolations(manifests, ['fixture'], '0.8.1')).toEqual([])
+  })
+
+  test('satisfies workspace-protocol peers by construction and checks remainders', () => {
+    const manifests = [
+      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
+      manifestEntry('packages/a/package.json', {
+        name: '@fixture/a',
+        version: '0.8.0',
+        peerDependencies: { fixture: 'workspace:*' },
+      }),
+      manifestEntry('packages/b/package.json', {
+        name: '@fixture/b',
+        version: '0.8.0',
+        peerDependencies: { fixture: 'workspace:>=0.9.0' },
+      }),
+    ]
+    expect(peerFloorViolations(manifests, ['fixture'], '0.8.1')).toEqual([
+      {
+        manifestPath: 'packages/b/package.json',
+        peerName: 'fixture',
+        range: 'workspace:>=0.9.0',
+      },
+    ] satisfies PeerFloorViolation[])
+  })
+
+  test('throws on peer declarations it cannot evaluate', () => {
+    const nonObject = [
+      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
+      manifestEntry('packages/a/package.json', {
+        name: '@fixture/a',
+        version: '0.8.0',
+        peerDependencies: '>=0.9.0',
+      }),
+    ]
+    expect(() => peerFloorViolations(nonObject, ['fixture'], '0.9.0')).toThrow(
+      'packages/a/package.json: peerDependencies must be an object',
+    )
+    const nonString = [
+      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
+      manifestEntry('packages/b/package.json', {
+        name: '@fixture/b',
+        version: '0.8.0',
+        peerDependencies: { fixture: 9 },
+      }),
+    ]
+    expect(() => peerFloorViolations(nonString, ['fixture'], '0.9.0')).toThrow(
+      'packages/b/package.json: peerDependencies.fixture must be a string',
+    )
+    const unparsable = [
+      manifestEntry('package.json', { name: 'fixture', version: '0.8.0' }),
+      manifestEntry('packages/c/package.json', {
+        name: '@fixture/c',
+        version: '0.8.0',
+        peerDependencies: { fixture: 'not a range >>>' },
+      }),
+    ]
+    expect(() => peerFloorViolations(unparsable, ['fixture'], '0.9.0')).toThrow(
+      'peerDependencies.fixture is not a valid semver range: not a range >>>',
+    )
+  })
+
+  test('the refusal names the version, each violating pair, and the way out', () => {
+    const message = peerFloorRefusalMessage('0.8.1', [
+      { manifestPath: 'packages/service/package.json', peerName: 'fixture', range: '>=0.9.0' },
+    ])
+    expect(message).toContain('cannot release 0.8.1')
+    expect(message).toContain('packages/service/package.json: peer "fixture" requires >=0.9.0')
+    expect(message).toContain('uninstallable from npm')
+    expect(message).toContain('--minor')
+  })
+
+  test('refuses a patch release below a dependent package peer floor', async () => {
+    const fixture = await createFixture({
+      extraPackages: [{ path: 'packages/dep/package.json', text: dependentManifest('>=2.1.0') }],
+    })
+    await expectReleaseFailure(
+      fixture.root,
+      /cannot release 2\.0\.1[\s\S]*packages\/dep\/package\.json[\s\S]*peer "fixture" requires >=2\.1\.0[\s\S]*uninstallable/,
+    )
+  })
+
+  test('refuses an explicit --version below the peer floor', async () => {
+    const fixture = await createFixture({
+      extraPackages: [{ path: 'packages/dep/package.json', text: dependentManifest('>=2.1.0') }],
+    })
+    await expectReleaseFailure(
+      fixture.root,
+      /cannot release 2\.0\.5[\s\S]*peer "fixture" requires >=2\.1\.0/,
+      harness(),
+      ['--version', '2.0.5'],
+    )
+  })
+
+  test('a compliant minor bump passes the guard in a dry run', async () => {
+    const fixture = await createFixture({
+      extraPackages: [{ path: 'packages/dep/package.json', text: dependentManifest('>=2.1.0') }],
+    })
+    const testHarness = harness()
+    await runRelease(['--minor', '--dry-run'], fixture.root, {
+      run: testHarness.run,
+      output: testHarness.output,
+      today: () => '2026-07-27',
+    })
+    expect(testHarness.warnings.join('\n')).toBe('')
+    expect(testHarness.logs.join('\n')).toContain(
+      'Would publish fixture@2.1.0, @fixture/core@2.1.0, @fixture/dep@2.1.0 to the npm registry, in that order, as release-bot.',
+    )
+  })
+
+  test('a private dependent with an unsatisfiable peer does not block the release', async () => {
+    const fixture = await createFixture({
+      extraPackages: [
+        {
+          path: 'packages/private-dep/package.json',
+          text: '{\n  "name": "@fixture/private-dep",\n  "version": "2.0.0",\n  "private": true,\n  "peerDependencies": {\n    "fixture": "<2.0.0"\n  }\n}\n',
+        },
+      ],
+    })
+    const testHarness = harness()
+    await runRelease(['--patch'], fixture.root, {
+      run: testHarness.run,
+      output: testHarness.output,
+      today: () => '2026-07-27',
+      repositoryUrl: fixture.remote,
+      packageArchive: async () => new Uint8Array([1, 2, 3]),
+    })
+    const publishedLine = testHarness.logs.find((message) =>
+      message.startsWith('Published fixture@2.0.1'),
+    )
+    expect(publishedLine).toBeDefined()
+    expect(testHarness.logs.join('\n')).not.toContain('@fixture/private-dep')
+    expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
   })
 })
 
