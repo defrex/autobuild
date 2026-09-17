@@ -553,21 +553,16 @@ export const x = 1`,
   })
 
   test('fully type-only imports are intentionally not flagged', () => {
-    // Ruled behavior: this scan enforces a runtime-load boundary — `import
-    // type` / `export type ... from` are fully erased (even under this repo's
-    // `verbatimModuleSyntax: true`) and cannot load the dispatcher, so
-    // flagging them would be a pure false positive. The tools
-    // package-boundary scanner keeps the same forms flagged on purpose (its
-    // boundary is the source-convention one; a type-only import still couples
-    // the test to sibling internals) — the divergence between the two
-    // scanners is deliberate, not drift. (The inline `{ type T }` form is
-    // different: it survives emit and IS flagged — see the dedicated fixture
-    // above.)
-    // Intentional narrowing: `import type` / `export type ... from` are fully
-    // erased — even under this repo's `verbatimModuleSyntax: true` — and
-    // cannot load the dispatcher, so the parser does not report them. (The
-    // inline `{ type T }` form is different: it survives emit and IS flagged —
-    // see the dedicated fixture above.)
+    // Ruled behavior / intentional narrowing: this scan enforces a
+    // runtime-load boundary — `import type` / `export type ... from` are fully
+    // erased (even under this repo's `verbatimModuleSyntax: true`) and cannot
+    // load the dispatcher, so the parser does not report them and flagging
+    // them would be a pure false positive. The tools package-boundary scanner
+    // keeps the same forms flagged on purpose (its boundary is the
+    // source-convention one; a type-only import still couples the test to
+    // sibling internals) — the divergence between the two scanners is
+    // deliberate, not drift. (The inline `{ type T }` form is different: it
+    // survives emit and IS flagged — see the dedicated fixture above.)
     expect(
       dispatcherSpecifiers("import type { T } from '@defrex/autobuild-hosted-dispatcher/types'"),
     ).toEqual([])
