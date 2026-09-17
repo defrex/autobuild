@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import {
   type PackRequest,
   type PackResult,
@@ -15,6 +16,8 @@ import {
   parsePackedPaths,
   runPublishContentsCheck,
 } from './publish-contents-check'
+
+const REPO_ROOT = join(import.meta.dir, '..')
 
 /**
  * Byte-shaped after the real bun 1.4.0 output this check parses: the banner,
@@ -149,7 +152,7 @@ const postgresFixtureManifest = {
     './store': { types: './src/store.ts', import: './src/store.ts' },
   },
   bin: { 'ab-postgres-store': './src/bin.ts' },
-  files: ['src', 'README.md', '!src/**/*.test.ts'],
+  files: ['src', 'README.md', '!src/**/*.test.ts', '!src/**/*.test.tsx', '!src/**/*.spec.ts'],
 }
 
 const hostedFixtureManifest = {
@@ -169,7 +172,7 @@ const hostedFixtureManifest = {
     './web/mcp': { types: './src/web/mcp.ts', import: './src/web/mcp.ts' },
   },
   bin: { 'ab-hosted-store': './src/bin.ts' },
-  files: ['src', 'README.md', '!src/**/*.test.ts'],
+  files: ['src', 'README.md', '!src/**/*.test.ts', '!src/**/*.test.tsx', '!src/**/*.spec.ts'],
 }
 
 const dispatcherFixtureManifest = {
@@ -190,7 +193,7 @@ const dispatcherFixtureManifest = {
     },
   },
   bin: { 'ab-hosted-dispatcher': './src/bin.ts' },
-  files: ['src', 'README.md', '!src/**/*.test.ts'],
+  files: ['src', 'README.md', '!src/**/*.test.ts', '!src/**/*.test.tsx', '!src/**/*.spec.ts'],
 }
 
 const fakeWorkspaceManifests = (): { path: string; text: string }[] => [
@@ -263,6 +266,24 @@ describe('matchesPackedPattern', () => {
       matchesPackedPattern('patches/better-authx1x4x18xpatch', 'patches/better-auth@1.4.18.patch'),
     ).toBe(false)
   })
+
+  test('the broadened AUT-490 spellings match the new negations, at the top level and nested', () => {
+    expect(matchesPackedPattern('src/foo.test.tsx', 'src/**/*.test.tsx')).toBe(true)
+    expect(matchesPackedPattern('src/web/foo.test.tsx', 'src/**/*.test.tsx')).toBe(true)
+    expect(matchesPackedPattern('src/foo.live.test.tsx', 'src/**/*.test.tsx')).toBe(true)
+    expect(matchesPackedPattern('src/foo.spec.ts', 'src/**/*.spec.ts')).toBe(true)
+    expect(matchesPackedPattern('src/foo.live.spec.ts', 'src/**/*.spec.ts')).toBe(true)
+  })
+
+  test('the old *.test.ts pattern misses the new spellings (the gap this broadening closes)', () => {
+    expect(matchesPackedPattern('src/foo.test.tsx', 'src/**/*.test.ts')).toBe(false)
+    expect(matchesPackedPattern('src/web/widget.tsx', 'src/**/*.test.ts')).toBe(false)
+    expect(matchesPackedPattern('src/foo.ts', 'src/**/*.test.ts')).toBe(false)
+  })
+
+  test('the suffix is literal: .spec.tsx does not match *.spec.ts', () => {
+    expect(matchesPackedPattern('src/foo.spec.tsx', 'src/**/*.spec.ts')).toBe(false)
+  })
 })
 
 describe('describeSurface', () => {
@@ -321,14 +342,26 @@ describe('deriveRuledPackages', () => {
     expect(rootRuling.directory).toBe('.')
 
     expect(postgresRuling.allowedSurfaces).toEqual(['src', 'README.md'])
-    expect(postgresRuling.deniedPackedPatterns).toEqual(['src/**/*.test.ts'])
+    expect(postgresRuling.deniedPackedPatterns).toEqual([
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.spec.ts',
+    ])
     expect(postgresRuling.directory).toBe('packages/postgres-store')
 
     expect(hostedRuling.allowedSurfaces).toEqual(['src', 'README.md'])
-    expect(hostedRuling.deniedPackedPatterns).toEqual(['src/**/*.test.ts'])
+    expect(hostedRuling.deniedPackedPatterns).toEqual([
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.spec.ts',
+    ])
 
     expect(dispatcherRuling.allowedSurfaces).toEqual(['src', 'README.md'])
-    expect(dispatcherRuling.deniedPackedPatterns).toEqual(['src/**/*.test.ts'])
+    expect(dispatcherRuling.deniedPackedPatterns).toEqual([
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.spec.ts',
+    ])
   })
 
   test('the store rulings keep their pinned prose; the dispatcher is pinned to AUT-490; the rest derive theirs', () => {
@@ -466,13 +499,17 @@ describe('evaluatePackedPaths', () => {
         'src/index.ts',
         'src/index.test.ts',
         'src/index.live.test.ts',
+        'src/index.test.tsx',
         'src/web/mcp.test.ts',
+        'src/web/mcp.spec.ts',
       ]
       const violations = evaluatePackedPaths(withTests, ruling)
       expect(violations).toEqual([
         { kind: 'extra', path: 'src/index.test.ts' },
         { kind: 'extra', path: 'src/index.live.test.ts' },
+        { kind: 'extra', path: 'src/index.test.tsx' },
         { kind: 'extra', path: 'src/web/mcp.test.ts' },
+        { kind: 'extra', path: 'src/web/mcp.spec.ts' },
       ])
     }
   })
@@ -791,7 +828,11 @@ describe('runPublishContentsCheck', () => {
       fake.directory === dispatcherDirectory
         ? {
             ...fake,
-            listing: listingFor([...dispatcherConformPaths, 'src/dispatcher.test.ts']),
+            listing: listingFor([
+              ...dispatcherConformPaths,
+              'src/dispatcher.test.ts',
+              'src/dispatcher.test.tsx',
+            ]),
           }
         : fake,
     )
@@ -800,6 +841,7 @@ describe('runPublishContentsCheck', () => {
     expect(exitCode).toBe(1)
     const stdout = captured.stdout.join('')
     expect(stdout).toContain('src/dispatcher.test.ts')
+    expect(stdout).toContain('src/dispatcher.test.tsx')
     expect(stdout).toContain('Ruling (AUT-490)')
     expect(captured.stderr.join('')).toContain(
       'packed-contents violation(s) against the @defrex/autobuild-hosted-dispatcher tarball ruling',
@@ -1017,4 +1059,30 @@ describe('runPublishContentsCheck', () => {
     expect(captured.stderr.join('')).toContain('packages/postgres-store/package.json')
     expect(captured.stderr.join('')).toContain("every 'files' entry must be a string")
   })
+})
+
+/* ------------------------------------------------------------------ */
+/* The real manifests: the fixture manifests above mirror their shapes,  */
+/* and the derivation assertions pin the derived denied patterns — so    */
+/* the fixtures must not silently drift from reality. This pin reads the */
+/* real manifests the way the check does.                                */
+/* ------------------------------------------------------------------ */
+
+describe('the real sub-package manifests', () => {
+  const AUT_490_BROADENED_FILES = [
+    'src',
+    'README.md',
+    '!src/**/*.test.ts',
+    '!src/**/*.test.tsx',
+    '!src/**/*.spec.ts',
+  ]
+
+  for (const directory of ['hosted-dispatcher', 'hosted-store-service', 'postgres-store']) {
+    test(`packages/${directory}/package.json's files allowlist carries the broadened AUT-490 negations exactly`, () => {
+      const manifest = JSON.parse(
+        readFileSync(join(REPO_ROOT, 'packages', directory, 'package.json'), 'utf8'),
+      ) as { files?: unknown }
+      expect(manifest.files).toEqual(AUT_490_BROADENED_FILES)
+    })
+  }
 })
