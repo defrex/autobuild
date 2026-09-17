@@ -8,11 +8,9 @@ import { parseConfig } from './load'
 import {
   BUILD_OWNED_CONFIG_PATHS,
   CONFIG_RELOAD_CLASSIFICATION,
-  DEPLOYMENT_OWNED_CONFIG_PATHS,
   LiveConfig,
   composeBuildConfig,
   composeReloadedConfig,
-  deploymentSectionsEqual,
   restartRequiredChanges,
 } from './live'
 import { TOP_LEVEL_KEYS } from './schema'
@@ -239,14 +237,13 @@ describe('live dispatcher config', () => {
     expect(live.current().config.capacity).toBe(4)
   })
 
-  test('names exactly the build- and deployment-owned config sections', () => {
+  test('names exactly the build-owned config sections', () => {
     expect([...BUILD_OWNED_CONFIG_PATHS].sort()).toEqual([
       'commands',
       'finalize',
       'verify',
       'workspace',
     ])
-    expect([...DEPLOYMENT_OWNED_CONFIG_PATHS].sort()).toEqual(['policy', 'roles'])
   })
 
   test('composes build-owned pipeline sections with live deployment sections', () => {
@@ -272,23 +269,6 @@ command = "lint"
     expect(composed.roles.default?.model).toBe('gpt-new')
     expect(composed.policy.stallRounds).toBe(9)
     expect(composed.capacity).toBe(4)
-  })
-
-  test('deploymentSectionsEqual ignores build-owned pipeline changes', () => {
-    const left = parseConfig(base)
-    const deploymentChange = parseConfig(base.replace('model = "gpt-old"', 'model = "gpt-new"'))
-    const pipelineChange = parseConfig(`${base}
-[commands]
-unit = "bun test"
-
-[verify]
-steps = ["unit"]
-[verify.unit]
-kind = "check"
-command = "unit"
-`)
-    expect(deploymentSectionsEqual(left, deploymentChange)).toBe(false)
-    expect(deploymentSectionsEqual(left, pipelineChange)).toBe(true)
   })
 
   test('validates a new route against the startup runtime catalog before publication', async () => {
