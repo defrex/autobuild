@@ -59,7 +59,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y chromium""" },
 
 [workspace.config.runtimeProvisioning.pi]
 install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
-preflight = "test \"$(pi --version)\" = \"0.84.4\""
+preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 ```
 
 Use a `vercel-ai-gateway/...` Pi model with `AI_GATEWAY_API_KEY` in the

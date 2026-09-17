@@ -154,6 +154,84 @@ describe('findBoundaryViolations', () => {
     expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
   })
 
+  test("the import's option-bag value is not an offender — only the specifier is", () => {
+    // Pre-fix, the argument-subtree walk collected the bag value too, yielding
+    // two violation lines; only the specifier slot is collected now.
+    const contents = `const m = import('${SIBLING_SRC_STORE}', { with: { type: '${SIBLING_SRC_STORE}' } })
+`
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('a second argument and a computed argument are not offenders', () => {
+    const contents = [
+      `const opts = require('./adapter', createOptions('${SIBLING_SRC_STORE}'))`,
+      `const joined = require(path.join(__dirname, '${SIBLING_SRC}/x'))`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
+  })
+
+  test('a nested collected call is reported once, not twice', () => {
+    // Pre-fix, both the outer argument-subtree walk and the inner
+    // CallExpression visit collected the same specifier.
+    const contents = `const m = require(require('${SIBLING_SRC_STORE}'))
+`
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('require.call collects the argument slot only — an array is not a specifier', () => {
+    const contents = [
+      `const a = require.call(null, '${SIBLING_SRC_STORE}')`,
+      `const b = require.call(null, ['${SIBLING_SRC_STORE}'])`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('require.apply collects only element 0 of the arguments array', () => {
+    // Element 1 also names a sibling-src path on purpose: an all-elements
+    // implementation would emit a second violation line here.
+    const contents = `const e = require.apply(null, ['${SIBLING_SRC_STORE}', '${SIBLING_SRC}/other'])
+`
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
+      `packages/core/src/a.test.ts:1: ${SIBLING_SRC_STORE}`,
+    ])
+  })
+
+  test('a leading-literal concatenation specifier is not collected (documented narrowing)', () => {
+    // The replaced regexes matched the leading literal of a concatenation;
+    // the specifier-position rule no longer does. Documented narrowing.
+    const contents = [
+      `const a = require('${SIBLING_SRC}/' + name)`,
+      `const b = import('${SIBLING_SRC}/' + name)`,
+    ].join('\n')
+    expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([])
+  })
+
+  test('the unparseable sentinel is a full Violation with pinned derivations', () => {
+    const violations = findBoundaryViolations(
+      [file('packages/core/src/broken.test.ts', "import { from 'x'\n")],
+      PACKAGES,
+    )
+    expect(violations).toEqual([
+      {
+        path: 'packages/core/src/broken.test.ts',
+        line: 1,
+        specifier: '<unparseable module>',
+        fromPackage: 'core',
+        toPackage: '<unknown>',
+      },
+    ])
+  })
+
+  test('an unparseable file outside every package is not reported, sentinel included', () => {
+    expect(scan([file('tools/broken.test.ts', "import { from 'x'\n")])).toEqual([])
+  })
+
   test('an unparseable file fails closed with the sentinel violation', () => {
     const contents = "import { from '../../postgres-store/src/store'\n"
     expect(scan([file('packages/core/src/a.test.ts', contents)])).toEqual([
@@ -204,6 +282,13 @@ describe('findBoundaryViolations', () => {
   })
 
   test('fully type-only import and export forms stay flagged (documented divergence)', () => {
+    // Ruled behavior: this guard enforces a source-convention boundary — a
+    // fully type-only import still makes tsc resolve types from the sibling's
+    // src and still couples the test to sibling internals, so it violates the
+    // convention exactly like a runtime import and stays flagged. The
+    // store-service dispatcher scan excludes these same forms on purpose (its
+    // boundary is runtime-load; erased imports load nothing) — the divergence
+    // between the two scanners is deliberate, not drift.
     expect(
       scan([
         file(

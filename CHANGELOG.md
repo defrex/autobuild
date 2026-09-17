@@ -3,6 +3,12 @@
 ## Unreleased
 
 - [#426](https://github.com/defrex/autobuild/pull/426) — Move the operator web app into the hosted store service package
+- [#424](https://github.com/defrex/autobuild/pull/424) — Complete the boundary-guard coverage statement's widening list
+- [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
+- [#422](https://github.com/defrex/autobuild/pull/422) — Enumerate all worktree-dirty triggers in the provenance docs
+- [#420](https://github.com/defrex/autobuild/pull/420) — Collect only specifier-position literals in the boundary guard
+- [#421](https://github.com/defrex/autobuild/pull/421) — Harden vercel-consumer-config test against catalog drift
+- [#419](https://github.com/defrex/autobuild/pull/419) — Rule on the type-only-import divergence between boundary scanners
 - [#418](https://github.com/defrex/autobuild/pull/418) — Make the cumulative-latency scenario-deadline test jitter-tolerant
 - [#415](https://github.com/defrex/autobuild/pull/415) — Stop the package-boundary lint flagging import text in comments
 - [#416](https://github.com/defrex/autobuild/pull/416) — Anchor the dispatcher dependency filter to the exact package name

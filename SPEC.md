@@ -2086,7 +2086,7 @@ decide where a build's effective configuration is composed from:
 
 | Class | Sections | Source at deposit |
 |---|---|---|
-| Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the workspace's `autobuild.toml` has uncommitted edits: the deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
+| Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
 | Dispatcher-owned | `baseBranch`, `capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator` | The dispatcher's live snapshot; the build runner never interprets them. |
 
@@ -2095,10 +2095,13 @@ branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
 recorded base commit (or its branch head once the build has published commits)
 through the forging adapter; in checkout mode it reads the workspace's file. The
 effective-config artifact records the commit the build-owned sections were
-taken from — except in checkout mode when the workspace's `autobuild.toml` has
-uncommitted edits: the artifact then records the source `worktree-dirty` and no
-commit, because attributing uncommitted worktree bytes to the branch-head commit
-would be false provenance. A base-branch change to `[verify]`, `[finalize]`, `[commands]`, or
+taken from — except in checkout mode when the worktree read cannot be
+attributed to the branch-head commit: because the worktree file has uncommitted
+edits, because the clean/dirty comparison could not be performed (non-git
+workspace or a transient git error), or because the branch head never carried
+the file. The artifact then records the source `worktree-dirty` and no commit,
+because attributing worktree bytes to a commit that has not been shown to carry
+them would be false provenance. A base-branch change to `[verify]`, `[finalize]`, `[commands]`, or
 the workspace provisioning after a build's base was cut does not change that
 build's verify universe, finalize steps, commands, or provisioning; a build
 that publishes such a change to its own branch picks it up at its next launch.

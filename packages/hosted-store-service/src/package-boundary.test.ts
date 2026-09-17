@@ -102,7 +102,15 @@ const DISPATCHER_SPECIFIER =
  *
  * Intentionally not flagged: the fully type-only forms `import type { T } from
  * '...'` and `export type { T } from '...'` — both are erased even under
- * `verbatimModuleSyntax` and cannot load the dispatcher.
+ * `verbatimModuleSyntax` and cannot load the dispatcher. This exclusion is
+ * deliberate and differs from `tools/package-boundary-check.ts` (the
+ * package-boundary lint), which keeps fully type-only imports flagged — that
+ * guard enforces a source-convention boundary (a type-only import still makes
+ * `tsc` resolve types from the sibling's `src`, so the test still couples to
+ * sibling internals), while this scan enforces a runtime-load boundary and an
+ * erased import loads nothing. The split is the ruled behavior, not drift:
+ * each scanner's comment documents it, so do not silently align one with the
+ * other.
  *
  * Fail-closed edges: a file that fails to parse (syntactic errors) yields the
  * `<unparseable module>` sentinel so the tree walk reports the whole file as
@@ -160,7 +168,10 @@ export function dispatcherSpecifiers(text: string): string[] {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       // `import type ...` is fully erased; every other import declaration
       // (including `import { type T } ...`) survives verbatimModuleSyntax
-      // emit and loads the module.
+      // emit and loads the module. Excluding the fully type-only form here is
+      // the ruled divergence from tools/package-boundary-check.ts, which
+      // flags type-only imports deliberately under its source-convention
+      // boundary — see the scanner doc comment above.
       if (
         node.importClause?.isTypeOnly !== true &&
         DISPATCHER_SPECIFIER.test(node.moduleSpecifier.text)
@@ -542,6 +553,16 @@ export const x = 1`,
   })
 
   test('fully type-only imports are intentionally not flagged', () => {
+    // Ruled behavior: this scan enforces a runtime-load boundary — `import
+    // type` / `export type ... from` are fully erased (even under this repo's
+    // `verbatimModuleSyntax: true`) and cannot load the dispatcher, so
+    // flagging them would be a pure false positive. The tools
+    // package-boundary scanner keeps the same forms flagged on purpose (its
+    // boundary is the source-convention one; a type-only import still couples
+    // the test to sibling internals) — the divergence between the two
+    // scanners is deliberate, not drift. (The inline `{ type T }` form is
+    // different: it survives emit and IS flagged — see the dedicated fixture
+    // above.)
     // Intentional narrowing: `import type` / `export type ... from` are fully
     // erased — even under this repo's `verbatimModuleSyntax: true` — and
     // cannot load the dispatcher, so the parser does not report them. (The

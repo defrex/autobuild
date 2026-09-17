@@ -160,10 +160,12 @@ and `[workspace]` (provider and config, including `provisioning` and
 dispatcher reads them at the build's recorded base commit, or at its branch
 head once the build has published commits, and records the exact commit in the
 effective-config artifact metadata. In checkout mode the worktree read is the
-exception: when the workspace's `autobuild.toml` has uncommitted edits, the
-deposit records the source `worktree-dirty` with no commit — the build still
-runs the worktree bytes, but provenance declines to attribute them to any
-commit. **Deployment-owned** sections — `[roles]`
+exception: when it cannot be attributed to the branch-head commit — because
+the worktree file has uncommitted edits, because the clean/dirty comparison
+could not be performed (non-git workspace or a transient git error), or because
+the branch head never carried the file — the deposit records the source
+`worktree-dirty` with no commit. The build still runs the worktree bytes, but
+provenance declines to attribute them to any commit. **Deployment-owned** sections — `[roles]`
 (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and
 `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
 `capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
@@ -470,7 +472,7 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 
 [workspace.config.runtimeProvisioning.pi]
 install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
-preflight = "test \"$(pi --version)\" = \"0.84.4\""
+preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 ```
 
 | Vercel field | Default | Constraints |
