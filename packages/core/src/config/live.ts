@@ -96,10 +96,6 @@ export function restartRequiredChanges(
  * the build's own branch at a recorded pipeline-source commit and never
  * replaced by a later base-branch change. */
 export const BUILD_OWNED_CONFIG_PATHS = ['verify', 'finalize', 'commands', 'workspace'] as const
-/** Deployment-owned runtime settings the reload feature deliberately delivers
- * to active builds live: role runtime/model selection, alternates, session
- * budgets, and policy limits. */
-export const DEPLOYMENT_OWNED_CONFIG_PATHS = ['roles', 'policy'] as const
 
 /** Compose one build's effective config: build-owned tables come from the
  * pipeline source (the build's own branch), everything else from the live
@@ -114,13 +110,6 @@ export function composeBuildConfig(pipeline: Config, deployment: Config): Config
     commands: pipeline.commands,
     workspace: pipeline.workspace,
   }
-}
-
-/** True when the deployment-owned sections are identical — the reload-time
- * guarantee that a base-branch reload only re-deposits a build's artifact when
- * its live settings actually moved. */
-export function deploymentSectionsEqual(a: Config, b: Config): boolean {
-  return same(a.roles, b.roles) && same(a.policy, b.policy)
 }
 
 /** Overlay all hot fields while retaining every startup-built adapter field. */
