@@ -312,6 +312,10 @@ interface HarnessOptions {
   verifyDiffs?: VerifyDiffResult[]
   /** Porcelain output before/after finalize turns; empty means clean. */
   finalizeStatuses?: Array<FinalizeGitResult<string>>
+  /** Exact `git diff` (working tree) / `git diff --cached` (staged) results for
+   * the finalize preflight's dirty-worktree record; defaults to empty output.
+   * Distinct from `verifyDiffs`, which serves conditional-verify diffs. */
+  finalizeDiffs?: { working?: FinalizeGitResult<string>; staged?: FinalizeGitResult<string> }
   /** `git rev-parse HEAD` results after successful finalize turns. */
   finalizeHeads?: Array<FinalizeGitResult<string>>
   /** Successive ancestry checks for changed finalize heads. */
@@ -453,6 +457,23 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
   const execCalls: Array<{ cmd: string[]; cwd: string | undefined }> = []
   const exec: Exec = async (cmd, opts) => {
     execCalls.push({ cmd, cwd: opts.cwd })
+    // Finalize preflight diff capture: exact bare commands only, dispatched
+    // BEFORE the generic `git diff` branch below so they never consume
+    // verifyDiffs entries.
+    if (
+      (cmd.length === 2 && cmd[0] === 'git' && cmd[1] === 'diff') ||
+      (cmd.length === 3 && cmd[0] === 'git' && cmd[1] === 'diff' && cmd[2] === '--cached')
+    ) {
+      const configured = options.finalizeDiffs
+      const result = (cmd.length === 2 ? configured?.working : configured?.staged) ?? {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      }
+      if (typeof result === 'string') return { stdout: result, stderr: '', exitCode: 0 }
+      if ('error' in result) return { stdout: '', stderr: result.error, exitCode: 128 }
+      return result
+    }
     if (cmd[0] === 'git' && cmd[1] === 'diff') {
       const diff = verifyDiffs[Math.min(verifyDiffIndex, verifyDiffs.length - 1)] ?? {
         error: 'no conditional verify diff configured',
@@ -2090,6 +2111,10 @@ describe('finalize post-step publication', () => {
       ['git', 'merge-base', '--is-ancestor', 'sha-head-1', FINALIZE_HEAD],
       ['git', 'rev-list', '--reverse', `sha-head-1..${FINALIZE_HEAD}`],
     ])
+    // A clean worktree never runs the preflight's diff capture (and therefore
+    // never consumes verifyDiffs entries either).
+    expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff'])
+    expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff', '--cached'])
   })
 
   test('scratch commits fail tolerantly with an observation and no push', async () => {
@@ -2131,6 +2156,60 @@ describe('finalize post-step publication', () => {
     await h.br.step()
     expect(h.forge.pushes).toEqual([])
     await expectFailureTolerance(h, 'workspace must be clean after the post-step finishes')
+  })
+
+  test('a dirty preflight record includes both diffs so a mode-only flip is characterizable', async () => {
+    // The AUT-439 shape: porcelain lists the path, but only the diff shows the
+    // change is mode-only — indistinguishable from a content edit without it.
+    const h = await readyHarness({
+      finalizeStatuses: [' M bin.ts\n'],
+      finalizeDiffs: {
+        working: 'diff --git a/bin.ts b/bin.ts\nold mode 100755\nnew mode 100644\n',
+        staged: '',
+      },
+    })
+
+    await h.br.step()
+    await expectFailureTolerance(h, 'workspace must be clean before the post-step starts')
+    const note = ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload
+      .note
+    expect(note).toContain(' M bin.ts')
+    expect(note).toContain('--- git diff (working tree) ---')
+    expect(note).toContain('old mode 100755')
+    expect(note).toContain('new mode 100644')
+    expect(note).toContain('--- git diff --cached (staged) ---')
+    expect(note).toContain('(no output)')
+  })
+
+  test('a large dirty diff is truncated at the stated cap', async () => {
+    const oversized = 'x'.repeat(30_000)
+    const h = await readyHarness({
+      finalizeStatuses: [' M big.txt\n'],
+      finalizeDiffs: { working: oversized, staged: '' },
+    })
+
+    await h.br.step()
+    const note = ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload
+      .note
+    expect(note).toContain('... (truncated at 20000 characters)')
+    expect(note).not.toContain(oversized)
+    // Bound: porcelain + two capped sections (20k characters each) + headers.
+    expect(note!.length).toBeLessThan(20_000 * 2 + 500)
+  })
+
+  test('a failing diff capture annotates its section without masking the dirty-worktree failure', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: [' M bin.ts\n'],
+      finalizeDiffs: { staged: { error: 'fatal: not a git repository' } },
+    })
+
+    await h.br.step()
+    await expectFailureTolerance(h, 'workspace must be clean before the post-step starts')
+    const note = ofType(await h.store.getEvents(SLUG), 'finalize.step-completed').at(-1)?.payload
+      .note
+    expect(note).toContain('workspace must be clean before the post-step starts')
+    expect(note).toContain('--- git diff (working tree) ---')
+    expect(note).toContain('(git diff --cached failed: exit 128: fatal: not a git repository)')
   })
 
   test('a non-descendant HEAD is rejected without pushing or failing the green build', async () => {
