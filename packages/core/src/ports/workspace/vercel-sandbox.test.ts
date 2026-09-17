@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
+import { distributionRoot } from '../../distribution'
 import { spawnExec, type Exec } from './git-worktree'
 import { installPackedDistribution } from '../../testing/packed-install'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
@@ -419,6 +420,47 @@ describe('VercelSandboxProvider', () => {
       await rm(tmp, { recursive: true, force: true })
     }
   }, 600_000)
+
+  test('the packed distribution carries only the files set and never the web app', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'ab-vercel-package-members-'))
+    const archivePath = join(tmp, 'autobuild.tgz')
+    try {
+      await writeFile(archivePath, await packageAutobuildDistribution())
+      const listing = await spawnExec(['tar', '-tzf', archivePath], { cwd: tmp })
+      expect(listing).toMatchObject({ exitCode: 0, stderr: '' })
+      const members = listing.stdout.split('\n').filter((entry) => entry.length > 0)
+
+      // The operator web app lives in the hosted store service package
+      // (AUT-409). The root `files` list has never carried it; pin the
+      // absence so a future files edit cannot silently ship the web app in
+      // the CLI tarball.
+      const forbidden = [
+        /^package\/app\//,
+        /^package\/server\.ts$/,
+        /^package\/next\.config/,
+        /^package\/next-env\.d\.ts$/,
+        /^package\/vercel\.json$/,
+      ]
+      for (const pattern of forbidden) {
+        expect(members.filter((member) => pattern.test(member))).toEqual([])
+      }
+
+      // Every member stays inside the root manifest's positive `files` set
+      // (directories contribute their whole subtree) plus the manifest itself.
+      const manifest = JSON.parse(
+        await readFile(join(distributionRoot(), 'package.json'), 'utf8'),
+      ) as { files: string[] }
+      const positive = manifest.files.filter((entry) => !entry.startsWith('!'))
+      const covered = (member: string) =>
+        member === 'package/package.json' ||
+        positive.some(
+          (entry) => member === `package/${entry}` || member.startsWith(`package/${entry}/`),
+        )
+      expect(members.filter((member) => !covered(member))).toEqual([])
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+    }
+  })
 
   test('classifies the real SDK not-found and stale-snapshot response shapes only', () => {
     expect(isMissingVercelSandbox({ response: { status: 404 } })).toBe(true)

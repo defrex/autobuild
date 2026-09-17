@@ -2,12 +2,12 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 const stylesheet = readFileSync(new URL('./globals.css', import.meta.url), 'utf8')
-const designDocument = readFileSync(new URL('../DESIGN.md', import.meta.url), 'utf8')
+const designDocument = readFileSync(new URL('../../../DESIGN.md', import.meta.url), 'utf8')
 const buildsView = readFileSync(new URL('./dashboard/BuildsView.tsx', import.meta.url), 'utf8')
 const dashboardFrame = readFileSync(new URL('./dashboard/frame.tsx', import.meta.url), 'utf8')
 const signIn = readFileSync(new URL('./sign-in/SignIn.tsx', import.meta.url), 'utf8')
 const designSidecar = JSON.parse(
-  readFileSync(new URL('../.impeccable/design.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../.impeccable/design.json', import.meta.url), 'utf8'),
 ) as {
   extensions: { glyphs: Record<string, string>; tokenSource: string }
   components: Array<{ name: string; description: string; css: string }>
