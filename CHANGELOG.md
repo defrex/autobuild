@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#434](https://github.com/defrex/autobuild/pull/434) — State docs-asset-check's shipped-docs-only document scope ruling
+- [#432](https://github.com/defrex/autobuild/pull/432) — Add --no-install to vercel-builds bunx preflight
 - [#430](https://github.com/defrex/autobuild/pull/430) — Pin setup.md parity and doc Pi version against autobuild.toml
 - [#429](https://github.com/defrex/autobuild/pull/429) — Make the vercel-builds skill's vercel CLI independent of bunfig.toml
 - [#428](https://github.com/defrex/autobuild/pull/428) — Document comment-interleaved argument positions in the boundary guard
