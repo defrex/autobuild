@@ -147,6 +147,9 @@ describe('runPublishContentsCheck', () => {
     )
     expect(exitCode).toBe(0)
     expect(captured.stdout.join('')).toContain('match the ruling')
+    // The success message must terminate its line like the failure paths do,
+    // so terminal output stops concatenating with the next shell output.
+    expect(captured.stdout.join('').endsWith('\n')).toBe(true)
     expect(lastRequest?.command).toBe('bun')
     expect(lastRequest?.args).toEqual(['pm', 'pack', '--dry-run'])
     expect(lastRequest?.cwd).toBe(packageDirectory)
@@ -176,6 +179,8 @@ describe('runPublishContentsCheck', () => {
     expect(exitCode).toBe(1)
     expect(captured.stderr.join('')).toContain('bun pm pack --dry-run failed')
     expect(captured.stderr.join('')).toContain('no such package')
+    // Failure paths already ended with a newline; pin that convention too.
+    expect(captured.stderr.join('').endsWith('\n')).toBe(true)
   })
 
   test('a thrown runner is a failed check (fail-closed, like every check here)', async () => {
