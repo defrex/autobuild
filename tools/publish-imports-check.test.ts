@@ -8,10 +8,12 @@ import {
   exportsSubpaths,
   exportsTargets,
   isProviderSpecifier,
+  packedScriptKind,
   runPublishImportsCheck,
   scanPublishedImports,
   subpathOfProviderSpecifier,
 } from './publish-imports-check'
+import ts from 'typescript'
 
 /**
  * Fixture strategy: a real on-disk mini-repo (manifests and sources written to
@@ -496,6 +498,192 @@ describe('scanPublishedImports', () => {
           : env.pack(request),
     }
     await expect(scanPublishedImports(failing)).rejects.toThrow('failed in .')
+  })
+})
+
+describe('packedScriptKind', () => {
+  test('maps exactly the chosen TS/JS/JSX suffix set and nothing else', () => {
+    expect(packedScriptKind('src/index.ts')).toBe(ts.ScriptKind.TS)
+    expect(packedScriptKind('x.mts')).toBe(ts.ScriptKind.TS)
+    expect(packedScriptKind('x.cts')).toBe(ts.ScriptKind.TS)
+    expect(packedScriptKind('x.d.ts')).toBe(ts.ScriptKind.TS)
+    expect(packedScriptKind('x.d.mts')).toBe(ts.ScriptKind.TS)
+    expect(packedScriptKind('x.d.cts')).toBe(ts.ScriptKind.TS)
+    expect(packedScriptKind('x.tsx')).toBe(ts.ScriptKind.TSX)
+    expect(packedScriptKind('x.js')).toBe(ts.ScriptKind.JS)
+    expect(packedScriptKind('x.mjs')).toBe(ts.ScriptKind.JS)
+    expect(packedScriptKind('x.cjs')).toBe(ts.ScriptKind.JS)
+    expect(packedScriptKind('x.jsx')).toBe(ts.ScriptKind.JSX)
+    expect(packedScriptKind('x.json')).toBeUndefined()
+    expect(packedScriptKind('README.md')).toBeUndefined()
+    expect(packedScriptKind('src/x.d.ts.map')).toBeUndefined()
+    expect(packedScriptKind('native.node')).toBeUndefined()
+    expect(packedScriptKind('no-extension')).toBeUndefined()
+    expect(packedScriptKind('LICENSE')).toBeUndefined()
+  })
+
+  test('matching is case-sensitive, like the \\.tsx?$ filter it replaced', () => {
+    expect(packedScriptKind('x.JS')).toBeUndefined()
+    expect(packedScriptKind('x.TS')).toBeUndefined()
+    expect(packedScriptKind('x.Jsx')).toBeUndefined()
+  })
+})
+
+describe('widened packed-file scan (AUT-479)', () => {
+  test('a packed .js file importing an unexported subpath fails the guard and is counted as scanned', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest(operatorExports),
+        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
+      },
+      {
+        directory: 'packages/store-service',
+        manifest: {
+          ...dependentManifest,
+          exports: { '.': { types: './src/legacy.js', import: './src/legacy.js' } },
+        },
+        files: {
+          'packages/store-service/src/legacy.js':
+            "import '@defrex/autobuild/missing'\nexport const legacy = true\n",
+        },
+      },
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([
+      {
+        kind: 'missing-export',
+        packageName: SERVICE,
+        specifier: `${PROVIDER}/missing`,
+        subpath: './missing',
+        path: 'packages/store-service/src/legacy.js',
+        line: 1,
+      },
+    ])
+    // The JS file is counted, not silently skipped.
+    expect(report.scannedFiles).toBe(1)
+  })
+
+  test('a packed .cjs require form fails the guard (ScriptKind.JS collects require-ish specifiers)', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest(operatorExports),
+        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
+      },
+      {
+        directory: 'packages/store-service',
+        manifest: {
+          ...dependentManifest,
+          exports: { '.': { default: './src/legacy.cjs' } },
+        },
+        files: {
+          'packages/store-service/src/legacy.cjs':
+            "const { testing } = require('@defrex/autobuild/testing')\nmodule.exports = { testing }\n",
+        },
+      },
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([
+      {
+        kind: 'missing-export',
+        packageName: SERVICE,
+        specifier: `${PROVIDER}/testing`,
+        subpath: './testing',
+        path: 'packages/store-service/src/legacy.cjs',
+        line: 1,
+      },
+    ])
+  })
+
+  test('a packed .mts file no longer escapes the scan (it did under the \\.tsx?$ filter)', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest(operatorExports),
+        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
+      },
+      {
+        directory: 'packages/store-service',
+        manifest: {
+          ...dependentManifest,
+          exports: { '.': { import: './src/modern.mts' } },
+        },
+        files: {
+          'packages/store-service/src/modern.mts':
+            "import '@defrex/autobuild/missing'\nexport const modern = true\n",
+        },
+      },
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([
+      {
+        kind: 'missing-export',
+        packageName: SERVICE,
+        specifier: `${PROVIDER}/missing`,
+        subpath: './missing',
+        path: 'packages/store-service/src/modern.mts',
+        line: 1,
+      },
+    ])
+  })
+
+  test('a packed .jsx file parses as JSX, not the unparseable sentinel, and its exported subpath is probed', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest(operatorExports),
+        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
+      },
+      {
+        directory: 'packages/store-service',
+        manifest: {
+          ...dependentManifest,
+          exports: { '.': { import: './src/component.jsx' } },
+        },
+        files: {
+          'packages/store-service/src/component.jsx':
+            "import { operator } from '@defrex/autobuild/operator'\nexport const component = () => <div>{operator}</div>\n",
+        },
+      },
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([])
+    expect(report.scannedFiles).toBe(1)
+    expect(report.probedSpecifiers).toBe(1)
+  })
+
+  test('packed non-script files are not scanned: no sentinel findings, no added scan count', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest(operatorExports),
+        files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
+      },
+      {
+        directory: 'packages/store-service',
+        manifest: dependentManifest,
+        files: {
+          'packages/store-service/src/index.ts': 'export {}\n',
+          // If any of these were scanned, each would fail closed as an
+          // unparseable-file violation naming its provider specifier text.
+          'packages/store-service/data.json': '{"imports": "@defrex/autobuild/testing"}',
+          'packages/store-service/README.md': '# reads `@defrex/autobuild/testing`',
+          'packages/store-service/src/index.d.ts.map':
+            '{"sources": ["import \'@defrex/autobuild/testing\'"]}',
+        },
+      },
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([])
+    // Only src/index.ts is scanned; the JSON, markdown, and source-map files
+    // add nothing to the count.
+    expect(report.scannedFiles).toBe(1)
   })
 })
 

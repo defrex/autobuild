@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import ts from 'typescript'
 import {
+  collectSpecifiers,
   findBoundaryViolations,
   isScannedTestFile,
   type PackageBoundaryCheckEnvironment,
@@ -8,6 +10,7 @@ import {
   runPackageBoundaryCheck,
   scanWorkspace,
   type ScannedFile,
+  UNPARSEABLE_MODULE,
 } from './package-boundary-check'
 
 // This file lives in tools/, which the guard never scans (it only scans test
@@ -388,6 +391,34 @@ describe('findBoundaryViolations', () => {
         ),
       ]),
     ).toEqual([])
+  })
+})
+
+describe('collectSpecifiers', () => {
+  test('ScriptKind.JS collects require() and dynamic import() from CJS content without the unparseable sentinel', () => {
+    const contents = [
+      "const { store } = require('@defrex/autobuild-postgres-store/store')",
+      'async function load() {',
+      "  return import('@defrex/autobuild-hosted-dispatcher/dispatcher')",
+      '}',
+      'module.exports = { store, load }',
+    ].join('\n')
+    const collected = collectSpecifiers(contents, ts.ScriptKind.JS)
+    expect(collected).toEqual([
+      { specifier: '@defrex/autobuild-postgres-store/store', line: 1 },
+      { specifier: '@defrex/autobuild-hosted-dispatcher/dispatcher', line: 3 },
+    ])
+    expect(collected.some((entry) => entry.specifier === UNPARSEABLE_MODULE)).toBe(false)
+  })
+
+  test('ScriptKind.JSX collects the import from a file containing JSX', () => {
+    const contents = [
+      "import { Widget } from './widget'",
+      'export const node = <Widget name="store" />',
+    ].join('\n')
+    const collected = collectSpecifiers(contents, ts.ScriptKind.JSX)
+    expect(collected).toEqual([{ specifier: './widget', line: 1 }])
+    expect(collected.some((entry) => entry.specifier === UNPARSEABLE_MODULE)).toBe(false)
   })
 })
 
