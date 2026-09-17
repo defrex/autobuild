@@ -40,9 +40,14 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * block is sample text, not a live reference): link and raw-HTML `<img>`
  * targets, resolved exactly as `docs-asset-check.ts` resolves them, and
  * inline-code spans — the recorded mention class — scanned for
- * `docs/assets/<file>` path tokens. A bare token is repo-root-relative as
- * written; a `../`-prefixed token resolves against the document's directory;
- * a token inside a URL (`scheme://host/docs/assets/…`) is not a mention. A
+ * `docs/assets/<file>` path tokens. A token may be bare or `./`-prefixed
+ * (both repo-root-relative as written — an explicit `./` is the same
+ * reference written more carefully, so it is recognized, never dropped) or
+ * `../`-prefixed (resolving against the document's directory); a token
+ * inside a URL (`scheme://host/docs/assets/…`) is not a mention. A
+ * trailing-slash token (`docs/assets/screenshots/`) names a directory and is
+ * deliberately ignored: git tracks files only, so a directory mention asserts
+ * no file exists and there is no tracked set to verify it against. A
  * reference is reported broken once per occurrence, in source order, when
  * its normalized path lands under `docs/assets/` and is not tracked.
  * References landing outside `docs/assets/` are out of scope, as are
@@ -91,24 +96,30 @@ export function isRepoLocalSkillDoc(
 
 /**
  * A path-like token inside an inline-code span naming something under
- * `docs/assets/`, optionally `../`-prefixed. The lookbehind keeps the tail of
- * a longer path — a sibling `static/docs/assets/…`, a URL's
+ * `docs/assets/`, optionally `../`- or `./`-prefixed. The lookbehind keeps the
+ * tail of a longer path — a sibling `static/docs/assets/…`, a URL's
  * `host/docs/assets/…` — from counting as a mention, and the file part must
- * end on a name character so trailing punctuation is not swallowed. Matching
- * is case-sensitive, like the `docs/assets/` prefix test every resolved path
+ * end on a name character so trailing punctuation is not swallowed. An
+ * optional trailing slash is captured so a directory mention survives whole
+ * and reaches the deliberate skip in `skillDocsAssetMentions` instead of
+ * being amputated into a slash-less path that is never tracked. Matching is
+ * case-sensitive, like the `docs/assets/` prefix test every resolved path
  * goes through.
  */
-const INLINE_CODE_MENTION = /(?<![\w./-])(?:\.\.\/)*docs\/assets\/[A-Za-z0-9._/-]*[A-Za-z0-9_-]/gu
+const INLINE_CODE_MENTION =
+  /(?<![\w./-])(?:\.\.?\/)*docs\/assets\/[A-Za-z0-9._/-]*[A-Za-z0-9_-]\/?/gu
 
 function inlineCodeSpans(body: string): string[] {
   return [...body.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]!)
 }
 
 /**
- * A bare mention is repo-root-relative as written — skill documents live
- * under `.agents/skills/`, so document-relative resolution would be wrong for
- * them — while a `../`-prefixed mention resolves against the document's
- * directory, like any relative link target.
+ * A bare or `./`-prefixed mention is repo-root-relative as written — skill
+ * documents live under `.agents/skills/`, so document-relative resolution
+ * would be wrong for them — while a `../`-prefixed mention resolves against
+ * the document's directory, like any relative link target. `posix.normalize`
+ * strips the redundant `./`, so the explicit prefix resolves identically to
+ * the bare form.
  */
 function resolveMention(documentPath: string, mention: string): string {
   if (mention.startsWith('../')) {
@@ -137,6 +148,13 @@ export function skillDocsAssetMentions(
   for (const span of inlineCodeSpans(body)) {
     for (const match of span.matchAll(INLINE_CODE_MENTION)) {
       const target = match[0]
+      // A trailing-slash mention names a directory (`docs/assets/screenshots/`).
+      // Tracked paths are files only, so a directory mention asserts no file
+      // exists and is deliberately ignored rather than amputated into a
+      // slash-less path that is never tracked and would read as broken.
+      if (target.endsWith('/')) {
+        continue
+      }
       const resolved = resolveMention(document.path, target)
       if (resolved.startsWith(ASSET_PREFIX)) {
         occurrences.push({ target, resolved })
