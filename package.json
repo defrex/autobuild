@@ -96,12 +96,7 @@
     "docs"
   ],
   "scripts": {
-    "dev": "bun run --bun next dev",
     "dev:cli": "bun --hot --no-clear-screen bin/ab-dev.ts",
-    "build": "bun run --bun next build",
-    "deploy:build": "bun packages/hosted-dispatcher/src/bin.ts pack-distribution && bun run postgres:migrate && bun run build && bun packages/hosted-dispatcher/src/ship-packed-distribution.ts",
-    "start": "bun run --bun next start",
-    "hosted-store": "bun server.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
     "capture:web-dashboard": "bun tools/web-dashboard-capture.tsx",
     "capture:readme-headline": "bun tools/readme-headline.ts",
@@ -110,7 +105,7 @@
     "check": "bun tools/biome-check.ts && bun tools/product-name-check.ts && bun tools/docs-asset-check.ts && bun tools/readme-headline.ts --check && bun tools/workspace-manifest-check.ts && bun tools/package-boundary-check.ts && bun tools/bin-mode-check.ts",
     "format:staged": "git-format-staged --formatter './node_modules/.bin/biome format --stdin-file-path {}' '*.js' '*.jsx' '*.ts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.graphql' '*.gql'",
     "prepare": "husky",
-    "test": "bun test packages/*/src tools bin app",
+    "test": "bun test packages/*/src tools bin packages/hosted-store-service/app",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -128,16 +123,12 @@
     "@resvg/resvg-js": "2.6.2",
     "@types/bun": "^1.3.14",
     "@types/node": "^24.0.0",
-    "@types/pg": "8.16.0",
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
     "@types/semver": "^7.7.1",
     "dejavu-fonts-ttf": "2.37.0",
     "drizzle-kit": "^0.31.10",
     "git-format-staged": "4.0.1",
     "husky": "9.1.7",
-    "typescript": "5.9.3",
-    "vercel": "^59.11.2"
+    "typescript": "5.9.3"
   },
   "patchedDependencies": {
     "better-auth@1.4.18": "patches/better-auth@1.4.18.patch"

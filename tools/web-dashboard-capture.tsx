@@ -10,6 +10,9 @@
  * projection → real React views → real stylesheet → pixels. The deterministic
  * half (evidence strings the frames must and must not contain) fails here; the
  * visual half is judged by the `verify-web-dashboard` skill from the PNGs.
+ *
+ * The app tree lives in `packages/hosted-store-service/app` (AUT-409); this
+ * tool stays at the repository root, like `dashboard-capture.ts`.
  */
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -28,10 +31,10 @@ import {
   type BuildsViewProps,
   DispatcherControls,
   type Selection,
-} from '../app/dashboard/BuildsView'
-import { LoadingControls } from '../app/dashboard/frame'
-import { OperatorShell } from '../app/dashboard/Shell'
-import { SignIn } from '../app/sign-in/SignIn'
+} from '../packages/hosted-store-service/app/dashboard/BuildsView'
+import { LoadingControls } from '../packages/hosted-store-service/app/dashboard/frame'
+import { OperatorShell } from '../packages/hosted-store-service/app/dashboard/Shell'
+import { SignIn } from '../packages/hosted-store-service/app/sign-in/SignIn'
 import { captureDashboardFrames, RENDER_NOW } from './dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
@@ -271,7 +274,7 @@ export interface WebFixtureModels {
 }
 
 export interface RenderAssets {
-  /** The contents of app/globals.css. */
+  /** The contents of the app's globals.css. */
   css: string
   /** `@font-face` rules that bind `--font-mono` for the capture. */
   fontCss: string
@@ -827,7 +830,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     "Frames render the operator web app's pure views (OperatorShell, BuildsView, SignIn)",
     'over the scripted dispatch models from',
     '`tools/dashboard-capture.ts` (`headline-happy-wide` and `mixed-wide`), the real',
-    '`app/globals.css`, and a locally installed monospace face (JetBrains Mono when',
+    '`packages/hosted-store-service/app/globals.css`, and a locally installed monospace face (JetBrains Mono when',
     'the host has it, otherwise DejaVu Sans Mono). Nothing here is a golden image:',
     'judge whether each frame is coherent and obeys the rules recorded in DESIGN.md.',
     '',
@@ -894,7 +897,10 @@ export async function captureWebDashboardFrames(
   assertOutputUnderScratch(REPO_ROOT, outputDir)
   const models = options.models ?? (await harnessModels())
   const assets: RenderAssets = {
-    css: await readFile(join(REPO_ROOT, 'app', 'globals.css'), 'utf8'),
+    css: await readFile(
+      join(REPO_ROOT, 'packages', 'hosted-store-service', 'app', 'globals.css'),
+      'utf8',
+    ),
     fontCss: fontFaceCss(),
   }
   await rm(outputDir, { recursive: true, force: true })

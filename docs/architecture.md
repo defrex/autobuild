@@ -75,9 +75,9 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/sessions/` | The operator-session reducer: status, open turn, pending approval, wake settings and cursors, and the turn list, reduced purely from the session event log | §7.1.1 |
 | `packages/core/src/store/` | BuildStore contract spanning builds, the repository journal, and operator sessions; interface-enforced build, operator-session, and local ambient-session scope wrappers; memory, SQLite/blob, and remote HTTP adapters | §7 |
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
-| `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, tests, and deployment guide | §7.2, §18 |
+| `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, the Next.js operator web app (`app/`, `server.ts`, `next.config.ts`, `vercel.json`), tests, and deployment guide | §7.2, §18 |
 | `packages/hosted-dispatcher/` | The optional cron-driven hosted dispatcher: endpoint driver, deploy-time `pack-distribution` binary, packed-distribution trace helper, tests, and operator guide | §7.2, §12, §18 |
-| `server.ts`, `vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
+| `packages/hosted-store-service/server.ts`, `packages/hosted-store-service/vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |
 | `packages/core/src/plugins/` | Strict versioned plugin manifests, dual-root repository/package Bun loading, owner-aware adapter registration, contract/credential metadata, and runtime-factory materialization | §3.2.1, §9 |
@@ -105,7 +105,7 @@ and the hosted ticket-source server) ship in
 workspace validates its environment,
 serves health without touching persistence, and lazily retains one
 `openPostgresBuildStoreFromEnv` promise per warm process. Its Fetch handler has
-no Vercel branch; root `server.ts` is the sole `Bun.serve()` composition point.
+no Vercel branch; the package's `server.ts` is the sole `Bun.serve()` composition point.
 The fixed 1 MiB decoded artifact policy is enforced before backing mutation.
 The `ab-hosted-store` binary signs admin or build/session tokens offline from
 `AB_STORE_SECRET`; the running service exposes no mint endpoint. Machine routes
@@ -589,8 +589,8 @@ bun typecheck     # tsc --noEmit
 For dashboard presentation work, run the repository-only hot CLI:
 
 ```sh
-bun run dev -- dispatch
-# Generic form: bun run dev -- <ab arguments>
+bun run dev:cli -- dispatch
+# Generic form: bun run dev:cli -- <ab arguments>
 ```
 
 Bun keeps the original CLI promise and its `DispatchLoop` alive while hot
