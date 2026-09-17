@@ -1416,16 +1416,28 @@ readyState = "ready"
     FAKE_TEST_TIMEOUT_MS,
   )
 
+  // Jitter tolerance (obs_67ad494d): the original { operationMs: 30, scenarioMs: 55 }
+  // gave the scenario guard only ~15ms of headroom over the ~40ms cumulative sleep
+  // time, so a single slow scheduler tick under load pushed the breach into a
+  // completed operation and the test failed (once during the record-a-pipeline
+  // full-suite run; green on rerun, three isolated runs, and a subsequent
+  // full-suite run with and without those changes). Binding timing invariant: the
+  // scenario guard must beat op3's own operation deadline, i.e.
+  // scenarioMs < 2 sleeps + operationMs (here 400 < 40 + 500, 140ms of margin),
+  // otherwise op3 rejects with its operation-deadline message instead. The guard
+  // now fires at 400ms with ~360ms of tolerance over the ~40ms of cumulative
+  // sleeps, so jitter cannot move the breach into a completed operation; the
+  // assertion still fails if the tracker misattributes the breach to one.
   test(
     'scenario deadline identifies the active operation after cumulative latency',
     () =>
       expect(
-        withTrackedScenario({ operationMs: 30, scenarioMs: 55 }, async (tracker) => {
+        withTrackedScenario({ operationMs: 500, scenarioMs: 400 }, async (tracker) => {
           await tracker.run('first bounded operation', () => Bun.sleep(20))
           await tracker.run('second bounded operation', () => Bun.sleep(20))
           await tracker.run('runtime fallback probe', () => new Promise<never>(() => {}))
         }),
-      ).rejects.toThrow('scenario exceeded 55ms while runtime fallback probe'),
+      ).rejects.toThrow('scenario exceeded 400ms while runtime fallback probe'),
     FAKE_TEST_TIMEOUT_MS,
   )
 
