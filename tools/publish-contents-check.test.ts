@@ -8,6 +8,7 @@ import {
   type PublishContentsCheckOutput,
   type TarballRuling,
   deriveRuledPackages,
+  describeSurface,
   evaluatePackedPaths,
   matchesPackedPattern,
   packedTargetsFromManifest,
@@ -261,6 +262,25 @@ describe('matchesPackedPattern', () => {
     expect(
       matchesPackedPattern('patches/better-authx1x4x18xpatch', 'patches/better-auth@1.4.18.patch'),
     ).toBe(false)
+  })
+})
+
+describe('describeSurface', () => {
+  test('npm always-packed extensionless files and dotted names render bare', () => {
+    expect(describeSurface('LICENSE')).toBe('LICENSE')
+    expect(describeSurface('LICENCE')).toBe('LICENCE')
+    expect(describeSurface('NOTICE')).toBe('NOTICE')
+    expect(describeSurface('README')).toBe('README')
+    expect(describeSurface('SPEC.md')).toBe('SPEC.md')
+    expect(describeSurface('README.md')).toBe('README.md')
+  })
+
+  test('directory surfaces keep the "/**" form, at the root and nested', () => {
+    expect(describeSurface('src')).toBe('src/**')
+    expect(describeSurface('bin')).toBe('bin/**')
+    expect(describeSurface('docs')).toBe('docs/**')
+    expect(describeSurface('packages/core/src')).toBe('packages/core/src/**')
+    expect(describeSurface('packages/core/src/cli')).toBe('packages/core/src/cli/**')
   })
 })
 
@@ -572,6 +592,9 @@ const dispatcherLeakedListing = listingFor([...dispatcherConformPaths, 'scratch.
 
 const rootConformListing = listingFor(rootConformPaths)
 
+/** A stray top-level file riding into the root tarball. */
+const rootLeakedListing = listingFor([...rootConformPaths, 'scratch.ts'])
+
 interface CapturedOutput {
   stdout: string[]
   stderr: string[]
@@ -687,6 +710,23 @@ describe('runPublishContentsCheck', () => {
     expect(stdout).toContain(
       '@defrex/autobuild-hosted-store-service pack contents match the ruling',
     )
+  })
+
+  test('a stray top-level file in the root listing renders the ruling with LICENSE bare, not LICENSE/**', async () => {
+    const { output, captured } = capture()
+    const packages = conformingPackages().map((fake) =>
+      fake.directory === rootDirectory ? { ...fake, listing: rootLeakedListing } : fake,
+    )
+    const { environment } = fakeEnvironment(packages)
+    const exitCode = await runPublishContentsCheck(environment, output)
+    expect(exitCode).toBe(1)
+    const stdout = captured.stdout.join('')
+    expect(stdout).toContain('scratch.ts')
+    expect(stdout).toContain(
+      'only package.json, README.md, bin/**, packages/core/src/**, skills/**, templates/**, ' +
+        'patches/**, LICENSE, SPEC.md, and docs/** are allowed by the ruling',
+    )
+    expect(stdout).not.toContain('LICENSE/**')
   })
 
   test('a test file under packages/core/src in the root listing fails, naming the path', async () => {

@@ -68,7 +68,6 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   that packs nothing (a typo in the allowlist would otherwise ship nothing
  *   while looking deliberate);
  * - negation entries (leading `!`) become denied glob patterns — a packed path
- *   negation entries (leading `!`) become denied glob patterns — a packed path
  *   matching one is a violation even where a surface would allow it (the root
  *   manifest denies its `packages/core/src` test files through the negation
  *   `!packages/core/src/**` with the `*.test.ts` suffix; bun honors it);
@@ -374,15 +373,29 @@ export function packedTargetsFromManifest(manifest: {
   return [...targets]
 }
 
+/** The extensionless members of npm's always-included pack set: npm packs
+ * these names (any extension, so the bare spellings included) regardless of
+ * the `files` field, so an allowlist entry naming one can only ever be the
+ * file itself, never a ruled directory tree. */
+const ALWAYS_PACKED_FILE_NAMES: ReadonlySet<string> = new Set([
+  'README',
+  'LICENSE',
+  'LICENCE',
+  'NOTICE',
+])
+
 /**
- * Renders an allowlist entry for messages: a last segment without a dot is
- * treated as a directory (`src` → `src/**`), one with a dot as a file
- * (`LICENSE` → `LICENSE`). Cosmetic only — enforcement uses the
- * exact-or-prefix predicate, never this guess.
+ * Renders an allowlist entry for messages: a last segment containing a dot, or
+ * naming one of npm's always-packed extensionless files, is a file and renders
+ * bare (`SPEC.md` → `SPEC.md`, `LICENSE` → `LICENSE`); anything else is
+ * treated as a directory (`src` → `src/**`). Cosmetic only — enforcement uses
+ * the exact-or-prefix predicate, never this guess.
  */
-function describeSurface(entry: string): string {
+export function describeSurface(entry: string): string {
   const lastSegment = entry.split('/').at(-1) ?? entry
-  return lastSegment.includes('.') ? entry : `${entry}/**`
+  return lastSegment.includes('.') || ALWAYS_PACKED_FILE_NAMES.has(lastSegment)
+    ? entry
+    : `${entry}/**`
 }
 
 /** The allowed set as the ruling sentence renders it: the always-packed files
