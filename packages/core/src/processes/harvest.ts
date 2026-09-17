@@ -1,5 +1,6 @@
 /** Deterministic halves of observation harvest: scan, dedup, validation, and
  * proposal rendering. Agent judgment is deliberately absent from this file. */
+import type { AbEvent } from '../events/catalog'
 import type { ArtifactRef } from '../ontology'
 import {
   harvestProposalSetSchema,
@@ -26,7 +27,8 @@ import {
 } from '../kernel/harvest'
 import type { TicketSource } from '../ports/types'
 import { specConformance } from '../spec-standard'
-import { contentHash, toBytes, type BuildStore } from '../store/types'
+import type { RepositoryEvent } from '../events/repository'
+import { contentHash, toBytes, type BuildRecord, type BuildStore } from '../store/types'
 
 export const HARVEST_SCAN_ARTIFACT = 'harvest-scan'
 export const HARVEST_PROPOSALS_ARTIFACT = 'harvest-proposals'
@@ -87,23 +89,26 @@ export function evaluateHarvestPressure(
   }
 }
 
-/** Raw structured `observation.recorded` envelopes across this repository.
- * The pair `{build, seq}` is the occurrence key; payload ids are not assumed
- * globally unique. */
-export async function scanUnclaimedObservations(
-  store: BuildStore,
-  repo: string,
-): Promise<HarvestScanResult> {
-  await store.ensureRepo(repo)
-  const harvestEvents = await store.getRepoEvents(repo)
-  const state = reduceHarvest(harvestEvents)
+/** The deterministic core of the unclaimed-observation scan, over
+ * already-loaded streams: exactly the reduce/claim/collect/sort the
+ * store-reading scan performs, with no store calls. The dashboard consumes
+ * this directly with the journal and per-build event arrays it has already
+ * fetched (AUT-486), while `scanUnclaimedObservations` keeps the
+ * ensure/read/delegate shape its other callers depend on. */
+export function collectUnclaimedObservations(input: {
+  repo: string
+  records: BuildRecord[]
+  eventsByBuild: Map<string, AbEvent[]>
+  harvestEvents: RepositoryEvent[]
+}): HarvestScanResult {
+  const state = reduceHarvest(input.harvestEvents)
   const claimed = claimedOccurrenceKeys(state)
   const observations: HarvestObservation[] = []
   const merges: HarvestMerge[] = []
 
-  for (const record of await store.listBuilds()) {
-    if (record.repo !== repo) continue
-    const events = await store.getEvents(record.slug)
+  for (const record of input.records) {
+    if (record.repo !== input.repo) continue
+    const events = input.eventsByBuild.get(record.slug) ?? []
     for (const event of events) {
       if (event.type === 'pr.merged') {
         merges.push({ build: record.slug, ts: event.ts })
@@ -130,6 +135,24 @@ export async function scanUnclaimedObservations(
       a.occurrence.build.localeCompare(b.occurrence.build) || a.occurrence.seq - b.occurrence.seq,
   )
   return { observations, merges, state }
+}
+
+/** Raw structured `observation.recorded` envelopes across this repository.
+ * The pair `{build, seq}` is the occurrence key; payload ids are not assumed
+ * globally unique. */
+export async function scanUnclaimedObservations(
+  store: BuildStore,
+  repo: string,
+): Promise<HarvestScanResult> {
+  await store.ensureRepo(repo)
+  const harvestEvents = await store.getRepoEvents(repo)
+  const records = await store.listBuilds()
+  const eventsByBuild = new Map<string, AbEvent[]>()
+  for (const record of records) {
+    if (record.repo !== repo) continue
+    eventsByBuild.set(record.slug, await store.getEvents(record.slug))
+  }
+  return collectUnclaimedObservations({ repo, records, eventsByBuild, harvestEvents })
 }
 
 /** Distinct previously filed/joined proposal tickets, reconciled through the
