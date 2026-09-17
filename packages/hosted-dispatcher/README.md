@@ -27,10 +27,10 @@ Besides the endpoint driver, the package owns two deploy-time helpers:
   during the deployment build (the hosted store service's `deploy:build` runs
   it by path from the package directory:
   `bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .`); and
-- the `ship-packed-distribution` trace helper
-  (`bun packages/hosted-dispatcher/src/ship-packed-distribution.ts`), which
-  appends that archive to the dispatch route's Next.js trace file so the
-  function bundle carries it.
+- the `ship-packed-distribution` trace helper, which appends that archive to
+  the dispatch route's Next.js trace file so the function bundle carries it
+  (the same `deploy:build` runs it by path from the package directory as its
+  final step: `bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts`).
 
 ## Dispatcher environment variables
 
