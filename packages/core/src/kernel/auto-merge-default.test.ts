@@ -96,6 +96,27 @@ describe('autoMergeDefaultEligible', () => {
     ).toBe(false)
   })
 
+  test('an outstanding discard request excludes a build on its way out', () => {
+    // `discardRequest` is present exactly while a discard request is
+    // outstanding and the build is non-terminal — the reducer settles it only
+    // by terminal completion (reducer.ts), symmetric with the pending-abort
+    // clause above. Direction-blind: an OFF fan-out skipping it withdraws
+    // nothing that survives the settlement.
+    expect(
+      autoMergeDefaultEligible(
+        build({ status: 'queued', discardRequest: { seq: 4, actor: operator } }),
+      ),
+    ).toBe(false)
+    // The inert, raced-runner-attachment shape: the discard landed in the
+    // queued window before the runner attached, leaving a running build that
+    // carries the request.
+    expect(
+      autoMergeDefaultEligible(
+        build({ status: 'running', discardRequest: { seq: 4, actor: operator } }),
+      ),
+    ).toBe(false)
+  })
+
   test('a record with no build.created yet — an empty log — is excluded', () => {
     // The crash or one-await window between `createBuild` and the first
     // append: an auto-merge command written ahead of `build.created` would
@@ -174,5 +195,11 @@ describe('autoMergeDefaultTarget', () => {
   test('ineligible builds are never targets', () => {
     expect(autoMergeDefaultTarget(build({ status: 'done' }), ON)).toBeUndefined()
     expect(autoMergeDefaultTarget(build({ status: 'aborted' }), OFF)).toBeUndefined()
+  })
+
+  test('an in-flight discard is never a fan-out target, either direction', () => {
+    const doomed = build({ status: 'queued', discardRequest: { seq: 4, actor: operator } })
+    expect(autoMergeDefaultTarget(doomed, ON)).toBeUndefined()
+    expect(autoMergeDefaultTarget(doomed, OFF)).toBeUndefined()
   })
 })

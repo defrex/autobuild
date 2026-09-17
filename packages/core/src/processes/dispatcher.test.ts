@@ -341,8 +341,9 @@ async function seedInterrupted(
   h: Harness,
   slug = 'interrupted-dispatch',
   autoMergeRequestedBy?: string,
+  ticketId = 'T-recover',
 ): Promise<void> {
-  const ticket = (await h.tickets.get('T-recover'))!
+  const ticket = (await h.tickets.get(ticketId))!
   await h.tickets.claim(ticket.ref.id)
   await h.store.createBuild({
     slug,
@@ -6268,5 +6269,70 @@ describe('the durable auto-merge default fans out onto current builds', () => {
     // normally — no `dispatch.failed {stage: 'create'}`.
     expect(events[0]?.type).toBe('build.created')
     expect(events.some((e) => e.type === 'dispatch.failed')).toBe(false)
+  })
+
+  test('a queued build with an in-flight discard is skipped while a clean sibling is fanned', async () => {
+    // The queued window: the discard request lands while the build still sits
+    // in the queue, then the operator presses the auto-merge toggle. One tick
+    // must skip consent for the doomed build and still settle the discard —
+    // the fan-out runs before the janitor (dispatcher tick order), so a
+    // consent record would otherwise beat the discard settlement.
+    const h = harness({ tickets: [readyTicket('T-recover'), readyTicket('T-clean')] })
+    await seedInterrupted(h, 'doomed-build')
+    await seedInterrupted(h, 'clean-build', undefined, 'T-clean')
+    await h.store.append('doomed-build', {
+      actor: humanActor('discard-operator'),
+      type: 'build.discard-requested',
+      payload: {},
+    })
+    await setDefault(h, true)
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+
+    // No consent of any kind was recorded for the discarded build, and the
+    // same tick settled the discard (the janitor ran after the fan-out).
+    const doomed = await h.store.getEvents('doomed-build')
+    expect(doomed.some((e) => e.type.startsWith('build.auto-merge-'))).toBe(false)
+    expect(doomed.at(-1)?.type).toBe('build.completed')
+    expect(doomed.at(-1)?.payload).toEqual({ outcome: 'discarded' })
+    // Control: the sibling with no discard and no pending abort received the
+    // request exactly as before (the exclusion is discard-specific).
+    const clean = await h.store.getEvents('clean-build')
+    expect(clean.some((e) => e.type === 'build.auto-merge-requested')).toBe(true)
+  })
+
+  test('a discard in flight on a running build never receives fan-out consent (the merge race)', async () => {
+    // The raced-runner-attachment shape: the discard landed in the queued
+    // window before the runner attached, so the build is running with an
+    // outstanding, deliberately inert `discardRequest`. `build-control` only
+    // queues a discard, so the event is appended raw — the journal is the
+    // source of truth. Without the eligibility exclusion the ON fan-out
+    // records consent here, and `checkPr` then enables native auto-merge or
+    // squash-merges — the build merges under consent the operator's discard
+    // intent never meant to give.
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setGatePresence(1, 'absent')
+    await h.store.claimLease(slug, 'runner-live', 60_000)
+    await h.store.append(slug, {
+      actor: humanActor('discard-operator'),
+      type: 'build.discard-requested',
+      payload: {},
+    })
+    await setDefault(h, true)
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+
+    const events = await h.store.getEvents(slug)
+    expect(events.some((e) => e.type === 'build.auto-merge-requested')).toBe(false)
+    expect(h.forge.squashMergeCalls).toEqual([])
+    expect(h.forge.autoMergeCalls.some((call) => call.enabled)).toBe(false)
+    // The raced shape is intact: the build stays running with the discard
+    // outstanding — consent was never recorded, and nothing merged.
+    const state = reduceBuild(events)
+    expect(state.status).toBe('running')
+    expect(state.discardRequest).toBeDefined()
   })
 })
