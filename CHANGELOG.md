@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#420](https://github.com/defrex/autobuild/pull/420) — Collect only specifier-position literals in the boundary guard
 - [#415](https://github.com/defrex/autobuild/pull/415) — Stop the package-boundary lint flagging import text in comments
 - [#412](https://github.com/defrex/autobuild/pull/412) — Remove unused deploymentSectionsEqual and DEPLOYMENT_OWNED_CONFIG_PATHS
 - [#414](https://github.com/defrex/autobuild/pull/414) — Record honest pipeline-source provenance for dirty checkout worktrees
