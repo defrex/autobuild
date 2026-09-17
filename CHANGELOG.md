@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#461](https://github.com/defrex/autobuild/pull/461) — Fail collectUnclaimedObservations loudly on a missing eventsByBuild entry
 - [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
 - [#458](https://github.com/defrex/autobuild/pull/458) — Guard the workspace's mirrored react pins against drift
 - [#457](https://github.com/defrex/autobuild/pull/457) — Skip getOperatorBuild's pinned-config read for null-row builds
