@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#409](https://github.com/defrex/autobuild/pull/409) — Harden store-service boundary scan against recorded evasion forms
 - [#408](https://github.com/defrex/autobuild/pull/408) — Extract the consent page's named/unnamed paragraph copy into one site
 - [#407](https://github.com/defrex/autobuild/pull/407) — Exclude discard-in-flight builds from auto-merge default eligibility
 - [#406](https://github.com/defrex/autobuild/pull/406) — Stop seedHappyBuild from appending a duplicate verify.started event
