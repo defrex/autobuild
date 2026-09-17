@@ -65,8 +65,28 @@ const DISPATCHER_SPECIFIER =
  * `import('...')` with either a quoted or a template-literal specifier (a
  * template-literal specifier is reported as its raw source text, interpolation
  * included — `` import(`@defrex/autobuild-hosted-dispatcher/${name}`) `` is
- * flagged), and `require('...')` (defensively; the package is ESM and has no
- * require today). A scan that missed side-effect or dynamic forms would let
+ * flagged), extensioned and subpath relative forms (`./dispatcher.js`,
+ * `./dispatcher/index.js` — see `DISPATCHER_SPECIFIER`), and require forms
+ * (defensively; see below).
+ *
+ * Require forms are flagged even though the package is ESM: the reachability
+ * caveat is that no `require` binding is in scope today, so every require-side
+ * gap is latent — this coverage guards a future regression (a `createRequire`
+ * import or a CommonJS interop revert), not live behavior. Flagged require
+ * forms: `require('...')` and `` require(`...`) `` (template-literal
+ * specifiers are reported as raw source text, like dynamic import),
+ * `new require(...)`, `x.require(...)` for any receiver (`module.require`,
+ * `globalThis.require`, ... — fail-closed, and harmless because only
+ * dispatcher-matching specifiers are reported), and
+ * `require.call(...)` / `require.apply(...)` (their argument subtrees are
+ * walked, so `require.apply(null, ['./dispatcher'])` is caught too). The
+ * realistic `createRequire` form —
+ * `const require = createRequire(import.meta.url); require('...')` — binds the
+ * identifier `require` and is flagged by the plain-identifier branch.
+ * Consciously not flagged: `require.bind(...)` (deferred invocation, not one
+ * of the recorded forms) and element-access callees like
+ * `require['call'](...)` (a general import-analysis rewrite is out of scope).
+ * A scan that missed side-effect or dynamic forms would let
  * the dispatcher's kernel/provider closure silently reintroduce itself.
  *
  * Intentionally not flagged: the fully type-only forms `import type { T } from
@@ -78,6 +98,19 @@ const DISPATCHER_SPECIFIER =
  * an offender rather than skipping it; ambiguity errs toward flagging.
  */
 const UNPARSEABLE_MODULE = '<unparseable module>'
+
+/**
+ * Expressions that denote `require` itself: the bare identifier, or a property
+ * access whose name is `require` (any receiver — `module.require`,
+ * `globalThis.require`, ...). Matching any receiver is fail-closed and
+ * harmless: only dispatcher-matching specifiers are ever reported.
+ */
+function isRequireishExpression(node: ts.Expression): boolean {
+  return (
+    (ts.isIdentifier(node) && node.text === 'require') ||
+    (ts.isPropertyAccessExpression(node) && node.name.text === 'require')
+  )
+}
 
 export function dispatcherSpecifiers(text: string): string[] {
   const { diagnostics } = ts.transpileModule(text, { reportDiagnostics: true })
@@ -92,6 +125,26 @@ export function dispatcherSpecifiers(text: string): string[] {
     ts.ScriptKind.TS,
   )
   const specifiers: string[] = []
+  /**
+   * Collect dispatcher specifiers from every string literal and template
+   * literal in an argument subtree, in visit order. Shared by dynamic `import`
+   * and the require forms so both report template-literal specifiers the same
+   * way: raw source text between the backticks, interpolation included. Only
+   * subtrees rooted at real call positions are walked, so string or template
+   * interiors elsewhere in the file can never yield an offender.
+   */
+  const collectFromArgument = (argument: ts.Expression): void => {
+    const visitArgument = (n: ts.Node): void => {
+      if (ts.isStringLiteral(n)) {
+        if (DISPATCHER_SPECIFIER.test(n.text)) specifiers.push(n.text)
+      } else if (ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) {
+        const raw = n.getText(sourceFile).slice(1, -1)
+        if (DISPATCHER_SPECIFIER.test(raw)) specifiers.push(raw)
+      }
+      n.forEachChild(visitArgument)
+    }
+    visitArgument(argument)
+  }
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       // `import type ...` is fully erased; every other import declaration
@@ -124,31 +177,27 @@ export function dispatcherSpecifiers(text: string): string[] {
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const argument = node.arguments[0]
-        if (argument && ts.isStringLiteral(argument)) {
-          if (DISPATCHER_SPECIFIER.test(argument.text)) specifiers.push(argument.text)
-        } else if (argument) {
-          // Dynamic import with a template-literal specifier (or any argument
-          // expression containing one): the raw source text between the
-          // backticks is reported, interpolation included (e.g.
-          // `@defrex/autobuild-hosted-dispatcher/${name}`), so the
-          // dispatcher-prefix check sees exactly what the source names. The
-          // parser keeps this scoped to real import positions — a template
-          // literal elsewhere in the file is never an import.
-          const visitTemplates = (n: ts.Node): void => {
-            if (ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) {
-              const raw = n.getText(sourceFile).slice(1, -1)
-              if (DISPATCHER_SPECIFIER.test(raw)) specifiers.push(raw)
-            }
-            n.forEachChild(visitTemplates)
-          }
-          visitTemplates(argument)
-        }
-      } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
-        const argument = node.arguments[0]
-        if (argument && ts.isStringLiteral(argument) && DISPATCHER_SPECIFIER.test(argument.text)) {
-          specifiers.push(argument.text)
-        }
+        if (argument) collectFromArgument(argument)
+      } else if (isRequireishExpression(node.expression)) {
+        // `require(...)` and any `x.require(...)` — every argument subtree is
+        // examined, so template-literal specifiers (`` require(`./dispatcher`)
+        // ``) and nested-string forms (`` require(`./dispatcher` + suffix) ``)
+        // are caught, consistent with the dynamic-import branch.
+        for (const argument of node.arguments) collectFromArgument(argument)
+      } else if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        (node.expression.name.text === 'call' || node.expression.name.text === 'apply') &&
+        isRequireishExpression(node.expression.expression)
+      ) {
+        // `require.call(...)` / `require.apply(...)` — the subtree walk also
+        // catches `require.apply(null, ['./dispatcher'])` through the array
+        // literal.
+        for (const argument of node.arguments) collectFromArgument(argument)
       }
+    } else if (ts.isNewExpression(node) && isRequireishExpression(node.expression)) {
+      // `new require(...)` — non-call require form the delivered raw-text scan
+      // caught by substring accident.
+      for (const argument of node.arguments ?? []) collectFromArgument(argument)
     }
     node.forEachChild(visit)
   }
@@ -272,6 +321,47 @@ describe('hosted-store-service package boundary', () => {
     // and stays outside this scan's claimed reach.
   })
 
+  test('require scan catches template-literal and non-call require forms', () => {
+    // Template-literal require specifiers are flagged, reported as raw source
+    // text — the same convention the dynamic-import branch ships.
+    expect(dispatcherSpecifiers('const d = require(`./dispatcher`)')).toEqual(['./dispatcher'])
+    expect(
+      dispatcherSpecifiers(`const d = require(\`@defrex/autobuild-hosted-dispatcher/\${name}\`)`),
+    ).toEqual([`@defrex/autobuild-hosted-dispatcher/\${name}`])
+    // An argument expression containing a template literal is examined too.
+    expect(dispatcherSpecifiers('const d = require(`./dispatcher` + suffix)')).toEqual([
+      './dispatcher',
+    ])
+
+    // Non-call require forms the delivered raw-text scan caught by substring
+    // accident are flagged again.
+    expect(dispatcherSpecifiers("new require('./dispatcher')")).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers("module.require('./dispatcher')")).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers("globalThis.require('./dispatcher')")).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers("require.call(null, './dispatcher')")).toEqual(['./dispatcher'])
+    expect(dispatcherSpecifiers("require.apply(null, ['./dispatcher'])")).toEqual(['./dispatcher'])
+
+    // The realistic createRequire form binds the identifier `require`, so the
+    // plain-identifier branch flags it.
+    expect(
+      dispatcherSpecifiers(
+        "const require = createRequire(import.meta.url)\nrequire('./dispatcher')",
+      ),
+    ).toEqual(['./dispatcher'])
+
+    // Negative controls: non-dispatcher specifiers stay clean in every form.
+    expect(dispatcherSpecifiers("module.require('./service')")).toEqual([])
+    expect(dispatcherSpecifiers('const d = require(`./service`)')).toEqual([])
+    expect(dispatcherSpecifiers("require.call(null, './service')")).toEqual([])
+    expect(dispatcherSpecifiers("new require('./service')")).toEqual([])
+
+    // Consciously not flagged (see the scanner doc comment):
+    // `require.bind(...)` defers the call, and element-access callees like
+    // `require['call'](...)` are beyond the recorded forms.
+    expect(dispatcherSpecifiers("const f = require.bind(null, './dispatcher')")).toEqual([])
+    expect(dispatcherSpecifiers("require['call'](null, './dispatcher')")).toEqual([])
+  })
+
   test('dispatcher-import text inside comments or strings is not an offender', () => {
     // The ticket: raw text matching would flag documentation and
     // commented-out code. The parser scopes specifiers to import statements,
@@ -302,6 +392,12 @@ export const x = 1`,
     expect(dispatcherSpecifiers(`const doc = "see import './dispatcher'"`)).toEqual([])
     expect(
       dispatcherSpecifiers(`const doc = \`import './dispatcher' when wiring the kernel manually\``),
+    ).toEqual([])
+    // Require-flavored text in comments and string interiors stays clean too:
+    // only subtrees rooted at real require-ish call positions are examined.
+    expect(dispatcherSpecifiers("// require('./dispatcher.js')")).toEqual([])
+    expect(
+      dispatcherSpecifiers(`const hint = "require('./dispatcher') to load the kernel"`),
     ).toEqual([])
   })
 
