@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
 - [#421](https://github.com/defrex/autobuild/pull/421) — Harden vercel-consumer-config test against catalog drift
 - [#419](https://github.com/defrex/autobuild/pull/419) — Rule on the type-only-import divergence between boundary scanners
 - [#418](https://github.com/defrex/autobuild/pull/418) — Make the cumulative-latency scenario-deadline test jitter-tolerant
