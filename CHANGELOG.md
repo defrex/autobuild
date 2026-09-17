@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#405](https://github.com/defrex/autobuild/pull/405) — Include git diff output in finalize-preflight dirty-worktree failure records
 - [#402](https://github.com/defrex/autobuild/pull/402) — Widen store-service boundary scan to template-literal dynamic imports
 - [#400](https://github.com/defrex/autobuild/pull/400) — Re-anchor the packed-install retry cooldown per lag window
 - [#399](https://github.com/defrex/autobuild/pull/399) — Verify worktree exec bits in bin-mode-check; add PackageManifest.bin
