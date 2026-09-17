@@ -13,11 +13,12 @@ import { projectRepositoryStatus, type RepositoryStatus } from '../cli/repositor
 import { projectHarvestStatus, type HarvestStatusView } from '../cli/harvest'
 import {
   buildDashboardFromProjected,
+  effectiveStatus,
   projectBuild,
   type DashboardBuild,
   type DashboardModel,
 } from '../cli/dashboard/model'
-import { reduceBuild } from '../kernel/reducer'
+import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { collectUnclaimedObservations } from '../processes/harvest'
 import type { BuildStore, Clock } from '../store/types'
@@ -155,6 +156,19 @@ async function readPinnedConfig(
   return { config, ...parseBuildConfigMetadata(artifact) }
 }
 
+/** The shared null-row gate (AUT-486 snapshot, AUT-496 getOperatorBuild):
+ * `effectiveStatus` maps only `done` outside the visible set
+ * (cli/dashboard/model.ts `isVisible`), so `projectBuild` returns null
+ * exactly for this state, and a pinned effective-config read for such a
+ * build could never be surfaced. One predicate so both call sites cannot
+ * diverge from each other or from the row projection. If
+ * cli/dashboard/model.ts ever adds a non-visible status, this predicate
+ * must follow — the snapshot byte-identical differential test and the
+ * done/aborted query tests pin the coupling. */
+function projectsNoDashboardRow(state: BuildState): boolean {
+  return effectiveStatus(state) === 'done'
+}
+
 /** Attach the effective-config metadata (SPEC §16.1) to a projected row so an
  * operator can see which autobuild.toml the build runs under. */
 function decorateWithPinnedMeta(row: DashboardBuild, pinned: PinnedProjection): DashboardBuild {
@@ -173,11 +187,17 @@ export async function getOperatorBuild(opts: {
   const events = await opts.store.getEvents(opts.slug)
   const state = reduceBuild(events)
   const { config } = await effectiveConfig(opts.store, opts.repo)
-  const pinned = await readPinnedConfig(opts.store, opts.slug, config)
-  const dashboardRow = projectBuild(record, state, config, events, undefined, pinned.config)
+  let dashboardRow: DashboardBuild | null = null
+  if (!projectsNoDashboardRow(state)) {
+    const pinned = await readPinnedConfig(opts.store, opts.slug, config)
+    const row = projectBuild(record, state, config, events, undefined, pinned.config)
+    // Implied by the gate; kept as an explicit check (not an assertion) so the
+    // code never lies if `effectiveStatus` and `projectBuild` ever drift.
+    if (row !== null) dashboardRow = decorateWithPinnedMeta(row, pinned)
+  }
   return {
     detail: detail(record, events, opts.now),
-    dashboardRow: dashboardRow === null ? null : decorateWithPinnedMeta(dashboardRow, pinned),
+    dashboardRow,
   }
 }
 
@@ -222,11 +242,13 @@ export async function getOperatorDashboard(opts: {
     eventsByBuild.set(record.slug, events)
     const state = reduceBuild(events)
     if (state.status !== 'done' && state.status !== 'aborted') activeCount += 1
-    // A done build projects no row (`effectiveStatus` maps only `done` outside
-    // the visible set), so its pinned effective-config artifact — fetched and
-    // then discarded on every refresh before AUT-486 — is not read at all.
-    // Every row-rendering build still gets its pinned pipeline and metadata.
-    if (state.status === 'done') continue
+    // Both query surfaces share the `projectsNoDashboardRow` gate (AUT-486
+    // snapshot, AUT-496 detail query): a build that projects no row —
+    // `effectiveStatus` maps only `done` outside the visible set — never
+    // reads its pinned effective-config artifact, because the read result
+    // could never be surfaced. Every row-rendering build still gets its
+    // pinned pipeline and metadata.
+    if (projectsNoDashboardRow(state)) continue
     const pinned = await readPinnedConfig(opts.store, record.slug, config)
     const row = projectBuild(record, state, config, events, undefined, pinned.config)
     if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
