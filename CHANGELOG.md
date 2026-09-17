@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#460](https://github.com/defrex/autobuild/pull/460) — Exclude the test-only src/testing/ tree from postgres-store's tarball
 - [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
 - [#457](https://github.com/defrex/autobuild/pull/457) — Skip getOperatorBuild's pinned-config read for null-row builds
 - [#456](https://github.com/defrex/autobuild/pull/456) — Rule AUT-490: exclude test files from sub-package tarballs
