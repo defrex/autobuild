@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#440](https://github.com/defrex/autobuild/pull/440) — Guard repo-local skill docs' asset refs; fix vendored-scope comment
+- [#436](https://github.com/defrex/autobuild/pull/436) — Pin comment-interleaved require/import positions in boundary tests
 - [#437](https://github.com/defrex/autobuild/pull/437) — End publish-contents-check's success message with a newline
 - [#435](https://github.com/defrex/autobuild/pull/435) — Extend Pi version cross-check to every install-literal pin
 - [#434](https://github.com/defrex/autobuild/pull/434) — State docs-asset-check's shipped-docs-only document scope ruling
