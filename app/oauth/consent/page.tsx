@@ -3,6 +3,33 @@ import { ConsentForm } from './ConsentForm'
 
 export const dynamic = 'force-dynamic'
 
+/** The consent request sentence, held once so the named and unnamed render
+ * paths cannot silently diverge on copy. Parameterized by the registered
+ * client label; a null name renders the unnamed-client wording. */
+function ConsentRequestCopy({
+  clientName,
+  clientId,
+}: {
+  clientName: string | null
+  clientId: string
+}) {
+  return (
+    <p>
+      {clientName ? (
+        <>
+          <strong>{clientName}</strong> (registered as <code>{clientId}</code>)
+        </>
+      ) : (
+        <>
+          A client registered as <code>{clientId}</code>
+        </>
+      )}{' '}
+      requests operator access to this deployment's Autobuild tools, acting under your signed-in
+      identity.
+    </p>
+  )
+}
+
 /** The OAuth consent page the MCP plugin's authorize flow redirects to when a
  * client sends `prompt=consent`. Markup reuses the sign-in page's existing
  * classes (frame signin, masthead, card, btn) under DESIGN.md's rules. The
@@ -35,18 +62,7 @@ export default async function ConsentPage({
         <section className="card" aria-labelledby="consent-title">
           <h2 id="consent-title">Authorize client</h2>
           {query.client_id ? (
-            clientName ? (
-              <p>
-                <strong>{clientName}</strong> (registered as <code>{query.client_id}</code>)
-                requests operator access to this deployment's Autobuild tools, acting under your
-                signed-in identity.
-              </p>
-            ) : (
-              <p>
-                A client registered as <code>{query.client_id}</code> requests operator access to
-                this deployment's Autobuild tools, acting under your signed-in identity.
-              </p>
-            )
+            <ConsentRequestCopy clientName={clientName} clientId={query.client_id} />
           ) : (
             <p>A client requests operator access to this deployment's Autobuild tools.</p>
           )}
