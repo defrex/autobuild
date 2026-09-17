@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#425](https://github.com/defrex/autobuild/pull/425) — Deduplicate type-only-import rationale comment in boundary test
 - [#422](https://github.com/defrex/autobuild/pull/422) — Enumerate all worktree-dirty triggers in the provenance docs
 - [#420](https://github.com/defrex/autobuild/pull/420) — Collect only specifier-position literals in the boundary guard
 - [#421](https://github.com/defrex/autobuild/pull/421) — Harden vercel-consumer-config test against catalog drift
