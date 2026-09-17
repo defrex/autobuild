@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import ts from 'typescript'
 
 /**
  * The store service hosts state only: after the hosted dispatcher moved to
@@ -41,37 +42,92 @@ async function sourceFiles(directory: string): Promise<string[]> {
 const DISPATCHER_SPECIFIER = /^(\.\/dispatcher$)|(^@defrex\/autobuild-hosted-dispatcher)/
 
 /**
- * Parser-based extraction of dispatcher specifiers (Bun.Transpiler.scanImports
- * with the `ts` loader) — NOT regex-based. Because a real parser scopes
- * specifiers to import statements, dispatcher-import text confined to a line
- * or block comment, a string/template-literal interior, or a regex-literal
- * body can never yield an offender. Type-only imports (`import type` /
- * `export type ... from`) are intentionally not flagged: they are erased at
- * compile time and cannot load the dispatcher. Every import form that could
- * load the dispatcher is reported: static `from` specifiers (including
- * `export ... from`), bare side-effect `import '...'`, dynamic `import('...')`,
- * and `require('...')` (defensively; the package is ESM and has no require
- * today). A static-only scan would let a side-effect or dynamic import
- * silently reintroduce the dispatcher's kernel/provider closure.
+ * Parser-based extraction of dispatcher specifiers — NOT regex-based. The
+ * parser is the TypeScript compiler's own AST (the same parser that implements
+ * this repo's `verbatimModuleSyntax: true` emit), so the guard models exactly
+ * the module loads the repo's own toolchain can produce. Because a real parser
+ * scopes specifiers to import statements, dispatcher-import text confined to a
+ * line or block comment, a string/template-literal interior, or a
+ * regex-literal body can never yield an offender (a leading `#!` shebang is
+ * comment trivia to the parser, not an import).
  *
- * Fail-closed edges: a leading `#!` shebang line is stripped as inert comment
- * text (Bun's transpiler otherwise throws on it); any other parse failure
- * yields the `<unparseable module>` sentinel so the tree walk reports the
- * whole file as an offender rather than skipping it.
+ * Flagged: every import form that survives emit as a module load — static
+ * `from` specifiers (including `export ... from` and inline type-only named
+ * bindings like `import { type T } from '...'`, which `verbatimModuleSyntax`
+ * preserves as `import {} from '...'` / `export {} from '...'` and therefore
+ * still executes the module), bare side-effect `import '...'`, dynamic
+ * `import('...')`, and `require('...')` (defensively; the package is ESM and
+ * has no require today).
+ *
+ * Intentionally not flagged: the fully type-only forms `import type { T } from
+ * '...'` and `export type { T } from '...'` — both are erased even under
+ * `verbatimModuleSyntax` and cannot load the dispatcher.
+ *
+ * Fail-closed edges: a file that fails to parse (syntactic errors) yields the
+ * `<unparseable module>` sentinel so the tree walk reports the whole file as
+ * an offender rather than skipping it; ambiguity errs toward flagging.
  */
-const transpiler = new Bun.Transpiler({ loader: 'ts' })
 const UNPARSEABLE_MODULE = '<unparseable module>'
 
 export function dispatcherSpecifiers(text: string): string[] {
-  const stripped = text.replace(/^#![^\n]*\n?/, '')
-  try {
-    return transpiler
-      .scanImports(stripped)
-      .map((found) => found.path)
-      .filter((path) => DISPATCHER_SPECIFIER.test(path))
-  } catch {
+  const { diagnostics } = ts.transpileModule(text, { reportDiagnostics: true })
+  if ((diagnostics ?? []).some((d) => d.category === ts.DiagnosticCategory.Error)) {
     return [UNPARSEABLE_MODULE]
   }
+  const sourceFile = ts.createSourceFile(
+    'module.ts',
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  )
+  const specifiers: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      // `import type ...` is fully erased; every other import declaration
+      // (including `import { type T } ...`) survives verbatimModuleSyntax
+      // emit and loads the module.
+      if (
+        node.importClause?.isTypeOnly !== true &&
+        DISPATCHER_SPECIFIER.test(node.moduleSpecifier.text)
+      ) {
+        specifiers.push(node.moduleSpecifier.text)
+      }
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      // `export type ... from` is fully erased; `export { type T } from`,
+      // `export * from`, and `export * as ns from` all survive emit.
+      node.isTypeOnly !== true &&
+      DISPATCHER_SPECIFIER.test(node.moduleSpecifier.text)
+    ) {
+      specifiers.push(node.moduleSpecifier.text)
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(node.moduleReference.expression) &&
+      DISPATCHER_SPECIFIER.test(node.moduleReference.expression.text)
+    ) {
+      // `import x = require('...')` — no type-only erasure exists for it.
+      specifiers.push(node.moduleReference.expression.text)
+    } else if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const argument = node.arguments[0]
+        if (argument && ts.isStringLiteral(argument) && DISPATCHER_SPECIFIER.test(argument.text)) {
+          specifiers.push(argument.text)
+        }
+      } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+        const argument = node.arguments[0]
+        if (argument && ts.isStringLiteral(argument) && DISPATCHER_SPECIFIER.test(argument.text)) {
+          specifiers.push(argument.text)
+        }
+      }
+    }
+    node.forEachChild(visit)
+  }
+  visit(sourceFile)
+  return specifiers
 }
 
 describe('hosted-store-service package boundary', () => {
@@ -210,18 +266,46 @@ export const x = 1`,
     // A file the parser cannot read is reported wholesale rather than
     // silently skipped.
     expect(dispatcherSpecifiers('const x = = =')).toEqual(['<unparseable module>'])
-    // A shebang is inert comment text; stripping it cannot hide an import.
+    // A shebang is comment trivia to the parser; it cannot hide an import.
     expect(dispatcherSpecifiers("#!/usr/bin/env bun\nimport './dispatcher'")).toEqual([
       './dispatcher',
     ])
   })
 
-  test('type-only imports are intentionally not flagged', () => {
-    // Intentional narrowing: `import type` / `export type ... from` are
-    // erased at compile time and cannot load the dispatcher, so the parser
-    // does not report them.
+  test('inline type-only named imports are flagged: verbatimModuleSyntax preserves them', () => {
+    // The repo's tsconfig pins `verbatimModuleSyntax: true`, under which the
+    // inline type-only form is NOT erased: tsc and esbuild both emit
+    // `import {} from '...'` / `export {} from '...'`, which still loads the
+    // module and executes its side effects. Flagging it is fail-closed.
+    expect(
+      dispatcherSpecifiers("import { type T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/types'])
+    expect(
+      dispatcherSpecifiers(
+        "import { type T, type U } from '@defrex/autobuild-hosted-dispatcher/types'",
+      ),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/types'])
+    expect(
+      dispatcherSpecifiers(
+        "import { kernel, type T } from '@defrex/autobuild-hosted-dispatcher/kernel'",
+      ),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/kernel'])
+    expect(
+      dispatcherSpecifiers("export { type T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual(['@defrex/autobuild-hosted-dispatcher/types'])
+  })
+
+  test('fully type-only imports are intentionally not flagged', () => {
+    // Intentional narrowing: `import type` / `export type ... from` are fully
+    // erased — even under this repo's `verbatimModuleSyntax: true` — and
+    // cannot load the dispatcher, so the parser does not report them. (The
+    // inline `{ type T }` form is different: it survives emit and IS flagged —
+    // see the dedicated fixture above.)
     expect(
       dispatcherSpecifiers("import type { T } from '@defrex/autobuild-hosted-dispatcher/types'"),
+    ).toEqual([])
+    expect(
+      dispatcherSpecifiers("import type * as ns from '@defrex/autobuild-hosted-dispatcher/types'"),
     ).toEqual([])
     expect(
       dispatcherSpecifiers("export type { T } from '@defrex/autobuild-hosted-dispatcher/types'"),
