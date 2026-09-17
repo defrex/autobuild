@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#439](https://github.com/defrex/autobuild/pull/439) — Widen the rule-on-docs AC3 sweep's include patterns to *.ts
 - [#435](https://github.com/defrex/autobuild/pull/435) — Extend Pi version cross-check to every install-literal pin
 - [#434](https://github.com/defrex/autobuild/pull/434) — State docs-asset-check's shipped-docs-only document scope ruling
 - [#433](https://github.com/defrex/autobuild/pull/433) — Restrict the hosted-store-service npm tarball to src/ and README
