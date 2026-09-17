@@ -124,6 +124,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   constructor(opts: {
     root: string
     exec?: Exec
+    /** Test-only override of the exit-stamp drain grace
+     * (`DEFAULT_SANDBOX_EXIT_DRAIN_GRACE_MS`); production behavior is
+     * unchanged. */
+    exitDrainGraceMs?: number
     /** Operator-sandbox worktree root; defaults to a sibling of the build
      * worktree root inside the local state tree. */
     sandboxRoot?: string
@@ -141,6 +145,8 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     this.setupCommand = opts.setupCommand
     this.sandboxEnvironmentVariables = opts.sandboxEnvironmentVariables ?? []
     this.sandboxEnvSource = opts.envSource ?? {}
+    this.exitDrainGraceMs =
+      opts.exitDrainGraceMs ?? GitWorktreeProvider.DEFAULT_SANDBOX_EXIT_DRAIN_GRACE_MS
     this.exec = opts.exec ?? spawnExec
     this.orchestratorSandbox = {
       describe: (input) => Promise.resolve(this.sandboxIdentity(input.repo, input.operator)),
@@ -650,7 +656,11 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * this cap covers the fire-and-forget case — commands that finish but are
    * never waited on — so the map (and its retained stdout/stderr strings)
    * stays bounded at ~cap entries' worth of output regardless of how many
-   * commands the process ever runs. Running entries are never evicted. */
+   * commands the process ever runs. Running entries are never evicted, and
+   * cap-evicted commands fail `wait` typed `not-found`: the legitimate
+   * not-found population under the cap is entries trimmed as the oldest
+   * finished, entries already consumed by a terminal wait, and ids from a
+   * restarted host. */
   private static readonly MAX_RETAINED_SANDBOX_COMMANDS = 50
 
   /** Bound on how long the exit stamp waits for the stdout/stderr pipe
@@ -658,8 +668,12 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * pipes on exit and drains immediately; a grandchild that inherited the
    * write end (e.g. `sleep 30 &`) keeps the pipe open long past the
    * child's exit, so the grace bounds the stamp instead of stalling the
-   * delivered `exited` result until the grandchild dies. */
-  private static readonly SANDBOX_EXIT_DRAIN_GRACE_MS = 250
+   * delivered `exited` result until the grandchild dies. Because the race
+   * outcome varies (reader drain vs. grace), stamp landing times are also
+   * variable — which is why `evictFinishedBeyondCap` stops at
+   * exited-but-unstamped entries instead of treating them as running. */
+  private static readonly DEFAULT_SANDBOX_EXIT_DRAIN_GRACE_MS = 250
+  private readonly exitDrainGraceMs: number
 
   /** Detached children tracked in-process only; a restarted host reports a
    * recorded command as gone (`wait` fails typed `not-found`). Eviction uses
@@ -688,13 +702,38 @@ export class GitWorktreeProvider implements WorkspaceProvider {
 
   /** While the map exceeds the retention cap, delete the oldest finished
    * entries in insertion order (`Map` iterates in insertion order). Running
-   * entries are never evicted — the live procs themselves are the resource. */
+   * entries are never evicted — the live procs themselves are the resource.
+   * A pass also stops at the first tracked command that has exited but whose
+   * drain-gated exit stamp has not yet landed: such an entry is finished,
+   * not running, so the stamped entries older than it are unambiguously
+   * safe to evict (and are deleted by the walk reaching it), but nothing
+   * newer may be selected ahead of it — deleting a newer finished entry
+   * while an older one's stamp is still pending would make the victim
+   * choice depend on when stamps happen to land. When the pending entry is
+   * itself the oldest evictable entry, the pass deletes nothing and defers
+   * to its stamp. The stop always resolves — every exited entry is stamped
+   * within the drain grace, and every stamp runs this pass again — so the
+   * map settles to the cap with victims chosen as the oldest finished
+   * entries in insertion order, independent of stamp timing; while a stamp
+   * is pending the map may transiently hold the cap plus the entries that
+   * finished after that pending entry. */
   private evictFinishedBeyondCap(): void {
     if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) return
     for (const [id, tracked] of this.sandboxChildren) {
-      if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) break
+      if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) return
+      // An exited-but-unstamped entry is finished, not running: stop here so
+      // no entry newer than it is evicted ahead of it.
+      if (tracked.exitCode === null && this.hasExitedProcess(tracked)) return
       if (tracked.exitCode !== null) this.sandboxChildren.delete(id)
     }
+  }
+
+  /** Synchronous exit probe for a tracked child: `exitCode` covers a normal
+   * exit, `signalCode` a signal kill (where `exitCode` stays null). Both are
+   * synchronous on `Bun.Subprocess`, so an eviction pass reads real state at
+   * pass time rather than the drain-delayed stamp. */
+  private hasExitedProcess(tracked: { proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'> }): boolean {
+    return tracked.proc.exitCode !== null || tracked.proc.signalCode !== null
   }
 
   private trackChildStreams(
@@ -730,9 +769,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       // keeps the write end open past the child's own exit.
       await Promise.race([
         drained,
-        new Promise((resolve) =>
-          setTimeout(resolve, GitWorktreeProvider.SANDBOX_EXIT_DRAIN_GRACE_MS),
-        ),
+        new Promise((resolve) => setTimeout(resolve, this.exitDrainGraceMs)),
       ])
       const tracked = this.sandboxChildren.get(commandId)
       if (tracked === undefined) return
