@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#408](https://github.com/defrex/autobuild/pull/408) — Extract the consent page's named/unnamed paragraph copy into one site
+- [#407](https://github.com/defrex/autobuild/pull/407) — Exclude discard-in-flight builds from auto-merge default eligibility
 - [#406](https://github.com/defrex/autobuild/pull/406) — Stop seedHappyBuild from appending a duplicate verify.started event
 - [#405](https://github.com/defrex/autobuild/pull/405) — Include git diff output in finalize-preflight dirty-worktree failure records
 - [#402](https://github.com/defrex/autobuild/pull/402) — Widen store-service boundary scan to template-literal dynamic imports
