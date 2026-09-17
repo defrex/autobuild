@@ -31,6 +31,23 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * no equivalent guard, and that gap is accepted by this ruling, not hidden
  * by it. A plan or reviewer must not claim this check validates SKILL.md
  * files.
+ *
+ * Re-verifying that nothing in-repo restates the false claim this ruling
+ * answers is a grep sweep (build `rule-on-docs`'s AC3), and that sweep must
+ * search this source: its original include list (`*.md`, `*.toml`, `*.json`)
+ * excluded `*.ts`, so it never searched the very file where a false claim
+ * about this check's scope would live, while its expected result claimed a
+ * match in `tools/docs-asset-check.test.ts` (obs_a4b1237d on that build).
+ * Widened by build `widen-the-rule` (AUT-475); the authoritative form is:
+ *
+ * `grep -rniE "docs-asset" --include='*.md' --include='*.toml' --include='*.json' --include='*.ts' . --exclude-dir=node_modules --exclude-dir=.git | grep -v '^\./\.ab/'`
+ *
+ * Include list and expected result must agree: every match is a mention of
+ * this check — a package.json script line, an import, a changelog entry, this
+ * record — never a statement that it scans skills or SKILL.md documents. The
+ * pattern is `docs-asset`, so this file matches only where it names itself
+ * (as this record does); `convention` says `docs/assets` and is covered by
+ * living in a searched file, not by matching the pattern.
  */
 
 const ASSET_PREFIX = 'docs/assets/'
