@@ -670,7 +670,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * child's exit, so the grace bounds the stamp instead of stalling the
    * delivered `exited` result until the grandchild dies. Because the race
    * outcome varies (reader drain vs. grace), stamp landing times are also
-   * variable — which is why `evictFinishedBeyondCap` defers on
+   * variable — which is why `evictFinishedBeyondCap` stops at
    * exited-but-unstamped entries instead of treating them as running. */
   private static readonly DEFAULT_SANDBOX_EXIT_DRAIN_GRACE_MS = 250
   private readonly exitDrainGraceMs: number
@@ -703,22 +703,27 @@ export class GitWorktreeProvider implements WorkspaceProvider {
   /** While the map exceeds the retention cap, delete the oldest finished
    * entries in insertion order (`Map` iterates in insertion order). Running
    * entries are never evicted — the live procs themselves are the resource.
-   * A pass defers (deletes nothing) while any tracked command has exited but
-   * its drain-gated exit stamp has not yet landed: such an entry is finished,
-   * not running, so selecting around it would make the victim choice depend
-   * on when stamps happen to land (an older command whose stamp is still
-   * pending would let a newer finished entry be evicted first). The deferral
-   * always resolves — every exited entry is stamped within the drain grace,
-   * and every stamp runs this pass again — after which victims are the
-   * oldest finished entries in insertion order, independent of stamp
-   * timing. */
+   * A pass also stops at the first tracked command that has exited but whose
+   * drain-gated exit stamp has not yet landed: such an entry is finished,
+   * not running, so the stamped entries older than it are unambiguously
+   * safe to evict (and are deleted by the walk reaching it), but nothing
+   * newer may be selected ahead of it — deleting a newer finished entry
+   * while an older one's stamp is still pending would make the victim
+   * choice depend on when stamps happen to land. When the pending entry is
+   * itself the oldest evictable entry, the pass deletes nothing and defers
+   * to its stamp. The stop always resolves — every exited entry is stamped
+   * within the drain grace, and every stamp runs this pass again — so the
+   * map settles to the cap with victims chosen as the oldest finished
+   * entries in insertion order, independent of stamp timing; while a stamp
+   * is pending the map may transiently hold the cap plus the entries that
+   * finished after that pending entry. */
   private evictFinishedBeyondCap(): void {
     if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) return
-    for (const tracked of this.sandboxChildren.values()) {
-      if (tracked.exitCode === null && this.hasExitedProcess(tracked)) return
-    }
     for (const [id, tracked] of this.sandboxChildren) {
-      if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) break
+      if (this.sandboxChildren.size <= GitWorktreeProvider.MAX_RETAINED_SANDBOX_COMMANDS) return
+      // An exited-but-unstamped entry is finished, not running: stop here so
+      // no entry newer than it is evicted ahead of it.
+      if (tracked.exitCode === null && this.hasExitedProcess(tracked)) return
       if (tracked.exitCode !== null) this.sandboxChildren.delete(id)
     }
   }
