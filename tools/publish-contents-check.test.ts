@@ -124,6 +124,8 @@ const rootFixtureManifest = {
     'bin',
     'packages/core/src',
     '!packages/core/src/**/*.test.ts',
+    '!packages/core/src/testing/store-failures.ts',
+    '!packages/core/src/testing/packed-install.ts',
     'skills',
     'templates',
     'patches',
@@ -254,6 +256,46 @@ describe('matchesPackedPattern', () => {
     expect(matchesPackedPattern('bin/ab.ts', rootDenialPattern)).toBe(false)
   })
 
+  test('the per-file AUT-503 negations match only their exact files', () => {
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/testing/store-failures.ts',
+        'packages/core/src/testing/store-failures.ts',
+      ),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/testing/packed-install.ts',
+        'packages/core/src/testing/packed-install.ts',
+      ),
+    ).toBe(true)
+    // The load-bearing helpers keep shipping: the negations must not touch them.
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/testing/index.ts',
+        'packages/core/src/testing/store-failures.ts',
+      ),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/testing/index.ts',
+        'packages/core/src/testing/packed-install.ts',
+      ),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/testing/fixed.ts',
+        'packages/core/src/testing/store-failures.ts',
+      ),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/testing/fixed.ts',
+        'packages/core/src/testing/packed-install.ts',
+      ),
+    ).toBe(false)
+  })
+
   test('* matches within a segment only', () => {
     expect(matchesPackedPattern('src/ids.test.ts', 'src/*.test.ts')).toBe(true)
     expect(matchesPackedPattern('src/web/ids.test.ts', 'src/*.test.ts')).toBe(false)
@@ -349,7 +391,11 @@ describe('deriveRuledPackages', () => {
       'SPEC.md',
       'docs',
     ])
-    expect(rootRuling.deniedPackedPatterns).toEqual(['packages/core/src/**/*.test.ts'])
+    expect(rootRuling.deniedPackedPatterns).toEqual([
+      'packages/core/src/**/*.test.ts',
+      'packages/core/src/testing/store-failures.ts',
+      'packages/core/src/testing/packed-install.ts',
+    ])
     expect(rootRuling.requiredPackedPaths).toEqual(['package.json', 'README.md'])
     expect(rootRuling.directory).toBe('.')
 
@@ -377,7 +423,7 @@ describe('deriveRuledPackages', () => {
     ])
   })
 
-  test('the store rulings keep their pinned prose; the dispatcher is pinned to AUT-490; the rest derive theirs', () => {
+  test('the root ruling is pinned to AUT-490 extended by AUT-503', () => {
     expect(hostedRuling.ruling).toContain('Ruling (AUT-463')
     expect(postgresRuling.ruling).toContain('Ruling (AUT-473')
     expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490)')
@@ -385,9 +431,17 @@ describe('deriveRuledPackages', () => {
     expect(hostedRuling.ruling).toContain('AUT-490')
     expect(postgresRuling.ruling).toContain('AUT-490')
     expect(dispatcherRuling.ruling).toContain('AUT-490')
-    expect(rootRuling.ruling).toContain('Ruling (derived from the manifest)')
+    expect(rootRuling.ruling).toContain('Ruling (AUT-490, extended by AUT-503)')
     expect(rootRuling.ruling).toContain('@defrex/autobuild')
-    expect(rootRuling.ruling).toContain('package.json')
+    expect(rootRuling.ruling).toContain('store-failures.ts')
+    expect(rootRuling.ruling).toContain('packed-install.ts')
+    expect(rootRuling.ruling).toContain('fixed.ts')
+    expect(rootRuling.ruling).toContain('index.ts')
+    expect(rootRuling.ruling).toContain('./plugin-sdk')
+    expect(rootRuling.ruling).toContain('./testing')
+    expect(rootRuling.ruling).toContain(
+      "update the 'files' allowlist in package.json and this check together",
+    )
   })
 
   test('leading ./ and trailing / on an entry do not change what it rules', () => {
@@ -574,6 +628,29 @@ describe('evaluatePackedPaths', () => {
     ])
     const violations = evaluatePackedPaths(paths, postgresRuling)
     expect(violations).toEqual([{ kind: 'extra', path: 'src/testing/concurrent-worker.ts' }])
+  })
+
+  test('the AUT-503 test-only src/testing helpers are extras under the root ruling, while the shipping helpers stay allowed', () => {
+    const paths = [
+      ...rootConformPaths,
+      'packages/core/src/testing/store-failures.ts',
+      'packages/core/src/testing/packed-install.ts',
+    ]
+    const violations = evaluatePackedPaths(paths, rootRuling)
+    expect(violations).toEqual([
+      { kind: 'extra', path: 'packages/core/src/testing/store-failures.ts' },
+      { kind: 'extra', path: 'packages/core/src/testing/packed-install.ts' },
+    ])
+    expect(
+      evaluatePackedPaths(
+        [
+          ...rootConformPaths,
+          'packages/core/src/testing/fixed.ts',
+          'packages/core/src/testing/index.ts',
+        ],
+        rootRuling,
+      ),
+    ).toEqual([])
   })
 
   test('a manifest target absent from the listing fails with missing-target, named by path', () => {
@@ -1115,4 +1192,31 @@ describe('the real sub-package manifests', () => {
       expect(manifest.files).toEqual(AUT_500_FILES_BY_DIRECTORY[directory])
     })
   }
+})
+
+describe('the real root manifest', () => {
+  // Pinned byte-for-byte (AUT-490 + AUT-503): the root tarball ships packages/core/src
+  // except its *.test.ts files, plus the AUT-503 per-file negations of the test-only
+  // src/testing helpers, whose load-bearing siblings (fixed.ts, index.ts) keep shipping.
+  const ROOT_AUT_503_FILES = [
+    'bin',
+    'packages/core/src',
+    '!packages/core/src/**/*.test.ts',
+    '!packages/core/src/testing/store-failures.ts',
+    '!packages/core/src/testing/packed-install.ts',
+    'skills',
+    'templates',
+    'patches',
+    'LICENSE',
+    'README.md',
+    'SPEC.md',
+    'docs',
+  ]
+
+  test("the root package.json's files allowlist carries the AUT-490 negation plus the AUT-503 per-file negations exactly", () => {
+    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+      files?: unknown
+    }
+    expect(manifest.files).toEqual(ROOT_AUT_503_FILES)
+  })
 })
