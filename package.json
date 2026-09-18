@@ -87,6 +87,8 @@
     "bin",
     "packages/core/src",
     "!packages/core/src/**/*.test.ts",
+    "!packages/core/src/testing/store-failures.ts",
+    "!packages/core/src/testing/packed-install.ts",
     "skills",
     "templates",
     "patches",

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#463](https://github.com/defrex/autobuild/pull/463) — Exclude the test-only src/testing helpers from the root tarball (AUT-503)
 - [#462](https://github.com/defrex/autobuild/pull/462) — Correct ALWAYS_PACKED_FILE_NAMES doc + constant to actual packer sets
 - [#461](https://github.com/defrex/autobuild/pull/461) — Fail collectUnclaimedObservations loudly on a missing eventsByBuild entry
 - [#460](https://github.com/defrex/autobuild/pull/460) — Exclude the test-only src/testing/ tree from postgres-store's tarball
