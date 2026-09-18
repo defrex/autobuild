@@ -409,22 +409,34 @@ export function packedTargetsFromManifest(manifest: {
   return [...targets]
 }
 
-/** The extensionless members of npm's always-included pack set: npm packs
+/** The extensionless members of bun pm pack's always-included set: bun packs
  * these names (any extension, so the bare spellings included) regardless of
  * the `files` field, so an allowlist entry naming one can only ever be the
- * file itself, never a ruled directory tree. */
-const ALWAYS_PACKED_FILE_NAMES: ReadonlySet<string> = new Set([
-  'README',
-  'LICENSE',
-  'LICENCE',
-  'NOTICE',
-])
+ * file itself, never a ruled directory tree.
+ *
+ * Per-packer always-included sets (empirically confirmed and per
+ * npm-packlist 10.0.4's strict rules and npm's package-json docs §files):
+ * - npm (npm-packlist): package.json, README, LICENSE, LICENCE, COPYING — no NOTICE.
+ * - bun pm pack: package.json, README, LICENSE, LICENCE — no NOTICE, no COPYING.
+ *
+ * This check parses `bun pm pack --dry-run` output, so the constant holds
+ * bun's set: those are the only extensionless names guaranteed to be files
+ * in the listing under inspection. (`package.json` contains a dot and renders
+ * bare via describeSurface's dotted-name branch regardless.) Note the
+ * defect class this guards: an extensionless allowlist entry whose name is
+ * NOT in this set — e.g. NOTICE or COPYING — renders as `NAME/**`, which is
+ * correct, since such a name is not guaranteed to be packed as a file. An
+ * editor extending the allowlist must not rely on the file form for it. */
+const ALWAYS_PACKED_FILE_NAMES: ReadonlySet<string> = new Set(['README', 'LICENSE', 'LICENCE'])
 
 /**
  * Renders an allowlist entry for messages: a last segment containing a dot, or
- * naming one of npm's always-packed extensionless files, is a file and renders
- * bare (`SPEC.md` → `SPEC.md`, `LICENSE` → `LICENSE`); anything else is
- * treated as a directory (`src` → `src/**`). Cosmetic only — enforcement uses
+ * naming one of bun pm pack's always-packed extensionless files, is a file and
+ * renders bare (`SPEC.md` → `SPEC.md`, `LICENSE` → `LICENSE`); anything else is
+ * treated as a directory (`src` → `src/**`). An extensionless allowlist entry
+ * whose name is not in the always-packed set (e.g. `NOTICE` or `COPYING`) is
+ * not guaranteed to be packed as a file, so it correctly renders as `NAME/**` —
+ * do not rely on the file form for such names. Cosmetic only — enforcement uses
  * the exact-or-prefix predicate, never this guess.
  */
 export function describeSurface(entry: string): string {

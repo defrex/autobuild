@@ -294,13 +294,18 @@ describe('matchesPackedPattern', () => {
 })
 
 describe('describeSurface', () => {
-  test('npm always-packed extensionless files and dotted names render bare', () => {
+  test('always-packed extensionless files (bun pm pack set) and dotted names render bare', () => {
     expect(describeSurface('LICENSE')).toBe('LICENSE')
     expect(describeSurface('LICENCE')).toBe('LICENCE')
-    expect(describeSurface('NOTICE')).toBe('NOTICE')
     expect(describeSurface('README')).toBe('README')
     expect(describeSurface('SPEC.md')).toBe('SPEC.md')
     expect(describeSurface('README.md')).toBe('README.md')
+  })
+
+  test('names outside the always-packed set render as directory patterns (NOTICE, COPYING)', () => {
+    expect(describeSurface('NOTICE')).toBe('NOTICE/**')
+    expect(describeSurface('COPYING')).toBe('COPYING/**')
+    expect(describeSurface('docs/NOTICE')).toBe('docs/NOTICE/**')
   })
 
   test('directory surfaces keep the "/**" form, at the root and nested', () => {

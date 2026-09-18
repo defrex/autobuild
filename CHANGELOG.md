@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#462](https://github.com/defrex/autobuild/pull/462) — Correct ALWAYS_PACKED_FILE_NAMES doc + constant to actual packer sets
 - [#461](https://github.com/defrex/autobuild/pull/461) — Fail collectUnclaimedObservations loudly on a missing eventsByBuild entry
 - [#460](https://github.com/defrex/autobuild/pull/460) — Exclude the test-only src/testing/ tree from postgres-store's tarball
 - [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
