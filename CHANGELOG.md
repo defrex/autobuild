@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
+- [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
 - [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
+- [#486](https://github.com/defrex/autobuild/pull/486) — Move packageAutobuildDistribution into core's distribution-archive
 - [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
 - [#483](https://github.com/defrex/autobuild/pull/483) — Keep dashboard cost flat as finished builds accumulate (AUT-487)

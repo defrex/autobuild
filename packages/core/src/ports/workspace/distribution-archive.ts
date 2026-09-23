@@ -27,8 +27,9 @@
  * a later mismatch, so an upgraded dispatcher retrofits its persistent guests
  * (see `vercel-sandbox.ts`).
  */
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { distributionRoot, distributionPath } from '../../distribution'
 import { registryBaseUrl, registryVersionUrl } from '../../registry'
 import { parseRepoCoordinates } from '../forge/github'
@@ -38,7 +39,7 @@ import {
   githubTokenFromEnv,
   type GitHubRequest,
 } from '../forge/github-transport'
-import { packageAutobuildDistribution } from './vercel-sandbox'
+import { spawnExec } from './git-worktree'
 
 /** The canonical repository the release assets are published to. Shared with
  * `tools/release.ts`, which uploads them. */
@@ -227,6 +228,85 @@ export const PREBUILT_DISTRIBUTION_DIR = '.autobuild-dist'
 /** The environment variable naming an explicit archive file, for deployments
  * that place it somewhere other than `PREBUILT_DISTRIBUTION_DIR`. */
 export const DISTRIBUTION_ARCHIVE_ENV = 'AB_DISTRIBUTION_ARCHIVE'
+
+async function execOrThrow(cmd: string[], cwd: string): Promise<string> {
+  const result = await spawnExec(cmd, { cwd })
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `${cmd.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}`,
+    )
+  }
+  return result.stdout.trim()
+}
+
+/** Manifest fields that name repo-local packaging state and must never reach
+ * the packed distribution manifest. `patchedDependencies` entries are resolved
+ * by bun against the consuming project's root, and bun 1.4.0 panics
+ * (`Option::unwrap`, exit 134) when a consumed manifest declares a patch for a
+ * package the consumer tree contains — so a packed manifest carrying the
+ * repo's better-auth patch declaration breaks any consumer that installs
+ * autobuild next to better-auth. The packed artifact ships no patched
+ * package, so the declaration is stripped from the packed manifest while the
+ * repo manifest keeps it for workspace installs.
+ *
+ * `devDependencies` is stripped for two reasons. First, the workspace link
+ * specifiers it may carry (for example the root's
+ * `@defrex/autobuild-postgres-store: workspace:*`) cannot be resolved in the
+ * staging tree — it stages only the manifest's `files` set, with no
+ * `bun.lock`, no `node_modules`, and no workspace packages — so `bun pm pack`
+ * fails there with "Failed to resolve workspace version". Second, the guest
+ * installs the distribution with `bun install --production --ignore-scripts`,
+ * which ignores devDependencies entirely; the packed artifact ships no
+ * dev-only tooling, so the declaration is dead weight in the packed manifest
+ * while the repo manifest keeps it for workspace installs. */
+const packedManifestOmittedFields = ['patchedDependencies', 'devDependencies'] as const
+
+export async function packageAutobuildDistribution(): Promise<Uint8Array> {
+  const staging = await mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
+  const destination = await mkdtemp(join(tmpdir(), 'autobuild-pack-'))
+  try {
+    // Pack from a staging copy of the repo's `files` set rather than the repo
+    // root: the packed manifest must differ from the repo manifest (above), and
+    // rewriting the repo manifest in place would leave a window where tracked
+    // files are dirty.
+    const manifestPath = join(distributionRoot(), 'package.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+    const files = manifest.files
+    if (!Array.isArray(files) || files.some((entry) => typeof entry !== 'string')) {
+      throw new Error(
+        'Autobuild packaging requires the root package.json to list its files as an array of paths',
+      )
+    }
+    for (const entry of files as string[]) {
+      // npm `files` entries may be negated globs (for example
+      // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
+      // published package). Only positive entries name a path to stage: the
+      // negations stay in the staged manifest and `bun pm pack` applies them,
+      // so the packed set still excludes those paths.
+      if (entry.startsWith('!')) continue
+      const target = join(staging, entry)
+      await mkdir(dirname(target), { recursive: true })
+      await cp(join(distributionRoot(), entry), target, {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+      })
+    }
+    for (const field of packedManifestOmittedFields) delete manifest[field]
+    await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    await execOrThrow(
+      ['bun', 'pm', 'pack', '--ignore-scripts', '--destination', destination],
+      staging,
+    )
+    const archives = (await readdir(destination)).filter((name) => name.endsWith('.tgz'))
+    if (archives.length !== 1)
+      throw new Error('Autobuild packaging did not produce exactly one archive')
+    return new Uint8Array(await readFile(join(destination, archives[0]!)))
+  } finally {
+    await rm(staging, { recursive: true, force: true })
+    await rm(destination, { recursive: true, force: true })
+  }
+}
 
 /** Pack the running distribution into `<root>/.autobuild-dist/autobuild-<version>.tgz`
  * (the same bytes `bun pm pack` produces) and return the archive path. Meant
