@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
+- [#482](https://github.com/defrex/autobuild/pull/482) — Correct the retention-cap test's documented pinning path
 - [#480](https://github.com/defrex/autobuild/pull/480) — Record the durable remote marker on workspace.provisioned
 - [#479](https://github.com/defrex/autobuild/pull/479) — Strengthen wait.test.ts's interval-spacing assertion
 - [#478](https://github.com/defrex/autobuild/pull/478) — Deterministically exercise the tsc-deadline branch via injection
