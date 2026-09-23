@@ -124,7 +124,7 @@ import {
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
-  unclaimedObservationCount,
+  sampleUnclaimedObservationCount,
   scanUnclaimedObservations,
   evaluateHarvestPressure,
 } from '../processes/harvest'
@@ -1083,16 +1083,16 @@ class DispatchLoop {
 
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick from the journal and one repo-scoped digest read
-      // (AUT-487) — flat in the finished-build count. A failed sample must
-      // neither fail dispatch nor replace the last complete measurement with a
-      // fabricated zero.
+      // (AUT-487) — flat in the finished-build count. A journal record that
+      // does not yet exist reads as an empty journal (AUT-524); the sample
+      // writes nothing. Any other failed sample must neither fail dispatch nor
+      // replace the last complete measurement with a fabricated zero.
       if (this.dashboard) {
         try {
-          const [harvestEvents, digests] = await Promise.all([
-            this.wiring.store.getRepoEvents(this.repoIdentity),
-            this.wiring.store.getRepoBuildDigests(this.repoIdentity),
-          ])
-          this.observationCount = unclaimedObservationCount({ digests, harvestEvents })
+          this.observationCount = await sampleUnclaimedObservationCount(
+            this.wiring.store,
+            this.repoIdentity,
+          )
         } catch {
           // Display-only sampling failures retain the last factual count and
           // retry on the next tick; they are not dashboard failures.
