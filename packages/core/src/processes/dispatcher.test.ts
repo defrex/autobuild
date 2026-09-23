@@ -209,6 +209,9 @@ async function seedBuild(
     workspacePath?: string
     /** Provider recorded on the provisioned fact; defaults to the harness fake. */
     workspaceProvider?: string
+    /** Remote publication marker recorded on the provisioned fact; defaults to
+     * absent so unmodified seeds keep exercising the legacy fallback. */
+    workspaceRemote?: boolean
     attached?: boolean
     pr?: { number: number; url: string; headSha: string }
   } = {},
@@ -235,6 +238,7 @@ async function seedBuild(
         provider: opts.workspaceProvider ?? 'fake',
         ref: opts.workspaceRef ?? `/ws/ab/${slug}`,
         ...(opts.workspacePath !== undefined ? { path: opts.workspacePath } : {}),
+        ...(opts.workspaceRemote !== undefined ? { remote: opts.workspaceRemote } : {}),
         branch: `ab/${slug}`,
         base: { source: 'remote', sha: 'fake-base-sha' },
       },
@@ -683,6 +687,7 @@ describe('Dispatcher dispatch', () => {
       provider: 'fake',
       ref: '/ws/ab/add-rate-limiting',
       path: '/ws/ab/add-rate-limiting',
+      remote: false,
       branch: 'ab/add-rate-limiting',
       base: { source: 'remote', sha: 'fake-base-sha' },
     })
@@ -903,6 +908,7 @@ releaseId = 42
       provider: 'fake',
       ref: '/ws/ab/add-rate-limiting',
       path: '/ws/ab/add-rate-limiting',
+      remote: false,
       branch: 'ab/add-rate-limiting',
       base,
     })
@@ -3834,25 +3840,44 @@ describe('Dispatcher janitor', () => {
     expect(events.at(-1)?.payload).toEqual({ baseSha: 'remote-base-sha' })
   })
 
-  test('abort cleanup skips the local-branch git step for vercel-sandbox builds', async () => {
-    const h = harness({
-      workspaceName: 'vercel-sandbox',
-      tickets: [readyTicket('T-1', { labels: [] })],
-    })
-    const slug = await seedBuild(h, { ticketId: 'T-1', workspaceProvider: 'vercel-sandbox' })
-    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+  test.each([
+    ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
+    ['a provisioned payload carrying the remote marker', 'vercel-sandbox', true],
+    ['a provisioned payload carrying the local marker', 'fake', false],
+  ])(
+    'abort cleanup skips the local-branch git step for remote workspaces: %s',
+    async (_name, provider, remote) => {
+      const remoteFixture = provider === 'vercel-sandbox'
+      const h = harness({
+        workspaceName: remoteFixture ? 'vercel-sandbox' : undefined,
+        tickets: [readyTicket('T-1', { labels: [] })],
+      })
+      const slug = await seedBuild(h, {
+        ticketId: 'T-1',
+        workspaceProvider: provider,
+        ...(remote !== undefined ? { workspaceRemote: remote } : {}),
+      })
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
 
-    const report = await h.dispatcher.tick({ acceptNewWork: false })
-    expect(report.janitorDiagnostics).toEqual([])
-    expect(report.abandoned).toBe(1)
-    const events = await h.store.getEvents(slug)
-    expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
-    // Remote workspaces never create a local branch; the git steps and their
-    // fact are skipped entirely.
-    expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(false)
-    expect(h.execCalls).toEqual([])
-    expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
-  })
+      const report = await h.dispatcher.tick({ acceptNewWork: false })
+      expect(report.janitorDiagnostics).toEqual([])
+      expect(report.abandoned).toBe(1)
+      const events = await h.store.getEvents(slug)
+      expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
+      // Remote workspaces never create a local branch; the git steps and their
+      // fact are skipped entirely. A local marker (remote: false) keeps the
+      // git steps running like the legacy local journal.
+      expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(
+        !remoteFixture,
+      )
+      if (remoteFixture) {
+        expect(h.execCalls).toEqual([])
+      } else {
+        expect(h.execCalls).toContainEqual(['git', 'check-ref-format', `refs/heads/ab/${slug}`])
+      }
+      expect(events.at(-1)?.payload).toEqual({ outcome: 'abandoned' })
+    },
+  )
 
   test('abort cleanup records an unknown remote delete and retries it durably', async () => {
     let fail = true
@@ -4103,6 +4128,7 @@ describe('Dispatcher janitor', () => {
         provider: 'vercel-sandbox',
         ref: 'sandbox-remote-abort',
         path: '/vercel/sandbox/workspace',
+        remote: true,
         branch: `ab/${slug}`,
         base: { source: 'existing', sha: 'a'.repeat(40) },
       },
