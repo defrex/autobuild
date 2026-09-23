@@ -513,9 +513,12 @@ It follows one dispatch run's repository facts incrementally through
 `packages/core/src/kernel/dispatch-status.ts`, retaining only low-volume settings/Harvest
 facts for their replay reducers, validates/caches its effective-config artifact,
 and polls build streams independently while elapsed paints continue from cached
-intervals. The same polling path calls the canonical
-`scanUnclaimedObservations` BuildStore reduction for the header's current count
-and pairs it with the effective config's `policy.harvestThreshold`. That sample
+intervals. The same polling path samples the header's current count from build
+digests plus the repository journal — one journal read plus one repo-scoped
+digest read, plus a journal-record probe — paired with the effective config's
+`policy.harvestThreshold`. A journal record that does not yet exist reads as an
+empty journal: the sample writes nothing (no `ensureRepo` from a display path),
+mirroring the operator query's missing-record treatment. That sample
 is process-local presentation state: a failed refresh preserves the last
 successful value and adds a local diagnostic, while an initial failure delays
 the complete frame rather than inventing zero. No repository fact transports

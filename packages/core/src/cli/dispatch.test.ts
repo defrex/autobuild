@@ -5396,6 +5396,96 @@ describe('abDispatch --once with an interactive terminal', () => {
     }
   }, 30_000)
 
+  test('watch samples a missing journal record as an empty journal, not a stale scan (AUT-524)', async () => {
+    const config = DISPATCH_CONFIG_TOML.replace(
+      'stallRounds = 3',
+      'stallRounds = 3\nharvestThreshold = 7\nharvestMaxDrift = 3',
+    )
+    const fx = await makeFixture([], happyHandlers(), config, steppingClock())
+    const term = fakeTerminal()
+    const stop = new AbortController()
+    const source = 'missing-record-carry'
+    try {
+      // One build carrying one unclaimed observation…
+      await fx.store.createBuild({ slug: source, repo: fx.origin })
+      await fx.store.append(source, {
+        actor: agentActor('implement', `s_missing_record_1`),
+        type: 'observation.recorded',
+        payload: {
+          id: 'obs-missing-record-1',
+          kind: 'followup',
+          summary: 'missing-record observation',
+        },
+      })
+      // …and one harvest claim over it, completed as suppressed. The claim
+      // persists in `reduceHarvest`'s claimed set after completion, and the
+      // closed run keeps the launch gate's resume precedence quiet.
+      await fx.store.ensureRepo(fx.origin)
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_missing_record',
+          observations: [{ build: source, seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: KERNEL,
+        type: 'harvest.completed',
+        payload: {
+          run: 'h_missing_record',
+          dispositions: [
+            {
+              occurrence: { build: source, seq: 1 },
+              action: 'suppressed',
+              proposalKey: 'missing-record-1',
+            },
+          ],
+          report: { kind: 'harvest-report', rev: 1 },
+        },
+      })
+
+      // The missing-record stand-in: the journal record exists (the harness
+      // and the dispatcher's own startup both ensure it), but `getRepo`
+      // answers null — the state a hosted store presents before any record
+      // exists. Every other `getRepo` call site in the loop already handles
+      // null, so only the sample's treatment of the missing record is under
+      // test. Pre-fix the sample read the real journal and saw the claim
+      // (0/7); post-fix it reads the missing record as empty (1/7).
+      fx.store.getRepo = async () => null
+
+      let sleeps = 0
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 1,
+        signal: stop.signal,
+        sleep: async () => {
+          sleeps += 1
+          if (sleeps === 1) {
+            await waitFor(() => latestDashboardFrame(term).includes('observations 1/7'), 30_000)
+            return
+          }
+          stop.abort()
+        },
+        wire: fx.wire,
+        terminal: term,
+      })
+
+      const frame = latestDashboardFrame(term)
+      expect(frame).toContain('observations 1/7')
+      expect(frame).not.toContain('observations 0/7')
+      expect(fx.err).toEqual([])
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+
   test('--once ticks exactly ONCE — a ticket that turns Ready mid-drain is not claimed', async () => {
     // The AC says --once selects eligible tickets only during its initial pass.
     // Today's --once already calls tick() once and then drains; the render loop
