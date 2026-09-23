@@ -650,8 +650,11 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       if (namedAllTerminal()) {
         // Decision 5, loop form: every named build went terminal without
         // satisfying anything. The local loop checks this after each tick;
-        // on the remote path a task that observed it set the shared stop,
-        // which is why the shared stop reason must survive cancellation.
+        // on the remote path the runner records only that a stop was
+        // requested — its `shouldStop`/`endCheck` callbacks re-derive the
+        // conditions live — so after the quiesce drain this decision re-reads
+        // the same live predicates (`hasMatch`, `namedAllTerminal`, `aborted`,
+        // the deadline) to pick the exit.
         const terminal = pickTerminalRecord()
         return finish(null, terminal.event, terminal.state)
       }
