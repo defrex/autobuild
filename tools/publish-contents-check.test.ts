@@ -160,6 +160,7 @@ const postgresFixtureManifest = {
     '!src/**/*.test.ts',
     '!src/**/*.test.tsx',
     '!src/**/*.spec.ts',
+    '!src/**/*.spec.tsx',
     '!src/testing/**',
   ],
 }
@@ -181,7 +182,14 @@ const hostedFixtureManifest = {
     './web/mcp': { types: './src/web/mcp.ts', import: './src/web/mcp.ts' },
   },
   bin: { 'ab-hosted-store': './src/bin.ts' },
-  files: ['src', 'README.md', '!src/**/*.test.ts', '!src/**/*.test.tsx', '!src/**/*.spec.ts'],
+  files: [
+    'src',
+    'README.md',
+    '!src/**/*.test.ts',
+    '!src/**/*.test.tsx',
+    '!src/**/*.spec.ts',
+    '!src/**/*.spec.tsx',
+  ],
 }
 
 const dispatcherFixtureManifest = {
@@ -202,7 +210,14 @@ const dispatcherFixtureManifest = {
     },
   },
   bin: { 'ab-hosted-dispatcher': './src/bin.ts' },
-  files: ['src', 'README.md', '!src/**/*.test.ts', '!src/**/*.test.tsx', '!src/**/*.spec.ts'],
+  files: [
+    'src',
+    'README.md',
+    '!src/**/*.test.ts',
+    '!src/**/*.test.tsx',
+    '!src/**/*.spec.ts',
+    '!src/**/*.spec.tsx',
+  ],
 }
 
 const fakeWorkspaceManifests = (): { path: string; text: string }[] => [
@@ -330,8 +345,14 @@ describe('matchesPackedPattern', () => {
     expect(matchesPackedPattern('src/foo.ts', 'src/**/*.test.ts')).toBe(false)
   })
 
-  test('the suffix is literal: .spec.tsx does not match *.spec.ts', () => {
+  test('the suffix is literal: .spec.tsx does not match *.spec.ts (the gap AUT-502 closes)', () => {
     expect(matchesPackedPattern('src/foo.spec.tsx', 'src/**/*.spec.ts')).toBe(false)
+  })
+
+  test('the AUT-502 spelling matches the new negation, at the top level and nested', () => {
+    expect(matchesPackedPattern('src/foo.spec.tsx', 'src/**/*.spec.tsx')).toBe(true)
+    expect(matchesPackedPattern('src/web/foo.spec.tsx', 'src/**/*.spec.tsx')).toBe(true)
+    expect(matchesPackedPattern('src/foo.live.spec.tsx', 'src/**/*.spec.tsx')).toBe(true)
   })
 })
 
@@ -404,6 +425,7 @@ describe('deriveRuledPackages', () => {
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
       'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
       'src/testing/**',
     ])
     expect(postgresRuling.directory).toBe('packages/postgres-store')
@@ -413,6 +435,7 @@ describe('deriveRuledPackages', () => {
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
       'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
     ])
 
     expect(dispatcherRuling.allowedSurfaces).toEqual(['src', 'README.md'])
@@ -420,13 +443,14 @@ describe('deriveRuledPackages', () => {
       'src/**/*.test.ts',
       'src/**/*.test.tsx',
       'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
     ])
   })
 
   test('the root ruling is pinned to AUT-490 extended by AUT-503', () => {
     expect(hostedRuling.ruling).toContain('Ruling (AUT-463')
     expect(postgresRuling.ruling).toContain('Ruling (AUT-473')
-    expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490)')
+    expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490, extended by AUT-502)')
     // The AUT-490 ruling is recorded in all three sub-package rulings.
     expect(hostedRuling.ruling).toContain('AUT-490')
     expect(postgresRuling.ruling).toContain('AUT-490')
@@ -567,6 +591,7 @@ describe('evaluatePackedPaths', () => {
         'src/index.test.ts',
         'src/index.live.test.ts',
         'src/index.test.tsx',
+        'src/index.spec.tsx',
         'src/web/mcp.test.ts',
         'src/web/mcp.spec.ts',
       ]
@@ -575,6 +600,7 @@ describe('evaluatePackedPaths', () => {
         { kind: 'extra', path: 'src/index.test.ts' },
         { kind: 'extra', path: 'src/index.live.test.ts' },
         { kind: 'extra', path: 'src/index.test.tsx' },
+        { kind: 'extra', path: 'src/index.spec.tsx' },
         { kind: 'extra', path: 'src/web/mcp.test.ts' },
         { kind: 'extra', path: 'src/web/mcp.spec.ts' },
       ])
@@ -930,6 +956,7 @@ describe('runPublishContentsCheck', () => {
               ...dispatcherConformPaths,
               'src/dispatcher.test.ts',
               'src/dispatcher.test.tsx',
+              'src/dispatcher.spec.tsx',
             ]),
           }
         : fake,
@@ -940,7 +967,8 @@ describe('runPublishContentsCheck', () => {
     const stdout = captured.stdout.join('')
     expect(stdout).toContain('src/dispatcher.test.ts')
     expect(stdout).toContain('src/dispatcher.test.tsx')
-    expect(stdout).toContain('Ruling (AUT-490)')
+    expect(stdout).toContain('src/dispatcher.spec.tsx')
+    expect(stdout).toContain('Ruling (AUT-490, extended by AUT-502)')
     expect(captured.stderr.join('')).toContain(
       'packed-contents violation(s) against the @defrex/autobuild-hosted-dispatcher tarball ruling',
     )
@@ -961,7 +989,9 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490, extended by AUT-500)')
+    expect(combined).toContain(
+      'Ruling (AUT-473, extended by AUT-490, extended by AUT-500, extended by AUT-502)',
+    )
     expect(combined).toContain('scratch.ts')
     expect(captured.stderr.join('')).toContain(
       'violation(s) against the @defrex/autobuild-postgres-store tarball ruling',
@@ -978,7 +1008,7 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-463, extended by AUT-490)')
+    expect(combined).toContain('Ruling (AUT-463, extended by AUT-490, extended by AUT-502)')
     expect(combined).toContain('.impeccable/surfaces/app-dashboard-dashboardclient-tsx.md')
     expect(combined).toContain('server.ts')
     expect(combined).toContain('@defrex/autobuild-postgres-store pack contents match the ruling')
@@ -1037,7 +1067,9 @@ describe('runPublishContentsCheck', () => {
     const exitCode = await runPublishContentsCheck(environment, output)
     expect(exitCode).toBe(1)
     const combined = captured.stdout.join('')
-    expect(combined).toContain('Ruling (AUT-473, extended by AUT-490, extended by AUT-500)')
+    expect(combined).toContain(
+      'Ruling (AUT-473, extended by AUT-490, extended by AUT-500, extended by AUT-502)',
+    )
     expect(combined).toContain('no non-empty `files` allowlist')
     expect(captured.stderr.join('')).toContain('1 packed-contents violation(s)')
     // No ruling can be derived, so the package is not packed at all.
@@ -1173,6 +1205,7 @@ describe('the real sub-package manifests', () => {
     '!src/**/*.test.ts',
     '!src/**/*.test.tsx',
     '!src/**/*.spec.ts',
+    '!src/**/*.spec.tsx',
   ]
 
   // postgres-store alone carries the AUT-500 negation; the other two
