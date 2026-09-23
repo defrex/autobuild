@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#474](https://github.com/defrex/autobuild/pull/474) — Close the closure walk's latent under-approximations (AUT-510)
 - [#470](https://github.com/defrex/autobuild/pull/470) — Walk provider exports-target closure in publish-imports-check
 - [#469](https://github.com/defrex/autobuild/pull/469) — Extend the root tarball's test-file negations (AUT-508)
 - [#468](https://github.com/defrex/autobuild/pull/468) — Pause the dashboard now-ticker while the document is hidden
