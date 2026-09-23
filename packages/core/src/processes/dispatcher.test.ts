@@ -4155,12 +4155,14 @@ describe('Dispatcher janitor', () => {
   })
 
   // AUT-527 audit: the parameterized dimension here is the PR's forge state at
-  // abort time (open / closed / merged), which is orthogonal to the
-  // marker-vs-provider-name decision of isRemoteWorkspace. Every case runs on
-  // the default seed (legacy local, no remote marker), so marker-keyed and
-  // name-keyed readings agree by construction; marker-over-name precedence for
-  // the abort-cleanup saga is pinned by the AUT-520 cross-cases at the
-  // 'abort cleanup skips the local-branch git step' test.each above.
+  // abort time (open / closed / merged), orthogonal to the marker-vs-name
+  // decision of isRemoteWorkspace. But the closePr workspacePath asserted below
+  // comes from forgeWorkspacePath, which branches on isRemoteWorkspace — a
+  // marker-sensitive decision this site's default seed (legacy local, no
+  // remote marker) cannot discriminate: under a name-keyed revert every case
+  // still reads local and still passes. The 'abort cleanup closePr targets the
+  // path isRemoteWorkspace names' test.each below pins that precedence for the
+  // saga's closePr step with marker-over-name cross-cases.
   test.each([
     ['open', { state: 'open', mergeable: true } as const, 'pr.closed'],
     ['already closed', { state: 'closed' } as const, 'pr.closed'],
@@ -4182,6 +4184,53 @@ describe('Dispatcher janitor', () => {
           sha: 'landing-sha',
         })
       }
+    },
+  )
+
+  // AUT-527: forgeWorkspacePath branches on isRemoteWorkspace to pick the
+  // closePr path — remote forges close against the store identity, local
+  // forges against the physical checkout. These cross-cases pin marker-over-
+  // name precedence for that decision: the marker decides when present,
+  // overriding a suggestive provider name in either direction; the name
+  // reading is only the legacy fallback. The PR-state dimension above is
+  // orthogonal (the closePr call precedes any settlement branch), so an open
+  // PR pins the path decision for every settlement case.
+  test.each([
+    ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
+    ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
+    [
+      'a provisioned payload carrying the local marker over a remote-suggestive name',
+      'vercel-sandbox',
+      false,
+    ],
+  ])(
+    'abort cleanup closePr targets the path isRemoteWorkspace names: %s',
+    async (_name, provider, remote) => {
+      // Harness wiring follows the provider name only: the dispatcher routes
+      // release and reap by the name on the provisioned fact, so the fake
+      // provider must present under that name. The closePr path expectation
+      // derives from the marker (with the legacy fallback), mirroring
+      // isRemoteWorkspace — not from the name.
+      const nameSuggestsRemote = provider === 'vercel-sandbox'
+      const expectRemote = remote ?? nameSuggestsRemote
+      const h = harness({
+        workspaceName: nameSuggestsRemote ? 'vercel-sandbox' : undefined,
+        tickets: [readyTicket('T-1', { labels: [] })],
+      })
+      const slug = await seedBuild(h, {
+        ticketId: 'T-1',
+        pr: PR,
+        workspaceProvider: provider,
+        ...(remote !== undefined ? { workspaceRemote: remote } : {}),
+      })
+      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+      expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), abandoned: 1 })
+      expect(h.forge.closePrCalls).toEqual([
+        { workspacePath: expectRemote ? REPO : `/ws/ab/${slug}`, number: PR.number },
+      ])
+      expect((await h.store.getEvents(slug)).some((event) => event.type === 'pr.closed')).toBe(true)
     },
   )
 
