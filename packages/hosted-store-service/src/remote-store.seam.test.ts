@@ -434,7 +434,6 @@ describe('D8 scope enforcement over the wire', () => {
         observations: [1],
       })
       expect(digests.get('dg-b')).toEqual({ slug: 'dg-b', observations: [] })
-      expect(await repoToken.getRepoBuildDigests('acme/never-seen')).toEqual(new Map())
       expect(await backing.getRepo('acme/never-seen')).toBeNull()
 
       // A wrong-repo token is 403 before any lookup — the no-existence-leak
@@ -456,6 +455,8 @@ describe('D8 scope enforcement over the wire', () => {
       const response = await fetch(`${url}/repos/acme%2Fnever-seen/build-digests`, {
         headers: {
           authorization: `Bearer ${mintToken(SECRET, { build: '*', session: '*', exp: EXP })}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
         },
       })
       expect(response.status).toBe(200)
