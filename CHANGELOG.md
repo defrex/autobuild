@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#478](https://github.com/defrex/autobuild/pull/478) — Deterministically exercise the tsc-deadline branch via injection
 - [#477](https://github.com/defrex/autobuild/pull/477) — Keep the directory-index probe for dotted extensionless specifiers
 - [#476](https://github.com/defrex/autobuild/pull/476) — Drop four dead-weight files from the root tarball (AUT-513)
 - [#475](https://github.com/defrex/autobuild/pull/475) — Guard publish-contents-check rendered rulings from silent corruption
