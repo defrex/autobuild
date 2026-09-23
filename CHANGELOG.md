@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#469](https://github.com/defrex/autobuild/pull/469) — Extend the root tarball's test-file negations (AUT-508)
 - [#466](https://github.com/defrex/autobuild/pull/466) — Relax tomlBasicStringLine's raw line-break guard to LF/CRLF only
 - [#465](https://github.com/defrex/autobuild/pull/465) — Deny *.spec.tsx in the published tarballs' test-file negation
 - [#463](https://github.com/defrex/autobuild/pull/463) — Exclude the test-only src/testing helpers from the root tarball (AUT-503)
