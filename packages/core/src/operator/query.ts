@@ -1,7 +1,6 @@
 import { composeBuildConfig } from '../config/live'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { configSchema, type Config } from '../config/schema'
-import type { AbEvent } from '../events/catalog'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   parseBuildConfigMetadata,
@@ -20,7 +19,7 @@ import {
 } from '../cli/dashboard/model'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { collectUnclaimedObservations } from '../processes/harvest'
+import { unclaimedObservationCount } from '../processes/harvest'
 import type { BuildStore, Clock } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
@@ -156,15 +155,19 @@ async function readPinnedConfig(
   return { config, ...parseBuildConfigMetadata(artifact) }
 }
 
-/** The shared null-row gate (AUT-486 snapshot, AUT-496 getOperatorBuild):
- * `effectiveStatus` maps only `done` outside the visible set
+/** The shared null-row gate (AUT-486 snapshot, AUT-496 getOperatorBuild,
+ * AUT-487 digest): `effectiveStatus` maps only `done` outside the visible set
  * (cli/dashboard/model.ts `isVisible`), so `projectBuild` returns null
  * exactly for this state, and a pinned effective-config read for such a
- * build could never be surfaced. One predicate so both call sites cannot
- * diverge from each other or from the row projection. If
- * cli/dashboard/model.ts ever adds a non-visible status, this predicate
- * must follow — the snapshot byte-identical differential test and the
- * done/aborted query tests pin the coupling. */
+ * build could never be surfaced. One predicate so every consumer cannot
+ * diverge from each other or from the row projection: the digest's `terminal`
+ * is a third consumer of the same gate — `terminal === 'done'` is exactly
+ * `reduceBuild(...).status === 'done'` — and the snapshot uses it to skip a
+ * finished build's history and pinned-config reads without weakening this
+ * predicate as the authority. If cli/dashboard/model.ts ever adds a
+ * non-visible status, this predicate must follow — the snapshot
+ * byte-identical differential test and the done/aborted query tests pin the
+ * coupling. */
 function projectsNoDashboardRow(state: BuildState): boolean {
   return effectiveStatus(state) === 'done'
 }
@@ -233,37 +236,49 @@ export async function getOperatorDashboard(opts: {
 }): Promise<OperatorDashboardSnapshot> {
   const { config, repositoryEvents, status } = await effectiveConfig(opts.store, opts.repo)
   const records = await opts.store.listBuilds()
+  // One digest read covers every build of the repository (AUT-487): the
+  // row gate (a `done` digest means no row) and the observation count no
+  // longer need per-build histories, so the snapshot's store traffic stays
+  // flat as finished builds accumulate. Row-rendering builds still get their
+  // full history below, and the digest itself is derived from the event log
+  // on every call — nothing is persisted or cached between snapshots.
+  const digests = await opts.store.getRepoBuildDigests(opts.repo)
   const projected: DashboardBuild[] = []
-  const eventsByBuild = new Map<string, AbEvent[]>()
   let activeCount = 0
   for (const record of records) {
     if (record.repo !== opts.repo) continue
-    const events = await opts.store.getEvents(record.slug)
-    eventsByBuild.set(record.slug, events)
-    const state = reduceBuild(events)
-    if (state.status !== 'done' && state.status !== 'aborted') activeCount += 1
+    const digest = digests.get(record.slug)
+    // Completeness is contractual (one entry per repo build); a missing entry
+    // is an adapter bug and must fail loudly rather than silently drop the
+    // build from the active count or the row list.
+    if (digest === undefined) {
+      throw new Error(`getRepoBuildDigests is missing an entry for build "${record.slug}"`)
+    }
+    // Reduced status is `done`/`aborted` exactly when a terminal fact exists,
+    // so `terminal === undefined` is exactly the old active test — no history
+    // read needed for the count.
+    if (digest.terminal === undefined) activeCount += 1
+    if (digest.terminal === 'done') continue
     // Both query surfaces share the `projectsNoDashboardRow` gate (AUT-486
     // snapshot, AUT-496 detail query): a build that projects no row —
     // `effectiveStatus` maps only `done` outside the visible set — never
     // reads its pinned effective-config artifact, because the read result
-    // could never be surfaced. Every row-rendering build still gets its
-    // pinned pipeline and metadata.
+    // could never be surfaced. The digest already excluded `done` builds
+    // above; the gate stays as the authority for the row projection so the
+    // digest and the reducer cannot silently diverge. Every row-rendering
+    // build still gets its full history and pinned pipeline.
+    const events = await opts.store.getEvents(record.slug)
+    const state = reduceBuild(events)
     if (projectsNoDashboardRow(state)) continue
     const pinned = await readPinnedConfig(opts.store, record.slug, config)
     const row = projectBuild(record, state, config, events, undefined, pinned.config)
     if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
   }
-  // The unclaimed-observation scan runs over the journal `effectiveConfig`
-  // already returned and the per-build histories the loop already loaded:
-  // each build's history and the repository journal are read once per
-  // snapshot (AUT-486). The pure core writes nothing — a snapshot performs no
-  // store writes and never creates or locks the repository record.
-  const scan = collectUnclaimedObservations({
-    repo: opts.repo,
-    records,
-    eventsByBuild,
-    harvestEvents: repositoryEvents,
-  })
+  // The unclaimed-observation count comes from the digests and the journal
+  // `effectiveConfig` already returned — no per-build history reads (AUT-487).
+  // The pure core writes nothing — a snapshot performs no store writes and
+  // never creates or locks the repository record.
+  const observationCount = unclaimedObservationCount({ digests, harvestEvents: repositoryEvents })
   const warningLines = [
     ...status.roleWarnings,
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
@@ -275,7 +290,7 @@ export async function getOperatorDashboard(opts: {
       queued: status.queued ?? 0,
       activeCount,
       capacity: config.capacity,
-      observationCount: scan.observations.length,
+      observationCount,
       observationLimit: config.policy.harvestThreshold,
       ...(status.availableUpgrade !== undefined
         ? { availableUpgrade: status.availableUpgrade }
