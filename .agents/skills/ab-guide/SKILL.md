@@ -1559,7 +1559,10 @@ The watch ends with exit 0 when `--timeout` elapses (30 minutes by default;
 gone terminal; with no slugs named, an empty set of active builds does not end
 it. Usage errors, scope violations, unknown slugs, and cursor rejection exit 1
 before any record. A store read that fails after the watch has started is
-reported once on stderr and retried without duplicating or skipping any event.
+reported on stderr once per failing read source — locally the poll cycle is
+one source, while against an `http(s)` store each tracked stream and the
+discovery pass carries its own failure streak — and retried without
+duplicating or skipping any event.
 Against a local store the default cadence polls every 1 second. Against an
 `http(s)` store each tracked stream long-polls instead — one held request per
 stream waits up to 25 seconds for the next event, requests run concurrently,
@@ -1641,8 +1644,11 @@ condition (one record with `condition` null, showing how the build ended); 3 —
 stdout is a bare `{"cursor": …}` object for the final position, plus one line
 on stderr); 4 — interrupted by SIGINT before any condition was satisfied (same
 cursor behavior as 3). The default poll interval and `--interval` match
-`ab watch`. A store read that fails while waiting is reported once on stderr
-and retried without missing or duplicating a condition. The command is
+`ab watch`. A store read that fails while waiting is reported on stderr once
+per failing read source — locally the poll cycle is one source, while
+against an `http(s)` store each tracked build and the discovery pass carries
+its own failure streak — and retried without missing or duplicating a
+condition. The command is
 read-only — it appends no event, takes no lease, and creates no record — and
 deciding what to do about a match stays with the caller's skill.
 
