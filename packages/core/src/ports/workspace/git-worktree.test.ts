@@ -977,13 +977,23 @@ describe('GitWorktreeProvider operator sandbox', () => {
       }
       expect(stamped(echoes[0]!)).toBe(true)
 
-      // The regression guard: with cap enforcement broken on either path
-      // (insert-time or exit-stamp-time), the cap+excess entries remain.
-      // The evicted slice below is derived, not lucky: in either timing
-      // (echo0's stamp after the insertion loop, or mid-insertion) the
-      // victims are exactly the oldest `excess + 1` echoes in insertion
-      // order — 71 entries (sentinel + cap + excess) trim to the cap with
-      // the sentinel un-evictable.
+      // The regression guard. Verified by temporary experiment: removing
+      // the exit-stamp-path `evictFinishedBeyondCap()` call (the one in
+      // `trackChildStreams`'s exited handler) fails this size assertion,
+      // while removing the insert-time call in `sandboxStart` leaves this
+      // test green — the drain-gated echo0's stamp-path pass still trims
+      // the map to cap and compensates. What this test pins, then, is cap
+      // enforcement on the exit-stamp path; the insert-time path is
+      // currently unguarded by this suite — no test in this file fails
+      // when the insert-time call is removed (verified: the whole file
+      // stays 35/35 green across three isolated runs, including the
+      // adjacent 'a pending newer stamp does not block eviction of older
+      // stamped finished entries' test). The evicted slice below is
+      // derived, not lucky: in either timing (echo0's stamp after the
+      // insertion loop, or mid-insertion) the victims are exactly the
+      // oldest `excess + 1` echoes in insertion order — 71 entries
+      // (sentinel + cap + excess) trim to the cap with the sentinel
+      // un-evictable.
       expect(children.size).toBeLessThanOrEqual(cap)
 
       // Exactly the oldest `excess + 1` echoes were evicted. Typed

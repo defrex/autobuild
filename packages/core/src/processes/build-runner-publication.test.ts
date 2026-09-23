@@ -50,6 +50,7 @@ describe('publicationPending', () => {
         event(3, 'workspace.provisioned', {
           provider: 'vercel-sandbox',
           ref: 'sandbox-g0',
+          remote: true,
           branch: 'ab/build',
           base: { source: 'existing', sha: 'b'.repeat(40) },
         }),
@@ -62,6 +63,7 @@ describe('publicationPending', () => {
         event(6, 'workspace.provisioned', {
           provider: 'vercel-sandbox',
           ref: 'sandbox-g1',
+          remote: true,
           branch: 'ab/build',
           base: { source: 'existing', sha: 'b'.repeat(40) },
         }),
@@ -73,6 +75,7 @@ describe('publicationPending', () => {
     const provisioned = event(3, 'workspace.provisioned', {
       provider: 'vercel-sandbox',
       ref: 'sandbox-g1',
+      remote: true,
       branch: 'ab/build',
       base: { source: 'existing', sha: 'b'.repeat(40) },
     })

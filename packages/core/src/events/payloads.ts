@@ -245,6 +245,10 @@ export const eventPayloadSchemas = {
     path: z.string().min(1).optional(),
     /** Dispatcher-reachable path. Remote providers intentionally omit it. */
     localPath: z.string().min(1).optional(),
+    /** True when the provider reported a remote publication capability at
+     * provision time. Absent ⇒ local (historical journals). AUT-505 removes
+     * the legacy fallback that reads absent as the provider name. */
+    remote: z.boolean().optional(),
     branch: z.string().min(1),
     base: workspaceBaseSchema,
   }),
