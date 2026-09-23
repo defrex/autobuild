@@ -7,8 +7,8 @@ import {
   elapsedMilliseconds,
   projectWebParity,
   reconcileDashboard,
-} from '../packages/hosted-store-service/app/dashboard/view-model'
-import { captureDashboardFrames, FRAME_SPECS } from './dashboard-capture'
+} from '../../hosted-store-service/app/dashboard/view-model'
+import { captureDashboardFrames, FRAME_SPECS } from '../../../tools/dashboard-capture'
 
 function model(status: 'running' | 'paused' = 'running'): DashboardModel {
   return {

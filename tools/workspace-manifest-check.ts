@@ -112,7 +112,8 @@ function bunEngine(entry: WorkspaceManifest): string {
 
 /**
  * Dependency names whose exact pins are deliberately duplicated between the
- * root `package.json` (for `tools/web-dashboard-capture.tsx`) and
+ * `@defrex/autobuild-web-dashboard-capture` package manifest (for the web
+ * capture tool in `packages/web-dashboard-capture/src`) and
  * `packages/hosted-store-service/package.json` (for the hosted store app): the
  * two manifests' pins for these names must move in lockstep, because under
  * Bun's isolated linker a skew gives the capture tool its own react copy
@@ -184,12 +185,18 @@ export async function validateWorkspaceManifests(root: string): Promise<Workspac
   if (hostedStore === undefined) {
     throw new Error('workspace @defrex/autobuild-hosted-store-service is required')
   }
+  const capturePackage = manifests.find(
+    (entry) => entry.manifest.name === '@defrex/autobuild-web-dashboard-capture',
+  )
+  if (capturePackage === undefined) {
+    throw new Error('workspace @defrex/autobuild-web-dashboard-capture is required')
+  }
   for (const name of mirroredReactPins) {
-    const rootPin = pinnedVersion(rootManifest.manifest, name)
+    const capturePin = pinnedVersion(capturePackage.manifest, name)
     const hostedPin = pinnedVersion(hostedStore.manifest, name)
-    if (rootPin !== hostedPin) {
+    if (capturePin !== hostedPin) {
       throw new Error(
-        `package.json and ${hostedStore.path}: ${name} pin drift (root ${describe(rootPin)}; hosted-store-service ${describe(hostedPin)}): the workspace react pins must move in lockstep — tools/web-dashboard-capture.tsx must resolve the same react copy as the hosted store app under Bun's isolated linker`,
+        `${capturePackage.path} and ${hostedStore.path}: ${name} pin drift (web-dashboard-capture ${describe(capturePin)}; hosted-store-service ${describe(hostedPin)}): the workspace react pins must move in lockstep — packages/web-dashboard-capture/src must resolve the same react copy as the hosted store app under Bun's isolated linker`,
       )
     }
   }
