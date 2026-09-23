@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#495](https://github.com/defrex/autobuild/pull/495) — Declare the SQLite digest index in local/schema.ts
 - [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
 - [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
 - [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
