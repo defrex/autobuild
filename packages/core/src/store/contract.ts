@@ -451,7 +451,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             expect(digest.terminal).toBe(
               status === 'done' ? 'done' : status === 'aborted' ? 'aborted' : undefined,
             )
-            expect(digest.observations).toEqual(expectedObservations[slug])
+            expect(digest.observations).toEqual(expectedObservations[slug] ?? [])
           }
           // Explicit shape pins (independent of the loop above):
           expect(digests.get('dg-open')).toEqual({ slug: 'dg-open', observations: [2] })
