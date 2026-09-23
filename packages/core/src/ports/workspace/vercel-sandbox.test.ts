@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
 import { distributionRoot } from '../../distribution'
+import { packageAutobuildDistribution } from './distribution-archive'
 import { spawnExec, type Exec } from './git-worktree'
 import { installPackedDistribution } from '../../testing/packed-install'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
@@ -25,7 +26,6 @@ import {
   isMissingVercelSandbox,
   vercelOidcTokenScope,
   vercelSdkCredentials,
-  packageAutobuildDistribution,
   sourceCheckoutPath,
   type VercelSandboxFacade,
   type VercelSandboxHandle,
