@@ -11,8 +11,12 @@
  * half (evidence strings the frames must and must not contain) fails here; the
  * visual half is judged by the `verify-web-dashboard` skill from the PNGs.
  *
- * The app tree lives in `packages/hosted-store-service/app` (AUT-409); this
- * tool stays at the repository root, like `dashboard-capture.ts`.
+ * The app tree lives in `packages/hosted-store-service/app` (AUT-409). This
+ * tooling lives in its own workspace package
+ * (`@defrex/autobuild-web-dashboard-capture`) whose manifest declares the react
+ * dependencies it imports, so it resolves under Bun's isolated linker without
+ * root pins; the terminal capture tool (`tools/dashboard-capture.ts`, which
+ * imports no react) remains at the repository root.
  */
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -23,7 +27,7 @@ import type {
   DashboardModel,
   TranscriptPresentation,
 } from '@defrex/autobuild/operator-presentation'
-import { autoMergeConsentReason } from '../packages/core/src/cli/dashboard/model'
+import { autoMergeConsentReason } from '../../core/src/cli/dashboard/model'
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -31,13 +35,13 @@ import {
   type BuildsViewProps,
   DispatcherControls,
   type Selection,
-} from '../packages/hosted-store-service/app/dashboard/BuildsView'
-import { LoadingControls } from '../packages/hosted-store-service/app/dashboard/frame'
-import { OperatorShell } from '../packages/hosted-store-service/app/dashboard/Shell'
-import { SignIn } from '../packages/hosted-store-service/app/sign-in/SignIn'
-import { captureDashboardFrames, RENDER_NOW } from './dashboard-capture'
+} from '../../hosted-store-service/app/dashboard/BuildsView'
+import { LoadingControls } from '../../hosted-store-service/app/dashboard/frame'
+import { OperatorShell } from '../../hosted-store-service/app/dashboard/Shell'
+import { SignIn } from '../../hosted-store-service/app/sign-in/SignIn'
+import { captureDashboardFrames, RENDER_NOW } from '../../../tools/dashboard-capture'
 
-const REPO_ROOT = resolve(import.meta.dir, '..')
+const REPO_ROOT = resolve(import.meta.dir, '../../..')
 const FIXTURE_REPO = 'example/repository'
 const ALTERNATE_FIXTURE_REPO = 'example/alternate'
 const LONG_FIXTURE_REPO = 'example/operator-dashboard-capture-fixture-repository'
