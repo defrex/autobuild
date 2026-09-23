@@ -91,6 +91,15 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   `src/integration/harness.ts` deliberately ships: it is a runtime dependency of the packed
  *   `./testing` surface (`src/testing/index.ts` re-exports the harness that out-of-tree packages'
  *   tests build against), the same load-bearing shape as `src/testing/fixed.ts` under AUT-503.
+ * - AUT-513 — the same ruling extended once more: the remaining four dead-weight files
+ *   (`src/cli/store-opening.contract.ts`, a shared `bun:test` contract suite;
+ *   `src/ports/runner/live-contract-fixture.ts`, a live-suite fixture;
+ *   `src/cli/dashboard/frame-image.ts`, a `@resvg/resvg-js`-dependent PNG renderer whose
+ *   dependency is a root devDependency only; and `src/markdown.ts`, approximate link-target
+ *   extraction written for the repo's own doc checks) are excluded by per-file negations: each
+ *   ships with no packed importer and no exports/bin target, and its sole consumers are the
+ *   pack-denied `*.test.ts` / `*.live.test.ts` files (for `frame-image.ts` and `markdown.ts`
+ *   also the unpacked repo tooling, which reads the working tree by relative path).
  *
  * Every ruling is read out of its package's declared `files` allowlist, so
  * ruling and manifest cannot drift apart:
@@ -209,7 +218,7 @@ const DISPATCHER_RULING =
   "'files' allowlist in packages/hosted-dispatcher/package.json and this check together."
 
 const ROOT_RULING =
-  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
+  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
   'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
   'packages/core/src (the !packages/core/src/**/*.test.ts, !packages/core/src/**/*.test.tsx, !packages/core/src/**/*.spec.ts, and ' +
   '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.test.* suites too): test files are dev-only surface and do ' +
@@ -224,7 +233,14 @@ const ROOT_RULING =
   'denies; no exports target and no packed source imports it) is excluded by a per-file negation, while ' +
   'src/integration/harness.ts deliberately ships: it is a runtime dependency of the packed ./testing surface ' +
   "(src/testing/index.ts re-exports the harness that out-of-tree packages' tests build against), the same " +
-  'load-bearing shape as src/testing/fixed.ts under AUT-503. Warning: ' +
+  'load-bearing shape as src/testing/fixed.ts under AUT-503. By AUT-513 the remaining four dead-weight files ' +
+  'src/cli/store-opening.contract.ts (a shared bun:test contract suite), src/ports/runner/live-contract-fixture.ts (a live-suite fixture), ' +
+  'src/cli/dashboard/frame-image.ts (a PNG renderer whose @resvg/resvg-js dependency is a root devDependency only), and ' +
+  "src/markdown.ts (approximate link-target extraction written for the repo's own doc checks) are excluded by per-file negations: " +
+  'each ships with no packed importer and no exports/bin target, and its sole consumers are the pack-denied *.test.ts and *.live.test.ts ' +
+  'files — for frame-image.ts and markdown.ts also the unpacked repo tooling tools/dashboard-capture.ts, tools/docs-asset-check.ts, and ' +
+  'tools/skill-docs-asset-check.ts, which read the working tree by relative path — so dropping them from the tarball changes nothing for ' +
+  'any consumer; no packed source imports any of them. Warning: ' +
   "publish-imports-check does not scan the provider's own packed files, so excluding fixed.ts would pass " +
   'every check while breaking the packed ./plugin-sdk export. If the ruling changes, update the ' +
   "'files' allowlist in package.json and this check together."
