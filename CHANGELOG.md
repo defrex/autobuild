@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#468](https://github.com/defrex/autobuild/pull/468) — Pause the dashboard now-ticker while the document is hidden
 - [#465](https://github.com/defrex/autobuild/pull/465) — Deny *.spec.tsx in the published tarballs' test-file negation
 - [#463](https://github.com/defrex/autobuild/pull/463) — Exclude the test-only src/testing helpers from the root tarball (AUT-503)
 - [#462](https://github.com/defrex/autobuild/pull/462) — Correct ALWAYS_PACKED_FILE_NAMES doc + constant to actual packer sets
