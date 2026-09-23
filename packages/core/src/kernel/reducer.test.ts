@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
-import { KERNEL, humanActor, type Actor } from '../events/envelope'
+import { DISPATCHER, KERNEL, humanActor, type Actor } from '../events/envelope'
 import {
   validateEventWrite,
   allowedActorKinds,
@@ -1757,5 +1757,48 @@ describe('reduceBuild: publication loss record (AUT-328)', () => {
     })
     expect(next.lastSeq).toBe(state.lastSeq + 1)
     expect(next.lastEvent?.type).toBe('publication.lost')
+  })
+})
+
+describe('reduceBuild: workspace.provisioned remote marker stays inert', () => {
+  const provisioned = (remote?: boolean): EventWrite<'workspace.provisioned'> => ({
+    actor: DISPATCHER,
+    type: 'workspace.provisioned',
+    payload: {
+      provider: 'vercel-sandbox',
+      ref: 'sandbox-g0',
+      path: '/vercel/sandbox/workspace',
+      ...(remote !== undefined ? { remote } : {}),
+      branch: 'ab/build',
+      base: { source: 'existing', sha: 'b'.repeat(40) },
+    },
+  })
+
+  test.each([
+    ['legacy journal without a marker', undefined],
+    ['the remote marker', true],
+    ['the local marker', false],
+  ])('%s reduces to the same projection as before the field existed', (_name, remote) => {
+    const log = toLog([
+      {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'fake', id: 'T-1', title: 'x' },
+          repo: 'acme/app',
+          baseBranch: 'main',
+        },
+      },
+      provisioned(remote),
+    ])
+    const state = reduceBuild(log)
+    expect(state.status).toBe('queued')
+    expect(state.phase).toBeUndefined()
+    expect(state.round).toBe(0)
+    expect(state.lastSeq).toBe(2)
+    expect(state.lastEvent?.type).toBe('workspace.provisioned')
+    expect(state.plan).toEqual({ round: 0, approved: false })
+    expect(state.implement).toEqual({ round: 0 })
+    expect(state.verify).toEqual({ maxAttemptSeen: 0, results: [], cycleSince: 0 })
   })
 })
