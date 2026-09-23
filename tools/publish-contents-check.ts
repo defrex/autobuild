@@ -210,7 +210,7 @@ const DISPATCHER_RULING =
 
 const ROOT_RULING =
   'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
-  +'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
+  'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
   'packages/core/src (the !packages/core/src/**/*.test.ts, !packages/core/src/**/*.test.tsx, !packages/core/src/**/*.spec.ts, and ' +
   '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.test.* suites too): test files are dev-only surface and do ' +
   'not publish. The denial covers the TypeScript test spellings only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of ' +
