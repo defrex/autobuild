@@ -1337,6 +1337,59 @@ describe('wait remote bounded-wait cadence (AUT-368)', () => {
     })
     expect(h.err).toEqual([])
   })
+
+  test('a mid-discovery failure still launches the stream registered before the throw', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    // An immediate (non-held) read of b3 always fails: once a discovery pass
+    // reaches it, the step throws — after b2 was registered in the same pass.
+    const breaking = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'getEvents') {
+          return async (
+            slug: string,
+            sinceSeq?: number,
+            opts?: { waitSeconds?: number; signal?: AbortSignal },
+          ) => {
+            if (slug === 'b3' && opts?.waitSeconds === undefined) {
+              throw new Error('b3 read failed')
+            }
+            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    const { store: fake } = longPollStore(breaking, (slug, call) => {
+      if (slug === 'b2' && call === 1) return appendEscalation(store, 'b2')
+    })
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 1) {
+          await seedRunningBuild(store, 'b2')
+          await seedRunningBuild(store, 'b3')
+        }
+      },
+    })
+    // b2 was registered before the throw and its held read still ran: the
+    // condition satisfied on it ends the wait with exit 0 even though
+    // discovery itself failed.
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, timeout: '5' })).toBe(0)
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'b2',
+      event: { type: 'escalation.raised' },
+      condition: 'blocked',
+    })
+    // The discovery failure is reported once, on the discovery task's own streak.
+    expect(h.err).toEqual([
+      expect.stringContaining('ab wait: a store read failed (b3 read failed)'),
+    ])
+  })
 })
 
 // ── Exit-code plumbing through runCli ────────────────────────────────────────
