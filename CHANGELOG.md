@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#486](https://github.com/defrex/autobuild/pull/486) — Move packageAutobuildDistribution into core's distribution-archive
 - [#482](https://github.com/defrex/autobuild/pull/482) — Correct the retention-cap test's documented pinning path
 - [#480](https://github.com/defrex/autobuild/pull/480) — Record the durable remote marker on workspace.provisioned
 - [#479](https://github.com/defrex/autobuild/pull/479) — Strengthen wait.test.ts's interval-spacing assertion
