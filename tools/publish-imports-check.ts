@@ -75,16 +75,27 @@ import { collectSpecifiers, UNPARSEABLE_MODULE } from './package-boundary-check'
  *    assertion only shapes the error message.
  * 6. The provider's packed exports targets are walked for closure presence
  *    (AUT-507): every exports target present in the packed listing and
- *    script-shaped seeds a breadth-first walk — one per exports key,
- *    cycle-safe — that resolves each static import/specifier with a pure
- *    packed-path resolver: provider self-imports jump to their exports key's
- *    targets, relative specifiers probe the packed path set, and bare or
- *    `#` specifiers are npm's install-time contract and are skipped. A
- *    reachable file absent from the pack is a `missing-closure-file`
- *    violation naming the exports key, the importing file, and the missing
- *    path; a reachable unparseable script file is an `unparseable-file`
- *    violation naming the provider; a reachable non-script file (a packed
- *    `.json`, for example) is presence-checked but never parsed.
+ *    script-shaped seeds a breadth-first walk — seeded per target, so an
+ *    exports key mixing script and non-script targets still walks its script
+ *    targets' closures — cycle-safe, resolving each static import/specifier
+ *    with a pure packed-path resolver: provider self-imports jump to their
+ *    exports key's targets, `#`-prefixed specifiers resolve through the
+ *    provider manifest's `imports` field (exact match only; pattern keys like
+ *    `#internal/*` stay external — implementing Node's longest-prefix `*`
+ *    capture is a resolver surface the provider does not use, and a
+ *    half-implemented matcher would under-approximate less predictably than
+ *    documented skip), relative specifiers probe the packed path set
+ *    respecting the specifier's own extension kind — a dotted extensionless
+ *    directory specifier (`./v1.2` naming a packed `v1.2/index.ts`) keeps
+ *    the directory-index probe with the whole path as stem, while a
+ *    specifier naming a known non-script kind (`.json`, `.md`, `.wasm`, …)
+ *    stays exact-match-only), and bare specifiers are
+ *    npm's install-time contract and are skipped. A reachable file absent
+ *    from the pack is a `missing-closure-file` violation naming the exports
+ *    key, the importing file, and the missing path; a reachable unparseable
+ *    script file is an `unparseable-file` violation naming the provider; a
+ *    reachable non-script file (a packed `.json`, for example) is
+ *    presence-checked but never parsed.
  * 7. Probes (all through the `resolveModule` seam): every scanned specifier
  *    from its own importing file's staged path; every exports-map target of
  *    every publishable package from its staged package root. A missing subpath
@@ -178,18 +189,25 @@ export function packedPathOfTarget(target: string): string {
  *   normalizes before any packedPaths check).
  * - `self-missing`: a provider self-import whose exports key does not exist
  *   — the caller emits the existing `missing-export` violation.
+ * - `imports`: a `#`-prefixed specifier that exact-matches a key of the
+ *   provider manifest's `imports` field — `targets` are the entry's raw
+ *   target strings (like `self`, still `./`-prefixed when they point into
+ *   the package; the caller normalizes before any packedPaths check).
  * - `relative`: a relative specifier that resolved to a path present in the
  *   packed listing.
  * - `missing`: a relative specifier that matched nothing — `path` is the
  *   normalized joined path *before* extension probing, so the message names
  *   what the source literally imports.
- * - `external`: everything else (bare package names, `#` imports-field
- *   specifiers, absolute paths) — npm resolves these from `dependencies` at
- *   install time; they are not part of the provider's packed tree.
+ * - `external`: everything else (bare package names, `#` specifiers with no
+ *   exact imports entry — including ones only a pattern key like
+ *   `#internal/*` could match, which stay external by design — and absolute
+ *   paths) — npm resolves these from `dependencies` at install time; they
+ *   are not part of the provider's packed tree.
  */
 export type PackedClosureResolution =
   | { kind: 'self'; targets: readonly string[] }
   | { kind: 'self-missing'; subpath: string }
+  | { kind: 'imports'; targets: readonly string[] }
   | { kind: 'relative'; path: string }
   | { kind: 'missing'; path: string }
   | { kind: 'external' }
@@ -197,23 +215,77 @@ export type PackedClosureResolution =
 /** The script extensions a relative specifier's stem may resolve to, in
  * probe order: TypeScript's family first (the tree's own shape), then the
  * JavaScript family. `.json` and directory-index variants are appended by
- * the resolver after these. */
+ * the resolver after these.
+ *
+ * Kind rule (closes the seq-46 under-approximation): the probe respects the
+ * specifier's own extension. Specifiers fall into three classes: an
+ * extensionless specifier and a specifier whose extension is one of these
+ * script extensions probe the stem and directory-index candidates (script
+ * extensions never probe `.json`; extensionless ones do); a specifier whose
+ * extension names a known non-script kind (`KNOWN_NON_SCRIPT_EXTENSIONS`) is
+ * an exact match or nothing; and a specifier with any other extension —
+ * dotted-but-extensionless in spirit (`./foo.bar` naming a packed
+ * `foo.bar/index.ts`) — probes with the whole path as stem, exactly like an
+ * extensionless specifier. A dangling non-script import must surface as a
+ * `missing-closure-file`, not silently resolve to a packed same-stem file of
+ * a different kind (a `./data.json` whose JSON is absent must not pass on a
+ * packed `data.ts`, and `./x.js` must not fall through to a packed
+ * `x.json`). */
 const CLOSURE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx']
 
+/** Non-script extensions a relative specifier may name where exact-match-only
+ * stays: the kinds the exact-match rule exists for. `.json` is the real
+ * hazard (a `./data.json` whose JSON is absent must not pass on a packed
+ * `data.ts`); `.node`/`.wasm` are Node's other runtime-loadable non-script
+ * kinds; the rest are the doc/asset kinds the scan-skip list names. Any
+ * extension outside this set and outside CLOSURE_EXTENSIONS is not treated
+ * as a kind boundary — it is a dotted-but-extensionless specifier (AUT-518)
+ * and gets the full extensionless probe with the whole path as stem. The set
+ * is deliberately closed: a future unrecognized kind falls into the
+ * Node-faithful probing bucket, which stays fail-visible, and extending it
+ * is a one-line change here. */
+const KNOWN_NON_SCRIPT_EXTENSIONS = [
+  '.json',
+  '.node',
+  '.wasm',
+  '.md',
+  '.map',
+  '.txt',
+  '.html',
+  '.css',
+]
+
 /** Resolves one static import specifier of `importerPath` (a packed path
- * relative to the provider package directory) against `packedPaths`. Relative
- * specifiers join against the importer's directory and probe candidates in
- * order: the exact normalized path; the stem with each script extension
- * (covering TS-style rewrites like `./x.js` → `./x.ts` and extensionless
- * imports); then `.json` (a packed JSON leaf is a legitimate resolution
- * target — the real `store/remote/version.ts` imports the packed root
- * `package.json`); then directory-index variants (`<path>/index` plus the
- * same extension list, `.json` last). First candidate present wins. */
+ * relative to the provider package directory) against `packedPaths`. A
+ * provider self-import resolves through `exports`; a `#`-prefixed specifier
+ * resolves through `imports`, exact match only (a specifier only a pattern
+ * key like `#internal/*` could match stays `external` — pattern syntax is
+ * deliberately unsupported; see the mechanics header).
+ *
+ * Relative specifiers join against the importer's directory and probe
+ * candidates in order: the exact normalized path (any kind — a packed
+ * `data.json` satisfies `import './data.json'`); then, for extensionless
+ * specifiers, the stem with each script extension (covering TS-style
+ * rewrites like `./x.js` → `./x.ts` and extensionless imports), `.json`
+ * (a packed JSON leaf is a legitimate resolution target — the real
+ * `store/remote/version.ts` imports the packed root `package.json`), and
+ * directory-index variants (`<path>/index` plus the same extension list,
+ * `.json` last); for script-extension specifiers, the same script-family
+ * stem and directory-index candidates but never `.json`; for specifiers
+ * naming a kind in `KNOWN_NON_SCRIPT_EXTENSIONS`, nothing — exact match
+ * only. Any other extension is not a kind boundary: a dotted-but-extensionless
+ * specifier (`./foo.bar` naming a packed `foo.bar/index.ts`, `./v1.2` naming
+ * `v1.2/index.ts`) probes exactly like an extensionless one, with the whole
+ * path as stem (the final dot is not stripped, so `./v1.2` never probes
+ * `v1.ts`). First candidate present wins. A specifier whose extension names
+ * a known non-script kind therefore never resolves to a packed file of a
+ * different kind at the same stem. */
 export function resolvePackedClosureTarget(
   packedPaths: readonly string[],
   importerPath: string,
   specifier: string,
   exports: ReadonlyMap<string, string[]>,
+  imports: ReadonlyMap<string, string[]>,
 ): PackedClosureResolution {
   if (isProviderSpecifier(specifier)) {
     const subpath = subpathOfProviderSpecifier(specifier)
@@ -221,22 +293,44 @@ export function resolvePackedClosureTarget(
     if (targets === undefined) return { kind: 'self-missing', subpath }
     return { kind: 'self', targets }
   }
+  if (specifier.startsWith('#')) {
+    const targets = imports.get(specifier)
+    if (targets === undefined) return { kind: 'external' }
+    return { kind: 'imports', targets }
+  }
   if (!specifier.startsWith('./') && !specifier.startsWith('../')) return { kind: 'external' }
   const joined = posix.normalize(posix.join(posix.dirname(importerPath), specifier))
   if (packedPaths.includes(joined)) return { kind: 'relative', path: joined }
-  const stem = joined.slice(0, joined.length - posix.extname(joined).length)
-  const candidates: string[] = CLOSURE_EXTENSIONS.map((extension) => stem + extension)
-  candidates.push(`${joined}.json`, `${stem}.json`)
-  for (const extension of CLOSURE_EXTENSIONS) candidates.push(`${joined}/index${extension}`)
-  candidates.push(`${joined}/index.json`)
+  const extension = posix.extname(joined)
+  const scriptExtension = CLOSURE_EXTENSIONS.includes(extension)
+  const knownNonScript = KNOWN_NON_SCRIPT_EXTENSIONS.includes(extension)
+  // The stem a stem-candidate probe extends: the path minus its script
+  // extension for script-extension specifiers (the TS-style rewrite,
+  // './x.js' → './x.ts'); the whole path for extensionless specifiers and for
+  // unrecognized extensions ('./v1.2', './foo.bar') — the final dot is not a
+  // kind boundary, and Node appends extensions to the full specifier, so
+  // './v1.2' must never probe './v1.ts'.
+  const stem = scriptExtension ? joined.slice(0, joined.length - extension.length) : joined
+  const candidates: string[] = []
+  if (!knownNonScript) {
+    for (const candidate of CLOSURE_EXTENSIONS) candidates.push(stem + candidate)
+    for (const candidate of CLOSURE_EXTENSIONS) candidates.push(`${joined}/index${candidate}`)
+    if (!scriptExtension) {
+      // Extensionless and unrecognized-extension specifiers may also name a
+      // JSON leaf (or a directory whose index is JSON). A specifier that
+      // names a known kind never probes across kinds.
+      candidates.push(`${stem}.json`, `${joined}/index.json`)
+    }
+  }
   const hit = candidates.find((candidate) => packedPaths.includes(candidate))
   if (hit !== undefined) return { kind: 'relative', path: hit }
   return { kind: 'missing', path: joined }
 }
 
-/** Every string target an exports-map value tree yields: a bare string entry,
- * or the string leaves of a conditions object (`types`/`import`/`default`/…).
- * Null leaves (`default: null`, "block an export") yield nothing. */
+/** Every string target an exports- or imports-map value tree yields: a bare
+ * string entry, or the string leaves of a conditions object
+ * (`types`/`import`/`default`/…). Null leaves (`default: null`, "block an
+ * export") yield nothing. */
 export function exportsTargets(value: unknown): string[] {
   if (typeof value === 'string') return [value]
   if (typeof value !== 'object' || value === null) return []
@@ -251,6 +345,26 @@ export function exportsSubpaths(manifest: unknown): Map<string, string[]> {
   const map = new Map<string, string[]>()
   if (typeof exports === 'object' && exports !== null) {
     for (const [key, value] of Object.entries(exports as Record<string, unknown>)) {
+      map.set(key, exportsTargets(value))
+    }
+  }
+  return map
+}
+
+/** The imports map of a parsed manifest as key → target strings, shaped like
+ * `exportsSubpaths`: each key of the manifest's `imports` object maps to its
+ * string leaves via `exportsTargets`, so conditions-object values work.
+ * Exact-match only for resolution: keys that could match via pattern syntax
+ * (`#internal/*`) are in the map but are never hit by an exact lookup, so a
+ * `#` specifier they alone could serve stays `external`. Keys not starting
+ * with `#` are invalid Node imports syntax and are never queried. A manifest
+ * without `imports` yields an empty map — `#` specifiers stay `external`,
+ * unchanged from the pre-imports behavior. */
+export function importsSubpaths(manifest: unknown): Map<string, string[]> {
+  const imports = (manifest as { imports?: unknown } | undefined)?.imports
+  const map = new Map<string, string[]>()
+  if (typeof imports === 'object' && imports !== null) {
+    for (const [key, value] of Object.entries(imports as Record<string, unknown>)) {
       map.set(key, exportsTargets(value))
     }
   }
@@ -415,6 +529,7 @@ export async function scanPublishedImports(
     return JSON.parse(manifest.text)
   }
   const providerExports = exportsSubpaths(manifestTextOf(stagedProvider))
+  const providerImports = importsSubpaths(manifestTextOf(stagedProvider))
 
   const scratchRoot = await env.createScratchRoot()
   const stagedPathOf = (name: string, relativePath: string): string =>
@@ -545,16 +660,22 @@ export async function scanPublishedImports(
     let providerClosureFiles = 0
     const closureCache = new Map<string, ReturnType<typeof collectSpecifiers>>()
     for (const [exportsKey, rawTargets] of providerExports) {
-      // Seed filter: every target must be present in the pack (an absent
-      // target is already flagged by `unresolved-exports-target`; do not
-      // double-report) and script-shaped (a key pointing at a `.json` or
-      // `.wasm` contributes no walk and is not itself a violation). Targets
-      // are normalized by stripping one leading `./` first — packed listings
-      // never carry the prefix, and an unnormalized check would match
-      // nothing, silently scanning no files at all.
-      const seedTargets = [...new Set(rawTargets.map(packedPathOfTarget))]
-      if (!seedTargets.every((target) => stagedProvider.packedPaths.includes(target))) continue
-      if (!seedTargets.every((target) => packedScriptKind(target) !== undefined)) continue
+      // Seed filter, per target (not per key): a target seeds a walk only if
+      // it is present in the pack (an absent target is already flagged by
+      // `unresolved-exports-target`; do not double-report) and script-shaped
+      // (a present `.json` or `.wasm` target is a presence-checked leaf, not
+      // a walk seed, and is not itself a violation). A key mixing script and
+      // non-script targets — or one with a target absent from the pack —
+      // still walks each surviving script target, so a shipped script
+      // export's closure is checked even when a sibling target drops out.
+      // Targets are normalized by stripping one leading `./` first — packed
+      // listings never carry the prefix, and an unnormalized check would
+      // match nothing, silently scanning no files at all.
+      const seedTargets = [...new Set(rawTargets.map(packedPathOfTarget))].filter(
+        (target) =>
+          stagedProvider.packedPaths.includes(target) && packedScriptKind(target) !== undefined,
+      )
+      if (seedTargets.length === 0) continue
       const visited = new Set<string>(seedTargets)
       const queue = [...seedTargets]
       while (queue.length > 0) {
@@ -586,10 +707,12 @@ export async function scanPublishedImports(
             current,
             specifier,
             providerExports,
+            providerImports,
           )
           switch (resolution.kind) {
             case 'external':
-              // Bare and `#` specifiers resolve from dependencies at install
+              // Bare specifiers, `#` specifiers with no exact imports entry,
+              // and absolute paths resolve from dependencies at install
               // time; they are not part of the packed tree.
               break
             case 'self-missing':
@@ -610,6 +733,30 @@ export async function scanPublishedImports(
                 if (!stagedProvider.packedPaths.includes(target)) {
                   // Provider-tree paths in the closure fields: packageName
                   // already pins the package.
+                  reportClosureMissing(exportsKey, current, target)
+                  continue
+                }
+                if (!visited.has(target)) {
+                  visited.add(target)
+                  queue.push(target)
+                }
+              }
+              break
+            }
+            case 'imports': {
+              // An imports-field mapping is manifest-declared like a self
+              // import: each target that points into the package (starts
+              // with `./`) is probed at its normalized packed path with no
+              // stem probing — a mapping relying on extension resolution
+              // would be flagged missing (fail-visible, and documented in the
+              // mechanics header). A bare target (a dependency name) resolves
+              // from `dependencies` at install time and is skipped like an
+              // external specifier. The originating export's key is kept, so
+              // the message still names a shipped export.
+              for (const rawTarget of resolution.targets) {
+                if (!rawTarget.startsWith('./')) continue
+                const target = packedPathOfTarget(rawTarget)
+                if (!stagedProvider.packedPaths.includes(target)) {
                   reportClosureMissing(exportsKey, current, target)
                   continue
                 }

@@ -993,3 +993,38 @@ describe('session.started stream field (SPEC §9)', () => {
     ).toThrow()
   })
 })
+
+describe('workspace.provisioned remote marker', () => {
+  const provisioned = {
+    provider: 'vercel-sandbox',
+    ref: 'ws_1',
+    path: '/workspace',
+    branch: 'ab/slug',
+    base: { source: 'existing', sha: 'b'.repeat(40) },
+  }
+
+  function provisionedWrite(payload: unknown): EventWrite<'workspace.provisioned'> {
+    return validateEventWrite({
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload,
+    }) as EventWrite<'workspace.provisioned'>
+  }
+
+  test('accepts the remote marker true and false', () => {
+    expect(provisionedWrite({ ...provisioned, remote: true }).payload).toMatchObject({
+      remote: true,
+    })
+    expect(provisionedWrite({ ...provisioned, remote: false }).payload).toMatchObject({
+      remote: false,
+    })
+  })
+
+  test('historical payloads without the marker stay valid', () => {
+    expect(provisionedWrite(provisioned).payload).not.toHaveProperty('remote')
+  })
+
+  test('rejects a non-boolean marker', () => {
+    expect(() => provisionedWrite({ ...provisioned, remote: 'yes' })).toThrow(/remote/)
+  })
+})

@@ -15,7 +15,7 @@ import { InvalidAmbientContextError } from './env'
 import { runCli } from './main'
 import { PhaseSessionError, scopeLocalStoreToPhaseSession } from '../store/phase-session'
 import type { BuildStore } from '../store/types'
-import { encodeCursor } from './watch'
+import { encodeCursor, watchSelection } from './watch'
 import { WAIT_USAGE, abWait, matchEvent, matchState, parseConditions } from './wait'
 
 const REPO = '/main/repo'
@@ -1132,13 +1132,25 @@ describe('wait remote bounded-wait cadence (AUT-368)', () => {
       starts.push(h.clock().getTime())
     })
     const h = harness(store, { openStore: () => fake })
-    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '3' })).toBe(3)
-    // One held request per wait window: three cycles inside the 3 s budget,
-    // each start at least one interval after the previous — not one request
-    // per poll iteration.
+    // Unlike the harness's flat 1s-per-call default delay, this override
+    // honors the requested gap: the fake clock advances by exactly the sleep
+    // the implementation asked for, so the spacing assertion below can
+    // detect a wrong interval-floor magnitude, not just a missing gap sleep.
+    // No jitter tolerance is needed — the clock is fake and advanced only by
+    // the code under test, so a correct implementation produces gaps of
+    // exactly the interval.
+    h.base.delay = async (ms) => {
+      h.clock.advance(ms)
+    }
+    const interval = watchSelection(REMOTE_REF).intervalMs
+    expect(await abWait({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], timeout: '11' })).toBe(3)
+    // One held request per wait window: three cycles inside the 11 s budget
+    // at the remote default cadence (starts at 0/5s/10s), each start at
+    // least one interval after the previous — not one request per poll
+    // iteration.
     expect(starts.length).toBeGreaterThanOrEqual(3)
     for (let i = 1; i < starts.length; i++) {
-      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(1000)
+      expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(interval)
     }
     expect(h.err).toEqual([expect.stringContaining('ab wait: timed out')])
   })

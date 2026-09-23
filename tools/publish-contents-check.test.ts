@@ -130,6 +130,10 @@ const rootFixtureManifest = {
     '!packages/core/src/testing/store-failures.ts',
     '!packages/core/src/testing/packed-install.ts',
     '!packages/core/src/cli/testkit.ts',
+    '!packages/core/src/cli/store-opening.contract.ts',
+    '!packages/core/src/ports/runner/live-contract-fixture.ts',
+    '!packages/core/src/cli/dashboard/frame-image.ts',
+    '!packages/core/src/markdown.ts',
     'skills',
     'templates',
     'patches',
@@ -328,6 +332,51 @@ describe('matchesPackedPattern', () => {
     ).toBe(false)
   })
 
+  test('the AUT-513 per-file negations match only their exact files, not their packed siblings', () => {
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/cli/store-opening.contract.ts',
+        'packages/core/src/cli/store-opening.contract.ts',
+      ),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/cli/store-opening.ts',
+        'packages/core/src/cli/store-opening.contract.ts',
+      ),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/ports/runner/live-contract-fixture.ts',
+        'packages/core/src/ports/runner/live-contract-fixture.ts',
+      ),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/ports/runner/session-env.ts',
+        'packages/core/src/ports/runner/live-contract-fixture.ts',
+      ),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/cli/dashboard/frame-image.ts',
+        'packages/core/src/cli/dashboard/frame-image.ts',
+      ),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/cli/dashboard/render.ts',
+        'packages/core/src/cli/dashboard/frame-image.ts',
+      ),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern('packages/core/src/markdown.ts', 'packages/core/src/markdown.ts'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern('packages/core/src/cli/observe.ts', 'packages/core/src/markdown.ts'),
+    ).toBe(false)
+  })
+
   test('* matches within a segment only', () => {
     expect(matchesPackedPattern('src/ids.test.ts', 'src/*.test.ts')).toBe(true)
     expect(matchesPackedPattern('src/web/ids.test.ts', 'src/*.test.ts')).toBe(false)
@@ -482,6 +531,10 @@ describe('deriveRuledPackages', () => {
       'packages/core/src/testing/store-failures.ts',
       'packages/core/src/testing/packed-install.ts',
       'packages/core/src/cli/testkit.ts',
+      'packages/core/src/cli/store-opening.contract.ts',
+      'packages/core/src/ports/runner/live-contract-fixture.ts',
+      'packages/core/src/cli/dashboard/frame-image.ts',
+      'packages/core/src/markdown.ts',
     ])
     expect(rootRuling.requiredPackedPaths).toEqual(['package.json', 'README.md'])
     expect(rootRuling.directory).toBe('.')
@@ -513,7 +566,7 @@ describe('deriveRuledPackages', () => {
     ])
   })
 
-  test('the root ruling is pinned to AUT-490 extended by AUT-503, AUT-508, and AUT-506', () => {
+  test('the root ruling is pinned to AUT-490 extended by AUT-503, AUT-508, AUT-506, and AUT-513', () => {
     expect(hostedRuling.ruling).toContain('Ruling (AUT-463')
     expect(postgresRuling.ruling).toContain('Ruling (AUT-473')
     expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490, extended by AUT-502)')
@@ -522,7 +575,7 @@ describe('deriveRuledPackages', () => {
     expect(postgresRuling.ruling).toContain('AUT-490')
     expect(dispatcherRuling.ruling).toContain('AUT-490')
     expect(rootRuling.ruling).toContain(
-      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506)',
+      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513)',
     )
     expect(rootRuling.ruling).toContain('@defrex/autobuild')
     expect(rootRuling.ruling).toContain('*.test.tsx')
@@ -539,6 +592,11 @@ describe('deriveRuledPackages', () => {
     // The AUT-506 extension names both files it decides.
     expect(rootRuling.ruling).toContain('testkit.ts')
     expect(rootRuling.ruling).toContain('harness.ts')
+    // The AUT-513 extension names the four files it rules out of the tarball.
+    expect(rootRuling.ruling).toContain('store-opening.contract.ts')
+    expect(rootRuling.ruling).toContain('live-contract-fixture.ts')
+    expect(rootRuling.ruling).toContain('frame-image.ts')
+    expect(rootRuling.ruling).toContain('markdown.ts')
     expect(rootRuling.ruling).toContain('./plugin-sdk')
     expect(rootRuling.ruling).toContain('./testing')
     expect(rootRuling.ruling).toContain(
@@ -581,6 +639,81 @@ describe('deriveRuledPackages', () => {
         directory: '.',
         ruling: expect.stringContaining('Ruling (derived from the manifest)'),
       },
+    ])
+  })
+})
+
+/** The root tarball's full shipped-surface enumeration, as ROOT_RULING renders it. */
+const ROOT_SHIPPED_SURFACE_ENUMERATION =
+  'bin, packages/core/src, skills, templates, patches, LICENSE, README.md, SPEC.md, and docs'
+
+/** The sub-package tarballs' shipped-surface enumeration, as their rulings render it. */
+const SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION = 'package.json, README.md, and src/**'
+
+/**
+ * The rendering-corruption guard for one rendered ruling: the text must carry no 'NaN'
+ * artifact (a stray unary plus in a concatenation renders NaN and can emit nothing else)
+ * and must contain its shipped-surface enumeration in full, so dropping any enumerated
+ * entry fails instead of passing on substring luck. Returns the problems found so the
+ * guard is itself testable against the recorded round-1 defect shape.
+ */
+function renderedRulingProblems(ruling: string, enumeration: string): string[] {
+  const problems: string[] = []
+  if (ruling.includes('NaN')) {
+    problems.push("rendered the 'NaN' artifact (stray unary plus in a concatenation)")
+  }
+  if (!ruling.includes(enumeration)) {
+    problems.push(`dropped the shipped-surface enumeration: ${enumeration}`)
+  }
+  return problems
+}
+
+describe('rendered-ruling integrity', () => {
+  const renderedRulings = [
+    {
+      name: '@defrex/autobuild',
+      ruling: rootRuling.ruling,
+      enumeration: ROOT_SHIPPED_SURFACE_ENUMERATION,
+    },
+    {
+      name: '@defrex/autobuild-hosted-store-service',
+      ruling: hostedRuling.ruling,
+      enumeration: SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION,
+    },
+    {
+      name: '@defrex/autobuild-postgres-store',
+      ruling: postgresRuling.ruling,
+      enumeration: SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION,
+    },
+    {
+      name: '@defrex/autobuild-hosted-dispatcher',
+      ruling: dispatcherRuling.ruling,
+      enumeration: SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION,
+    },
+  ]
+
+  test('every rendered ruling is free of the NaN corruption artifact and carries its full shipped-surface enumeration', () => {
+    for (const { name, ruling, enumeration } of renderedRulings) {
+      expect({ name, problems: renderedRulingProblems(ruling, enumeration) }).toEqual({
+        name,
+        problems: [],
+      })
+    }
+  })
+
+  test('the guard detects the recorded round-1 defect (a stray unary plus renders NaN and drops the enumeration)', () => {
+    // Reproduce the defect's semantics, not just its output: `+<string>` parses as a
+    // unary plus on a non-numeric string literal, evaluating to NaN, so the rendered
+    // sentence reads '... packages/core/src, NaN — except ...' with the enumeration
+    // literal gone.
+    const corruptedEnumeration = +ROOT_SHIPPED_SURFACE_ENUMERATION
+    const corruptedRuling =
+      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506): ' +
+      `the @defrex/autobuild npm tarball ships bin, packages/core/src, ${corruptedEnumeration} — except ` +
+      'every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under packages/core/src'
+    expect(renderedRulingProblems(corruptedRuling, ROOT_SHIPPED_SURFACE_ENUMERATION)).toEqual([
+      "rendered the 'NaN' artifact (stray unary plus in a concatenation)",
+      `dropped the shipped-surface enumeration: ${ROOT_SHIPPED_SURFACE_ENUMERATION}`,
     ])
   })
 })
@@ -1324,12 +1457,13 @@ describe('the real sub-package manifests', () => {
 })
 
 describe('the real root manifest', () => {
-  // Pinned byte-for-byte (AUT-490 + AUT-503 + AUT-508 + AUT-506): the root tarball ships packages/core/src
+  // Pinned byte-for-byte (AUT-490 + AUT-503 + AUT-508 + AUT-506 + AUT-513): the root tarball ships packages/core/src
   // except its *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx files (AUT-490's negation,
   // broadened to the four spellings by AUT-508), the AUT-503 per-file negations of the
-  // test-only src/testing helpers, and the AUT-506 per-file negation of the test-only
-  // src/cli/testkit.ts helper, whose load-bearing siblings (fixed.ts, index.ts, harness.ts) keep shipping.
-  const ROOT_AUT_508_FILES = [
+  // test-only src/testing helpers, the AUT-506 per-file negation of the test-only
+  // src/cli/testkit.ts helper, and the AUT-513 per-file negations of the four remaining
+  // dead-weight files, whose load-bearing siblings (fixed.ts, index.ts, harness.ts) keep shipping.
+  const ROOT_AUT_513_FILES = [
     'bin',
     'packages/core/src',
     '!packages/core/src/**/*.test.ts',
@@ -1339,6 +1473,10 @@ describe('the real root manifest', () => {
     '!packages/core/src/testing/store-failures.ts',
     '!packages/core/src/testing/packed-install.ts',
     '!packages/core/src/cli/testkit.ts',
+    '!packages/core/src/cli/store-opening.contract.ts',
+    '!packages/core/src/ports/runner/live-contract-fixture.ts',
+    '!packages/core/src/cli/dashboard/frame-image.ts',
+    '!packages/core/src/markdown.ts',
     'skills',
     'templates',
     'patches',
@@ -1348,10 +1486,10 @@ describe('the real root manifest', () => {
     'docs',
   ]
 
-  test("the root package.json's files allowlist carries the AUT-490 negations broadened by AUT-508 plus the AUT-503 and AUT-506 per-file negations exactly", () => {
+  test("the root package.json's files allowlist carries the AUT-490 negations broadened by AUT-508 plus the AUT-503, AUT-506, and AUT-513 per-file negations exactly", () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
       files?: unknown
     }
-    expect(manifest.files).toEqual(ROOT_AUT_508_FILES)
+    expect(manifest.files).toEqual(ROOT_AUT_513_FILES)
   })
 })
