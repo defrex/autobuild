@@ -585,6 +585,81 @@ describe('deriveRuledPackages', () => {
   })
 })
 
+/** The root tarball's full shipped-surface enumeration, as ROOT_RULING renders it. */
+const ROOT_SHIPPED_SURFACE_ENUMERATION =
+  'bin, packages/core/src, skills, templates, patches, LICENSE, README.md, SPEC.md, and docs'
+
+/** The sub-package tarballs' shipped-surface enumeration, as their rulings render it. */
+const SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION = 'package.json, README.md, and src/**'
+
+/**
+ * The rendering-corruption guard for one rendered ruling: the text must carry no 'NaN'
+ * artifact (a stray unary plus in a concatenation renders NaN and can emit nothing else)
+ * and must contain its shipped-surface enumeration in full, so dropping any enumerated
+ * entry fails instead of passing on substring luck. Returns the problems found so the
+ * guard is itself testable against the recorded round-1 defect shape.
+ */
+function renderedRulingProblems(ruling: string, enumeration: string): string[] {
+  const problems: string[] = []
+  if (ruling.includes('NaN')) {
+    problems.push("rendered the 'NaN' artifact (stray unary plus in a concatenation)")
+  }
+  if (!ruling.includes(enumeration)) {
+    problems.push(`dropped the shipped-surface enumeration: ${enumeration}`)
+  }
+  return problems
+}
+
+describe('rendered-ruling integrity', () => {
+  const renderedRulings = [
+    {
+      name: '@defrex/autobuild',
+      ruling: rootRuling.ruling,
+      enumeration: ROOT_SHIPPED_SURFACE_ENUMERATION,
+    },
+    {
+      name: '@defrex/autobuild-hosted-store-service',
+      ruling: hostedRuling.ruling,
+      enumeration: SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION,
+    },
+    {
+      name: '@defrex/autobuild-postgres-store',
+      ruling: postgresRuling.ruling,
+      enumeration: SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION,
+    },
+    {
+      name: '@defrex/autobuild-hosted-dispatcher',
+      ruling: dispatcherRuling.ruling,
+      enumeration: SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION,
+    },
+  ]
+
+  test('every rendered ruling is free of the NaN corruption artifact and carries its full shipped-surface enumeration', () => {
+    for (const { name, ruling, enumeration } of renderedRulings) {
+      expect({ name, problems: renderedRulingProblems(ruling, enumeration) }).toEqual({
+        name,
+        problems: [],
+      })
+    }
+  })
+
+  test('the guard detects the recorded round-1 defect (a stray unary plus renders NaN and drops the enumeration)', () => {
+    // Reproduce the defect's semantics, not just its output: `+<string>` parses as a
+    // unary plus on a non-numeric string literal, evaluating to NaN, so the rendered
+    // sentence reads '... packages/core/src, NaN — except ...' with the enumeration
+    // literal gone.
+    const corruptedEnumeration = +ROOT_SHIPPED_SURFACE_ENUMERATION
+    const corruptedRuling =
+      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506): ' +
+      `the @defrex/autobuild npm tarball ships bin, packages/core/src, ${corruptedEnumeration} — except ` +
+      'every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under packages/core/src'
+    expect(renderedRulingProblems(corruptedRuling, ROOT_SHIPPED_SURFACE_ENUMERATION)).toEqual([
+      "rendered the 'NaN' artifact (stray unary plus in a concatenation)",
+      `dropped the shipped-surface enumeration: ${ROOT_SHIPPED_SURFACE_ENUMERATION}`,
+    ])
+  })
+})
+
 describe('parsePackedPaths', () => {
   test('extracts every path from a real-shaped listing and ignores the trailer lines', () => {
     expect(parsePackedPaths(happyListing)).toEqual([
