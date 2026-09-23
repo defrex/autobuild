@@ -217,6 +217,51 @@ test('criterion 5: a repository switch aborts the old request and renders only t
   expect(h.generated()).toEqual(['b'])
 })
 
+test('criterion 5: a fetch that fulfills before the switch discards its stale answer at the generation guard', async () => {
+  const h = harness()
+  h.refresher.setRepo('a')
+  const stale = h.calls[0]!
+
+  // Fulfill the fetch, then switch repos in the same synchronous turn. The
+  // continuation of the fulfilled promise has not run yet, so it reaches the
+  // render-side generation guard (run.generation !== generation) instead of the
+  // silent-abort path the rejection-based harness takes for a still-pending
+  // fetch — pinning the superseded-answer branch.
+  stale.resolve(snapshot('stale-a'))
+  h.refresher.setRepo('b')
+
+  expect(stale.signal.aborted).toBe(true)
+  expect(h.calls).toHaveLength(2)
+  expect(h.calls[1]!.repo).toBe('b')
+
+  await flush()
+  // The stale A snapshot did not render, and the swallowed abort is silent.
+  expect(h.generated()).toEqual([])
+  expect(h.errors).toEqual([])
+
+  // The fresh repo B answer renders normally and the poll schedule continues.
+  h.calls[1]!.resolve(snapshot('fresh-b'))
+  await flush()
+  expect(h.generated()).toEqual(['fresh-b'])
+  expect(h.pendingChanges).toEqual([true, false])
+
+  h.timers.advance(POLL_INTERVAL_MS - 1)
+  expect(h.calls).toHaveLength(2)
+  h.timers.advance(1)
+  expect(h.calls).toHaveLength(3)
+  expect(h.calls[2]!.repo).toBe('b')
+})
+
+test('criterion 5: the same fulfilled fetch renders when no switch follows', async () => {
+  const h = harness()
+  h.refresher.setRepo('a')
+  h.calls[0]!.resolve(snapshot('plain'))
+  await flush()
+
+  expect(h.generated()).toEqual(['plain'])
+  expect(h.errors).toEqual([])
+})
+
 test('criterion 5: dispose aborts silently and resolves outstanding demands', async () => {
   const h = harness()
   h.refresher.setRepo('repo')
