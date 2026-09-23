@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#493](https://github.com/defrex/autobuild/pull/493) — Fix wait.ts's post-drain exit-2 comment after AUT-403 (AUT-528)
 - [#491](https://github.com/defrex/autobuild/pull/491) — Pin the terminal observation sample's missing-record behavior (AUT-524)
 - [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
 - [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
