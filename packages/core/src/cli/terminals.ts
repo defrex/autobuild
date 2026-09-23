@@ -20,6 +20,7 @@ import { z } from 'zod'
 import { loadConfig } from '../config/load'
 import type { AbEvent, EventEnvelope } from '../events/catalog'
 import { agentActor, KERNEL } from '../events/envelope'
+import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
 import {
   autoMergeApplicationType,
@@ -258,7 +259,7 @@ function requireImplementationProvisioning(events: AbEvent[]): void {
 function remotePublication(events: readonly AbEvent[]): boolean {
   let remote = false
   for (const event of events) {
-    if (event.type === 'workspace.provisioned') remote = event.payload.provider === 'vercel-sandbox'
+    if (event.type === 'workspace.provisioned') remote = isRemoteWorkspace(event.payload)
     else if (event.type === 'workspace.released') remote = false
   }
   return remote
