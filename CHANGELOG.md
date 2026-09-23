@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
 - [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
 - [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
 - [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
