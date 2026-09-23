@@ -64,13 +64,16 @@ const [doc, guide, readme, setupDoc, guideSetup, autobuildToml] = await Promise.
  *
  * Multi-line/triple-quoted TOML values are out of contract: doc fences
  * render a multi-line command as a triple-quoted block whose bytes this
- * one-line renderer can never match, so a raw line break throws instead of
- * deriving expectation bytes that can only mismatch. The suite must not
- * call this helper with a multi-line value; the guard makes a violation
- * loud. `key` must be a bare key (today's call sites: install, preflight).
+ * one-line renderer can never match, so a raw TOML line break — LF or
+ * CRLF — throws instead of deriving expectation bytes that can only
+ * mismatch. A lone raw CR is not a TOML line break: it renders as the
+ * compact \r escape in a single-line basic string, matching what
+ * smol-toml produces for the same value. The suite must not call this
+ * helper with a multi-line value; the guard makes a violation loud.
+ * `key` must be a bare key (today's call sites: install, preflight).
  */
 function tomlBasicStringLine(key: string, value: string): string {
-  if (/[\n\r]/.test(value)) {
+  if (/[\n]/.test(value)) {
     throw new Error(
       `tomlBasicStringLine(${key}): value contains a line break — the helper renders single-line TOML basic strings only; multi-line/triple-quoted values are out of contract`,
     )
@@ -589,9 +592,16 @@ describe('tomlBasicStringLine — basic-string rendering', () => {
     expect(tomlBasicStringLine('k', 'a\\b"c')).toBe('k = "a\\\\b\\"c"')
   })
 
-  test('refuses multi-line values instead of deriving unmatchable bytes', () => {
+  test('renders a lone raw CR as an escaped single-line value', () => {
+    // A lone CR is not a TOML line break (TOML line breaks are LF or
+    // CRLF), so it renders like any other control character, in smol-toml's
+    // compact \r form inside a single-line basic string.
+    expect(tomlBasicStringLine('k', 'a\rb')).toBe('k = "a\\rb"')
+  })
+
+  test('refuses values with TOML line breaks (LF or CRLF) instead of deriving unmatchable bytes', () => {
     expect(() => tomlBasicStringLine('k', 'one\ntwo')).toThrow(/single-line/)
-    expect(() => tomlBasicStringLine('k', 'one\rtwo')).toThrow(/single-line/)
+    expect(() => tomlBasicStringLine('k', 'one\r\ntwo')).toThrow(/single-line/)
   })
 })
 
