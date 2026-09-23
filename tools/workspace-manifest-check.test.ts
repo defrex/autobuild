@@ -11,9 +11,9 @@ afterEach(async () => {
 
 const dependencies = { alpha: '^1.0.0', beta: '2.0.0' }
 
-// The four pins mirrored between the root manifest and the hosted-store-service
-// manifest; every fixture carries them identically so existing tests keep
-// passing under the mirror rule.
+// The four pins mirrored between the web-dashboard-capture package manifest and
+// the hosted-store-service manifest; every fixture carries them identically in
+// both so existing tests keep passing under the mirror rule.
 const reactPins = {
   react: '19.2.4',
   'react-dom': '19.2.4',
@@ -34,11 +34,13 @@ async function fixture(
   core: Record<string, unknown> = {},
   hosted: Record<string, unknown> = {},
   root: Record<string, unknown> = {},
+  capture: Record<string, unknown> = {},
 ): Promise<string> {
   const rootPath = await mkdtemp(join(tmpdir(), 'ab-workspaces-'))
   temporary.push(rootPath)
   await mkdir(join(rootPath, 'packages', 'core'), { recursive: true })
   await mkdir(join(rootPath, 'packages', 'hosted-store-service'), { recursive: true })
+  await mkdir(join(rootPath, 'packages', 'web-dashboard-capture'), { recursive: true })
   await writeFile(
     join(rootPath, 'package.json'),
     JSON.stringify({
@@ -72,6 +74,16 @@ async function fixture(
       ...hosted,
     }),
   )
+  await writeFile(
+    join(rootPath, 'packages', 'web-dashboard-capture', 'package.json'),
+    JSON.stringify({
+      name: '@defrex/autobuild-web-dashboard-capture',
+      version: '1.2.3',
+      engines: { bun: '>=1.4.0' },
+      devDependencies: reactPins,
+      ...capture,
+    }),
+  )
   return rootPath
 }
 
@@ -81,6 +93,7 @@ describe('workspace manifest invariants', () => {
       'package.json',
       'packages/core/package.json',
       'packages/hosted-store-service/package.json',
+      'packages/web-dashboard-capture/package.json',
     ])
   })
 
@@ -112,24 +125,24 @@ describe('workspace manifest invariants', () => {
     ).rejects.toThrow('dependency alpha')
   })
 
-  test('rejects react pin drift between root and hosted-store-service', async () => {
+  test('rejects react pin drift between web-dashboard-capture and hosted-store-service', async () => {
     await expect(
       validateWorkspaceManifests(
-        await fixture({}, {}, { devDependencies: { ...reactPins, react: '19.2.5' } }),
+        await fixture({}, {}, {}, { devDependencies: { ...reactPins, react: '19.2.5' } }),
       ),
     ).rejects.toThrow(
-      'package.json and packages/hosted-store-service/package.json: react pin drift (root 19.2.5; hosted-store-service 19.2.4)',
+      'packages/web-dashboard-capture/package.json and packages/hosted-store-service/package.json: react pin drift (web-dashboard-capture 19.2.5; hosted-store-service 19.2.4)',
     )
     await expect(
       validateWorkspaceManifests(
-        await fixture({}, {}, { devDependencies: { ...reactPins, '@types/react': '19.2.15' } }),
+        await fixture({}, {}, {}, { devDependencies: { ...reactPins, '@types/react': '19.2.15' } }),
       ),
     ).rejects.toThrow('@types/react pin drift')
     await expect(
       validateWorkspaceManifests(
         await fixture({}, { dependencies: { ...hostedDependencies, react: '19.2.5' } }),
       ),
-    ).rejects.toThrow('react pin drift (root 19.2.4; hosted-store-service 19.2.5)')
+    ).rejects.toThrow('react pin drift (web-dashboard-capture 19.2.4; hosted-store-service 19.2.5)')
     await expect(
       validateWorkspaceManifests(
         await fixture(
@@ -142,12 +155,16 @@ describe('workspace manifest invariants', () => {
           },
         ),
       ),
-    ).rejects.toThrow('@types/react-dom pin drift (root 19.2.3; hosted-store-service 19.2.4)')
+    ).rejects.toThrow(
+      '@types/react-dom pin drift (web-dashboard-capture 19.2.3; hosted-store-service 19.2.4)',
+    )
     await expect(
       validateWorkspaceManifests(
         await fixture({}, { dependencies: { 'react-dom': reactPins['react-dom'], pg: '8.18.0' } }),
       ),
-    ).rejects.toThrow('react pin drift (root 19.2.4; hosted-store-service not pinned)')
+    ).rejects.toThrow(
+      'react pin drift (web-dashboard-capture 19.2.4; hosted-store-service not pinned)',
+    )
   })
 
   test('does not constrain non-mirrored dependencies between root and hosted-store-service', async () => {
@@ -161,6 +178,22 @@ describe('workspace manifest invariants', () => {
         await fixture({}, {}, { devDependencies: { ...reactPins, '@types/bun': '^1.3.14' } }),
       ),
     ).resolves.toBeDefined()
+  })
+
+  test('accepts a root manifest without any react pins', async () => {
+    // The web capture tool moved into its own workspace package; the root
+    // manifest no longer carries pins that exist solely to serve it.
+    await expect(
+      validateWorkspaceManifests(await fixture({}, {}, { devDependencies: {} })),
+    ).resolves.toBeDefined()
+  })
+
+  test('fails closed when the web-dashboard-capture manifest is missing', async () => {
+    await expect(
+      validateWorkspaceManifests(
+        await fixture({}, {}, {}, { name: '@defrex/autobuild-something-else' }),
+      ),
+    ).rejects.toThrow('workspace @defrex/autobuild-web-dashboard-capture is required')
   })
 
   test('fails closed when the hosted-store-service manifest is missing', async () => {

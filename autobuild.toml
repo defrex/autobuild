@@ -96,7 +96,7 @@ paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.t
 [verify.web-dashboard]
 kind = "agent"
 skill = "verify-web-dashboard"
-paths = ["packages/hosted-store-service/app/**", "tools/web-dashboard-capture.tsx", ".agents/skills/verify-web-dashboard/SKILL.md", "DESIGN.md"]
+paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture/src/**", ".agents/skills/verify-web-dashboard/SKILL.md", "DESIGN.md"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.

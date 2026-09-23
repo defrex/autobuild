@@ -5,7 +5,7 @@ import {
   buildRowActions,
   canPreviewPointer,
   handleRowControlKey,
-} from '../packages/hosted-store-service/app/dashboard/BuildsView'
+} from '../../hosted-store-service/app/dashboard/BuildsView'
 import {
   captureStateCss,
   checkEvidence,
