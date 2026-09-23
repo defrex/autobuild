@@ -4,7 +4,7 @@
 
 Provenance: audiences, the usage scene, and the parity commitment below were
 confirmed with the maintainer on 2026-09-07. Everything else is drawn from the
-repository (`SPEC.md`, `README.md`, `docs/`, `app/`). Correct it here if it is
+repository (`SPEC.md`, `README.md`, `docs/`, the hosted store service app tree). Correct it here if it is
 wrong; do not reopen the confirmed fields without a reason.
 
 ## Platform

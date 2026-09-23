@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { verifyToken } from '@defrex/autobuild/remote-store'
-import { TOOLS, type ToolEntry } from '@defrex/autobuild/operator-api'
+import { TOOLS, type ToolEntry } from '@defrex/autobuild/operator'
 import { z } from 'zod'
 import type { WebAuth } from './auth'
 import { MCP_MAX_WAIT_SECONDS, createMcpEndpoint } from './mcp'

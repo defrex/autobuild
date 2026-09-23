@@ -201,7 +201,7 @@
       "rule": "─",
       "menu": "▾"
     },
-    "tokenSource": "app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well, shared --button-border, step and status maps); app/layout.tsx (--font-mono)."
+    "tokenSource": "packages/hosted-store-service/app/globals.css (:root role tokens --ground --ink --title --live --lane-preview --ok --warn --alert --slack --rule --well, shared --button-border, step and status maps); packages/hosted-store-service/app/layout.tsx (--font-mono)."
   },
   "components": [
     {

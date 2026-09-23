@@ -41,7 +41,9 @@ DATABASE_URL=postgres://… bun run postgres:migrate
 
 Replace `v0.6.0` with the selected release tag. Schema diagnostics' root
 `postgres:migrate` script is relative to that pinned checkout. A hosted build
-can run the same step itself: `bun run deploy:build` migrates against the
+can run the same step itself: `bun run deploy:build` — run from the hosted
+store service package directory (`packages/hosted-store-service`), the Next.js
+project directory — migrates against the
 deployment's database URL, logs the host it prepared, and then builds the web
 application, failing the build when no database URL is configured or the
 schema is incompatible. The database
@@ -150,6 +152,33 @@ snapshot. Raising capacity can fill the new slots immediately; lowering it
 prevents new claims without terminating builds already above the limit. `ab
 dispatch --once` performs one pass and does not watch or reload.
 
+The sections `autobuild.toml` delivers to a build fall into three ownership
+classes. **Build-owned** sections define the pipeline a build runs — `[verify]`
+with `[verify.<step>]`, `[finalize]` with `[finalize.<step>]`, `[commands]`,
+and `[workspace]` (provider and config, including `provisioning` and
+`runtimeProvisioning`). They are pinned to the build's own branch: the
+dispatcher reads them at the build's recorded base commit, or at its branch
+head once the build has published commits, and records the exact commit in the
+effective-config artifact metadata. In checkout mode the worktree read is the
+exception: when it cannot be attributed to the branch-head commit — because
+the worktree file has uncommitted edits, because the clean/dirty comparison
+could not be performed (non-git workspace or a transient git error), or because
+the branch head never carried the file — the deposit records the source
+`worktree-dirty` with no commit. The build still runs the worktree bytes, but
+provenance declines to attribute them to any commit. **Deployment-owned** sections — `[roles]`
+(runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and
+`[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
+`capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
+dispatcher itself and are never interpreted by the build runner.
+
+Consequently, an accepted base-branch reload re-deposits only the
+deployment-owned sections to active builds; it does not retarget an in-flight
+build's verify universe, finalize steps, commands, or provisioning. A build
+that publishes a pipeline change to its own branch picks it up at its next
+launch, so config changes still flow through the pipeline for the build that
+carries them. In-flight environments are never re-provisioned: a fresh build
+from the new base is the path for a changed provisioning definition.
+
 Every accepted revision is deposited verbatim as a `dispatcher-config`
 repository artifact and referenced by a `dispatcher.config-reloaded` repository
 event. The dashboard reports the reload and reprojects values such as capacity;
@@ -168,10 +197,11 @@ These fields hot-reload:
 | `baseBranch` | Next dispatch or base fallback decision; existing `build.created` facts remain immutable. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
-| `[commands]` | Next setup, verify check, or finalize check selected. |
-| `[verify]` and `[finalize]` | Next engine step selection. An approved plan's stored verify selection remains authoritative. |
-| `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together. |
-| `[policy]` | Next policy, convergence, or agent-session boundary. A running session keeps its captured budget. |
+| `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. A base-branch reload does not retarget an in-flight build. |
+| `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
+| `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
+| `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
+| `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
 | `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
 
@@ -442,7 +472,7 @@ gitPasswordEnv = "AB_GIT_READ_TOKEN"
 
 [workspace.config.runtimeProvisioning.pi]
 install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
-preflight = "test \"$(pi --version)\" = \"0.84.4\""
+preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
 ```
 
 | Vercel field | Default | Constraints |
@@ -1463,7 +1493,7 @@ poll. Editing TOML cannot change them.
 |---|---:|---|---|
 | Ticket intake | on | `ab dispatch --intake` / `--no-intake`; `i` on the dashboard's global row, and `p` (pause all) / `r` (resume all) on that row or their sessionless equivalents `ab pause --all` / `ab resume --all`, which turn intake off and on as part of quiescing the repository | When off, skip only new ticket list/claim/dispatch work. Janitor work, lease recovery, in-flight builds, and harvesting continue. Turning intake off does not hold builds the repository has already accepted — that is the repository pause below. |
 | Repository pause | off | `p` (pause all) / `r` (resume all) on the dashboard's global row, or `ab pause --all` / `ab resume --all` | While on, the dashboard controls line shows `repository PAUSED`, and each held queued row shows `(held)` while retaining its literal `QUEUED` status. No dispatcher tick attaches a runner to such a build — recovery, startup resume, and the lease sweep all skip them. Running builds are parked by the per-build pauses the same command writes; the janitor still settles aborts and discards. |
-| Claim-time auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent only on builds claimed after the setting is enabled. Existing builds never change with the default. |
+| Repository auto-merge default | off | `ab dispatch --auto-merge` / `--no-auto-merge`; `m` on the global row | Seeds durable auto-merge intent on builds claimed while the setting is enabled, and — on each change — also applies as a bulk action to every current non-terminal build: turning it on requests consent for each build (turning it off withdraws it), attributed to the operator who toggled it exactly as if they had pressed `m` on every row. A per-build toggle overrides its build's state until the global row is toggled again. |
 | Harvest gate | on | `h` on the dashboard's global row | Pauses or resumes repository observation harvesting. The header shows the kernel-acknowledged gate, not merely a pending keypress. |
 
 The opposite flag forms for each dispatch setting are mutually exclusive.

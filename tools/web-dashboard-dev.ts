@@ -22,15 +22,15 @@
  *   docker exec ab-dev-minio sh -c 'mc alias set local http://localhost:9000 abdev abdevsecret123 && mc mb --ignore-existing local/autobuild-dev'
  */
 import { randomBytes, createHmac } from 'node:crypto'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { SQL } from 'bun'
 import type { Config } from '../packages/core/src/config/schema'
 import { roleKeyWarnings } from '../packages/core/src/config/roles'
 import { DISPATCHER } from '../packages/core/src/events/envelope'
 import type { E2eHarness } from '../packages/core/src/integration/harness'
 import type { BuildStore, Clock } from '../packages/core/src/store/types'
-import { migratePostgres } from '../packages/postgres-store/src/schema'
-import { openPostgresBuildStoreFromEnv } from '../packages/postgres-store/src/config'
+import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
+import { openPostgresBuildStoreFromEnv } from '@defrex/autobuild-postgres-store'
 import { prepareHappyScenario, prepareScenario } from './dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
@@ -38,7 +38,13 @@ const WEB_PORT = 3100
 const SIGN_IN_PORT = 3199
 const WEB_ORIGIN = `http://localhost:${WEB_PORT}`
 const IDENTITY = process.env.AB_WEB_DEV_EMAIL ?? 'operator@example.com'
-const REPOSITORIES = { happy: 'example/happy', mixed: 'example/mixed' } as const
+// Repository identities are normalized https:// origins (see the web
+// config's AB_WEB_REPOSITORIES validation); short `owner/name` spellings
+// fail that parse and break every page that reads the config.
+const REPOSITORIES = {
+  happy: 'https://github.com/example/happy',
+  mixed: 'https://github.com/example/mixed',
+} as const
 const COOKIE_NAME = 'better-auth.session_token'
 const SESSION_TOKEN_FILE = resolve(REPO_ROOT, '.autobuild', 'web-dev-session-token')
 
@@ -338,7 +344,9 @@ async function serve(): Promise<void> {
   console.log(`web app:  ${WEB_ORIGIN}/`)
 
   const child = Bun.spawn(['bun', 'run', '--bun', 'next', 'dev', '-p', String(WEB_PORT)], {
-    cwd: REPO_ROOT,
+    // The Next.js project directory is the hosted store service package (AUT-409);
+    // `next dev` must run there so its config, tsconfig, and .next/ resolve.
+    cwd: join(REPO_ROOT, 'packages', 'hosted-store-service'),
     env: { ...process.env, ...env },
     stdout: 'inherit',
     stderr: 'inherit',

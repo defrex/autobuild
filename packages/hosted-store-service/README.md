@@ -1,16 +1,41 @@
 # `@defrex/autobuild-hosted-store-service`
 
 The optional hosted Autobuild service composes the remote BuildStore and the
-full TicketSource HTTP protocol with `@defrex/autobuild-postgres-store`. The root
-Next.js application mounts those machine protocols unchanged and serves the
-cookie-authenticated operator dashboard on the same origin. `server.ts` remains
-the named bare-Bun machine-service entrypoint for non-Next hosts.
+full TicketSource HTTP protocol with `@defrex/autobuild-postgres-store`; the
+protocol servers live here while their client half, wire schemas, and token
+minting ship in the `@defrex/autobuild` core package. The Next.js application
+lives in this package's `app/` tree: it mounts those machine protocols
+unchanged and serves the cookie-authenticated operator dashboard on the same
+origin. `server.ts` in this package remains the named bare-Bun
+machine-service entrypoint for non-Next hosts.
+
+Only this package's `src/` tree and this README publish to npm: every
+consumer of the published package imports through the manifest's `exports`
+and `bin`, all of which live under `src/`. The manifest's `files` allowlist
+pins the tarball to exactly that, and `bun tools/publish-contents-check.ts`
+in the repository `check` gate fails when anything else would ship — in
+particular the internal `.impeccable/` surface brief. The Next.js `app/`
+tree, `server.ts`, the Next/Vercel configuration files, and `.impeccable/`
+are release-checkout/Vercel surface — read from this repository at deploy
+time, never from the package npm installs — and their absence from the
+tarball is deliberate, not an oversight.
 
 ## Configure and run locally
 
 The service and PostgreSQL adapter are published to npm
 (`@defrex/autobuild-hosted-store-service`, `@defrex/autobuild-postgres-store`)
-separately from the `@defrex/autobuild` CLI. The deployable web application
+separately from the `@defrex/autobuild` CLI. Their published `src/` trees
+import `@defrex/autobuild` subpaths (`./operator`, `./hosted-tickets`,
+`./testing` among them) that exist only from `@defrex/autobuild` 0.9.0 —
+published 0.8.0 predates the renames and lacks them — so the manifest's
+optional peer dependency `"@defrex/autobuild": ">=0.9.0"` is the
+machine-readable form of that floor; install the service only against a
+provider that satisfies it.
+`tools/publish-imports-check.ts` in the repository `check` gate pins this
+coupling where releases are cut: it packs every publishable package, stages
+the tarballs into a scratch `node_modules` layout, and fails when a packed
+file imports a `@defrex/autobuild` subpath the packed provider does not
+export. The deployable web application
 runs from a release checkout: clone the compatible release tag and install it
 as shown in the [complete environment reference](../../docs/configuration.md),
 then migrate the database (the migration is idempotent):
@@ -22,9 +47,11 @@ DATABASE_URL=postgres://… bun run postgres:migrate
 Set `AB_STORE_SECRET`, `DATABASE_URL` (or an explicit `AB_POSTGRES_URL`), one
 blob backend, and the web/auth
 variables below in that pinned checkout. Register a GitHub OAuth app with
-`http://localhost:3000/api/auth/callback/github` as its local callback, then run:
+`http://localhost:3000/api/auth/callback/github` as its local callback, then
+run the dev script from this package directory:
 
 ```sh
+cd packages/hosted-store-service
 bun run dev
 ```
 
@@ -32,7 +59,8 @@ The GitHub app needs access to the user's primary email (`user:email`, or the
 GitHub App equivalent read-only email permission). Open `http://localhost:3000`.
 The browser receives only Better Auth's secure HTTP-only session cookie; it
 never receives a store/operator token or a signing/provider secret. To run only
-the legacy machine service use `bun run hosted-store`; `AB_HOST` defaults to
+the legacy machine service use `bun run hosted-store` (from the package
+directory); `AB_HOST` defaults to
 `0.0.0.0` and `PORT` defaults to `3000`. Check the public
 endpoint with `curl http://localhost:3000/health`; it reports the Autobuild and
 remote-protocol versions without opening the database. Clients use the deploy
@@ -96,13 +124,17 @@ answers. `wait` is one or more ASCII digits (whole seconds); any other form is a
 400 validation error, and a value above the hosted ceiling of **25 seconds** is
 clamped to 25, never rejected. The ceiling must stay under the machine routes'
 `maxDuration` of 60 s (`app/builds/[[...path]]/route.ts` and
-`app/repos/[[...path]]/route.ts`), which exists to cover the hold; raise the
+`app/repos/[[...path]]/route.ts` in this package's app tree), which exists to cover the hold; raise the
 two together if you change either.
 
 ## Deploy to Vercel
 
-1. Import this repository and select its repository root as the project root.
-2. Select Bun. The checked-in `vercel.json` pins Bun 1.4.x and sets the build
+1. Import this repository and select `packages/hosted-store-service` (the
+   package directory holding `vercel.json` and the Next.js app) as the Root
+   Directory. `bun install` from a workspace member installs the whole
+   workspace.
+2. Select Bun. The checked-in `vercel.json` in the package directory pins Bun
+   1.4.x and sets the build
    command to `bun run deploy:build`, which runs the idempotent migration
    against the deployment's own database URL and then builds the Next.js
    output. Pages and machine routes are one deployment.
@@ -150,7 +182,8 @@ session. `AB_STORE_SECRET`, GitHub's client secret, PostgreSQL/blob credentials,
 machine tokens, and OAuth account tokens are server-only and must never use a
 `NEXT_PUBLIC_` name.
 
-On another Bun-capable host, `bun run dev` or `bun run start` serves the full
+On another Bun-capable host, `bun run dev` or `bun run start` from this
+package directory serves the full
 application. `bun run hosted-store` serves machine routes only.
 
 ## Hosted dispatcher

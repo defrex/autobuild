@@ -7,9 +7,9 @@ import {
   systemClock,
 } from '@defrex/autobuild/plugin-sdk'
 import { AuthError, RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
-import { humanActor, type Via } from '../../core/src/events/envelope'
-import { migratePostgres } from '../../postgres-store/src/schema'
-import { openPostgresBuildStore } from '../../postgres-store/src/store'
+import { humanActor, type Via } from '@defrex/autobuild/testing'
+import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
+import { openPostgresBuildStore } from '@defrex/autobuild-postgres-store/store'
 import { createHostedStoreService } from './service'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()

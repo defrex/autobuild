@@ -12,14 +12,22 @@
  * trace file's directory). It fails loudly when pack-distribution has not run
  * or the trace file is missing, so a deployment can never silently ship
  * without the archive.
+ *
+ * It appends the distribution manifest the same way. Provisioning reads the
+ * running version from the repository root's package.json, which no import
+ * traces; it reached the bundle only while the Next.js project directory was
+ * the repository root, and a Root Directory below it drops the file.
  */
 import { createHash } from 'node:crypto'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative } from 'node:path'
+import { distributionManifestPath } from '@defrex/autobuild/distribution'
 
 export interface EnsureOptions {
   root?: string
   distDir?: string
+  /** Distribution manifest to carry; defaults to the file provisioning reads. */
+  manifest?: string
   log?: (message: string) => void
 }
 
@@ -28,6 +36,7 @@ export interface EnsureResult {
   bytes: number
   sha256: string
   appended: boolean
+  manifestAppended: boolean
 }
 
 const DIST_DIRECTORY = '.autobuild-dist'
@@ -42,14 +51,14 @@ async function findArchive(root: string): Promise<string> {
   } catch {
     throw new Error(
       `no ${DIST_DIRECTORY}/ directory under ${root} — run ` +
-        '`bun packages/hosted-dispatcher/src/bin.ts pack-distribution` before building',
+        '`bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .` before building',
     )
   }
   const archives = entries.filter((name) => /^autobuild-.+\.tgz$/.test(name)).sort()
   if (archives.length === 0) {
     throw new Error(
       `no autobuild-*.tgz in ${DIST_DIRECTORY}/ — run ` +
-        '`bun packages/hosted-dispatcher/src/bin.ts pack-distribution` before building',
+        '`bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .` before building',
     )
   }
   if (archives.length > 1) {
@@ -90,17 +99,31 @@ async function readTrace(path: string): Promise<string[]> {
 export async function ensureDistributionArchiveInTrace({
   root = process.cwd(),
   distDir = '.next',
+  manifest = distributionManifestPath(),
   log = (message) => console.log(message),
 }: EnsureOptions = {}): Promise<EnsureResult> {
   const archive = await findArchive(root)
+  try {
+    await stat(manifest)
+  } catch {
+    throw new Error(
+      `missing distribution manifest ${manifest} — provisioning reads the version from it`,
+    )
+  }
   const trace = tracePath(root, distDir)
   const files = await readTrace(trace)
 
   const entry = relative(dirname(trace), archive)
+  const manifestEntry = relative(dirname(trace), manifest)
   const appended = !files.includes(entry)
-  if (appended) {
+  const manifestAppended = !files.includes(manifestEntry)
+  if (appended || manifestAppended) {
     const parsed = JSON.parse(await readFile(trace, 'utf8'))
-    await writeFile(trace, `${JSON.stringify({ ...parsed, files: [...files, entry] }, null, 2)}\n`)
+    const added = [...(appended ? [entry] : []), ...(manifestAppended ? [manifestEntry] : [])]
+    await writeFile(
+      trace,
+      `${JSON.stringify({ ...parsed, files: [...files, ...added] }, null, 2)}\n`,
+    )
   }
 
   const bytes = (await stat(archive)).size
@@ -111,7 +134,11 @@ export async function ensureDistributionArchiveInTrace({
     `distribution archive ${basename(archive)} (${bytes} bytes, sha256 ${sha256}) ` +
       `${appended ? 'appended to' : 'already present in'} ${trace}`,
   )
-  return { archive, bytes, sha256, appended }
+  log(
+    `distribution manifest ${manifest} ` +
+      `${manifestAppended ? 'appended to' : 'already present in'} ${trace}`,
+  )
+  return { archive, bytes, sha256, appended, manifestAppended }
 }
 
 if (import.meta.main) {

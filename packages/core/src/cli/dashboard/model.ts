@@ -38,6 +38,7 @@
 import type { AbEvent } from '../../events/catalog'
 import type { RepositoryEvent } from '../../events/repository'
 import type { Config } from '../../config/schema'
+import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
 import { currentAutoMergeDeferral } from '../../kernel/auto-merge'
 import { decideNext } from '../../kernel/engine'
@@ -104,6 +105,12 @@ export interface PipelineStep {
   /** Absent ⇒ the step has never run in the current spec scope ⇒ no time is
    * shown (AC 6). The renderer composes the elapsed segment from this. */
   timing?: StepTiming
+  /** Display-only, like `qualifier`, and never consulted for routing: the
+   * parked merge step's no-consent explanation — why nothing will happen
+   * without operator action, and which control unblocks it. Attached when the
+   * build is current at merge with effective auto-merge off; the terminal
+   * row/detail and the web row/detail render the same words. */
+  reason?: string
 }
 
 export type DashboardSelection =
@@ -155,6 +162,11 @@ export interface DashboardBuild {
   pr?: { url: string; state: PrLifecycle }
   /** Chronological session history projected from the retained raw log. */
   sessions?: DashboardSession[]
+  /** Which `autobuild.toml` the dispatcher pinned this build's pipeline from,
+   * and the effective-config revision it was deposited under (SPEC §16.1).
+   * Present once an effective-config artifact exists. */
+  pipelineSource?: PipelineSourceMeta
+  effectiveConfigRev?: number
 }
 
 export type DashboardView =
@@ -329,6 +341,18 @@ export function autoMergeDisplay(state: BuildState): AutoMergeDisplay {
   return 'cancelling'
 }
 
+/** The shared no-consent wording for a build parked on an open PR. One string
+ * so the terminal row/detail and the web row/detail say the same words, and
+ * so it names the per-build control that unblocks the parked build. */
+export function autoMergeConsentReason(slug: string): string {
+  return (
+    `no auto-merge consent has been requested — request it with m on the build row or ` +
+    '`ab auto-merge ' +
+    slug +
+    ' on`'
+  )
+}
+
 /**
  * One step, built through one helper so the precedence rule cannot be applied
  * inconsistently: **`current > done > provisional > pending`**. In particular,
@@ -342,6 +366,7 @@ interface StepExtra {
   qualifier?: 'failed' | 'skipped' | 'waiting'
   count?: number
   timing?: StepTiming
+  reason?: string
 }
 
 function step(label: string, done: boolean, current: boolean, extra: StepExtra = {}): PipelineStep {
@@ -357,6 +382,7 @@ function step(label: string, done: boolean, current: boolean, extra: StepExtra =
     ...(extra.qualifier !== undefined ? { qualifier: extra.qualifier } : {}),
     ...(extra.count !== undefined ? { count: extra.count } : {}),
     ...(extra.timing !== undefined ? { timing: extra.timing } : {}),
+    ...(extra.reason !== undefined ? { reason: extra.reason } : {}),
   }
 }
 
@@ -490,6 +516,14 @@ function timingFor(
 
 /**
  * `record` + `state` → one dashboard row, or `null` only for terminal builds.
+ *
+ * `config` is the dispatcher's live snapshot; `pinnedConfig` (SPEC §16.1) is
+ * the build's own pipeline — its deposited effective-config artifact's
+ * build-owned sections composed over `config`'s deployment-owned ones. A
+ * build's verify/finalize universe and next-action are decided from the
+ * pinned pipeline: the live snapshot describes the base branch, which a
+ * pinned build may never execute (the AUT-366 class). Absent artifact ⇒ the
+ * live config, the pre-pin behavior.
  */
 export function projectBuild(
   record: BuildRecord,
@@ -497,7 +531,9 @@ export function projectBuild(
   config: Config,
   events: AbEvent[],
   streams?: readonly StreamRecord[],
+  pinnedConfig?: Config,
 ): DashboardBuild | null {
+  const pipeline = pinnedConfig ?? config
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
   const abortProgress =
@@ -663,7 +699,7 @@ export function projectBuild(
   const verifySkipped = (s: string): boolean =>
     cycle.some((r) => r.step === s && r.outcome === 'skipped')
   const verifySatisfied = (s: string): boolean => verifyPassed(s) || verifySkipped(s)
-  const verifyDrained = !cycleFailed && config.verify.steps.every(verifySatisfied)
+  const verifyDrained = !cycleFailed && pipeline.verify.steps.every(verifySatisfied)
 
   // A loop is settled only if its standing approval survived the last restart
   // AND no later producer round reopened it. `approved` alone is a full-log
@@ -713,7 +749,7 @@ export function projectBuild(
   // Finalize ran for the CURRENT spec — NOT `prState !== undefined`, which a
   // spec restart never resets while the engine re-runs finalize from scratch.
   const finalizeDone = state.finalizeCompletedSeq > restartSince
-  const postStepsDrained = config.finalize.steps.every((s) =>
+  const postStepsDrained = pipeline.finalize.steps.every((s) =>
     finalizeSteps.some((f) => f.step === s),
   )
 
@@ -746,7 +782,7 @@ export function projectBuild(
     }),
   ]
 
-  for (const s of config.verify.steps) {
+  for (const s of pipeline.verify.steps) {
     const phase = verifyPhase(s)
     const current = at(phase)
     const stepResults = cycle.filter((r) => r.step === s)
@@ -787,7 +823,7 @@ export function projectBuild(
       timing: timingFor(intervals, 'finalize', restartSince, frozenNow),
     }),
   )
-  for (const s of config.finalize.steps) {
+  for (const s of pipeline.finalize.steps) {
     // Post-steps have no `.started` event, so they carry no timing.
     const done = finalizeSteps.find((f) => f.step === s)
     steps.push(
@@ -839,6 +875,17 @@ export function projectBuild(
       ? { accumulatedMs: Math.max(0, frozenNow - lastMs) }
       : { accumulatedMs: 0, runningSince: lastMs }
   steps.push(step('merge', false, mergeCurrent, { qualifier: 'waiting', timing: mergeTiming }))
+  const autoMerge = autoMergeDisplay(state)
+  // The parked no-consent reason: a merge-current build whose effective
+  // auto-merge state is off will never merge without operator action, and the
+  // step must say so (and name the control) wherever the pipeline renders.
+  // Display-only; the deferral `mergeWaitReason` stays in `blockers`.
+  if (mergeCurrent && autoMerge === 'off') {
+    steps[steps.length - 1] = {
+      ...steps[steps.length - 1]!,
+      reason: autoMergeConsentReason(record.slug),
+    }
+  }
 
   const setupError =
     state.infrastructureFailure !== undefined
@@ -855,7 +902,7 @@ export function projectBuild(
               : `exit status ${state.setupFailure.exitStatus}`
           }): ${state.setupFailure.output || '(no output)'}`
 
-  const decision = decideNext(events, config)
+  const decision = decideNext(events, pipeline)
   const mergeWaitReason =
     decision.kind === 'wait' && decision.reason === 'awaiting-pr'
       ? currentAutoMergeDeferral(events, state)
@@ -875,7 +922,7 @@ export function projectBuild(
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
       ? { reviewRoundCeilings: { ...state.reviewRoundCeilings } }
       : {}),
-    autoMerge: autoMergeDisplay(state),
+    autoMerge,
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),

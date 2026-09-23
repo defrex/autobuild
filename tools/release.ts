@@ -2,12 +2,17 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
-import { inc as incrementSemver, valid as validSemver } from 'semver'
+import {
+  inc as incrementSemver,
+  satisfies as satisfiesSemver,
+  valid as validSemver,
+  validRange as validRangeSemver,
+} from 'semver'
 import {
   MISSING_POSTGRES_URL_MESSAGE,
   POSTGRES_URL_VARIABLES,
-} from '../packages/postgres-store/src/env'
-import { readWorkspaceManifests } from './workspace-manifest-check'
+} from '@defrex/autobuild-postgres-store/env'
+import { readWorkspaceManifests, type WorkspaceManifest } from './workspace-manifest-check'
 import { distributionAssetName } from '../packages/core/src/ports/workspace/distribution-archive'
 import { packageAutobuildDistribution } from '../packages/core/src/ports/workspace/vercel-sandbox'
 
@@ -593,6 +598,90 @@ export function publishablePackages(
 
 const PUBLISH_ARGS = ['publish', '--access', 'public', '--ignore-scripts'] as const
 
+/** A peer range a workspace package declares on a package this release would
+ * publish, which the requested release version does not satisfy. */
+export interface PeerFloorViolation {
+  /** Manifest path relative to the repository root. */
+  manifestPath: string
+  /** The peer dependency name whose range is unsatisfied. */
+  peerName: string
+  /** The declared range, verbatim (including any `workspace:` prefix). */
+  range: string
+}
+
+/** Every peer-dependency range that a published (non-private) workspace
+ * manifest declares on a package this release publishes but that the
+ * requested release version does not satisfy. This repo releases in
+ * lockstep — every published package receives the requested version — so a
+ * peer on a published name pins the release version itself. npm omits an
+ * optional peer whose range excludes the published version, so an ignored
+ * violation leaves the dependent package uninstallable from npm.
+ *
+ * Throws on a malformed peer declaration (non-object map, non-string range,
+ * or a range semver cannot parse): a release must not proceed past a peer
+ * declaration it cannot evaluate. `workspace:`-prefixed ranges are stripped
+ * first — `workspace:*` (empty remainder) is rewritten to the released
+ * version at publish time and satisfied by construction; a remainder
+ * (e.g. `workspace:^0.9.0`) is checked as-is. */
+export function peerFloorViolations(
+  manifests: readonly WorkspaceManifest[],
+  publishedNames: readonly string[],
+  version: string,
+): PeerFloorViolation[] {
+  const published = new Set(publishedNames)
+  const violations: PeerFloorViolation[] = []
+  for (const entry of manifests) {
+    // Private manifests never reach npm, so an unsatisfied peer there cannot
+    // make anything uninstallable.
+    if (entry.manifest.private === true) continue
+    const peers = entry.manifest.peerDependencies
+    if (peers === undefined) continue
+    if (typeof peers !== 'object' || peers === null || Array.isArray(peers)) {
+      throw new Error(`${entry.path}: peerDependencies must be an object`)
+    }
+    for (const [peerName, rawRange] of Object.entries(peers)) {
+      // Only the packages this release publishes receive the requested
+      // version; a peer on any other name is out of scope for this guard.
+      if (!published.has(peerName)) continue
+      if (typeof rawRange !== 'string') {
+        throw new Error(`${entry.path}: peerDependencies.${peerName} must be a string`)
+      }
+      const range = rawRange.startsWith('workspace:')
+        ? rawRange.slice('workspace:'.length) || '*'
+        : rawRange
+      if (validRangeSemver(range) === null) {
+        throw new Error(
+          `${entry.path}: peerDependencies.${peerName} is not a valid semver range: ${rawRange}`,
+        )
+      }
+      // Default satisfies options mirror npm's default prerelease exclusion.
+      if (!satisfiesSemver(version, range)) {
+        violations.push({ manifestPath: entry.path, peerName, range: rawRange })
+      }
+    }
+  }
+  return violations
+}
+
+export function peerFloorRefusalMessage(
+  version: string,
+  violations: readonly PeerFloorViolation[],
+): string {
+  const lines = violations.map(
+    (violation) =>
+      `  ${violation.manifestPath}: peer "${violation.peerName}" requires ${violation.range}`,
+  )
+  return (
+    `cannot release ${version}: publishing would violate a declared peer floor:
+${lines.join('\n')}
+` +
+    'npm omits an optional peer whose range excludes the published version, so publishing ' +
+    'a below-floor version leaves the dependent package uninstallable from npm. ' +
+    'Release a version satisfying every declared peer floor (the next --minor bump), ' +
+    'or renegotiate the floors in their own ticket.'
+  )
+}
+
 /** Verbatim retry commands for the packages a failed publish stage left
  * unpublished, in dependency order. */
 export function publishRecoveryCommand(remaining: readonly PublishablePackage[]): string {
@@ -674,6 +763,18 @@ export async function runRelease(
   const tag = `v${version}`
   const packages = publishablePackages(workspaceManifests)
   if (packages.length === 0) throw new Error('no publishable (non-private) workspace package found')
+
+  // Fail fast, before any registry, ref, gate, or file mutation: a requested
+  // version below a dependent's declared peer floor must not get as far as
+  // touching the worktree.
+  const floorViolations = peerFloorViolations(
+    workspaceManifests,
+    packages.map((entry) => entry.name),
+    version,
+  )
+  if (floorViolations.length > 0) {
+    throw new Error(peerFloorRefusalMessage(version, floorViolations))
+  }
 
   await ensureClean(run, root)
   const registryLogin = await run({ command: 'bun', args: ['pm', 'whoami'], cwd: root })

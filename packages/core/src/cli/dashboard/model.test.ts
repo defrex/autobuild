@@ -1378,6 +1378,50 @@ describe('f_23e76d34: the verify cycle boundary', () => {
   })
 })
 
+describe('projectBuild: a pinned build projects from its own pipeline (SPEC §16.1)', () => {
+  // The live dispatcher snapshot carries a base-branch verify step this
+  // build's pinned pipeline never had — the AUT-366 divergence. The row must
+  // describe the pipeline the build actually runs, not the base branch.
+  const PINNED = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+
+[commands]
+lint = "bun lint"
+
+[verify]
+steps = ["lint"]
+
+[verify.lint]
+kind = "check"
+command = "lint"
+`)
+
+  test('the verify universe and the next-action come from the pinned config', () => {
+    const log = toLog([...throughCodeReview(), ...verifyRun('lint', 1, true)])
+    // Under the live snapshot the build looks mid-verify, one step short.
+    expect(decideNext(log, CONFIG)).toMatchObject({ kind: 'run-check', step: 'test' })
+    expect(stepFor(project(log), 'verify:test')).toBeDefined()
+    // Under the pinned pipeline lint drained the cycle: the row drops the
+    // base-branch step and agrees with the engine the build actually runs.
+    const build = projectBuild(RECORD, reduceBuild(log), CONFIG, log, undefined, PINNED)
+    if (build === null) throw new Error('projectBuild returned null — the build is not active')
+    expect(stepFor(build, 'verify:test')).toBeUndefined()
+    expect(stateOf(build, 'verify:lint')).toBe('done')
+    guardA(log, build)
+    guardB(log, build, PINNED)
+    expect(decideNext(log, PINNED)).toMatchObject({ kind: 'run-phase', phase: 'finalize' })
+  })
+
+  test('a build with no pinned artifact still projects from the live config', () => {
+    const log = toLog([...throughCodeReview(), ...verifyRun('lint', 1, true)])
+    const build = projectBuild(RECORD, reduceBuild(log), CONFIG, log)
+    if (build === null) throw new Error('projectBuild returned null — the build is not active')
+    expect(stepFor(build, 'verify:test')).toBeDefined()
+  })
+})
+
 describe('f_89defd3e: the attempt count names the attempt ACTUALLY running', () => {
   const postApprove = [...failedCycleWrites(), ...codeRound(2, 'approve')]
 
@@ -1665,6 +1709,24 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
     expect(stepFor(build, 'merge')?.qualifier).toBe('waiting')
     expect(build.pr).toEqual({ url: 'https://github.com/defrex/app/pull/7', state: 'open' })
     expect(build.blockers).toEqual([])
+  })
+
+  test('a parked merge step names the missing consent — and requested/enabled do not', () => {
+    const bare = project(toLog(throughPr))
+    expect(stepFor(bare, 'merge')?.reason).toBe(
+      'no auto-merge consent has been requested — request it with m on the build row ' +
+        'or `ab auto-merge auth-rate-limit on`',
+    )
+    const consented = project(toLog([...throughPr, ev('build.auto-merge-requested', {})]))
+    expect(stepFor(consented, 'merge')?.reason).toBeUndefined()
+    const enabled = project(
+      toLog([
+        ...throughPr,
+        ev('build.auto-merge-requested', {}),
+        ev('pr.auto-merge-enabled', { commandSeq: 6 }),
+      ]),
+    )
+    expect(stepFor(enabled, 'merge')?.reason).toBeUndefined()
   })
 
   test('an awaiting-PR deferral surfaces its complete forge-agnostic provider detail', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { MemoryBuildStore } from '../../core/src/store/memory'
-import { OperatorApiClient } from '@defrex/autobuild/operator-api'
+import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { OperatorApiClient } from './operator-api'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,

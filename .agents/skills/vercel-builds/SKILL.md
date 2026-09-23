@@ -202,10 +202,21 @@ ab models vercel-ai-gateway
 ab models vercel-ai-gateway --available
 ab repository status --json
 ab ticket list --state Todo --json
-vercel whoami
-vercel project inspect "$VERCEL_PROJECT_ID" --scope "$VERCEL_TEAM_ID"
+(cd packages/hosted-store-service && bunx --no-install vercel whoami)
+(cd packages/hosted-store-service && bunx --no-install vercel project inspect "$VERCEL_PROJECT_ID" --scope "$VERCEL_TEAM_ID")
 ab init --validate
 ```
+
+The two vercel CLI calls run from `packages/hosted-store-service` because only that package declares
+the `vercel` devDependency, and `bunx` resolves a declared binary from the package that declares it;
+nothing at the root resolves a root-level `vercel` command under any linker — the root manifest
+declares no `vercel` dependency, and since the old `bunfig.toml` hoisted-linker override was retired,
+nothing hoists one into root `node_modules` either. Both invocations carry `--no-install`, placed between `bunx` and the
+package name (bunx only parses its own flags there — after the package name the flag would be
+forwarded to vercel and the silent-install fallback would return). With `--no-install`, a missing
+local vercel binary fails the preflight visibly instead of bunx silently installing an unpinned
+vercel from the registry — an install whose version nobody chose and whose provenance the skill
+does not describe. Do not remove the flag as noise.
 
 The validation report must name `vercel-sandbox`, Pi 0.84.4, all three configured gateway models,
 `system-install`, `browser-smoke`, repository setup, and hosted Store access. It must also report

@@ -139,6 +139,7 @@ async function seedAwaitingPr(
   workspace: string,
   detail?: string,
   refOnly = false,
+  noCommand = false,
 ): Promise<void> {
   await seedBuild(store, { slug: 'merge-wait' })
   await store.append('merge-wait', {
@@ -213,18 +214,22 @@ async function seedAwaitingPr(
     type: 'finalize.completed',
     payload: { pr: { number: 7, url: 'https://example.test/pull/7', headSha: 'head' } },
   })
-  const command = await store.append('merge-wait', {
-    actor: humanActor('operator'),
-    type: 'build.auto-merge-requested',
-    payload: {},
-  })
+  // `noCommand` seeds the bare parked build — no consent anywhere in the log —
+  // which is the state whose wait line must name the missing consent.
+  const command = noCommand
+    ? undefined
+    : await store.append('merge-wait', {
+        actor: humanActor('operator'),
+        type: 'build.auto-merge-requested',
+        payload: {},
+      })
   if (detail !== undefined) {
     await store.append(
       'merge-wait',
       autoMergeDeferralObservation(
         { code: 'local-base-checkout-dirty', detail },
         7,
-        command.seq,
+        command?.seq ?? 1,
         'obs_merge_wait',
       ),
     )
@@ -1070,6 +1075,50 @@ describe('renderers', () => {
     expect(bareText).not.toContain('Auto-merge gate')
   })
 
+  test('the auto-merge display state is projected and printed beside the wait', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    const workspace = '/ws/merge-wait'
+    // The existing fixture seeds settled consent; the bare-parked variant
+    // (no consent) is the state whose wait line must name it.
+    await seedAwaitingPr(store, workspace, undefined, false, true)
+    const events = await store.getEvents('merge-wait')
+    const d = detail(record({ slug: 'merge-wait' }), events, NOW, undefined, {
+      kind: 'awaiting-pr',
+    })
+    expect(d.autoMerge).toBe('off')
+    const text = renderDetail(d, NOW).join('\n')
+    expect(text).toContain('waiting:  on PR — auto merge off')
+    // --json carries the same projection.
+    expect(JSON.parse(JSON.stringify(d)).autoMerge).toBe('off')
+
+    const consented = detail(
+      record({ slug: 'merge-wait' }),
+      await (async () => {
+        await store.append('merge-wait', {
+          actor: humanActor('operator'),
+          type: 'build.auto-merge-requested',
+          payload: {},
+        })
+        return store.getEvents('merge-wait')
+      })(),
+      NOW,
+      undefined,
+      { kind: 'awaiting-pr' },
+    )
+    expect(consented.autoMerge).toBe('requested')
+    expect(renderDetail(consented, NOW).join('\n')).toContain(
+      'waiting:  on PR — auto merge requested',
+    )
+    // A deferral reason still takes precedence over the state word.
+    const reason = 'Auto-merge gate could not apply consent for PR #7: provider detail'
+    const deferred = detail(record({ slug: 'merge-wait' }), events, NOW, undefined, {
+      kind: 'awaiting-pr',
+      reason,
+    })
+    expect(renderDetail(deferred, NOW).join('\n')).toContain(`waiting:  on PR — ${reason}`)
+    expect(renderDetail(deferred, NOW).join('\n')).not.toContain('waiting:  on PR — auto merge')
+  })
+
   test('merged and closed PRs render repository completion without runner recovery guidance', async () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     await seedBuild(store, { slug: 'b1' })
@@ -1677,7 +1726,13 @@ describe('abBuildStatus', () => {
     await store.putArtifact('merge-wait', {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
       content: effectiveBuildConfigContent(parseConfig(MINIMAL_CONFIG)),
-      metadata: { revision: 0 },
+      metadata: {
+        revision: 0,
+        pipelineSource: {
+          ref: 'branch-head',
+          commit: 'abc1234def5678901234567890123456789012345',
+        },
+      },
     })
 
     const json: string[] = []
@@ -1693,6 +1748,13 @@ describe('abBuildStatus', () => {
     })
     const parsed = JSON.parse(json.join('\n'))
     expect(parsed.decision).toEqual({ kind: 'awaiting-pr' })
+    // SPEC §16.1 operator visibility: the pinned pipeline source and the
+    // effective-config revision travel in the status projection.
+    expect(parsed.pipelineSource).toEqual({
+      ref: 'branch-head',
+      commit: 'abc1234def5678901234567890123456789012345',
+    })
+    expect(parsed.effectiveConfigRev).toBe(0)
 
     const human: string[] = []
     await abBuildStatus({
@@ -1707,6 +1769,7 @@ describe('abBuildStatus', () => {
     const text = human.join('\n')
     expect(text).toContain('waiting:  on PR')
     expect(text).not.toContain('decision: unavailable')
+    expect(text).toContain('pipeline: autobuild.toml@abc1234 (branch-head)  config rev 0')
   })
 
   test('an unknown slug is an actionable error', async () => {

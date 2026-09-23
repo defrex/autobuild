@@ -14,6 +14,14 @@
     "./env": {
       "types": "./src/env.ts",
       "import": "./src/env.ts"
+    },
+    "./schema": {
+      "types": "./src/schema.ts",
+      "import": "./src/schema.ts"
+    },
+    "./store": {
+      "types": "./src/store.ts",
+      "import": "./src/store.ts"
     }
   },
   "bin": {
@@ -26,6 +34,15 @@
     "@aws-sdk/client-s3": "^3.0.0",
     "@vercel/blob": "^2.0.0"
   },
+  "files": [
+    "src",
+    "README.md",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "!src/**/*.spec.ts",
+    "!src/**/*.spec.tsx",
+    "!src/testing/**"
+  ],
   "publishConfig": {
     "access": "public"
   },

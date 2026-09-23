@@ -241,6 +241,12 @@ interface SessionSpec {
 /** Longest tail of check output preserved in a verify report (§8.2). */
 const REPORT_TAIL_CHARS = 10_000
 
+/** Per-section cap for the finalize preflight's dirty-worktree diff capture:
+ * each diff view (working tree, staged) is truncated at this many characters
+ * so a large dirty diff cannot bloat the failure record unboundedly — worst
+ * case ≈ porcelain + 2 × (cap + header). */
+const FINALIZE_DIFF_CAPTURE_CAP = 20_000
+
 /**
  * One session bracket's live stream (SPEC §9): the sink the build-runner
  * opened through the resolved target's streaming capability, the store id it
@@ -259,6 +265,14 @@ const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Bound one captured diff section: unchanged within the cap, otherwise the
+ * first FINALIZE_DIFF_CAPTURE_CAP characters plus an explicit truncation
+ * marker, so truncation is visible in the record itself. */
+function capDiffOutput(output: string): string {
+  if (output.length <= FINALIZE_DIFF_CAPTURE_CAP) return output
+  return `${output.slice(0, FINALIZE_DIFF_CAPTURE_CAP)}\n... (truncated at ${FINALIZE_DIFF_CAPTURE_CAP} characters)`
 }
 
 function sessionBudgetError(seconds: number): string {
@@ -1490,11 +1504,48 @@ export class BuildRunner {
       )
     }
     if (result.stdout.length > 0) {
+      // The failure record must characterize the dirtiness on its own: the
+      // build workspace is disposable, and porcelain lists paths and status
+      // codes only — a mode-only flip (AUT-439) is indistinguishable from a
+      // content modification once the workspace is gone. Append both diff
+      // views so the record shows what actually changed.
       throw new Error(
         `workspace must be clean ${when}; commit intended files and remove ` +
-          `temporary files before finishing:\n${result.stdout.trimEnd()}`,
+          `temporary files before finishing:\n${result.stdout.trimEnd()}\n\n` +
+          (await this.collectWorktreeDiffSections()),
       )
     }
+  }
+
+  /** Labeled working-tree and staged diff sections for a dirty finalize
+   * preflight record. Runs only on the dirty branch (a clean worktree or a
+   * failed status command never executes a diff), caps each section at
+   * FINALIZE_DIFF_CAPTURE_CAP characters, and is best-effort: a failing `git
+   * diff` command annotates its own section instead of masking the
+   * dirty-worktree failure it is annotating. */
+  private async collectWorktreeDiffSections(): Promise<string> {
+    const views = [
+      { args: ['git', 'diff'], header: '--- git diff (working tree) ---' },
+      { args: ['git', 'diff', '--cached'], header: '--- git diff --cached (staged) ---' },
+    ] as const
+    const sections: string[] = []
+    for (const { args, header } of views) {
+      const command = args.join(' ')
+      let body: string
+      try {
+        const result = await this.deps.exec([...args], { cwd: this.deps.workspacePath })
+        if (result.exitCode !== 0) {
+          const detail = result.stderr.trim() || result.stdout.trim() || '(no output)'
+          body = `(${command} failed: exit ${result.exitCode}: ${capDiffOutput(detail)})`
+        } else {
+          body = capDiffOutput(result.stdout) || '(no output)'
+        }
+      } catch (error) {
+        body = `(${command} failed: ${capDiffOutput(errorMessage(error))})`
+      }
+      sections.push(`${header}\n${body}`)
+    }
+    return sections.join('\n\n')
   }
 
   private async resolveFinalizeHead(): Promise<string> {

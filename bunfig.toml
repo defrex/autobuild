@@ -1,8 +1,0 @@
-# The operator web app lives at the repository root but its dependencies
-# (next, react, better-auth, pg) are declared by the hosted store service
-# package, so they must be hoisted into the root node_modules. Bun 1.4 picks
-# the isolated linker for workspaces by default, which would leave `next`
-# unresolvable at the root and break `bun run build` on a fresh install.
-# AUT-409 moves the app into that package and retires this override.
-[install]
-linker = "hoisted"

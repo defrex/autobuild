@@ -13,6 +13,42 @@ import { gitTrackedPaths, repoRoot } from './git-tracked'
  * and cost a hand-retouch before an agent's observation caught it. It is
  * repository-local tooling, not product surface, exactly as
  * `product-name-check.ts` is.
+ *
+ * The scan scope is exactly `isShippedDocument`: Markdown under a
+ * `package.json` `files` entry. Nothing else is ever scanned — in
+ * particular `.agents/skills/**` (every vendored SKILL.md and reference
+ * document, and the `.ab-pristine/` records) is out of scope, however
+ * plausible a target it looks like for a `docs/assets` lint. Ruled on
+ * build `rule-on-docs` (AUT-469): a skill document is not shipped surface,
+ * so a reference from one can neither keep an asset alive nor count as
+ * broken here — an image only a skill mentions is still an orphan by this
+ * check's convention. Widening was rejected because it would trade the
+ * mechanically derived `files` set for hand-maintained scope plus a
+ * hand-maintained `.ab-pristine/` exclusion (pristine copies are `ab
+ * upgrade`'s three-way-merge baselines and must never be edited to satisfy
+ * a finding). Canonical skill documents have their own reference guard,
+ * `skill-self-containment.test.ts`, and the vendored `.agents/skills` copies of those
+ * canonical skills inherit it through the byte-for-byte mirroring in
+ * `tools/vendored-skills-sync.test.ts`. Repo-local skills (no canonical inventory entry)
+ * are guarded by `tools/skill-docs-asset-check.ts`. A plan or reviewer must not claim this
+ * check validates SKILL.md files.
+ *
+ * Re-verifying that nothing in-repo restates the false claim this ruling
+ * answers is a grep sweep (build `rule-on-docs`'s AC3), and that sweep must
+ * search this source: its original include list (`*.md`, `*.toml`, `*.json`)
+ * excluded `*.ts`, so it never searched the very file where a false claim
+ * about this check's scope would live, while its expected result claimed a
+ * match in `tools/docs-asset-check.test.ts` (obs_a4b1237d on that build).
+ * Widened by build `widen-the-rule` (AUT-475); the authoritative form is:
+ *
+ * `grep -rniE "docs-asset" --include='*.md' --include='*.toml' --include='*.json' --include='*.ts' . --exclude-dir=node_modules --exclude-dir=.git | grep -v '^\./\.ab/'`
+ *
+ * Include list and expected result must agree: every match is a mention of
+ * this check — a package.json script line, an import, a changelog entry, this
+ * record — never a statement that it scans skills or SKILL.md documents. The
+ * pattern is `docs-asset`, so this file matches only where it names itself
+ * (as this record does); `convention` says `docs/assets` and is covered by
+ * living in a searched file, not by matching the pattern.
  */
 
 const ASSET_PREFIX = 'docs/assets/'
@@ -44,6 +80,10 @@ export type DocsAssetFinding =
  * `packages/core/src/cli/skill-self-containment.test.ts`. Counting it is vacuous rather than
  * wrong, and deriving the set mechanically from `files` cannot fall out of date
  * the way a hand-maintained list would.
+ *
+ * Vendored agent skills (`.agents/skills/**`, including `.ab-pristine/`)
+ * are outside `files` and therefore never scanned — deliberately, not by
+ * omission; see the module comment for the ruling.
  */
 export function isShippedDocument(path: string, packageFiles: readonly string[]): boolean {
   if (!path.toLowerCase().endsWith('.md')) {
@@ -65,8 +105,12 @@ export function isImageAsset(path: string): boolean {
  * A reference's target as written and where it lands, repo-root-relative.
  * `undefined` for anything that cannot name a tracked file: a scheme, a
  * bare fragment, or an empty remainder.
+ *
+ * Exported for `tools/skill-docs-asset-check.ts`, this resolution's second
+ * consumer, so a skill document's references land exactly where a shipped
+ * document's do.
  */
-function resolveTarget(documentPath: string, rawTarget: string): string | undefined {
+export function resolveTarget(documentPath: string, rawTarget: string): string | undefined {
   // Any scheme at all — `https:`, `mailto:`, `data:`. None can name a path in
   // this repository, and `[a-z0-9+.-]*` cannot cross a `/`, so a relative path
   // containing a colon is still resolved.

@@ -10,8 +10,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
-import { startStoreServer } from '../store/remote/server'
-import { mintToken } from '../store/remote/token'
 import type { BuildStore } from '../store/types'
 import type { StoreOpener } from './store-opening'
 
@@ -237,52 +235,6 @@ export function describeStoreOpeningContract(
         expect(existsSync(join(repo, 'state', 'autobuild.sqlite'))).toBe(true)
       } finally {
         await rm(repo, { recursive: true, force: true })
-      }
-    })
-
-    test('production composition forwards a token to remote HTTP and rejects missing or invalid credentials', async () => {
-      const secret = 'store-opening-secret'
-      const now = new Date('2026-07-15T12:00:00.000Z')
-      const backing = new MemoryBuildStore({ clock: () => now })
-      const server = startStoreServer({
-        store: backing,
-        secret,
-        clock: () => now,
-      })
-      const token = mintToken(secret, {
-        build: '*',
-        session: '*',
-        exp: now.getTime() + 60_000,
-      })
-      try {
-        await adapter.run({
-          targetRepo: LINKED_REPO,
-          env: { AB_TOKEN: token },
-          exec: mainRepoExec,
-          stdout: () => {},
-          storeRef: server.url,
-        })
-        await expect(
-          adapter.run({
-            targetRepo: LINKED_REPO,
-            env: {},
-            exec: mainRepoExec,
-            stdout: () => {},
-            storeRef: server.url,
-          }),
-        ).rejects.toThrow(/missing bearer token/)
-        await expect(
-          adapter.run({
-            targetRepo: LINKED_REPO,
-            env: { AB_TOKEN: 'invalid-token' },
-            exec: mainRepoExec,
-            stdout: () => {},
-            storeRef: server.url,
-          }),
-        ).rejects.toThrow(/invalid or expired token/)
-      } finally {
-        await server.stop()
-        await backing.close()
       }
     })
   })

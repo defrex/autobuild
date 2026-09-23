@@ -221,7 +221,8 @@ Small, independently runnable, crash-safe:
   `build.created` from the immutable record, executes only missing workspace,
   spec, and ticket-notification boundaries, and records each failed attempt as
   `dispatch.failed`. `build.created` retains any claim-time auto-merge
-  attribution until its human-authored command fact is materialized, while
+  attribution and the sampled default fact's seq until the human-authored
+  command fact is materialized, while
   `dispatch.comment-posted` prevents retries from duplicating the ticket notice.
   It also owns observation back-pressure: settling
   outstanding recoverable harvest runs takes priority over starting new scans
@@ -936,7 +937,7 @@ sessionless read-only status projection.
 
 `ab repository status [--json] [--store <ref>]` is the sessionless read-only
 projection of the repository journal's dispatcher controls: ticket intake, the
-repository-wide pause, and the claim-time auto-merge default. It uses the same
+repository-wide pause, and the auto-merge default. It uses the same
 dispatch-settings reducer as dispatcher decisions and the dashboard. An absent
 repository stream reduces as an empty journal and reports intake on, repository
 pause off, and auto-merge default off; the query does not create that stream,
@@ -1455,12 +1456,15 @@ signal, and error evidence. `--plain`, non-TTY,
 and `--once` kernel semantics remain the line-oriented/direct compatibility
 path; `--once` still performs one tick and drains its in-flight work.
 
-Durable operator settings (intake, the repository-wide pause, the claim-time
-auto-merge default, the harvest gate) are repository-journal facts: they
-survive restarts, propagate between dispatchers by ordinary polling, and are
-never optimistically rendered — the UI shows acknowledged state. The
-repository-wide pause holds every queued build: while it is set, no dispatcher
-tick may attach a runner to a build that does not have one yet.
+Durable operator settings (intake, the repository-wide pause, the auto-merge
+default, the harvest gate) are repository-journal facts: they survive restarts,
+propagate between dispatchers by ordinary polling, and are never optimistically
+rendered — the UI shows acknowledged state. The repository-wide pause holds
+every queued build: while it is set, no dispatcher tick may attach a runner to
+a build that does not have one yet. The auto-merge default both seeds new
+claims and, on each change, fans out onto every current non-terminal build of
+the repository as a bulk request or withdrawal attributed to the toggling
+operator (§15.7).
 
 The **operator sandbox** is the third execution kind beside build and harvest
 executions: a persistent, credential-free, per-operator-per-repository
@@ -1954,13 +1958,18 @@ Decisions here continue the series: **[D9]** declarative repo config and
 One declarative file at the repo root. A running dispatcher owns an accepted
 snapshot read from the **main checkout** and refreshes it before each dispatch
 tick. Before launch and after each accepted revision, the dispatcher deposits
-the composed snapshot into each affected build's artifact namespace. The child
-samples that durable artifact at setup and pipeline-step boundaries, so a valid
-change may affect the next action of an in-flight build but never interrupts an agent turn
-or deterministic command already running. Scoped phase CLI processes separately
+one composed snapshot into each affected build's artifact namespace: its
+build-owned sections come from the build's own branch, and its deployment- and
+dispatcher-owned sections from the live snapshot (the three ownership classes
+are defined below). The child samples that durable artifact at setup and
+pipeline-step boundaries, so a valid change to a deployment-owned section may
+affect the next action of an in-flight build but never interrupts an agent turn
+or deterministic command already running, and a change to a build-owned section
+never retargets an in-flight build at all. Scoped phase CLI processes separately
 read the build worktree's branch-owned file. Because the file is repo-versioned,
-changes still flow through the pipeline itself: once merged, the system can
-adopt a retuned configuration without restarting the dispatcher.
+changes still flow through the pipeline itself: once a build's own branch
+carries them, the system can adopt a retuned configuration without restarting
+the dispatcher.
 
 A missing or unreadable file and a malformed or routing-invalid candidate are
 rejected atomically: the last valid snapshot, resolver, and revision remain in
@@ -2071,6 +2080,35 @@ and defaults; any other name is resolved after plugin loading, receives the
 existing ticket table as factory config, and fails with the complete available
 name set when unregistered. Plugin-declared `requiredEnv` values are never TOML
 fields: secrets stay in the process environment or local `.env`.
+
+`autobuild.toml` sections belong to one of three ownership classes, which
+decide where a build's effective configuration is composed from:
+
+| Class | Sections | Source at deposit |
+|---|---|---|
+| Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
+| Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
+| Dispatcher-owned | `baseBranch`, `capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator` | The dispatcher's live snapshot; the build runner never interprets them. |
+
+A build's pipeline definition is therefore composed from the build's own
+branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
+recorded base commit (or its branch head once the build has published commits)
+through the forging adapter; in checkout mode it reads the workspace's file. The
+effective-config artifact records the commit the build-owned sections were
+taken from — except in checkout mode when the worktree read cannot be
+attributed to the branch-head commit: because the worktree file has uncommitted
+edits, because the clean/dirty comparison could not be performed (non-git
+workspace or a transient git error), or because the branch head never carried
+the file. The artifact then records the source `worktree-dirty` and no commit,
+because attributing worktree bytes to a commit that has not been shown to carry
+them would be false provenance. A base-branch change to `[verify]`, `[finalize]`, `[commands]`, or
+the workspace provisioning after a build's base was cut does not change that
+build's verify universe, finalize steps, commands, or provisioning; a build
+that publishes such a change to its own branch picks it up at its next launch.
+A live reload delivers only deployment-owned sections to active builds, so the
+artifact deposited on reload changes only those sections. In-flight
+environments are never re-provisioned; a fresh build from the new base is the
+path for a changed provisioning definition.
 
 Two configurable narrowing mechanisms govern which verify steps run, both
 resolving to the ordinary `skipped` outcome so exclusions stay queryable:

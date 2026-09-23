@@ -11,7 +11,8 @@ store environment for the signing secret. See the
 incident pauses, and behavior details.
 
 A deployment opts into building by installing the package and mounting the
-route: `app/api/dispatch/route.ts` imports `dispatcherEndpoint` from
+route: the Next.js app's `app/api/dispatch/route.ts` (in the hosted store
+service package) imports `dispatcherEndpoint` from
 `@defrex/autobuild-hosted-dispatcher/runtime` and keeps a module-scope
 instance. A deployment that only hosts state does not install it and never
 attempts a dispatch tick. The package peers on `@defrex/autobuild` (the core
@@ -23,12 +24,13 @@ Besides the endpoint driver, the package owns two deploy-time helpers:
 
 - the `ab-hosted-dispatcher` bin with the `pack-distribution` command, which
   packs the running distribution into `<root>/.autobuild-dist/autobuild-<version>.tgz`
-  during the deployment build (`deploy:build` runs it by path:
-  `bun packages/hosted-dispatcher/src/bin.ts pack-distribution`); and
-- the `ship-packed-distribution` trace helper
-  (`bun packages/hosted-dispatcher/src/ship-packed-distribution.ts`), which
-  appends that archive to the dispatch route's Next.js trace file so the
-  function bundle carries it.
+  during the deployment build (the hosted store service's `deploy:build` runs
+  it by path from the package directory:
+  `bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root .`); and
+- the `ship-packed-distribution` trace helper, which appends that archive to
+  the dispatch route's Next.js trace file so the function bundle carries it
+  (the same `deploy:build` runs it by path from the package directory as its
+  final step: `bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts`).
 
 ## Dispatcher environment variables
 

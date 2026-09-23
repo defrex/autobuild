@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { packageAutobuildDistribution } from '../ports/workspace/vercel-sandbox'
+import { installPackedDistribution } from '../testing/packed-install'
 import {
   FakeForge,
   FakeTicketSource,
@@ -28,6 +29,48 @@ const temporary: string[] = []
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
+
+const TYPECHECK_DEADLINE_EXCEEDED = Symbol('typecheck-deadline-exceeded')
+
+/** Races a spawned tsc against an injected wall-clock deadline; kills the
+ * process when the deadline wins and throws the deadline-specific diagnostic
+ * so that failure mode stays distinguishable from the typecheck-exit guard's
+ * generic type-error failure. The deadline is a parameter so a test can
+ * inject an artificially small value and deterministically drive the
+ * deadline branch regardless of compile speed. */
+async function typecheckExitWithinDeadline(
+  typecheck: Bun.ReadableSubprocess,
+  deadlineMs: number,
+): Promise<{ exitCode: number; elapsedMs: number; output: string; error: string }> {
+  const start = performance.now()
+  // The deadline resolves with a sentinel rather than rejecting, so the
+  // diagnostic is thrown on the main path below and the losing branch can
+  // never produce an unhandled rejection.
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<typeof TYPECHECK_DEADLINE_EXCEEDED>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      typecheck.kill()
+      resolve(TYPECHECK_DEADLINE_EXCEEDED)
+    }, deadlineMs)
+  })
+  let raceResult: number | typeof TYPECHECK_DEADLINE_EXCEEDED
+  try {
+    raceResult = await Promise.race([typecheck.exited, deadline])
+  } finally {
+    clearTimeout(deadlineTimer)
+  }
+  const elapsedMs = Math.round(performance.now() - start)
+  const [output, error] = await Promise.all([
+    new Response(typecheck.stdout).text(),
+    new Response(typecheck.stderr).text(),
+  ])
+  if (raceResult === TYPECHECK_DEADLINE_EXCEEDED) {
+    throw new Error(
+      `plugin-sdk package-surface fixture: tsc --noEmit exceeded ${deadlineMs}ms (${elapsedMs}ms elapsed) — this is the test's heavy step (machine-speed-bound), not a type error; see the per-test timeout comment above`,
+    )
+  }
+  return { exitCode: raceResult, elapsedMs, output, error }
+}
 
 describe('plugin SDK package surface', () => {
   test('exports manifest types, contracts, and reference adapters from the local SDK barrel', () => {
@@ -125,13 +168,30 @@ describe('plugin SDK package surface', () => {
       ],
       { cwd: destination, stdout: 'pipe', stderr: 'pipe' },
     )
-    const typecheckExit = await typecheck.exited
-    const [typecheckOutput, typecheckError] = await Promise.all([
-      new Response(typecheck.stdout).text(),
-      new Response(typecheck.stderr).text(),
-    ])
+    // This test runs a full `tsc --noEmit` plus a transpile and a dynamic
+    // import inside bun's per-test timeout, and the compile alone is
+    // machine-speed-bound right at bun's 5000ms default cap: on the 4-vcpu
+    // vercel-sandbox guest it failed 3/3 isolated and 2/2 full-suite runs
+    // with "this test timed out after 5000ms" and empty typecheck output
+    // (build pin-the-dashboard, event seq 118), while it passed on the faster
+    // verify hardware. Measured warm on that same guest the fixture's tsc
+    // takes ~3.6-4.9s (well under the cap on faster machines), so this one
+    // test gets a 120s per-test budget — roughly 25x the observed compile —
+    // and an internal 90s deadline around the tsc step fails with a
+    // diagnostic naming the heavy step before bun's own timeout can ever be
+    // the first signal. A genuine type error still fails via the
+    // typecheck-exit guard below; only the time budget and the failure
+    // labeling changed.
+    const {
+      exitCode: typecheckExit,
+      elapsedMs: typecheckMs,
+      output: typecheckOutput,
+      error: typecheckError,
+    } = await typecheckExitWithinDeadline(typecheck, 90_000)
     if (typecheckExit !== 0) {
-      throw new Error(`sample plugin typecheck failed:\n${typecheckOutput}${typecheckError}`)
+      throw new Error(
+        `sample plugin typecheck failed after ${typecheckMs}ms:\n${typecheckOutput}${typecheckError}`,
+      )
     }
 
     const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(source)
@@ -141,7 +201,32 @@ describe('plugin SDK package surface', () => {
     await rm(dependencyDir, { recursive: true, force: true })
     const loaded = await import(pathToFileURL(built).href)
     expect(loaded.default.name).toBe('erased-types')
-  })
+  }, 120_000)
+
+  test('an injected short deadline deterministically drives the tsc-deadline branch, independent of compile speed', async () => {
+    // The deadline branch's race/kill/diagnostic mechanics were verified by
+    // hand during #472 but never deterministically exercised by the suite:
+    // with the production 90s constant the branch only fires on a genuinely
+    // slow compile. This pin spawns a real tsc that would exit quickly and
+    // successfully on any machine (`--version`; node startup alone is tens
+    // of ms) and injects a 1ms deadline, so the sentinel provably wins by
+    // injection rather than by wall-clock luck — and if that ever stopped
+    // holding, the resolve below fails the test loudly instead of silently
+    // passing.
+    const typecheck = Bun.spawn([join(root, 'node_modules', '.bin', 'tsc'), '--version'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const outcome = await typecheckExitWithinDeadline(typecheck, 1).then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(outcome).toBeInstanceOf(Error)
+    const message = outcome instanceof Error ? outcome.message : ''
+    expect(message).toMatch(/exceeded 1ms/)
+    expect(message).toContain('not a type error')
+    expect(message).not.toContain('typecheck failed')
+  }, 10_000)
 
   test('the packed artifact contains the SDK and all reusable contract suites', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
@@ -197,18 +282,9 @@ describe('plugin SDK package surface', () => {
         dependencies: { '@defrex/autobuild': `file:${archive}` },
       }),
     )
-    const install = Bun.spawn(['bun', 'install', '--linker', 'isolated'], {
-      cwd: consumer,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const installExit = await install.exited
-    const [installOutput, installError] = await Promise.all([
-      new Response(install.stdout).text(),
-      new Response(install.stderr).text(),
-    ])
-    if (installExit !== 0) {
-      throw new Error(`packed consumer install failed:\n${installOutput}${installError}`)
+    const install = await installPackedDistribution(['--linker', 'isolated'], consumer)
+    if (install.exitCode !== 0) {
+      throw new Error(`packed consumer install failed:\n${install.stdout}${install.stderr}`)
     }
 
     await writeFile(
@@ -258,11 +334,15 @@ describe('plugin SDK package surface', () => {
       stderr: 'pipe',
     })
     expect(await version.exited, await new Response(version.stderr).text()).toBe(0)
+    // The packed CLI reports the packed manifest's version — derive the
+    // expectation from the source manifest so a release bump cannot stale the
+    // pin (as the v0.7.0 release did to its hardcoded predecessor), and take
+    // the plugin API version from the SDK constant for the same reason.
     const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
       version: string
     }
     expect((await new Response(version.stdout).text()).trim()).toBe(
-      `autobuild ${rootManifest.version}\nplugin API 1.5.0`,
+      `autobuild ${rootManifest.version}\nplugin API ${PLUGIN_API_VERSION}`,
     )
 
     const initialized = join(destination, 'initialized')
@@ -277,7 +357,7 @@ describe('plugin SDK package surface', () => {
     expect(
       await Bun.file(join(initialized, '.agents', 'skills', 'ab-implement', 'SKILL.md')).exists(),
     ).toBe(true)
-  }, 20_000)
+  }, 600_000)
 
   test('the packed distribution installs next to better-auth without a patchedDependencies declaration', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-pack-patch-consumer-'))
@@ -300,19 +380,10 @@ describe('plugin SDK package surface', () => {
     // declares a patchedDependencies entry for a package the consumer tree
     // contains, so this install only succeeds while the packed manifest
     // carries no patchedDependencies field.
-    const install = Bun.spawn(['bun', 'install'], {
-      cwd: consumer,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    const installExit = await install.exited
-    const [installOutput, installError] = await Promise.all([
-      new Response(install.stdout).text(),
-      new Response(install.stderr).text(),
-    ])
-    if (installExit !== 0) {
+    const install = await installPackedDistribution([], consumer)
+    if (install.exitCode !== 0) {
       throw new Error(
-        `packed distribution install next to better-auth failed:\n${installOutput}${installError}`,
+        `packed distribution install next to better-auth failed:\n${install.stdout}${install.stderr}`,
       )
     }
     expect(
@@ -323,5 +394,5 @@ describe('plugin SDK package surface', () => {
         join(consumer, 'node_modules', '@defrex', 'autobuild', 'bin', 'ab.ts'),
       ).exists(),
     ).toBe(true)
-  }, 120_000)
+  }, 600_000)
 })

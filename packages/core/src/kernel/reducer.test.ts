@@ -932,6 +932,46 @@ describe('reduceBuild: native auto-merge intent and application facts', () => {
       }),
     ).toThrow(/invalid payload/)
   })
+
+  test('a per-build command preserves the previous fan-out provenance', () => {
+    const log = toLog([
+      ...prelude(),
+      // A fan-out command carrying the default fact it answered.
+      ev('build.auto-merge-requested', { defaultSeq: 7 }), // seq 5
+      // A later per-build cancel with no provenance: it must NOT clear the
+      // marker, or the next tick would re-fan this override.
+      ev('build.auto-merge-cancelled', {}), // seq 6
+    ])
+    expect(stateAfter(log, 'build.auto-merge-cancelled').autoMerge.defaultSeq).toBe(7)
+    expect(reduceBuild(log).autoMerge.defaultSeq).toBe(7)
+  })
+
+  test('a fan-out command advances the provenance', () => {
+    const log = toLog([
+      ...prelude(),
+      ev('build.auto-merge-requested', { defaultSeq: 3 }), // seq 5
+      ev('build.auto-merge-cancelled', { defaultSeq: 9 }), // seq 6
+    ])
+    expect(reduceBuild(log).autoMerge.defaultSeq).toBe(9)
+  })
+
+  test('a no-op observation advances provenance without touching the command', () => {
+    const log = toLog([
+      ...prelude(),
+      ev('build.auto-merge-default-observed', { defaultSeq: 5 }), // seq 5
+    ])
+    expect(reduceBuild(log).autoMerge).toEqual({ requested: false, defaultSeq: 5 })
+    // A stale observation never lowers the cursor.
+    expect(
+      reduceBuild(
+        toLog([
+          ...prelude(),
+          ev('build.auto-merge-default-observed', { defaultSeq: 5 }),
+          ev('build.auto-merge-default-observed', { defaultSeq: 2 }),
+        ]),
+      ).autoMerge.defaultSeq,
+    ).toBe(5)
+  })
 })
 
 describe('reduceBuild: abort — accepted intent vs acknowledged (D2)', () => {

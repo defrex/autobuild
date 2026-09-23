@@ -44,13 +44,20 @@ import { packageAutobuildDistribution } from './vercel-sandbox'
  * `tools/release.ts`, which uploads them. */
 export const CANONICAL_REPOSITORY_URL = 'https://github.com/defrex/autobuild'
 
+/** The shipped manifest `readDistributionPackage()` reads. A bundled
+ * deployment must carry this exact file into its function bundle; the hosted
+ * service's post-build trace step appends it to the dispatch route's trace. */
+export function distributionManifestPath(): string {
+  return distributionPath('package.json')
+}
+
 /** The running distribution's package name and version, from the shipped
  * package.json. Deployed distributions must ship `package.json` — a
  * deployment requirement the hosted entry point owns. Absence is a hard,
  * actionable error. */
 export async function readDistributionPackage(): Promise<{ name: string; version: string }> {
   try {
-    const manifest = JSON.parse(await Bun.file(distributionPath('package.json')).text()) as {
+    const manifest = JSON.parse(await Bun.file(distributionManifestPath()).text()) as {
       name?: unknown
       version?: unknown
     }

@@ -1,16 +1,26 @@
+import { composeBuildConfig } from '../config/live'
+import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { configSchema, type Config } from '../config/schema'
+import type { AbEvent } from '../events/catalog'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
+  parseEffectiveBuildConfig,
+} from '../processes/build-execution-state'
+import type { Artifact } from '../store/types'
 import { detail, statusFilter, summarize, type BuildDetail, type BuildSummary } from '../cli/status'
 import { projectRepositoryStatus, type RepositoryStatus } from '../cli/repository-status'
 import { projectHarvestStatus, type HarvestStatusView } from '../cli/harvest'
 import {
   buildDashboardFromProjected,
+  effectiveStatus,
   projectBuild,
   type DashboardBuild,
   type DashboardModel,
 } from '../cli/dashboard/model'
-import { reduceBuild } from '../kernel/reducer'
+import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { scanUnclaimedObservations } from '../processes/harvest'
+import { collectUnclaimedObservations } from '../processes/harvest'
 import type { BuildStore, Clock } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
@@ -112,6 +122,61 @@ export interface OperatorBuildView {
   dashboardRow: DashboardBuild | null
 }
 
+interface PinnedProjection {
+  config: Config
+  revision?: number
+  pipelineSource?: PipelineSourceMeta
+}
+
+/** Read one build's pinned effective-config artifact (SPEC §16.1): its parsed
+ * build-owned sections composed over the live snapshot's deployment-owned
+ * ones, plus the artifact's metadata projection. Every row must be projected
+ * against the pipeline the build actually runs — the artifact's build-owned
+ * sections — never the dispatcher's live base-branch snapshot, which a pinned
+ * build may never execute. All read failures are display-only: an absent or
+ * malformed artifact degrades to the live config, the pre-pin behavior. */
+async function readPinnedConfig(
+  store: BuildStore,
+  slug: string,
+  live: Config,
+): Promise<PinnedProjection> {
+  let artifact: Artifact | null
+  try {
+    artifact = await store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+  } catch {
+    artifact = null
+  }
+  if (artifact === null) return { config: live }
+  let config: Config
+  try {
+    config = composeBuildConfig(parseEffectiveBuildConfig(artifact), live)
+  } catch {
+    config = live
+  }
+  return { config, ...parseBuildConfigMetadata(artifact) }
+}
+
+/** The shared null-row gate (AUT-486 snapshot, AUT-496 getOperatorBuild):
+ * `effectiveStatus` maps only `done` outside the visible set
+ * (cli/dashboard/model.ts `isVisible`), so `projectBuild` returns null
+ * exactly for this state, and a pinned effective-config read for such a
+ * build could never be surfaced. One predicate so both call sites cannot
+ * diverge from each other or from the row projection. If
+ * cli/dashboard/model.ts ever adds a non-visible status, this predicate
+ * must follow — the snapshot byte-identical differential test and the
+ * done/aborted query tests pin the coupling. */
+function projectsNoDashboardRow(state: BuildState): boolean {
+  return effectiveStatus(state) === 'done'
+}
+
+/** Attach the effective-config metadata (SPEC §16.1) to a projected row so an
+ * operator can see which autobuild.toml the build runs under. */
+function decorateWithPinnedMeta(row: DashboardBuild, pinned: PinnedProjection): DashboardBuild {
+  if (pinned.revision !== undefined) row.effectiveConfigRev = pinned.revision
+  if (pinned.pipelineSource !== undefined) row.pipelineSource = pinned.pipelineSource
+  return row
+}
+
 export async function getOperatorBuild(opts: {
   store: BuildStore
   repo: string
@@ -122,8 +187,18 @@ export async function getOperatorBuild(opts: {
   const events = await opts.store.getEvents(opts.slug)
   const state = reduceBuild(events)
   const { config } = await effectiveConfig(opts.store, opts.repo)
-  const dashboardRow = projectBuild(record, state, config, events)
-  return { detail: detail(record, events, opts.now), dashboardRow }
+  let dashboardRow: DashboardBuild | null = null
+  if (!projectsNoDashboardRow(state)) {
+    const pinned = await readPinnedConfig(opts.store, opts.slug, config)
+    const row = projectBuild(record, state, config, events, undefined, pinned.config)
+    // Implied by the gate; kept as an explicit check (not an assertion) so the
+    // code never lies if `effectiveStatus` and `projectBuild` ever drift.
+    if (row !== null) dashboardRow = decorateWithPinnedMeta(row, pinned)
+  }
+  return {
+    detail: detail(record, events, opts.now),
+    dashboardRow,
+  }
 }
 
 export async function getRepositoryStatus(
@@ -157,17 +232,38 @@ export async function getOperatorDashboard(opts: {
   clock: Clock
 }): Promise<OperatorDashboardSnapshot> {
   const { config, repositoryEvents, status } = await effectiveConfig(opts.store, opts.repo)
+  const records = await opts.store.listBuilds()
   const projected: DashboardBuild[] = []
+  const eventsByBuild = new Map<string, AbEvent[]>()
   let activeCount = 0
-  for (const record of await opts.store.listBuilds()) {
+  for (const record of records) {
     if (record.repo !== opts.repo) continue
     const events = await opts.store.getEvents(record.slug)
+    eventsByBuild.set(record.slug, events)
     const state = reduceBuild(events)
     if (state.status !== 'done' && state.status !== 'aborted') activeCount += 1
-    const row = projectBuild(record, state, config, events)
-    if (row !== null) projected.push(row)
+    // Both query surfaces share the `projectsNoDashboardRow` gate (AUT-486
+    // snapshot, AUT-496 detail query): a build that projects no row —
+    // `effectiveStatus` maps only `done` outside the visible set — never
+    // reads its pinned effective-config artifact, because the read result
+    // could never be surfaced. Every row-rendering build still gets its
+    // pinned pipeline and metadata.
+    if (projectsNoDashboardRow(state)) continue
+    const pinned = await readPinnedConfig(opts.store, record.slug, config)
+    const row = projectBuild(record, state, config, events, undefined, pinned.config)
+    if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
   }
-  const scan = await scanUnclaimedObservations(opts.store, opts.repo)
+  // The unclaimed-observation scan runs over the journal `effectiveConfig`
+  // already returned and the per-build histories the loop already loaded:
+  // each build's history and the repository journal are read once per
+  // snapshot (AUT-486). The pure core writes nothing — a snapshot performs no
+  // store writes and never creates or locks the repository record.
+  const scan = collectUnclaimedObservations({
+    repo: opts.repo,
+    records,
+    eventsByBuild,
+    harvestEvents: repositoryEvents,
+  })
   const warningLines = [
     ...status.roleWarnings,
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),

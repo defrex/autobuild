@@ -1,5 +1,5 @@
 import { describeTicketSourceContract, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
-import { HostedTicketSource } from '@defrex/autobuild/remote-tickets'
+import { HostedTicketSource } from './remote-tickets'
 import { mintToken } from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from './service'
 

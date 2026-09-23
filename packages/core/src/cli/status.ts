@@ -39,10 +39,13 @@ import { loadConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  parseBuildConfigMetadata,
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
+import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
 import { currentAutoMergeDeferral } from '../kernel/auto-merge'
+import { autoMergeDisplay, type AutoMergeDisplay } from './dashboard/model'
 import { decideNext } from '../kernel/engine'
 import {
   reduceBuild,
@@ -135,6 +138,10 @@ export interface BuildDetail extends BuildSummary {
   /** Current work-owner decision. Open PRs use the build-owned config; ended
    * PRs project the repository completion path directly from durable state. */
   decision?: BuildDecisionProjection
+  /** The build's effective auto-merge display state (off, requested, enabled,
+   * cancelling) — the same projection the dashboards render, so `--json` and
+   * the text agree and `waiting: on PR` can say why it is waiting. */
+  autoMerge: AutoMergeDisplay
   openEscalations: OpenEscalation[]
   /** Per-loop review overrides for the current spec; omitted when none are set. */
   reviewRoundCeilings?: { plan?: number; code?: number }
@@ -155,6 +162,11 @@ export interface BuildDetail extends BuildSummary {
   lastEvent?: { type: string; seq: number; ts: string; actor: Actor }
   /** Present only with `--events <n>`: the newest n, chronological. */
   events?: AbEvent[]
+  /** Which `autobuild.toml` the build's pinned pipeline was read from, and the
+   * effective-config artifact revision it was deposited under (SPEC §16.1).
+   * Absent when no effective-config artifact has been deposited. */
+  pipelineSource?: PipelineSourceMeta
+  effectiveConfigRev?: number
   outcome?: BuildOutcome
 }
 
@@ -287,6 +299,7 @@ export function detail(
     }))
   return {
     ...summary,
+    autoMerge: autoMergeDisplay(state),
     ...(decision !== undefined ? { decision } : {}),
     openEscalations: state.openEscalations,
     ...(state.reviewRoundCeilings.plan !== undefined || state.reviewRoundCeilings.code !== undefined
@@ -493,6 +506,16 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     lines.push(`  review round ceiling: ${ceilings.join(', ')}`)
   }
   lines.push(`  updated:  ${d.updatedAt} (${relativeTime(d.updatedAt, now)})`)
+  if (d.pipelineSource !== undefined || d.effectiveConfigRev !== undefined) {
+    const source =
+      d.pipelineSource !== undefined
+        ? `autobuild.toml@${
+            d.pipelineSource.commit !== undefined ? d.pipelineSource.commit.slice(0, 7) : 'unknown'
+          } (${d.pipelineSource.ref})`
+        : 'autobuild.toml@unknown (pre-pin)'
+    const rev = d.effectiveConfigRev !== undefined ? `  config rev ${d.effectiveConfigRev}` : ''
+    lines.push(`  pipeline: ${source}${rev}`)
+  }
 
   // Its own line, never folded into status: a running build with an expired
   // lease is the case this exists to make visible.
@@ -548,9 +571,11 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
     )
   }
   if (d.decision?.kind === 'awaiting-pr') {
-    lines.push(
-      `  waiting:  on PR${d.decision.reason !== undefined ? ` — ${d.decision.reason}` : ''}`,
-    )
+    // The deferral reason (a durable observation about WHY consent could not
+    // be applied) takes precedence; otherwise the auto-merge state itself is
+    // what the parked operator needs — off names the missing consent.
+    const consent = d.decision.reason ?? `auto merge ${d.autoMerge}`
+    lines.push(`  waiting:  on PR — ${consent}`)
   } else if (d.decision?.kind === 'repository-completion') {
     lines.push(
       `  waiting:  repository-level completion after the PR was ${d.decision.prState}; no runner re-attachment is pending`,
@@ -885,7 +910,22 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
     } catch {
       streams = undefined
     }
-    const d = detail(record, events, now, opts.events, decision, streams)
+    const projected = detail(record, events, now, opts.events, decision, streams)
+    // Operator visibility (SPEC §16.1): which autobuild.toml the build's
+    // pinned pipeline came from, alongside the effective-config revision.
+    const configArtifact = await context.store.getArtifact(
+      opts.slug,
+      BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+    )
+    const configMeta =
+      configArtifact !== null ? parseBuildConfigMetadata(configArtifact) : undefined
+    const d: BuildDetail = {
+      ...projected,
+      ...(configMeta?.revision !== undefined ? { effectiveConfigRev: configMeta.revision } : {}),
+      ...(configMeta?.pipelineSource !== undefined
+        ? { pipelineSource: configMeta.pipelineSource }
+        : {}),
+    }
     if (opts.json === true) {
       opts.stdout(JSON.stringify(d, null, 2))
       return

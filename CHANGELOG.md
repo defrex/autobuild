@@ -3,6 +3,99 @@
 ## Unreleased
 
 - [#480](https://github.com/defrex/autobuild/pull/480) — Record the durable remote marker on workspace.provisioned
+- [#479](https://github.com/defrex/autobuild/pull/479) — Strengthen wait.test.ts's interval-spacing assertion
+- [#478](https://github.com/defrex/autobuild/pull/478) — Deterministically exercise the tsc-deadline branch via injection
+- [#477](https://github.com/defrex/autobuild/pull/477) — Keep the directory-index probe for dotted extensionless specifiers
+- [#476](https://github.com/defrex/autobuild/pull/476) — Drop four dead-weight files from the root tarball (AUT-513)
+- [#475](https://github.com/defrex/autobuild/pull/475) — Guard publish-contents-check rendered rulings from silent corruption
+- [#474](https://github.com/defrex/autobuild/pull/474) — Close the closure walk's latent under-approximations (AUT-510)
+- [#473](https://github.com/defrex/autobuild/pull/473) — De-flake the retention-cap test with deterministic completion order
+- [#472](https://github.com/defrex/autobuild/pull/472) — Raise the plugin SDK package-surface test's timeout budget
+- [#471](https://github.com/defrex/autobuild/pull/471) — Exclude the test-only cli/testkit.ts from the root tarball (AUT-506)
+- [#470](https://github.com/defrex/autobuild/pull/470) — Walk provider exports-target closure in publish-imports-check
+- [#469](https://github.com/defrex/autobuild/pull/469) — Extend the root tarball's test-file negations (AUT-508)
+- [#468](https://github.com/defrex/autobuild/pull/468) — Pause the dashboard now-ticker while the document is hidden
+- [#467](https://github.com/defrex/autobuild/pull/467) — Give web capture tooling a package; retire hoisted linker
+- [#466](https://github.com/defrex/autobuild/pull/466) — Relax tomlBasicStringLine's raw line-break guard to LF/CRLF only
+- [#465](https://github.com/defrex/autobuild/pull/465) — Deny *.spec.tsx in the published tarballs' test-file negation
+- [#464](https://github.com/defrex/autobuild/pull/464) — Pin the dashboard refresh's superseded-generation branch with tests
+- [#463](https://github.com/defrex/autobuild/pull/463) — Exclude the test-only src/testing helpers from the root tarball (AUT-503)
+- [#462](https://github.com/defrex/autobuild/pull/462) — Correct ALWAYS_PACKED_FILE_NAMES doc + constant to actual packer sets
+- [#461](https://github.com/defrex/autobuild/pull/461) — Fail collectUnclaimedObservations loudly on a missing eventsByBuild entry
+- [#460](https://github.com/defrex/autobuild/pull/460) — Exclude the test-only src/testing/ tree from postgres-store's tarball
+- [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
+- [#458](https://github.com/defrex/autobuild/pull/458) — Guard the workspace's mirrored react pins against drift
+- [#457](https://github.com/defrex/autobuild/pull/457) — Skip getOperatorBuild's pinned-config read for null-row builds
+- [#456](https://github.com/defrex/autobuild/pull/456) — Rule AUT-490: exclude test files from sub-package tarballs
+- [#455](https://github.com/defrex/autobuild/pull/455) — Fix publish-contents-check's duplicated header sentence and describeSurface's LICENSE rendering
+- [#454](https://github.com/defrex/autobuild/pull/454) — Serialize the web dashboard's snapshot refreshes
+- [#453](https://github.com/defrex/autobuild/pull/453) — Remove the dashboard snapshot's duplicate reads and per-refresh write
+- [#452](https://github.com/defrex/autobuild/pull/452) — Rule the store-service scan's subtree collection deliberate (AUT-456)
+- [#451](https://github.com/defrex/autobuild/pull/451) — Retire the bunfig.toml hoisted-linker override
+- [#450](https://github.com/defrex/autobuild/pull/450) — Seed normalized https origins in web-dashboard-dev's devEnv
+- [#449](https://github.com/defrex/autobuild/pull/449) — Make tomlBasicStringLine a general TOML basic-string renderer
+- [#448](https://github.com/defrex/autobuild/pull/448) — Make evictFinishedBeyondCap's retention order stamp-independent
+- [#447](https://github.com/defrex/autobuild/pull/447) — Pin collectSpecifiers' JS fileName mapping; fix guard example (AUT-484)
+- [#446](https://github.com/defrex/autobuild/pull/446) — Guard every publishable workspace manifest's packed contents (AUT-481)
+- [#445](https://github.com/defrex/autobuild/pull/445) — Fix skill-docs-asset-check's inline-code mention recognition
+- [#444](https://github.com/defrex/autobuild/pull/444) — Widen the published-imports guard beyond .ts/.tsx packed files
+- [#443](https://github.com/defrex/autobuild/pull/443) — Reject releases below a dependent's declared peer floor (AUT-480)
+- [#442](https://github.com/defrex/autobuild/pull/442) — Declare an explicit files allowlist for postgres-store (AUT-473)
+- [#441](https://github.com/defrex/autobuild/pull/441) — End bin-mode-check's success message with a newline
+- [#439](https://github.com/defrex/autobuild/pull/439) — Widen the rule-on-docs AC3 sweep's include patterns to *.ts
+- [#438](https://github.com/defrex/autobuild/pull/438) — Resolve the @defrex/autobuild@0.8.0 npm export skew (AUT-476)
+- [#440](https://github.com/defrex/autobuild/pull/440) — Guard repo-local skill docs' asset refs; fix vendored-scope comment
+- [#436](https://github.com/defrex/autobuild/pull/436) — Pin comment-interleaved require/import positions in boundary tests
+- [#437](https://github.com/defrex/autobuild/pull/437) — End publish-contents-check's success message with a newline
+- [#435](https://github.com/defrex/autobuild/pull/435) — Extend Pi version cross-check to every install-literal pin
+- [#434](https://github.com/defrex/autobuild/pull/434) — State docs-asset-check's shipped-docs-only document scope ruling
+- [#433](https://github.com/defrex/autobuild/pull/433) — Restrict the hosted-store-service npm tarball to src/ and README
+- [#432](https://github.com/defrex/autobuild/pull/432) — Add --no-install to vercel-builds bunx preflight
+- [#430](https://github.com/defrex/autobuild/pull/430) — Pin setup.md parity and doc Pi version against autobuild.toml
+- [#429](https://github.com/defrex/autobuild/pull/429) — Make the vercel-builds skill's vercel CLI independent of bunfig.toml
+- [#428](https://github.com/defrex/autobuild/pull/428) — Document comment-interleaved argument positions in the boundary guard
+- [#427](https://github.com/defrex/autobuild/pull/427) — Derive the doc preflight pin from autobuild.toml's runtimeProvisioning.pi
+- [#426](https://github.com/defrex/autobuild/pull/426) — Move the operator web app into the hosted store service package
+- [#424](https://github.com/defrex/autobuild/pull/424) — Complete the boundary-guard coverage statement's widening list
+- [#423](https://github.com/defrex/autobuild/pull/423) — Align Pi provisioning examples and pins with delivered commands
+- [#425](https://github.com/defrex/autobuild/pull/425) — Deduplicate type-only-import rationale comment in boundary test
+- [#422](https://github.com/defrex/autobuild/pull/422) — Enumerate all worktree-dirty triggers in the provenance docs
+- [#420](https://github.com/defrex/autobuild/pull/420) — Collect only specifier-position literals in the boundary guard
+- [#421](https://github.com/defrex/autobuild/pull/421) — Harden vercel-consumer-config test against catalog drift
+- [#419](https://github.com/defrex/autobuild/pull/419) — Rule on the type-only-import divergence between boundary scanners
+- [#418](https://github.com/defrex/autobuild/pull/418) — Make the cumulative-latency scenario-deadline test jitter-tolerant
+- [#415](https://github.com/defrex/autobuild/pull/415) — Stop the package-boundary lint flagging import text in comments
+- [#416](https://github.com/defrex/autobuild/pull/416) — Anchor the dispatcher dependency filter to the exact package name
+- [#412](https://github.com/defrex/autobuild/pull/412) — Remove unused deploymentSectionsEqual and DEPLOYMENT_OWNED_CONFIG_PATHS
+- [#417](https://github.com/defrex/autobuild/pull/417) — Document checkout-mode worktree-dirty provenance in ownership docs
+- [#414](https://github.com/defrex/autobuild/pull/414) — Record honest pipeline-source provenance for dirty checkout worktrees
+- [#411](https://github.com/defrex/autobuild/pull/411) — Reject per-build auto-merge consent while a discard is in flight
+- [#413](https://github.com/defrex/autobuild/pull/413) — Anchor the dispatcher package specifier in the boundary scan
+- [#409](https://github.com/defrex/autobuild/pull/409) — Harden store-service boundary scan against recorded evasion forms
+- [#408](https://github.com/defrex/autobuild/pull/408) — Extract the consent page's named/unnamed paragraph copy into one site
+- [#407](https://github.com/defrex/autobuild/pull/407) — Exclude discard-in-flight builds from auto-merge default eligibility
+- [#406](https://github.com/defrex/autobuild/pull/406) — Stop seedHappyBuild from appending a duplicate verify.started event
+- [#405](https://github.com/defrex/autobuild/pull/405) — Include git diff output in finalize-preflight dirty-worktree failure records
+- [#402](https://github.com/defrex/autobuild/pull/402) — Widen store-service boundary scan to template-literal dynamic imports
+- [#401](https://github.com/defrex/autobuild/pull/401) — Stop dispatcher scan reporting import text in comments or strings
+- [#400](https://github.com/defrex/autobuild/pull/400) — Re-anchor the packed-install retry cooldown per lag window
+- [#399](https://github.com/defrex/autobuild/pull/399) — Verify worktree exec bits in bin-mode-check; add PackageManifest.bin
+- [#398](https://github.com/defrex/autobuild/pull/398) — Fix three distribution-packing tests failing on registry lag
+- [#396](https://github.com/defrex/autobuild/pull/396) — Prevent bin.ts mode flips from failing the finalize preflight
+- [#395](https://github.com/defrex/autobuild/pull/395) — Declare @defrex/autobuild-postgres-store as root devDependency
+- [#394](https://github.com/defrex/autobuild/pull/394) — Correct /testing attribution in core-floor test comment
+- [#393](https://github.com/defrex/autobuild/pull/393) — Harden store-service boundary scan to all dispatcher import forms
+- [#392](https://github.com/defrex/autobuild/pull/392) — Add a committed package-boundary check for cross-package src test imports
+- [#391](https://github.com/defrex/autobuild/pull/391) — Migrate tools/ scripts onto postgres-store public subpath exports
+- [#390](https://github.com/defrex/autobuild/pull/390) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0
+- [#431](https://github.com/defrex/autobuild/pull/431) — Raise hosted-dispatcher's peer floor for @defrex/autobuild to >=0.9.0 so dispatcher + hosted-store-service cannot install against a core missing the /operator, /hosted-tickets, and /testing subpaths (AUT-431)
+- [#389](https://github.com/defrex/autobuild/pull/389) — Show pinned pipeline source and config rev on web build detail
+- [#388](https://github.com/defrex/autobuild/pull/388) — Expose postgres-store schema/store subpath exports and use them in hosted-store-service tests
+- [#387](https://github.com/defrex/autobuild/pull/387) — Restore client-only over-the-wire coverage for core's remote clients
+- [#386](https://github.com/defrex/autobuild/pull/386) — Reconcile peer-dependency floors left by the hosted-store extraction
+- [#385](https://github.com/defrex/autobuild/pull/385) — Migrate hosted-dispatcher integration test to core public subpaths
+- [#384](https://github.com/defrex/autobuild/pull/384) — Pin each build's pipeline config to its own branch (AUT-390)
+- [#383](https://github.com/defrex/autobuild/pull/383) — Move the hosted store, operator, and ticket servers out of core
 - [#382](https://github.com/defrex/autobuild/pull/382) — Align docs with the @defrex/autobuild-hosted-dispatcher package split
 - [#380](https://github.com/defrex/autobuild/pull/380) — Split the hosted dispatcher into @defrex/autobuild-hosted-dispatcher
 - [#379](https://github.com/defrex/autobuild/pull/379) — Fix the MCP plugin's metadata typing gap; drop the workaround

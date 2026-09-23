@@ -9,6 +9,19 @@ dependencies. A project that embeds the adapter adds it directly:
 bun add @defrex/autobuild-postgres-store
 ```
 
+Only this package's `src/` tree and this README publish to npm: every
+consumer of the published package imports through the manifest's `exports`
+and `bin`, all of which live under `src/`. The manifest's `files` allowlist
+pins the tarball to exactly that, and `bun tools/publish-contents-check.ts`
+in the repository `check` gate fails when anything else would ship. The
+deny-by-default allowlist is deliberate: a future top-level file in this
+package (a scratch script, a live-test fixture, a dotenv file, an editor
+artifact) stays out of the tarball unless the allowlist and the check are
+updated together. The `src/testing/` helpers are test-only surface — their
+sole consumer is the live test suite — and are excluded from the tarball by
+the `!src/testing/**` negation (AUT-500), so a surface pass does not re-flag
+them.
+
 ## Setup
 
 To run the migration from the hosted deployment's own checkout, choose the
@@ -34,6 +47,21 @@ own version/checksum marker, so migrating an existing BuildStore v1 database
 adds team-scoped tickets, comments, and blockers without replacing the
 established BuildStore marker. Opening against a missing, older/newer, or
 checksum-mismatched schema fails; schema creation is never implicit.
+
+## Public entry points
+
+The package exposes four subpaths, each named after the source module it
+publishes:
+
+- `@defrex/autobuild-postgres-store` — the full adapter surface: `openPostgresBuildStore`,
+  `openPostgresBuildStoreFromEnv`, `migratePostgres`, ticket and blob stores.
+- `@defrex/autobuild-postgres-store/env` — URL resolution helpers
+  (`resolvePostgresUrl`, `describePostgresTarget`).
+- `@defrex/autobuild-postgres-store/schema` — schema DDL, version and checksum
+  constants, schema assertions, and `migratePostgres`.
+- `@defrex/autobuild-postgres-store/store` — `openPostgresBuildStore`, the
+  `PostgresBuildStore` class, `PostgresBuildStoreOptions`, and
+  `EVENT_WAIT_POLL_MS`.
 
 ## Concurrency
 
