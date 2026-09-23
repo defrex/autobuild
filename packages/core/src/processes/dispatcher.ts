@@ -38,6 +38,7 @@
  */
 import type { Config } from '../config/schema'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
+import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import type { IdSource } from '../ids'
@@ -1192,6 +1193,7 @@ export class Dispatcher {
           ref: handle.ref,
           path: handle.path,
           ...(handle.localPath !== undefined ? { localPath: handle.localPath } : {}),
+          remote: workspaces.publication !== undefined,
           branch: handle.branch,
           base: handle.base,
         },
@@ -1379,7 +1381,7 @@ export class Dispatcher {
 
   private forgeWorkspacePath(events: AbEvent[]): string {
     const open = openWorkspace(events)
-    if (open?.provider === 'vercel-sandbox') return this.deps.repo
+    if (open !== null && isRemoteWorkspace(open)) return this.deps.repo
     // Local forges run git with cwd = workspacePath: it must be the physical
     // checkout, never the store identity (an origin URL since the identity
     // change; a path only for origin-less fixtures).
@@ -1407,13 +1409,12 @@ export class Dispatcher {
     // provisioned facts (not the open one, which is null when the build never
     // provisioned or already released — only the former must skip the
     // local-branch git step; a released local workspace may still have left a
-    // branch in the checkout). Remote workspaces (vercel-sandbox) never create
-    // a local branch in the main checkout, and origin mode has no checkout at
-    // all: the local-branch git step is skipped, and the saga's later steps
-    // tolerate its absence.
+    // branch in the checkout). Remote workspaces never create a local branch
+    // in the main checkout, and origin mode has no checkout at all: the
+    // local-branch git step is skipped, and the saga's later steps tolerate
+    // its absence.
     const hadLocalWorkspace = events.some(
-      (event) =>
-        event.type === 'workspace.provisioned' && event.payload.provider !== 'vercel-sandbox',
+      (event) => event.type === 'workspace.provisioned' && !isRemoteWorkspace(event.payload),
     )
     const has = (type: AbEvent['type']): boolean => events.some((event) => event.type === type)
     const append = async <T extends EventWrite['type']>(write: EventWrite<T>): Promise<void> => {
@@ -2172,6 +2173,7 @@ export class Dispatcher {
             ref: handle.ref,
             path: handle.path,
             ...(handle.localPath !== undefined ? { localPath: handle.localPath } : {}),
+            remote: this.deps.workspaces.publication !== undefined,
             branch: handle.branch,
             base: handle.base,
           },
