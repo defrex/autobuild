@@ -6,7 +6,7 @@
  */
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
-import { getTableConfig, type SQLiteTable } from 'drizzle-orm/sqlite-core'
+import { getTableConfig, type IndexColumn, type SQLiteTable } from 'drizzle-orm/sqlite-core'
 import {
   artifacts,
   builds,
@@ -41,11 +41,19 @@ function declaredIndexes(): Set<string> {
   const out = new Set<string>()
   for (const [tableName, table] of Object.entries(tables)) {
     for (const ix of getTableConfig(table).indexes) {
-      const columns = ix.config.columns.map((c) => c.name).join(',')
+      const columns = ix.config.columns.map(columnName).join(',')
       out.add(`${tableName}/${ix.config.name}/${columns}`)
     }
   }
   return out
+}
+
+/** Index columns are plain column references in this schema; a SQL expression
+ * would need different handling on the DDL side, so fail loudly instead of
+ * comparing an empty name. */
+function columnName(c: IndexColumn): string {
+  if (!('name' in c)) throw new Error('index over a SQL expression is not parity-checked')
+  return c.name
 }
 
 /** (table, indexName, columnList) as the applied BOOTSTRAP_DDL creates them,
