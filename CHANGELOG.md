@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
 - [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
 - [#483](https://github.com/defrex/autobuild/pull/483) — Keep dashboard cost flat as finished builds accumulate (AUT-487)
