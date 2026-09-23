@@ -26,6 +26,8 @@ import {
   SCHEMA_V4_DDL,
   SCHEMA_V5_CHECKSUM,
   SCHEMA_V5_DDL,
+  SCHEMA_V6_CHECKSUM,
+  SCHEMA_V6_DDL,
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
@@ -416,6 +418,54 @@ if (testUrl) {
             (await store.listStreams({ kind: 'build', build: 'v5-build' })).map((s) => s.id),
           ).toEqual(['st_legacy-1', 'st_legacy-2', created.id])
           await store.appendStreamParts(created.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v6 database in place: the build-digest scan index, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v6 database: v6 DDL, v6 marker, plus a build with a
+        // long non-digest history the index upgrade must leave untouched.
+        await sql.unsafe(SCHEMA_V6_DDL)
+        // The genuine v6 marker is version 6 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v6 checksum under any other
+        // version is (correctly) rejected as incompatible.
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, 6, ${SCHEMA_V6_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+          VALUES ('v6-build', 'acme/v6', ${CONTRACT_T0}, ${CONTRACT_T0})`
+        await sql`INSERT INTO events (build, seq, ts, actor, type, payload)
+          VALUES ('v6-build', 1, ${CONTRACT_T0}, '"dispatcher"', 'build.created', '{}')`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // The index exists under its pinned name and the legacy row survived.
+        const indexes =
+          await sql`SELECT indexname FROM pg_indexes WHERE tablename = 'events' AND indexname = 'events_type_build_seq'`
+        expect(indexes).toHaveLength(1)
+        const legacy = await sql`SELECT seq, type FROM events WHERE build = 'v6-build'`
+        expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1])
+
+        // The migrated store digests the legacy row and answers new writes.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const digests = await store.getRepoBuildDigests('acme/v6')
+          expect([...digests.keys()]).toEqual(['v6-build'])
+          expect(digests.get('v6-build')).toEqual({ slug: 'v6-build', observations: [] })
         } finally {
           await store.close()
         }

@@ -8,7 +8,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -376,7 +376,10 @@ CREATE TABLE IF NOT EXISTS stream_chunks (
 );`.trim()
 export const SCHEMA_V5_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V5_DDL).digest('hex')
 
-export const SCHEMA_DDL = `
+/** The frozen v6 DDL, kept verbatim so a deployed v6 marker's checksum can be
+ * recognized and upgraded in place (see migratePostgres). v6 is the shape the
+ * hosted service ran immediately before the build-digest scan index (v7). */
+export const SCHEMA_V6_DDL = `
 CREATE TABLE IF NOT EXISTS ab_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   version integer NOT NULL,
@@ -460,6 +463,97 @@ CREATE TABLE IF NOT EXISTS stream_chunks (
   seq bigint NOT NULL, ts timestamptz NOT NULL, parts jsonb NOT NULL,
   PRIMARY KEY (stream, seq)
 );`.trim()
+export const SCHEMA_V6_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V6_DDL).digest('hex')
+
+export const SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS ab_schema_migrations (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  version integer NOT NULL,
+  checksum text NOT NULL,
+  applied_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS builds (
+  slug text PRIMARY KEY, repo text NOT NULL, ticket jsonb, branch text,
+  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+  lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
+  heartbeat_at timestamptz, repo_origin text
+);
+CREATE TABLE IF NOT EXISTS events (
+  build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (build, seq)
+);
+CREATE TABLE IF NOT EXISTS artifacts (
+  build text NOT NULL REFERENCES builds(slug) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (build, kind, revision)
+);
+CREATE TABLE IF NOT EXISTS repo_streams (
+  repo text PRIMARY KEY, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+  lease_holder text, lease_expires_at timestamptz, lease_ttl_ms bigint,
+  heartbeat_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS repo_events (
+  repo text NOT NULL REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (repo, seq)
+);
+CREATE TABLE IF NOT EXISTS repo_artifacts (
+  repo text NOT NULL REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (repo, kind, revision)
+);
+CREATE SEQUENCE IF NOT EXISTS sessions_creation_seq;
+CREATE TABLE IF NOT EXISTS sessions (
+  id text PRIMARY KEY,
+  repo text NOT NULL,
+  operator text NOT NULL,
+  title text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  creation_seq bigint NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_events (
+  session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, actor jsonb NOT NULL,
+  type text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY (session, seq)
+);
+CREATE TABLE IF NOT EXISTS session_artifacts (
+  session text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind text NOT NULL, revision bigint NOT NULL, blob_ref text NOT NULL,
+  metadata jsonb NOT NULL, created_at timestamptz NOT NULL,
+  PRIMARY KEY (session, kind, revision)
+);
+CREATE SEQUENCE IF NOT EXISTS streams_creation_seq;
+CREATE TABLE IF NOT EXISTS streams (
+  id text PRIMARY KEY, scope_kind text NOT NULL,
+  build text REFERENCES builds(slug) ON DELETE CASCADE,
+  repo text REFERENCES repo_streams(repo) ON DELETE CASCADE,
+  label text NOT NULL, format text NOT NULL, status text NOT NULL,
+  outcome text, artifact_kind text, artifact_revision bigint,
+  artifact_blob_ref text, created_at timestamptz NOT NULL, closed_at timestamptz,
+  session text REFERENCES sessions(id) ON DELETE CASCADE,
+  creation_seq bigint NOT NULL,
+  CONSTRAINT streams_scope_kind_check CHECK (scope_kind IN ('build','repo','session')),
+  CONSTRAINT streams_status_check CHECK (status IN ('open','closed')),
+  CONSTRAINT streams_scope_exactly_one_check CHECK (
+    (scope_kind = 'build' AND build IS NOT NULL AND repo IS NULL AND session IS NULL)
+    OR (scope_kind = 'repo' AND build IS NULL AND repo IS NOT NULL AND session IS NULL)
+    OR (scope_kind = 'session' AND build IS NULL AND repo IS NULL AND session IS NOT NULL)
+  )
+);
+CREATE TABLE IF NOT EXISTS stream_chunks (
+  stream text NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
+  seq bigint NOT NULL, ts timestamptz NOT NULL, parts jsonb NOT NULL,
+  PRIMARY KEY (stream, seq)
+);
+
+-- The build-digest scan index (AUT-487): type-leading, so the digest query's
+-- cost grows with the observation/terminal events themselves, not with total
+-- history. Created idempotently so pre-v7 databases gain it on migrate.
+CREATE INDEX IF NOT EXISTS events_type_build_seq ON events (type, build, seq);`.trim()
 
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
@@ -851,7 +945,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
   }
 }
 
-/** The guarded streams.creation_seq upgrade, shared by every pre-v6 marker
+/** The guarded streams.creation_seq upgrade, shared by every pre-v7 marker
  * branch whose database carries a pre-existing streams table (v2, v3, v4, v5).
  * The idempotent full DDL above has already created the
  * streams_creation_seq sequence; the column is added only when missing, with
@@ -891,12 +985,12 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`
       const marker = rows[0]
       if (marker) {
-        // v1–v5 → v6: the guarded builds.repo_origin column runs for EVERY
-        // pre-v6 marker, before the version branches — not only in a v4
+        // v1–v6 → v7: the guarded builds.repo_origin column runs for EVERY
+        // pre-v7 marker, before the version branches — not only in a v4
         // branch. `CREATE TABLE IF NOT EXISTS builds` does not alter an
         // existing builds table, so without this the internal assertSchema
         // below would fail on every upgraded legacy database. The ALTER is
-        // guarded and idempotent, so re-running it on a v6 database (or a
+        // guarded and idempotent, so re-running it on a v7 database (or a
         // marker that turns out to be rejected below, which rolls this
         // transaction back) is a no-op.
         await tx.unsafe(`
@@ -910,25 +1004,37 @@ export async function migratePostgres(url: string): Promise<void> {
             END IF;
           END $$;
         `)
+        // v6 → v7: the guarded build-digest scan index (AUT-487) likewise
+        // runs for EVERY pre-v7 marker — the idempotent full DDL above only
+        // creates an index on a database that lacks the events table, never
+        // on a pre-existing one. Guarded and idempotent (the repo_origin
+        // precedent), so it is a no-op on fresh installs, on v7 reruns, and
+        // on markers rejected below (which roll the transaction back).
+        await tx.unsafe(
+          `CREATE INDEX IF NOT EXISTS events_type_build_seq ON events (type, build, seq)`,
+        )
         const version = Number(marker.version)
         if (version === SCHEMA_VERSION) {
           if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('marker is incompatible')
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
-          // v1 → v6: the idempotent full DDL above already applied the deltas
+          // v1 → v7: the idempotent full DDL above already applied the deltas
           // (the stream tables and the session tables); v1 databases never had
           // a streams or sessions table, so the full DDL created them with the
           // session column, the widened CHECKs, and both creation_seq columns.
-          // The guarded repo_origin ALTER above covered builds. Promote the
-          // marker in this transaction.
+          // The guarded repo_origin ALTER and the guarded digest-scan index
+          // above covered the pre-existing tables. Promote the marker in this
+          // transaction.
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 2 && marker.checksum === SCHEMA_V2_CHECKSUM) {
-          // v2 → v6: the idempotent full DDL above created the session tables
+          // v2 → v7: the idempotent full DDL above created the session tables
           // (with the creation_seq column); a v2 database's streams table
           // needs the guarded session column, the widened CHECK constraints,
-          // and the guarded creation_seq column (shared with v3 and v4).
+          // and the guarded creation_seq column (shared with v3 and v4). The
+          // guarded repo_origin ALTER and the guarded digest-scan index above
+          // covered the pre-existing builds and events tables.
           await tx.unsafe(`
             DO $$ BEGIN
               IF NOT EXISTS (
@@ -958,7 +1064,7 @@ export async function migratePostgres(url: string): Promise<void> {
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 3 && marker.checksum === SCHEMA_V3_CHECKSUM) {
-          // v3 → v6: the listSessions and listStreams creation-order
+          // v3 → v7: the listSessions and listStreams creation-order
           // tiebreaks (store/types.ts). The idempotent full DDL above created
           // the sessions_creation_seq and streams_creation_seq sequences; a
           // v3 database's sessions and streams tables need the guarded
@@ -967,8 +1073,8 @@ export async function migratePostgres(url: string): Promise<void> {
           // unorderable, so any total order consistent with createdAt is
           // acceptable — SET NOT NULL, and the sequence positioned above the
           // backfilled values so the next nextval continues the counter
-          // without collision. The guarded repo_origin ALTER above covered
-          // builds.
+          // without collision. The guarded repo_origin ALTER and the guarded
+          // digest-scan index above covered the pre-existing tables.
           await tx.unsafe(`
             DO $$ BEGIN
               IF NOT EXISTS (
@@ -994,28 +1100,38 @@ export async function migratePostgres(url: string): Promise<void> {
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 4 && marker.checksum === SCHEMA_V4_CHECKSUM) {
-          // v4 → v6: the listStreams creation-order tiebreak
+          // v4 → v7: the listStreams creation-order tiebreak
           // (store/types.ts), mirroring the v3→v4 sessions treatment. The
           // idempotent full DDL above created the streams_creation_seq
           // sequence; a v4 database's streams table needs the guarded
           // creation_seq column, backfill, NOT NULL, and sequence continuity
           // (the shared pre-v6 streams migration). The guarded repo_origin
-          // ALTER above covered builds.
+          // ALTER and the guarded digest-scan index above covered the
+          // pre-existing tables.
           await tx.unsafe(STREAMS_CREATION_SEQ_MIGRATION)
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
         } else if (version === 5 && marker.checksum === SCHEMA_V5_CHECKSUM) {
-          // v5 → v6: the listStreams creation-order tiebreak (store/types.ts)
+          // v5 → v7: the listStreams creation-order tiebreak (store/types.ts)
           // landed on the v5 DDL without a version bump, so the hosted
           // database carries the v5 marker with the pre-tiebreak checksum. The
           // idempotent full DDL above created the streams_creation_seq
           // sequence; a v5 database's streams table needs the guarded
           // creation_seq column, backfill, NOT NULL, and sequence continuity
-          // (the shared pre-v6 streams migration). Every other v6 table and
-          // column already exists in a v5 database.
+          // (the shared pre-v6 streams migration). Every other pre-v7 table
+          // and column already exists in a v5 database; the guarded
+          // digest-scan index above covers events.
           await tx.unsafe(STREAMS_CREATION_SEQ_MIGRATION)
+          await tx`UPDATE ab_schema_migrations
+            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
+        } else if (version === 6 && marker.checksum === SCHEMA_V6_CHECKSUM) {
+          // v6 → v7: the guarded digest-scan index above is the entire delta;
+          // every v6 table and column already exists. Promote the marker in
+          // this transaction.
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}

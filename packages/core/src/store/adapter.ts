@@ -18,6 +18,7 @@ export type {
 } from '../events/sessions'
 export { createBuildScopedStore } from './build-scope'
 export { createSessionScopedStore } from './session-handle'
+export { DIGEST_EVENT_TYPES, reduceBuildDigest } from './digest'
 export {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   DISPATCHER_RETENTION_BUILD_KINDS,
@@ -61,6 +62,7 @@ export type {
   ArtifactInput,
   ArtifactMeta,
   BlobStore,
+  BuildDigest,
   BuildRecord,
   BuildScopedStore,
   BuildStore,
