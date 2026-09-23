@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#494](https://github.com/defrex/autobuild/pull/494) — Pin the duplicated execOrThrow helpers’ exit/error semantics with tests
+- [#493](https://github.com/defrex/autobuild/pull/493) — Fix wait.ts's post-drain exit-2 comment after AUT-403 (AUT-528)
+- [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
+- [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
 - [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
 - [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
 - [#486](https://github.com/defrex/autobuild/pull/486) — Move packageAutobuildDistribution into core's distribution-archive
