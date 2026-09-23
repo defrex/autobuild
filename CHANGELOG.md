@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#479](https://github.com/defrex/autobuild/pull/479) — Strengthen wait.test.ts's interval-spacing assertion
 - [#478](https://github.com/defrex/autobuild/pull/478) — Deterministically exercise the tsc-deadline branch via injection
 - [#477](https://github.com/defrex/autobuild/pull/477) — Keep the directory-index probe for dotted extensionless specifiers
