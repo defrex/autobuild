@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#475](https://github.com/defrex/autobuild/pull/475) — Guard publish-contents-check rendered rulings from silent corruption
+- [#474](https://github.com/defrex/autobuild/pull/474) — Close the closure walk's latent under-approximations (AUT-510)
 - [#473](https://github.com/defrex/autobuild/pull/473) — De-flake the retention-cap test with deterministic completion order
 - [#472](https://github.com/defrex/autobuild/pull/472) — Raise the plugin SDK package-surface test's timeout budget
 - [#471](https://github.com/defrex/autobuild/pull/471) — Exclude the test-only cli/testkit.ts from the root tarball (AUT-506)

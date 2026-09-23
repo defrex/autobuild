@@ -7,6 +7,7 @@ import {
   type PublishImportsReport,
   exportsSubpaths,
   exportsTargets,
+  importsSubpaths,
   isProviderSpecifier,
   packedPathOfTarget,
   packedScriptKind,
@@ -769,22 +770,27 @@ describe('packedPathOfTarget', () => {
 
 describe('resolvePackedClosureTarget', () => {
   const exportsMap = new Map([['./testing', ['./core-src/testing/index.ts']]])
+  const importsMap = new Map<string, string[]>()
 
   test('an exact relative hit resolves to itself', () => {
     expect(
-      resolvePackedClosureTarget(['src/util.ts'], 'src/a.ts', './util.ts', exportsMap),
+      resolvePackedClosureTarget(['src/util.ts'], 'src/a.ts', './util.ts', exportsMap, importsMap),
     ).toEqual({ kind: 'relative', path: 'src/util.ts' })
   })
 
   test('a .js specifier resolves to a packed .ts file (TS-style rewrite)', () => {
-    expect(resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x.js', exportsMap)).toEqual({
+    expect(
+      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x.js', exportsMap, importsMap),
+    ).toEqual({
       kind: 'relative',
       path: 'src/x.ts',
     })
   })
 
   test('an extensionless specifier hits the packed .ts through same-stem probing', () => {
-    expect(resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x', exportsMap)).toEqual({
+    expect(
+      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x', exportsMap, importsMap),
+    ).toEqual({
       kind: 'relative',
       path: 'src/x.ts',
     })
@@ -792,46 +798,181 @@ describe('resolvePackedClosureTarget', () => {
 
   test('a directory-index import resolves to <dir>/index.ts, .json last', () => {
     expect(
-      resolvePackedClosureTarget(['src/dir/index.ts'], 'src/a.ts', './dir', exportsMap),
+      resolvePackedClosureTarget(['src/dir/index.ts'], 'src/a.ts', './dir', exportsMap, importsMap),
     ).toEqual({ kind: 'relative', path: 'src/dir/index.ts' })
     expect(
-      resolvePackedClosureTarget(['src/dir/index.json'], 'src/a.ts', './dir', exportsMap),
+      resolvePackedClosureTarget(
+        ['src/dir/index.json'],
+        'src/a.ts',
+        './dir',
+        exportsMap,
+        importsMap,
+      ),
     ).toEqual({ kind: 'relative', path: 'src/dir/index.json' })
   })
 
   test('a relative specifier matching nothing is missing with the literal joined path', () => {
-    expect(resolvePackedClosureTarget(['src/other.ts'], 'src/a.ts', './gone', exportsMap)).toEqual({
+    expect(
+      resolvePackedClosureTarget(['src/other.ts'], 'src/a.ts', './gone', exportsMap, importsMap),
+    ).toEqual({
       kind: 'missing',
       path: 'src/gone',
     })
     expect(
-      resolvePackedClosureTarget(['src/other.json'], 'src/a.ts', './data.json', exportsMap),
+      resolvePackedClosureTarget(
+        ['src/other.json'],
+        'src/a.ts',
+        './data.json',
+        exportsMap,
+        importsMap,
+      ),
     ).toEqual({ kind: 'missing', path: 'src/data.json' })
   })
 
-  test('bare, #-prefixed, and absolute specifiers are external', () => {
-    expect(resolvePackedClosureTarget([], 'src/a.ts', 'zod', exportsMap)).toEqual({
+  test('bare, #-prefixed, and absolute specifiers are external when no imports field matches', () => {
+    expect(resolvePackedClosureTarget([], 'src/a.ts', 'zod', exportsMap, importsMap)).toEqual({
       kind: 'external',
     })
-    expect(resolvePackedClosureTarget([], 'src/a.ts', '#internal/thing', exportsMap)).toEqual({
+    expect(
+      resolvePackedClosureTarget([], 'src/a.ts', '#internal/thing', exportsMap, importsMap),
+    ).toEqual({
       kind: 'external',
     })
-    expect(resolvePackedClosureTarget([], 'src/a.ts', '/absolute/path', exportsMap)).toEqual({
+    expect(
+      resolvePackedClosureTarget([], 'src/a.ts', '/absolute/path', exportsMap, importsMap),
+    ).toEqual({
       kind: 'external',
     })
   })
 
   test('a provider self-import resolves through the exports map, or self-missing when the key is absent', () => {
     expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild/testing', exportsMap),
+      resolvePackedClosureTarget(
+        [],
+        'src/a.ts',
+        '@defrex/autobuild/testing',
+        exportsMap,
+        importsMap,
+      ),
     ).toEqual({ kind: 'self', targets: ['./core-src/testing/index.ts'] })
-    expect(resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild', exportsMap)).toEqual({
+    expect(
+      resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild', exportsMap, importsMap),
+    ).toEqual({
       kind: 'self-missing',
       subpath: '.',
     })
     expect(
-      resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild/nope', exportsMap),
+      resolvePackedClosureTarget([], 'src/a.ts', '@defrex/autobuild/nope', exportsMap, importsMap),
     ).toEqual({ kind: 'self-missing', subpath: './nope' })
+  })
+
+  test('# specifiers resolve through the imports map, exact match only (seq 36 shape)', () => {
+    const imports = importsSubpaths({
+      imports: {
+        '#internal/util': './core-src/internal/util.ts',
+        '#config': { import: './config/index.ts', default: null },
+        '#internal/*': ['./core-src/internal/*.ts'],
+      },
+    })
+    // An exact key resolves to its string leaves, conditions objects included.
+    expect(
+      resolvePackedClosureTarget([], 'src/a.ts', '#internal/util', exportsMap, imports),
+    ).toEqual({ kind: 'imports', targets: ['./core-src/internal/util.ts'] })
+    expect(resolvePackedClosureTarget([], 'src/a.ts', '#config', exportsMap, imports)).toEqual({
+      kind: 'imports',
+      targets: ['./config/index.ts'],
+    })
+    // A specifier only a pattern key could match stays external: exact-match
+    // lookup cannot see `#internal/*`, and pattern syntax is unsupported by
+    // design (see the mechanics header).
+    expect(
+      resolvePackedClosureTarget([], 'src/a.ts', '#internal/other', exportsMap, imports),
+    ).toEqual({ kind: 'external' })
+    // No imports entry at all: external, unchanged from the pre-imports walk.
+    expect(resolvePackedClosureTarget([], 'src/a.ts', '#nothing', exportsMap, imports)).toEqual({
+      kind: 'external',
+    })
+  })
+
+  test('kind-aware probing: a non-script extension never resolves across kinds (seq 46 shape)', () => {
+    // A .json specifier whose JSON is absent is missing, not a silent match
+    // on a packed same-stem .ts.
+    expect(
+      resolvePackedClosureTarget(
+        ['src/data.ts'],
+        'src/a.ts',
+        './data.json',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'missing', path: 'src/data.json' })
+    // The exact packed JSON still satisfies the specifier (exact hit is
+    // checked first, any kind).
+    expect(
+      resolvePackedClosureTarget(
+        ['src/data.json'],
+        'src/a.ts',
+        './data.json',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/data.json' })
+    // A .js specifier no longer falls through to a packed same-stem .json.
+    expect(
+      resolvePackedClosureTarget(['src/x.json'], 'src/a.ts', './x.js', exportsMap, importsMap),
+    ).toEqual({ kind: 'missing', path: 'src/x.js' })
+    // Other non-script extensions are exact-only too.
+    expect(
+      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './README.md', exportsMap, importsMap),
+    ).toEqual({ kind: 'missing', path: 'src/README.md' })
+    // …but the script-family stem rewrite survives: ./x.js with x.ts packed.
+    expect(
+      resolvePackedClosureTarget(['src/x.ts'], 'src/a.ts', './x.js', exportsMap, importsMap),
+    ).toEqual({ kind: 'relative', path: 'src/x.ts' })
+    // Script-family directory-index candidates survive for script specifiers
+    // (the candidates join against the specifier's own joined path).
+    expect(
+      resolvePackedClosureTarget(
+        ['src/dir.js/index.ts'],
+        'src/a.ts',
+        './dir.js',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/dir.js/index.ts' })
+    // …while a .json directory-index never serves a script specifier.
+    expect(
+      resolvePackedClosureTarget(
+        ['src/dir/index.json'],
+        'src/a.ts',
+        './dir.js',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'missing', path: 'src/dir.js' })
+  })
+})
+
+describe('importsSubpaths', () => {
+  test('collects string and conditions-object leaves, keyed exactly as written', () => {
+    expect(
+      importsSubpaths({
+        imports: {
+          '#internal/util': './core-src/internal/util.ts',
+          '#config': { import: './config/index.ts', default: null },
+        },
+      }),
+    ).toEqual(
+      new Map([
+        ['#internal/util', ['./core-src/internal/util.ts']],
+        ['#config', ['./config/index.ts']],
+      ]),
+    )
+  })
+
+  test('a manifest without imports yields an empty map (# specifiers stay external)', () => {
+    expect(importsSubpaths({ name: 'x' }).size).toBe(0)
+    expect(importsSubpaths({ imports: null }).size).toBe(0)
   })
 })
 
@@ -1198,6 +1339,157 @@ describe('provider exports-target closure walk (AUT-507)', () => {
     expect(sharedReport.violations).toEqual([])
     // One file walked under two keys counts once.
     expect(sharedReport.providerClosureFiles).toBe(1)
+  })
+
+  test('per-target seeding: a key mixing a present script target with an absent one still walks the script target (seq 31/45)', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest({
+          './mixed': {
+            import: './core-src/plugin-sdk/index.ts',
+            // A sibling target absent from the pack: today's all-or-nothing
+            // seed filter would skip the key entirely.
+            types: './core-src/ghost/index.d.ts',
+          },
+        }),
+        files: {
+          'core-src/plugin-sdk/index.ts': "import '../testing/fixed'\n",
+          'core-src/ghost/index.d.ts': 'export type Ghost = never\n',
+        },
+        // The script target and its unpacked transitive import are packed;
+        // the ghost target is not.
+        packedPaths: ['package.json', 'core-src/plugin-sdk/index.ts'],
+      },
+      quietDependent(),
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(
+      report.violations.map((violation) =>
+        violation.kind === 'missing-closure-file' ? violation : violation.kind,
+      ),
+    ).toContainEqual({
+      kind: 'missing-closure-file',
+      packageName: PROVIDER,
+      exportsKey: './mixed',
+      importerPath: 'core-src/plugin-sdk/index.ts',
+      missingPath: 'core-src/testing/fixed',
+    })
+    // Exactly one dangling finding: the absent ghost target is flagged by the
+    // pre-existing `unresolved-exports-target` probe, not double-reported here.
+    expect(report.violations).toHaveLength(2)
+    expect(report.violations.some((entry) => entry.kind === 'unresolved-exports-target')).toBe(true)
+
+    // Pass direction with a present non-script sibling target: the walk still
+    // scans the script target's closure despite the `.json` sibling.
+    const packed: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest({
+          './mixed': { import: './core-src/plugin-sdk/index.ts', types: './core-src/data.json' },
+        }),
+        files: {
+          'core-src/plugin-sdk/index.ts': "import '../testing/fixed'\nexport { fixed }\n",
+          'core-src/testing/fixed.ts': 'export const fixed = true\n',
+          'core-src/data.json': '{}',
+        },
+      },
+      quietDependent(),
+    ]
+    const packedRoot = await buildFixtureRepo(packed)
+    const packedReport = await scanPublishedImports(fixtureEnvironment(packedRoot, packed))
+    expect(packedReport.violations).toEqual([])
+    expect(packedReport.providerClosureFiles).toBe(2)
+  })
+
+  test('imports-field mappings are walked: a packed # specifier resolves, an unpacked one dangles (seq 36)', async () => {
+    const make = (packUtil: boolean): FixtureSpec[] => [
+      {
+        directory: '.',
+        manifest: {
+          ...providerManifest({
+            './plugin-sdk': { import: './core-src/plugin-sdk/index.ts' },
+          }),
+          imports: { '#internal/util': './core-src/internal/util.ts' },
+        },
+        files: {
+          'core-src/plugin-sdk/index.ts': "import { util } from '#internal/util'\n",
+          'core-src/internal/util.ts': 'export const util = true\n',
+        },
+        packedPaths: packUtil ? undefined : ['package.json', 'core-src/plugin-sdk/index.ts'],
+      },
+      quietDependent(),
+    ]
+    const packedRoot = await buildFixtureRepo(make(true))
+    const packedReport = await scanPublishedImports(fixtureEnvironment(packedRoot, make(true)))
+    expect(packedReport.violations).toEqual([])
+    // The imports-mapped file was reached and scanned.
+    expect(packedReport.providerClosureFiles).toBe(2)
+
+    const danglingRoot = await buildFixtureRepo(make(false))
+    const danglingReport = await scanPublishedImports(fixtureEnvironment(danglingRoot, make(false)))
+    expect(danglingReport.violations).toEqual([
+      {
+        kind: 'missing-closure-file',
+        packageName: PROVIDER,
+        exportsKey: './plugin-sdk',
+        importerPath: 'core-src/plugin-sdk/index.ts',
+        missingPath: 'core-src/internal/util.ts',
+      },
+    ])
+  })
+
+  test('an imports value naming a bare dependency is skipped like an external specifier', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: {
+          ...providerManifest({
+            './plugin-sdk': { import: './core-src/plugin-sdk/index.ts' },
+          }),
+          imports: { '#dep': 'zod' },
+        },
+        files: {
+          'core-src/plugin-sdk/index.ts': "import { z } from '#dep'\nexport { z }\n",
+        },
+      },
+      quietDependent(),
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([])
+    // Only the seed was scanned; the bare target added no walk step.
+    expect(report.providerClosureFiles).toBe(1)
+  })
+
+  test('kind-aware probing in the walk: a dangling .json import is reported, not masked by a packed same-stem .ts (seq 46)', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest({
+          './plugin-sdk': { import: './core-src/plugin-sdk/index.ts' },
+        }),
+        files: {
+          // The specifier names a JSON file the pack omits; the same-stem .ts
+          // is packed, but a script file cannot satisfy `import './data.json'`.
+          'core-src/plugin-sdk/index.ts': "import identity from './data.json'\n",
+          'core-src/plugin-sdk/data.ts': 'export const identity = true\n',
+        },
+      },
+      quietDependent(),
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([
+      {
+        kind: 'missing-closure-file',
+        packageName: PROVIDER,
+        exportsKey: './plugin-sdk',
+        importerPath: 'core-src/plugin-sdk/index.ts',
+        missingPath: 'core-src/plugin-sdk/data.json',
+      },
+    ])
   })
 
   test('real tree: the closure walk scans the packed provider closure and finds nothing dangling', async () => {
