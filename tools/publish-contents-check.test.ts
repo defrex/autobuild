@@ -124,6 +124,9 @@ const rootFixtureManifest = {
     'bin',
     'packages/core/src',
     '!packages/core/src/**/*.test.ts',
+    '!packages/core/src/**/*.test.tsx',
+    '!packages/core/src/**/*.spec.ts',
+    '!packages/core/src/**/*.spec.tsx',
     '!packages/core/src/testing/store-failures.ts',
     '!packages/core/src/testing/packed-install.ts',
     'skills',
@@ -354,6 +357,51 @@ describe('matchesPackedPattern', () => {
     expect(matchesPackedPattern('src/web/foo.spec.tsx', 'src/**/*.spec.tsx')).toBe(true)
     expect(matchesPackedPattern('src/foo.live.spec.tsx', 'src/**/*.spec.tsx')).toBe(true)
   })
+
+  test('the broadened AUT-508 root spellings match the new root negations, at the top level and nested', () => {
+    expect(
+      matchesPackedPattern('packages/core/src/foo.test.tsx', 'packages/core/src/**/*.test.tsx'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern('packages/core/src/cli/foo.test.tsx', 'packages/core/src/**/*.test.tsx'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern('packages/core/src/foo.spec.ts', 'packages/core/src/**/*.spec.ts'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern('packages/core/src/cli/foo.spec.ts', 'packages/core/src/**/*.spec.ts'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern('packages/core/src/foo.spec.tsx', 'packages/core/src/**/*.spec.tsx'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern('packages/core/src/cli/foo.spec.tsx', 'packages/core/src/**/*.spec.tsx'),
+    ).toBe(true)
+    expect(
+      matchesPackedPattern(
+        'packages/core/src/foo.live.test.tsx',
+        'packages/core/src/**/*.test.tsx',
+      ),
+    ).toBe(true)
+  })
+
+  test('the old root *.test.ts pattern misses the new spellings (the gap AUT-508 closes)', () => {
+    expect(
+      matchesPackedPattern('packages/core/src/foo.test.tsx', 'packages/core/src/**/*.test.ts'),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern('packages/core/src/foo.spec.ts', 'packages/core/src/**/*.test.ts'),
+    ).toBe(false)
+  })
+
+  test('the root suffix is literal: .spec.tsx does not match the root *.spec.ts negation', () => {
+    expect(
+      matchesPackedPattern('packages/core/src/foo.spec.tsx', 'packages/core/src/**/*.spec.ts'),
+    ).toBe(false)
+    expect(
+      matchesPackedPattern('packages/core/src/cli/foo.spec.tsx', 'packages/core/src/**/*.spec.ts'),
+    ).toBe(false)
+  })
 })
 
 describe('describeSurface', () => {
@@ -414,6 +462,9 @@ describe('deriveRuledPackages', () => {
     ])
     expect(rootRuling.deniedPackedPatterns).toEqual([
       'packages/core/src/**/*.test.ts',
+      'packages/core/src/**/*.test.tsx',
+      'packages/core/src/**/*.spec.ts',
+      'packages/core/src/**/*.spec.tsx',
       'packages/core/src/testing/store-failures.ts',
       'packages/core/src/testing/packed-install.ts',
     ])
@@ -447,7 +498,7 @@ describe('deriveRuledPackages', () => {
     ])
   })
 
-  test('the root ruling is pinned to AUT-490 extended by AUT-503', () => {
+  test('the root ruling is pinned to AUT-490 extended by AUT-503 and AUT-508', () => {
     expect(hostedRuling.ruling).toContain('Ruling (AUT-463')
     expect(postgresRuling.ruling).toContain('Ruling (AUT-473')
     expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490, extended by AUT-502)')
@@ -455,8 +506,17 @@ describe('deriveRuledPackages', () => {
     expect(hostedRuling.ruling).toContain('AUT-490')
     expect(postgresRuling.ruling).toContain('AUT-490')
     expect(dispatcherRuling.ruling).toContain('AUT-490')
-    expect(rootRuling.ruling).toContain('Ruling (AUT-490, extended by AUT-503)')
+    expect(rootRuling.ruling).toContain(
+      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508)',
+    )
     expect(rootRuling.ruling).toContain('@defrex/autobuild')
+    expect(rootRuling.ruling).toContain('*.test.tsx')
+    expect(rootRuling.ruling).toContain('*.spec.ts')
+    expect(rootRuling.ruling).toContain('*.spec.tsx')
+    // The JS/JSX spellings are named as deliberately out of scope, mirroring
+    // the AUT-502 sub-package closure shape.
+    expect(rootRuling.ruling).toContain('*.spec.jsx')
+    expect(rootRuling.ruling).toContain('deliberately out of scope')
     expect(rootRuling.ruling).toContain('store-failures.ts')
     expect(rootRuling.ruling).toContain('packed-install.ts')
     expect(rootRuling.ruling).toContain('fixed.ts')
@@ -580,6 +640,24 @@ describe('evaluatePackedPaths', () => {
       rootRuling,
     )
     expect(violations).toEqual([{ kind: 'extra', path: 'packages/core/src/cli/args.test.ts' }])
+  })
+
+  test('a hypothetical foo.spec.tsx under packages/core/src is denied by the AUT-508 root negations, while the conforming listing still passes', () => {
+    expect(evaluatePackedPaths(rootConformPaths, rootRuling)).toEqual([])
+    const violations = evaluatePackedPaths(
+      [
+        ...rootConformPaths,
+        'packages/core/src/foo.spec.tsx',
+        'packages/core/src/cli/foo.spec.tsx',
+        'packages/core/src/foo.test.tsx',
+      ],
+      rootRuling,
+    )
+    expect(violations).toEqual([
+      { kind: 'extra', path: 'packages/core/src/foo.spec.tsx' },
+      { kind: 'extra', path: 'packages/core/src/cli/foo.spec.tsx' },
+      { kind: 'extra', path: 'packages/core/src/foo.test.tsx' },
+    ])
   })
 
   test('every packed test file is an extra under the AUT-490 sub-package rulings, named by path', () => {
@@ -1228,13 +1306,17 @@ describe('the real sub-package manifests', () => {
 })
 
 describe('the real root manifest', () => {
-  // Pinned byte-for-byte (AUT-490 + AUT-503): the root tarball ships packages/core/src
-  // except its *.test.ts files, plus the AUT-503 per-file negations of the test-only
-  // src/testing helpers, whose load-bearing siblings (fixed.ts, index.ts) keep shipping.
-  const ROOT_AUT_503_FILES = [
+  // Pinned byte-for-byte (AUT-490 + AUT-503 + AUT-508): the root tarball ships packages/core/src
+  // except its *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx files (AUT-490's negation,
+  // broadened to the four spellings by AUT-508), plus the AUT-503 per-file negations of the
+  // test-only src/testing helpers, whose load-bearing siblings (fixed.ts, index.ts) keep shipping.
+  const ROOT_AUT_508_FILES = [
     'bin',
     'packages/core/src',
     '!packages/core/src/**/*.test.ts',
+    '!packages/core/src/**/*.test.tsx',
+    '!packages/core/src/**/*.spec.ts',
+    '!packages/core/src/**/*.spec.tsx',
     '!packages/core/src/testing/store-failures.ts',
     '!packages/core/src/testing/packed-install.ts',
     'skills',
@@ -1246,10 +1328,10 @@ describe('the real root manifest', () => {
     'docs',
   ]
 
-  test("the root package.json's files allowlist carries the AUT-490 negation plus the AUT-503 per-file negations exactly", () => {
+  test("the root package.json's files allowlist carries the AUT-490 negations broadened by AUT-508 plus the AUT-503 per-file negations exactly", () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
       files?: unknown
     }
-    expect(manifest.files).toEqual(ROOT_AUT_503_FILES)
+    expect(manifest.files).toEqual(ROOT_AUT_508_FILES)
   })
 })
