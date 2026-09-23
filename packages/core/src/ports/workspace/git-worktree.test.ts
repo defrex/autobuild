@@ -875,99 +875,156 @@ describe('GitWorktreeProvider operator sandbox', () => {
   test('finished-but-never-waited commands are bounded by the retention cap; running entries survive', async () => {
     const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
       .MAX_RETAINED_SANDBOX_COMMANDS
-    const identity = await provider.orchestratorSandbox.ensure({
-      repo,
-      operator: 'ops',
-      baseBranch: 'main',
-    })
-    // Live sentinel: running for the whole test, must never be evicted.
-    const sentinel = await provider.orchestratorSandbox.start(identity, {
-      command: 'sleep 30',
-    })
-    // A burst of fire-and-forget echoes exceeding the cap by a wide margin;
-    // none of them is waited on before the assertions, so only the cap can
-    // bound them.
-    const excess = 20
-    // This burst forks more short-lived shells than any other test in the
-    // suite, and a verify run executes it concurrently with the other verify
-    // steps — a load under which a fork can transiently fail (EAGAIN/ENOMEM)
-    // before the burst's own eviction mechanics are ever exercised (observed
-    // once as a ~60ms failure in a verify unit run; never locally across
-    // repeated full-suite runs, including with lint and typecheck running
-    // concurrently). A failed `start` in this window is an environment
-    // condition, not the behavior under test (the retention cap), so retry
-    // each start once after a beat: a deterministic start regression still
-    // fails on the retry.
-    const startBurstCommand = async (command: string): Promise<string> => {
-      try {
-        return (await provider.orchestratorSandbox.start(identity, { command })).commandId
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 50))
-        return (await provider.orchestratorSandbox.start(identity, { command })).commandId
+    // Own provider with a large drain grace so the gated echo's stamp is
+    // controlled by its grandchild's lifetime (drain EOF wins the race at
+    // ~2s), not by the 250ms default — the same idiom the two adjacent
+    // drain-gate tests use. Own temp roots, removed in finally: the shared
+    // afterEach never sees them.
+    const slowRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-slow-'))
+    const slowSandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-slow-'))
+    try {
+      const slowProvider = new GitWorktreeProvider({
+        root: slowRoot,
+        sandboxRoot: slowSandboxRoot,
+        exitDrainGraceMs: 5000,
+      })
+      const identity = await slowProvider.orchestratorSandbox.ensure({
+        repo,
+        operator: 'ops-cap',
+        baseBranch: 'main',
+      })
+
+      // No private-access idiom exists in this suite; one-line cast local.
+      const children = (
+        slowProvider as unknown as { sandboxChildren: Map<string, { exitCode: number | null }> }
+      ).sandboxChildren
+
+      // This test forks more short-lived shells than any other in the
+      // suite, and a verify run executes it concurrently with the other
+      // verify steps — a load under which a fork can transiently fail
+      // (EAGAIN/ENOMEM). A failed `start` is an environment condition, not
+      // the behavior under test (the retention cap), so retry with bounded
+      // backoff: a deterministic start regression still fails. (The
+      // reproduction behind this hardening located the actual flake in
+      // victim selection, not here — the retry is defense, not the fix.)
+      const startWithRetry = async (command: string): Promise<string> => {
+        const backoffs = [50, 100, 200, 400, 800]
+        let lastError: unknown
+        for (let attempt = 0; attempt < backoffs.length; attempt++) {
+          try {
+            return (await slowProvider.orchestratorSandbox.start(identity, { command })).commandId
+          } catch (error) {
+            lastError = error
+            await new Promise((resolve) => setTimeout(resolve, backoffs[attempt]))
+          }
+        }
+        throw lastError
       }
-    }
-    const echoes: string[] = []
-    for (let i = 0; i < cap + excess; i++) {
-      echoes.push(await startBurstCommand('echo burst'))
-    }
 
-    // No private-access idiom exists in this suite; one-line cast local.
-    const children = (
-      provider as unknown as { sandboxChildren: Map<string, { exitCode: number | null }> }
-    ).sandboxChildren
+      // Live sentinel: running for the whole test, must never be evicted.
+      // `sleep 300` so it can never be outlived by the serialized body
+      // below (itself bounded by the explicit 120s test timeout).
+      const sentinelId = await startWithRetry('sleep 300')
 
-    // Settle: wait for every echo to have exited (and been stamped) without
-    // calling `wait` — a wait observing `exited` would consume a never-waited
-    // entry and defeat the test. The last exit stamp itself runs the final
-    // cap-eviction pass, so once this settles the map is within bound.
-    const deadline = Date.now() + 10_000
-    const settled = (id: string): boolean => {
-      const tracked = children.get(id)
-      return tracked === undefined || tracked.exitCode !== null
-    }
-    while (Date.now() < deadline && !echoes.every(settled)) {
-      await new Promise((resolve) => setTimeout(resolve, 25))
-    }
-    expect(echoes.every(settled)).toBe(true)
+      // Deterministic completion order is the fix. The original
+      // fire-and-forget burst assumed echoes complete in insertion order,
+      // but under load an older echo can still be running while a newer
+      // one has already stamped — `evictFinishedBeyondCap` skips genuinely
+      // running entries and stops at exited-but-unstamped ones, so a
+      // newer stamped echo can be deleted ahead of a slower older one and
+      // the older survivor then breaks the positional assertions below
+      // (reproduced: evicted set {echo0..19, echo21} with echo20
+      // retained). Serializing the burst removes that precondition
+      // structurally: at any eviction pass, every echo older than the
+      // newest is stamped-or-deleted, never running.
+      const excess = 20
+      const echoes: string[] = []
 
-    // The regression guard: with cap enforcement broken on either path
-    // (insert-time or exit-stamp-time), the cap+excess entries remain.
-    expect(children.size).toBeLessThanOrEqual(cap)
+      // echo0 is the drain-gated entry: its child exits in ~ms, but the
+      // `sleep 2 &` grandchild holds the pipe write end, so its stamp
+      // lands ~2s in. Because it is the *oldest* echo, every over-cap
+      // pass walks to it and stops (exited-but-unstamped) — deferring all
+      // trimming until its stamp. Its own output is never asserted (it is
+      // always in the evicted slice).
+      echoes.push(await startWithRetry('sleep 2 & echo burst'))
 
-    // Exactly the oldest `excess + 1` echoes were evicted — 71 entries
-    // (sentinel + cap + excess) trim to the cap with the sentinel
-    // un-evictable, so the boundary is settled once every observed exit is
-    // stamped, not left to scheduler timing. Typed not-found on wait.
-    for (const id of echoes.slice(0, excess + 1)) {
-      const evicted = await provider.orchestratorSandbox
-        .wait(identity, { commandId: id, waitSeconds: 0 })
-        .catch((e: unknown) => e)
-      expect(evicted).toBeInstanceOf(SandboxOperationError)
-      expect((evicted as SandboxOperationError).stage).toBe('not-found')
+      // Stamped-or-absent, probed on the private map — never via `wait`:
+      // a wait observing `exited` would consume a never-waited entry and
+      // defeat the test. (`undefined` means already evicted, which only
+      // happens to stamped entries, so it counts as settled.)
+      const stamped = (id: string): boolean => {
+        const tracked = children.get(id)
+        return tracked === undefined || tracked.exitCode !== null
+      }
+      // echo1..echo(cap+excess-1): plain echoes, inserted one at a time,
+      // each stamped before the next starts.
+      for (let i = 1; i < cap + excess; i++) {
+        const id = await startWithRetry('echo burst')
+        echoes.push(id)
+        const stampDeadline = Date.now() + 10_000
+        while (Date.now() < stampDeadline && !stamped(id)) {
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+        expect(stamped(id)).toBe(true)
+      }
+
+      // Final settle: echo0's stamp (or its eviction) runs the final
+      // trim. Structurally bounded, not wall-clock luck — the drain EOF
+      // lands ~2s in and the 5s grace bounds the stamp regardless.
+      const settleDeadline = Date.now() + 15_000
+      while (Date.now() < settleDeadline && !stamped(echoes[0]!)) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect(stamped(echoes[0]!)).toBe(true)
+
+      // The regression guard: with cap enforcement broken on either path
+      // (insert-time or exit-stamp-time), the cap+excess entries remain.
+      // The evicted slice below is derived, not lucky: in either timing
+      // (echo0's stamp after the insertion loop, or mid-insertion) the
+      // victims are exactly the oldest `excess + 1` echoes in insertion
+      // order — 71 entries (sentinel + cap + excess) trim to the cap with
+      // the sentinel un-evictable.
+      expect(children.size).toBeLessThanOrEqual(cap)
+
+      // Exactly the oldest `excess + 1` echoes were evicted. Typed
+      // not-found on wait.
+      for (const id of echoes.slice(0, excess + 1)) {
+        const evicted = await slowProvider.orchestratorSandbox
+          .wait(identity, { commandId: id, waitSeconds: 0 })
+          .catch((e: unknown) => e)
+        expect(evicted).toBeInstanceOf(SandboxOperationError)
+        expect((evicted as SandboxOperationError).stage).toBe('not-found')
+      }
+      // The first retained echo — immediately past the evicted slice —
+      // still delivers its result (and is consumed).
+      const retained = echoes[excess + 1]!
+      expect(
+        await slowProvider.orchestratorSandbox.wait(identity, {
+          commandId: retained,
+          waitSeconds: 5,
+        }),
+      ).toEqual({
+        state: 'exited',
+        exitCode: 0,
+        stdout: 'burst\n',
+        stderr: '',
+      })
+      // The running sentinel is untouched by the cap.
+      expect(
+        await slowProvider.orchestratorSandbox.wait(identity, {
+          commandId: sentinelId,
+          waitSeconds: 0,
+        }),
+      ).toEqual({
+        state: 'running',
+        stdout: '',
+        stderr: '',
+      })
+    } finally {
+      await rm(slowRoot, { recursive: true, force: true })
+      await rm(slowSandboxRoot, { recursive: true, force: true })
     }
-    // The first retained echo — immediately past the evicted slice — still
-    // delivers its result (and is consumed).
-    const retained = echoes[excess + 1]!
-    expect(
-      await provider.orchestratorSandbox.wait(identity, { commandId: retained, waitSeconds: 5 }),
-    ).toEqual({
-      state: 'exited',
-      exitCode: 0,
-      stdout: 'burst\n',
-      stderr: '',
-    })
-    // The running sentinel is untouched by the cap.
-    expect(
-      await provider.orchestratorSandbox.wait(identity, {
-        commandId: sentinel.commandId,
-        waitSeconds: 0,
-      }),
-    ).toEqual({
-      state: 'running',
-      stdout: '',
-      stderr: '',
-    })
-  })
+  }, 120_000)
 
   test('eviction defers while an exited command’s drain-gated stamp is pending, then evicts the oldest finished first', async () => {
     // Own provider with a large drain grace so the delayed command’s stamp
