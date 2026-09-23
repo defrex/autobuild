@@ -348,8 +348,17 @@ describe('layered CLI help catalog', () => {
   })
 
   test('store-read failure wording states the per-source scope, not an unconditional once', () => {
+    // page() joins help entries with '\n', so a phrase can be split across an
+    // entry boundary; normalize whitespace so the stale-phrase guard below is
+    // wrap-insensitive and fails however the wording happens to be wrapped.
+    const unwrapped = (text: string): string => text.replace(/\s+/g, ' ')
+    // By-construction pin: a phrase wrapped exactly the way the wait help
+    // wraps its store-read sentence is reassembled by the normalizer, so the
+    // negative guard cannot be defeated by moving the wrap.
+    expect(unwrapped('is reported once\non stderr')).toContain('is reported once on stderr')
+    expect(unwrapped('once per failing\nread source')).toContain('once per failing read source')
     for (const command of ['watch', 'wait'] as const) {
-      const detail = renderCommandHelp(command)
+      const detail = unwrapped(renderCommandHelp(command))
       expect(detail).toContain('once per failing read source')
       // The stale claim overstated deduplication: on the remote path each
       // tracked stream and the discovery pass carries its own failure streak.

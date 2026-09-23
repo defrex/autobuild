@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
 - [#486](https://github.com/defrex/autobuild/pull/486) — Move packageAutobuildDistribution into core's distribution-archive
 - [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
