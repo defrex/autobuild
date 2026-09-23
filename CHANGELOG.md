@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
 - [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
 - [#483](https://github.com/defrex/autobuild/pull/483) — Keep dashboard cost flat as finished builds accumulate (AUT-487)
