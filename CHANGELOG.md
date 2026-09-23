@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#473](https://github.com/defrex/autobuild/pull/473) — De-flake the retention-cap test with deterministic completion order
 - [#470](https://github.com/defrex/autobuild/pull/470) — Walk provider exports-target closure in publish-imports-check
 - [#469](https://github.com/defrex/autobuild/pull/469) — Extend the root tarball's test-file negations (AUT-508)
 - [#467](https://github.com/defrex/autobuild/pull/467) — Give web capture tooling a package; retire hoisted linker
