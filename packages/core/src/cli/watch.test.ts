@@ -1184,4 +1184,57 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     expect(waits[0]).toBe(25)
     for (const wait of waits) expect(wait).toBeLessThanOrEqual(25)
   })
+
+  test('a mid-discovery failure still launches the stream registered before the throw', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    // An immediate (non-held) read of b3 always fails: once a discovery pass
+    // reaches it, the step throws — after b2 was registered in the same pass.
+    const breaking = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'getEvents') {
+          return async (
+            slug: string,
+            sinceSeq?: number,
+            opts?: { waitSeconds?: number; signal?: AbortSignal },
+          ) => {
+            if (slug === 'b3' && opts?.waitSeconds === undefined) {
+              throw new Error('b3 read failed')
+            }
+            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    const { store: fake } = longPollStore(breaking, (slug, call) => {
+      if (slug === 'b2' && call === 1) return appendEscalation(store, 'b2')
+    })
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 1) {
+          await seedRunningBuild(store, 'b2')
+          await seedRunningBuild(store, 'b3')
+        }
+      },
+    })
+    await abWatch({ ...h.base, storeRef: REMOTE_REF, timeout: '5' })
+    // b2 was registered before the throw and its held read still ran: its
+    // escalation is delivered even though discovery itself failed.
+    const records = h.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { build: string; event: { type: string } })
+    expect(records.map((record) => [record.build, record.event.type])).toContainEqual([
+      'b2',
+      'escalation.raised',
+    ])
+    // The discovery failure is reported once, on the discovery task's own streak.
+    expect(h.err).toEqual([
+      expect.stringContaining('ab watch: a store read failed (b3 read failed)'),
+    ])
+  })
 })
