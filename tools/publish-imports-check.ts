@@ -84,8 +84,12 @@ import { collectSpecifiers, UNPARSEABLE_MODULE } from './package-boundary-check'
  *    `#internal/*` stay external — implementing Node's longest-prefix `*`
  *    capture is a resolver surface the provider does not use, and a
  *    half-implemented matcher would under-approximate less predictably than
- *    the documented skip), relative specifiers probe the packed path set
- *    respecting the specifier's own extension kind, and bare specifiers are
+ *    documented skip), relative specifiers probe the packed path set
+ *    respecting the specifier's own extension kind — a dotted extensionless
+ *    directory specifier (`./v1.2` naming a packed `v1.2/index.ts`) keeps
+ *    the directory-index probe with the whole path as stem, while a
+ *    specifier naming a known non-script kind (`.json`, `.md`, `.wasm`, …)
+ *    stays exact-match-only), and bare specifiers are
  *    npm's install-time contract and are skipped. A reachable file absent
  *    from the pack is a `missing-closure-file` violation naming the exports
  *    key, the importing file, and the missing path; a reachable unparseable
@@ -214,16 +218,42 @@ export type PackedClosureResolution =
  * the resolver after these.
  *
  * Kind rule (closes the seq-46 under-approximation): the probe respects the
- * specifier's own extension. An extensionless specifier keeps the full probe
- * order above plus the JSON and directory-index variants; a specifier whose
- * extension is one of these script extensions probes the script-family stem
- * and directory-index candidates but never `.json`; a specifier naming any
- * other kind (`.json`, `.md`, `.wasm`, …) is an exact match or nothing. A
- * dangling non-script import must surface as a `missing-closure-file`, not
- * silently resolve to a packed same-stem file of a different kind (a
- * `./data.json` whose JSON is absent must not pass on a packed `data.ts`,
- * and `./x.js` must not fall through to a packed `x.json`). */
+ * specifier's own extension. Specifiers fall into three classes: an
+ * extensionless specifier and a specifier whose extension is one of these
+ * script extensions probe the stem and directory-index candidates (script
+ * extensions never probe `.json`; extensionless ones do); a specifier whose
+ * extension names a known non-script kind (`KNOWN_NON_SCRIPT_EXTENSIONS`) is
+ * an exact match or nothing; and a specifier with any other extension —
+ * dotted-but-extensionless in spirit (`./foo.bar` naming a packed
+ * `foo.bar/index.ts`) — probes with the whole path as stem, exactly like an
+ * extensionless specifier. A dangling non-script import must surface as a
+ * `missing-closure-file`, not silently resolve to a packed same-stem file of
+ * a different kind (a `./data.json` whose JSON is absent must not pass on a
+ * packed `data.ts`, and `./x.js` must not fall through to a packed
+ * `x.json`). */
 const CLOSURE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx']
+
+/** Non-script extensions a relative specifier may name where exact-match-only
+ * stays: the kinds the exact-match rule exists for. `.json` is the real
+ * hazard (a `./data.json` whose JSON is absent must not pass on a packed
+ * `data.ts`); `.node`/`.wasm` are Node's other runtime-loadable non-script
+ * kinds; the rest are the doc/asset kinds the scan-skip list names. Any
+ * extension outside this set and outside CLOSURE_EXTENSIONS is not treated
+ * as a kind boundary — it is a dotted-but-extensionless specifier (AUT-518)
+ * and gets the full extensionless probe with the whole path as stem. The set
+ * is deliberately closed: a future unrecognized kind falls into the
+ * Node-faithful probing bucket, which stays fail-visible, and extending it
+ * is a one-line change here. */
+const KNOWN_NON_SCRIPT_EXTENSIONS = [
+  '.json',
+  '.node',
+  '.wasm',
+  '.md',
+  '.map',
+  '.txt',
+  '.html',
+  '.css',
+]
 
 /** Resolves one static import specifier of `importerPath` (a packed path
  * relative to the provider package directory) against `packedPaths`. A
@@ -242,9 +272,14 @@ const CLOSURE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs'
  * directory-index variants (`<path>/index` plus the same extension list,
  * `.json` last); for script-extension specifiers, the same script-family
  * stem and directory-index candidates but never `.json`; for specifiers
- * naming any other kind, nothing — exact match only. First candidate present
- * wins. A specifier whose extension names a non-script kind therefore never
- * resolves to a packed file of a different kind at the same stem. */
+ * naming a kind in `KNOWN_NON_SCRIPT_EXTENSIONS`, nothing — exact match
+ * only. Any other extension is not a kind boundary: a dotted-but-extensionless
+ * specifier (`./foo.bar` naming a packed `foo.bar/index.ts`, `./v1.2` naming
+ * `v1.2/index.ts`) probes exactly like an extensionless one, with the whole
+ * path as stem (the final dot is not stripped, so `./v1.2` never probes
+ * `v1.ts`). First candidate present wins. A specifier whose extension names
+ * a known non-script kind therefore never resolves to a packed file of a
+ * different kind at the same stem. */
 export function resolvePackedClosureTarget(
   packedPaths: readonly string[],
   importerPath: string,
@@ -267,15 +302,23 @@ export function resolvePackedClosureTarget(
   const joined = posix.normalize(posix.join(posix.dirname(importerPath), specifier))
   if (packedPaths.includes(joined)) return { kind: 'relative', path: joined }
   const extension = posix.extname(joined)
-  const stem = joined.slice(0, joined.length - extension.length)
+  const scriptExtension = CLOSURE_EXTENSIONS.includes(extension)
+  const knownNonScript = KNOWN_NON_SCRIPT_EXTENSIONS.includes(extension)
+  // The stem a stem-candidate probe extends: the path minus its script
+  // extension for script-extension specifiers (the TS-style rewrite,
+  // './x.js' → './x.ts'); the whole path for extensionless specifiers and for
+  // unrecognized extensions ('./v1.2', './foo.bar') — the final dot is not a
+  // kind boundary, and Node appends extensions to the full specifier, so
+  // './v1.2' must never probe './v1.ts'.
+  const stem = scriptExtension ? joined.slice(0, joined.length - extension.length) : joined
   const candidates: string[] = []
-  if (extension === '' || CLOSURE_EXTENSIONS.includes(extension)) {
+  if (!knownNonScript) {
     for (const candidate of CLOSURE_EXTENSIONS) candidates.push(stem + candidate)
     for (const candidate of CLOSURE_EXTENSIONS) candidates.push(`${joined}/index${candidate}`)
-    if (extension === '') {
-      // Extensionless only: a packed JSON leaf (or `index.json`) is a
-      // legitimate resolution target. A specifier that itself names a kind
-      // (`.json`, `.js`, `.md`, …) never probes across kinds.
+    if (!scriptExtension) {
+      // Extensionless and unrecognized-extension specifiers may also name a
+      // JSON leaf (or a directory whose index is JSON). A specifier that
+      // names a known kind never probes across kinds.
       candidates.push(`${stem}.json`, `${joined}/index.json`)
     }
   }

@@ -951,6 +951,85 @@ describe('resolvePackedClosureTarget', () => {
       ),
     ).toEqual({ kind: 'missing', path: 'src/dir.js' })
   })
+
+  test('a dotted extensionless directory specifier keeps the directory-index probe (AUT-518)', () => {
+    // './foo.bar' whose final-segment dot is not a kind boundary resolves
+    // through the packed foo.bar/index.ts, like './foo' would.
+    expect(
+      resolvePackedClosureTarget(
+        ['src/foo.bar/index.ts'],
+        'src/a.ts',
+        './foo.bar',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/foo.bar/index.ts' })
+    expect(
+      resolvePackedClosureTarget(
+        ['src/v1.2/index.ts'],
+        'src/a.ts',
+        './v1.2',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/v1.2/index.ts' })
+  })
+
+  test('an unrecognized extension is never stripped from the stem (no cross-stem silent pass)', () => {
+    // './v1.2' must not probe './v1.ts': Node appends extensions to the full
+    // specifier, and silently resolving ./v1.2 onto a packed v1.ts would be
+    // a cross-module silent pass.
+    expect(
+      resolvePackedClosureTarget(['src/v1.ts'], 'src/a.ts', './v1.2', exportsMap, importsMap),
+    ).toEqual({ kind: 'missing', path: 'src/v1.2' })
+    expect(
+      resolvePackedClosureTarget(['src/foo.ts'], 'src/a.ts', './foo.bar', exportsMap, importsMap),
+    ).toEqual({ kind: 'missing', path: 'src/foo.bar' })
+  })
+
+  test('a dotted extensionless specifier probes stem and .json variants with the whole path as stem', () => {
+    expect(
+      resolvePackedClosureTarget(
+        ['src/foo.bar.ts'],
+        'src/a.ts',
+        './foo.bar',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/foo.bar.ts' })
+    expect(
+      resolvePackedClosureTarget(
+        ['src/foo.bar.json'],
+        'src/a.ts',
+        './foo.bar',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/foo.bar.json' })
+    expect(
+      resolvePackedClosureTarget(
+        ['src/foo.bar/index.json'],
+        'src/a.ts',
+        './foo.bar',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'relative', path: 'src/foo.bar/index.json' })
+  })
+
+  test('known non-script kinds stay exact-match-only by enumeration, not by the blanket rule', () => {
+    // '.md' is in KNOWN_NON_SCRIPT_EXTENSIONS, so neither the stem nor the
+    // directory-index probe runs even when absurd pack shapes exist.
+    expect(
+      resolvePackedClosureTarget(
+        ['src/data.md.ts', 'src/data.md/index.ts'],
+        'src/a.ts',
+        './data.md',
+        exportsMap,
+        importsMap,
+      ),
+    ).toEqual({ kind: 'missing', path: 'src/data.md' })
+  })
 })
 
 describe('importsSubpaths', () => {
@@ -1076,6 +1155,56 @@ describe('provider exports-target closure walk (AUT-507)', () => {
     const report = await scanPublishedImports(fixtureEnvironment(root, specs))
     expect(report.violations).toEqual([])
     expect(report.providerClosureFiles).toBe(2)
+  })
+
+  test('a dotted extensionless directory specifier resolves through the index probe (AUT-518)', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest({
+          './plugin-sdk': { import: './core-src/plugin-sdk/index.ts' },
+        }),
+        files: {
+          'core-src/plugin-sdk/index.ts': "import './v1.2'\n",
+          'core-src/plugin-sdk/v1.2/index.ts': 'export const v12 = true\n',
+        },
+      },
+      quietDependent(),
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([])
+    // The dotted directory specifier resolves through the index probe and
+    // the walk reaches the index file.
+    expect(report.providerClosureFiles).toBe(2)
+  })
+
+  test('a dotted extensionless directory specifier absent from the pack is fail-visible', async () => {
+    const specs: FixtureSpec[] = [
+      {
+        directory: '.',
+        manifest: providerManifest({
+          './plugin-sdk': { import: './core-src/plugin-sdk/index.ts' },
+        }),
+        files: {
+          'core-src/plugin-sdk/index.ts': "import './v1.2'\n",
+          'core-src/plugin-sdk/v1.2/index.ts': 'export const v12 = true\n',
+        },
+        packedPaths: ['package.json', 'core-src/plugin-sdk/index.ts'],
+      },
+      quietDependent(),
+    ]
+    const root = await buildFixtureRepo(specs)
+    const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+    expect(report.violations).toEqual([
+      {
+        kind: 'missing-closure-file',
+        packageName: PROVIDER,
+        exportsKey: './plugin-sdk',
+        importerPath: 'core-src/plugin-sdk/index.ts',
+        missingPath: 'core-src/plugin-sdk/v1.2',
+      },
+    ])
   })
 
   test('fail-closed: an unparseable reachable provider script is an unparseable-file naming the provider', async () => {
