@@ -25,6 +25,7 @@ import { answerRequest, classifyAnswerReply, classifyControlReply } from './cont
 import { clockText, LoadingControls } from './frame'
 import { createDashboardRefresher, type DashboardRefresher } from './refresh'
 import { OperatorShell } from './Shell'
+import { createNowTicker } from './ticker'
 import { reconcileDashboard } from './view-model'
 
 interface ClientProps {
@@ -166,9 +167,20 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     setHoverPreview(undefined)
     refresherRef.current?.setRepo(repo)
   }, [repo])
+  // The now-ticker pauses with the document like the refresher above: no
+  // interval is scheduled while hidden, and the hidden → visible transition
+  // ticks once immediately so the rendered clock is never stale on return.
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
+    const ticker = createNowTicker({
+      visible: () => !document.hidden,
+      onTick: () => setNow(Date.now()),
+    })
+    const onVisibility = () => ticker.onVisibilityChange()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      ticker.dispose()
+    }
   }, [])
 
   /** A selection that carries nothing (no open detail, no local step) returns to rest. */
