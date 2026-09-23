@@ -335,6 +335,12 @@ interface HarnessOptions {
   /** Seed build.created + workspace.provisioned + spec@0 + spec.imported
    * (§15.6 prelude). Default true. */
   seedPrelude?: boolean
+  /** Provider recorded on the seeded provisioned fact; defaults to the
+   * harness fake. */
+  workspaceProvider?: string
+  /** Remote publication marker recorded on the seeded provisioned fact;
+   * defaults to absent (legacy journal, local under the fallback). */
+  workspaceRemote?: boolean
   /** Replaces the module config (parseConfig of this TOML) — e.g. to add a
    * [commands].setup for the §16.1 attach tests. */
   configToml?: string
@@ -409,8 +415,9 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
       actor: DISPATCHER,
       type: 'workspace.provisioned',
       payload: {
-        provider: handle.provider,
+        provider: options.workspaceProvider ?? handle.provider,
         ref: handle.ref,
+        ...(options.workspaceRemote !== undefined ? { remote: options.workspaceRemote } : {}),
         branch: handle.branch,
         base: handle.base,
       },
@@ -2115,6 +2122,45 @@ describe('finalize post-step publication', () => {
     // never consumes verifyDiffs entries either).
     expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff'])
     expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff', '--cached'])
+  })
+
+  test('a remote workspace forks the finalize push into a publication request, by marker and by legacy name', async () => {
+    for (const provisioned of [
+      { provider: 'fake', remote: true },
+      { provider: 'vercel-sandbox' },
+    ]) {
+      const h = await readyHarness({
+        finalizeStatuses: ['', ''],
+        finalizeHeads: [FINALIZE_HEAD],
+        finalizeAncestors: [true],
+        workspaceProvider: provisioned.provider,
+        ...(provisioned.remote !== undefined ? { workspaceRemote: provisioned.remote } : {}),
+      })
+
+      expect((await h.br.step()).kind).toBe('run-finalize-step')
+      expect(h.forge.pushes).toEqual([])
+      const requests = ofType(await h.store.getEvents(SLUG), 'publication.requested')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]!.payload).toEqual({
+        operation: 'finalize-step',
+        branch: BRANCH,
+        sha: FINALIZE_HEAD,
+        step: 'release-notes',
+      })
+    }
+  })
+
+  test('an explicit local marker keeps the finalize push direct', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: ['', ''],
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+      workspaceRemote: false,
+    })
+
+    expect((await h.br.step()).kind).toBe('run-finalize-step')
+    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
+    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
   })
 
   test('scratch commits fail tolerantly with an observation and no push', async () => {
@@ -4079,6 +4125,7 @@ describe('remote publication terminal boundary', () => {
       payload: {
         provider: 'vercel-sandbox',
         ref: 'sandbox-g1',
+        remote: true,
         branch: BRANCH,
         base: { source: 'existing', sha: 'b'.repeat(40) },
       },

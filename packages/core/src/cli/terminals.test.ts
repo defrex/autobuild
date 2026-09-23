@@ -449,7 +449,53 @@ describe('ab done — implement', () => {
     expect(await eventTypes()).not.toContain('implement.completed')
   })
 
-  test('remote implementation deposits a publication request without pushing or completing', async () => {
+  test.each([
+    ['a legacy vercel-sandbox journal without a marker', undefined],
+    ['a provisioned payload carrying the remote marker', true],
+  ])(
+    'remote implementation deposits a publication request without pushing or completing (%s)',
+    async (_name, remote) => {
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'vercel-sandbox',
+          ref: 'sandbox-remote',
+          path: '/vercel/sandbox/workspace',
+          ...(remote !== undefined ? { remote } : {}),
+          branch: BRANCH,
+          base: { source: 'existing', sha: implementationBase },
+        },
+      })
+      const deps = implementDeps()
+      const head = await runGit(['rev-parse', 'HEAD'], workspace)
+      const event = await done(deps, {
+        notes: await stash('remote-notes.md', 'remote implementation\n'),
+      })
+
+      expect(event.type).toBe('publication.requested')
+      expect(event.payload).toEqual({
+        operation: 'implement',
+        branch: BRANCH,
+        sha: head,
+        round: 1,
+        base: implementationBase,
+        artifact: { kind: 'implement-notes', rev: 0 },
+      })
+      expect(deps.forge.pushes).toEqual([])
+      expect(await eventTypes()).not.toContain('implement.completed')
+      await expect(
+        done(deps, { notes: await stash('remote-notes-again.md', 'duplicate\n') }),
+      ).rejects.toThrow(/second terminal call rejected.*Remote publication is pending/s)
+      expect(
+        (await store.getEvents(BUILD)).filter(
+          (candidate) => candidate.type === 'publication.requested',
+        ),
+      ).toHaveLength(1)
+    },
+  )
+
+  test('a marker-local journal pushes directly and completes despite the legacy-suggestive name', async () => {
     await store.append(BUILD, {
       actor: KERNEL,
       type: 'workspace.provisioned',
@@ -457,35 +503,22 @@ describe('ab done — implement', () => {
         provider: 'vercel-sandbox',
         ref: 'sandbox-remote',
         path: '/vercel/sandbox/workspace',
+        remote: false,
         branch: BRANCH,
         base: { source: 'existing', sha: implementationBase },
       },
     })
     const deps = implementDeps()
     const head = await runGit(['rev-parse', 'HEAD'], workspace)
-    const event = await done(deps, {
-      notes: await stash('remote-notes.md', 'remote implementation\n'),
-    })
 
-    expect(event.type).toBe('publication.requested')
-    expect(event.payload).toEqual({
-      operation: 'implement',
-      branch: BRANCH,
-      sha: head,
+    const event = await done(deps, { notes: await stash('local-marker-notes.md', 'local\n') })
+
+    expect(event.type).toBe('implement.completed')
+    expect(deps.forge.pushes).toEqual([{ workspacePath: workspace, branch: BRANCH }])
+    expect(event.payload).toMatchObject({
       round: 1,
-      base: implementationBase,
-      artifact: { kind: 'implement-notes', rev: 0 },
+      commits: { base: implementationBase, head },
     })
-    expect(deps.forge.pushes).toEqual([])
-    expect(await eventTypes()).not.toContain('implement.completed')
-    await expect(
-      done(deps, { notes: await stash('remote-notes-again.md', 'duplicate\n') }),
-    ).rejects.toThrow(/second terminal call rejected.*Remote publication is pending/s)
-    expect(
-      (await store.getEvents(BUILD)).filter(
-        (candidate) => candidate.type === 'publication.requested',
-      ),
-    ).toHaveLength(1)
   })
 
   test('.ab/ scratch never dirties the worktree — ab context establishes the gitignore itself (§7, §8.3)', async () => {

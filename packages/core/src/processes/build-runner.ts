@@ -48,6 +48,7 @@ import type { Config } from '../config/schema'
 import type { AbEvent, EventWrite } from '../events/catalog'
 import type { EventPayload } from '../events/payloads'
 import { KERNEL, agentActor, type Actor } from '../events/envelope'
+import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
 import { decideNext, type Decision } from '../kernel/engine'
 import { PHASE_SPECS } from '../kernel/phases'
@@ -1151,8 +1152,7 @@ export class BuildRunner {
           )
           if (scratchPaths.length > 0) throw phaseScratchRejection(scratchPaths)
           const remote = events.some(
-            (event) =>
-              event.type === 'workspace.provisioned' && event.payload.provider === 'vercel-sandbox',
+            (event) => event.type === 'workspace.provisioned' && isRemoteWorkspace(event.payload),
           )
           if (remote) {
             await this.deps.store.append(this.deps.slug, {
