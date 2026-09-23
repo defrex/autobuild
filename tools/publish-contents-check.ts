@@ -33,8 +33,8 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *
  * - AUT-463 — `@defrex/autobuild-hosted-store-service` ships exactly
  *   `package.json`, `README.md`, and `src/**` — with the AUT-490 exception that
- *   every `*.test.ts`, `*.test.tsx`, and `*.spec.ts` file under `src/` (written
- *   as the negations `!src/**` + `*.test.ts`, `*.test.tsx`, and `*.spec.ts` in
+ *   every `*.test.ts`, `*.test.tsx`, `*.spec.ts`, and `*.spec.tsx` file under `src/` (written
+ *   as the negations `!src/**` + `*.test.ts`, `*.test.tsx`, `*.spec.ts`, and `*.spec.tsx` in
  *   the manifest; the within-segment `*` also covers the `*.live.test.*`
  *   suites) does not publish. The ruling exists because
  *   AUT-409's move of the operator web app into the service package silently
@@ -53,24 +53,28 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  * - AUT-473 — `@defrex/autobuild-postgres-store` declares the same shape
  *   (`files: ["src", "README.md"]`) so its tarball ships exactly
  *   `package.json`, `README.md`, and `src/**` — again with the AUT-490
- *   test-file exception (the negated `*.test.ts`, `*.test.tsx`, and
- *   `*.spec.ts` spellings) — by manifest rather than by
+ *   test-file exception (the negated `*.test.ts`, `*.test.tsx`, `*.spec.ts`,
+ *   and `*.spec.tsx` spellings) — by manifest rather than by
  *   directory layout. Its directory today carries only `src/`, so the tarball
  *   was correct by accident of layout; deny-by-default keeps a future
  *   top-level addition (a scratch script, a live-test fixture, a dotenv file,
  *   an editor artifact) out of the tarball unless the allowlist and this check
  *   are updated together.
  * - AUT-490 — none of the three sub-packages' tarballs carries test files:
- *   each `files` allowlist negates every `*.test.ts`, `*.test.tsx`, and
- *   `*.spec.ts` file under `src/` (manifest entries `!src/**` + `*.test.ts`,
- *   `!src/**` + `*.test.tsx`, and `!src/**` + `*.spec.ts`; under the matcher's
- *   within-segment `*`, this also denies the `*.live.test.*` suites). This is
- *   a deliberate ruling, not a leak: the root package takes the same stance
- *   (its `packages/core/src` test files are negated the same way), the tests
+ *   each `files` allowlist negates every `*.test.ts`, `*.test.tsx`, `*.spec.ts`,
+ *   and `*.spec.tsx` file under `src/` (manifest entries `!src/**` + `*.test.ts`,
+ *   `!src/**` + `*.test.tsx`, `!src/**` + `*.spec.ts`, and `!src/**` + `*.spec.tsx`;
+ *   under the matcher's within-segment `*`, this also denies the `*.live.test.*`
+ *   suites). This is a deliberate ruling, not a leak: the root package takes the same
+ *   stance (its `packages/core/src` test files are negated the same way), the tests
  *   are written for `bun test`
  *   (not a declared runtime dependency of the packages), and the live suites
  *   additionally need a Postgres URL and env a consumer installing from npm
- *   cannot have. If a sub-package's ruling changes, update its 'files'
+ *   cannot have. The denial is bounded to the TypeScript test spellings: `*.test.js`,
+ *   `*.spec.js`, `*.test.jsx`, and `*.spec.jsx` are deliberately out of scope (this
+ *   workspace writes its tests in TypeScript only), so a future JS/JSX test file
+ *   would publish unless the ruling is deliberately widened here and in the
+ *   manifests together. If a sub-package's ruling changes, update its 'files'
  *   allowlist and this check together.
  * - AUT-503 — the root `@defrex/autobuild` tarball ships `packages/core/src` except its
  *   `*.test.ts` files (AUT-490's negation); the test-only `src/testing/store-failures.ts` and
@@ -162,17 +166,21 @@ export interface TarballRuling {
 }
 
 const HOSTED_STORE_SERVICE_RULING =
-  'Ruling (AUT-463, extended by AUT-490): the @defrex/autobuild-hosted-store-service npm tarball ships exactly ' +
-  'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, and src/**/*.spec.ts files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The Next.js app/ tree, server.ts, next.config.ts, ' +
+  'Ruling (AUT-463, extended by AUT-490, extended by AUT-502): the @defrex/autobuild-hosted-store-service npm tarball ships exactly ' +
+  'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
+  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
+  'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
+  'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. The Next.js app/ tree, server.ts, next.config.ts, ' +
   'vercel.json, tsconfig.json, next-env.d.ts, and the internal .impeccable/ surface brief are ' +
   'release-checkout/Vercel surface and must not publish. If the ruling changes, update the ' +
   "'files' allowlist in packages/hosted-store-service/package.json and this check together."
 
 const POSTGRES_STORE_RULING =
-  'Ruling (AUT-473, extended by AUT-490, extended by AUT-500): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
-  'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, and src/**/*.spec.ts files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. By AUT-500 the src/testing/ tree is also ' +
+  'Ruling (AUT-473, extended by AUT-490, extended by AUT-500, extended by AUT-502): the @defrex/autobuild-postgres-store npm tarball ships exactly ' +
+  'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
+  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
+  'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
+  'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. By AUT-500 the src/testing/ tree is also ' +
   'test-only dev surface (its helpers are consumed only by the live suites, e.g. ' +
   'src/store.live.test.ts spawning src/testing/concurrent-worker.ts) and is excluded from the tarball by the !src/testing/** ' +
   'negation. The allowlist pins the publishable surface by manifest ' +
@@ -182,9 +190,11 @@ const POSTGRES_STORE_RULING =
   "'files' allowlist in packages/postgres-store/package.json and this check together."
 
 const DISPATCHER_RULING =
-  'Ruling (AUT-490): the @defrex/autobuild-hosted-dispatcher npm tarball ships exactly ' +
-  'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, and src/**/*.spec.ts files (the within-segment * ' +
-  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. They are ' +
+  'Ruling (AUT-490, extended by AUT-502): the @defrex/autobuild-hosted-dispatcher npm tarball ships exactly ' +
+  'package.json, README.md, and src/** — except src/**/*.test.ts, src/**/*.test.tsx, src/**/*.spec.ts, and src/**/*.spec.tsx files (the within-segment * ' +
+  'covers the *.live.test.* suites too): test files are dev-only surface and do not publish. The denial covers the TypeScript test spellings ' +
+  'only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of scope (this workspace writes its tests in TypeScript ' +
+  'only), so a future JS/JSX test file would publish unless the ruling is widened here and in the manifests together. They are ' +
   'written for `bun test` and are dead weight for consumers; the root package takes the same ' +
   'stance, and a deliberate negation keeps the surface from drifting wider by accident. If ' +
   'the ruling changes, update the ' +

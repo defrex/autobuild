@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#466](https://github.com/defrex/autobuild/pull/466) — Relax tomlBasicStringLine's raw line-break guard to LF/CRLF only
+- [#465](https://github.com/defrex/autobuild/pull/465) — Deny *.spec.tsx in the published tarballs' test-file negation
 - [#464](https://github.com/defrex/autobuild/pull/464) — Pin the dashboard refresh's superseded-generation branch with tests
 - [#463](https://github.com/defrex/autobuild/pull/463) — Exclude the test-only src/testing helpers from the root tarball (AUT-503)
 - [#462](https://github.com/defrex/autobuild/pull/462) — Correct ALWAYS_PACKED_FILE_NAMES doc + constant to actual packer sets

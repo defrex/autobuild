@@ -72,7 +72,10 @@ autobuild-api pipeline therefore ends `deploy:build` with a post-build trace
 step (`bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts`) that appends the archive to the
 dispatch route's `route.js.nft.json` — the trace file Vercel's Next builder
 consumes when assembling the function bundle — and fails the deploy loudly if
-nothing was packed or the trace file is missing. A deployment using this
+nothing was packed or the trace file is missing. The same step appends the
+distribution root's `package.json`, which provisioning reads for the running
+version and which no import traces once the Next.js project directory sits
+below the repository root. A deployment using this
 pipeline cannot ship without the archive; deployments that skip both packing
 and the trace step still fail at runtime.
 
