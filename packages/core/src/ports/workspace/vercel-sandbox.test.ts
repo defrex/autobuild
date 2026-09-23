@@ -23,6 +23,7 @@ import {
   VERCEL_WORKSPACE_PATH,
   VercelSandboxProvider,
   harvestSandboxName,
+  validateVercelSandbox,
   isMissingVercelSandbox,
   vercelOidcTokenScope,
   vercelSdkCredentials,
@@ -2778,5 +2779,53 @@ describe('operator sandbox capability', () => {
       .catch((e: unknown) => e)
     expect(error).toBeInstanceOf(SandboxOperationError)
     expect((error as SandboxOperationError).stage).toBe('environment')
+  })
+})
+
+describe('validateVercelSandbox execOrThrow failure semantics', () => {
+  const baseOptions = {
+    config: {
+      image: 'vercel/sandbox/universal:latest',
+      vcpus: 4,
+      timeoutSeconds: 2700,
+      failoverRegions: [],
+      environmentVariables: [],
+    },
+    env: {},
+    storeRef: 'https://store.example.test',
+    storeToken: 'scoped-store-token',
+    repo: '/repo',
+    baseBranch: 'main',
+  }
+
+  test('a failing exec throws with the exit code and the trimmed stderr', async () => {
+    // Deliberately not keyed to a specific argv: this pins the helper's
+    // formatting, not the call order. If a future edit inserts an earlier exec
+    // call, this test fails loudly and gets re-pinned — that is the
+    // drift-detection working.
+    const exec: Exec = async () => ({
+      stdout: ' stdout filler ',
+      stderr: 'fatal: not a git repository',
+      exitCode: 2,
+    })
+    const error = await validateVercelSandbox({ ...baseOptions, exec }).then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(Error)
+    // Exact equality against the current first execOrThrow call site.
+    expect((error as Error).message).toBe(
+      'git remote get-url origin exited 2: fatal: not a git repository',
+    )
+  })
+
+  test('with empty stderr the message falls back to the trimmed stdout', async () => {
+    const exec: Exec = async () => ({ stdout: '  noisy stdout  ', stderr: '', exitCode: 7 })
+    const error = await validateVercelSandbox({ ...baseOptions, exec }).then(
+      () => undefined,
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('git remote get-url origin exited 7: noisy stdout')
   })
 })
