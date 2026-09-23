@@ -77,7 +77,8 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   manifests together. If a sub-package's ruling changes, update its 'files'
  *   allowlist and this check together.
  * - AUT-503 — the root `@defrex/autobuild` tarball ships `packages/core/src` except its
- *   `*.test.ts` files (AUT-490's negation); the test-only `src/testing/store-failures.ts` and
+ *   `*.test.ts`, `*.test.tsx`, `*.spec.ts`, and `*.spec.tsx` files (AUT-490's negation, broadened
+ *   to the four spellings by AUT-508); the test-only `src/testing/store-failures.ts` and
  *   `src/testing/packed-install.ts` helpers (their sole consumers are the pack-denied test
  *   files) are excluded by per-file negations, while `src/testing/fixed.ts` and
  *   `src/testing/index.ts` deliberately ship: `fixed.ts` is a runtime dependency of the packed
@@ -99,8 +100,9 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   while looking deliberate);
  * - negation entries (leading `!`) become denied glob patterns — a packed path
  *   matching one is a violation even where a surface would allow it (the root
- *   manifest denies its `packages/core/src` test files through the negation
- *   `!packages/core/src/**` with the `*.test.ts` suffix; bun honors it);
+ *   manifest denies its `packages/core/src` test files through the negations
+ *   `!packages/core/src/**` with the `*.test.ts`, `*.test.tsx`, `*.spec.ts`, and
+ *   `*.spec.tsx` suffixes; bun honors them);
  * - every `exports`/`bin` target in the manifest must appear in the packed
  *   listing (the packed artifact must resolve everything the manifest
  *   promises);
@@ -201,10 +203,13 @@ const DISPATCHER_RULING =
   "'files' allowlist in packages/hosted-dispatcher/package.json and this check together."
 
 const ROOT_RULING =
-  'Ruling (AUT-490, extended by AUT-503): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
-  'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts file under ' +
-  'packages/core/src (the !packages/core/src/**/*.test.ts negation): test files are dev-only surface and do ' +
-  'not publish. By AUT-503 the test-only src/testing/store-failures.ts and src/testing/packed-install.ts ' +
+  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
+  'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
+  'packages/core/src (the !packages/core/src/**/*.test.ts, !packages/core/src/**/*.test.tsx, !packages/core/src/**/*.spec.ts, and ' +
+  '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.test.* suites too): test files are dev-only surface and do ' +
+  'not publish. The denial covers the TypeScript test spellings only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of ' +
+  'scope (this workspace writes its tests in TypeScript only), so a future JS/JSX test file would publish unless the ruling is widened here and ' +
+  'in the manifests together. By AUT-503 the test-only src/testing/store-failures.ts and src/testing/packed-install.ts ' +
   'helpers (their sole consumers are *.test.ts files the pack already denies) are excluded by per-file ' +
   'negations, while src/testing/fixed.ts and src/testing/index.ts deliberately ship: fixed.ts is a runtime ' +
   'dependency of the packed ./plugin-sdk surface (store/contract.ts imports manualClock from it), and ' +
