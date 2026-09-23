@@ -4154,6 +4154,13 @@ describe('Dispatcher janitor', () => {
     expect(h.workspaces.releases.at(-1)?.ref).toBe('sandbox-remote-abort')
   })
 
+  // AUT-527 audit: the parameterized dimension here is the PR's forge state at
+  // abort time (open / closed / merged), which is orthogonal to the
+  // marker-vs-provider-name decision of isRemoteWorkspace. Every case runs on
+  // the default seed (legacy local, no remote marker), so marker-keyed and
+  // name-keyed readings agree by construction; marker-over-name precedence for
+  // the abort-cleanup saga is pinned by the AUT-520 cross-cases at the
+  // 'abort cleanup skips the local-branch git step' test.each above.
   test.each([
     ['open', { state: 'open', mergeable: true } as const, 'pr.closed'],
     ['already closed', { state: 'closed' } as const, 'pr.closed'],
@@ -4217,6 +4224,15 @@ describe('Dispatcher janitor', () => {
     expect(events.at(-1)?.type).toBe('build.completed')
   })
 
+  // AUT-527 audit: the parameterized dimension here is how many abort-cleanup
+  // saga steps have already settled (checkpoint prefix 0..5). The assertions
+  // include execCalls (the local-branch git steps, settled < 4), so the case is
+  // sensitive to the remote-vs-local outcome — but only through the default
+  // seed (legacy local, no remote marker), which marker-keyed and name-keyed
+  // readings of isRemoteWorkspace agree on by construction; the settled count
+  // cannot change the marker reading. Marker-over-name precedence for this
+  // saga is already pinned in both directions by the AUT-520 cross-cases at
+  // the 'abort cleanup skips the local-branch git step' test.each above.
   test.each([0, 1, 2, 3, 4, 5])(
     'a crash after cleanup checkpoint prefix %i resumes only the remaining external effects',
     async (settled) => {
@@ -4279,6 +4295,14 @@ describe('Dispatcher janitor', () => {
     },
   )
 
+  // AUT-527 audit: the parameterized dimension here is which Forge capability
+  // is absent (closePr / deleteBranch). The assertions (janitorFailed, the
+  // diagnostic, absence of build.completed) are insensitive to the
+  // remote-vs-local outcome, and every case runs on the default seed (legacy
+  // local, no remote marker), so marker-keyed and name-keyed readings of
+  // isRemoteWorkspace agree by construction. Marker-over-name precedence for
+  // the abort-cleanup saga is pinned by the AUT-520 cross-cases at the
+  // 'abort cleanup skips the local-branch git step' test.each above.
   test.each(['closePr', 'deleteBranch'] as const)(
     'missing Forge %s capability leaves cleanup pending with an actionable diagnostic',
     async (capability) => {
