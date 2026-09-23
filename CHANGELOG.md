@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#483](https://github.com/defrex/autobuild/pull/483) — Keep dashboard cost flat as finished builds accumulate (AUT-487)
 - [#476](https://github.com/defrex/autobuild/pull/476) — Drop four dead-weight files from the root tarball (AUT-513)
 - [#475](https://github.com/defrex/autobuild/pull/475) — Guard publish-contents-check rendered rulings from silent corruption
 - [#474](https://github.com/defrex/autobuild/pull/474) — Close the closure walk's latent under-approximations (AUT-510)
