@@ -404,6 +404,64 @@ describe('D8 scope enforcement over the wire', () => {
       })
     })
   })
+
+  test('the build-digest route: repo-token scope, no existence gate, wrong-repo 403 before lookup', async () => {
+    await withSecureStore(async ({ url, admin, backing }) => {
+      // A repo with builds but no journal record, and a repo the store has
+      // never seen, both answer 200 (the route is keyed to build records and
+      // sits before the repo-existence gate, like the session collection).
+      await admin.createBuild({ slug: 'dg-a', repo: 'acme/repo' })
+      await admin.createBuild({ slug: 'dg-b', repo: 'acme/repo' })
+      await admin.append('dg-a', sampleEventWrite('one'))
+      await admin.append('dg-a', {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      const repoToken = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, {
+          resource: { kind: 'repo', id: 'acme/repo' },
+          session: 'hs_one',
+          exp: EXP,
+        }),
+      })
+      const digests = await repoToken.getRepoBuildDigests('acme/repo')
+      expect([...digests.keys()]).toEqual(['dg-a', 'dg-b'])
+      expect(digests.get('dg-a')).toEqual({
+        slug: 'dg-a',
+        terminal: 'done',
+        observations: [1],
+      })
+      expect(digests.get('dg-b')).toEqual({ slug: 'dg-b', observations: [] })
+      expect(await repoToken.getRepoBuildDigests('acme/never-seen')).toEqual(new Map())
+      expect(await backing.getRepo('acme/never-seen')).toBeNull()
+
+      // A wrong-repo token is 403 before any lookup — the no-existence-leak
+      // rule holds even though the route skips the journal-record check.
+      const otherToken = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, {
+          resource: { kind: 'repo', id: 'acme/other' },
+          session: 'hs_two',
+          exp: EXP,
+        }),
+      })
+      const err = await otherToken.getRepoBuildDigests('acme/repo').catch((error: unknown) => error)
+      expect(err).toBeInstanceOf(AuthError)
+
+      // The wire shape parses through the same schema the client composes:
+      // an empty repo answers an empty array, and `terminal` is omitted when
+      // the build's log carries no terminal fact.
+      const response = await fetch(`${url}/repos/acme%2Fnever-seen/build-digests`, {
+        headers: {
+          authorization: `Bearer ${mintToken(SECRET, { build: '*', session: '*', exp: EXP })}`,
+        },
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual([])
+    })
+  })
 })
 
 // ── Open-server harness for the D6 wire tests ────────────────────────────────

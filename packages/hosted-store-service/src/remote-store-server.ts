@@ -469,6 +469,24 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     return fail(404, 'not-found', `no route: ${req.method} /repos/:repo/sessions`)
   }
 
+  /**
+   * The build-digest batch read (AUT-487). Keyed to build records, not the
+   * repository journal record: a repo that has builds but no journal record,
+   * and a repo the store has never seen, both answer `200` with the (possibly
+   * empty) digests array rather than `404 not-found` — the same shape the
+   * backing store's `getRepoBuildDigests` contract gives every adapter. The
+   * route is therefore handled BEFORE the `store.getRepo` existence gate, like
+   * `sessionCollectionRoute`, while `authorize(req, 'repo', repo)` has already
+   * run, so a wrong-scope token is still rejected before any lookup and the
+   * no-existence-leak rule holds.
+   */
+  async function buildDigestRoute(req: Request, repo: string): Promise<Response> {
+    if (req.method !== 'GET') {
+      return fail(404, 'not-found', `no route: ${req.method} /repos/:repo/build-digests`)
+    }
+    return json(200, [...(await store.getRepoBuildDigests(repo)).values()])
+  }
+
   async function sessionRoute(req: Request, url: URL, id: string, rest: string): Promise<Response> {
     const segments = rest.split('/')
     if (segments[0] === 'streams') {
@@ -803,6 +821,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       const scope = authorize(req, 'repo', repo)
       if (segments.length === 3 && segments[2] === 'sessions') {
         return sessionCollectionRoute(req, repo)
+      }
+      if (segments.length === 3 && segments[2] === 'build-digests') {
+        return buildDigestRoute(req, repo)
       }
       const record = await store.getRepo(repo)
       if (record === null) {
