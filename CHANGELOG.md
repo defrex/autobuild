@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#476](https://github.com/defrex/autobuild/pull/476) — Drop four dead-weight files from the root tarball (AUT-513)
 - [#472](https://github.com/defrex/autobuild/pull/472) — Raise the plugin SDK package-surface test's timeout budget
 - [#471](https://github.com/defrex/autobuild/pull/471) — Exclude the test-only cli/testkit.ts from the root tarball (AUT-506)
 - [#470](https://github.com/defrex/autobuild/pull/470) — Walk provider exports-target closure in publish-imports-check
