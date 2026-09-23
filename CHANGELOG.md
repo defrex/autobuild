@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
 - [#482](https://github.com/defrex/autobuild/pull/482) — Correct the retention-cap test's documented pinning path
 - [#481](https://github.com/defrex/autobuild/pull/481) — State the per-source scope of store-read failure reporting in wait and watch help
