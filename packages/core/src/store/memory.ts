@@ -27,6 +27,7 @@ import {
 import { humanActor } from '../events/envelope'
 import { createBuildScopedStore } from './build-scope'
 import { createSessionScopedStore } from './session-handle'
+import { reduceBuildDigest } from './digest'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -62,6 +63,7 @@ import {
   type ArtifactMeta,
   type BlobStore,
   type BuildRecord,
+  type BuildDigest,
   type BuildScopedStore,
   type BuildStore,
   type Clock,
@@ -272,6 +274,22 @@ export class MemoryBuildStore implements BuildStore {
 
   async listBuilds(): Promise<BuildRecord[]> {
     return [...this.builds.values()].map((state) => this.snapshot(state))
+  }
+
+  async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+    // Insertion order is creation order (the listSessions tiebreak note); the
+    // digest map is returned in slug order so every adapter answers the same
+    // shape for the same store contents.
+    const slugs = [...this.builds.entries()]
+      .filter(([, state]) => state.record.repo === repo)
+      .map(([slug]) => slug)
+      .sort()
+    const digests = new Map<string, BuildDigest>()
+    for (const slug of slugs) {
+      const state = this.builds.get(slug)!
+      digests.set(slug, { slug, ...reduceBuildDigest(state.events) })
+    }
+    return digests
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {

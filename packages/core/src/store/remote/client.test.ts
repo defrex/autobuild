@@ -37,6 +37,7 @@ import { AuthError, REMOTE_EVENT_WAIT_SECONDS, RemoteBuildStore } from './client
 import {
   artifactGetResponseSchema,
   artifactMetaWireSchema,
+  buildDigestListSchema,
   buildRecordListSchema,
   buildRecordWireSchema,
   conditionalEventResponseSchema,
@@ -481,6 +482,19 @@ describe('request construction', () => {
         responses: [{ body: [] }],
         act: (s) => s.listRepoArtifacts('acme/rate-limiter'),
         path: '/repos/acme%2Frate-limiter/artifact-list',
+        method: 'GET',
+      },
+      getRepoBuildDigests: {
+        responses: [
+          {
+            body: buildDigestListSchema.parse([
+              { slug: 'build-a', terminal: 'done', observations: [1, 4] },
+              { slug: 'build-b', observations: [] },
+            ]),
+          },
+        ],
+        act: (s) => s.getRepoBuildDigests('acme/rate-limiter'),
+        path: '/repos/acme%2Frate-limiter/build-digests',
         method: 'GET',
       },
       claimRepoLease: {

@@ -3,7 +3,10 @@
 ## Unreleased
 
 - [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
+- [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
+- [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
+- [#483](https://github.com/defrex/autobuild/pull/483) — Keep dashboard cost flat as finished builds accumulate (AUT-487)
 - [#482](https://github.com/defrex/autobuild/pull/482) — Correct the retention-cap test's documented pinning path
 - [#481](https://github.com/defrex/autobuild/pull/481) — State the per-source scope of store-read failure reporting in wait and watch help
 - [#480](https://github.com/defrex/autobuild/pull/480) — Record the durable remote marker on workspace.provisioned

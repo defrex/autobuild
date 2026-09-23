@@ -28,7 +28,13 @@ import {
 import type { TicketSource } from '../ports/types'
 import { specConformance } from '../spec-standard'
 import type { RepositoryEvent } from '../events/repository'
-import { contentHash, toBytes, type BuildRecord, type BuildStore } from '../store/types'
+import {
+  contentHash,
+  toBytes,
+  type BuildDigest,
+  type BuildRecord,
+  type BuildStore,
+} from '../store/types'
 
 export const HARVEST_SCAN_ARTIFACT = 'harvest-scan'
 export const HARVEST_PROPOSALS_ARTIFACT = 'harvest-proposals'
@@ -138,6 +144,28 @@ export function collectUnclaimedObservations(input: {
       a.occurrence.build.localeCompare(b.occurrence.build) || a.occurrence.seq - b.occurrence.seq,
   )
   return { observations, merges, state }
+}
+
+/** The unclaimed-observation count from build digests and the repository
+ * journal alone (AUT-487): the same reduce/claim/count the store-reading scan
+ * performs, with no per-build history reads. The dashboards consume this
+ * directly — the count is all they display — while `scanUnclaimedObservations`
+ * keeps the full-scan shape its remaining callers depend on (the harvest
+ * runner's own scan and the dispatcher's harvest-launch gate, which also need
+ * the merges and observation payloads). Occurrences are keyed `{build, seq}`;
+ * payload ids are not assumed globally unique. */
+export function unclaimedObservationCount(input: {
+  digests: Map<string, BuildDigest>
+  harvestEvents: RepositoryEvent[]
+}): number {
+  const claimed = claimedOccurrenceKeys(reduceHarvest(input.harvestEvents))
+  let count = 0
+  for (const digest of input.digests.values()) {
+    for (const seq of digest.observations) {
+      if (!claimed.has(occurrenceKey({ build: digest.slug, seq }))) count += 1
+    }
+  }
+  return count
 }
 
 /** Raw structured `observation.recorded` envelopes across this repository.

@@ -5324,11 +5324,16 @@ describe('abDispatch --once with an interactive terminal', () => {
     const stop = new AbortController()
     const source = 'pressure-carry-over'
     const originalListBuilds = fx.store.listBuilds.bind(fx.store)
+    const originalGetDigests = fx.store.getRepoBuildDigests.bind(fx.store)
     let failReads = false
     let sleeps = 0
     fx.store.listBuilds = async () => {
       if (failReads) throw new Error('pressure scan unavailable')
       return originalListBuilds()
+    }
+    fx.store.getRepoBuildDigests = async (repo: string) => {
+      if (failReads) throw new Error('pressure scan unavailable')
+      return originalGetDigests(repo)
     }
     try {
       await fx.store.createBuild({ slug: source, repo: fx.origin })
@@ -5366,7 +5371,10 @@ describe('abDispatch --once with an interactive terminal', () => {
         sleep: async () => {
           sleeps += 1
           if (sleeps === 1) {
-            await waitFor(() => latestDashboardFrame(term).includes('observations 2'))
+            await waitFor(() => {
+              console.error('FRAME:', latestDashboardFrame(term))
+              return latestDashboardFrame(term).includes('observations 2')
+            })
             failReads = true
             return
           }
