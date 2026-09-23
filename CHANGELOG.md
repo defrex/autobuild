@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#464](https://github.com/defrex/autobuild/pull/464) — Pin the dashboard refresh's superseded-generation branch with tests
+- [#463](https://github.com/defrex/autobuild/pull/463) — Exclude the test-only src/testing helpers from the root tarball (AUT-503)
+- [#462](https://github.com/defrex/autobuild/pull/462) — Correct ALWAYS_PACKED_FILE_NAMES doc + constant to actual packer sets
+- [#461](https://github.com/defrex/autobuild/pull/461) — Fail collectUnclaimedObservations loudly on a missing eventsByBuild entry
 - [#460](https://github.com/defrex/autobuild/pull/460) — Exclude the test-only src/testing/ tree from postgres-store's tarball
 - [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
 - [#458](https://github.com/defrex/autobuild/pull/458) — Guard the workspace's mirrored react pins against drift

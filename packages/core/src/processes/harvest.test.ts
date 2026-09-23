@@ -358,6 +358,54 @@ describe('harvest deterministic scan and ledger', () => {
     ).toEqual(await scanUnclaimedObservations(store, '/repo'))
   })
 
+  test('a missing eventsByBuild entry for a same-repo build fails loudly', async () => {
+    const store = new MemoryBuildStore()
+    await observation(store, 'a', 'a1')
+    await store.createBuild({ slug: 'orphan', repo: '/repo' })
+    const records = await store.listBuilds()
+    const eventsByBuild = new Map<string, AbEvent[]>()
+    for (const record of records) {
+      // Simulate a caller that forgot a build's history.
+      if (record.slug === 'orphan') continue
+      eventsByBuild.set(record.slug, await store.getEvents(record.slug))
+    }
+
+    expect(() =>
+      collectUnclaimedObservations({
+        repo: '/repo',
+        records,
+        eventsByBuild,
+        harvestEvents: [],
+      }),
+    ).toThrow('eventsByBuild is missing an entry for build "orphan"')
+  })
+
+  test('an explicitly empty events entry scans cleanly instead of throwing', async () => {
+    const store = new MemoryBuildStore()
+    await store.createBuild({ slug: 'quiet', repo: '/repo' })
+    await store.createBuild({ slug: 'merged', repo: '/repo' })
+    await store.append('merged', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: 'abc123' },
+    })
+    const records = await store.listBuilds()
+    const eventsByBuild = new Map<string, AbEvent[]>()
+    for (const record of records) {
+      eventsByBuild.set(record.slug, await store.getEvents(record.slug))
+    }
+
+    const scan = collectUnclaimedObservations({
+      repo: '/repo',
+      records,
+      eventsByBuild,
+      harvestEvents: [],
+    })
+    expect(scan.observations).toEqual([])
+    expect(scan.merges).toHaveLength(1)
+    expect(scan.merges[0]?.build).toBe('merged')
+  })
+
   test('projects distinct origin lifecycle without querying foreign sources', async () => {
     const tickets = new FakeTicketSource([
       {

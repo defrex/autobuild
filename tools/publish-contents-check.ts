@@ -29,7 +29,7 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  * `@defrex/autobuild-hosted-dispatcher` (`@defrex/autobuild-core` is
  * `private: true` and excluded).
  *
- * The three sub-package rulings carry their rulings' pinned prose:
+ * The three sub-package rulings and the root ruling carry their rulings' pinned prose:
  *
  * - AUT-463 — `@defrex/autobuild-hosted-store-service` ships exactly
  *   `package.json`, `README.md`, and `src/**` — with the AUT-490 exception that
@@ -72,6 +72,14 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   additionally need a Postgres URL and env a consumer installing from npm
  *   cannot have. If a sub-package's ruling changes, update its 'files'
  *   allowlist and this check together.
+ * - AUT-503 — the root `@defrex/autobuild` tarball ships `packages/core/src` except its
+ *   `*.test.ts` files (AUT-490's negation); the test-only `src/testing/store-failures.ts` and
+ *   `src/testing/packed-install.ts` helpers (their sole consumers are the pack-denied test
+ *   files) are excluded by per-file negations, while `src/testing/fixed.ts` and
+ *   `src/testing/index.ts` deliberately ship: `fixed.ts` is a runtime dependency of the packed
+ *   `./plugin-sdk` surface (`store/contract.ts` imports `manualClock` from it) and `index.ts`
+ *   is the `./testing` exports target that out-of-tree packages' tests build against. See
+ *   `ROOT_RULING` below for the warning about publish-imports-check's self-scan skip.
  *
  * Every ruling is read out of its package's declared `files` allowlist, so
  * ruling and manifest cannot drift apart:
@@ -182,19 +190,33 @@ const DISPATCHER_RULING =
   'the ruling changes, update the ' +
   "'files' allowlist in packages/hosted-dispatcher/package.json and this check together."
 
+const ROOT_RULING =
+  'Ruling (AUT-490, extended by AUT-503): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
+  'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts file under ' +
+  'packages/core/src (the !packages/core/src/**/*.test.ts negation): test files are dev-only surface and do ' +
+  'not publish. By AUT-503 the test-only src/testing/store-failures.ts and src/testing/packed-install.ts ' +
+  'helpers (their sole consumers are *.test.ts files the pack already denies) are excluded by per-file ' +
+  'negations, while src/testing/fixed.ts and src/testing/index.ts deliberately ship: fixed.ts is a runtime ' +
+  'dependency of the packed ./plugin-sdk surface (store/contract.ts imports manualClock from it), and ' +
+  "index.ts is the ./testing exports target that out-of-tree packages' tests build against. Warning: " +
+  "publish-imports-check does not scan the provider's own packed files, so excluding fixed.ts would pass " +
+  'every check while breaking the packed ./plugin-sdk export. If the ruling changes, update the ' +
+  "'files' allowlist in package.json and this check together."
+
 /** The missing-surface sentence the pre-widening check printed for `src/`;
  * the store rulings keep it verbatim (their legacy wording is pinned). */
 const MISSING_SRC_SURFACE_MESSAGE =
   'no src/ file is packed; the ruling requires the src/ tree (every exports and bin target lives there)'
 
 /**
- * Rulings whose prose their rulings pinned (AUT-463/AUT-473/AUT-490), keyed by npm
+ * Rulings whose prose their rulings pinned (AUT-463/AUT-473/AUT-490/AUT-503), keyed by npm
  * name. Every other publishable package gets the generic derived template, so
  * a newly publishable package is guarded without anyone extending this map.
  */
 const PINNED_RULING_PROSE: Readonly<
   Record<string, { ruling: string; missingSurfaceMessages?: Readonly<Record<string, string>> }>
 > = {
+  '@defrex/autobuild': { ruling: ROOT_RULING },
   '@defrex/autobuild-hosted-store-service': {
     ruling: HOSTED_STORE_SERVICE_RULING,
     missingSurfaceMessages: { src: MISSING_SRC_SURFACE_MESSAGE },
@@ -409,22 +431,34 @@ export function packedTargetsFromManifest(manifest: {
   return [...targets]
 }
 
-/** The extensionless members of npm's always-included pack set: npm packs
+/** The extensionless members of bun pm pack's always-included set: bun packs
  * these names (any extension, so the bare spellings included) regardless of
  * the `files` field, so an allowlist entry naming one can only ever be the
- * file itself, never a ruled directory tree. */
-const ALWAYS_PACKED_FILE_NAMES: ReadonlySet<string> = new Set([
-  'README',
-  'LICENSE',
-  'LICENCE',
-  'NOTICE',
-])
+ * file itself, never a ruled directory tree.
+ *
+ * Per-packer always-included sets (empirically confirmed and per
+ * npm-packlist 10.0.4's strict rules and npm's package-json docs §files):
+ * - npm (npm-packlist): package.json, README, LICENSE, LICENCE, COPYING — no NOTICE.
+ * - bun pm pack: package.json, README, LICENSE, LICENCE — no NOTICE, no COPYING.
+ *
+ * This check parses `bun pm pack --dry-run` output, so the constant holds
+ * bun's set: those are the only extensionless names guaranteed to be files
+ * in the listing under inspection. (`package.json` contains a dot and renders
+ * bare via describeSurface's dotted-name branch regardless.) Note the
+ * defect class this guards: an extensionless allowlist entry whose name is
+ * NOT in this set — e.g. NOTICE or COPYING — renders as `NAME/**`, which is
+ * correct, since such a name is not guaranteed to be packed as a file. An
+ * editor extending the allowlist must not rely on the file form for it. */
+const ALWAYS_PACKED_FILE_NAMES: ReadonlySet<string> = new Set(['README', 'LICENSE', 'LICENCE'])
 
 /**
  * Renders an allowlist entry for messages: a last segment containing a dot, or
- * naming one of npm's always-packed extensionless files, is a file and renders
- * bare (`SPEC.md` → `SPEC.md`, `LICENSE` → `LICENSE`); anything else is
- * treated as a directory (`src` → `src/**`). Cosmetic only — enforcement uses
+ * naming one of bun pm pack's always-packed extensionless files, is a file and
+ * renders bare (`SPEC.md` → `SPEC.md`, `LICENSE` → `LICENSE`); anything else is
+ * treated as a directory (`src` → `src/**`). An extensionless allowlist entry
+ * whose name is not in the always-packed set (e.g. `NOTICE` or `COPYING`) is
+ * not guaranteed to be packed as a file, so it correctly renders as `NAME/**` —
+ * do not rely on the file form for such names. Cosmetic only — enforcement uses
  * the exact-or-prefix predicate, never this guess.
  */
 export function describeSurface(entry: string): string {
