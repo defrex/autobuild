@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#477](https://github.com/defrex/autobuild/pull/477) — Keep the directory-index probe for dotted extensionless specifiers
+- [#476](https://github.com/defrex/autobuild/pull/476) — Drop four dead-weight files from the root tarball (AUT-513)
 - [#474](https://github.com/defrex/autobuild/pull/474) — Close the closure walk's latent under-approximations (AUT-510)
 - [#473](https://github.com/defrex/autobuild/pull/473) — De-flake the retention-cap test with deterministic completion order
 - [#472](https://github.com/defrex/autobuild/pull/472) — Raise the plugin SDK package-surface test's timeout budget
