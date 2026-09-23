@@ -92,6 +92,7 @@
     "!packages/core/src/**/*.spec.tsx",
     "!packages/core/src/testing/store-failures.ts",
     "!packages/core/src/testing/packed-install.ts",
+    "!packages/core/src/cli/testkit.ts",
     "skills",
     "templates",
     "patches",

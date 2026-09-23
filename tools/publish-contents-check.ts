@@ -85,6 +85,12 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *   `./plugin-sdk` surface (`store/contract.ts` imports `manualClock` from it) and `index.ts`
  *   is the `./testing` exports target that out-of-tree packages' tests build against. See
  *   `ROOT_RULING` below for the warning about publish-imports-check's self-scan skip.
+ * - AUT-506 — the same ruling extended once more: the test-only `src/cli/testkit.ts` helper
+ *   (its sole consumers are the colocated `*.test.ts` files the pack already denies; no
+ *   exports target and no packed source imports it) is excluded by a per-file negation, while
+ *   `src/integration/harness.ts` deliberately ships: it is a runtime dependency of the packed
+ *   `./testing` surface (`src/testing/index.ts` re-exports the harness that out-of-tree packages'
+ *   tests build against), the same load-bearing shape as `src/testing/fixed.ts` under AUT-503.
  *
  * Every ruling is read out of its package's declared `files` allowlist, so
  * ruling and manifest cannot drift apart:
@@ -203,8 +209,8 @@ const DISPATCHER_RULING =
   "'files' allowlist in packages/hosted-dispatcher/package.json and this check together."
 
 const ROOT_RULING =
-  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
-  'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
+  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
+  +'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
   'packages/core/src (the !packages/core/src/**/*.test.ts, !packages/core/src/**/*.test.tsx, !packages/core/src/**/*.spec.ts, and ' +
   '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.test.* suites too): test files are dev-only surface and do ' +
   'not publish. The denial covers the TypeScript test spellings only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of ' +
@@ -213,7 +219,12 @@ const ROOT_RULING =
   'helpers (their sole consumers are *.test.ts files the pack already denies) are excluded by per-file ' +
   'negations, while src/testing/fixed.ts and src/testing/index.ts deliberately ship: fixed.ts is a runtime ' +
   'dependency of the packed ./plugin-sdk surface (store/contract.ts imports manualClock from it), and ' +
-  "index.ts is the ./testing exports target that out-of-tree packages' tests build against. Warning: " +
+  "index.ts is the ./testing exports target that out-of-tree packages' tests build against. By AUT-506 the " +
+  'test-only src/cli/testkit.ts helper (its sole consumers are the colocated *.test.ts files the pack already ' +
+  'denies; no exports target and no packed source imports it) is excluded by a per-file negation, while ' +
+  'src/integration/harness.ts deliberately ships: it is a runtime dependency of the packed ./testing surface ' +
+  "(src/testing/index.ts re-exports the harness that out-of-tree packages' tests build against), the same " +
+  'load-bearing shape as src/testing/fixed.ts under AUT-503. Warning: ' +
   "publish-imports-check does not scan the provider's own packed files, so excluding fixed.ts would pass " +
   'every check while breaking the packed ./plugin-sdk export. If the ruling changes, update the ' +
   "'files' allowlist in package.json and this check together."
