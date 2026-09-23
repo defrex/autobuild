@@ -241,6 +241,25 @@ describe('createRemotePollRunner', () => {
     expect(errs).toEqual([])
   })
 
+  test('onStop fires on every stop path — endCheck and caller-initiated alike', async () => {
+    const stops: number[] = []
+    const { runner } = testRunner({ onStop: () => stops.push(stops.length + 1) })
+    // An endCheck stop fires the hook from inside the runner...
+    runner.launch(
+      'a',
+      async () => {},
+      () => true,
+    )
+    await flush()
+    expect(runner.stopped).toBe(true)
+    expect(stops).toEqual([1])
+    // ...and a caller-initiated stop fires it again: the hook must be
+    // idempotent, matching the pre-extraction `requestStop`, which executed
+    // the command's `stop = true` on every call.
+    runner.requestStop()
+    expect(stops).toEqual([1, 2])
+  })
+
   test('a failing poll is reported once per streak, retried, and re-armed by success', async () => {
     const { runner, errs } = testRunner()
     let calls = 0

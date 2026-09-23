@@ -92,6 +92,15 @@ export interface RemotePollRunnerOpts {
   /** The loop-guard predicate: `aborted() || deadline elapsed || domain
    * stop`. Evaluated at the top of every task cycle. */
   shouldStop: () => boolean
+  /** Invoked on every runner stop — a task's endCheck, the discovery task's
+   * endCheck, or a caller-initiated `requestStop`. `ab watch` trips its
+   * shared `stop` flag here: `pollBuild`/`pollRepository` gate their batch
+   * loops on that flag (`if (stop) break`), so a sibling task whose held
+   * read has already resolved must stop delivering its batch the moment any
+   * task observes the terminal condition — exactly what the pre-extraction
+   * command-scoped `requestStop` did (f_42263f38). May fire more than once
+   * (every `requestStop` call fires it); the callback must be idempotent. */
+  onStop?: () => void
   /** How `drain()` treats tasks launched while it is awaiting.
    * `'snapshot'`: await only the tasks present when `drain()` is called
    * (`ab watch`'s one-shot semantics). `'quiesce'`: keep awaiting until no
@@ -143,6 +152,7 @@ export function createRemotePollRunner(opts: RemotePollRunnerOpts): RemotePollRu
   let stopped = false
   const requestStop = (): void => {
     stopped = true
+    opts.onStop?.()
     stopController.abort()
     for (const controller of inFlightReads) controller.abort()
   }

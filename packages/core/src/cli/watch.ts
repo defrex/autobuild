@@ -815,6 +815,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           deadlineMs: deadline,
           aborted,
           shouldStop: () => aborted() || now().getTime() >= deadline || namedAllTerminal(),
+          // A task's terminal endCheck stops the runner from the inside; the
+          // command's `stop` flag must trip with it — pollBuild and
+          // pollRepository gate their batch loops on that flag
+          // (`if (stop) break`), so a sibling task whose held read has
+          // already resolved stops delivering its batch instead of draining
+          // it, exactly as the pre-extraction command-scoped `requestStop`
+          // (which set `stop` on every path) made it do (f_42263f38).
+          onStop: (): void => {
+            stop = true
+          },
           drain: 'snapshot',
         })
         runner = remoteRunner
