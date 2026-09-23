@@ -239,6 +239,7 @@ describe('layered CLI help catalog', () => {
         'escalation.raised',
         'dispatcher.tick-failed',
         'openEscalations',
+        'once per failing read source',
         '"cursor": …',
         'exit 0',
         'exit 1',
@@ -266,6 +267,7 @@ describe('layered CLI help catalog', () => {
         'exit 4',
         '"cursor": …',
         'condition',
+        'once per failing read source',
         'appends no event',
         'permits only the ambient build',
       ],
@@ -343,6 +345,16 @@ describe('layered CLI help catalog', () => {
     expect(renderTopLevelHelp()).not.toContain('ab server')
     expect(dispatch).not.toContain('p         Toggle intake')
     expect(dispatch).not.toContain('selected Harvest workflow or build')
+  })
+
+  test('store-read failure wording states the per-source scope, not an unconditional once', () => {
+    for (const command of ['watch', 'wait'] as const) {
+      const detail = renderCommandHelp(command)
+      expect(detail).toContain('once per failing read source')
+      // The stale claim overstated deduplication: on the remote path each
+      // tracked stream and the discovery pass carries its own failure streak.
+      expect(detail).not.toContain('is reported once on stderr')
+    }
   })
 
   test('unknown and malformed help requests fail with targeted feedback', async () => {
