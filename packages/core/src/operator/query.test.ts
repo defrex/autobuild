@@ -627,17 +627,46 @@ command = "postgres"
     await store.append('aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
     await recordObservation(store, 'aborted', 'obs-aborted', 'unclaimed after abort')
 
+    // Finished builds with observations: one unclaimed (must still be counted
+    // even though its history is never read) and one claimed by the harvest
+    // run below (must not be counted).
+    await createBuild(store, 'done-unclaimed', 'done')
+    await recordObservation(store, 'done-unclaimed', 'obs-done1', 'unclaimed on a finished build')
+    await createBuild(store, 'done-claimed', 'done')
+    const doneClaimedSeq = await recordObservation(
+      store,
+      'done-claimed',
+      'obs-done2',
+      'claimed on a finished build',
+    )
+
+    let finishedClaimedSeq: number | undefined
     for (let index = 1; index <= extraDoneBuilds; index += 1) {
       const slug = `finished-${index}`
       await createBuild(store, slug, 'done')
+      if (index === 2) {
+        finishedClaimedSeq = await recordObservation(
+          store,
+          slug,
+          'obs-fin2',
+          'claimed on a finished build',
+        )
+      }
     }
 
+    const harvestObservations: { build: string; seq: number }[] = [
+      { build: 'blocked', seq: claimedSeq },
+      { build: 'done-claimed', seq: doneClaimedSeq },
+    ]
+    if (finishedClaimedSeq !== undefined) {
+      harvestObservations.push({ build: 'finished-2', seq: finishedClaimedSeq })
+    }
     await store.appendRepo(REPO, {
       actor: KERNEL,
       type: 'harvest.started',
       payload: {
         run: 'harvest-1',
-        observations: [{ build: 'blocked', seq: claimedSeq }],
+        observations: harvestObservations,
         scan: { kind: 'harvest-scan', rev: 0 },
       },
     })
@@ -645,7 +674,10 @@ command = "postgres"
   }
 
   test('the dashboard snapshot is byte-identical to the legacy algorithm over every lifecycle shape', async () => {
-    const store = await seedDashboardStore()
+    // Finished builds with observations ride in the fixtures: the legacy
+    // algorithm still reads every history, so it remains the oracle for rows
+    // and the observation count even as finished builds accumulate (AC 3).
+    const store = await seedDashboardStore(3)
     const legacy = await legacySnapshot({ store, repo: REPO, clock })
     const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
     expect(snapshot).toEqual(legacy)
@@ -667,7 +699,7 @@ command = "postgres"
     ])
     expect(snapshot.model.queued).toBe(2)
     expect(snapshot.model.active).toEqual({ current: 3, limit: 7 })
-    expect(snapshot.model.observations).toEqual({ current: 3, limit: 11 })
+    expect(snapshot.model.observations).toEqual({ current: 4, limit: 11 })
     expect(snapshot.model.warningLines).toEqual(['role warning', 'operator warning'])
     const statuses = new Map(snapshot.model.builds.map((build) => [build.slug, build.status]))
     expect(statuses.get('running')).toBe('running')
@@ -684,26 +716,15 @@ command = "postgres"
     expect(snapshot.model.builds.find((build) => build.slug === 'merged')).toBeUndefined()
   })
 
-  test('one snapshot reads each history once, the journal once, and writes nothing', async () => {
-    // More finished builds than rendered rows: five `done` builds, one of them
-    // carrying a pinned artifact that must NOT be fetched.
+  test('one snapshot reads each row-rendering history once, the journal once, one digest, and writes nothing', async () => {
+    // More finished builds than rendered rows: seven `done` builds, one of
+    // them carrying a pinned artifact that must NOT be fetched.
     const raw = await seedDashboardStore(4)
     await raw.putArtifact('finished-1', {
       kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
       content: effectiveBuildConfigContent(pinnedPipelineConfig()),
       metadata: { revision: 5, run: 'new' },
     })
-    const repoBuilds = [
-      'aborted',
-      'blocked',
-      'finished-1',
-      'finished-2',
-      'finished-3',
-      'finished-4',
-      'merged',
-      'queued',
-      'running',
-    ]
     const rowBuilds = ['aborted', 'blocked', 'queued', 'running']
 
     const counting = countingStore(raw)
@@ -711,15 +732,17 @@ command = "postgres"
     const snapshot = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
     expect(snapshot.model.builds.map((build) => build.slug)).toEqual(rowBuilds)
 
-    // Read bounds: one journal read, one listing, one history read per repo
-    // build (each slug exactly once), and pinned-config reads only for builds
-    // that render a row (ACs 2–4).
+    // Read bounds: one journal read, one listing, ONE digest read for the
+    // whole repo, full history reads only for row-rendering builds (each
+    // slug exactly once), and pinned-config reads only for the same builds
+    // (ACs 2–4, AUT-487).
     expect(counting.counts.get('listBuilds')).toBe(1)
     expect(counting.counts.get('getRepo')).toBe(1)
     expect(counting.counts.get('getRepoEvents')).toBe(1)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
-    expect(counting.eventSlugs).toHaveLength(repoBuilds.length)
-    expect([...counting.eventSlugs].sort()).toEqual(repoBuilds)
+    expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(counting.eventSlugs).toHaveLength(rowBuilds.length)
+    expect([...counting.eventSlugs].sort()).toEqual(rowBuilds)
     expect(counting.counts.get('getArtifact')).toBe(rowBuilds.length)
     expect([...counting.artifactSlugs].sort()).toEqual(rowBuilds)
     // The done build's pinned artifact is never fetched.
@@ -729,6 +752,40 @@ command = "postgres"
     for (const method of MUTATING_STORE_METHODS) {
       expect(counting.counts.get(method) ?? 0).toBe(0)
     }
+  })
+
+  test('adding finished builds does not increase the snapshot store round trips (AUT-487)', async () => {
+    // AC 1: with a fixed set of row-rendering builds, adding done builds
+    // that carry no unclaimed observations must not increase the number of
+    // store calls one snapshot makes.
+    const run = async (extraDone: number) => {
+      const raw = await seedDashboardStore(extraDone)
+      const counting = countingStore(raw)
+      counting.counts.clear() // seeding used the raw store; count the snapshot only
+      const snapshot = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
+      return { counting, snapshot }
+    }
+    const small = await run(0)
+    const large = await run(4)
+
+    // Same store contents for the visible dashboard: rows and the
+    // observation count are unchanged (AC 3).
+    expect(large.snapshot.model.builds.map((build) => build.slug)).toEqual(
+      small.snapshot.model.builds.map((build) => build.slug),
+    )
+    expect(large.snapshot.model.observations).toEqual(small.snapshot.model.observations)
+
+    // Per-method call counts are identical across the two finished-build
+    // counts, including the single digest read.
+    const methods = new Set([...small.counting.counts.keys(), ...large.counting.counts.keys()])
+    for (const method of methods) {
+      expect(large.counting.counts.get(method) ?? 0).toBe(small.counting.counts.get(method) ?? 0)
+    }
+    expect(small.counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(large.counting.counts.get('getRepoBuildDigests')).toBe(1)
+    // Finished builds never have their history read.
+    expect(small.counting.eventSlugs).not.toContain('finished-1')
+    expect(large.counting.eventSlugs).not.toContain('finished-4')
   })
 
   test('a terminal done build skips the pinned effective-config read in getOperatorBuild', async () => {

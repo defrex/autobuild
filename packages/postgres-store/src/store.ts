@@ -19,6 +19,7 @@ import {
   type ArtifactMeta,
   type BlobStore,
   type BuildRecord,
+  type BuildDigest,
   type BuildScopedStore,
   type BuildStore,
   type Clock,
@@ -70,6 +71,7 @@ import {
   isRetentionManagedKind,
   revisionsToPrune,
 } from '@defrex/autobuild/store-adapter'
+import { DIGEST_EVENT_TYPES, reduceBuildDigest } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 
 // The held-read poll cadence for event waits — a re-export of the canonical
@@ -189,6 +191,38 @@ export class PostgresBuildStore implements BuildStore {
   async listBuilds(): Promise<BuildRecord[]> {
     const rows: Row[] = await this.sql`SELECT * FROM builds ORDER BY created_at, slug`
     return rows.map((row) => this.record(row))
+  }
+
+  async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+    // From the builds side (AUT-487), matching the SQLite adapter: the type
+    // filter lives in the ON clause so a build whose log holds none of the
+    // three digest-relevant event types still yields its row, and only those
+    // types are fetched. The `events_type_build_seq` index (schema.ts) makes
+    // the join's per-build probes type-leading, so the cost grows with the
+    // actual signal, not with total history.
+    const rows: Row[] = await this.sql.unsafe(
+      `SELECT b.slug AS slug, e.seq AS seq, e.type AS type
+       FROM builds b
+       LEFT JOIN events e
+         ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map((_, i) => `$${i + 2}`).join(', ')})
+       WHERE b.repo = $1
+       ORDER BY b.slug, e.seq`,
+      [repo, ...DIGEST_EVENT_TYPES],
+    )
+    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq'>[]>()
+    for (const row of rows) {
+      if (row.seq === null || row.seq === undefined) continue
+      const events = eventsByBuild.get(String(row.slug)) ?? []
+      events.push({ type: String(row.type) as AbEvent['type'], seq: num(row.seq) })
+      eventsByBuild.set(String(row.slug), events)
+    }
+    const digests = new Map<string, BuildDigest>()
+    for (const row of rows) {
+      const slug = String(row.slug)
+      if (digests.has(slug)) continue
+      digests.set(slug, { slug, ...reduceBuildDigest(eventsByBuild.get(slug) ?? []) })
+    }
+    return digests
   }
 
   private async appendLocked(

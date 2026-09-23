@@ -3,7 +3,9 @@
 ## Unreleased
 
 - [#486](https://github.com/defrex/autobuild/pull/486) — Move packageAutobuildDistribution into core's distribution-archive
+- [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
+- [#483](https://github.com/defrex/autobuild/pull/483) — Keep dashboard cost flat as finished builds accumulate (AUT-487)
 - [#482](https://github.com/defrex/autobuild/pull/482) — Correct the retention-cap test's documented pinning path
 - [#481](https://github.com/defrex/autobuild/pull/481) — State the per-source scope of store-read failure reporting in wait and watch help
 - [#480](https://github.com/defrex/autobuild/pull/480) — Record the durable remote marker on workspace.provisioned

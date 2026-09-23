@@ -35,6 +35,7 @@ import type {
 import { createBuildScopedStore } from '../build-scope'
 import { createSessionScopedStore } from '../session-handle'
 import { pollingSubscribe } from '../subscribe'
+import type { BuildDigest } from '../types'
 import type {
   StreamChunk,
   StreamOutcome,
@@ -68,6 +69,7 @@ import {
   artifactGetResponseSchema,
   artifactMetaListSchema,
   artifactMetaWireSchema,
+  buildDigestListSchema,
   buildRecordListSchema,
   buildRecordWireSchema,
   conditionalEventResponseSchema,
@@ -244,6 +246,19 @@ export class RemoteBuildStore implements BuildStore {
 
   async listBuilds(): Promise<BuildRecord[]> {
     return this.requestJson('GET', '/builds', buildRecordListSchema)
+  }
+
+  async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+    // A repo-scoped batch read (AUT-487): one request regardless of build
+    // count. The route answers from build records, so an unknown repo or a
+    // repo without a journal record answers 200 with an empty array rather
+    // than 404 — the server composes it before the repository-existence gate.
+    const digests = await this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/build-digests`,
+      buildDigestListSchema,
+    )
+    return new Map(digests.map((digest) => [digest.slug, digest]))
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {

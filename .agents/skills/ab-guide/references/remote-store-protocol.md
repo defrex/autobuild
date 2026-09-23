@@ -368,7 +368,11 @@ waits apply. There is no push transport; a held request is the whole mechanism.
 Repository journals are separate resources with independent event sequences,
 artifacts, and leases. `{repo}` is one percent-encoded repository id; encode
 embedded `/` characters. All resource routes authorize and require the
-repository to exist. An unknown repository returns `404 not-found`.
+repository to exist. An unknown repository returns `404 not-found` — with one
+carve-out: the build-digest batch read of this section is keyed to build
+records, not the repository journal record, so it authorizes the repo token
+but answers `200` (possibly empty) even for an unknown repository, a repository
+without a journal record, or a repository without builds.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
@@ -380,6 +384,7 @@ repository to exist. An unknown repository returns `404 not-found`.
 | `putRepoArtifact` | `POST /repos/{repo}/artifacts` | artifact input | `201` + repository artifact metadata |
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
 | `listRepoArtifacts` | `GET /repos/{repo}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
+| `getRepoBuildDigests` | `GET /repos/{repo}/build-digests` | none | `200` + `BuildDigest[]`, one entry per build record of the repository (possibly empty), ordered by slug; handled before the repository-existence gate, so an unknown or journal-less repository answers `200 []` |
 | `claimRepoLease` | `POST /repos/{repo}/lease/claim` | claim request | `200 {"ok": boolean}` |
 | `heartbeatRepo` | `POST /repos/{repo}/lease/heartbeat` | holder request | `200 {"ok": boolean}` |
 | `releaseRepoLease` | `POST /repos/{repo}/lease/release` | holder request | `200 {"ok": true}`; a wrong holder is a successful no-op |
@@ -388,6 +393,23 @@ There is no repository-list operation. `ensureRepo` is the only repository
 creation operation and must not reset timestamps, events, artifacts, or lease
 state when the repository already exists. Event sequence numbering starts at 1
 for each repository independently of every build and other repository.
+
+A `BuildDigest` is the projection of one build's log onto its terminal fact
+and its `observation.recorded` occurrences:
+
+```jsonc
+// BuildDigest
+{
+  "slug": "ab-fix-login-3",
+  "terminal": "done",               // optional: "done" | "aborted", omitted while the log has neither
+  "observations": [1, 4]            // ascending seqs of the log's observation.recorded events
+}
+```
+
+The digest is derived from the event log on every call — the server persists
+nothing and there is no refresh step. The route is purely additive: the
+protocol version stays `2`, matching the streams/sessions precedent of
+section 6.
 
 The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals, including the event-read bounded
@@ -675,12 +697,12 @@ resource access; an explicit resource whose id is `"*"` is not admin.
 
 ### Resource authorization matrix
 
-| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | one matching session |
-|---|---:|---:|---:|---:|---:|---:|
-| admin (`build: "*"`) | yes | any | yes | any | yes | any |
-| build | no | exact id only | no | no | no | no |
-| repo | no | no | no | exact id only | yes | no |
-| session | no | no | no | no | no | exact id only |
+| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | `/repos/{repo}/build-digests` | one matching session |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| admin (`build: "*"`) | yes | any | yes | any | yes | any | any |
+| build | no | exact id only | no | no | no | no | no |
+| repo | no | no | no | exact id only | yes | exact id only | no |
+| session | no | no | no | no | no | no | exact id only |
 
 A valid token used for the wrong resource receives `403 auth`. Resource scope
 gates all operations, including reads, artifact operations, and leases. A
@@ -919,8 +941,9 @@ Four shipped behaviors do not add `BuildStore` routes:
   "protocolVersion":"2"}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
-There is no push/WebSocket subscription protocol, batch-read route,
-repository listing, artifact deletion, or server deployment API.
+There is no push/WebSocket subscription protocol, repository listing, artifact
+deletion, or server deployment API. The one repo-scoped batch read is the
+build-digest route of section 4; no other batch-read route exists.
 
 ## 12. Conformance
 
