@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#492](https://github.com/defrex/autobuild/pull/492) — Add finalize-fork cross case for explicit local marker over remote-suggestive name
 - [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)
 - [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
 - [#486](https://github.com/defrex/autobuild/pull/486) — Move packageAutobuildDistribution into core's distribution-archive
