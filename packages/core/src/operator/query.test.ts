@@ -725,19 +725,6 @@ command = "postgres"
       content: effectiveBuildConfigContent(pinnedPipelineConfig()),
       metadata: { revision: 5, run: 'new' },
     })
-    const repoBuilds = [
-      'aborted',
-      'blocked',
-      'done-claimed',
-      'done-unclaimed',
-      'finished-1',
-      'finished-2',
-      'finished-3',
-      'finished-4',
-      'merged',
-      'queued',
-      'running',
-    ]
     const rowBuilds = ['aborted', 'blocked', 'queued', 'running']
 
     const counting = countingStore(raw)
