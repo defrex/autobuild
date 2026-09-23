@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { packageAutobuildDistribution } from '../ports/workspace/vercel-sandbox'
+import { packageAutobuildDistribution } from '../ports/workspace/distribution-archive'
 import { installPackedDistribution } from '../testing/packed-install'
 import {
   FakeForge,
