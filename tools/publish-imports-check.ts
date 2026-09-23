@@ -1,6 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix } from 'node:path'
 import ts from 'typescript'
 import { repoRoot } from './git-tracked'
 import {
@@ -73,18 +73,38 @@ import { collectSpecifiers, UNPARSEABLE_MODULE } from './package-boundary-check'
  *    wildcard patterns (`./feature/*`), exact-key matching would under-match,
  *    so the resolution probe below is the authoritative check and the static
  *    assertion only shapes the error message.
- * 6. Probes (all through the `resolveModule` seam): every scanned specifier
+ * 6. The provider's packed exports targets are walked for closure presence
+ *    (AUT-507): every exports target present in the packed listing and
+ *    script-shaped seeds a breadth-first walk — one per exports key,
+ *    cycle-safe — that resolves each static import/specifier with a pure
+ *    packed-path resolver: provider self-imports jump to their exports key's
+ *    targets, relative specifiers probe the packed path set, and bare or
+ *    `#` specifiers are npm's install-time contract and are skipped. A
+ *    reachable file absent from the pack is a `missing-closure-file`
+ *    violation naming the exports key, the importing file, and the missing
+ *    path; a reachable unparseable script file is an `unparseable-file`
+ *    violation naming the provider; a reachable non-script file (a packed
+ *    `.json`, for example) is presence-checked but never parsed.
+ * 7. Probes (all through the `resolveModule` seam): every scanned specifier
  *    from its own importing file's staged path; every exports-map target of
  *    every publishable package from its staged package root. A missing subpath
  *    or a target absent from the packed listing throws the runtime's
  *    npm-style resolution error — the exact failure an npm consumer hits.
  *
- * Scanning the provider's own packed files is deliberately out of scope: the
- * provider cannot be skewed against itself, and its `bin`/`skills`/`templates`
- * trees are workspace-internal surface, not the coupling this ruling pins.
- * Cross-package specifiers between the dependents themselves (for example
+ * Provider packed files are not scanned for provider-specifier skew — the
+ * provider cannot be skewed against itself, and a provider file importing its
+ * own subpath is resolved through the exports map, not checked as skew. They
+ * are, however, walked for closure presence from the packed exports targets
+ * (AUT-507): an exports target that ships while one of its transitive imports
+ * is excluded from the pack passes every skew check and then breaks at install
+ * time, so each file statically reachable from a packed exports target must
+ * itself be packed. The provider's `bin`/`skills`/`templates` trees are
+ * workspace-internal surface governed by their own guards; they are not
+ * exports targets, so the walk never starts in them — an export importing
+ * into them is checked like any other reachable file. Cross-package
+ * specifiers between the dependents themselves (for example
  * `@defrex/autobuild-hosted-store-service/…` imported by the dispatcher) are
- * a different coupling with its own guards; only the shared provider is
+ * a different coupling with their own guards; only the shared provider is
  * checked here.
  */
 
@@ -138,6 +158,82 @@ export function subpathOfProviderSpecifier(specifier: string): string {
   return specifier === PROVIDER_PACKAGE ? '.' : `./${specifier.slice(PROVIDER_PACKAGE.length + 1)}`
 }
 
+/** Strips a single leading `./` from an exports-map target: real manifests
+ * write targets as `./…`, while packed listings (`bun pm pack`, and so
+ * `parsePackedPaths`) emit paths relative to the package directory with no
+ * prefix. Normalizing at exactly the packedPaths boundary keeps the raw
+ * target intact for the staged-layout resolution probe, which needs the
+ * prefix. Only one leading `./` is stripped, so an already-bare path and a
+ * doubly-prefixed one pass through unchanged. */
+export function packedPathOfTarget(target: string): string {
+  return target.startsWith('./') ? target.slice(2) : target
+}
+
+/** How a closure-walk specifier resolves against the provider's packed path
+ * set. Pure over its string inputs, so the candidate-order rules are
+ * unit-testable without fixtures.
+ *
+ * - `self`: a provider self-import whose exports key exists — `targets` are
+ *   the key's raw exports targets (still `./`-prefixed; the caller
+ *   normalizes before any packedPaths check).
+ * - `self-missing`: a provider self-import whose exports key does not exist
+ *   — the caller emits the existing `missing-export` violation.
+ * - `relative`: a relative specifier that resolved to a path present in the
+ *   packed listing.
+ * - `missing`: a relative specifier that matched nothing — `path` is the
+ *   normalized joined path *before* extension probing, so the message names
+ *   what the source literally imports.
+ * - `external`: everything else (bare package names, `#` imports-field
+ *   specifiers, absolute paths) — npm resolves these from `dependencies` at
+ *   install time; they are not part of the provider's packed tree.
+ */
+export type PackedClosureResolution =
+  | { kind: 'self'; targets: readonly string[] }
+  | { kind: 'self-missing'; subpath: string }
+  | { kind: 'relative'; path: string }
+  | { kind: 'missing'; path: string }
+  | { kind: 'external' }
+
+/** The script extensions a relative specifier's stem may resolve to, in
+ * probe order: TypeScript's family first (the tree's own shape), then the
+ * JavaScript family. `.json` and directory-index variants are appended by
+ * the resolver after these. */
+const CLOSURE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx']
+
+/** Resolves one static import specifier of `importerPath` (a packed path
+ * relative to the provider package directory) against `packedPaths`. Relative
+ * specifiers join against the importer's directory and probe candidates in
+ * order: the exact normalized path; the stem with each script extension
+ * (covering TS-style rewrites like `./x.js` → `./x.ts` and extensionless
+ * imports); then `.json` (a packed JSON leaf is a legitimate resolution
+ * target — the real `store/remote/version.ts` imports the packed root
+ * `package.json`); then directory-index variants (`<path>/index` plus the
+ * same extension list, `.json` last). First candidate present wins. */
+export function resolvePackedClosureTarget(
+  packedPaths: readonly string[],
+  importerPath: string,
+  specifier: string,
+  exports: ReadonlyMap<string, string[]>,
+): PackedClosureResolution {
+  if (isProviderSpecifier(specifier)) {
+    const subpath = subpathOfProviderSpecifier(specifier)
+    const targets = exports.get(subpath)
+    if (targets === undefined) return { kind: 'self-missing', subpath }
+    return { kind: 'self', targets }
+  }
+  if (!specifier.startsWith('./') && !specifier.startsWith('../')) return { kind: 'external' }
+  const joined = posix.normalize(posix.join(posix.dirname(importerPath), specifier))
+  if (packedPaths.includes(joined)) return { kind: 'relative', path: joined }
+  const stem = joined.slice(0, joined.length - posix.extname(joined).length)
+  const candidates: string[] = CLOSURE_EXTENSIONS.map((extension) => stem + extension)
+  candidates.push(`${joined}.json`, `${stem}.json`)
+  for (const extension of CLOSURE_EXTENSIONS) candidates.push(`${joined}/index${extension}`)
+  candidates.push(`${joined}/index.json`)
+  const hit = candidates.find((candidate) => packedPaths.includes(candidate))
+  if (hit !== undefined) return { kind: 'relative', path: hit }
+  return { kind: 'missing', path: joined }
+}
+
 /** Every string target an exports-map value tree yields: a bare string entry,
  * or the string leaves of a conditions object (`types`/`import`/`default`/…).
  * Null leaves (`default: null`, "block an export") yield nothing. */
@@ -181,6 +277,13 @@ export type PublishImportsViolation =
       reason: string
     }
   | { kind: 'unresolved-exports-target'; packageName: string; target: string; reason: string }
+  | {
+      kind: 'missing-closure-file'
+      packageName: string
+      exportsKey: string
+      importerPath: string
+      missingPath: string
+    }
 
 export interface PublishImportsCheckEnvironment {
   /** Absolute path of the repository root. */
@@ -211,6 +314,13 @@ export interface PublishImportsReport {
   scannedFiles: number
   /** Specifiers that passed the static assertion and were resolution-probed. */
   probedSpecifiers: number
+  /** Packed provider files scanned for the exports-target closure walk —
+   * files whose suffix `packedScriptKind` maps to a script kind, actually read
+   * and parsed (deduplicated across the per-key walks via the shared
+   * read/parse cache; a file reachable from several exports keys counts
+   * once). Reachable non-script files are presence-checked leaves and are
+   * never counted. */
+  providerClosureFiles: number
 }
 
 /** A publishable package whose packed listing was parsed, with its manifest
@@ -401,7 +511,136 @@ export async function scanPublishedImports(
         }
       }
     }
-    return { violations, packedPackages: packed.length, scannedFiles, probedSpecifiers }
+    /** Reports one dangling closure edge, deduplicated on the
+     * (exportsKey, importerPath, missingPath) triple: the same missing file
+     * reached twice by the same importer is one finding, while two distinct
+     * importers — or the same file under two exports keys — are separate
+     * findings, each naming one shipped export. */
+    const closureMissing = new Set<string>()
+    const reportClosureMissing = (
+      exportsKey: string,
+      importerPath: string,
+      missingPath: string,
+    ): void => {
+      const identity = `${exportsKey}|${importerPath}|${missingPath}`
+      if (closureMissing.has(identity)) return
+      closureMissing.add(identity)
+      violations.push({
+        kind: 'missing-closure-file',
+        packageName: PROVIDER_PACKAGE,
+        exportsKey,
+        importerPath,
+        missingPath,
+      })
+    }
+
+    // Provider closure walk (AUT-507): every file statically reachable from a
+    // packed exports target must itself be packed. One walk per exports key
+    // (each with its own visited set, so a dangling dependency is reported
+    // under every key whose walk reaches it), sharing one read/parse cache so
+    // each packed file is read from disk and parsed once across all walks.
+    // The provider's `continue` above stays: provider files are still not
+    // scanned for provider-specifier skew — self-imports here are resolved
+    // through the exports map instead.
+    let providerClosureFiles = 0
+    const closureCache = new Map<string, ReturnType<typeof collectSpecifiers>>()
+    for (const [exportsKey, rawTargets] of providerExports) {
+      // Seed filter: every target must be present in the pack (an absent
+      // target is already flagged by `unresolved-exports-target`; do not
+      // double-report) and script-shaped (a key pointing at a `.json` or
+      // `.wasm` contributes no walk and is not itself a violation). Targets
+      // are normalized by stripping one leading `./` first — packed listings
+      // never carry the prefix, and an unnormalized check would match
+      // nothing, silently scanning no files at all.
+      const seedTargets = [...new Set(rawTargets.map(packedPathOfTarget))]
+      if (!seedTargets.every((target) => stagedProvider.packedPaths.includes(target))) continue
+      if (!seedTargets.every((target) => packedScriptKind(target) !== undefined)) continue
+      const visited = new Set<string>(seedTargets)
+      const queue = [...seedTargets]
+      while (queue.length > 0) {
+        const current = queue.shift() as string
+        // Enqueueing and scanning are separated by the kind guard: a dequeued
+        // non-script file was found present in the pack (an absent one was
+        // already reported at resolution time) and is a leaf — never read or
+        // parsed, so a packed `package.json` reached from an export cannot
+        // become `unparseable-file`.
+        const scriptKind = packedScriptKind(current)
+        if (scriptKind === undefined) continue
+        const path = `${stagedProvider.directory}/${current}`
+        let collected = closureCache.get(current)
+        if (collected === undefined) {
+          const bytes = await env.readFile(join(env.repoRoot, stagedProvider.directory, current))
+          collected = collectSpecifiers(new TextDecoder().decode(bytes), scriptKind)
+          closureCache.set(current, collected)
+          providerClosureFiles += 1
+        }
+        for (const { specifier, line } of collected) {
+          if (specifier === UNPARSEABLE_MODULE) {
+            // Fail-closed, like the existing treatment of unparseable
+            // dependents; per-walk and un-deduped across keys, matching it.
+            violations.push({ kind: 'unparseable-file', packageName: PROVIDER_PACKAGE, path })
+            continue
+          }
+          const resolution = resolvePackedClosureTarget(
+            stagedProvider.packedPaths,
+            current,
+            specifier,
+            providerExports,
+          )
+          switch (resolution.kind) {
+            case 'external':
+              // Bare and `#` specifiers resolve from dependencies at install
+              // time; they are not part of the packed tree.
+              break
+            case 'self-missing':
+              violations.push({
+                kind: 'missing-export',
+                packageName: PROVIDER_PACKAGE,
+                specifier,
+                subpath: resolution.subpath,
+                path,
+                line,
+              })
+              break
+            case 'self': {
+              // A self-import keeps the originating export's key, so the
+              // message still names a shipped export.
+              for (const rawTarget of resolution.targets) {
+                const target = packedPathOfTarget(rawTarget)
+                if (!stagedProvider.packedPaths.includes(target)) {
+                  // Provider-tree paths in the closure fields: packageName
+                  // already pins the package.
+                  reportClosureMissing(exportsKey, current, target)
+                  continue
+                }
+                if (!visited.has(target)) {
+                  visited.add(target)
+                  queue.push(target)
+                }
+              }
+              break
+            }
+            case 'relative':
+              if (!visited.has(resolution.path)) {
+                visited.add(resolution.path)
+                queue.push(resolution.path)
+              }
+              break
+            case 'missing':
+              reportClosureMissing(exportsKey, current, resolution.path)
+              break
+          }
+        }
+      }
+    }
+
+    return {
+      violations,
+      packedPackages: packed.length,
+      scannedFiles,
+      probedSpecifiers,
+      providerClosureFiles,
+    }
   } finally {
     await env.removeScratchRoot(scratchRoot)
   }
@@ -428,6 +667,12 @@ function describeViolation(violation: PublishImportsViolation): string {
       return (
         `${violation.packageName}: exports target '${violation.target}' is not present in the package's ` +
         `packed files: ${violation.reason}`
+      )
+    case 'missing-closure-file':
+      return (
+        `${PROVIDER_PACKAGE} export '${violation.exportsKey}' dangles: ${violation.importerPath} ` +
+        `imports ${violation.missingPath}, which the packed tarball does not ship; an npm consumer ` +
+        `importing the export cannot load the module`
       )
   }
 }
@@ -465,6 +710,7 @@ export async function runPublishImportsCheck(
     output.stdout(
       `Published-imports check: ${report.packedPackages} publishable packages packed, ` +
         `${report.scannedFiles} dependent files scanned, ` +
+        `${report.providerClosureFiles} provider closure files scanned, ` +
         `${report.probedSpecifiers} ${PROVIDER_PACKAGE} specifiers resolved against the staged tarball layout.`,
     )
     return 0
