@@ -30,6 +30,48 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
+const TYPECHECK_DEADLINE_EXCEEDED = Symbol('typecheck-deadline-exceeded')
+
+/** Races a spawned tsc against an injected wall-clock deadline; kills the
+ * process when the deadline wins and throws the deadline-specific diagnostic
+ * so that failure mode stays distinguishable from the typecheck-exit guard's
+ * generic type-error failure. The deadline is a parameter so a test can
+ * inject an artificially small value and deterministically drive the
+ * deadline branch regardless of compile speed. */
+async function typecheckExitWithinDeadline(
+  typecheck: Bun.ReadableSubprocess,
+  deadlineMs: number,
+): Promise<{ exitCode: number; elapsedMs: number; output: string; error: string }> {
+  const start = performance.now()
+  // The deadline resolves with a sentinel rather than rejecting, so the
+  // diagnostic is thrown on the main path below and the losing branch can
+  // never produce an unhandled rejection.
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<typeof TYPECHECK_DEADLINE_EXCEEDED>((resolve) => {
+    deadlineTimer = setTimeout(() => {
+      typecheck.kill()
+      resolve(TYPECHECK_DEADLINE_EXCEEDED)
+    }, deadlineMs)
+  })
+  let raceResult: number | typeof TYPECHECK_DEADLINE_EXCEEDED
+  try {
+    raceResult = await Promise.race([typecheck.exited, deadline])
+  } finally {
+    clearTimeout(deadlineTimer)
+  }
+  const elapsedMs = Math.round(performance.now() - start)
+  const [output, error] = await Promise.all([
+    new Response(typecheck.stdout).text(),
+    new Response(typecheck.stderr).text(),
+  ])
+  if (raceResult === TYPECHECK_DEADLINE_EXCEEDED) {
+    throw new Error(
+      `plugin-sdk package-surface fixture: tsc --noEmit exceeded ${deadlineMs}ms (${elapsedMs}ms elapsed) — this is the test's heavy step (machine-speed-bound), not a type error; see the per-test timeout comment above`,
+    )
+  }
+  return { exitCode: raceResult, elapsedMs, output, error }
+}
+
 describe('plugin SDK package surface', () => {
   test('exports manifest types, contracts, and reference adapters from the local SDK barrel', () => {
     const ticketSource = {
@@ -140,36 +182,12 @@ describe('plugin SDK package surface', () => {
     // the first signal. A genuine type error still fails via the
     // typecheck-exit guard below; only the time budget and the failure
     // labeling changed.
-    const typecheckDeadlineMs = 90_000
-    const typecheckStart = performance.now()
-    // The deadline resolves with a sentinel rather than rejecting, so the
-    // diagnostic is thrown on the main path below and the losing branch can
-    // never produce an unhandled rejection.
-    const typecheckDeadlineExceeded = Symbol('typecheck-deadline-exceeded')
-    let typecheckDeadlineTimer: ReturnType<typeof setTimeout> | undefined
-    const typecheckDeadline = new Promise<typeof typecheckDeadlineExceeded>((resolve) => {
-      typecheckDeadlineTimer = setTimeout(() => {
-        typecheck.kill()
-        resolve(typecheckDeadlineExceeded)
-      }, typecheckDeadlineMs)
-    })
-    let raceResult: number | typeof typecheckDeadlineExceeded
-    try {
-      raceResult = await Promise.race([typecheck.exited, typecheckDeadline])
-    } finally {
-      clearTimeout(typecheckDeadlineTimer)
-    }
-    const typecheckMs = Math.round(performance.now() - typecheckStart)
-    const [typecheckOutput, typecheckError] = await Promise.all([
-      new Response(typecheck.stdout).text(),
-      new Response(typecheck.stderr).text(),
-    ])
-    if (raceResult === typecheckDeadlineExceeded) {
-      throw new Error(
-        `plugin-sdk package-surface fixture: tsc --noEmit exceeded ${typecheckDeadlineMs}ms (${typecheckMs}ms elapsed) — this is the test's heavy step (machine-speed-bound), not a type error; see the per-test timeout comment above`,
-      )
-    }
-    const typecheckExit = raceResult
+    const {
+      exitCode: typecheckExit,
+      elapsedMs: typecheckMs,
+      output: typecheckOutput,
+      error: typecheckError,
+    } = await typecheckExitWithinDeadline(typecheck, 90_000)
     if (typecheckExit !== 0) {
       throw new Error(
         `sample plugin typecheck failed after ${typecheckMs}ms:\n${typecheckOutput}${typecheckError}`,
@@ -184,6 +202,31 @@ describe('plugin SDK package surface', () => {
     const loaded = await import(pathToFileURL(built).href)
     expect(loaded.default.name).toBe('erased-types')
   }, 120_000)
+
+  test('an injected short deadline deterministically drives the tsc-deadline branch, independent of compile speed', async () => {
+    // The deadline branch's race/kill/diagnostic mechanics were verified by
+    // hand during #472 but never deterministically exercised by the suite:
+    // with the production 90s constant the branch only fires on a genuinely
+    // slow compile. This pin spawns a real tsc that would exit quickly and
+    // successfully on any machine (`--version`; node startup alone is tens
+    // of ms) and injects a 1ms deadline, so the sentinel provably wins by
+    // injection rather than by wall-clock luck — and if that ever stopped
+    // holding, the resolve below fails the test loudly instead of silently
+    // passing.
+    const typecheck = Bun.spawn([join(root, 'node_modules', '.bin', 'tsc'), '--version'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const outcome = await typecheckExitWithinDeadline(typecheck, 1).then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(outcome).toBeInstanceOf(Error)
+    const message = outcome instanceof Error ? outcome.message : ''
+    expect(message).toMatch(/exceeded 1ms/)
+    expect(message).toContain('not a type error')
+    expect(message).not.toContain('typecheck failed')
+  }, 10_000)
 
   test('the packed artifact contains the SDK and all reusable contract suites', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
