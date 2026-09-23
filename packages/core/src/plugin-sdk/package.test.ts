@@ -126,13 +126,54 @@ describe('plugin SDK package surface', () => {
       ],
       { cwd: destination, stdout: 'pipe', stderr: 'pipe' },
     )
-    const typecheckExit = await typecheck.exited
+    // This test runs a full `tsc --noEmit` plus a transpile and a dynamic
+    // import inside bun's per-test timeout, and the compile alone is
+    // machine-speed-bound right at bun's 5000ms default cap: on the 4-vcpu
+    // vercel-sandbox guest it failed 3/3 isolated and 2/2 full-suite runs
+    // with "this test timed out after 5000ms" and empty typecheck output
+    // (build pin-the-dashboard, event seq 118), while it passed on the faster
+    // verify hardware. Measured warm on that same guest the fixture's tsc
+    // takes ~3.6-4.9s (well under the cap on faster machines), so this one
+    // test gets a 120s per-test budget — roughly 25x the observed compile —
+    // and an internal 90s deadline around the tsc step fails with a
+    // diagnostic naming the heavy step before bun's own timeout can ever be
+    // the first signal. A genuine type error still fails via the
+    // typecheck-exit guard below; only the time budget and the failure
+    // labeling changed.
+    const typecheckDeadlineMs = 90_000
+    const typecheckStart = performance.now()
+    // The deadline resolves with a sentinel rather than rejecting, so the
+    // diagnostic is thrown on the main path below and the losing branch can
+    // never produce an unhandled rejection.
+    const typecheckDeadlineExceeded = Symbol('typecheck-deadline-exceeded')
+    let typecheckDeadlineTimer: ReturnType<typeof setTimeout> | undefined
+    const typecheckDeadline = new Promise<typeof typecheckDeadlineExceeded>((resolve) => {
+      typecheckDeadlineTimer = setTimeout(() => {
+        typecheck.kill()
+        resolve(typecheckDeadlineExceeded)
+      }, typecheckDeadlineMs)
+    })
+    let raceResult: number | typeof typecheckDeadlineExceeded
+    try {
+      raceResult = await Promise.race([typecheck.exited, typecheckDeadline])
+    } finally {
+      clearTimeout(typecheckDeadlineTimer)
+    }
+    const typecheckMs = Math.round(performance.now() - typecheckStart)
     const [typecheckOutput, typecheckError] = await Promise.all([
       new Response(typecheck.stdout).text(),
       new Response(typecheck.stderr).text(),
     ])
+    if (raceResult === typecheckDeadlineExceeded) {
+      throw new Error(
+        `plugin-sdk package-surface fixture: tsc --noEmit exceeded ${typecheckDeadlineMs}ms (${typecheckMs}ms elapsed) — this is the test's heavy step (machine-speed-bound), not a type error; see the per-test timeout comment above`,
+      )
+    }
+    const typecheckExit = raceResult
     if (typecheckExit !== 0) {
-      throw new Error(`sample plugin typecheck failed:\n${typecheckOutput}${typecheckError}`)
+      throw new Error(
+        `sample plugin typecheck failed after ${typecheckMs}ms:\n${typecheckOutput}${typecheckError}`,
+      )
     }
 
     const output = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(source)
@@ -142,7 +183,7 @@ describe('plugin SDK package surface', () => {
     await rm(dependencyDir, { recursive: true, force: true })
     const loaded = await import(pathToFileURL(built).href)
     expect(loaded.default.name).toBe('erased-types')
-  })
+  }, 120_000)
 
   test('the packed artifact contains the SDK and all reusable contract suites', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'ab-plugin-sdk-pack-'))
