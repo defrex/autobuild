@@ -3844,14 +3844,24 @@ describe('Dispatcher janitor', () => {
 
   test.each([
     ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
-    ['a provisioned payload carrying the remote marker', 'vercel-sandbox', true],
-    ['a provisioned payload carrying the local marker', 'fake', false],
+    ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
+    [
+      'a provisioned payload carrying the local marker over a remote-suggestive name',
+      'vercel-sandbox',
+      false,
+    ],
   ])(
     'abort cleanup skips the local-branch git step for remote workspaces: %s',
     async (_name, provider, remote) => {
-      const remoteFixture = provider === 'vercel-sandbox'
+      // Harness wiring follows the provider name only: the dispatcher routes
+      // release and reap by the name on the provisioned fact, so the fake
+      // provider must present under that name. Outcome expectations below
+      // derive from the marker (with the legacy fallback), mirroring
+      // isRemoteWorkspace — not from the name.
+      const nameSuggestsRemote = provider === 'vercel-sandbox'
+      const expectRemote = remote ?? nameSuggestsRemote
       const h = harness({
-        workspaceName: remoteFixture ? 'vercel-sandbox' : undefined,
+        workspaceName: nameSuggestsRemote ? 'vercel-sandbox' : undefined,
         tickets: [readyTicket('T-1', { labels: [] })],
       })
       const slug = await seedBuild(h, {
@@ -3866,13 +3876,14 @@ describe('Dispatcher janitor', () => {
       expect(report.abandoned).toBe(1)
       const events = await h.store.getEvents(slug)
       expect(events.some((event) => event.type === 'abort.remote-branch-deleted')).toBe(true)
-      // Remote workspaces never create a local branch; the git steps and their
-      // fact are skipped entirely. A local marker (remote: false) keeps the
-      // git steps running like the legacy local journal.
+      // The marker decides when present, overriding a suggestive provider
+      // name in either direction; the name reading is only the fallback for
+      // journals written before the marker existed. Remote workspaces never
+      // create a local branch, so the git steps and their fact are skipped.
       expect(events.some((event) => event.type === 'abort.local-branch-deleted')).toBe(
-        !remoteFixture,
+        !expectRemote,
       )
-      if (remoteFixture) {
+      if (expectRemote) {
         expect(h.execCalls).toEqual([])
       } else {
         expect(h.execCalls).toContainEqual(['git', 'check-ref-format', `refs/heads/ab/${slug}`])
