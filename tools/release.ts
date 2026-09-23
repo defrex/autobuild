@@ -13,8 +13,10 @@ import {
   POSTGRES_URL_VARIABLES,
 } from '@defrex/autobuild-postgres-store/env'
 import { readWorkspaceManifests, type WorkspaceManifest } from './workspace-manifest-check'
-import { distributionAssetName } from '../packages/core/src/ports/workspace/distribution-archive'
-import { packageAutobuildDistribution } from '../packages/core/src/ports/workspace/vercel-sandbox'
+import {
+  distributionAssetName,
+  packageAutobuildDistribution,
+} from '../packages/core/src/ports/workspace/distribution-archive'
 
 /** The CLI package name the README install command names. Publishing reads
  * every package's own manifest; this constant only renders the README line. */
@@ -1026,11 +1028,11 @@ function distributionUploadRecoveryCommand(tag: string): string {
   // The pack step must go through the production packer — a bare
   // `bun pm pack` from the repo root would publish a manifest carrying the
   // repo's `patchedDependencies`, which panics a consumer's bun install
-  // (see `packedManifestOmittedFields` in vercel-sandbox.ts).
+  // (see `packedManifestOmittedFields` in distribution-archive.ts).
   return [
     '# Run from the repository root.',
     'archive_dir="$(mktemp -d)"',
-    `ARCHIVE_DIR="$archive_dir" bun -e 'const { packageAutobuildDistribution } = await import("./packages/core/src/ports/workspace/vercel-sandbox.ts"); const { distributionAssetName } = await import("./packages/core/src/ports/workspace/distribution-archive.ts"); const { writeFile } = await import("node:fs/promises"); const { version } = await Bun.file("package.json").json(); await writeFile(\`\${process.env.ARCHIVE_DIR}/\${distributionAssetName(version)}\`, await packageAutobuildDistribution());'`,
+    `ARCHIVE_DIR="$archive_dir" bun -e 'const { packageAutobuildDistribution, distributionAssetName } = await import("./packages/core/src/ports/workspace/distribution-archive.ts"); const { writeFile } = await import("node:fs/promises"); const { version } = await Bun.file("package.json").json(); await writeFile(\`\${process.env.ARCHIVE_DIR}/\${distributionAssetName(version)}\`, await packageAutobuildDistribution());'`,
     `gh release upload ${tag} "$archive_dir/"*.tgz`,
     'rm -rf "$archive_dir"',
   ].join('\n')
