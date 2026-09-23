@@ -73,6 +73,34 @@ async function registrationCount(repo: string, path: string): Promise<number> {
   return list.split('\n\n').filter((block) => block.split('\n').includes(`worktree ${path}`)).length
 }
 
+/** Bounded escalating-backoff retry for the operator-sandbox describe's setup
+ * seams. Three verify unit runs have lost the retention test at ~59-61ms
+ * apiece — always in setup, never in the burst: `beforeEach`'s git
+ * provisioning plus `ensure`'s worktree provisioning take ~55ms locally, the
+ * burst's 71 forks alone cost ~450ms more, and a `start` failure under the
+ * burst's own escalating backoff cannot rethrow before ~750ms — so a ~60ms
+ * failure can only be a transient fork failure (EAGAIN/ENOMEM under the
+ * verify run's whole-suite concurrency) in a spawn-heavy setup seam, an
+ * environment condition and not anything the tests observe. Every retried
+ * seam starts from clean state (fresh tmp directories per attempt; `ensure`
+ * removes its own half-provisioned worktree on failure), and a deterministic
+ * failure exhausts the bounded attempts and rethrows, so the retry cannot
+ * mask a real regression; worst added latency for a genuinely transient
+ * environment is ~350ms per seam. */
+const SETUP_RETRY_DELAYS_MS = [50, 100, 200]
+const retrySetup = async <T>(attempt: () => Promise<T>): Promise<T> => {
+  let attemptNumber = 0
+  for (;;) {
+    try {
+      return await attempt()
+    } catch (error) {
+      const delay = SETUP_RETRY_DELAYS_MS[attemptNumber++]
+      if (delay === undefined) throw error
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+}
+
 describeWorkspaceProviderContract('GitWorktreeProvider', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'ab-git-worktree-contract-'))
   const remote = join(tmp, 'remote.git')
@@ -685,16 +713,33 @@ describe('GitWorktreeProvider operator sandbox', () => {
   let provider: GitWorktreeProvider
 
   beforeEach(async () => {
-    repo = await mkdtemp(join(tmpdir(), 'ab-sandbox-repo-'))
-    root = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-'))
-    sandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-'))
-    await initRepo(repo)
-    provider = new GitWorktreeProvider({
-      root,
-      sandboxRoot,
-      setupCommand: 'echo setup-ran > setup-marker.txt',
-      sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
-      envSource: { PATH: process.env.PATH ?? '', MY_TOOL_CONFIG: 'tool-value' },
+    // One retried setup attempt: fresh directories per attempt, a failed
+    // attempt removes its own partial ones so the next starts clean, and the
+    // shared fixtures are published only once a whole attempt succeeds.
+    await retrySetup(async () => {
+      const attemptRepo = await mkdtemp(join(tmpdir(), 'ab-sandbox-repo-'))
+      const attemptRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-worktrees-'))
+      const attemptSandboxRoot = await mkdtemp(join(tmpdir(), 'ab-sandbox-root-'))
+      try {
+        await initRepo(attemptRepo)
+      } catch (error) {
+        await Promise.all([
+          rm(attemptRepo, { recursive: true, force: true }),
+          rm(attemptRoot, { recursive: true, force: true }),
+          rm(attemptSandboxRoot, { recursive: true, force: true }),
+        ])
+        throw error
+      }
+      repo = attemptRepo
+      root = attemptRoot
+      sandboxRoot = attemptSandboxRoot
+      provider = new GitWorktreeProvider({
+        root,
+        sandboxRoot,
+        setupCommand: 'echo setup-ran > setup-marker.txt',
+        sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
+        envSource: { PATH: process.env.PATH ?? '', MY_TOOL_CONFIG: 'tool-value' },
+      })
     })
   })
 
@@ -875,23 +920,24 @@ describe('GitWorktreeProvider operator sandbox', () => {
   test('finished-but-never-waited commands are bounded by the retention cap; running entries survive', async () => {
     const cap = (GitWorktreeProvider as unknown as { MAX_RETAINED_SANDBOX_COMMANDS: number })
       .MAX_RETAINED_SANDBOX_COMMANDS
-    const identity = await provider.orchestratorSandbox.ensure({
-      repo,
-      operator: 'ops',
-      baseBranch: 'main',
-    })
+    // `ensure` is the seam all three verify failures actually landed in (see
+    // retrySetup's comment for the timing evidence): before the burst below
+    // ever ran.
+    const identity = await retrySetup(() =>
+      provider.orchestratorSandbox.ensure({
+        repo,
+        operator: 'ops',
+        baseBranch: 'main',
+      }),
+    )
     // This burst forks more short-lived shells than any other test in the
     // suite, and a verify run executes it concurrently with the other verify
-    // steps — a load under which a fork can transiently fail (EAGAIN/ENOMEM)
-    // before the burst's own eviction mechanics are ever exercised (observed
-    // once as a ~60ms failure in a verify unit run, and a second verify run
-    // failed the same way at ~61ms even with a single 50ms retry: the fork
-    // pressure persisted past that first beat; never locally across repeated
-    // full-suite runs, including with lint and typecheck running
-    // concurrently). A failed `start` in this window is an environment
-    // condition, not the behavior under test (the retention cap), so retry
-    // each start with escalating backoff — a deterministic start regression
-    // still fails on every attempt.
+    // steps — a load under which a fork can transiently fail (EAGAIN/ENOMEM).
+    // A failed `start` in this window is an environment condition, not the
+    // behavior under test (the retention cap), so retry each start with
+    // escalating backoff — a deterministic start regression still fails on
+    // every attempt. (Second line of defense: the setup seams themselves are
+    // what failed in verify, and are retried above and in beforeEach.)
     const startDelays = [50, 100, 200, 400]
     const startRetrying = async (command: string): Promise<string> => {
       for (;;) {
