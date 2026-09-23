@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#464](https://github.com/defrex/autobuild/pull/464) — Pin the dashboard refresh's superseded-generation branch with tests
 - [#460](https://github.com/defrex/autobuild/pull/460) — Exclude the test-only src/testing/ tree from postgres-store's tarball
 - [#459](https://github.com/defrex/autobuild/pull/459) — Broaden AUT-490 tarball test-file negations to .tsx/.spec.ts
 - [#458](https://github.com/defrex/autobuild/pull/458) — Guard the workspace's mirrored react pins against drift
