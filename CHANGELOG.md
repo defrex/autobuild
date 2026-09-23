@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#491](https://github.com/defrex/autobuild/pull/491) — Pin the terminal observation sample's missing-record behavior (AUT-524)
 - [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
 - [#485](https://github.com/defrex/autobuild/pull/485) — Extract the shared remote long-poll runner for ab watch and ab wait
 - [#484](https://github.com/defrex/autobuild/pull/484) — Discriminate marker-over-name precedence in dispatcher tests
