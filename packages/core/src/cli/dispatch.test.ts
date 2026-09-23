@@ -5372,7 +5372,6 @@ describe('abDispatch --once with an interactive terminal', () => {
           sleeps += 1
           if (sleeps === 1) {
             await waitFor(() => {
-              console.error('FRAME:', latestDashboardFrame(term))
               return latestDashboardFrame(term).includes('observations 2')
             })
             failReads = true
