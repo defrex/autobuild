@@ -49,9 +49,15 @@ import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { PhaseSessionError } from '../store/phase-session'
-import { REMOTE_EVENT_WAIT_SECONDS } from '../store/remote/client'
 import type { BuildRecord } from '../store/types'
 import { resolveAmbientReadSession } from './env'
+import {
+  createRemotePollRunner,
+  defaultDelay,
+  makeFailureStreak,
+  type RemotePollReadOpts,
+  type RemotePollRunner,
+} from './remote-poll'
 import { buildInRepository, isRemoteStoreRef, normalizeGitRemoteUrl } from './repo-state'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
@@ -470,23 +476,6 @@ interface RepositoryStream {
 
 type Stream = BuildStream | RepositoryStream
 
-function defaultDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted === true) {
-      resolve()
-      return
-    }
-    const finish = (): void => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }
-    const timer = setTimeout(finish, ms)
-    const onAbort = (): void => finish()
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
 /**
  * `ab watch` — stream matching build and repository events until a timeout, a
  * record count, or (only when slugs were named) terminal status ends the
@@ -543,17 +532,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       let emitted = 0
       let countCursor: string | undefined
       let stop = false
-      // Held reads in flight right now, each with its own controller. When
-      // the watch stops for any reason, every in-flight read is cancelled —
-      // otherwise a stop during a quiet window would wait out a full wait
-      // window (up to the remote hold) before the watch could exit.
-      const inFlightReads = new Set<AbortController>()
-      // Wakes stop-aware gap sleeps the moment the watch stops.
-      const stopController = new AbortController()
+      // On the remote path this is the shared long-poll runner (the held
+      // reads, their cancellation, and the gap sleeps it owns); on the local
+      // path it stays undefined and a stop trips the `stop` flag alone.
+      let runner: RemotePollRunner | undefined
       const requestStop = (): void => {
         stop = true
-        stopController.abort()
-        for (const controller of inFlightReads) controller.abort()
+        runner?.requestStop()
       }
 
       const encodeCurrent = (): string =>
@@ -684,7 +669,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
 
       const pollBuild = async (
         stream: BuildStream,
-        readOpts?: { waitSeconds?: number; signal?: AbortSignal },
+        readOpts?: RemotePollReadOpts,
       ): Promise<boolean> => {
         const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
@@ -700,7 +685,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
 
       const pollRepository = async (
         stream: RepositoryStream,
-        readOpts?: { waitSeconds?: number; signal?: AbortSignal },
+        readOpts?: RemotePollReadOpts,
       ): Promise<boolean> => {
         // A repository row may be created mid-watch by the first dispatch.
         if ((await store.getRepo(repo)) === null) return true
@@ -722,34 +707,10 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
-      /** A failed read is reported once per failure streak, advances nothing,
-       * and is retried at the next interval (local) or next request (remote);
-       * a success on the same source re-arms the report. Each read source —
-       * per stream task, plus discovery — carries its own streak, so a
-       * persistent failure on one stream interleaved with successes elsewhere
-       * is still reported only once. */
-      const makeFailureStreak = (): {
-        onFailure: (error: unknown) => void
-        onSuccess: () => void
-      } => {
-        let reported = false
-        return {
-          onFailure: (error: unknown): void => {
-            if (reported) return
-            reported = true
-            const message = error instanceof Error ? error.message : String(error)
-            opts.stderr(`ab watch: a store read failed (${message}); retrying at the next interval`)
-          },
-          onSuccess: (): void => {
-            reported = false
-          },
-        }
-      }
-
       // One streak for the whole local loop — the same lifetime the shared
       // reported flag had before per-source streaks: a persistent read
       // failure is reported once, and a fully-successful cycle re-arms it.
-      const tickStreak = makeFailureStreak()
+      const tickStreak = makeFailureStreak('watch', opts.stderr)
 
       const tick = async (): Promise<void> => {
         let allReadsOk = true
@@ -799,7 +760,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
       if (repository) {
         if (!(await trackRepository())) {
-          makeFailureStreak().onFailure(
+          makeFailureStreak('watch', opts.stderr).onFailure(
             new Error(`could not read the repository journal for "${repo}"`),
           )
         }
@@ -840,57 +801,33 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         // Every stop is prompt: an external abort, a tripped --count, an
         // all-terminal named set, or an elapsed --timeout cancels the
         // in-flight held reads (via `requestStop`) and wakes the gap sleeps
-        // (via `stopController`) instead of waiting out a full hold. The
-        // held read's own bound is additionally capped at the watch's
-        // remaining time budget, so a hold can never outlive the deadline.
+        // (via the runner's stop controller) instead of waiting out a full
+        // hold. The held read's own bound is additionally capped at the
+        // watch's remaining time budget, so a hold can never outlive the
+        // deadline.
         const shouldStop = stop || aborted() || now().getTime() >= deadline || namedAllTerminal()
-        const tasks: Promise<void>[] = []
-        const launched = new Set<string>()
-
-        /** The wait bound for one held read: the remote default, capped at
-         * the watch's remaining time budget. */
-        const readWaitSeconds = (atMs: number): number => {
-          if (timeoutMs === 0) return REMOTE_EVENT_WAIT_SECONDS
-          const remaining = Math.floor((deadline - atMs) / 1000)
-          return Math.max(0, Math.min(REMOTE_EVENT_WAIT_SECONDS, remaining))
-        }
-
-        const runStreamTask = async (
-          poll: (readOpts: { waitSeconds?: number; signal?: AbortSignal }) => Promise<unknown>,
-        ): Promise<void> => {
-          const streak = makeFailureStreak()
-          while (!stop && !aborted() && now().getTime() < deadline) {
-            const started = now().getTime()
-            const controller = new AbortController()
-            inFlightReads.add(controller)
-            try {
-              await poll({ waitSeconds: readWaitSeconds(started), signal: controller.signal })
-              streak.onSuccess()
-              if (namedAllTerminal()) {
-                requestStop()
-                return
-              }
-            } catch (error) {
-              // A cancelled held read is the watch stopping, not a store
-              // failure — never report it.
-              if (!stop && !aborted() && !controller.signal.aborted) streak.onFailure(error)
-            } finally {
-              inFlightReads.delete(controller)
-            }
-            if (stop || aborted()) return
-            const elapsed = now().getTime() - started
-            if (elapsed < interval) await sleep(interval - elapsed, stopController.signal)
-          }
-        }
+        const remoteRunner = createRemotePollRunner({
+          command: 'watch',
+          stderr: opts.stderr,
+          now,
+          sleep,
+          intervalMs: interval,
+          deadlineMs: deadline,
+          aborted,
+          shouldStop: () => aborted() || now().getTime() >= deadline || namedAllTerminal(),
+          drain: 'snapshot',
+        })
+        runner = remoteRunner
 
         const launch = (stream: Stream): void => {
           const key = stream.kind === 'build' ? stream.slug : REPO_STREAM_KEY
-          if (launched.has(key)) return
-          launched.add(key)
-          tasks.push(
-            stream.kind === 'build'
-              ? runStreamTask((readOpts) => pollBuild(stream, readOpts))
-              : runStreamTask((readOpts) => pollRepository(stream, readOpts)),
+          remoteRunner.launch(
+            key,
+            (readOpts) =>
+              stream.kind === 'build'
+                ? pollBuild(stream, readOpts)
+                : pollRepository(stream, readOpts),
+            () => namedAllTerminal(),
           )
         }
 
@@ -901,25 +838,20 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         for (const stream of streams.values()) if (!shouldStop) launch(stream)
 
         if (slugs.length === 0 && !shouldStop) {
-          tasks.push(
-            (async (): Promise<void> => {
-              const streak = makeFailureStreak()
-              while (!stop && !aborted() && now().getTime() < deadline) {
-                try {
-                  await discoverBuilds()
-                  streak.onSuccess()
-                } catch (error) {
-                  streak.onFailure(error)
-                }
-                for (const stream of streams.values()) launch(stream)
-                if (stop || aborted()) return
-                await sleep(interval, stopController.signal)
-              }
-            })(),
-          )
+          void remoteRunner.runDiscovery({
+            step: async (): Promise<void> => {
+              await discoverBuilds()
+            },
+            // Unconditional, after the catch — exactly where the inline
+            // launch loop ran: streams registered before a mid-discovery
+            // throw still get tasks whose polls then run independently.
+            launchPending: (): void => {
+              for (const stream of streams.values()) launch(stream)
+            },
+          })
         }
 
-        await Promise.all(tasks)
+        await remoteRunner.drain()
         opts.signal?.removeEventListener('abort', requestStop)
       }
 
