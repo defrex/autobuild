@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#487](https://github.com/defrex/autobuild/pull/487) — Make ab wait's stale store-read-failure help guard wrap-insensitive
 - [#482](https://github.com/defrex/autobuild/pull/482) — Correct the retention-cap test's documented pinning path
 - [#481](https://github.com/defrex/autobuild/pull/481) — State the per-source scope of store-read failure reporting in wait and watch help
 - [#480](https://github.com/defrex/autobuild/pull/480) — Record the durable remote marker on workspace.provisioned
