@@ -23,6 +23,7 @@ import type {
   Artifact,
   ArtifactInput,
   ArtifactMeta,
+  BuildDigest,
   BuildRecord,
   BuildStore,
   NewBuildInput,
@@ -315,6 +316,10 @@ export function scopeLocalStoreToPhaseSession(
     ): Promise<RepositoryEvent[]> {
       own('getRepoEvents', 'repo', repo)
       return store.getRepoEvents(repo, sinceSeq, opts)
+    },
+    async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+      own('getRepoBuildDigests', 'repo', repo)
+      return store.getRepoBuildDigests(repo)
     },
     async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
       own('putRepoArtifact', 'repo', repo)

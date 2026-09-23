@@ -516,6 +516,12 @@ conformance suite):
 `subscribe` is specced in the interface; the v2.0 implementation is polling
 `getEvents(since)`. True push comes later.
 
+Operator UIs additionally have a repository-scoped batch read,
+`getRepoBuildDigests(repo)`: the projection of every build's log onto its
+terminal fact and observation occurrences, derived from the event log on each
+call. It lets a dashboard snapshot count unclaimed observations and gate rows
+without reading the full history of finished builds (§16.1).
+
 ### 7.3 Persistence granularity
 
 Required phase outputs persist at **phase/round boundaries**; a killed phase

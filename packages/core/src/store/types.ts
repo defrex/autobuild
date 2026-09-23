@@ -77,6 +77,24 @@ export interface ArtifactMeta {
   createdAt: string
 }
 
+/** The projection of one build's event log onto exactly the two facts an
+ * operator dashboard needs from every build (AUT-487): the latest terminal
+ * fact's kind — `done` for `build.completed`, `aborted` for `build.aborted`,
+ * in-order overwrite, exactly `reduceBuild`'s terminal rule — and the seqs of
+ * the log's `observation.recorded` occurrences. `terminal` is absent while
+ * the log carries neither terminal fact (a queued, running, paused, blocked,
+ * or mid-cleanup build). Everything else a dashboard shows comes from the
+ * journal, the build records, and the full histories of just the builds that
+ * render rows. Nothing is persisted: every adapter derives the digest from
+ * the event log on each call, so the log stays the sole authority and the
+ * digest can always be discarded and rebuilt. */
+export interface BuildDigest {
+  slug: string
+  terminal?: 'done' | 'aborted'
+  /** Ascending seqs of every `observation.recorded` in the build's log. */
+  observations: number[]
+}
+
 export interface RepositoryRecord {
   repo: string
   createdAt: string
@@ -257,6 +275,18 @@ export interface BuildStore {
     sinceSeq?: number,
     opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<AbEvent[]>
+
+  /** One entry for EVERY build whose record's repo is `repo` (completeness is
+   * contractual: a freshly created build whose log holds none of the three
+   * digest-relevant event types still gets its entry, with empty
+   * `observations` and no `terminal`), keyed by slug. A read-only, repo-scoped
+   * batch query shaped like `listBuilds`: it performs no `ensureRepo`, never
+   * writes, and an unknown or build-less repo answers an empty map rather
+   * than rejecting. Derived from the event log on every call — the log is the
+   * sole authority, so there is nothing to refresh or invalidate. The
+   * derivation is the shared `reduceBuildDigest` (store/digest.ts), so every
+   * adapter answers identical results for identical logs. */
+  getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>>
 
   putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta>
   /** Latest revision when `rev` is omitted; null if kind (or rev) absent. */

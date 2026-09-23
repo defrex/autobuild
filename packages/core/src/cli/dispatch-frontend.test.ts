@@ -403,13 +403,13 @@ test('frontend owns live observation pressure and retains the last factual sampl
   let failNextObservationRead = false
   const store = new Proxy(backing, {
     get(target, property) {
-      if (property === 'getEvents') {
-        return async (...args: Parameters<BuildStore['getEvents']>) => {
+      if (property === 'getRepoBuildDigests') {
+        return async (...args: Parameters<BuildStore['getRepoBuildDigests']>) => {
           if (failNextObservationRead) {
             failNextObservationRead = false
-            throw new Error('observation stream unavailable')
+            throw new Error('observation digest unavailable')
           }
-          return target.getEvents(...args)
+          return target.getRepoBuildDigests(...args)
         }
       }
       const value = Reflect.get(target, property, target) as unknown
@@ -502,7 +502,7 @@ test('frontend owns live observation pressure and retains the last factual sampl
   const running = frontend.run()
   await waitFor(() => !failNextObservationRead, 'initial failed observation refresh')
   expect(frames).toHaveLength(0)
-  expect(output).not.toContain('observation stream unavailable')
+  expect(output).not.toContain('observation digest unavailable')
   await waitFor(
     () => frames.some((frame) => frame.current === 1 && frame.limit === 7),
     'first factual pressure sample',
@@ -673,8 +673,8 @@ test('frontend owns live observation pressure and retains the last factual sampl
       .slice(framesBeforeFailure)
       .flatMap((frame) => frame.warnings)
       .join('\n'),
-  ).not.toContain('observation stream unavailable')
-  expect(output).not.toContain('observation stream unavailable')
+  ).not.toContain('observation digest unavailable')
+  expect(output).not.toContain('observation digest unavailable')
   expect((await backing.getRepoEvents(repo)).length).toBe(repoEventsBeforeFailure)
   expect((await backing.getEvents('source')).length).toBe(buildEventsBeforeFailure)
 
@@ -1845,4 +1845,131 @@ test('Enter keeps today’s behavior for sessions without a stream', async () =>
   expect(frames().includes('Build  legacy')).toBe(true)
 
   await finish()
+})
+
+test('observation sample traffic stays flat as finished builds accumulate (AUT-487)', async () => {
+  const repo = '/digest-pressure-repo'
+
+  const runOnce = async (finishedBuilds: number) => {
+    const backing = new MemoryBuildStore()
+    await backing.ensureRepo(repo)
+    // One active build carrying a single unclaimed observation.
+    await backing.createBuild({ slug: 'active', repo })
+    await backing.append('active', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'active-runner', host: 'host' },
+    })
+    await backing.append('active', {
+      actor: agentActor('implement', 's_obs'),
+      type: 'observation.recorded',
+      payload: { id: 'obs-1', kind: 'followup', summary: 'unclaimed observation' },
+    })
+    // Finished builds: no unclaimed observations.
+    for (let index = 1; index <= finishedBuilds; index += 1) {
+      const slug = `finished-${index}`
+      await backing.createBuild({ slug, repo })
+      await backing.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo,
+          baseBranch: 'main',
+          ticket: { source: 'fake', id: slug, title: slug },
+        },
+      })
+      await backing.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+
+    const counts = new Map<string, number>()
+    const store = new Proxy(backing as unknown as Record<string, unknown>, {
+      get(target, property) {
+        if (typeof property === 'symbol') return Reflect.get(target, property, target)
+        const value = (target as Record<string, unknown>)[property]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          counts.set(property, (counts.get(property) ?? 0) + 1)
+          return (value as (...a: unknown[]) => unknown).apply(target, args)
+        }
+      },
+    }) as unknown as BuildStore
+
+    let observationCount: number | undefined
+    const frontend = new DispatchFrontend({
+      repo,
+      storeRef: 'memory',
+      store,
+      env: {},
+      terminal: {
+        write: () => {},
+        modes: createTerminalModeController(
+          () => {},
+          () => {},
+        ),
+        columns: 100,
+        rows: 24,
+        interactive: true,
+      },
+      input: { start: () => () => {} },
+      once: true,
+      resolveDashboardRenderer: () => (model) => {
+        observationCount = model.observations.current
+        return ['frame']
+      },
+      launchChild: ({ run }) => {
+        const completed = store
+          .appendRepoWithArtifacts(
+            repo,
+            [
+              {
+                kind: 'dispatcher-effective-config',
+                content: JSON.stringify({
+                  capacity: 2,
+                  roles: { default: { runtime: 'claude' } },
+                  policy: { harvestThreshold: 7 },
+                  tickets: { source: 'file', readyState: 'ready' },
+                }),
+              },
+            ],
+            (artifacts) => ({
+              actor: DISPATCHER,
+              type: 'dispatcher.run-started',
+              payload: {
+                run,
+                pid: 999,
+                effectiveConfig: {
+                  kind: artifacts[0]!.kind,
+                  rev: artifacts[0]!.revision,
+                },
+                roleWarnings: [],
+              },
+            }),
+          )
+          .then(() => ({ outcome: 'normal', exitCode: 0 }) as const)
+        return { completed, async stop() {} }
+      },
+    })
+    await frontend.run()
+    return { counts, observationCount }
+  }
+
+  const baseline = await runOnce(1)
+  const more = await runOnce(4)
+
+  // The observation count is unchanged by the extra finished builds (AC 2).
+  expect(baseline.observationCount).toBe(1)
+  expect(more.observationCount).toBe(baseline.observationCount)
+
+  // The observation-pressure sample's own store traffic (one journal read +
+  // one digest read) is identical regardless of finished-build count. The
+  // dashboard row cache may still read row-rendering histories on its first
+  // refresh, but that is outside the sample and unchanged in behavior.
+  const sampleMethods = ['getRepoEvents', 'getRepoBuildDigests'] as const
+  for (const method of sampleMethods) {
+    expect(more.counts.get(method) ?? 0).toBe(baseline.counts.get(method) ?? 0)
+  }
 })

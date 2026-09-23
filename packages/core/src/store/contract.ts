@@ -13,6 +13,7 @@
 import { describe, expect, test } from 'bun:test'
 import { EventValidationError, type EventWrite } from '../events/catalog'
 import { agentActor, DISPATCHER, humanActor, KERNEL, type Via } from '../events/envelope'
+import { reduceBuild } from '../kernel/reducer'
 import type { RepositoryEventWrite } from '../events/repository'
 import type { SessionEventWrite } from '../events/sessions'
 import { manualClock } from '../testing/fixed'
@@ -332,6 +333,184 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await store.createBuild(sampleBuildInput('list-b'))
           const slugs = (await store.listBuilds()).map((b) => b.slug).sort()
           expect(slugs).toEqual(['list-a', 'list-b'])
+        })
+      })
+    })
+
+    describe('build digests (repo-scoped batch read, AUT-487)', () => {
+      test('an unknown repo and a journal-less repo answer build-less maps without writes', async () => {
+        await withStore(factory, undefined, async (store) => {
+          expect(await store.getRepoBuildDigests('acme/never-seen')).toEqual(new Map())
+          // The operation is keyed to build records, not the repository
+          // journal record: builds created without `ensureRepo` still digest
+          // (the remote route answers before the repo-existence gate).
+          await store.createBuild(sampleBuildInput('dg-no-journal', { repo: 'acme/no-journal' }))
+          const digests = await store.getRepoBuildDigests('acme/no-journal')
+          expect([...digests.keys()]).toEqual(['dg-no-journal'])
+          expect(digests.get('dg-no-journal')).toEqual({
+            slug: 'dg-no-journal',
+            observations: [],
+          })
+          // Read-only: no journal record was implicitly created.
+          expect(await store.getRepo('acme/no-journal')).toBeNull()
+          expect(await store.getRepo('acme/never-seen')).toBeNull()
+        })
+      })
+
+      test('one entry per repo build — including a build with no digest-relevant events — and only that repo', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('dg-a', { repo: 'acme/dga' }))
+          await store.createBuild(sampleBuildInput('dg-other', { repo: 'acme/dgb' }))
+          // A freshly created queued build whose log holds none of the three
+          // digest-relevant event types keeps its contractual entry — a join
+          // that started from the events side would silently drop it.
+          const digests = await store.getRepoBuildDigests('acme/dga')
+          expect([...digests.keys()]).toEqual(['dg-a'])
+          expect(digests.get('dg-a')).toEqual({ slug: 'dg-a', observations: [] })
+          const other = await store.getRepoBuildDigests('acme/dgb')
+          expect([...other.keys()]).toEqual(['dg-other'])
+        })
+      })
+
+      test('the digest equals the full-log ground truth over every lifecycle shape', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/dg-life'
+          // Open build: an observation, no terminal fact.
+          await store.createBuild(sampleBuildInput('dg-open', { repo }))
+          await store.append('dg-open', buildCreatedWrite())
+          await store.append('dg-open', sampleEventWrite('open observation'))
+
+          // Done build: observation after completion stays an occurrence.
+          await store.createBuild(sampleBuildInput('dg-done', { repo }))
+          await store.append('dg-done', buildCreatedWrite())
+          await store.append('dg-done', {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+          await store.append('dg-done', sampleEventWrite('after completion'))
+
+          // Cleaning build (mid-abort): renders a row, no terminal completion.
+          await store.createBuild(sampleBuildInput('dg-cleaning', { repo }))
+          await store.append('dg-cleaning', buildCreatedWrite())
+          await store.append('dg-cleaning', {
+            actor: KERNEL,
+            type: 'build.aborted',
+            payload: {},
+          })
+          await store.append('dg-cleaning', sampleEventWrite('during cleanup'))
+
+          // Abort saga terminated in completion: latest terminal fact wins.
+          await store.createBuild(sampleBuildInput('dg-abandoned', { repo }))
+          await store.append('dg-abandoned', buildCreatedWrite())
+          await store.append('dg-abandoned', {
+            actor: KERNEL,
+            type: 'build.aborted',
+            payload: {},
+          })
+          await store.append('dg-abandoned', {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'abandoned' },
+          })
+
+          // The reducer's exact terminal rule, pinned: done → aborted → done.
+          await store.createBuild(sampleBuildInput('dg-overwrite', { repo }))
+          await store.append('dg-overwrite', buildCreatedWrite())
+          await store.append('dg-overwrite', {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+          await store.append('dg-overwrite', {
+            actor: KERNEL,
+            type: 'build.aborted',
+            payload: {},
+          })
+          await store.append('dg-overwrite', {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+
+          const digests = await store.getRepoBuildDigests(repo)
+          const expectedStatuses: Record<string, string> = {}
+          const expectedObservations: Record<string, number[]> = {}
+          for (const record of await store.listBuilds()) {
+            if (record.repo !== repo) continue
+            const events = await store.getEvents(record.slug)
+            expectedStatuses[record.slug] = reduceBuild(events).status
+            expectedObservations[record.slug] = events
+              .filter((event) => event.type === 'observation.recorded')
+              .map((event) => event.seq)
+          }
+          expect([...digests.keys()].sort()).toEqual(Object.keys(expectedStatuses).sort())
+          for (const [slug, digest] of digests) {
+            // Terminal presence and kind follow the reducer's status exactly.
+            const status = expectedStatuses[slug]!
+            expect(digest.terminal).toBe(
+              status === 'done' ? 'done' : status === 'aborted' ? 'aborted' : undefined,
+            )
+            expect(digest.observations).toEqual(expectedObservations[slug] ?? [])
+          }
+          // Explicit shape pins (independent of the loop above):
+          expect(digests.get('dg-open')).toEqual({ slug: 'dg-open', observations: [2] })
+          expect(digests.get('dg-done')).toEqual({
+            slug: 'dg-done',
+            terminal: 'done',
+            observations: [3],
+          })
+          expect(digests.get('dg-cleaning')).toEqual({
+            slug: 'dg-cleaning',
+            terminal: 'aborted',
+            observations: [3],
+          })
+          expect(digests.get('dg-abandoned')).toEqual({
+            slug: 'dg-abandoned',
+            terminal: 'done',
+            observations: [],
+          })
+          expect(digests.get('dg-overwrite')).toEqual({
+            slug: 'dg-overwrite',
+            terminal: 'done',
+            observations: [],
+          })
+        })
+      })
+
+      test('digests reflect appends through every write path without a refresh step', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/dg-paths'
+          await store.createBuild(sampleBuildInput('dg-paths', { repo }))
+          expect((await store.getRepoBuildDigests(repo)).get('dg-paths')?.observations).toEqual([])
+
+          await store.append('dg-paths', sampleEventWrite('first'))
+          let digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
+          expect(digest?.observations).toEqual([1])
+          expect(digest?.terminal).toBeUndefined()
+
+          const conditional = await store.appendIfCurrent('dg-paths', 1, sampleEventWrite('second'))
+          expect(conditional).not.toBeNull()
+          digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
+          expect(digest?.observations).toEqual([1, 2])
+
+          await store.appendWithArtifacts('dg-paths', [{ kind: 'dg-notes', content: 'note' }], () =>
+            sampleEventWrite('third'),
+          )
+          digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
+          expect(digest?.observations).toEqual([1, 2, 3])
+
+          await store.append('dg-paths', {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'merged' },
+          })
+          digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
+          expect(digest).toEqual({
+            slug: 'dg-paths',
+            terminal: 'done',
+            observations: [1, 2, 3],
+          })
         })
       })
     })
@@ -1399,6 +1578,9 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await expect(scoped.getRepoEvents('acme/rate-limiter')).rejects.toThrow(
             /build-scoped store/,
           )
+          await expect(scoped.getRepoBuildDigests('acme/rate-limiter')).rejects.toThrow(
+            /build-scoped store/,
+          )
           await expect(scoped.close()).rejects.toThrow(/build-scoped store/)
         })
       })
@@ -2243,6 +2425,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               () => scoped.ensureRepo('acme/a'),
               () => scoped.appendRepo('acme/a', harvestStartedWrite()),
               () => scoped.getRepoEvents('acme/a'),
+              () => scoped.getRepoBuildDigests('acme/a'),
               () => scoped.createStream({ kind: 'build', build: 'scope-build' }, 'x'),
               () => scoped.createStream({ kind: 'repo', repo: 'acme/a' }, 'x'),
               () => scoped.close(),

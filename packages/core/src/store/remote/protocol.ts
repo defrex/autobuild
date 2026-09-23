@@ -187,6 +187,17 @@ export const sessionDepositsResponseSchema = z.object({
   artifacts: sessionArtifactMetaListSchema,
 })
 
+// ── Build digests (repo-scoped batch read, AUT-487) ────────────────────────
+// The wire form of `BuildDigest` (store/types.ts). `terminal` is omitted when
+// the build's log carries no terminal fact, per the protocol's omission
+// convention for optional members.
+export const buildDigestWireSchema = z.object({
+  slug: z.string().min(1),
+  terminal: z.enum(['done', 'aborted']).optional(),
+  observations: z.array(z.number().int().positive()),
+})
+export const buildDigestListSchema = z.array(buildDigestWireSchema)
+
 // ── Artifacts ────────────────────────────────────────────────────────────────
 
 export const artifactMetaWireSchema = z.object({
