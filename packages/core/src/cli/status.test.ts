@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseConfig } from '../config/load'
 import { autoMergeDeferralObservation } from '../kernel/auto-merge'
+import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { BUILD_STATUSES } from '../ontology'
 import {
@@ -25,7 +26,7 @@ import {
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { PhaseSessionError } from '../store/phase-session'
-import type { BuildRecord, BuildStore } from '../store/types'
+import type { BuildDigest, BuildRecord, BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import {
   abBuildStatus,
@@ -37,6 +38,7 @@ import {
   renderSummaries,
   statusFilter,
   summarize,
+  type BuildSummary,
 } from './status'
 import { describeStoreOpeningContract } from './store-opening.contract'
 import { isDiverged, PROGRESS_DIVERGENCE_MS } from './build-progress'
@@ -1438,6 +1440,194 @@ describe('abBuilds', () => {
     const parsed = JSON.parse(raw)
     const expected = summarize((await store.getBuild('b1'))!, await store.getEvents('b1'), NOW)
     expect(parsed).toEqual([JSON.parse(JSON.stringify(expected))])
+  })
+})
+
+// AUT-488: the active and queued listings gate per-build history reads on one
+// batch digest read, so their store cost stays flat as finished builds
+// accumulate. The old algorithm is computed inline in each test so the output
+// equivalence is pinned against the pre-change behavior, not against a
+// re-derivation of the new gate.
+describe('abBuilds store cost (AUT-488)', () => {
+  function countingStore(store: MemoryBuildStore): {
+    store: BuildStore
+    counts: Map<string, number>
+    eventSlugs: string[]
+  } {
+    const counts = new Map<string, number>()
+    const eventSlugs: string[] = []
+    const target = store as unknown as Record<string, unknown>
+    const proxy = new Proxy(target, {
+      get(t, prop) {
+        if (typeof prop === 'symbol') return Reflect.get(t, prop, t)
+        const value = t[prop]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          counts.set(prop, (counts.get(prop) ?? 0) + 1)
+          if (prop === 'getEvents') eventSlugs.push(args[0] as string)
+          return (value as (...a: unknown[]) => unknown).apply(t, args)
+        }
+      },
+    })
+    return { store: proxy as unknown as BuildStore, counts, eventSlugs }
+  }
+
+  async function runCounting(
+    store: BuildStore,
+    opts: { queued?: boolean; all?: boolean; json?: boolean } = {},
+  ): Promise<string[]> {
+    const out: string[] = []
+    await abBuilds({
+      targetRepo: '/anywhere',
+      env: {},
+      exec: fakeExec,
+      stdout: (line) => out.push(line),
+      openStore: () => store,
+      now: () => NOW,
+      ...opts,
+    })
+    return out
+  }
+
+  async function seedFinished(
+    store: MemoryBuildStore,
+    slug: string,
+    kind: 'done' | 'aborted',
+  ): Promise<void> {
+    await seedBuild(store, { slug, status: 'running' })
+    if (kind === 'done') {
+      // build.completed is dispatcher-authored (see allowedActorKinds).
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    } else {
+      await store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    }
+  }
+
+  /** The pre-change `abBuilds` selection, computed against the raw store.
+   * fakeExec has no origin remote, so the identity is the checkout path. */
+  async function legacySummaries(
+    store: MemoryBuildStore,
+    opts: { queued?: boolean; all?: boolean } = {},
+  ): Promise<BuildSummary[]> {
+    const wanted = new Set(statusFilter(opts.all, opts.queued))
+    const mine = (record: BuildRecord): boolean =>
+      record.repo === REPO ||
+      (record.repoOrigin !== undefined && normalizeGitRemoteUrl(record.repoOrigin) === REPO)
+    const summaries: BuildSummary[] = []
+    for (const record of (await store.listBuilds()).filter(mine)) {
+      const summary = summarize(record, await store.getEvents(record.slug), NOW)
+      if (wanted.has(summary.status)) summaries.push(summary)
+    }
+    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  }
+
+  test('default and --queued scopes pay one digest read and skip finished histories', async () => {
+    for (const finishedCount of [3, 8]) {
+      const store = new MemoryBuildStore({ clock: steppingClock() })
+      await seedBuild(store, { slug: 'run-1', status: 'running' })
+      await seedBuild(store, { slug: 'run-2', status: 'blocked' })
+      await seedBuild(store, { slug: 'is-queued', status: 'queued' })
+      const finishedSlugs: string[] = []
+      for (let i = 0; i < finishedCount; i++) {
+        const slug = `finished-${i}`
+        finishedSlugs.push(slug)
+        // Alternate done and aborted so both terminal kinds are skipped.
+        await seedFinished(store, slug, i % 2 === 0 ? 'done' : 'aborted')
+      }
+      for (const queued of [false, true] as const) {
+        const counting = countingStore(store)
+        const text = await runCounting(counting.store, queued ? { queued: true } : {})
+        // The bound: exactly one digest read, and one history read per
+        // non-terminal record — identical at both finished-build counts.
+        expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+        expect(counting.counts.get('getEvents')).toBe(3)
+        for (const slug of finishedSlugs) expect(counting.eventSlugs).not.toContain(slug)
+        // Output equivalence — rendered text and JSON against the old algorithm.
+        const expected = await legacySummaries(store, { queued })
+        const scope = queued ? 'active or queued builds' : 'active builds'
+        const hint = queued ? ' — try --all' : ' — try --queued or --all'
+        expect(text).toEqual(renderSummaries(expected, NOW, `no ${scope} for ${REPO}${hint}`))
+        const jsonOut = await runCounting(store, {
+          json: true,
+          ...(queued ? { queued: true } : {}),
+        })
+        expect(JSON.parse(jsonOut.join('\n'))).toEqual(JSON.parse(JSON.stringify(expected)))
+      }
+    }
+  })
+
+  test('the --all scope reads every history and never fetches digests', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'run-1', status: 'running' })
+    await seedBuild(store, { slug: 'is-queued', status: 'queued' })
+    await seedFinished(store, 'done-1', 'done')
+    await seedFinished(store, 'aborted-1', 'aborted')
+    const counting = countingStore(store)
+    const text = await runCounting(counting.store, { all: true })
+    expect(counting.counts.get('getRepoBuildDigests')).toBeUndefined()
+    expect(counting.counts.get('getEvents')).toBe(4)
+    const expected = await legacySummaries(store, { all: true })
+    expect(text).toEqual(renderSummaries(expected, NOW, `no builds for ${REPO}`))
+    const jsonOut = await runCounting(store, { all: true, json: true })
+    expect(JSON.parse(jsonOut.join('\n'))).toEqual(JSON.parse(JSON.stringify(expected)))
+  })
+
+  test('adding finished builds leaves the default and --queued rendering unchanged', async () => {
+    const base = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(base, { slug: 'run-1', status: 'running' })
+    await seedBuild(base, { slug: 'is-queued', status: 'queued' })
+    const withFinished = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(withFinished, { slug: 'run-1', status: 'running' })
+    await seedBuild(withFinished, { slug: 'is-queued', status: 'queued' })
+    await seedFinished(withFinished, 'done-1', 'done')
+    await seedFinished(withFinished, 'aborted-1', 'aborted')
+    await seedFinished(withFinished, 'done-2', 'done')
+    for (const queued of [false, true] as const) {
+      const opts = queued ? { queued: true } : {}
+      expect(await runCounting(withFinished, opts)).toEqual(await runCounting(base, opts))
+    }
+  })
+
+  test('a legacy repoOrigin-keyed record still lists via its per-build history read', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'modern', status: 'running' })
+    // Legacy record: keyed by an old checkout path and matched only through
+    // its normalized origin — no digest entry is expected under `identity`,
+    // so it keeps its per-build history read.
+    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/acme-app', repoOrigin: REPO })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    const counting = countingStore(store)
+    const text = (await runCounting(counting.store)).join('\n')
+    expect(text).toContain('modern')
+    expect(text).toContain('legacy')
+    expect(counting.eventSlugs).toContain('legacy')
+    // The legacy fallback does not disturb the digest-gated count for the
+    // origin-keyed records: one digest read, one history per remaining record.
+    expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(counting.counts.get('getEvents')).toBe(2)
+  })
+
+  test('a missing digest entry for an identity-keyed record fails loudly', async () => {
+    class IncompleteDigestStore extends MemoryBuildStore {
+      override async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+        const digests = await super.getRepoBuildDigests(repo)
+        digests.delete('modern')
+        return digests
+      }
+    }
+    const store = new IncompleteDigestStore({ clock: steppingClock() })
+    await seedBuild(store, { slug: 'modern', status: 'running' })
+    await expect(runCounting(store)).rejects.toThrow(
+      'getRepoBuildDigests is missing an entry for build "modern"',
+    )
   })
 })
 
