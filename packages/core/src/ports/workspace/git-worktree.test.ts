@@ -718,20 +718,26 @@ describe('GitWorktreeProvider operator sandbox', () => {
       'setup-ran',
     )
 
-    // Reuse: the marker and setup are not re-run.
+    // Reuse: the marker and setup are not re-run. The reuse identity omits
+    // `baseSha` (only a fresh provision resolves it), so compare with the
+    // fresh-only field stripped.
     const setupAt = statSync(join(identity.workspacePath, 'setup-marker.txt')).mtimeMs
     const reused = await provider.orchestratorSandbox.ensure({
       repo,
       operator: 'ops',
       baseBranch: 'main',
     })
-    expect(reused).toEqual(identity)
+    const { baseSha: _baseSha, ...reuseExpected } = identity
+    expect(reused).toEqual(reuseExpected)
     expect(statSync(join(identity.workspacePath, 'setup-marker.txt')).mtimeMs).toBe(setupAt)
 
-    // describe resolves the same identity without provisioning anything new.
-    expect(await provider.orchestratorSandbox.describe({ repo, operator: 'ops' })).toEqual(identity)
+    // describe resolves the same identity without provisioning anything new
+    // (and never carries the fresh-only baseSha).
+    expect(await provider.orchestratorSandbox.describe({ repo, operator: 'ops' })).toEqual(
+      reuseExpected,
+    )
     expect(await provider.orchestratorSandbox.describe({ repo, operator: 'other' })).not.toEqual(
-      identity,
+      reuseExpected,
     )
   })
 

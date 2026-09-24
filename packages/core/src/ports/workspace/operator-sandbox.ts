@@ -49,6 +49,11 @@ export interface SandboxEnvironmentIdentity {
   sessionId?: string
   /** Checkout root inside the environment; tool file paths are rooted here. */
   workspacePath: string
+  /** The base branch head the fresh provision selected, present only on the
+   * fresh-provision path (absent on reuse/resume, which never re-resolves
+   * it). The publication preconditions compare against it: a publish must
+   * be a descendant of the base head at provision or reset time. */
+  baseSha?: string
 }
 
 export interface SandboxCommandRequest {
@@ -87,7 +92,8 @@ export class SandboxOperationError extends Error {
       | 'not-found'
       | 'environment'
       | 'reset'
-      | 'release',
+      | 'release'
+      | 'publish',
     message: string,
     options?: { cause?: unknown },
   ) {

@@ -22,6 +22,12 @@ export interface SandboxEnvironmentSnapshot {
    * `[orchestrator].sandbox.idleMinutes`. */
   lastEvidenceTs: string
   sessionId?: string
+  /** The base branch head the fresh provision selected; carried forward
+   * through later lifecycle facts (the base head cannot change without a
+   * fresh provision, which overwrites it) — the publication precondition's
+   * reference point, read by the publish operation. Absent on snapshots
+   * provisioned before this field existed. */
+  baseSha?: string
 }
 
 type MutableSnapshot = {
@@ -31,6 +37,7 @@ type MutableSnapshot = {
   state: SandboxEnvironmentState
   lastEvidenceTs: string
   sessionId?: string
+  baseSha?: string
 }
 
 /** Per-environment sandbox state, keyed deterministically by
@@ -49,6 +56,7 @@ export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnviro
         state: 'live',
         lastEvidenceTs: ts,
         ...(event.payload.sessionId !== undefined ? { sessionId: event.payload.sessionId } : {}),
+        ...(event.payload.baseSha !== undefined ? { baseSha: event.payload.baseSha } : {}),
       })
     } else if (event.type === 'orchestrator.sandbox.resumed') {
       const previous = byEnvironment.get(event.payload.environmentId)
@@ -63,6 +71,7 @@ export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnviro
           : previous?.sessionId !== undefined
             ? { sessionId: previous.sessionId }
             : {}),
+        ...(previous?.baseSha !== undefined ? { baseSha: previous.baseSha } : {}),
       })
     } else if (event.type === 'orchestrator.sandbox.activity') {
       const current = byEnvironment.get(event.payload.environmentId)
@@ -94,6 +103,7 @@ export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnviro
         state: 'released',
         lastEvidenceTs: ts,
         ...(existing?.sessionId !== undefined ? { sessionId: existing.sessionId } : {}),
+        ...(existing?.baseSha !== undefined ? { baseSha: existing.baseSha } : {}),
       })
     }
   }

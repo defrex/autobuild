@@ -188,7 +188,9 @@ export async function createOperatorSandboxService(
       | 'orchestrator.sandbox.resumed'
       | 'orchestrator.sandbox.activity'
       | 'orchestrator.sandbox.released'
-      | 'orchestrator.sandbox.reset',
+      | 'orchestrator.sandbox.reset'
+      | 'orchestrator.sandbox.published'
+      | 'orchestrator.sandbox.publish-failed',
     payload: Record<string, unknown>,
   ): Promise<void> => {
     await store.appendRepo(repo, {
@@ -229,6 +231,7 @@ export async function createOperatorSandboxService(
         provider: resolved.provider,
         ...(resolved.sessionId !== undefined ? { sessionId: resolved.sessionId } : {}),
         workspacePath: resolved.workspacePath,
+        ...(resolved.baseSha !== undefined ? { baseSha: resolved.baseSha } : {}),
       })
     } else if (state.state === 'stopped') {
       await append(identity, 'orchestrator.sandbox.resumed', {
@@ -268,7 +271,7 @@ export async function createOperatorSandboxService(
 
   const run = async <T>(
     identity: string,
-    stage: 'provision' | 'resume' | 'exec',
+    stage: 'provision' | 'resume' | 'exec' | 'publish',
     operation: (
       resolved: SandboxEnvironmentIdentity,
       state: ReturnType<typeof operatorState>,
