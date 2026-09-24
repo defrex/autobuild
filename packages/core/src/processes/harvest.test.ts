@@ -3,11 +3,14 @@ import type { AbEvent } from '../events/catalog'
 import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { manualClock } from '../testing/fixed'
 import { MemoryBuildStore } from '../store/memory'
 import {
   artifactRef,
   collectUnclaimedObservations,
   evaluateHarvestPressure,
+  evaluateHarvestPressureFromDigests,
+  evaluateHarvestPressureFromStore,
   harvestProposalKey,
   makeHarvestScanPacket,
   partitionHarvestExhaustion,
@@ -296,6 +299,227 @@ describe('harvest pressure', () => {
         2,
       ),
     ).toEqual({ observationCount: 2, drift: 1 })
+  })
+})
+
+describe('harvest pressure from digests (AUT-521)', () => {
+  const policy = { harvestThreshold: 5, harvestMaxDrift: 3 }
+
+  /** The scan-projection twin of a digest shape: one observation and the
+   * merges the scan would have collected for the same log contents. */
+  const scanOf = (
+    observations: Array<{ build: string; seq: number; ts: string }>,
+    merges: Array<{ build: string; ts: string }>,
+    gatePolicy = policy,
+  ) =>
+    evaluateHarvestPressure(
+      {
+        observations: observations.map((item) => ({
+          occurrence: { build: item.build, seq: item.seq },
+          id: `obs-${item.build}-${item.seq}`,
+          kind: 'followup' as const,
+          summary: `${item.build}#${item.seq}`,
+          ts: item.ts,
+        })),
+        merges,
+      },
+      gatePolicy,
+    )
+
+  test('the digest evaluation equals the scan evaluation over the same store contents', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    await observation(store, 'origin', 'oldest')
+    await observation(store, 'fresh', 'newer')
+    await observation(store, 'claimed', 'already claimed')
+    await store.createBuild({ slug: 'merged', repo: '/repo' })
+    await store.append('merged', {
+      actor: DISPATCHER,
+      type: 'pr.merged',
+      payload: { sha: 'abc123' },
+    })
+    await store.append('merged', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    await claim(store, 'h_1', [{ build: 'claimed', seq: 1 }])
+
+    const harvestEvents = await store.getRepoEvents('/repo')
+    const digests = await store.getRepoBuildDigests('/repo')
+    const scan = await scanUnclaimedObservations(store, '/repo')
+    expect(evaluateHarvestPressureFromDigests({ digests, harvestEvents, policy })).toEqual(
+      evaluateHarvestPressure(scan, policy),
+    )
+    // The claimed occurrence is genuinely excluded from both.
+    expect(evaluateHarvestPressure(scan, policy).observationCount).toBe(2)
+  })
+
+  test('the exact-ts tie-break matches the scan projection: oldest is build-ascending', () => {
+    const at = '2026-01-02T00:00:00.000Z'
+    const later = '2026-01-03T00:00:00.000Z'
+    // Three unclaimed occurrences share one ts; build `b` also merged after
+    // it. If the oldest were chosen as `b`, its own merge would be excluded
+    // and drift would be 0; build-ascending selection makes it 1.
+    const digests = new Map([
+      ['a', { slug: 'a', observations: [{ seq: 1, ts: at }] }],
+      ['b', { slug: 'b', observations: [{ seq: 1, ts: at }], merged: later }],
+      ['c', { slug: 'c', observations: [{ seq: 1, ts: at }] }],
+    ])
+    const fromDigests = evaluateHarvestPressureFromDigests({
+      digests,
+      harvestEvents: [],
+      policy: { ...policy, harvestMaxDrift: 1 },
+    })
+    expect(fromDigests).toEqual({ observationCount: 3, drift: 1, trigger: 'drift' })
+    expect(fromDigests).toEqual(
+      scanOf(
+        [
+          { build: 'a', seq: 1, ts: at },
+          { build: 'b', seq: 1, ts: at },
+          { build: 'c', seq: 1, ts: at },
+        ],
+        [{ build: 'b', ts: later }],
+        { ...policy, harvestMaxDrift: 1 },
+      ),
+    )
+  })
+
+  test('merge-after, merge-equal, and merge-before-oldest classify identically', () => {
+    const oldest = '2026-01-02T00:00:00.000Z'
+    const digests = new Map([
+      // The oldest build itself merged later: drift excludes its own build.
+      [
+        'origin',
+        {
+          slug: 'origin',
+          observations: [{ seq: 1, ts: oldest }],
+          merged: '2026-01-06T00:00:00.000Z',
+        },
+      ],
+      ['after', { slug: 'after', observations: [], merged: '2026-01-03T00:00:00.000Z' }],
+      ['equal', { slug: 'equal', observations: [], merged: oldest }],
+      ['before', { slug: 'before', observations: [], merged: '2026-01-01T00:00:00.000Z' }],
+    ])
+    const fromDigests = evaluateHarvestPressureFromDigests({ digests, harvestEvents: [], policy })
+    expect(fromDigests).toEqual({ observationCount: 1, drift: 1 })
+    expect(fromDigests).toEqual(
+      scanOf(
+        [{ build: 'origin', seq: 1, ts: oldest }],
+        [
+          { build: 'origin', ts: '2026-01-06T00:00:00.000Z' },
+          { build: 'after', ts: '2026-01-03T00:00:00.000Z' },
+          { build: 'equal', ts: oldest },
+          { build: 'before', ts: '2026-01-01T00:00:00.000Z' },
+        ],
+      ),
+    )
+  })
+
+  test('multiple merges per build collapse to latest-wins without changing drift', () => {
+    const oldest = '2026-01-02T00:00:00.000Z'
+    const early = '2026-01-01T00:00:00.000Z'
+    const late = '2026-01-05T00:00:00.000Z'
+    // The scan sees both merges; the digest keeps only the latest. Both must
+    // count the build once (drift is a set of builds, not of merge events).
+    const scanMerges = [
+      { build: 'm', ts: late },
+      { build: 'm', ts: early },
+    ]
+    const digests = new Map([
+      ['origin', { slug: 'origin', observations: [{ seq: 1, ts: oldest }] }],
+      ['m', { slug: 'm', observations: [], merged: late }],
+    ])
+    const fromDigests = evaluateHarvestPressureFromDigests({
+      digests,
+      harvestEvents: [],
+      policy: { ...policy, harvestMaxDrift: 1 },
+    })
+    expect(fromDigests).toEqual({ observationCount: 1, drift: 1, trigger: 'drift' })
+    expect(fromDigests).toEqual(
+      scanOf([{ build: 'origin', seq: 1, ts: oldest }], scanMerges, {
+        ...policy,
+        harvestMaxDrift: 1,
+      }),
+    )
+  })
+
+  test('the store-reading wrapper pays no per-build history reads as finished builds accumulate', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    await store.ensureRepo('/repo')
+    const finished = 6
+    for (let index = 0; index < finished; index += 1) {
+      const slug = `done-${index}`
+      await store.createBuild({ slug, repo: '/repo' })
+      await store.append(slug, {
+        actor: agentActor('implement', `s-${slug}`),
+        type: 'observation.recorded',
+        payload: { id: `obs-${slug}`, kind: 'latent-bug', summary: slug },
+      })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'pr.merged',
+        payload: { sha: `sha-${index}` },
+      })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+
+    let getEventReads = 0
+    let listBuildReads = 0
+    const getEvents = store.getEvents.bind(store)
+    const listBuilds = store.listBuilds.bind(store)
+    store.getEvents = async (slug) => {
+      getEventReads += 1
+      return getEvents(slug)
+    }
+    store.listBuilds = async () => {
+      listBuildReads += 1
+      return listBuilds()
+    }
+
+    const harvestEvents = await store.getRepoEvents('/repo')
+    const pressure = await evaluateHarvestPressureFromStore({
+      store,
+      repo: '/repo',
+      harvestEvents,
+      policy,
+    })
+    // The flat-cost invariant: no per-build history reads, regardless of how
+    // many finished builds carry observations and merges.
+    expect(getEventReads).toBe(0)
+    expect(listBuildReads).toBe(0)
+    // And the decision is the scan evaluation's decision over the same state.
+    expect(pressure).toEqual(
+      evaluateHarvestPressure(await scanUnclaimedObservations(store, '/repo'), policy),
+    )
+    expect(pressure).toEqual({ observationCount: finished, drift: 0, trigger: 'count' })
+  })
+
+  test('below threshold the wrapper defers exactly as the scan evaluation defers', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    await store.ensureRepo('/repo')
+    for (let index = 0; index < 2; index += 1) {
+      const slug = `quiet-${index}`
+      await store.createBuild({ slug, repo: '/repo' })
+      await store.append(slug, {
+        actor: agentActor('implement', `s-${slug}`),
+        type: 'observation.recorded',
+        payload: { id: `obs-${slug}`, kind: 'latent-bug', summary: slug },
+      })
+    }
+    const pressure = await evaluateHarvestPressureFromStore({
+      store,
+      repo: '/repo',
+      harvestEvents: await store.getRepoEvents('/repo'),
+      policy,
+    })
+    expect(pressure).toEqual({ observationCount: 2, drift: 0 })
+    expect(pressure).toEqual(
+      evaluateHarvestPressure(await scanUnclaimedObservations(store, '/repo'), policy),
+    )
   })
 })
 
