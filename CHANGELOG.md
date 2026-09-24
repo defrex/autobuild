@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#540](https://github.com/defrex/autobuild/pull/540) — Surface suppressed skip notices on the guest probe failure path
+- [#537](https://github.com/defrex/autobuild/pull/537) — Pin the corrected AUT-580 plan steps at their code seams
 - [#536](https://github.com/defrex/autobuild/pull/536) — Disk-gate plugin resolution so the dispatcher never auto-installs
 - [#535](https://github.com/defrex/autobuild/pull/535) — Guard excludeProvisioningMarker against empty git-path stdout
 - [#534](https://github.com/defrex/autobuild/pull/534) — Name unresolvable guest plugins in the readiness probe detail
