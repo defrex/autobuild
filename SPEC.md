@@ -889,7 +889,12 @@ A no-op step has no push. Agents only ever commit locally. Consequences: forge
 credentials **never enter the sandbox** (load-bearing once builds run on
 remote sandboxes), history is extended rather than force-pushed, and the
 push-at-boundary rule from [D3] is enforced by construction rather than
-convention.
+convention. The same rule bounds the orchestrator's small fixes: an operator
+sandbox publishes work only through the `sandbox.publish` tool, whose push and
+PR creation are kernel-side plumbing executed by the sandbox service through
+the workspace provider's publication capability — the only publication path
+from an operator sandbox, always to a dedicated operator branch and a pull
+request, never to the base branch.
 
 ### 8.7 Walkthroughs
 
@@ -1498,7 +1503,11 @@ is repository-journal fact: provisioned/resumed/activity/stopped/released facts
 bracket one deterministic environment per operator × repository, the
  dispatcher tick's idle settlement stops an environment whose evidence is
 stale (settling an orphan exactly as harvest executions are settled), and
-`ab repository status` reports each operator's sandbox.
+`ab repository status` reports each operator's sandbox. An operator's work
+leaves the sandbox only through `sandbox.publish`, which takes the checkout's
+head (or an explicit commit) to a deterministic operator branch and a pull
+request against the base branch and records published/publish-failed journal
+facts.
 
 The operator's job across many concurrent builds: see status at a glance,
 act on a selected build, find blocked builds, answer escalations, and inspect
