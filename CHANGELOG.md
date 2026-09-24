@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#516](https://github.com/defrex/autobuild/pull/516) — Pace the SQLite store's held event reads at the event-wait budget
 - [#515](https://github.com/defrex/autobuild/pull/515) — Enforce patchedDependencies exclusion from the packed distribution
 - [#514](https://github.com/defrex/autobuild/pull/514) — Ship the Vercel Sandbox provider as a plugin alongside the builtin
 - [#513](https://github.com/defrex/autobuild/pull/513) — Pin registeredClientName's Better Auth lookup contract in tests
