@@ -431,7 +431,7 @@ describe('D8 scope enforcement over the wire', () => {
       expect(digests.get('dg-a')).toEqual({
         slug: 'dg-a',
         terminal: 'done',
-        observations: [1],
+        observations: [{ seq: 1, ts: CONTRACT_T0 }],
       })
       expect(digests.get('dg-b')).toEqual({ slug: 'dg-b', observations: [] })
       expect(await backing.getRepo('acme/never-seen')).toBeNull()

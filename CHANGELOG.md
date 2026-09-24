@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#496](https://github.com/defrex/autobuild/pull/496) — Make the harvest-launch pressure gate's evaluation cost flat
 - [#495](https://github.com/defrex/autobuild/pull/495) — Declare the SQLite digest index in local/schema.ts
 - [#494](https://github.com/defrex/autobuild/pull/494) — Pin the duplicated execOrThrow helpers’ exit/error semantics with tests
 - [#493](https://github.com/defrex/autobuild/pull/493) — Fix wait.ts's post-drain exit-2 comment after AUT-403 (AUT-528)

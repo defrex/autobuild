@@ -125,8 +125,7 @@ import {
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
   sampleUnclaimedObservationCount,
-  scanUnclaimedObservations,
-  evaluateHarvestPressure,
+  evaluateHarvestPressureFromStore,
 } from '../processes/harvest'
 import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
 import type { HarvestExecution } from '../ports/workspace/harvest-execution'
@@ -2271,8 +2270,16 @@ class DispatchLoop {
         control.kind === 'request-recovery' ||
         control.kind === 'exhaust-recovery'
       if (!resumePending) {
-        const scan = await scanUnclaimedObservations(store, repo)
-        const pressure = evaluateHarvestPressure(scan, this.currentConfig().config.policy)
+        // Flat-cost gate (AUT-521): the journal read above plus one
+        // repo-scoped digest batch read — no per-build history reads, so the
+        // per-evaluation cost no longer grows with accumulated finished
+        // builds. The guest rescans authoritatively once provisioned.
+        const pressure = await evaluateHarvestPressureFromStore({
+          store,
+          repo,
+          harvestEvents: events,
+          policy: this.currentConfig().config.policy,
+        })
         if (pressure.trigger === undefined) return
       }
 
