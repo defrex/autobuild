@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#531](https://github.com/defrex/autobuild/pull/531) — Heal the provisioning-marker exclusion on ensure's early return
 - [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
 - [#526](https://github.com/defrex/autobuild/pull/526) — Add PR-only publication from operator sandboxes via sandbox.publish
 - [#525](https://github.com/defrex/autobuild/pull/525) — Enforce parity between builtin workspace-provider declaration tables
