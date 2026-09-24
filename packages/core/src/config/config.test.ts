@@ -1246,12 +1246,16 @@ describe('parseConfig — [orchestrator] sandbox gate', () => {
     )
   })
 
-  test('wake stays absent-vs-empty distinct and rejects globs matching no event type', () => {
+  test('wake stays absent-vs-empty distinct and accepts build or repository globs, rejecting unknown ones', () => {
     expect(parseConfig(READY).orchestrator.wake).toBeUndefined()
     const empty = parseConfig(`${READY}[orchestrator]\nwake = []\n`)
     expect(empty.orchestrator.wake).toEqual([])
     const explicit = parseConfig(`${READY}[orchestrator]\nwake = ["escalation.*"]\n`)
     expect(explicit.orchestrator.wake).toEqual(['escalation.*'])
+    // A glob matching only the repository catalog is legal — the wake pass
+    // scans the journal too.
+    const repository = parseConfig(`${READY}[orchestrator]\nwake = ["harvest.escalated"]\n`)
+    expect(repository.orchestrator.wake).toEqual(['harvest.escalated'])
     const error = parseError(`${READY}[orchestrator]\nwake = ["bogus.*"]\n`)
     expect(error.message).toContain('bogus.*')
     expect(error.message).toContain('wake')

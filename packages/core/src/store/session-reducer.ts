@@ -13,7 +13,7 @@ export type TurnOutcomeState = 'open' | 'suspended' | 'completed' | 'failed'
 
 export type SessionTurnTrigger =
   | { kind: 'message'; messageSeq: number }
-  | { kind: 'wake'; build: string; seq: number; type: string }
+  | { kind: 'wake'; build?: string; journal?: true; seq: number; type: string }
 
 export interface SessionTurn {
   turn: string
@@ -46,6 +46,10 @@ export interface SessionState {
   wakeGlobs: string[]
   /** Per build, the highest build event seq a wake trigger has consumed. */
   wakeCursors: Record<string, number>
+  /** The highest repository-journal seq a wake trigger has consumed (0 when
+   * no journal wake has been consumed). The journal has an independent seq
+   * space with no build slug, so it gets its own cursor. */
+  journalWakeCursor: number
   /** Every turn in start order, with its stream id and outcome. */
   turns: SessionTurn[]
 }
@@ -66,6 +70,7 @@ export function reduceSession(events: SessionEvent[]): SessionState {
   let pendingApproval: SessionState['pendingApproval']
   let wakeGlobs: string[] = []
   const wakeCursors: Record<string, number> = {}
+  let journalWakeCursor = 0
 
   const open = (): TurnEntry | undefined => turns.findLast((turn) => !isTerminal(turn.state))
 
@@ -88,8 +93,15 @@ export function reduceSession(events: SessionEvent[]): SessionState {
         }
         turns.push(entry)
         if (event.payload.trigger.kind === 'wake') {
-          const build = event.payload.trigger.build
-          wakeCursors[build] = Math.max(wakeCursors[build] ?? 0, event.payload.trigger.seq)
+          if (event.payload.trigger.journal === true) {
+            journalWakeCursor = Math.max(journalWakeCursor, event.payload.trigger.seq)
+          } else {
+            // The catalog's `.check()` guarantees `build` when `journal` is
+            // absent — a stored trigger can never be a journal wake without
+            // the flag or a build wake without the slug.
+            const build = event.payload.trigger.build!
+            wakeCursors[build] = Math.max(wakeCursors[build] ?? 0, event.payload.trigger.seq)
+          }
         }
         break
       }
@@ -186,6 +198,7 @@ export function reduceSession(events: SessionEvent[]): SessionState {
     ...(pendingApproval !== undefined ? { pendingApproval } : {}),
     wakeGlobs,
     wakeCursors,
+    journalWakeCursor,
     turns: turns.map(({ suspensionCause: _suspensionCause, ...turn }) => turn),
   }
 }

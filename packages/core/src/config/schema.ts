@@ -22,6 +22,7 @@ import {
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
 import { compileEventGlobs } from '../events/globs'
+import { REPOSITORY_ATTENTION_EVENTS } from '../events/repository'
 import { effectiveRuntimeReferences } from './roles'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
@@ -628,9 +629,10 @@ const ORCHESTRATOR_APPROVAL_ENTRY = /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
 
 /** The attention set a new session's wake settings inherit when the
  * repository does not override `wake`: the build events an operator or agent
- * must wake up for (the same set `ab watch` filters on by default), spelled
- * as literal globs. The repository-journal attention events are NOT part of
- * the default — the wake scan reads build logs only. */
+ * must wake up for (the same set `ab watch` filters on by default) plus the
+ * repository-journal attention events (the same set `ab watch --repository`
+ * follows), spelled as literal globs. Both halves of the attention set can
+ * wake a session. */
 export const defaultOrchestratorWakeGlobs: readonly string[] = [
   'escalation.raised',
   'phase.failed',
@@ -644,6 +646,7 @@ export const defaultOrchestratorWakeGlobs: readonly string[] = [
   'pr.closed',
   'build.completed',
   'build.aborted',
+  ...REPOSITORY_ATTENTION_EVENTS,
 ]
 
 /** The registry tools a turn asks its operator about before executing.
@@ -700,7 +703,8 @@ export const orchestratorSchema = z.strictObject({
   /** Wake-filter globs a NEW session inherits. Kept schema-optional (not
    * `.default()`) so absent ("inherit the default attention set") and `[]`
    * ("never wake") stay distinct. Each glob must match at least one build
-   * event type — validated below with the shared `ab watch` compiler. */
+   * or repository-journal event type — validated below with the shared
+   * `ab watch` compiler. */
   wake: z.array(z.string().min(1)).optional(),
 })
 export type OrchestratorConfig = z.infer<typeof orchestratorSchema>
@@ -932,13 +936,17 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   // `createWorkspaceProvider` (construction) and `validateInitReadiness`
   // (init validation), both of which run after plugin load; no site loads
   // plugins earlier to widen parse-time coverage.
-  // Wake globs are validated with the same compiler `ab watch` uses, so a
+  // Wake globs are validated with the same compiler `ab watch` uses, over the
+  // build AND repository-journal catalogs — the wake pass scans both — so a
   // typo'd glob fails at parse time instead of silently matching nothing —
   // regardless of `enabled`, since a later enablement would inherit the
   // already-broken value.
   if (config.orchestrator.wake !== undefined) {
     try {
-      compileEventGlobs(config.orchestrator.wake, { usage: '[orchestrator].wake' })
+      compileEventGlobs(config.orchestrator.wake, {
+        repository: true,
+        usage: '[orchestrator].wake',
+      })
     } catch (error) {
       ctx.addIssue({
         code: 'custom',

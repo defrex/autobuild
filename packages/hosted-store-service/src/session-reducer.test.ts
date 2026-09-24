@@ -43,7 +43,13 @@ function requestApproval(seq: number, turn = 't1', toolCallId = 'c1'): SessionEv
 
 describe('session reducer', () => {
   test('an empty log reduces to idle with no turns and default wake settings', () => {
-    expect(reduceSession([])).toEqual({ status: 'idle', wakeGlobs: [], wakeCursors: {}, turns: [] })
+    expect(reduceSession([])).toEqual({
+      status: 'idle',
+      wakeGlobs: [],
+      wakeCursors: {},
+      journalWakeCursor: 0,
+      turns: [],
+    })
   })
 
   test('creation, messages, and wake-set facts accumulate without touching status', () => {
@@ -247,6 +253,30 @@ describe('session reducer', () => {
     expect(state.status).toBe('running')
     expect(state.openTurn?.turn).toBe('t4')
     expect(state.turns.map((turn) => turn.turn)).toEqual(['t1', 't2', 't3', 't4'])
+  })
+
+  test('journal wake triggers accumulate journalWakeCursor with the highest seq, leaving build cursors alone', () => {
+    const state = reduceSession([
+      event(1, OPERATOR, 'session.created', {}),
+      event(2, OPERATOR, 'session.wake-set', { globs: ['harvest.escalated'] }),
+      turnStarted(3, 't1', { kind: 'wake', journal: true, seq: 5, type: 'harvest.escalated' }),
+      turnStarted(4, 't2', {
+        kind: 'wake',
+        build: 'b1',
+        seq: 7,
+        type: 'escalation.raised',
+      }),
+      turnStarted(5, 't3', { kind: 'wake', journal: true, seq: 2, type: 'harvest.failed' }),
+      turnStarted(6, 't4', { kind: 'wake', journal: true, seq: 9, type: 'harvest.escalated' }),
+    ])
+    expect(state.journalWakeCursor).toBe(9)
+    expect(state.wakeCursors).toEqual({ b1: 7 })
+    expect(state.openTurn?.trigger).toEqual({
+      kind: 'wake',
+      journal: true,
+      seq: 9,
+      type: 'harvest.escalated',
+    })
   })
 
   test('archived is terminal: status freezes and later facts are ignored', () => {

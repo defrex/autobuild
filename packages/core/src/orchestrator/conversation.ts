@@ -113,6 +113,7 @@ export async function reconstructConversation(
         messages.push(
           wakeTriggerInputMessage({
             build: event.payload.trigger.build,
+            journal: event.payload.trigger.journal === true,
             type: event.payload.trigger.type,
             event: event.payload.wake.event,
             buildState: event.payload.wake.buildState,
@@ -130,28 +131,36 @@ export async function reconstructConversation(
 
 /**
  * The user input message a wake trigger delivers to its turn: the attention
- * event record and the build's reduced state, as JSON. The runner embeds the
- * same object in the `turn.started` payload, so this function and the
- * reconstruction agree by construction.
+ * event record and — for a build wake — the build's reduced state, as JSON.
+ * A journal wake names the repository journal instead of a build and carries
+ * no build-state section (there is no build; the turn's operator registry
+ * exposes bounded repository reads). The runner embeds the same object in
+ * the `turn.started` payload, so this function and the reconstruction agree
+ * by construction.
  */
 export function wakeTriggerInputMessage(input: {
-  build: string
+  build?: string
+  journal?: boolean
   type: string
   event: { seq: number; ts: string; type: string; payload: unknown }
-  buildState: unknown
+  buildState?: unknown
 }): UIMessage {
+  const journal = input.journal === true || input.build === undefined
   return {
-    id: `wake_${input.build}_${input.event.seq}`,
+    id: journal ? `wake_journal_${input.event.seq}` : `wake_${input.build}_${input.event.seq}`,
     role: 'user',
     parts: [
       {
         type: 'text',
-        text:
-          `Attention event on build ${input.build}: ${input.type} (seq ${input.event.seq}).\n` +
-          'Event record:\n' +
-          JSON.stringify(input.event, null, 2) +
-          '\nBuild state:\n' +
-          JSON.stringify(input.buildState, null, 2),
+        text: journal
+          ? `Repository-journal attention event: ${input.type} (seq ${input.event.seq}).\n` +
+            'Event record:\n' +
+            JSON.stringify(input.event, null, 2)
+          : `Attention event on build ${input.build}: ${input.type} (seq ${input.event.seq}).\n` +
+            'Event record:\n' +
+            JSON.stringify(input.event, null, 2) +
+            '\nBuild state:\n' +
+            JSON.stringify(input.buildState, null, 2),
       },
     ],
   }
