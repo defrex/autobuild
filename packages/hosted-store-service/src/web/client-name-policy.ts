@@ -36,17 +36,30 @@ const FORBIDDEN = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\
 /** Return a short human-readable reason the name violates the policy, or
  * null when the name conforms. Both the registration hook and the consent
  * page's name lookup call this, so the page never renders a name that
- * violates the rules — including rows registered before the policy existed. */
+ * violates the rules — including rows registered before the policy existed.
+ *
+ * The name is unauthenticated DCR input, so the scan materializes nothing:
+ * a single `for...of` pass counts code points and records the first
+ * forbidden character, exiting as soon as the cap is exceeded. Work on an
+ * over-cap name is therefore bounded by the cap, not by the input length,
+ * and no allocation is proportional to the raw string. The decision order
+ * replays the cap-before-forbidden precedence: an over-cap name always
+ * gets the cap message even when it also contains a forbidden character. */
 export function clientNameProblem(name: string): string | null {
   const trimmed = name.trim()
   if (!trimmed) return 'client_name must not be empty'
-  const codePointCount = [...trimmed].length
+  let codePointCount = 0
+  let forbidden: string | undefined
+  for (const character of trimmed) {
+    codePointCount++
+    if (forbidden === undefined && FORBIDDEN.test(character)) forbidden = character
+    if (codePointCount > CLIENT_NAME_MAX_LENGTH) break
+  }
   if (codePointCount > CLIENT_NAME_MAX_LENGTH) {
     return `client_name must be at most ${CLIENT_NAME_MAX_LENGTH} characters`
   }
-  const found = [...trimmed].find((character) => FORBIDDEN.test(character))
-  if (found) {
-    const codePoint = found.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')
+  if (forbidden !== undefined) {
+    const codePoint = forbidden.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')
     return `client_name must not contain control or invisible formatting characters (found U+${codePoint})`
   }
   return null

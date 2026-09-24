@@ -518,15 +518,22 @@ unknown tool is inert by design.
 
 **Wake rule.** The dispatcher tick's orchestrator step wakes each idle
 session with non-empty wake settings: it scans the repository's builds for
-events after the session's per-build wake cursor matching the settings, and
-starts one turn per session per tick with a `wake` trigger naming the build,
-seq, and type, delivering the event record and the build's reduced state —
-frozen into the `turn.started` fact — as the turn's input. The wake cursor
-advances only through the recorded trigger, so a crash between scan and start
-cannot skip or duplicate a wake, and other builds' matching events re-trigger
-on later ticks. Sessions with empty wake settings are never woken. The
-repository-journal attention events are not wake sources (the scan reads
-build logs only).
+build events after the session's per-build wake cursor and the repository
+journal for events after the session's journal wake cursor — both filtered
+by the same compiled settings, which may name build event types,
+repository-journal event types, or both — and starts one turn per session
+per tick with a `wake` trigger naming the winning event's source: the build,
+seq, and type for a build-log wake, or the journal flag, seq, and type for a
+repository-journal wake. A build wake delivers the event record and the
+build's reduced state — frozen into the `turn.started` fact — as the turn's
+input; a journal wake delivers the event record only (the turn's operator
+registry already exposes bounded repository reads). Each source's cursor
+advances only through a recorded trigger naming that source, so a crash
+between scan and start cannot skip or duplicate a wake, and other builds' —
+and the journal's — matching events re-trigger on later ticks. Sessions with
+empty wake settings are never woken. The default wake settings span both
+halves of the attention set: the build events `ab watch` filters on by
+default plus the repository-journal events `ab watch --repository` follows.
 
 **Crash recovery.** A turn invocation that dies without an outcome leaves the
 session `running` with a silent open stream; the tick's reaper fails such a
