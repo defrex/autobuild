@@ -14,7 +14,8 @@
  * 1. The trimmed name must be non-empty (an unnamed client is legal — the
  *    consent page then falls back to the raw client_id — but a name that is
  *    only whitespace is not).
- * 2. The trimmed name is at most CLIENT_NAME_MAX_LENGTH characters.
+ * 2. The trimmed name is at most CLIENT_NAME_MAX_LENGTH code points (Unicode
+ *    characters — an emoji counts as one).
  * 3. No C0/C1 control characters (U+0000–U+001F, U+007F–U+009F).
  * 4. No invisible or bidi formatting characters (U+200B–U+200F,
  *    U+202A–U+202E, U+2066–U+2069, U+FEFF) — these exist to make rendered
@@ -39,7 +40,8 @@ const FORBIDDEN = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\
 export function clientNameProblem(name: string): string | null {
   const trimmed = name.trim()
   if (!trimmed) return 'client_name must not be empty'
-  if (trimmed.length > CLIENT_NAME_MAX_LENGTH) {
+  const codePointCount = [...trimmed].length
+  if (codePointCount > CLIENT_NAME_MAX_LENGTH) {
     return `client_name must be at most ${CLIENT_NAME_MAX_LENGTH} characters`
   }
   const found = [...trimmed].find((character) => FORBIDDEN.test(character))
