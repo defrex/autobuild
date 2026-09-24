@@ -38,11 +38,17 @@ function packageNameOf(specifier: string): string {
  * disk and never touches the installer.
  *
  * Termination (AUT-597): `root` is resolved to an absolute path before the
- * walk begins, so a relative candidate root — origin mode passes the
- * non-filesystem token `'<hosted-dispatcher>'` — cannot make `dirname` a
- * fixed point and spin the loop forever. The `parent === current` guard
- * backstops the fixed point (`dirname('/') === '/'`) should the loop's
- * start point ever change. */
+ * walk begins, so a relative candidate root cannot make `dirname` a fixed
+ * point and spin the loop forever. The `parent === current` guard backstops
+ * the fixed point (`dirname('/') === '/'`) should the loop's start point
+ * ever change.
+ *
+ * Candidate-root provenance (AUT-604): production callers never supply a
+ * non-filesystem token here. Origin mode does not pass
+ * `'<hosted-dispatcher>'` — `abDispatch` normalizes `targetRepo` to the
+ * per-origin scratch root before `loadPlugins` runs — so candidate roots
+ * are always real filesystem roots; a relative one reaching this walk is a
+ * caller bug with a fail-closed outcome, not a supported input. */
 function diskNodeModulesDirectory(specifier: string, root: string): string | undefined {
   const pkg = packageNameOf(specifier)
   let current = resolve(root)
