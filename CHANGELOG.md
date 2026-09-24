@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#557](https://github.com/defrex/autobuild/pull/557) — Restore workspace plugin symlink after a local deploy:build
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
 - [#552](https://github.com/defrex/autobuild/pull/552) — Serve sandbox.* tools from a hosted operator-sandbox backend
 - [#550](https://github.com/defrex/autobuild/pull/550) — Wake durable sessions from repository-journal attention events
