@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#563](https://github.com/defrex/autobuild/pull/563) — Reject capabilities.requiredEnv groups that carry neither dispatchMessage nor validationMessage
 - [#561](https://github.com/defrex/autobuild/pull/561) — Extend the plugin workspace-provider factory context (AUT-560)
 - [#559](https://github.com/defrex/autobuild/pull/559) — Retry PostgresTicketSource on cached-plan invalidation (AUT-559)
 - [#557](https://github.com/defrex/autobuild/pull/557) — Restore workspace plugin symlink after a local deploy:build
