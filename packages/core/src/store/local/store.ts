@@ -438,14 +438,15 @@ export class SqliteBuildStore implements BuildStore {
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
     // From the builds side (AUT-487): the type filter lives in the ON clause
-    // so a build whose log holds none of the three digest-relevant event
+    // so a build whose log holds none of the digest-relevant event
     // types still yields its row — a join that starts from `events` would
     // silently drop such builds and break the operation's completeness
-    // contract. Only the three types are fetched, then one shared derivation
+    // contract. Only the digest-relevant types are fetched, then one shared
+    // derivation
     // per build, so the answer cannot drift from `reduceBuild`.
     const rows = this.sqlite
       .query(
-        `SELECT b.slug AS slug, e.seq AS seq, e.type AS type
+        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type
          FROM builds b
          LEFT JOIN events e
            ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map(() => '?').join(', ')})
@@ -455,13 +456,14 @@ export class SqliteBuildStore implements BuildStore {
       .all(...DIGEST_EVENT_TYPES, repo) as {
       slug: string
       seq: number | null
+      ts: string | null
       type: string | null
     }[]
-    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq'>[]>()
+    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq' | 'ts'>[]>()
     for (const row of rows) {
-      if (row.seq === null || row.type === null) continue
+      if (row.seq === null || row.ts === null || row.type === null) continue
       const events = eventsByBuild.get(row.slug) ?? []
-      events.push({ type: row.type as AbEvent['type'], seq: row.seq })
+      events.push({ type: row.type as AbEvent['type'], seq: row.seq, ts: row.ts })
       eventsByBuild.set(row.slug, events)
     }
     const digests = new Map<string, BuildDigest>()
