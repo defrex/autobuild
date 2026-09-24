@@ -787,9 +787,25 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
         .publish('ops', { repo: 'other/repo', title: 'Fix' })
         .catch((e: unknown) => e as unknown as SandboxOperationError)
       expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).stage).toBe('publish')
       expect((error as SandboxOperationError).message).toContain('other/repo')
       expect(fx.provider.publications).toEqual([])
       expect(fx.forge!.opened).toEqual([])
+      expect(await factsOf(fx)).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('a foreign repo refusal on exec keeps the exec stage', async () => {
+    const fx = await forgeFx()
+    try {
+      const error = await fx.service
+        .exec('ops', { repo: 'other/repo', command: 'true' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).stage).toBe('exec')
+      expect((error as SandboxOperationError).message).toContain('other/repo')
       expect(await factsOf(fx)).toEqual([])
     } finally {
       await fx.cleanup()

@@ -310,10 +310,13 @@ export async function createOperatorSandboxService(
     })
   }
 
-  const requireRepo = (inputRepo: string | undefined): void => {
+  const requireRepo = (
+    inputRepo: string | undefined,
+    stage: SandboxOperationError['stage'] = 'exec',
+  ): void => {
     if (inputRepo !== undefined && inputRepo !== repo) {
       throw new SandboxOperationError(
-        'exec',
+        stage,
         `sandbox tools serve repository "${repo}"; refusing "${inputRepo}"`,
       )
     }
@@ -462,7 +465,7 @@ export async function createOperatorSandboxService(
         via?: Via
       },
     ) {
-      requireRepo(input.repo)
+      requireRepo(input.repo, 'publish')
       const title = input.title.trim()
       if (title === '') {
         throw new SandboxOperationError('publish', 'title must not be empty')

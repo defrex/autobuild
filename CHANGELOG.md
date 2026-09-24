@@ -3,8 +3,10 @@
 ## Unreleased
 
 - [#531](https://github.com/defrex/autobuild/pull/531) — Heal the provisioning-marker exclusion on ensure's early return
+- [#529](https://github.com/defrex/autobuild/pull/529) — Map sandbox.publish foreign-repo failures to the sandbox-publish code
 - [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
 - [#526](https://github.com/defrex/autobuild/pull/526) — Add PR-only publication from operator sandboxes via sandbox.publish
+- [#527](https://github.com/defrex/autobuild/pull/527) — Verify and align CLI repo-identity comparisons with AUT-567's rule
 - [#525](https://github.com/defrex/autobuild/pull/525) — Enforce parity between builtin workspace-provider declaration tables
 - [#524](https://github.com/defrex/autobuild/pull/524) — Make repo-scoped stream download membership origin-aware (AUT-567)
 - [#522](https://github.com/defrex/autobuild/pull/522) — Pin the schemaless-builtin-needs-configRefusalMessage rule (AUT-565)
