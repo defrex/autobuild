@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#559](https://github.com/defrex/autobuild/pull/559) — Retry PostgresTicketSource on cached-plan invalidation (AUT-559)
 - [#555](https://github.com/defrex/autobuild/pull/555) — Deny test files from the vercel-sandbox packed tarball (AUT-564)
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
 - [#553](https://github.com/defrex/autobuild/pull/553) — Derive [orchestrator] doc-coverage expectations from schema
