@@ -33,6 +33,12 @@ import {
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
+import { FROZEN } from './schema-guard.test.js'
+// Mandatory, not optional: importing the guard module runs its pure pin and
+// contiguity tests inside this file's `postgres` verify invocation too (bun
+// dedupes the module instance, so nothing double-executes), and it keeps one
+// definition of the frozen maps. The `.js` spelling maps to
+// `schema-guard.test.ts` under the repository's bundler module resolution.
 import { openPostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
@@ -744,6 +750,104 @@ if (testUrl) {
         const clients =
           await sql`SELECT "authenticationScheme" FROM "oauthApplication" WHERE id = 'c2'`
         expect(clients[0]?.authenticationScheme).toBe('none')
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    // The general property behind the per-version fixtures above: a database
+    // carrying the immediately previous version's frozen DDL and marker —
+    // exactly what every deployed database carries after a normal release —
+    // upgrades in place. The predecessor is looked up from the frozen-family
+    // map (schema-guard.test.ts) rather than hardcoded, so this test keeps
+    // working after every future bump; the missing-predecessor failure below
+    // is the live-side twin of that map's contiguity assertion, so a bump
+    // without a freeze fails here too, with a database in the loop.
+    test('upgrades a database carrying the immediately previous frozen schema in place (the general property)', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        const prev = FROZEN.build.get(SCHEMA_VERSION - 1)
+        if (!prev) {
+          throw new Error(
+            `No frozen DDL for build-store schema version ${SCHEMA_VERSION - 1}: the frozen ` +
+              `family must be contiguous from v1. The current DDL is immutable once a database ` +
+              `has deployed it — freeze SCHEMA_V${SCHEMA_VERSION - 1}_DDL pre-trimmed with its ` +
+              `checksum, add its upgrade branch in migratePostgres, bump SCHEMA_VERSION, and ` +
+              `update the pin in schema-guard.test.ts; then this test runs against the new ` +
+              `predecessor.`,
+          )
+        }
+        // Seed the deployed shape: the previous version's DDL and marker, plus
+        // a canary builds row (the one table present since v1) the upgrade
+        // must preserve.
+        await sql.unsafe(prev.ddl)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, ${SCHEMA_VERSION - 1}, ${prev.checksum}, ${new Date().toISOString()})`
+        await sql`INSERT INTO builds (slug, repo, created_at, updated_at)
+          VALUES ('guard-prev', 'acme/guard', ${CONTRACT_T0}, ${CONTRACT_T0})`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+        const canary = await sql`SELECT slug FROM builds`
+        expect(canary.map((row: Row) => row.slug)).toEqual(['guard-prev'])
+
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        await store.close()
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a database carrying the immediately previous frozen auth schema in place (the general property)', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        const prev = FROZEN.auth.get(AUTH_SCHEMA_VERSION - 1)
+        if (!prev) {
+          throw new Error(
+            `No frozen DDL for auth schema version ${AUTH_SCHEMA_VERSION - 1}: the frozen auth ` +
+              `family must be contiguous from v1. The current auth DDL is immutable once a ` +
+              `database has deployed it — freeze AUTH_SCHEMA_V${AUTH_SCHEMA_VERSION - 1}_DDL ` +
+              `pre-trimmed with its checksum, add its upgrade branch in migratePostgres, bump ` +
+              `AUTH_SCHEMA_VERSION, and update the pin in schema-guard.test.ts; then this test ` +
+              `runs against the new predecessor.`,
+          )
+        }
+        // Seed a coherent whole database the way the genuine-v2 auth fixture
+        // above does: the current build-store DDL and marker (migratePostgres
+        // validates both markers), the previous auth DDL and marker, and a
+        // canary user row the upgrade must preserve.
+        await sql.unsafe(SCHEMA_DDL)
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
+        await sql.unsafe(prev.ddl)
+        await sql`INSERT INTO ab_auth_schema_migrations VALUES
+          (true, ${AUTH_SCHEMA_VERSION - 1}, ${prev.checksum}, ${new Date().toISOString()})`
+        await sql`INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+          VALUES ('u_guard', 'Guard', 'guard@example.com', true, ${CONTRACT_T0}, ${CONTRACT_T0})`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_auth_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(AUTH_SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(AUTH_SCHEMA_CHECKSUM)
+        const users = await sql`SELECT id FROM "user"`
+        expect(users.map((row: Row) => row.id)).toEqual(['u_guard'])
+
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        await store.close()
 
         // The upgrade is idempotent.
         await migratePostgres(harness.url)
