@@ -50,6 +50,8 @@ export const CANONICAL_REPOSITORY_URL = 'https://github.com/defrex/autobuild'
 /** The shipped manifest `readDistributionPackage()` reads. A bundled
  * deployment must carry this exact file into its function bundle; the hosted
  * service's post-build trace step appends it to the dispatch route's trace. */
+export { distributionPath, distributionRoot } from '../../distribution'
+
 export function distributionManifestPath(): string {
   return distributionPath('package.json')
 }
