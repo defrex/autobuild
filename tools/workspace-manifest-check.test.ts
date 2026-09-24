@@ -180,6 +180,100 @@ describe('workspace manifest invariants', () => {
     ).resolves.toBeDefined()
   })
 
+  test('rejects a patched package in the root dependencies — the packed set ships unpatched', async () => {
+    // The packer strips patchedDependencies from the packed manifest, so a
+    // patched package the root manifest also depends on would reach every
+    // consumer unpatched while the workspace installs the patched copy. This
+    // is the arrangement AUT-386 avoided for better-auth; the check makes the
+    // avoidance enforced instead of incidental.
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          { patchedDependencies: { 'alpha@1.0.0': 'patches/alpha@1.0.0.patch' } },
+        ),
+      ),
+    ).rejects.toThrow(
+      'patchedDependencies entry alpha@1.0.0 patches alpha, which is in the root dependencies',
+    )
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          { patchedDependencies: { 'beta@2.0.0': 'patches/beta@2.0.0.patch' } },
+        ),
+      ),
+    ).rejects.toThrow('declare the dependency in the workspace package that imports it instead')
+  })
+
+  test('allows a patched package in the root devDependencies only', async () => {
+    // devDependencies is stripped from the packed manifest and never
+    // production-installed in guests, so a patched dev-only tool ships no
+    // divergence.
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          { patchedDependencies: { 'react@19.2.4': 'patches/react@19.2.4.patch' } },
+        ),
+      ),
+    ).resolves.toBeDefined()
+  })
+
+  test("allows a patched package declared only in a workspace package's dependencies", async () => {
+    // Today's better-auth shape: the root manifest declares no dependency on
+    // the patched package; the importing workspace package
+    // (@defrex/autobuild-hosted-store-service) carries it and the root's
+    // patch entry is ignored for the packed artifact's consumers.
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          { dependencies: { ...hostedDependencies, 'better-auth': '1.4.18' } },
+          { patchedDependencies: { 'better-auth@1.4.18': 'patches/better-auth@1.4.18.patch' } },
+        ),
+      ),
+    ).resolves.toBeDefined()
+  })
+
+  test('accepts a root manifest without patchedDependencies', async () => {
+    // Covered implicitly by every fixture without the field; pinned
+    // explicitly so the rule reads as vacuous-by-absence, not accidental.
+    await expect(validateWorkspaceManifests(await fixture())).resolves.toBeDefined()
+  })
+
+  test('parses scoped patch keys', async () => {
+    // The version separator in `@scope/pkg@1.2.3` is the last '@', not the
+    // leading one that belongs to the scope.
+    const scoped = { ...dependencies, '@scope/alpha': '^1.0.0' }
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          { dependencies: scoped },
+          {},
+          {
+            dependencies: scoped,
+            patchedDependencies: { '@scope/alpha@1.0.0': 'patches/scoped.patch' },
+          },
+        ),
+      ),
+    ).rejects.toThrow(
+      'patchedDependencies entry @scope/alpha@1.0.0 patches @scope/alpha, which is in the root dependencies',
+    )
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          { patchedDependencies: { '@scope/gamma@1.0.0': 'patches/scoped.patch' } },
+        ),
+      ),
+    ).resolves.toBeDefined()
+  })
+
   test('accepts a root manifest without any react pins', async () => {
     // The web capture tool moved into its own workspace package; the root
     // manifest no longer carries pins that exist solely to serve it.
