@@ -166,6 +166,12 @@ export const sessionEventEnvelopeWireSchema = z.object({
 })
 export const sessionEventListSchema = z.array(sessionEventEnvelopeWireSchema)
 
+export const conditionalSessionEventBodySchema = z.object({
+  expectedSeq: z.number().int().nonnegative(),
+  event: eventWriteWireSchema,
+})
+export const conditionalSessionEventResponseSchema = sessionEventEnvelopeWireSchema.nullable()
+
 export const sessionArtifactMetaWireSchema = z.object({
   session: z.string(),
   kind: z.string(),

@@ -1296,6 +1296,26 @@ export class SqliteBuildStore implements BuildStore {
     return this.writeTx(() => this.appendSessionInTx(id, validated) as SessionEventEnvelope<T>)
   }
 
+  async appendSessionEventIfCurrent<T extends SessionEventType>(
+    id: string,
+    expectedSeq: number,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T> | null> {
+    validateExpectedSeq(expectedSeq)
+    const validated = validateSessionEventWrite(event)
+    return this.writeTx(() => {
+      // BEGIN IMMEDIATE serializes this comparison and append across every
+      // SQLite connection/process using the same store file.
+      const row = this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(sessionEvents)
+        .where(eq(sessionEvents.session, id))
+        .get()
+      if ((row?.count ?? 0) !== expectedSeq) return null
+      return this.appendSessionInTx(id, validated) as SessionEventEnvelope<T>
+    })
+  }
+
   async getSessionEvents(
     id: string,
     sinceSeq = 0,

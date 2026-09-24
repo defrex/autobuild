@@ -18,6 +18,7 @@ import {
   type DashboardModel,
 } from '../cli/dashboard/model'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
+import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { readRepoEventsIfRecorded, unclaimedObservationCount } from '../processes/harvest'
 import type { RepositoryEvent } from '../events/repository'
@@ -337,4 +338,53 @@ export async function getOperatorDashboard(opts: {
       harvestPaused: model.harvestPaused,
     },
   }
+}
+
+/** Thrown when a deposited `dispatcher-effective-config` artifact exists but
+ * cannot be parsed or validated: the hosted message route maps this to a 500
+ * `internal` — a broken config must never silently disable the orchestrator
+ * (AUT-342). */
+export class OrchestratorConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OrchestratorConfigError'
+  }
+}
+
+/** The repository's orchestrator configuration, resolved from the latest
+ * deposited `dispatcher-effective-config` artifact (AUT-342). Returns null
+ * when no artifact exists — the orchestrator is disabled, and message
+ * posting behaves exactly as it did before this feature. Throws
+ * `OperatorQueryError` (code `effective-config-unavailable`) when an
+ * artifact exists but is unreadable or invalid: a deployment that deposited
+ * a broken config must fail loudly (a 500 on the message route), never
+ * silently disable the orchestrator. */
+export async function orchestratorConfig(store: BuildStore, repo: string): Promise<Config | null> {
+  // A repository the store has no record for has no deposited artifact and
+  // no dispatcher history: the orchestrator is disabled there.
+  if ((await store.getRepo(repo)) === null) return null
+  const artifacts = await store.listRepoArtifacts(repo, DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)
+  if (artifacts.length === 0) return null
+  const latest = [...artifacts].sort((a, b) => b.revision - a.revision)[0]!
+  const artifact = await store.getRepoArtifact(repo, latest.kind, latest.revision)
+  if (artifact === null) {
+    throw new OrchestratorConfigError(
+      `effective config ${latest.kind}@${latest.revision} is not retrievable`,
+    )
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(new TextDecoder().decode(artifact.content))
+  } catch {
+    throw new OrchestratorConfigError(
+      `effective config ${latest.kind}@${latest.revision} is not valid JSON`,
+    )
+  }
+  const parsed = configSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new OrchestratorConfigError(
+      `effective config ${latest.kind}@${latest.revision} is invalid: ${parsed.error.message}`,
+    )
+  }
+  return parsed.data.orchestrator.enabled ? parsed.data : null
 }

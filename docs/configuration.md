@@ -1278,20 +1278,25 @@ Set `COMPANY_TICKET_TOKEN` in the environment, never in this table.
 
 ## `[orchestrator]`
 
-Gates the operator-sandbox feature: a persistent, **credential-free**
-environment per operator × repository that an operator agent drives through the
-`sandbox.*` registry tools (served by `ab mcp` and every later binding). The
-table is closed to unknown keys and restart-classified as a whole.
+Gates the operator-agent feature (AUT-340, AUT-342): the per-operator sandbox
+environments the `sandbox.*` registry tools drive, and — when the embedded
+orchestrator is enabled — the turn runner that answers operator sessions and
+wakes on build events. The table is closed to unknown keys and
+restart-classified as a whole.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
-| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding and no environment is ever provisioned. |
-| `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
+| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment. |
+| `model` | — | nonblank string, required when `enabled = true` | Provider-qualified model string for the turn runner, in the same vocabulary as `[roles]` model strings (a leading `vercel-ai-gateway/` prefix is accepted and stripped). Resolved through the deployment's gateway credential. |
+| `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under (`ORCHESTRATOR_ROUTE_LIMIT_SECONDS`, the same number the operator route pins as `maxDuration`). |
+| `approvals` | see below | array of `tool` or `tool:qualifier` strings | Registry tool names whose calls suspend a turn until the operator answers. Default: `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]`. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
+| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the default attention set — the same events `ab watch` filters on by default) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins. |
 
 `[orchestrator.sandbox]` fields:
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
+| `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
 | `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
 | `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
 
@@ -1320,6 +1325,10 @@ one environment per operator and repository.
 ```toml
 [orchestrator]
 enabled = true
+model = "anthropic/claude-sonnet-4"
+invocationBudgetSeconds = 240
+approvals = ["builds.control:abort", "sandbox.publish", "tickets.move:ready"]
+# wake omitted: new sessions inherit the default attention set
 
 [orchestrator.sandbox]
 idleMinutes = 30
@@ -1511,8 +1520,10 @@ pre-attempt index and reports the original Git failure; merged worktree files
 remain in place and the merge's exit status is unchanged. Upgrade never pushes
 or rewrites history.
 
-Autobuild now installs 11 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
-are model-invocable. The setup reference is an ordinary support file in the
+Autobuild now installs 12 skills; only `ab-spec`, `ab-tickets`, and `ab-guide`
+are model-invocable. (`ab-operate` — the embedded orchestrator's operating
+manual — also carries `disable-model-invocation: true`; it is read by the
+hosted turn runner, never invoked by a model in a build session.) The setup reference is an ordinary support file in the
 editable/pristine `ab-guide` tree and participates in the same three-way
 upgrade merge as every other vendored file.
 

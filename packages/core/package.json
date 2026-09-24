@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {
+    "@ai-sdk/gateway": "4.0.82",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@vercel/sandbox": "^3.1.0",
     "ai": "^7.0.101",

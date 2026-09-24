@@ -38,6 +38,13 @@
  */
 export const OPERATOR_NOTES_REPO_KIND = 'operator-notes'
 
+/** The repository artifact carrying the schema-validated composed Config one
+ * dispatch run used. The embedded orchestrator's hosted wiring resolves its
+ * per-repository configuration from the latest revision of this kind
+ * (AUT-342). Defined here — the store must not import from the CLI — and
+ * re-exported by `cli/dispatch.ts`, which deposits it. */
+export const DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT = 'dispatcher-effective-config'
+
 /**
  * Repository-scoped artifact kinds subject to retention. Values mirror the
  * kind constants in `cli/dispatch.ts` (DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT)

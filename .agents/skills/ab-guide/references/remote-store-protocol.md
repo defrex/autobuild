@@ -466,6 +466,7 @@ identity is already the actor.
 | `listSessions` | `GET /repos/{repo}/sessions` | none | `200` + `SessionRecord[]`, creation order (`createdAt`, then the store's creation counter for same-millisecond ties) |
 | `getSession` | `GET /sessions/{id}` | none | `200` + `SessionRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendSessionEvent` | `POST /sessions/{id}/events` | event write | `201` + session event envelope (same envelope shape with `"session"` in place of `"build"`) |
+| `appendSessionEventIfCurrent` | `POST /sessions/{id}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + session event envelope; session advanced: `200 null` (mirroring section 3's build compare-and-append) |
 | `getSessionEvents` | `GET /sessions/{id}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + session event envelopes with `seq >` parsed `since`, in increasing sequence order |
 | `appendSessionWithArtifacts` | `POST /sessions/{id}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using session shapes; the substitution algorithm of section 8 applies unchanged |
 | `putSessionArtifact` | `POST /sessions/{id}/artifacts` | artifact input | `201` + session artifact metadata |
