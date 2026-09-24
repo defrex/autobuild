@@ -889,13 +889,22 @@ export class PostgresBuildStore implements BuildStore {
     // anchor (indexed by repo_events_type_repo_seq, v8 — without it MAX(seq)
     // over the repo's run-started facts degrades to a scan of the repo's
     // whole PK range, exactly the cost being removed), then one select of
-    // durable types plus the tail from that anchor. A journal with no
-    // run-started answers durable types only — the no-anchor case must not
-    // degenerate into `seq >= 0`, which would select the whole journal.
-    const anchorRows: { seq: string | number | null }[] = await this
-      .sql`SELECT MAX(seq) AS seq FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
-    const anchorRaw = anchorRows[0]?.seq
-    const anchor = anchorRaw === null || anchorRaw === undefined ? undefined : num(anchorRaw)
+    // durable types plus the tail from that anchor.
+    //
+    // The probe below is an aggregate: MAX() always returns exactly one row —
+    // NULL when the journal has no run-started fact — so the empty-journal
+    // signal is that NULL, tested explicitly here via `no_anchor`, never row
+    // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
+    // (in either dialect the comparison is never true, so the durable-only
+    // outcome would then survive only by accident), and the no-anchor case
+    // must not degenerate into `seq >= 0`, which would select the whole
+    // journal. The `anchor === undefined` branch below is the durable-only
+    // path.
+    const probe = (
+      await this
+        .sql`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
+    )[0]
+    const anchor = probe?.no_anchor ? undefined : num(probe?.seq)
     const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
     // `repo` is $1; the anchored select also spends $2 on the anchor, so the
     // type list's placeholders start at the right offset per branch.

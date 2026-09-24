@@ -77,9 +77,18 @@ export type {
   TicketSourcePluginDescriptor,
   TicketSourcePluginFactory,
   TicketSourcePluginRegistration,
+  WorkspaceProviderPluginDescriptor,
   WorkspaceProviderPluginFactory,
   WorkspaceProviderPluginRegistration,
 } from '../plugins/manifest'
+export type {
+  GuestProbeReport,
+  InitValidationReport,
+  ReadinessCheck,
+  WorkspaceProviderCapabilities,
+  WorkspaceProviderEnvRequirement,
+  WorkspaceReadinessContext,
+} from '../ports/workspace/provider-capabilities'
 
 export {
   describeTicketSourceContract,

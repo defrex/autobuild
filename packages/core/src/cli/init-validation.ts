@@ -3,14 +3,20 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { effectiveRuntimeReferences } from '../config/roles'
 import type { Config } from '../config/schema'
-import { vercelSandboxConfigSchema } from '../config/schema'
 import { loadConfig } from '../config/load'
 import { createProductionRuntimes } from '../ports/runner/production'
 import { createRuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { type VercelSandboxFacade, validateVercelSandbox } from '../ports/workspace/vercel-sandbox'
+import { builtinWorkspaceProviderCapabilities } from '../ports/workspace/builtin-capabilities'
+import type {
+  GuestProbeReport,
+  InitValidationReport,
+  ReadinessCheck,
+  WorkspaceProviderCapabilities,
+} from '../ports/workspace/provider-capabilities'
+import type { VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
 import { loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
@@ -18,64 +24,19 @@ import { inspectLocalStoreSnapshot } from '../store/local/store'
 import type { StoreOpener } from './store-opening'
 import { openProductionStore } from './store-opening'
 import { isRemoteStoreRef, resolveMainRepo, resolveRepoStatePaths } from './repo-state'
+import { createReadinessRedactor, gitText } from './init-readiness-shared'
 
-export const INIT_PROBE_MARKER = 'AB_INIT_READINESS_V1='
-
-export interface ReadinessCheck {
-  name: string
-  status: 'pass' | 'fail' | 'absent'
-  detail: string
-}
-
-export interface InitValidationReport {
-  provider: string
-  context: 'local worktree' | 'Vercel Sandbox'
-  workspace?: string
-  revision?: string
-  checks: ReadinessCheck[]
-  exitCode: number
-  /** Vercel only: automatic snapshots deleted while releasing the disposable
-   * environment; zero proves no snapshot storage was left behind. */
-  snapshotsDeleted?: number
-}
-
-export interface GuestProbeReport {
-  checks: ReadinessCheck[]
-}
-
-function message(error: unknown): string {
-  if (error instanceof AggregateError) {
-    return [error.message, ...error.errors.map(message)].filter(Boolean).join('; ')
-  }
-  if (error instanceof Error)
-    return `${error.message}${error.cause === undefined ? '' : `; ${message(error.cause)}`}`
-  return String(error)
-}
-
-/** Replace every supplied nonempty value, longest first, in all diagnostics. */
-export function createReadinessRedactor(
-  env: Readonly<Record<string, string | undefined>>,
-  explicitSecretNames: readonly string[] = [],
-): (value: unknown) => string {
-  const namedSecrets = new Set(explicitSecretNames)
-  const secrets = [
-    ...new Set(
-      Object.entries(env)
-        .filter(
-          ([name, value]) =>
-            value !== undefined &&
-            value !== '' &&
-            (namedSecrets.has(name) || /(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i.test(name)),
-        )
-        .map(([, value]) => value as string),
-    ),
-  ].sort((left, right) => right.length - left.length)
-  return (value) => {
-    let text = message(value)
-    for (const secret of secrets) text = text.split(secret).join('[REDACTED]')
-    return text
-  }
-}
+export {
+  INIT_PROBE_MARKER,
+  createReadinessRedactor,
+  gitText,
+  parseGuestOutput,
+} from './init-readiness-shared'
+export type {
+  GuestProbeReport,
+  InitValidationReport,
+  ReadinessCheck,
+} from '../ports/workspace/provider-capabilities'
 
 async function shell(
   exec: Exec,
@@ -126,11 +87,17 @@ export async function runGuestReadinessProbe(opts: {
 }): Promise<GuestProbeReport> {
   const checks: ReadinessCheck[] = []
   const config = await loadConfig(join(opts.repo, 'autobuild.toml'))
-  const vercelConfig =
-    config.workspace.provider === 'vercel-sandbox'
-      ? vercelSandboxConfigSchema.parse(config.workspace.config)
+  // Pre-registry site: plugins are not loaded yet, so provider behavior comes
+  // from the builtin capability table (AUT-516).
+  const builtinCaps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
+  const providerConfig =
+    builtinCaps?.configSchema !== undefined
+      ? builtinCaps.configSchema.parse(config.workspace.config)
       : undefined
-  const redact = createReadinessRedactor(opts.env, vercelConfig?.environmentVariables)
+  const redact = createReadinessRedactor(
+    opts.env,
+    providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
+  )
   try {
     const setup = config.commands.setup
     if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('validation cancelled')
@@ -181,7 +148,7 @@ export async function runGuestReadinessProbe(opts: {
   }
 
   const runtimeRemediation = (runtime: string, preflightOnly: boolean): string =>
-    vercelConfig === undefined
+    builtinCaps?.requireRuntimeProvisioning !== true
       ? 'install/authenticate this runtime in the local validation environment'
       : `fix workspace.config.runtimeProvisioning.${runtime}${preflightOnly ? '.preflight' : ''} and expose API credential names in workspace.config.environmentVariables`
 
@@ -277,56 +244,55 @@ export async function runGuestReadinessProbe(opts: {
   return { checks }
 }
 
-function parseGuestOutput(output: string): GuestProbeReport {
-  const line = output.split(/\r?\n/).find((candidate) => candidate.startsWith(INIT_PROBE_MARKER))
-  if (line === undefined)
-    throw new Error('remote readiness probe returned malformed output (result marker absent)')
-  const value = JSON.parse(line.slice(INIT_PROBE_MARKER.length)) as GuestProbeReport
-  if (!Array.isArray(value.checks))
-    throw new Error('remote readiness probe returned malformed checks')
-  return value
-}
-
-async function gitText(
-  exec: Exec,
-  repo: string,
-  args: string[],
-  signal?: AbortSignal,
-): Promise<string> {
-  const result = await exec(['git', ...args], {
-    cwd: repo,
-    ...(signal === undefined ? {} : { signal }),
-  })
-  if (result.exitCode !== 0)
+/** Forge and required-environment checks driven by one provider's capability
+ * declarations. Shared by the pre-registry builtin preflight and the
+ * registry-aware check after plugin load so a plugin provider's declarations
+ * are honoured at the same seam. */
+function declaredForgeEnvChecks(
+  caps: WorkspaceProviderCapabilities | undefined,
+  config: Config,
+  env: Record<string, string | undefined>,
+): void {
+  if (caps?.supportedForges !== undefined && !caps.supportedForges.includes(config.forge)) {
     throw new Error(
-      `git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}`,
+      caps.forgeValidationMessage ??
+        `workspace provider "${config.workspace.provider}" does not support forge "${config.forge}"`,
     )
-  return result.stdout.trim()
+  }
+  for (const group of caps?.requiredEnv ?? []) {
+    if (group.validationMessage === undefined) continue
+    const satisfied = group.alternatives.some((names) =>
+      names.every((name) => env[name] !== undefined && env[name] !== ''),
+    )
+    if (!satisfied) throw new Error(group.validationMessage)
+  }
 }
 
 function hostPreflight(config: Config, env: Record<string, string | undefined>): void {
-  if (config.workspace.provider !== 'vercel-sandbox') return
-  if (config.forge !== 'github')
-    throw new Error(
-      'vercel-sandbox supports forge = "github" only; configure GitHub publication before validating',
-    )
-  if (!env.GITHUB_TOKEN && !env.GH_TOKEN)
-    throw new Error('vercel-sandbox publication requires push-capable GITHUB_TOKEN or GH_TOKEN')
+  // Pre-registry site: the builtin capability table drives the provider's
+  // declared forge and environment requirements (AUT-516). Plugin providers
+  // are checked registry-aware after plugin load in validateInitReadiness.
+  const caps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
+  declaredForgeEnvChecks(caps, config, env)
+  // Stays exactly where today's remote-provider branch put it: only a
+  // provider with remote readiness preflights its ticket-source credential
+  // here, because remote provisioning acquires tickets before allocating
+  // disposable infrastructure.
   if (
-    !env.VERCEL_OIDC_TOKEN &&
-    (!env.VERCEL_TOKEN || !env.VERCEL_TEAM_ID || !env.VERCEL_PROJECT_ID)
-  ) {
-    throw new Error(
-      'Vercel authentication requires VERCEL_OIDC_TOKEN or the durable VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID set',
-    )
-  }
-  if (config.tickets.source === 'linear' && !env.LINEAR_API_KEY)
+    caps?.validateReadiness !== undefined &&
+    config.tickets.source === 'linear' &&
+    !env.LINEAR_API_KEY
+  )
     throw new Error('ticket source "linear" requires LINEAR_API_KEY')
 }
 
 export async function validateInitReadiness(opts: {
   targetRepo: string
   env: Record<string, string | undefined>
+  /** The raw launcher process environment, alongside the dotenv-augmented
+   * `env`. When supplied, a declared `processEnvOnly` variable present only in
+   * a loaded `.env` fails the registry-aware check below. */
+  processEnv?: Record<string, string | undefined>
   stdout?: (line: string) => void
   exec?: Exec
   openStore?: StoreOpener
@@ -342,20 +308,60 @@ export async function validateInitReadiness(opts: {
   const configBytes = await readFile(configPath, 'utf8')
   const config = await loadConfig(configPath)
   const state = resolveRepoStatePaths({ repo, envStore: opts.env.AB_STORE })
-  const vercelConfig =
-    config.workspace.provider === 'vercel-sandbox'
-      ? vercelSandboxConfigSchema.parse(config.workspace.config)
+  // Pre-registry parse and redaction come from the builtin capability table;
+  // after plugin load the registration's own declarations take over (AUT-516).
+  const builtinCaps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
+  let providerConfig =
+    builtinCaps?.configSchema !== undefined
+      ? builtinCaps.configSchema.parse(config.workspace.config)
       : undefined
-  const redact = createReadinessRedactor(opts.env, [
-    ...(vercelConfig?.environmentVariables ?? []),
-    ...(vercelConfig?.gitUsernameEnv === undefined ? [] : [vercelConfig.gitUsernameEnv]),
-    ...(vercelConfig?.gitPasswordEnv === undefined ? [] : [vercelConfig.gitPasswordEnv]),
-  ])
+  let redact = createReadinessRedactor(
+    opts.env,
+    providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
+  )
+  let caps: WorkspaceProviderCapabilities | undefined
   try {
     hostPreflight(config, opts.env)
     // Ticket acquisition is a host responsibility for both workspace providers.
     // Exercise its read surface before allocating disposable infrastructure.
     const hostPlugins = await loadPlugins(config.plugins, repo, { packageRoot: repo })
+    caps =
+      hostPlugins.workspaceProviders.get(config.workspace.provider)?.capabilities ?? builtinCaps
+    // Registry-aware declaration checks. The pre-registry preflight above could
+    // only consult the builtin table, so a plugin provider's declared forge and
+    // required-environment validations are honoured here (f_9d68b3e5); for the
+    // builtins the registration carries the same declarations, so the check is
+    // a no-op repeat after the preflight already passed.
+    declaredForgeEnvChecks(caps, config, opts.env)
+    // The registration's own configSchema and guestEnvNames take over from the
+    // builtin table, so a plugin provider's readiness context carries its
+    // parsed config and its declared names are redacted (f_55ba7591). A
+    // declared guestEnvNames with no declared configSchema still feeds the
+    // redactor — it is called with the raw `[workspace.config]` then, mirroring
+    // how createWorkspaceProvider falls back to the raw config for
+    // requireRuntimeProvisioning (f_1ddf1415).
+    if (caps?.configSchema !== undefined)
+      providerConfig = caps.configSchema.parse(config.workspace.config)
+    if (caps?.guestEnvNames !== undefined)
+      redact = createReadinessRedactor(
+        opts.env,
+        caps.guestEnvNames(providerConfig !== undefined ? providerConfig : config.workspace.config),
+      )
+    // Registry-aware process-env-only check: a declared name present in the
+    // dotenv-augmented `env` but absent from the raw launcher map fails here,
+    // so plugin-declared requirements and non-CLI callers are covered too
+    // (the CLI path's own guard in main.ts runs before this and keeps its
+    // error precedence).
+    if (opts.processEnv !== undefined) {
+      for (const requirement of caps?.processEnvOnly ?? []) {
+        if (
+          opts.env[requirement.name] !== undefined &&
+          opts.processEnv[requirement.name] === undefined
+        ) {
+          throw new Error(requirement.message)
+        }
+      }
+    }
     if (config.tickets.source !== 'file') {
       const ticketSource = await createTicketSource(
         config.tickets,
@@ -446,103 +452,33 @@ export async function validateInitReadiness(opts: {
     }
     if (failure !== undefined) throw failure
     if (cleanupFailure !== undefined) throw cleanupFailure
-  } else if (config.workspace.provider === 'vercel-sandbox') {
-    const vercel = vercelConfig!
-    const storeRef = state.storeRef
-    if (!/^https:\/\//i.test(storeRef))
-      throw new Error('vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel')
-    const token = opts.env.AB_TOKEN
-    if (!token) throw new Error('vercel-sandbox requires nonempty AB_TOKEN for the hosted Store')
-    const remoteLine = await gitText(
-      exec,
-      repo,
-      ['ls-remote', '--heads', 'origin', `refs/heads/${config.baseBranch}`],
-      opts.signal,
-    )
-    const remoteRevision = remoteLine.split(/\s+/)[0]
-    if (!/^[0-9a-f]{40,64}$/i.test(remoteRevision ?? '')) {
-      throw new Error(
-        `remote base ${config.baseBranch} does not exist; commit and push setup changes before validating`,
-      )
+  } else if (caps?.validateReadiness !== undefined) {
+    // Store preconditions come from the registration's declaration, uniformly
+    // for builtin and plugin providers; the texts are byte-identical to the
+    // branch they replace.
+    if (caps.storeRequirements !== undefined) {
+      if (!/^https:\/\//i.test(state.storeRef))
+        throw new Error(caps.storeRequirements.storeRefMessage)
+      const token = opts.env.AB_TOKEN
+      if (!token) throw new Error(caps.storeRequirements.storeTokenMessage)
     }
-    await gitText(
-      exec,
+    report = await caps.validateReadiness({
+      config,
+      providerConfig,
+      env: opts.env,
+      storeRef: state.storeRef,
+      storeToken: opts.env.AB_TOKEN ?? '',
       repo,
-      [
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        '--refmap=',
-        'origin',
-        `refs/heads/${config.baseBranch}`,
-      ],
-      opts.signal,
-    )
-    const shownConfig = await exec(['git', 'show', `${remoteRevision}:autobuild.toml`], {
-      cwd: repo,
-      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+      baseBranch: config.baseBranch,
+      configBytes,
+      exec,
+      redact,
+      runtimeReferences: effectiveRuntimeReferences(config),
+      stdout: opts.stdout ?? (() => {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),
+      ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
     })
-    if (shownConfig.exitCode !== 0) {
-      throw new Error(
-        `remote ${config.baseBranch} does not contain autobuild.toml; commit and push setup changes before validating`,
-      )
-    }
-    if (shownConfig.stdout !== configBytes) {
-      throw new Error(
-        `remote ${config.baseBranch} autobuild.toml differs from this checkout; commit and push setup changes before validating`,
-      )
-    }
-    let remote: Awaited<ReturnType<typeof validateVercelSandbox>>
-    try {
-      remote = await validateVercelSandbox({
-        config: vercel,
-        env: opts.env,
-        storeRef,
-        storeToken: token,
-        repo,
-        baseBranch: config.baseBranch,
-        ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),
-        exec,
-        ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
-        runtimeReferences: effectiveRuntimeReferences(config),
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-        onSandbox: (name) => opts.stdout?.(`Disposable Vercel Sandbox: ${name} (active)`),
-      })
-    } catch (error) {
-      throw new Error(redact(error))
-    }
-    let guest: GuestProbeReport
-    try {
-      guest = parseGuestOutput(remote.output)
-    } catch (error) {
-      throw new Error(
-        `disposable sandbox ${remote.sandbox} was deleted, but its readiness output was invalid: ${redact(error)}`,
-      )
-    }
-    report = {
-      provider: 'vercel-sandbox',
-      context: 'Vercel Sandbox',
-      workspace: remote.sandbox,
-      revision: remote.revision,
-      snapshotsDeleted: remote.snapshotsDeleted,
-      checks: [
-        {
-          name: 'repository acquisition',
-          status: 'pass',
-          detail: `${remote.origin} ${remote.revision}`,
-        },
-        {
-          name: 'system provisioning',
-          status: 'pass',
-          detail:
-            remote.provisioning.length === 0
-              ? 'no workspace.config.provisioning steps declared'
-              : `completed: ${remote.provisioning.join(', ')}`,
-        },
-        ...guest.checks,
-      ],
-      exitCode: guest.checks.some((check) => check.status === 'fail') ? 1 : 0,
-    }
   } else {
     throw new Error(
       `workspace provider "${config.workspace.provider}" does not support init readiness validation`,
@@ -554,20 +490,7 @@ export async function validateInitReadiness(opts: {
   stdout(`Readiness: ${report.context} (${report.provider})`)
   stdout(`Store: ${state.storeRef}`)
   stdout(`Forge: ${config.forge}`)
-  if (vercelConfig !== undefined) {
-    stdout(
-      `Vercel auth: ${opts.env.VERCEL_OIDC_TOKEN ? 'OIDC' : 'access token'}; team=${opts.env.VERCEL_TEAM_ID ?? '(linked)'}; project=${opts.env.VERCEL_PROJECT_ID ?? '(linked)'}`,
-    )
-    stdout(
-      `Private clone variables: ${vercelConfig.gitUsernameEnv === undefined ? '(public repository)' : `${vercelConfig.gitUsernameEnv}, ${vercelConfig.gitPasswordEnv}`}`,
-    )
-    stdout(
-      `Guest environment variable names: ${vercelConfig.environmentVariables.join(', ') || '(none)'}`,
-    )
-    stdout(
-      `Runtime provisioning names: ${Object.keys(vercelConfig.runtimeProvisioning).sort().join(', ') || '(none)'}`,
-    )
-  }
+  for (const line of caps?.describeEnvironment?.(providerConfig, opts.env) ?? []) stdout(line)
   if (report.workspace !== undefined)
     stdout(
       `Disposable environment: ${report.workspace} (released${report.snapshotsDeleted === undefined ? '' : `; ${report.snapshotsDeleted} snapshot(s) deleted`})`,

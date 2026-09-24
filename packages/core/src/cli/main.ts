@@ -478,6 +478,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         const report = await (deps.initValidation ?? validateInitReadiness)({
           targetRepo,
           env,
+          processEnv: deps.processEnv ?? process.env,
           stdout,
           ...(deps.exec !== undefined ? { exec: deps.exec } : {}),
           ...(deps.initRuntimes !== undefined ? { runtimes: deps.initRuntimes } : {}),
