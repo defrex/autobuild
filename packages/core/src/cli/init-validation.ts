@@ -415,7 +415,9 @@ export async function validateInitReadiness(opts: {
     // declared guestEnvNames with no declared configSchema still feeds the
     // redactor — it is called with the raw `[workspace.config]` then, mirroring
     // how createWorkspaceProvider falls back to the raw config for
-    // requireRuntimeProvisioning (f_1ddf1415).
+    // requireRuntimeProvisioning (f_1ddf1415). The post-report
+    // describeEnvironment call below receives that same raw fallback, so the
+    // two call shapes cannot drift apart again.
     if (caps?.configSchema !== undefined)
       providerConfig = caps.configSchema.parse(config.workspace.config)
     if (caps?.guestEnvNames !== undefined)
@@ -566,7 +568,14 @@ export async function validateInitReadiness(opts: {
   stdout(`Readiness: ${report.context} (${report.provider})`)
   stdout(`Store: ${state.storeRef}`)
   stdout(`Forge: ${config.forge}`)
-  for (const line of caps?.describeEnvironment?.(providerConfig, opts.env) ?? []) stdout(line)
+  // Same raw `[workspace.config]` fallback guestEnvNames gets (f_55ba7591): a
+  // provider that declares describeEnvironment without a configSchema still
+  // receives a defined argument — the raw table — never undefined.
+  for (const line of caps?.describeEnvironment?.(
+    providerConfig !== undefined ? providerConfig : config.workspace.config,
+    opts.env,
+  ) ?? [])
+    stdout(line)
   if (report.workspace !== undefined)
     stdout(
       `Disposable environment: ${report.workspace} (released${report.snapshotsDeleted === undefined ? '' : `; ${report.snapshotsDeleted} snapshot(s) deleted`})`,
