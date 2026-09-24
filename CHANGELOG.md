@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#534](https://github.com/defrex/autobuild/pull/534) — Name unresolvable guest plugins in the readiness probe detail
+- [#532](https://github.com/defrex/autobuild/pull/532) — Pin the mine filter's repo-identity arms in CLI tests (wait parity)
+- [#533](https://github.com/defrex/autobuild/pull/533) — Derive PluginRegistry builtin workspace-providers from canonical list
+- [#531](https://github.com/defrex/autobuild/pull/531) — Heal the provisioning-marker exclusion on ensure's early return
 - [#529](https://github.com/defrex/autobuild/pull/529) — Map sandbox.publish foreign-repo failures to the sandbox-publish code
 - [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
 - [#526](https://github.com/defrex/autobuild/pull/526) — Add PR-only publication from operator sandboxes via sandbox.publish

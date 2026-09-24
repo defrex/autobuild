@@ -16,6 +16,12 @@
  * not copied from the table's parse-site `configRefusalMessage` — the two
  * strings differ by design (the parse-site message adds the remediation
  * clause; the construction-site one does not).
+ *
+ * This `BUILTINS` record is the single source of truth for which builtins
+ * exist: `plugins/registry.ts` derives its builtin workspace-provider set
+ * from `builtinWorkspaceProviderNames()` (AUT-579), so adding an entry here
+ * (plus the config-table half that AUT-573's parity tests pin) completes
+ * the registration step — no registry edit is required.
  */
 import { join, resolve } from 'node:path'
 import type { VercelSandboxConfig, WorkspaceConfig } from '../../config/schema'

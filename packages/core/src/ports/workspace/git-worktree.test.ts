@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { WorkspaceHandle } from '../types'
 import { describeWorkspaceProviderContract } from './contract'
 import { GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
@@ -745,6 +745,45 @@ describe('GitWorktreeProvider operator sandbox', () => {
     expect(await provider.orchestratorSandbox.describe({ repo, operator: 'other' })).not.toEqual(
       reuseExpected,
     )
+  })
+
+  test('ensure heals a pre-existing registered worktree whose provisioning marker is not excluded (AUT-580)', async () => {
+    // Reproduce the pre-exclusion-era state: a registered detached worktree
+    // carrying the marker file, with no marker line in info/exclude — what
+    // ensureSandbox's registered-worktree early return used to skip.
+    const legacy = await provider.orchestratorSandbox.describe({ repo, operator: 'legacy' })
+    await run(['git', 'worktree', 'add', '--detach', legacy.workspacePath, 'HEAD'], repo)
+    await writeFile(join(legacy.workspacePath, '.autobuild-sandbox-provisioned'), '')
+    const excludePath = resolve(
+      legacy.workspacePath,
+      await run(['git', 'rev-parse', '--git-path', 'info/exclude'], legacy.workspacePath),
+    )
+    expect(readFileSync(excludePath, 'utf8')).not.toContain('.autobuild-sandbox-provisioned')
+
+    await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'legacy',
+      baseBranch: 'main',
+    })
+
+    // The early-return path now writes the exclusion, so the marker never
+    // counts as dirt for the publish service's untracked-inclusive dirty
+    // check and the correct baseSha / reset-required diagnostic surfaces.
+    expect(readFileSync(excludePath, 'utf8')).toContain('.autobuild-sandbox-provisioned')
+    expect(await run(['git', 'status', '--porcelain'], legacy.workspacePath)).not.toContain(
+      '.autobuild-sandbox-provisioned',
+    )
+
+    // A second ensure is still a no-op reuse: the exclusion line is not
+    // duplicated and setup is not re-run (it never ran on this path).
+    await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'legacy',
+      baseBranch: 'main',
+    })
+    const lines = readFileSync(excludePath, 'utf8').split('\n')
+    expect(lines.filter((line) => line === '.autobuild-sandbox-provisioned')).toHaveLength(1)
+    expect(existsSync(join(legacy.workspacePath, 'setup-marker.txt'))).toBe(false)
   })
 
   test('setup runs with the scrubbed guest environment, never the host environment', async () => {

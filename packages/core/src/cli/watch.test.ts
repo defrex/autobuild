@@ -427,6 +427,33 @@ describe('watch dynamic membership', () => {
     expect(records.map((record) => record.build)).toEqual(['legacy'])
   })
 
+  test('a path-mismatched record with no repoOrigin does not join the watch', async () => {
+    const store = makeStore()
+    // The plain first-arm mismatch: neither identity arm applies — the first
+    // arm sees a different checkout path and the fallback arm has no
+    // `repoOrigin` to forgive it — so the record is invisible to discovery.
+    await seedRunningBuild(store, 'own')
+    await store.createBuild({ slug: 'elsewhere', repo: '/other/path' })
+    await store.append('elsewhere', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        calls += 1
+        if (calls === 1) {
+          await appendEscalation(store, 'own')
+          await appendEscalation(store, 'elsewhere')
+        }
+      },
+    })
+    await abWatch({ ...h.base, timeout: '2' })
+    const records = h.out.slice(0, -1).map((line) => JSON.parse(line) as { build: string })
+    expect(records.map((record) => record.build)).toEqual(['own'])
+  })
+
   test('with no slugs, an empty active set does not end the watch', async () => {
     const store = makeStore()
     const h = harness(store)
