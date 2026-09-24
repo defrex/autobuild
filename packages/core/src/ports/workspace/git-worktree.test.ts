@@ -807,7 +807,11 @@ describe('GitWorktreeProvider operator sandbox', () => {
     expect(intercepted).toBe(true)
     expect(error).toBeInstanceOf(SandboxOperationError)
     expect((error as SandboxOperationError).stage).toBe('provision')
-    expect((error as Error).message).toMatch(/could not resolve info\/exclude/)
+    // Exact pin: the message must be byte-identical to fake.ts's twin guard
+    // message for the same degenerate input (exit 0, empty stdout, empty
+    // stderr → the stderr-or-exit tail is `exit 0`). A future edit to either
+    // side's tail must move both implementations together and update this pin.
+    expect((error as Error).message).toBe('operator sandbox could not resolve info/exclude: exit 0')
 
     // The guard fired before any filesystem side effect: the fresh-provision
     // catch path removed the half-provisioned worktree, so nothing is

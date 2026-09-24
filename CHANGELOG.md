@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#544](https://github.com/defrex/autobuild/pull/544) — Stamp the guest distribution marker with the archive digest (AUT-600)
+- [#542](https://github.com/defrex/autobuild/pull/542) — Match excludeProvisioningMarker's empty-stdout error to the fake twin
+- [#539](https://github.com/defrex/autobuild/pull/539) — Append distribution archive and manifest to the dispatch trace only
 - [#538](https://github.com/defrex/autobuild/pull/538) — Close the turn stream on resumeTurn's missing-approval failure path
 - [#537](https://github.com/defrex/autobuild/pull/537) — Pin the corrected AUT-580 plan steps at their code seams
 - [#536](https://github.com/defrex/autobuild/pull/536) — Disk-gate plugin resolution so the dispatcher never auto-installs
