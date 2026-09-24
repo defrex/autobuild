@@ -94,6 +94,17 @@ export async function runGuestReadinessProbe(opts: {
     builtinCaps?.configSchema !== undefined
       ? builtinCaps.configSchema.parse(config.workspace.config)
       : undefined
+  // Redaction scope is the provider's declared `guestEnvNames` (AUT-539) —
+  // for vercel-sandbox that is `environmentVariables` plus
+  // `gitUsernameEnv`/`gitPasswordEnv`, deliberately wider than
+  // `environmentVariables` alone: the capability contract documents
+  // `guestEnvNames` as the readiness-redaction surface, and a git credential
+  // echoed into a guest check detail (e.g. a failed clone printing an
+  // authenticated URL) is a secret we know the guest holds. Note the
+  // byte-level consequence: repos whose git env values appear in a guest
+  // check detail now see `[REDACTED]` there. Providers without a
+  // `guestEnvNames`/`configSchema` declaration fall back to the name-heuristic
+  // redaction only.
   const redact = createReadinessRedactor(
     opts.env,
     providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
