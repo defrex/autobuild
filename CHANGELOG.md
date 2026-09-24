@@ -3,6 +3,9 @@
 ## Unreleased
 
 - [#517](https://github.com/defrex/autobuild/pull/517) — Guard the Postgres schema against DDL edits that skip a version bump
+- [#515](https://github.com/defrex/autobuild/pull/515) — Enforce patchedDependencies exclusion from the packed distribution
+- [#514](https://github.com/defrex/autobuild/pull/514) — Ship the Vercel Sandbox provider as a plugin alongside the builtin
+- [#513](https://github.com/defrex/autobuild/pull/513) — Pin registeredClientName's Better Auth lookup contract in tests
 - [#512](https://github.com/defrex/autobuild/pull/512) — Validate the DCR client name shown on the OAuth consent page
 - [#511](https://github.com/defrex/autobuild/pull/511) — Move consent page's lookupClientName test seam off the route page
 - [#510](https://github.com/defrex/autobuild/pull/510) — Enforce plugin-declared sandbox env names at post-load seams

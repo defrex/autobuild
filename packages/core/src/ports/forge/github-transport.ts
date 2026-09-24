@@ -213,8 +213,14 @@ export function createGitHubFetchTransport(opts: {
       // a private repository is otherwise indistinguishable from a bad path,
       // and the operator's fix (export a token, or `gh auth login`) is the
       // point of the message.
+      // `in` rather than relying on the `token === undefined` discriminant:
+      // the plugin-sdk typecheck fixture compiles this chain without
+      // strictNullChecks, where `undefined` is assignable to `string` and
+      // the union stops discriminating (AUT-517).
       const anonymous =
-        credential.token === undefined ? ` (request was unauthenticated: ${credential.reason})` : ''
+        credential.token === undefined && 'reason' in credential
+          ? ` (request was unauthenticated: ${credential.reason})`
+          : ''
       throw new GitHubApiError(
         response.status,
         `${githubErrorMessage(response.status, json, text)}${anonymous}`,
@@ -335,9 +341,14 @@ export async function resolveGitHubToken(
   if (fromEnv !== undefined) return { token: fromEnv }
   const probe = await githubTokenFromGhCli(exec)
   if (probe.token !== undefined) return probe
+  // `in` rather than relying on the `token !== undefined` discriminant: the
+  // plugin-sdk typecheck fixture compiles this chain without
+  // strictNullChecks, where `undefined` is assignable to `string` and the
+  // union stops discriminating (AUT-517). A miss always carries its reason.
+  const missReason = 'reason' in probe ? probe.reason : 'no credential source succeeded'
   return {
     token: undefined,
-    reason: `GITHUB_TOKEN and GH_TOKEN are unset and ${probe.reason}`,
+    reason: `GITHUB_TOKEN and GH_TOKEN are unset and ${missReason}`,
   }
 }
 

@@ -261,7 +261,13 @@ async function execOrThrow(cmd: string[], cwd: string): Promise<string> {
  * repo's better-auth patch declaration breaks any consumer that installs
  * autobuild next to better-auth. The packed artifact ships no patched
  * package, so the declaration is stripped from the packed manifest while the
- * repo manifest keeps it for workspace installs.
+ * repo manifest keeps it for workspace installs. The strip is an enforced
+ * invariant, not a local detail: the `patchedDependencies` rule in
+ * `tools/workspace-manifest-check.ts` rejects a root manifest whose packed
+ * dependency set contains a patched package, and the negative control in
+ * `packages/core/src/plugin-sdk/package.test.ts` (the packed-distribution
+ * better-auth canary) pins the consumed-manifest failure shape this strip
+ * guards, so removing the field from this list fails the suite loudly.
  *
  * `devDependencies` is stripped for two reasons. First, the workspace link
  * specifiers it may carry (for example the root's

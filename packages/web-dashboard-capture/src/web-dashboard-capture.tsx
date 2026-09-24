@@ -39,7 +39,7 @@ import {
 import { LoadingControls } from '../../hosted-store-service/app/dashboard/frame'
 import { OperatorShell } from '../../hosted-store-service/app/dashboard/Shell'
 import { SignIn } from '../../hosted-store-service/app/sign-in/SignIn'
-import { Consent } from '../../hosted-store-service/app/oauth/consent/Consent'
+import { Consent as ConsentPage } from '../../hosted-store-service/app/oauth/consent/Consent'
 import { captureDashboardFrames, RENDER_NOW } from '../../../tools/dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -600,10 +600,12 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       return <SignIn providers={['github']} error="access_denied" />
     case 'consent-named-wide':
     case 'consent-unnamed-narrow':
-      // The seam lives on the Consent component, not the route page: the
-      // stubbed lookup selects the named-client path (wide) and the client_id
-      // fallback path (narrow), mirroring Consent.test.tsx.
-      return Consent({
+      // The view is an async component: the awaited element must be produced
+      // here, mirroring Consent.test.tsx. The stubbed lookup selects the
+      // named-client path (wide) and the client_id fallback path (narrow).
+      // The lookupClientName seam lives on the Consent component, not the
+      // route module's exported page (AUT-402).
+      return await ConsentPage({
         query:
           spec.id === 'consent-named-wide'
             ? {

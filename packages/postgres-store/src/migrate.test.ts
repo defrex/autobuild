@@ -487,8 +487,12 @@ if (testUrl) {
         expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
 
         // The index exists under its pinned name and the legacy row survived.
+        // pg_indexes spans every schema in the database, and the live-test
+        // suites share one database with concurrently migrating isolated
+        // schemas — scope the lookup to this test's schema or a sibling
+        // schema's same-named index is counted too.
         const indexes =
-          await sql`SELECT indexname FROM pg_indexes WHERE tablename = 'events' AND indexname = 'events_type_build_seq'`
+          await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'events' AND indexname = 'events_type_build_seq'`
         expect(indexes).toHaveLength(1)
         const legacy = await sql`SELECT seq, type FROM events WHERE build = 'v6-build'`
         expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1])
@@ -542,7 +546,7 @@ if (testUrl) {
 
         // The index exists under its pinned name and the legacy rows survived.
         const indexes =
-          await sql`SELECT indexname FROM pg_indexes WHERE tablename = 'repo_events' AND indexname = 'repo_events_type_repo_seq'`
+          await sql`SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'repo_events' AND indexname = 'repo_events_type_repo_seq'`
         expect(indexes).toHaveLength(1)
         const legacy = await sql`SELECT seq, type FROM repo_events WHERE repo = 'acme/v7'`
         expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1, 2, 3])
