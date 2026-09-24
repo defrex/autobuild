@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#535](https://github.com/defrex/autobuild/pull/535) — Guard excludeProvisioningMarker against empty git-path stdout
 - [#534](https://github.com/defrex/autobuild/pull/534) — Name unresolvable guest plugins in the readiness probe detail
 - [#532](https://github.com/defrex/autobuild/pull/532) — Pin the mine filter's repo-identity arms in CLI tests (wait parity)
 - [#533](https://github.com/defrex/autobuild/pull/533) — Derive PluginRegistry builtin workspace-providers from canonical list
