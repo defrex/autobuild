@@ -8,6 +8,7 @@ export interface PackageManifest {
   workspaces?: unknown
   engines?: unknown
   dependencies?: unknown
+  optionalDependencies?: unknown
   devDependencies?: unknown
   peerDependencies?: unknown
   private?: unknown
@@ -195,21 +196,34 @@ export async function validateWorkspaceManifests(root: string): Promise<Workspac
   // packages/core/src/ports/workspace/distribution-archive.ts) because bun
   // resolves a consumed manifest's patch declarations against the consuming
   // project's root and panics on one naming a package in the consumer tree —
-  // so a patched package in the root `dependencies` (the packed dependency
-  // set) would ship unpatched to every consumer while the workspace installs
-  // the patched copy. `devDependencies` is allowed: it is stripped from the
-  // packed manifest and never production-installed in guests. This check
-  // makes the better-auth avoidance deliberate: a root manifest that needs a
-  // patched package fails here with the remedy instead of silently shipping
-  // the divergence.
+  // so a patched package in the packed dependency set would ship unpatched to
+  // every consumer while the workspace installs the patched copy. The packed
+  // dependency set is `dependencies`, `optionalDependencies`, and
+  // `peerDependencies`: `packedManifestOmittedFields` strips only
+  // `patchedDependencies` and `devDependencies`, so the other three sections
+  // survive `bun pm pack` and reach every consumer of the distribution.
+  // `devDependencies` is allowed: it is stripped from the packed manifest and
+  // never production-installed in guests. This check makes the better-auth
+  // avoidance deliberate: a root manifest that needs a patched package fails
+  // here with the remedy instead of silently shipping the divergence.
   const patchedRaw = rootManifest.manifest.patchedDependencies
   if (patchedRaw !== undefined) {
     const patchedDependencies = stringMap(patchedRaw, 'package.json patchedDependencies')
+    const packedSetSections = (
+      ['dependencies', 'optionalDependencies', 'peerDependencies'] as const
+    ).map((section) => ({
+      section,
+      entries:
+        rootManifest.manifest[section] === undefined
+          ? {}
+          : stringMap(rootManifest.manifest[section], `package.json ${section}`),
+    }))
     for (const key of Object.keys(patchedDependencies)) {
       const name = patchedPackageName(key)
-      if (rootDependencies[name] !== undefined) {
+      const hit = packedSetSections.find(({ entries }) => entries[name] !== undefined)
+      if (hit !== undefined) {
         throw new Error(
-          `package.json: patchedDependencies entry ${key} patches ${name}, which is in the root dependencies: the packer strips patchedDependencies from the packed manifest (packedManifestOmittedFields in packages/core/src/ports/workspace/distribution-archive.ts), so a patched package in the packed dependency set would ship unpatched to every consumer while the workspace installs the patched copy — declare the dependency in the workspace package that imports it instead, as @defrex/autobuild-hosted-store-service does for better-auth`,
+          `package.json: patchedDependencies entry ${key} patches ${name}, which is in the root ${hit.section}: the packer strips patchedDependencies from the packed manifest (packedManifestOmittedFields in packages/core/src/ports/workspace/distribution-archive.ts), so a patched package in the packed dependency set would ship unpatched to every consumer while the workspace installs the patched copy — declare the dependency in the workspace package that imports it instead, as @defrex/autobuild-hosted-store-service does for better-auth`,
         )
       }
     }
