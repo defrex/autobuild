@@ -1081,6 +1081,17 @@ Inside a phase, a complete ambient tuple permits only the ambient build; a
 foreign build or malformed/partial identity is rejected. Use the exact pinned
 `@rev` from a PR attachment command.
 
+Repository-scoped streams have their own form:
+`ab artifact download stream:<id>[@rev] --output <file> [--store <ref>]`. A
+stream id is store-assigned and globally unique, so no build argument is
+needed; the command resolves the stream, requires it to be repository-scoped
+and owned by this repository, and retrieves the artifact its close finalized
+(§7.6) — an open stream has no artifact yet. This form is strictly an operator
+read: under any complete ambient build or Harvest identity it fails closed
+(§8.2), since repository-scoped targets are never reachable by ambient
+own-build or own-harvest authority. Find stream ids in the session rows of
+`ab harvest status`.
+
 In a build session, `ab artifact put <kind> <file> --attach` atomically deposits
 the exact bytes and designates that revision for the PR. A later designation of
 the same kind replaces it; distinct kinds remain distinct attachments. The
@@ -1515,10 +1526,12 @@ stream:<id>` retrieves the closed session's finalized document.
 Harvest sessions stream the same protocol into *repository-scoped* streams:
 the harvest runner's synthesize and review brackets each get one stream
 (`phase` spelled `harvest:<step>`), with `harvest.session.started` carrying
-the stream id. Find them via that `stream` field or the harvest journal
-(`ab watch --repository`); a closed stream finalizes to a repository-scope
-`stream:<id>` artifact. The harvest run id is not on the stream — recover it
-from the journal event that names the stream.
+the stream id. `ab harvest status` shows each run's sessions the way build
+status does — one row per session with its stream id and open/closed status
+(`session hs_… (harvest, synthesize@1) stream st_… (open)`). Once a stream
+closes, its finalized document is a repository-scoped `stream:<id>` artifact,
+and `ab artifact download stream:<id>` retrieves it; the stream form is an
+operator-only read (ambient phase identity fails closed).
 
 **`ab watch [<slug>...] [--repository] [--event <glob>]... [--since <cursor>]
 [--timeout <dur>] [--interval <dur>] [--count <n>] [--json] [--store <ref>]`**

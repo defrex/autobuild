@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#519](https://github.com/defrex/autobuild/pull/519) — Give repo-scoped finalized stream artifacts an operator download path
 - [#518](https://github.com/defrex/autobuild/pull/518) — Add a prompt-teardown cap to the stream polls twin (AUT-393)
 - [#517](https://github.com/defrex/autobuild/pull/517) — Guard the Postgres schema against DDL edits that skip a version bump
 - [#516](https://github.com/defrex/autobuild/pull/516) — Pace the SQLite store's held event reads at the event-wait budget
