@@ -386,6 +386,12 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
         if (streams.has(slug)) return
         const record = await store.getBuild(slug)
         if (record === null) return
+        // AUT-545: this full-log read is deliberate, accepted growth — the
+        // retained prefix is consumed at full replay depth by every later
+        // reduction (approvals, findings, answered escalations, PR facts,
+        // observations), so bounding it would need reducer-partition store
+        // machinery out of AUT-545's scope. Required for `--since` replay and
+        // the registration state check over the full reduction.
         const events = await store.getEvents(slug)
         const stream = registerStream(slug, events, slugs.includes(slug))
         if (resumeSeq !== undefined) {
@@ -419,8 +425,24 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
        * build to appear.
        */
       const discoverBuilds = async (): Promise<void> => {
+        // AUT-545: the terminal filter is the AUT-487 digest, not a full-log read —
+        // one flat batch read replaces a full getEvents per candidate build, per
+        // discovery pass; `terminal` is reduceBuild's exact terminal rule
+        // (store/digest.ts, pinned by contract). The per-build full read below
+        // remains deliberate for builds the digest cannot retire: its retained
+        // prefix is consumed at full replay depth by every later reduction
+        // (approvals, findings, answered escalations, PR facts, observations), so
+        // bounding it would need reducer-partition store machinery out of
+        // AUT-545's scope. The reduceBuild re-check stays: it is the
+        // legacy-record fallback (a record whose `repo` predates origin
+        // normalization is in `mine` via `repoOrigin` but absent from the digest
+        // map, which keys on `record.repo`) and it keeps this filter unable to
+        // diverge from reduceBuild.
+        const digests = await store.getRepoBuildDigests(repo)
         for (const record of (await store.listBuilds()).filter(mine)) {
           if (streams.has(record.slug)) continue
+          const digest = digests.get(record.slug)
+          if (digest !== undefined && digest.terminal !== undefined) continue
           const events = await store.getEvents(record.slug)
           const status = reduceBuild(events).status
           if (!NONTERMINAL_STATUSES.includes(status)) continue
