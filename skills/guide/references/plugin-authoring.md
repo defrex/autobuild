@@ -38,6 +38,17 @@ the durable provider locator as `BuildExecutionStart.workspaceRef`; local PID
 supervision remains host-owned. A workspace plugin relying on these fields
 should declare an API range containing `^1.5.0`.
 
+Plugin API 1.7 extends the workspace-provider factory context with the
+host-derived seams a store-requiring remote provider needs. Workspace-provider
+factories additionally receive `storeRef` and `storeToken` (guaranteed present
+when the registration declares `capabilities.storeRequirements`),
+`runtimeReferences` (the host's effective runtime routes; absent at call sites
+that reference no runtimes), and the checkout-less `origin` and
+`remoteBranchHead` readers (absent means fall back to host `git` from
+`repoRoot`). All five are optional, and a factory that ignores them changes
+nothing. A plugin reading the new seams should declare an API range containing
+`^1.7.0`.
+
 `BuildStore` and `BlobStore` contract types are exported for remote-server
 authors, but BuildStore is **not** an in-process manifest map. Implement the
 colocated language-neutral
@@ -113,6 +124,12 @@ Every module must default-export one strict `AutobuildPluginManifest`:
   absolute consuming-repository root. Ticket sources receive the existing
   `[tickets]` fields, workspace providers receive `[workspace.config]`, and
   runtime and forge factories currently receive an empty `config` object.
+  Workspace providers additionally receive the host-derived seams (API 1.7):
+  `storeRef` and `storeToken` — guaranteed strings when the registration
+  declares `capabilities.storeRequirements` — plus `runtimeReferences`,
+  `origin`, and `remoteBranchHead`. Each seam is optional and absent when the
+  host call site supplies no such value; absent `origin`/`remoteBranchHead`
+  fall back to host `git` from `repoRoot`.
 
 Add the module specifier at the TOML root, before any table. Repository-path
 specifiers resolve from the config-bearing root, which is the immutable build
