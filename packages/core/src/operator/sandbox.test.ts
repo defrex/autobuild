@@ -708,6 +708,27 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
     }
   })
 
+  test('refuses an unresolvable explicit commit with the documented refusal, not the generic error', async () => {
+    const fx = await forgeFx()
+    try {
+      const error = await fx.service
+        .publish('ops', { repo: fx.repo, title: 'Fix', commit: 'no-such-ref' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toMatch(
+        /does not resolve to a commit in the sandbox checkout/,
+      )
+      expect((error as SandboxOperationError).message).not.toMatch(/exited \d+/)
+      expect(fx.provider.publications).toEqual([])
+      const failed = (await factsOf(fx)).find(
+        (event) => event.type === 'orchestrator.sandbox.publish-failed',
+      )!
+      expect(failed.payload).toMatchObject({ stage: 'checks' })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
   test('refuses with a reset-required message when the journal has no baseSha', async () => {
     const fx = await forgeFx()
     try {

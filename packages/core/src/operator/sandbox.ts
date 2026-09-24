@@ -495,7 +495,10 @@ export async function createOperatorSandboxService(
           // 1. Resolve the commit inside the sandbox checkout.
           const commitExpr = input.commit?.trim() || 'HEAD'
           const resolveResult = await capability.exec(resolved, {
-            command: `git rev-parse --verify ${commitExpr}^{commit}`,
+            // --quiet makes an unresolvable commit-ish exit 1 (the documented
+            // refusal signal below); without it git exits 128 and the refusal
+            // branch is unreachable.
+            command: `git rev-parse --verify --quiet ${commitExpr}^{commit}`,
             timeoutSeconds: 30,
           })
           if (resolveResult.exitCode === 1) {
