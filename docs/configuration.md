@@ -289,6 +289,17 @@ require `^1.3.0`. API 1.4 adds the optional `Ticket.creationKey` projection: a
 ticket-source plugin should return its stable external create/adoption key from
 create, get, and ready listings so dispatch can correlate Autobuild's durable
 in-flight creations. Legacy tickets may omit it and remain dispatchable.
+API 1.6 adds workspace-provider capability declarations: a
+`workspaceProviders` registration may carry a `capabilities` object declaring
+its `[workspace.config]` schema (or an outright refusal), required runtime
+provisioning, supported forges, required environment groups (with per-site
+messages), variables that must exist in the launcher process environment,
+additional operator-sandbox forbidden variable names, HTTPS/token store
+requirements, an origin validator, and a remote readiness validation for
+`ab init --validate`. The host enforces every declared capability at its seam
+without naming the provider; required environment belongs on
+`capabilities.requiredEnv` (a descriptor-level `requiredEnv` is rejected at
+manifest parse).
 
 ```ts
 import type { AutobuildPluginManifest } from '@defrex/autobuild/plugin-sdk'
