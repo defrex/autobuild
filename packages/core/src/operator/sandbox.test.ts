@@ -10,10 +10,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from '../ports/workspace/operator-sandbox'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
+import { FakeForge } from '../ports/forge/fake'
 import { MemoryBuildStore } from '../store/memory'
 import {
   createOperatorSandboxService,
   resolveSandboxRelativePath,
+  sandboxPublicationBranch,
   SANDBOX_TRUNCATION_MARKER,
   truncateSandboxOutput,
   type OperatorSandboxService,
@@ -23,6 +25,7 @@ async function fixture(opts?: {
   clock?: () => Date
   setupCommand?: string
   environmentVariables?: string[]
+  forge?: FakeForge
 }) {
   const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-fake-'))
   const source = await mkdtemp(join(tmpdir(), 'ab-sandbox-src-'))
@@ -49,12 +52,14 @@ async function fixture(opts?: {
       environmentVariables: opts?.environmentVariables ?? [],
     },
     baseBranch: 'main',
+    ...(opts?.forge !== undefined ? { forge: opts.forge } : {}),
     ...(opts?.clock !== undefined ? { clock: opts.clock } : {}),
   })
   return {
     store,
     provider,
     service,
+    forge: opts?.forge,
     repo: source,
     async cleanup() {
       await store.close()
@@ -257,6 +262,12 @@ describe('OperatorSandboxService', () => {
         expect(probe.stdout).not.toContain(`${name}=`)
       }
       expect(probe.stdout).toContain('MY_TOOL_CONFIG=v-MY_TOOL_CONFIG')
+      // Direct evidence from the provider's recorded spawn environments:
+      // what the provider constructed, not merely what the shell reported.
+      expect(fx.provider.sandboxExecEnvironments.length).toBeGreaterThan(0)
+      for (const entry of fx.provider.sandboxExecEnvironments) {
+        expect(Object.keys(entry.env).sort()).toEqual(['MY_TOOL_CONFIG', 'PATH'])
+      }
     } finally {
       await fx.cleanup()
     }
@@ -350,7 +361,9 @@ describe('OperatorSandboxService', () => {
       ).release = async () => {
         throw new Error('purge failed')
       }
-      const error = await fx.service.reset('ops', { repo: fx.repo }).catch((e: unknown) => e)
+      const error = await fx.service
+        .reset('ops', { repo: fx.repo })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
       expect(error).toBeInstanceOf(SandboxOperationError)
       expect((error as SandboxOperationError).stage).toBe('reset')
     } finally {
@@ -394,6 +407,448 @@ describe('OperatorSandboxService', () => {
       await rm(workspaces, { recursive: true, force: true })
       await rm(source, { recursive: true, force: true })
     }
+  })
+})
+
+describe('OperatorSandboxService.publish (AUT-343)', () => {
+  const forgeFx = () =>
+    fixture({ forge: new FakeForge() }) as Promise<{
+      store: Awaited<ReturnType<typeof fixture>>['store']
+      provider: FakeWorkspaceProvider
+      service: OperatorSandboxService
+      forge: FakeForge
+      repo: string
+      cleanup(): Promise<void>
+    }>
+
+  const factsOf = async (fx: {
+    store: Awaited<ReturnType<typeof fixture>>['store']
+    repo: string
+  }) => fx.store.getRepoEvents(fx.repo)
+
+  /** The fresh sandbox's seed commit IS the provision-time base head, so a
+   * publishable state requires a real commit on top of it. */
+  const commitChange = (fx: { service: OperatorSandboxService; repo: string }) =>
+    fx.service.exec('ops', {
+      repo: fx.repo,
+      command: 'echo change >> README.md && git add README.md && git commit -q -m change',
+    })
+
+  test('canPublish is true only with forge and provider publication capability', async () => {
+    const withForge = await forgeFx()
+    try {
+      expect(withForge.service.canPublish).toBe(true)
+    } finally {
+      await withForge.cleanup()
+    }
+    const withoutForge = await fixture()
+    try {
+      expect(withoutForge.service.canPublish).toBe(false)
+    } finally {
+      await withoutForge.cleanup()
+    }
+  })
+
+  test('fresh provision and reset write baseSha into the fact and the snapshot', async () => {
+    const fx = await forgeFx()
+    try {
+      await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
+      const provisioned = (await factsOf(fx)).find(
+        (event) => event.type === 'orchestrator.sandbox.provisioned',
+      )!
+      // Extract before any matcher runs: Bun's toMatchObject can mutate the
+      // received object.
+      const baseSha = (provisioned.payload as { baseSha?: string }).baseSha
+      expect(baseSha).toMatch(/^[0-9a-f]{40}$/)
+
+      await fx.service.reset('ops', { repo: fx.repo })
+      const reprovisioned = (await factsOf(fx))
+        .filter((event) => event.type === 'orchestrator.sandbox.provisioned')
+        .at(-1)!
+      expect((reprovisioned.payload as { baseSha?: string }).baseSha).toMatch(/^[0-9a-f]{40}$/)
+
+      // The snapshot channel: sandboxStates exposes baseSha after reset.
+      const { sandboxStates } = await import('../processes/sandbox-state')
+      const states = sandboxStates(await fx.store.getRepoStateEvents(fx.repo))
+      const live = states.filter((state) => state.state === 'live').at(-1)!
+      expect(live.baseSha).toMatch(/^[0-9a-f]{40}$/)
+      expect(baseSha).toMatch(/^[0-9a-f]{40}$/)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('happy path: one push, one branch, never the base, PR against base, journaled fact', async () => {
+    const fx = await forgeFx()
+    try {
+      await commitChange(fx)
+      const result = await fx.service.publish('ops', {
+        repo: fx.repo,
+        title: 'Fix login',
+        via: { kind: 'session', id: 'sess-1' },
+      })
+      const branch = sandboxPublicationBranch(fx.repo, 'ops')
+      expect(result.branch).toBe(branch)
+      expect(result.sha).toMatch(/^[0-9a-f]{40}$/)
+      expect(fx.provider.publications).toEqual([
+        { ref: expect.any(String), sha: result.sha, branch },
+      ])
+      expect(branch).not.toBe('main')
+      expect(fx.forge!.opened).toHaveLength(1)
+      expect(fx.forge!.opened[0]).toMatchObject({ head: branch, base: 'main', title: 'Fix login' })
+      expect(fx.forge!.opened[0]!.body).toContain('by ops')
+      expect(fx.forge!.opened[0]!.body).toContain('via orchestrator session sess-1')
+      expect(fx.forge!.opened[0]!.body).toContain('agent-authored, not a pipeline build')
+      const published = (await factsOf(fx)).find(
+        (event) => event.type === 'orchestrator.sandbox.published',
+      )!
+      expect(published.actor).toEqual({ kind: 'human', user: 'ops' })
+      expect(published.payload).toMatchObject({
+        operator: 'ops',
+        branch,
+        sha: result.sha,
+        session: 'sess-1',
+        pr: { number: 1, url: expect.any(String) },
+      })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('open-then-update: a later publish pushes the new head to the same branch and adopts the PR', async () => {
+    const fx = await forgeFx()
+    try {
+      await commitChange(fx)
+      const first = await fx.service.publish('ops', {
+        repo: fx.repo,
+        title: 'Fix login',
+      })
+      await fx.service.exec('ops', {
+        repo: fx.repo,
+        command: 'echo more >> README.md && git add README.md && git commit -q -m more',
+      })
+      const second = await fx.service.publish('ops', {
+        repo: fx.repo,
+        title: 'Fix login more',
+      })
+      expect(second.branch).toBe(first.branch)
+      expect(second.sha).not.toBe(first.sha)
+      expect(fx.provider.publications).toHaveLength(2)
+      expect(fx.forge!.opened).toHaveLength(1) // adopted, not reopened
+      expect(fx.forge!.opened[0]!.head).toBe(first.branch)
+      expect(
+        (await factsOf(fx)).filter((e) => e.type === 'orchestrator.sandbox.published'),
+      ).toHaveLength(2)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('refuses a dirty checkout (tracked changes), staging and unstaged alike, and journals stage checks', async () => {
+    for (const dirty of [
+      'echo dirty >> README.md',
+      'echo dirty >> README.md && git add README.md',
+    ]) {
+      const fx = await forgeFx()
+      try {
+        await fx.service.exec('ops', { repo: fx.repo, command: dirty })
+        const error = await fx.service
+          .publish('ops', { repo: fx.repo, title: 'Fix' })
+          .catch((e: unknown) => e as unknown as SandboxOperationError)
+        expect(error).toBeInstanceOf(SandboxOperationError)
+        expect((error as SandboxOperationError).stage).toBe('publish')
+        expect((error as SandboxOperationError).message).toMatch(
+          /uncommitted changes to tracked files/,
+        )
+        expect(fx.provider.publications).toEqual([])
+        const failed = (await factsOf(fx)).find(
+          (event) => event.type === 'orchestrator.sandbox.publish-failed',
+        )!
+        expect(failed.payload).toMatchObject({ operator: 'ops', stage: 'checks' })
+      } finally {
+        await fx.cleanup()
+      }
+    }
+  })
+
+  test('an untracked-files-only checkout publishes (including the provisioning marker)', async () => {
+    const fx = await forgeFx()
+    try {
+      // A fresh sandbox carries the untracked .autobuild-sandbox-provisioned
+      // marker; add another untracked file — neither may refuse.
+      await fx.service.exec('ops', { repo: fx.repo, command: 'echo scratch > scratch.txt' })
+      await commitChange(fx)
+      const result = await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
+      expect(result.sha).toMatch(/^[0-9a-f]{40}$/)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('refuses a non-descendant commit and the degenerate base-equal commit', async () => {
+    const fx = await forgeFx()
+    try {
+      await fx.service.exec('ops', {
+        repo: fx.repo,
+        command: 'git checkout -q --orphan stray && git add -A && git commit -q -m stray',
+      })
+      const error = await fx.service
+        .publish('ops', { repo: fx.repo, title: 'Fix', commit: 'stray' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toMatch(/not a descendant of the base head/)
+      expect(fx.provider.publications).toEqual([])
+      expect(
+        (await factsOf(fx)).some(
+          (event) =>
+            event.type === 'orchestrator.sandbox.publish-failed' &&
+            (event.payload as { stage: string }).stage === 'checks',
+        ),
+      ).toBe(true)
+    } finally {
+      await fx.cleanup()
+    }
+
+    const degenerate = await forgeFx()
+    try {
+      await degenerate.service.exec('ops', { repo: degenerate.repo, command: 'true' })
+      const provisioned = (await factsOf(degenerate)).find(
+        (event) => event.type === 'orchestrator.sandbox.provisioned',
+      )!
+      const baseSha = (provisioned.payload as { baseSha: string }).baseSha
+      const error = await degenerate.service
+        .publish('ops', { repo: degenerate.repo, title: 'Fix', commit: baseSha })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect((error as SandboxOperationError).message).toMatch(/nothing to publish/)
+      expect(degenerate.provider.publications).toEqual([])
+    } finally {
+      await degenerate.cleanup()
+    }
+  })
+
+  test('refuses with a reset-required message when the journal has no baseSha', async () => {
+    const fx = await forgeFx()
+    try {
+      // Pre-existing environment: a provisioned fact written before this
+      // build carried no baseSha.
+      const identity = await fx.provider.orchestratorSandbox.describe({
+        repo: fx.repo,
+        operator: 'legacy',
+      })
+      await fx.store.appendRepo(fx.repo, {
+        actor: { kind: 'human', user: 'legacy' },
+        type: 'orchestrator.sandbox.provisioned',
+        payload: {
+          operator: 'legacy',
+          environmentId: identity.environmentId,
+          provider: 'fake',
+          workspacePath: identity.workspacePath,
+        },
+      })
+      const error = await fx.service
+        .publish('legacy', { repo: fx.repo, title: 'Fix' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toMatch(
+        /reset required|no recorded base head/,
+      )
+      expect(fx.provider.publications).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('ancestry-check error discipline: nonzero merge-base exit is an error naming the exit, not a refusal', async () => {
+    const fx = await forgeFx()
+    try {
+      await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
+      await commitChange(fx)
+      const capability = fx.provider.orchestratorSandbox
+      const originalExec = capability.exec.bind(capability)
+      capability.exec = async (handle, request) => {
+        if (request.command.includes('merge-base --is-ancestor')) {
+          return { exitCode: 128, stdout: '', stderr: 'fatal: internal git failure' }
+        }
+        return originalExec(handle, request)
+      }
+      const error = await fx.service
+        .publish('ops', { repo: fx.repo, title: 'Fix' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toContain('exited 128')
+      expect((error as SandboxOperationError).message).not.toMatch(/not a descendant/)
+      expect(fx.provider.publications).toEqual([])
+      const failed = (await factsOf(fx)).find(
+        (event) => event.type === 'orchestrator.sandbox.publish-failed',
+      )!
+      expect(failed.payload as { stage: string; message: string }).toMatchObject({
+        stage: 'checks',
+        message: expect.stringContaining('exited 128'),
+      })
+
+      // Same pin for a nonzero rev-parse exit.
+      capability.exec = async (handle, request) => {
+        if (request.command.includes('rev-parse')) {
+          return { exitCode: 128, stdout: '', stderr: 'fatal: bad object' }
+        }
+        return originalExec(handle, request)
+      }
+      const resolveError = await fx.service
+        .publish('ops', { repo: fx.repo, title: 'Fix' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect((resolveError as SandboxOperationError).message).toContain('exited 128')
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('a foreign repo is refused before any provider traffic', async () => {
+    const fx = await forgeFx()
+    try {
+      const error = await fx.service
+        .publish('ops', { repo: 'other/repo', title: 'Fix' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toContain('other/repo')
+      expect(fx.provider.publications).toEqual([])
+      expect(fx.forge!.opened).toEqual([])
+      expect(await factsOf(fx)).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('crash window: a recorded push with no journal fact is completed, not re-pushed', async () => {
+    const fx = await forgeFx()
+    try {
+      await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
+      await commitChange(fx)
+      const identity = await fx.provider.orchestratorSandbox.describe({
+        repo: fx.repo,
+        operator: 'ops',
+      })
+      const sha = (
+        await fx.provider.orchestratorSandbox.exec(identity, { command: 'git rev-parse HEAD' })
+      ).stdout.trim()
+      const branch = sandboxPublicationBranch(fx.repo, 'ops')
+      // Simulate the crash: push landed, journal fact never appended.
+      await fx.provider.sandboxPublication!.publish({ ref: identity.environmentId, sha, branch })
+      expect(fx.provider.publications).toHaveLength(1)
+
+      const result = await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
+      expect(result.sha).toBe(sha)
+      expect(fx.provider.publications).toHaveLength(1) // no re-push
+      expect(
+        (await factsOf(fx)).filter((e) => e.type === 'orchestrator.sandbox.published'),
+      ).toHaveLength(1)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('failure paths journal publish-failed with the stage and a redacted message', async () => {
+    const fx = await forgeFx()
+    try {
+      await commitChange(fx)
+      process.env.GITHUB_TOKEN = 'super-secret-token'
+      try {
+        fx.provider.setPublicationFailure(
+          new Error('push failed with GITHUB_TOKEN=super-secret-token'),
+        )
+        const pushError = await fx.service
+          .publish('ops', { repo: fx.repo, title: 'Fix' })
+          .catch((e: unknown) => e as unknown as SandboxOperationError)
+        expect((pushError as SandboxOperationError).stage).toBe('publish')
+        const pushFailed = (await factsOf(fx))
+          .filter((event) => event.type === 'orchestrator.sandbox.publish-failed')
+          .at(-1)!
+        expect((pushFailed.payload as { stage: string }).stage).toBe('push')
+        expect((pushFailed.payload as { message: string }).message).not.toContain(
+          'super-secret-token',
+        )
+      } finally {
+        delete process.env.GITHUB_TOKEN
+        fx.provider.setPublicationFailure(null)
+      }
+
+      const forge = fx.forge!
+      forge.openPr = async () => {
+        throw new Error('forge exploded')
+      }
+      await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' }).catch(() => {})
+      const prFailed = (await factsOf(fx))
+        .filter((event) => event.type === 'orchestrator.sandbox.publish-failed')
+        .at(-1)!
+      expect((prFailed.payload as { stage: string }).stage).toBe('pr')
+      expect((prFailed.payload as { message: string }).message).toContain('forge exploded')
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('the guest environment stays credential-free during a publish attempt', async () => {
+    const fx = await forgeFx()
+    try {
+      await commitChange(fx)
+      process.env.GITHUB_TOKEN = 'super-secret-token'
+      try {
+        await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
+      } finally {
+        delete process.env.GITHUB_TOKEN
+      }
+      const publishRecords = fx.provider.sandboxExecEnvironments.slice()
+      expect(publishRecords.length).toBeGreaterThan(0)
+      for (const entry of publishRecords) {
+        expect(Object.keys(entry.env)).toEqual(['PATH'])
+        for (const name of SANDBOX_FORBIDDEN_ENV) {
+          expect(Object.keys(entry.env)).not.toContain(name)
+        }
+      }
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('reset after the base advances: new baseSha, publish from the fresh checkout accepted', async () => {
+    const fx = await forgeFx()
+    try {
+      await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
+      const firstBaseSha = (
+        (await factsOf(fx)).find((event) => event.type === 'orchestrator.sandbox.provisioned')!
+          .payload as { baseSha: string }
+      ).baseSha
+      // A merge moved the base forward: the source tree gains a file, reset
+      // tears down and re-provisions from the new base (a fresh seed commit
+      // → a fresh baseSha).
+      await Bun.write(join(fx.repo, 'merged.txt'), 'from merge\n')
+      await fx.service.reset('ops', { repo: fx.repo })
+      const reprovisioned = (await factsOf(fx))
+        .filter((event) => event.type === 'orchestrator.sandbox.provisioned')
+        .at(-1)!
+      const newBaseSha = (reprovisioned.payload as { baseSha: string }).baseSha
+      expect(newBaseSha).toMatch(/^[0-9a-f]{40}$/)
+      expect(newBaseSha).not.toBe(firstBaseSha)
+      // A publish from the fresh checkout is then accepted.
+      await commitChange(fx)
+      const result = await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
+      expect(result.sha).toMatch(/^[0-9a-f]{40}$/)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('branch naming: an operator with no alphanumerics still yields a canonical branch', () => {
+    const branch = sandboxPublicationBranch('https://github.com/acme/widgets', '@@@')
+    expect(branch).toMatch(/^ab\/orch--[0-9a-f]{8}$/)
+    expect(branch).toMatch(/^ab\/[a-z0-9][a-z0-9-]*$/)
+    const normal = sandboxPublicationBranch('https://github.com/acme/widgets', 'Ada Lovelace!')
+    expect(normal).toBe(
+      `ab/orch-ada-lovelace-${require('node:crypto')
+        .createHash('sha256')
+        .update('https://github.com/acme/widgets\0Ada Lovelace!')
+        .digest('hex')
+        .slice(0, 8)}`,
+    )
   })
 })
 

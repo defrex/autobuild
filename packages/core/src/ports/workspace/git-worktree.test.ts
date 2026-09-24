@@ -1400,4 +1400,98 @@ describe('GitWorktreeProvider operator sandbox', () => {
       environmentId: missing.environmentId,
     })
   })
+
+  test('the build-path publication discriminator is untouched; the sandbox seam exists', () => {
+    expect((provider as unknown as { publication?: unknown }).publication).toBeUndefined()
+    expect(provider.sandboxPublication).toBeDefined()
+  })
+
+  test('sandboxPublication pushes an exact sha to one branch against a real temp origin', async () => {
+    // A bare origin so the push has a real network-style destination; the
+    // worktree's origin remote carries the host's local forge configuration
+    // exactly as a local build's finalize push does.
+    const origin = await mkdtemp(join(tmpdir(), 'ab-sandbox-publish-origin-'))
+    await run(['git', 'init', '-q', '--bare', '-b', 'main', origin], repo)
+    await run(['git', 'remote', 'add', 'origin', origin], repo)
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const sha = await commitFile(identity.workspacePath, 'fix.txt', 'fix\n', 'operator fix')
+    const publication = provider.sandboxPublication!
+    expect(
+      await publication.isPublished!({
+        ref: identity.environmentId,
+        sha,
+        branch: 'ab/orch-ops-abc12345',
+      }),
+    ).toBe(false)
+    await publication.publish({ ref: identity.environmentId, sha, branch: 'ab/orch-ops-abc12345' })
+    // Exactly the pushed branch exists on the origin, at exactly the sha.
+    const refs = await run(['git', 'ls-remote', '--heads', 'origin'], repo)
+    expect(refs.split('\n')).toEqual([`${sha}\trefs/heads/ab/orch-ops-abc12345`])
+    expect(
+      await publication.isPublished!({
+        ref: identity.environmentId,
+        sha,
+        branch: 'ab/orch-ops-abc12345',
+      }),
+    ).toBe(true)
+    // The git-worktree probe is workspace-anchored: without a ref it cannot
+    // run, and the service always supplies one.
+    await expect(publication.isPublished!({ sha, branch: 'ab/orch-ops-abc12345' })).rejects.toThrow(
+      /workspace ref/,
+    )
+  })
+
+  test('sandboxPublication without an origin remote moves the local ref forward-only', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops-local',
+      baseBranch: 'main',
+    })
+    const sha = await commitFile(identity.workspacePath, 'fix.txt', 'fix\n', 'operator fix')
+    const publication = provider.sandboxPublication!
+    await publication.publish({ ref: identity.environmentId, sha, branch: 'ab/orch-ops-local999' })
+    expect(await run(['git', 'rev-parse', 'refs/heads/ab/orch-ops-local999'], repo)).toBe(sha)
+    expect(
+      await publication.isPublished!({
+        ref: identity.environmentId,
+        sha,
+        branch: 'ab/orch-ops-local999',
+      }),
+    ).toBe(true)
+
+    // A second push that is NOT a descendant of the current tip is refused.
+    await run(['git', 'checkout', '-q', '--orphan', 'divergent'], identity.workspacePath)
+    await writeFile(join(identity.workspacePath, 'divergent.txt'), 'divergent\n')
+    await run(['git', 'add', 'divergent.txt'], identity.workspacePath)
+    await run(['git', ...GIT_ID, 'commit', '-q', '-m', 'divergent'], identity.workspacePath)
+    const divergent = await run(['git', 'rev-parse', 'HEAD'], identity.workspacePath)
+    await expect(
+      publication.publish({
+        ref: identity.environmentId,
+        sha: divergent,
+        branch: 'ab/orch-ops-local999',
+      }),
+    ).rejects.toThrow(/not an ancestor/)
+  })
+
+  test('sandboxPublication validates input shapes and a missing ref', async () => {
+    const identity = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops-shape',
+      baseBranch: 'main',
+    })
+    const sha = await run(['git', 'rev-parse', 'HEAD'], identity.workspacePath)
+    const publication = provider.sandboxPublication!
+    await expect(
+      publication.publish({ ref: identity.environmentId, sha: 'nothash', branch: 'ab/orch-ops-x' }),
+    ).rejects.toThrow(/exact commit SHA/)
+    await expect(
+      publication.publish({ ref: identity.environmentId, sha, branch: 'main' }),
+    ).rejects.toThrow(/canonical build branch/)
+    await expect(publication.isPublished!({ sha, branch: 'ab/orch-ops-x' })).rejects.toThrow() // no ref and no recorded workspace → probe cannot run
+  })
 })

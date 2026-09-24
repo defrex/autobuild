@@ -484,144 +484,143 @@ export async function createOperatorSandboxService(
       }
       const forge = options.forge!
       const publication = provider.sandboxPublication!
-      const key = `${repo}\0${identity}`
-      return serialize(key, () =>
-        run(identity, 'publish', async (resolved, freshState) => {
-          let stage: 'checks' | 'push' | 'pr' = 'checks'
-          try {
-            // 1. Resolve the commit inside the sandbox checkout.
-            const commitExpr = input.commit?.trim() || 'HEAD'
-            const resolveResult = await capability.exec(resolved, {
-              command: `git rev-parse --verify ${commitExpr}^{commit}`,
-              timeoutSeconds: 30,
-            })
-            if (resolveResult.exitCode === 1) {
-              throw new SandboxOperationError(
-                'publish',
-                `commit ${JSON.stringify(commitExpr)} does not resolve to a commit in the sandbox checkout`,
-              )
-            }
-            if (resolveResult.exitCode !== 0) {
-              throw new Error(
-                `git rev-parse --verify ${commitExpr}^{commit} exited ${resolveResult.exitCode}: ${resolveResult.stderr.trim() || resolveResult.stdout.trim() || '(no output)'}`,
-              )
-            }
-            const sha = resolveResult.stdout.trim()
-            // 2. Refuse a dirty checkout: staged or unstaged changes to
-            // tracked files. Untracked files do not refuse (they cannot
-            // enter the published commit, and providers leave untracked
-            // provisioning markers in the checkout).
-            const statusResult = await capability.exec(resolved, {
-              command: 'git status --porcelain -uno',
-              timeoutSeconds: 30,
-            })
-            if (statusResult.exitCode !== 0) {
-              throw new Error(
-                `git status --porcelain -uno exited ${statusResult.exitCode}: ${statusResult.stderr.trim() || statusResult.stdout.trim() || '(no output)'}`,
-              )
-            }
-            if (statusResult.stdout.trim() !== '') {
-              throw new SandboxOperationError(
-                'publish',
-                'the sandbox checkout has uncommitted changes to tracked files; commit or discard them before publishing',
-              )
-            }
-            // 3. Refuse a commit that is not a descendant of the base head
-            // at provision or reset time.
-            const baseSha = freshState?.baseSha
-            if (baseSha === undefined) {
-              throw new SandboxOperationError(
-                'publish',
-                'this environment has no recorded base head; run sandbox.reset to re-provision before publishing',
-              )
-            }
-            if (sha === baseSha) {
-              throw new SandboxOperationError(
-                'publish',
-                'the checkout head is the base commit itself; there is nothing to publish',
-              )
-            }
-            const ancestorResult = await capability.exec(resolved, {
-              command: `git merge-base --is-ancestor ${baseSha} ${sha}`,
-              timeoutSeconds: 30,
-            })
-            if (ancestorResult.exitCode === 1) {
-              throw new SandboxOperationError(
-                'publish',
-                `the commit is not a descendant of the base head ${baseSha} recorded at provision time; rebase onto the current base or run sandbox.reset`,
-              )
-            }
-            if (ancestorResult.exitCode !== 0) {
-              throw new Error(
-                `git merge-base --is-ancestor ${baseSha} ${sha} exited ${ancestorResult.exitCode}: ${ancestorResult.stderr.trim() || ancestorResult.stdout.trim() || '(no output)'}`,
-              )
-            }
-            // 4. Deterministic branch; the helper self-validates the grammar.
-            const branch = sandboxPublicationBranch(repo, identity)
-            if (branch === options.baseBranch) {
-              throw new SandboxOperationError(
-                'publish',
-                'the derived publication branch collides with the base branch; refusing',
-              )
-            }
-            // 5. Push-before-fact crash safety, mirroring
-            // publication-settlement: a crashed prior attempt is owed its
-            // completion, not a re-push.
-            const alreadyPublished =
-              (await publication.isPublished?.({
-                ref: resolved.environmentId,
-                sha,
-                branch,
-              })) === true
-            stage = 'push'
-            if (!alreadyPublished) {
-              await publication.publish({ ref: resolved.environmentId, sha, branch })
-            }
-            // 6. Open (or adopt) the PR against the base branch; a later
-            // publish to the same branch moves the same PR's head.
-            stage = 'pr'
-            const session =
-              input.via !== undefined && input.via.kind === 'session' ? input.via.id : undefined
-            const body =
-              (input.body ?? '') +
-              (input.body !== undefined && input.body !== '' ? '\n\n' : '') +
-              `Published from an Autobuild operator sandbox by ${identity}` +
-              (session !== undefined ? ` via orchestrator session ${session}` : '') +
-              ' — agent-authored, not a pipeline build.'
-            const pr = await forge.openPr({
-              workspacePath: resolved.workspacePath,
-              head: branch,
-              base: options.baseBranch,
-              title,
-              body,
-            })
-            // 7. The publication is a repository-journal fact.
-            await append(identity, 'orchestrator.sandbox.published', {
-              operator: identity,
-              environmentId: resolved.environmentId,
-              branch,
-              sha,
-              ...(session !== undefined ? { session } : {}),
-              pr: { number: pr.number, url: pr.url, headSha: pr.headSha },
-            })
-            return { branch, sha, pr: { number: pr.number, url: pr.url, headSha: pr.headSha } }
-          } catch (error) {
-            // 8. Every refusal or failure at steps 1-6 is a journal fact
-            // naming the stage, with credential values redacted from the
-            // message.
-            const message = describeError(error)
-            await append(identity, 'orchestrator.sandbox.publish-failed', {
-              operator: identity,
-              environmentId: resolved.environmentId,
-              stage,
-              message,
-            }).catch(() => {})
-            throw new SandboxOperationError('publish', message, {
-              cause: error instanceof SandboxOperationError ? error.cause : error,
-            })
+      // run() already serializes per environment; wrapping it in another
+      // serialize on the same key would deadlock the chain.
+      return run(identity, 'publish', async (resolved, freshState) => {
+        let stage: 'checks' | 'push' | 'pr' = 'checks'
+        try {
+          // 1. Resolve the commit inside the sandbox checkout.
+          const commitExpr = input.commit?.trim() || 'HEAD'
+          const resolveResult = await capability.exec(resolved, {
+            command: `git rev-parse --verify ${commitExpr}^{commit}`,
+            timeoutSeconds: 30,
+          })
+          if (resolveResult.exitCode === 1) {
+            throw new SandboxOperationError(
+              'publish',
+              `commit ${JSON.stringify(commitExpr)} does not resolve to a commit in the sandbox checkout`,
+            )
           }
-        }),
-      )
+          if (resolveResult.exitCode !== 0) {
+            throw new Error(
+              `git rev-parse --verify ${commitExpr}^{commit} exited ${resolveResult.exitCode}: ${resolveResult.stderr.trim() || resolveResult.stdout.trim() || '(no output)'}`,
+            )
+          }
+          const sha = resolveResult.stdout.trim()
+          // 2. Refuse a dirty checkout: staged or unstaged changes to
+          // tracked files. Untracked files do not refuse (they cannot
+          // enter the published commit, and providers leave untracked
+          // provisioning markers in the checkout).
+          const statusResult = await capability.exec(resolved, {
+            command: 'git status --porcelain -uno',
+            timeoutSeconds: 30,
+          })
+          if (statusResult.exitCode !== 0) {
+            throw new Error(
+              `git status --porcelain -uno exited ${statusResult.exitCode}: ${statusResult.stderr.trim() || statusResult.stdout.trim() || '(no output)'}`,
+            )
+          }
+          if (statusResult.stdout.trim() !== '') {
+            throw new SandboxOperationError(
+              'publish',
+              'the sandbox checkout has uncommitted changes to tracked files; commit or discard them before publishing',
+            )
+          }
+          // 3. Refuse a commit that is not a descendant of the base head
+          // at provision or reset time.
+          const baseSha = freshState?.baseSha
+          if (baseSha === undefined) {
+            throw new SandboxOperationError(
+              'publish',
+              'this environment has no recorded base head; run sandbox.reset to re-provision before publishing',
+            )
+          }
+          if (sha === baseSha) {
+            throw new SandboxOperationError(
+              'publish',
+              'the checkout head is the base commit itself; there is nothing to publish',
+            )
+          }
+          const ancestorResult = await capability.exec(resolved, {
+            command: `git merge-base --is-ancestor ${baseSha} ${sha}`,
+            timeoutSeconds: 30,
+          })
+          if (ancestorResult.exitCode === 1) {
+            throw new SandboxOperationError(
+              'publish',
+              `the commit is not a descendant of the base head ${baseSha} recorded at provision time; rebase onto the current base or run sandbox.reset`,
+            )
+          }
+          if (ancestorResult.exitCode !== 0) {
+            throw new Error(
+              `git merge-base --is-ancestor ${baseSha} ${sha} exited ${ancestorResult.exitCode}: ${ancestorResult.stderr.trim() || ancestorResult.stdout.trim() || '(no output)'}`,
+            )
+          }
+          // 4. Deterministic branch; the helper self-validates the grammar.
+          const branch = sandboxPublicationBranch(repo, identity)
+          if (branch === options.baseBranch) {
+            throw new SandboxOperationError(
+              'publish',
+              'the derived publication branch collides with the base branch; refusing',
+            )
+          }
+          // 5. Push-before-fact crash safety, mirroring
+          // publication-settlement: a crashed prior attempt is owed its
+          // completion, not a re-push.
+          const alreadyPublished =
+            (await publication.isPublished?.({
+              ref: resolved.environmentId,
+              sha,
+              branch,
+            })) === true
+          stage = 'push'
+          if (!alreadyPublished) {
+            await publication.publish({ ref: resolved.environmentId, sha, branch })
+          }
+          // 6. Open (or adopt) the PR against the base branch; a later
+          // publish to the same branch moves the same PR's head.
+          stage = 'pr'
+          const session =
+            input.via !== undefined && input.via.kind === 'session' ? input.via.id : undefined
+          const body =
+            (input.body ?? '') +
+            (input.body !== undefined && input.body !== '' ? '\n\n' : '') +
+            `Published from an Autobuild operator sandbox by ${identity}` +
+            (session !== undefined ? ` via orchestrator session ${session}` : '') +
+            ' — agent-authored, not a pipeline build.'
+          const pr = await forge.openPr({
+            workspacePath: resolved.workspacePath,
+            head: branch,
+            base: options.baseBranch,
+            title,
+            body,
+          })
+          // 7. The publication is a repository-journal fact.
+          await append(identity, 'orchestrator.sandbox.published', {
+            operator: identity,
+            environmentId: resolved.environmentId,
+            branch,
+            sha,
+            ...(session !== undefined ? { session } : {}),
+            pr: { number: pr.number, url: pr.url, headSha: pr.headSha },
+          })
+          return { branch, sha, pr: { number: pr.number, url: pr.url, headSha: pr.headSha } }
+        } catch (error) {
+          // 8. Every refusal or failure at steps 1-6 is a journal fact
+          // naming the stage, with credential values redacted from the
+          // message.
+          const message = describeError(error)
+          await append(identity, 'orchestrator.sandbox.publish-failed', {
+            operator: identity,
+            environmentId: resolved.environmentId,
+            stage,
+            message,
+          }).catch(() => {})
+          throw new SandboxOperationError('publish', message, {
+            cause: error instanceof SandboxOperationError ? error.cause : error,
+          })
+        }
+      })
     },
 
     async reset(identity, input) {
