@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#514](https://github.com/defrex/autobuild/pull/514) — Ship the Vercel Sandbox provider as a plugin alongside the builtin
 - [#507](https://github.com/defrex/autobuild/pull/507) — Pin runGuestReadinessProbe's redaction scope to guestEnvNames
 - [#506](https://github.com/defrex/autobuild/pull/506) — Bound the local surfaces' initial repository-journal replays
 - [#505](https://github.com/defrex/autobuild/pull/505) — Make getRepoStateEvents anchor probe test MAX(seq) IS NULL explicitly
