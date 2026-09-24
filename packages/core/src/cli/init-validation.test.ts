@@ -2139,4 +2139,137 @@ readyState = "ready"
     expect(detail).toContain('[REDACTED]')
     expect(detail).not.toContain('sekret-value-123')
   })
+
+  test('a describeEnvironment provider without a configSchema receives the raw config (never undefined)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-describe-env-no-schema-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        describeEnvironment: (config) => ['config=' + JSON.stringify(config)],
+        validateReadiness: async () => ({
+          provider: 'acmebox',
+          context: 'remote',
+          exitCode: 0,
+          checks: [{ name: 'context', status: 'pass', detail: 'ok' }],
+        }),
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[workspace.config]
+region = "acme-region"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+
+    // No configSchema is declared, so describeEnvironment must still receive a
+    // defined argument — the raw [workspace.config] table, the same fallback
+    // guestEnvNames gets — never undefined.
+    const lines: string[] = []
+    await validateInitReadiness({
+      targetRepo: repo,
+      env: {},
+      exec: spawnExec,
+      stdout: (line) => lines.push(line),
+    })
+    expect(lines).toContain('config={"region":"acme-region"}')
+  })
+
+  test('a describeEnvironment provider with a configSchema still receives the parsed config', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-describe-env-schema-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        configSchema: {
+          parse: (value) => {
+            if (
+              typeof value !== 'object' ||
+              value === null ||
+              typeof value.guestName !== 'string'
+            ) {
+              throw new Error('guestName must be a string')
+            }
+            // Rename the key: the parsed shape must stringify differently
+            // from the raw workspace.config table, so this test's assertion
+            // can only pass when the parsed config (not the raw fallback)
+            // reaches describeEnvironment.
+            return { guest: value.guestName }
+          },
+          safeParse: function (value) {
+            try {
+              return { success: true, data: this.parse(value) }
+            } catch (error) {
+              return { success: false, error }
+            }
+          },
+        },
+        describeEnvironment: (config) => ['config=' + JSON.stringify(config)],
+        validateReadiness: async () => ({
+          provider: 'acmebox',
+          context: 'remote',
+          exitCode: 0,
+          checks: [{ name: 'context', status: 'pass', detail: 'ok' }],
+        }),
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[workspace.config]
+guestName = "acme-guest"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+
+    // A declared configSchema still wins: describeEnvironment receives the
+    // parsed config, not the raw table, so the fallback did not shadow the
+    // parse. The schema renames the key (guestName → guest), so the raw
+    // table would stringify as {"guestName":...} and only the parsed shape
+    // satisfies the assertion.
+    const lines: string[] = []
+    await validateInitReadiness({
+      targetRepo: repo,
+      env: {},
+      exec: spawnExec,
+      stdout: (line) => lines.push(line),
+    })
+    expect(lines).toContain('config={"guest":"acme-guest"}')
+  })
 })

@@ -134,7 +134,10 @@ export interface WorkspaceProviderCapabilities {
   originReadFailureMessage?: string
   /** Env names the provider forwards into the guest (readiness redaction). */
   guestEnvNames?: (config: unknown) => readonly string[]
-  /** Readiness summary stdout lines printed after the report. */
+  /** Readiness summary stdout lines printed after the report. The config
+   * argument is the `[workspace.config]` parsed with the declared
+   * `configSchema`, or the raw `[workspace.config]` table when no schema is
+   * declared — mirroring `guestEnvNames`. */
   describeEnvironment?: (
     config: unknown,
     env: Record<string, string | undefined>,

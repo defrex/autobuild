@@ -5,7 +5,12 @@ import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
 import { distributionRoot } from '../../distribution'
-import { packageAutobuildDistribution } from './distribution-archive'
+import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
+import {
+  distributionStampFor,
+  packageAutobuildDistribution,
+  readDistributionIdentity,
+} from './distribution-archive'
 import { spawnExec, type Exec } from './git-worktree'
 import { installPackedDistribution } from '../../testing/packed-install'
 import { HARVEST_RUNNER_OPTIONS_ENV } from './harvest-execution'
@@ -269,6 +274,13 @@ function harness(
     /** Operator-sandbox options threaded to the provider constructor. */
     setupCommand?: string
     sandboxEnvironmentVariables?: readonly string[]
+    /** Construct the provider WITHOUT the `distributionIdentity` seam, so
+     * `identityStamp()`'s default path — `distributionStampFor(archiveBytes())`
+     * over the injected `packageArchive` — executes and the provider's default
+     * identity resolution is pinned at the wiring site under test. The seam
+     * lever and the returned `distributionIdentity` getter/setter stay (they
+     * are simply inert in this mode). */
+    defaultIdentityStamp?: boolean
   } = {},
 ) {
   const sandbox = new FakeSandbox()
@@ -371,7 +383,12 @@ function harness(
       }
       return new Uint8Array([1, 2, 3])
     },
-    distributionIdentity: async () => identityState.current,
+    // Seam-less mode omits the seam entirely (the point of
+    // `defaultIdentityStamp`): the provider falls through to its default
+    // `distributionStampFor(archiveBytes())` resolution.
+    ...(options.defaultIdentityStamp
+      ? {}
+      : { distributionIdentity: async () => identityState.current }),
     // Bounded observation waits resolve in milliseconds, never the 5 s default.
     observeWaitMs: 25,
     ...(options.setupCommand !== undefined ? { setupCommand: options.setupCommand } : {}),
@@ -744,6 +761,33 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.distributionVersion).toBe('1.2.3')
   })
 
+  test('fresh provisioning without the identity seam records the default-computed stamp', async () => {
+    // obs_8266d6a3 pin (provision site): every sibling test injects the
+    // `distributionIdentity` seam, so the provider's DEFAULT identity
+    // resolution — `identityStamp()` falling through to
+    // `distributionStampFor(archiveBytes())` — never runs for them. This test
+    // constructs the provider without the seam; the written marker must equal
+    // the full stamp recomputed independently over the exact archive bytes the
+    // harness injects. Wiring the default to bare `readDistributionIdentity()`
+    // (dropping the protocol and digest terms) writes the bare version here
+    // and fails both assertions.
+    const h = harness({ defaultIdentityStamp: true })
+    await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const marker = h.sandbox.distributionVersion
+    expect(marker).toBe(await distributionStampFor(new Uint8Array([1, 2, 3])))
+    // Shape assertions document the intent and sharpen the failure: the
+    // marker is not the bare version and carries the full
+    // `<version>+protocol<N>+sha256-<64 hex>` stamp shape.
+    expect(marker).not.toBe(await readDistributionIdentity())
+    expect(marker).toMatch(
+      new RegExp(`\\+protocol${REMOTE_STORE_PROTOCOL_VERSION}\\+sha256-[0-9a-f]{64}$`),
+    )
+  })
+
   test('restart after a protocol-only bump reinstalls before the runner starts (AUT-521 regression)', async () => {
     const h = harness()
     const provisioned = await h.provider.provision({
@@ -835,6 +879,112 @@ describe('VercelSandboxProvider', () => {
       expect(command.cmd).not.toBe('git')
       expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
     }
+  })
+
+  test('restart after a version-only bump on a current-protocol marker reinstalls before the runner starts', async () => {
+    // obs_6981ba1d pin: the sibling version-only test provisions the bare
+    // seam value '1.2.3', so its pre-restart marker has the same legacy shape
+    // as the protocol-only test. This test isolates a PURE version-only
+    // change: the provisioned marker already carries the current protocol
+    // (full `<version>+protocol<N>` stamp on both sides, differing only in
+    // the version component) — the case AUT-540 specifies a refresh for.
+    const h = harness()
+    h.distributionIdentity = '1.2.3+protocol3'
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The provisioned marker carries the current protocol — what isolates
+    // this case from the sibling tests.
+    expect(h.sandbox.distributionVersion).toBe('1.2.3+protocol3')
+    // Version-only bump: same protocol, no digest component on either side.
+    h.distributionIdentity = '2.0.0+protocol3'
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-version-bump-current-protocol',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // The refresh sequence strictly precedes the detached runner launch, with
+    // Bun's preflight after the reinstall.
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    expect((restart[runner - 1] as { args?: string[] }).args).toEqual(['--version'])
+    // The marker now carries the bumped version on the current protocol.
+    expect(h.sandbox.distributionVersion).toBe('2.0.0+protocol3')
+    // Exactly one new write — the archive into /tmp — never the workspace.
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+    // No git command and no workspace-cwd command before the runner: the
+    // checkout and its unpushed commits are untouched by the refresh.
+    for (const command of restart.slice(0, runner)) {
+      expect(command.cmd).not.toBe('git')
+      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
+    }
+  })
+
+  test('restart without the identity seam refreshes a bare-version marker to the default stamp', async () => {
+    // obs_8266d6a3 pin (start / build-restart site): without the seam the
+    // restart path must resolve the identity via the default
+    // `distributionStampFor(archiveBytes())` and refresh any guest whose
+    // marker disagrees. The stale marker is the bare running version — the
+    // pre-AUT-521 legacy shape AND the exact value a wiring degraded to bare
+    // `readDistributionIdentity()` would recompute — so under that regression
+    // the comparison matches, no refresh runs, and both assertions fail.
+    const h = harness({ defaultIdentityStamp: true })
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // Provision wrote the full default stamp; model the legacy bare-version
+    // guest marker.
+    h.sandbox.distributionVersion = await readDistributionIdentity()
+    const commandsBefore = h.sandbox.commands.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-seamless-restart',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // The refresh ran strictly before the detached runner (Bun's preflight
+    // trails the reinstall).
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    // The marker was rewritten to the independently recomputed full stamp —
+    // not the bare version a degraded wiring would produce.
+    expect(h.sandbox.distributionVersion).toBe(
+      await distributionStampFor(new Uint8Array([1, 2, 3])),
+    )
   })
 
   test('restart with an unchanged identity stamp reinstalls nothing', async () => {
@@ -2515,6 +2665,60 @@ describe('VercelSandboxProvider harvestExecution', () => {
     expect(envelope.supervision).toEqual({ kind: 'environment' })
   })
 
+  test('harvest reuse without the identity seam refreshes a stale marker to the default stamp', async () => {
+    // obs_8266d6a3 pin (startHarvestExecution / harvest-reuse site): without
+    // the injected seam the reuse path must resolve the identity via the
+    // default `distributionStampFor(archiveBytes())` and refresh a stale
+    // marker. The stale value is the bare running version — the exact value a
+    // wiring degraded to bare `readDistributionIdentity()` would recompute —
+    // so under that regression no refresh runs and the assertions fail.
+    const h = harness({ defaultIdentityStamp: true })
+    const first = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i1',
+      baseBranch: 'main',
+    })
+    expect(await first.completion).toEqual({ exitCode: 0 })
+    // The fresh provision wrote the full default stamp over the injected
+    // archive bytes; model a stale guest by degrading the marker to the bare
+    // version.
+    const fullStamp = await distributionStampFor(new Uint8Array([1, 2, 3]))
+    expect(h.sandbox.distributionVersion).toBe(fullStamp)
+    h.sandbox.distributionVersion = await readDistributionIdentity()
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const second = await h.provider.harvestExecution.start({
+      storeRef: 'https://store.example.test',
+      repo: ORIGIN,
+      instance: 'host-harvest-i2',
+      baseBranch: 'main',
+    })
+    expect(await second.completion).toEqual({ exitCode: 0 })
+
+    const since = h.sandbox.commands.slice(commandsBefore)
+    const runner = since.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // The stale marker is read, then the full refresh sequence runs before
+    // the detached runner (Bun's preflight trails the reinstall).
+    expect(since.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'test',
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    // Exactly one new write — the archive into /tmp — and the marker was
+    // refreshed to the independently recomputed full stamp.
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+    expect(h.sandbox.distributionVersion).toBe(fullStamp)
+  })
+
   test('deletes and recreates an unmarked leftover harvest environment', async () => {
     const leftover = new FakeSandbox()
     leftover.cwd = '/vercel/sandbox'
@@ -2770,6 +2974,49 @@ describe('operator sandbox capability', () => {
     expect(h.creates).toBe(1)
     expect(h.sandbox.distributionVersion).toBe('1.2.3')
     expect(h.sandbox.commands.length).toBeGreaterThan(refreshCommands)
+  })
+
+  test('operator sandbox reuse without the identity seam refreshes a stale marker to the default stamp', async () => {
+    // obs_8266d6a3 pin (ensureOperatorSandbox / operator-reuse site): without
+    // the injected seam the reuse path must resolve the identity via the
+    // default `distributionStampFor(archiveBytes())` and refresh a stale
+    // marker. The stale value is the bare running version — the exact value a
+    // wiring degraded to bare `readDistributionIdentity()` would recompute —
+    // so under that regression no refresh runs and the assertions fail.
+    const h = harness({ defaultIdentityStamp: true })
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    // The fresh provision wrote the full default stamp over the injected
+    // archive bytes; model a stale guest by degrading the marker to the bare
+    // version.
+    const fullStamp = await distributionStampFor(new Uint8Array([1, 2, 3]))
+    expect(h.sandbox.distributionVersion).toBe(fullStamp)
+    h.sandbox.distributionVersion = await readDistributionIdentity()
+    const commandsBefore = h.sandbox.commands.length
+
+    await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(h.creates).toBe(1)
+    // The stale marker was read, the refresh ran, and the marker was
+    // rewritten to the independently recomputed full stamp — not the bare
+    // version a degraded wiring would produce (which would equal the stale
+    // marker and suppress the refresh entirely).
+    expect(h.sandbox.commands.slice(commandsBefore).map((command) => command.cmd)).toEqual([
+      'test',
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+    ])
+    expect(h.sandbox.distributionVersion).toBe(fullStamp)
   })
 
   test('baseSha rides on the fresh provision and is omitted on reuse', async () => {
