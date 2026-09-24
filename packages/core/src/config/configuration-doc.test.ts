@@ -16,6 +16,8 @@ import {
   finalizeAgentStepSchema,
   finalizeCheckStepSchema,
   imageHostSchema,
+  orchestratorSchema,
+  orchestratorSandboxSchema,
   policySchema,
   prSchema,
   roleSchema,
@@ -412,7 +414,9 @@ const TABLE_FIELDS: Record<string, string[]> = {
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
-  orchestrator: ['enabled', 'model', 'invocationBudgetSeconds', 'approvals', 'wake', 'sandbox'],
+  // Derived like the strict-shape entries above: a schema field added without
+  // a matching doc row fails the coverage loop rather than passing silently.
+  orchestrator: Object.keys(orchestratorSchema.shape),
 }
 
 function tableSection(table: string): string | undefined {
@@ -774,15 +778,8 @@ describe('docs/configuration.md — schema coverage', () => {
     // table carries which row. Set equality at the field-name level (not
     // full row text) keeps column-vocabulary drift between the doc and the
     // guide from causing false failures.
-    const orchestratorRows = [
-      'enabled',
-      'model',
-      'invocationBudgetSeconds',
-      'approvals',
-      'wake',
-      'sandbox',
-    ]
-    const sandboxRows = ['idleMinutes', 'environmentVariables']
+    const orchestratorRows = Object.keys(orchestratorSchema.shape)
+    const sandboxRows = Object.keys(orchestratorSandboxSchema.shape)
     const surfaces = [
       ['docs/configuration.md', tableSection('orchestrator')],
       ['skills/guide/SKILL.md', headingSection(guide, 3, '`[orchestrator]`')],
