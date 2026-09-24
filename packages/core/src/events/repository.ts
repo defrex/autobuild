@@ -456,6 +456,16 @@ export type RepositoryEventType = keyof typeof repositoryEventPayloadSchemas
 export const REPOSITORY_EVENT_TYPES = Object.keys(
   repositoryEventPayloadSchemas,
 ) as RepositoryEventType[]
+
+/** The repository-journal attention set, followed only under `--repository`
+ * by `ab watch` and scanned by the orchestrator wake pass. */
+export const REPOSITORY_ATTENTION_EVENTS = [
+  'harvest.escalated',
+  'harvest.failed',
+  'dispatcher.tick-failed',
+  'dispatcher.config-rejected',
+  'dispatcher.harvest-runner-failed',
+] as const satisfies readonly RepositoryEventType[]
 export type RepositoryEventPayload<T extends RepositoryEventType> = z.infer<
   (typeof repositoryEventPayloadSchemas)[T]
 >

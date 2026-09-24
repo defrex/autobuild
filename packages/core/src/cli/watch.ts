@@ -40,6 +40,7 @@
 import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
+import { REPOSITORY_ATTENTION_EVENTS } from '../events/repository'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
@@ -94,15 +95,6 @@ export const BUILD_ATTENTION_EVENTS = [
   'build.completed',
   'build.aborted',
 ] as const satisfies readonly EventType[]
-
-/** The repository-journal attention set, followed only under `--repository`. */
-export const REPOSITORY_ATTENTION_EVENTS = [
-  'harvest.escalated',
-  'harvest.failed',
-  'dispatcher.tick-failed',
-  'dispatcher.config-rejected',
-  'dispatcher.harvest-runner-failed',
-] as const satisfies readonly RepositoryEventType[]
 
 // ── Glob compilation and matching ────────────────────────────────────────────
 
