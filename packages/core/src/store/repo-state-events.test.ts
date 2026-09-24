@@ -6,7 +6,8 @@
  * with a full replay under the four state readers.
  */
 import { describe, expect, test } from 'bun:test'
-import { DISPATCHER, humanActor, KERNEL } from '../events/envelope'
+import { humanActor, KERNEL } from '../events/envelope'
+import type { Actor } from '../events/envelope'
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import { REPOSITORY_EVENT_TYPES } from '../events/repository'
 import {
@@ -26,10 +27,14 @@ let nextSeq = 0
 /** A well-formed repository event of any type; payloads satisfy their
  * schemas, which keeps the events honest for the reducers the equivalence
  * assertions run them through. */
-function event(
-  type: RepositoryEventType,
-  overrides: Partial<Pick<RepositoryEvent, 'seq' | 'payload' | 'run' | 'actor'>> = {},
-): RepositoryEvent {
+interface EventOverrides {
+  seq?: number
+  run?: string
+  actor?: Actor
+  payload?: Record<string, unknown>
+}
+
+function event(type: RepositoryEventType, overrides: EventOverrides = {}): RepositoryEvent {
   const seq = overrides.seq ?? ++nextSeq
   const payload = {
     ...payloadShape(type),
