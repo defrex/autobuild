@@ -10,7 +10,12 @@ import { createRuntimeResolver } from '../ports/runner/routing'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { type VercelSandboxFacade, validateVercelSandbox } from '../ports/workspace/vercel-sandbox'
+import type {
+  GuestProbeReport,
+  InitValidationReport,
+  ReadinessCheck,
+} from '../ports/workspace/provider-capabilities'
+import type { VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
 import { loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
@@ -18,64 +23,20 @@ import { inspectLocalStoreSnapshot } from '../store/local/store'
 import type { StoreOpener } from './store-opening'
 import { openProductionStore } from './store-opening'
 import { isRemoteStoreRef, resolveMainRepo, resolveRepoStatePaths } from './repo-state'
+import { createReadinessRedactor, gitText } from './init-readiness-shared'
+import { validateRemoteReadiness } from './init-readiness-remote'
 
-export const INIT_PROBE_MARKER = 'AB_INIT_READINESS_V1='
-
-export interface ReadinessCheck {
-  name: string
-  status: 'pass' | 'fail' | 'absent'
-  detail: string
-}
-
-export interface InitValidationReport {
-  provider: string
-  context: 'local worktree' | 'Vercel Sandbox'
-  workspace?: string
-  revision?: string
-  checks: ReadinessCheck[]
-  exitCode: number
-  /** Vercel only: automatic snapshots deleted while releasing the disposable
-   * environment; zero proves no snapshot storage was left behind. */
-  snapshotsDeleted?: number
-}
-
-export interface GuestProbeReport {
-  checks: ReadinessCheck[]
-}
-
-function message(error: unknown): string {
-  if (error instanceof AggregateError) {
-    return [error.message, ...error.errors.map(message)].filter(Boolean).join('; ')
-  }
-  if (error instanceof Error)
-    return `${error.message}${error.cause === undefined ? '' : `; ${message(error.cause)}`}`
-  return String(error)
-}
-
-/** Replace every supplied nonempty value, longest first, in all diagnostics. */
-export function createReadinessRedactor(
-  env: Readonly<Record<string, string | undefined>>,
-  explicitSecretNames: readonly string[] = [],
-): (value: unknown) => string {
-  const namedSecrets = new Set(explicitSecretNames)
-  const secrets = [
-    ...new Set(
-      Object.entries(env)
-        .filter(
-          ([name, value]) =>
-            value !== undefined &&
-            value !== '' &&
-            (namedSecrets.has(name) || /(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i.test(name)),
-        )
-        .map(([, value]) => value as string),
-    ),
-  ].sort((left, right) => right.length - left.length)
-  return (value) => {
-    let text = message(value)
-    for (const secret of secrets) text = text.split(secret).join('[REDACTED]')
-    return text
-  }
-}
+export {
+  INIT_PROBE_MARKER,
+  createReadinessRedactor,
+  gitText,
+  parseGuestOutput,
+} from './init-readiness-shared'
+export type {
+  GuestProbeReport,
+  InitValidationReport,
+  ReadinessCheck,
+} from '../ports/workspace/provider-capabilities'
 
 async function shell(
   exec: Exec,
@@ -277,33 +238,6 @@ export async function runGuestReadinessProbe(opts: {
   return { checks }
 }
 
-function parseGuestOutput(output: string): GuestProbeReport {
-  const line = output.split(/\r?\n/).find((candidate) => candidate.startsWith(INIT_PROBE_MARKER))
-  if (line === undefined)
-    throw new Error('remote readiness probe returned malformed output (result marker absent)')
-  const value = JSON.parse(line.slice(INIT_PROBE_MARKER.length)) as GuestProbeReport
-  if (!Array.isArray(value.checks))
-    throw new Error('remote readiness probe returned malformed checks')
-  return value
-}
-
-async function gitText(
-  exec: Exec,
-  repo: string,
-  args: string[],
-  signal?: AbortSignal,
-): Promise<string> {
-  const result = await exec(['git', ...args], {
-    cwd: repo,
-    ...(signal === undefined ? {} : { signal }),
-  })
-  if (result.exitCode !== 0)
-    throw new Error(
-      `git ${args.join(' ')} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim()}`,
-    )
-  return result.stdout.trim()
-}
-
 function hostPreflight(config: Config, env: Record<string, string | undefined>): void {
   if (config.workspace.provider !== 'vercel-sandbox') return
   if (config.forge !== 'github')
@@ -447,102 +381,28 @@ export async function validateInitReadiness(opts: {
     if (failure !== undefined) throw failure
     if (cleanupFailure !== undefined) throw cleanupFailure
   } else if (config.workspace.provider === 'vercel-sandbox') {
-    const vercel = vercelConfig!
     const storeRef = state.storeRef
     if (!/^https:\/\//i.test(storeRef))
       throw new Error('vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel')
     const token = opts.env.AB_TOKEN
     if (!token) throw new Error('vercel-sandbox requires nonempty AB_TOKEN for the hosted Store')
-    const remoteLine = await gitText(
-      exec,
+    report = await validateRemoteReadiness({
+      config,
+      providerConfig: vercelConfig,
+      env: opts.env,
+      storeRef,
+      storeToken: token,
       repo,
-      ['ls-remote', '--heads', 'origin', `refs/heads/${config.baseBranch}`],
-      opts.signal,
-    )
-    const remoteRevision = remoteLine.split(/\s+/)[0]
-    if (!/^[0-9a-f]{40,64}$/i.test(remoteRevision ?? '')) {
-      throw new Error(
-        `remote base ${config.baseBranch} does not exist; commit and push setup changes before validating`,
-      )
-    }
-    await gitText(
+      baseBranch: config.baseBranch,
+      configBytes,
       exec,
-      repo,
-      [
-        'fetch',
-        '--no-tags',
-        '--no-write-fetch-head',
-        '--refmap=',
-        'origin',
-        `refs/heads/${config.baseBranch}`,
-      ],
-      opts.signal,
-    )
-    const shownConfig = await exec(['git', 'show', `${remoteRevision}:autobuild.toml`], {
-      cwd: repo,
-      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+      redact,
+      runtimeReferences: effectiveRuntimeReferences(config),
+      stdout: (line) => (opts.stdout ?? (() => {}))(line),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),
+      ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
     })
-    if (shownConfig.exitCode !== 0) {
-      throw new Error(
-        `remote ${config.baseBranch} does not contain autobuild.toml; commit and push setup changes before validating`,
-      )
-    }
-    if (shownConfig.stdout !== configBytes) {
-      throw new Error(
-        `remote ${config.baseBranch} autobuild.toml differs from this checkout; commit and push setup changes before validating`,
-      )
-    }
-    let remote: Awaited<ReturnType<typeof validateVercelSandbox>>
-    try {
-      remote = await validateVercelSandbox({
-        config: vercel,
-        env: opts.env,
-        storeRef,
-        storeToken: token,
-        repo,
-        baseBranch: config.baseBranch,
-        ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),
-        exec,
-        ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
-        runtimeReferences: effectiveRuntimeReferences(config),
-        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-        onSandbox: (name) => opts.stdout?.(`Disposable Vercel Sandbox: ${name} (active)`),
-      })
-    } catch (error) {
-      throw new Error(redact(error))
-    }
-    let guest: GuestProbeReport
-    try {
-      guest = parseGuestOutput(remote.output)
-    } catch (error) {
-      throw new Error(
-        `disposable sandbox ${remote.sandbox} was deleted, but its readiness output was invalid: ${redact(error)}`,
-      )
-    }
-    report = {
-      provider: 'vercel-sandbox',
-      context: 'Vercel Sandbox',
-      workspace: remote.sandbox,
-      revision: remote.revision,
-      snapshotsDeleted: remote.snapshotsDeleted,
-      checks: [
-        {
-          name: 'repository acquisition',
-          status: 'pass',
-          detail: `${remote.origin} ${remote.revision}`,
-        },
-        {
-          name: 'system provisioning',
-          status: 'pass',
-          detail:
-            remote.provisioning.length === 0
-              ? 'no workspace.config.provisioning steps declared'
-              : `completed: ${remote.provisioning.join(', ')}`,
-        },
-        ...guest.checks,
-      ],
-      exitCode: guest.checks.some((check) => check.status === 'fail') ? 1 : 0,
-    }
   } else {
     throw new Error(
       `workspace provider "${config.workspace.provider}" does not support init readiness validation`,

@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import { basename } from 'node:path'
 import { Sandbox, Snapshot, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
 import { displayName, tomlKey, type RuntimeReferenceGroup } from '../../config/roles'
 import {
@@ -39,6 +38,10 @@ import {
 import { BUILD_RUNNER_OPTIONS_ENV } from './local-build-execution'
 import type { Exec } from './git-worktree'
 import { spawnExec } from './git-worktree'
+import { validateVercelGithubOrigin } from './github-origin'
+import { currentRuntimeReferences, type RuntimeReferencesSource } from './provider-capabilities'
+
+export { validateVercelGithubOrigin }
 
 export const VERCEL_WORKSPACE_PATH = '/vercel/sandbox/workspace'
 export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
@@ -441,35 +444,6 @@ export async function purgeEnvironmentSnapshots(
         return { outcome: 'unknown', deleted, error: describeError(error) }
       }
     }
-  }
-}
-
-export function validateVercelGithubOrigin(raw: string): {
-  url: string
-  host: string
-  path: string
-  directory: string
-} {
-  let url: URL
-  try {
-    url = new URL(raw)
-  } catch {
-    throw new Error('vercel-sandbox requires an HTTPS GitHub origin')
-  }
-  if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com') {
-    throw new Error('vercel-sandbox requires an HTTPS github.com origin')
-  }
-  url.username = ''
-  url.password = ''
-  url.search = ''
-  url.hash = ''
-  const path = url.pathname.replace(/\.git$/, '').replace(/^\//, '')
-  if (!/^[^/]+\/[^/]+$/.test(path)) throw new Error('GitHub origin must name owner/repository')
-  return {
-    url: `https://github.com/${path}.git`,
-    host: 'github.com',
-    path: `/${path}.git`,
-    directory: basename(path),
   }
 }
 
@@ -1032,16 +1006,7 @@ export async function validateVercelSandbox(
   return { ...readiness!, snapshotsDeleted }
 }
 
-export type RuntimeReferencesSource =
-  | readonly RuntimeReferenceGroup[]
-  | (() => readonly RuntimeReferenceGroup[])
-
-function currentRuntimeReferences(
-  source: RuntimeReferencesSource | undefined,
-): readonly RuntimeReferenceGroup[] {
-  if (source === undefined) return []
-  return typeof source === 'function' ? source() : source
-}
+export type { RuntimeReferencesSource } from './provider-capabilities'
 
 /** Install the distribution archive into `/opt/autobuild` and record its
  * version marker. Shared by fresh provisioning and reuse-path refreshes; the
