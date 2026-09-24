@@ -77,6 +77,9 @@ function renderModuleReport(report: PluginDiagnosis['reports'][number]): string 
     report.api === undefined
       ? ''
       : ` api=${report.api.declaredRange} host=${report.api.hostVersion} ${report.api.status}`
+  if (report.status === 'skipped') {
+    return `SKIP ${report.module} kind=${report.resolutionKind} stage=${report.stage}${location}${source}${plugin}${api}: ${report.notice}`
+  }
   return report.status === 'loaded'
     ? `OK ${report.module} kind=${report.resolutionKind}${location}${source}${plugin}${api}`
     : `FAIL ${report.module} kind=${report.resolutionKind} stage=${report.stage}${location}${source}${plugin}${api}: ${report.error}`
@@ -149,8 +152,8 @@ export async function abPlugin(argv: readonly string[], opts: PluginCliOpts): Pr
     if (diagnosis.reports.length === 0) opts.stdout('  (none)')
     for (const report of diagnosis.reports) {
       const line = `  ${renderModuleReport(report)}`
-      if (report.status === 'loaded') opts.stdout(line)
-      else opts.stderr(line)
+      if (report.status === 'failed') opts.stderr(line)
+      else opts.stdout(line)
     }
     opts.stdout('adapters:')
     for (const port of PLUGIN_PORTS) {
@@ -170,8 +173,8 @@ export async function abPlugin(argv: readonly string[], opts: PluginCliOpts): Pr
     }
     for (const report of diagnosis.reports) {
       const line = renderModuleReport(report)
-      if (report.status === 'loaded') opts.stdout(line)
-      else opts.stderr(line)
+      if (report.status === 'failed') opts.stderr(line)
+      else opts.stdout(line)
     }
     return diagnosis.healthy ? 0 : 1
   }

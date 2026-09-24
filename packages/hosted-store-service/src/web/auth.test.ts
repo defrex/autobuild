@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { createWebAuth, admittedUser } from './auth'
+import { CLIENT_NAME_MAX_LENGTH } from './client-name-policy'
 
 describe('GitHub identity admission', () => {
   test('accepts and normalizes an allowed current provider email', () => {
@@ -86,5 +87,80 @@ describe('advertised jwks_uri resolves (AUT-369)', () => {
     const jwks = (await response.json()) as { keys: unknown[] }
     expect(Array.isArray(jwks.keys)).toBe(true)
     expect(jwks.keys.length).toBeGreaterThan(0)
+  })
+})
+
+describe('DCR client-name policy (AUT-399)', () => {
+  // The real instance on the memory adapter: the hook under test is the
+  // file-local plugin in createWebAuth, not a mock, and the endpoint is the
+  // pinned 1.4.18 MCP plugin's own registerMcpClient at /mcp/register —
+  // mounted under the app's /api/auth prefix.
+  const db: Record<string, Record<string, unknown>[]> = {
+    user: [],
+    session: [],
+    account: [],
+    verification: [],
+    jwks: [],
+    oauthApplication: [],
+    oauthAccessToken: [],
+    oauthConsent: [],
+  }
+  const auth = createWebAuth(testEnv, { database: memoryAdapter(db) })
+
+  async function registerClient(body: Record<string, unknown>): Promise<Response> {
+    return await auth.handler(
+      new Request(`${ORIGIN}/api/auth/mcp/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          ...body,
+        }),
+      }),
+    )
+  }
+
+  test('a conforming client_name registers and is persisted', async () => {
+    const response = await registerClient({ client_name: 'Acme MCP Console' })
+    expect(response.status).toBe(201)
+    // RFC 7591 registration response echoes the metadata fields.
+    const registered = (await response.json()) as { client_name?: string }
+    expect(registered.client_name).toBe('Acme MCP Console')
+    expect(db.oauthApplication?.at(-1)?.name).toBe('Acme MCP Console')
+  })
+
+  test('a control character in client_name is rejected with the RFC 7591 error shape', async () => {
+    const response = await registerClient({ client_name: 'acme\u0000console' })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as {
+      error?: string
+      error_description?: string
+    }
+    expect(body.error).toBe('invalid_client_metadata')
+    expect(body.error_description).toContain('control or invisible formatting')
+  })
+
+  test('an oversized client_name is rejected', async () => {
+    const response = await registerClient({ client_name: 'a'.repeat(CLIENT_NAME_MAX_LENGTH + 1) })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error?: string }
+    expect(body.error).toBe('invalid_client_metadata')
+  })
+
+  test('a whitespace-only client_name is rejected', async () => {
+    const response = await registerClient({ client_name: '   ' })
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as { error?: string }
+    expect(body.error).toBe('invalid_client_metadata')
+  })
+
+  test('registration without client_name stays legal (the unnamed-client path)', async () => {
+    const response = await registerClient({})
+    expect(response.status).toBe(201)
+    const registered = (await response.json()) as { client_name?: string }
+    expect(registered.client_name).toBeUndefined()
   })
 })

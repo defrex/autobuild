@@ -31,6 +31,10 @@
       "types": "./src/web/config.ts",
       "import": "./src/web/config.ts"
     },
+    "./web/client-name-policy": {
+      "types": "./src/web/client-name-policy.ts",
+      "import": "./src/web/client-name-policy.ts"
+    },
     "./web/runtime": {
       "types": "./src/web/runtime.ts",
       "import": "./src/web/runtime.ts"
@@ -48,7 +52,7 @@
     "build": "bun run --bun next build",
     "start": "bun run --bun next start",
     "hosted-store": "bun server.ts",
-    "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts"
+    "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts && bun ../../packages/hosted-dispatcher/src/ship-provider-plugin.ts"
   },
   "peerDependencies": {
     "@defrex/autobuild": ">=0.9.0"

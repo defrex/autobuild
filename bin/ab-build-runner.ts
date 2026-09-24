@@ -19,6 +19,12 @@ try {
 if (input === undefined) process.exit(2)
 
 let exitCode = 0
+// Guest tolerance (AUT-517): an environment-supervised build child is
+// structurally a guest — it never constructs workspace providers — so a
+// configured provider plugin it cannot resolve is skipped with a notice
+// instead of failing the build. A local-parent child runs on the host with
+// the repository's full dependency tree, so it stays strict.
+const guest = input.supervision.kind === 'environment'
 if (input.supervision.kind === 'local-parent') {
   // Every local exit first transfers group teardown to an owner outside this
   // session. Environment-owned execution deliberately installs neither this
@@ -30,7 +36,7 @@ if (input.supervision.kind === 'local-parent') {
     watchBuildParent(input.supervision.parentPid, () => terminal.terminate(143)),
   )
   try {
-    await runBuildChild(input, process.env)
+    await runBuildChild(input, process.env, undefined, { guest })
   } catch {
     exitCode = 1
   }
@@ -39,7 +45,7 @@ if (input.supervision.kind === 'local-parent') {
   // Vercel owns teardown of the complete VM session. Addressing a POSIX group
   // here could leave the SDK believing a still-running environment completed.
   try {
-    await runBuildChild(input, process.env)
+    await runBuildChild(input, process.env, undefined, { guest })
   } catch {
     exitCode = 1
   }

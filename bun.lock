@@ -16,6 +16,7 @@
       "devDependencies": {
         "@biomejs/biome": "2.5.5",
         "@defrex/autobuild-postgres-store": "workspace:*",
+        "@defrex/autobuild-vercel-sandbox": "workspace:*",
         "@resvg/resvg-js": "2.6.2",
         "@types/bun": "^1.3.14",
         "@types/node": "^24.0.0",
@@ -95,6 +96,16 @@
       "optionalPeers": [
         "@defrex/autobuild",
       ],
+    },
+    "packages/vercel-sandbox": {
+      "name": "@defrex/autobuild-vercel-sandbox",
+      "version": "0.8.0",
+      "dependencies": {
+        "@vercel/sandbox": "^3.1.0",
+      },
+      "peerDependencies": {
+        "@defrex/autobuild": ">=0.9.0",
+      },
     },
     "packages/web-dashboard-capture": {
       "name": "@defrex/autobuild-web-dashboard-capture",
@@ -190,6 +201,8 @@
     "@defrex/autobuild-hosted-store-service": ["@defrex/autobuild-hosted-store-service@workspace:packages/hosted-store-service"],
 
     "@defrex/autobuild-postgres-store": ["@defrex/autobuild-postgres-store@workspace:packages/postgres-store"],
+
+    "@defrex/autobuild-vercel-sandbox": ["@defrex/autobuild-vercel-sandbox@workspace:packages/vercel-sandbox"],
 
     "@defrex/autobuild-web-dashboard-capture": ["@defrex/autobuild-web-dashboard-capture@workspace:packages/web-dashboard-capture"],
 
