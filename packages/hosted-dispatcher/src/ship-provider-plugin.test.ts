@@ -1,11 +1,21 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parsePluginManifest } from '@defrex/autobuild/plugin-sdk'
-import { shipProviderPlugin } from './ship-provider-plugin'
+import { restoresWorkspaceLinkIn, shipProviderPlugin } from './ship-provider-plugin'
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -151,20 +161,115 @@ describe('ship-provider-plugin', () => {
     // Direct reproduction of the finding: two separate processes against one
     // fixture. Run 1 stages over the symlink; run 2 (new process, no cached
     // module resolution) must not abort with ENOENT on <staging>/src.
+    // VERCEL is pinned ON so both runs exercise the DEPLOYMENT branch (the
+    // staged bundle persists into the function bundle) — the ambient
+    // environment must not decide which branch a test exercises.
     const { project } = await fixture()
     const script = join(import.meta.dir, 'ship-provider-plugin.ts')
     for (let run = 1; run <= 2; run++) {
-      const process = Bun.spawnSync({
+      const spawn = Bun.spawnSync({
         cmd: ['bun', script],
         cwd: project,
+        env: { ...process.env, VERCEL: '1' },
         stdout: 'pipe',
         stderr: 'pipe',
       })
-      expect(process.exitCode).toBe(0)
-      const output = `${process.stdout.toString()}${process.stderr.toString()}`
+      expect(spawn.exitCode).toBe(0)
+      const output = `${spawn.stdout.toString()}${spawn.stderr.toString()}`
       expect(output).toContain(run === 1 ? 'appended 2 entries to' : 'already present in')
+      expect(output).not.toContain('restored workspace symlink')
     }
   }, 120_000)
+
+  test('a fresh process WITHOUT VERCEL restores the workspace symlink (local run)', async () => {
+    // The developer-local path end-to-end: the CLI decides the restore from
+    // the environment, so the subprocess env explicitly OMITS VERCEL (a copy
+    // of process.env with VERCEL deleted — never the ambient environment,
+    // which differs between the sandbox and a developer machine). The run
+    // must leave the node_modules path a directory symlink to the workspace
+    // member, exactly as `bun install` would have left it.
+    const { root, project } = await fixture()
+    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
+    const script = join(import.meta.dir, 'ship-provider-plugin.ts')
+    const { VERCEL: _omit, ...env } = process.env
+    expect('VERCEL' in env).toBe(false)
+    const spawn = Bun.spawnSync({
+      cmd: ['bun', script],
+      cwd: project,
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const output = `${spawn.stdout.toString()}${spawn.stderr.toString()}`
+    expect(spawn.exitCode).toBe(0)
+    expect(output).toContain('restored workspace symlink')
+    expect((await lstat(staged)).isSymbolicLink()).toBe(true)
+    // Assert on the RESOLVED target, not the raw link string: a dangling
+    // relative target is the failure class this must catch.
+    expect(await realpath(staged)).toBe(join(root, 'packages', 'vercel-sandbox'))
+    // The trace still describes the deployment layout (the staged files are
+    // appended there whether or not they persist locally).
+    const { files } = JSON.parse(
+      await readFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), 'utf8'),
+    )
+    expect(files.filter((entry: string) => entry.includes('node_modules'))).toHaveLength(2)
+  }, 120_000)
+
+  test('restoreWorkspaceLink restores the workspace symlink after staging', async () => {
+    const { root, project } = await fixture()
+    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
+    const lines: string[] = []
+    const result = await shipProviderPlugin({
+      cwd: project,
+      restoreWorkspaceLink: true,
+      log: (m) => lines.push(m),
+    })
+    expect(result.restoredWorkspaceLink).toBe(true)
+    expect((await lstat(staged)).isSymbolicLink()).toBe(true)
+    // The resolved target is the fixture's packages/vercel-sandbox member —
+    // the assertion that catches a dangling relative target (the link must
+    // resolve, not merely exist).
+    expect(await realpath(staged)).toBe(join(root, 'packages', 'vercel-sandbox'))
+    // The trace file still contains the appended entries — the trace
+    // describes the deployment layout; it does not require the staged files
+    // to persist locally.
+    const { files } = JSON.parse(
+      await readFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), 'utf8'),
+    )
+    expect(result.traceEntries.every((entry) => files.includes(entry))).toBe(true)
+    expect(lines.join('\n')).toContain('restored workspace symlink')
+  }, 60_000)
+
+  test('restoreWorkspaceLink heals a poisoned checkout (staged directory, no symlink)', async () => {
+    // The state an already-bitten developer's checkout is in: a previous
+    // deploy:build left a real staged directory in node_modules and `bun
+    // install` never relinked it. A local run must still end with the
+    // workspace symlink restored.
+    const { root, project } = await fixture()
+    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
+    await mkdir(join(staged, 'dist'), { recursive: true })
+    await writeFile(
+      join(staged, 'package.json'),
+      JSON.stringify({ name: PACKAGE_NAME, version: '0.0.0-stale' }),
+    )
+    const result = await shipProviderPlugin({
+      cwd: project,
+      restoreWorkspaceLink: true,
+      log: () => {},
+    })
+    expect(result.restoredWorkspaceLink).toBe(true)
+    expect((await lstat(staged)).isSymbolicLink()).toBe(true)
+    expect(await realpath(staged)).toBe(join(root, 'packages', 'vercel-sandbox'))
+  }, 60_000)
+
+  test('restoresWorkspaceLinkIn gates on the VERCEL environment variable', () => {
+    // Vercel sets VERCEL in every build environment — including a local
+    // `vercel build` — so a deployment build keeps the staged bundle.
+    expect(restoresWorkspaceLinkIn({ VERCEL: '1' })).toBe(false)
+    expect(restoresWorkspaceLinkIn({ VERCEL: 'production' })).toBe(false)
+    // A plain local `bun run deploy:build` has no VERCEL and restores.
+    expect(restoresWorkspaceLinkIn({})).toBe(true)
+  })
 
   test('throws loudly when the plugin package is not a workspace member of the root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ab-ship-plugin-'))

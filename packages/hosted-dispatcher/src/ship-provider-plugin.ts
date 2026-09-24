@@ -35,10 +35,16 @@
  * f_5b9ade16).
  *
  * The npm published package remains the real `src` — only the deployment
- * stages the bundle. Staged files are build-time artifacts under
- * `node_modules` (gitignored, never committed).
+ * stages the bundle. In a Vercel deployment build the staged directory
+ * replaces the workspace symlink and persists there (the deployment never
+ * runs `bun install` again). A developer-local run of `deploy:build` (no
+ * `VERCEL` environment) removes the staged directory afterwards and restores
+ * the workspace symlink, so a local run leaves the checkout exactly as
+ * `bun install` had it and local test runs keep resolving the workspace
+ * source. Staged files are build-time artifacts under `node_modules`
+ * (gitignored, never committed).
  */
-import { lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import type { Dirent } from 'node:fs'
 
@@ -50,6 +56,11 @@ export interface ShipProviderPluginOptions {
   distDir?: string
   /** The plugin package specifier to stage. */
   packageName?: string
+  /** Remove the staged directory after the trace append and re-create the
+   * workspace symlink it replaced. The deployment build (the default) must
+   * keep the staged bundle — its runtime resolution needs it; only a
+   * developer-local run (no `VERCEL` environment) should restore the link. */
+  restoreWorkspaceLink?: boolean
   log?: (message: string) => void
 }
 
@@ -62,6 +73,17 @@ export interface ShipProviderPluginResult {
   traceEntries: string[]
   appended: number
   bytes: number
+  /** Whether the staged directory was removed and the workspace symlink
+   * restored after staging (local runs only). */
+  restoredWorkspaceLink?: boolean
+}
+
+/** True when the run is a developer-local build: Vercel sets `VERCEL` in
+ * every build environment — including a local `vercel build` — so an absent
+ * `VERCEL` identifies exactly the plain local runs this tool's restore is
+ * for. */
+export function restoresWorkspaceLinkIn(env: Record<string, string | undefined>): boolean {
+  return env.VERCEL === undefined
 }
 
 const TRACE_FILE = 'route.js.nft.json'
@@ -210,6 +232,7 @@ export async function shipProviderPlugin({
   cwd = process.cwd(),
   distDir = '.next',
   packageName = '@defrex/autobuild-vercel-sandbox',
+  restoreWorkspaceLink = false,
   log = (message) => console.log(message),
 }: ShipProviderPluginOptions = {}): Promise<ShipProviderPluginResult> {
   const repoRoot = await findWorkspaceRoot(cwd)
@@ -264,12 +287,34 @@ export async function shipProviderPlugin({
     `plugin package ${packageName} (${bytes} bytes, ${stagedFiles.length} file(s)) ` +
       `${missing.length > 0 ? `appended ${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} to` : 'already present in'} ${trace}`,
   )
+  if (restoreWorkspaceLink) {
+    // A local run must leave the checkout as `bun install` had it: the staged
+    // directory would otherwise satisfy the manifest and keep `bun install`
+    // from ever relinking the workspace, so later local runs would resolve
+    // the plugin to the staged bundle instead of the workspace source. The
+    // link target is computed from the link's OWN directory (a relative
+    // symlink resolves from the directory containing the link):
+    // `<repoRoot>/node_modules/@defrex` + `../../packages/...` — exactly what
+    // `bun install` leaves.
+    const target = relative(dirname(staging), packageDirectory)
+    await rm(staging, { recursive: true })
+    await symlink(target, staging, 'dir')
+    log(`restored workspace symlink ${staging} -> ${target} (local run, no VERCEL environment)`)
+    return {
+      repoRoot,
+      staging,
+      traceEntries: entries,
+      appended: missing.length,
+      bytes,
+      restoredWorkspaceLink: true,
+    }
+  }
   return { repoRoot, staging, traceEntries: entries, appended: missing.length, bytes }
 }
 
 if (import.meta.main) {
   try {
-    await shipProviderPlugin()
+    await shipProviderPlugin({ restoreWorkspaceLink: restoresWorkspaceLinkIn(process.env) })
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
     process.exit(1)
