@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#556](https://github.com/defrex/autobuild/pull/556) — Correct trace-depth labels from 'six ups' to seven '..' components
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
 - [#552](https://github.com/defrex/autobuild/pull/552) — Serve sandbox.* tools from a hosted operator-sandbox backend
 - [#550](https://github.com/defrex/autobuild/pull/550) — Wake durable sessions from repository-journal attention events
