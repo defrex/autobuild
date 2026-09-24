@@ -28,6 +28,7 @@ import { humanActor } from '../events/envelope'
 import { createBuildScopedStore } from './build-scope'
 import { createSessionScopedStore } from './session-handle'
 import { reduceBuildDigest } from './digest'
+import { projectRepositoryStateEvents } from './repo-state-events'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -645,6 +646,14 @@ export class MemoryBuildStore implements BuildStore {
       // presentation content's cadence.
       pollMs: EVENT_WAIT_POLL_MS,
     })
+  }
+
+  async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+    // The oracle runs on the in-memory journal itself, which keeps the pure
+    // derivation honest against real adapter data.
+    return structuredClone(
+      projectRepositoryStateEvents(this.repoState(repo).events as RepositoryEvent[]),
+    )
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {

@@ -198,9 +198,11 @@ export async function createOperatorSandboxService(
     })
   }
 
-  const journalEvents = async (): Promise<Awaited<ReturnType<typeof store.getRepoEvents>>> => {
+  const journalEvents = async (): Promise<Awaited<ReturnType<typeof store.getRepoStateEvents>>> => {
     if ((await store.getRepo(repo)) === null) return []
-    return store.getRepoEvents(repo)
+    // Bounded read (AUT-489): sandboxStates consumes orchestrator.sandbox.*
+    // facts, all of which are durable.
+    return store.getRepoStateEvents(repo)
   }
 
   /** The operator's journal state, or undefined when no environment exists. */

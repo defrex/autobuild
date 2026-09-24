@@ -45,13 +45,13 @@ async function appendSetting(
 describe('ab repository status', () => {
   test('projects reducer-owned defaults without creating a repository stream', async () => {
     const store = new MemoryBuildStore()
-    let getRepoEvents = 0
+    let getRepoStateEvents = 0
     const readOnly = new Proxy(store, {
       get(target, property) {
-        if (property === 'getRepoEvents') {
-          return async (...args: Parameters<BuildStore['getRepoEvents']>) => {
-            getRepoEvents += 1
-            return target.getRepoEvents(...args)
+        if (property === 'getRepoStateEvents') {
+          return async (...args: Parameters<BuildStore['getRepoStateEvents']>) => {
+            getRepoStateEvents += 1
+            return target.getRepoStateEvents(...args)
           }
         }
         if (property === 'getRepo' || property === 'close') {
@@ -78,7 +78,7 @@ describe('ab repository status', () => {
       defaultAutoMerge: false,
       sandboxes: [],
     })
-    expect(getRepoEvents).toBe(0)
+    expect(getRepoStateEvents).toBe(0)
     expect(await store.getRepo(REPO)).toBeNull()
   })
 

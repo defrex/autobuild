@@ -69,7 +69,8 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
     // A fresh store has no repository row. Do not call ensureRepo: this query's
     // empty-stream defaults must remain a genuinely read-only operation.
     const record = await store.getRepo(repo)
-    const events = record === null ? [] : await store.getRepoEvents(repo)
+    // Bounded read (AUT-489): projectRepositoryStatus reduces durable types only.
+    const events = record === null ? [] : await store.getRepoStateEvents(repo)
     const status = projectRepositoryStatus(repo, events)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))

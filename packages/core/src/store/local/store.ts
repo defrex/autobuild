@@ -11,7 +11,7 @@
  * content-addressed.
  */
 import { Database } from 'bun:sqlite'
-import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, inArray, or, sql } from 'drizzle-orm'
 import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite'
 import { mkdirSync } from 'node:fs'
 import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
@@ -42,6 +42,7 @@ import {
 import { createBuildScopedStore } from '../build-scope'
 import { createSessionScopedStore } from '../session-handle'
 import { DIGEST_EVENT_TYPES, reduceBuildDigest } from '../digest'
+import { REPOSITORY_STATE_EVENT_TYPES } from '../repo-state-events'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -985,6 +986,44 @@ export class SqliteBuildStore implements BuildStore {
       waitSeconds: opts?.waitSeconds,
       signal: opts?.signal,
     })
+  }
+
+  async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+    this.requireRepo(repo)
+    // Two queries, mirroring the oracle's derivation: the latest
+    // run-started anchor, then one select of durable types plus the tail
+    // from that anchor. No new index: local journals are small and the
+    // existing (repo, seq) PK index keeps the anchor scan acceptable.
+    const anchorRows = this.db
+      .select({ seq: repoEvents.seq })
+      .from(repoEvents)
+      .where(and(eq(repoEvents.repo, repo), eq(repoEvents.type, 'dispatcher.run-started')))
+      .orderBy(desc(repoEvents.seq))
+      .limit(1)
+      .all()
+    const anchor = anchorRows[0]?.seq
+    const durable = inArray(repoEvents.type, [...REPOSITORY_STATE_EVENT_TYPES])
+    const rows = this.db
+      .select()
+      .from(repoEvents)
+      .where(
+        anchor === undefined
+          ? and(eq(repoEvents.repo, repo), durable)
+          : and(eq(repoEvents.repo, repo), or(gte(repoEvents.seq, anchor), durable)),
+      )
+      .orderBy(asc(repoEvents.seq))
+      .all()
+    return rows.map(
+      (row) =>
+        ({
+          repo: row.repo,
+          seq: row.seq,
+          ts: row.ts,
+          actor: row.actor,
+          type: row.type,
+          payload: row.payload,
+        }) as RepositoryEvent,
+    )
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {

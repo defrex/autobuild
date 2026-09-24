@@ -6446,3 +6446,131 @@ describe('the durable auto-merge default fans out onto current builds', () => {
     expect(state.discardRequest).toBeDefined()
   })
 })
+
+describe('the dispatcher tick reads a bounded journal (AUT-489)', () => {
+  /** Count the journal rows the store returns to the dispatcher. */
+  function countingStore(store: BuildStore): { store: BuildStore; journalRows: () => number } {
+    let rows = 0
+    const target = store as unknown as Record<string, unknown>
+    const proxy = new Proxy(target, {
+      get(t, prop) {
+        if (prop === 'getRepoStateEvents') {
+          return async (repo: string) => {
+            const events = await (
+              t.getRepoStateEvents as (repo: string) => Promise<RepositoryEvent[]>
+            ).call(t, repo)
+            rows += events.length
+            return events
+          }
+        }
+        if (prop === 'getRepoEvents') {
+          return async (...args: unknown[]) => {
+            const events = await (
+              t.getRepoEvents as (...a: unknown[]) => Promise<RepositoryEvent[]>
+            ).call(t, ...args)
+            rows += events.length
+            return events
+          }
+        }
+        const value = Reflect.get(t, prop, t)
+        return typeof value === 'function' ? value.bind(t) : value
+      },
+    })
+    return { store: proxy as unknown as BuildStore, journalRows: () => rows }
+  }
+
+  /** Seed `invocations` no-op dispatcher invocations (alternating
+   * lease-held yields and no-ready-work completions) into the repository. */
+  async function seedNoopInvocations(store: MemoryBuildStore, invocations: number): Promise<void> {
+    await store.ensureRepo(REPO)
+    const noopCounters = {
+      merged: 0,
+      closed: 0,
+      conflicted: 0,
+      abandoned: 0,
+      discarded: 0,
+      janitorFailed: 0,
+      recovered: 0,
+      dispatchFailed: 0,
+      resumed: 0,
+      swept: 0,
+      dispatched: 0,
+      authored: 0,
+      bounced: 0,
+      claimRaces: 0,
+      invalidTickets: 0,
+      dependencyBlocked: 0,
+      harvestStarted: 0,
+      harvestResumed: 0,
+      harvestCompleted: 0,
+      harvestEscalated: 0,
+      harvestFailed: 0,
+    }
+    for (let index = 0; index < invocations; index += 1) {
+      const run = `noop_${index}`
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 1,
+          effectiveConfig: { kind: 'dispatcher-effective-config', rev: 0 },
+          roleWarnings: [],
+        },
+      })
+      if (index % 2 === 0) {
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-yielded',
+          payload: { run, holder: 'other' },
+        })
+      } else {
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.tick-completed',
+          payload: {
+            run,
+            queued: 0,
+            counters: noopCounters,
+            janitorDiagnostics: [],
+            ticketDiagnostics: [],
+            dependencyDiagnostics: [],
+          },
+        })
+      }
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-stopped',
+        payload: { run, outcome: 'normal' as const },
+      })
+    }
+  }
+
+  test('a no-ready-work tick reads the same number of journal events at 1,000 and 2,000 invocations of history', async () => {
+    const measured: number[] = []
+    for (const invocations of [1_000, 2_000]) {
+      const raw = new MemoryBuildStore()
+      await seedNoopInvocations(raw, invocations)
+      const counting = countingStore(raw)
+      const h = harness({ tickets: [], store: counting.store })
+      // The tick performs no claims and no launches; it only samples the
+      // journal (controls, settlements, ready-scan brackets) and records its
+      // own facts.
+      const report = await h.dispatcher.tick()
+      expect(report.dispatched).toBe(0)
+      expect(report.queued).toBe(0)
+      expect(h.launches).toEqual([])
+      measured.push(counting.journalRows())
+      // The tick still recorded its own facts under the new run.
+      const tail = await raw.getRepoEvents(REPO)
+      expect(tail.slice(-3).map((event) => event.type)).toEqual([
+        'dispatcher.run-started',
+        'dispatcher.tick-completed',
+        'dispatcher.run-stopped',
+      ])
+    }
+    // The bound does not depend on the invocation history length.
+    expect(measured[0]).toBe(measured[1])
+    expect(measured[0]).toBeGreaterThan(0)
+  })
+})
