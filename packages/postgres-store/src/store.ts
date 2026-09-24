@@ -74,6 +74,7 @@ import {
 import {
   DIGEST_EVENT_TYPES,
   REPOSITORY_STATE_EVENT_TYPES,
+  readRepoStateEventsWithAnchorRecheck,
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
@@ -966,45 +967,65 @@ export class PostgresBuildStore implements BuildStore {
     // whole PK range, exactly the cost being removed), then one select of
     // durable types plus the tail from that anchor.
     //
-    const { rows } = await this.run(async (q) => {
-      // The probe below is an aggregate: MAX() always returns exactly one row —
-      // NULL when the journal has no run-started fact — so the empty-journal
-      // signal is that NULL, tested explicitly here via `no_anchor`, never row
-      // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
-      // (in either dialect the comparison is never true, so the durable-only
-      // outcome would then survive only by accident), and the no-anchor case
-      // must not degenerate into `seq >= 0`, which would select the whole
-      // journal. The `anchor === undefined` branch below is the durable-only
-      // path.
-      const probe = (
-        await q`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
-      )[0]
-      const anchor = probe?.no_anchor ? undefined : num(probe?.seq)
-      const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
-      // `repo` is $1; the anchored select also spends $2 on the anchor, so the
-      // type list's placeholders start at the right offset per branch.
-      const placeholders = (start: number) =>
-        durableList.map((_, index) => `$${index + start}`).join(', ')
-      const rows: Row[] =
-        anchor === undefined
-          ? await q.unsafe(
-              `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
-              [repo, ...durableList],
-            )
-          : await q.unsafe(
-              `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
-              [repo, anchor, ...durableList],
-            )
-      return { probe, rows }
-    })
-    return rows.map((row) => ({
-      repo: String(row.repo),
-      seq: num(row.seq),
-      ts: iso(row.ts),
-      actor: json(row.actor),
-      type: String(row.type),
-      payload: json(row.payload),
-    })) as RepositoryEvent[]
+    // `this.run` is deliberately non-transactional (a pinned pooled
+    // connection, no BEGIN), so the probe and the select each get their own
+    // READ COMMITTED snapshot — a concurrent append of the journal's first
+    // `dispatcher.run-started` between them would be invisible to the probe,
+    // absent from the durable-only selection, yet present in the journal by
+    // the time this method returns (AUT-551). The shared helper below closes
+    // that window with a one-shot anchor re-check on the durable-only
+    // outcome: a durable-only result is returned only when the journal was
+    // anchor-free as of the final probe. When the probe *does* find an
+    // anchor, the anchored select's `seq >= anchor` arm is
+    // monotone-inclusive, so any later run-started is picked up by that same
+    // select; an append after the final re-probe is an ordinary post-read
+    // concurrent append, not this race.
+    const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
+    // `repo` is $1; the anchored select also spends $2 on the anchor, so the
+    // type list's placeholders start at the right offset per branch.
+    const placeholders = (start: number) =>
+      durableList.map((_, index) => `$${index + start}`).join(', ')
+    return readRepoStateEventsWithAnchorRecheck(
+      async () => {
+        // The probe below is an aggregate: MAX() always returns exactly one row —
+        // NULL when the journal has no run-started fact — so the empty-journal
+        // signal is that NULL, tested explicitly here via `no_anchor`, never row
+        // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
+        // (in either dialect the comparison is never true, so the durable-only
+        // outcome would then survive only by accident), and the no-anchor case
+        // must not degenerate into `seq >= 0`, which would select the whole
+        // journal. The `anchor === undefined` branch below is the durable-only
+        // path.
+        const probe = (
+          await this.run(
+            (q) =>
+              q`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`,
+          )
+        )[0]
+        return probe?.no_anchor ? undefined : num(probe?.seq)
+      },
+      async (anchor) => {
+        const rows: Row[] = await this.run((q) =>
+          anchor === undefined
+            ? q.unsafe(
+                `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
+                [repo, ...durableList],
+              )
+            : q.unsafe(
+                `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
+                [repo, anchor, ...durableList],
+              ),
+        )
+        return rows.map((row) => ({
+          repo: String(row.repo),
+          seq: num(row.seq),
+          ts: iso(row.ts),
+          actor: json(row.actor),
+          type: String(row.type),
+          payload: json(row.payload),
+        })) as RepositoryEvent[]
+      },
+    )
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
