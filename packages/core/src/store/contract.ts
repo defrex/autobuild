@@ -702,7 +702,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
     describe('getRepoStateEvents (bounded journal read, AUT-489)', () => {
       /** One no-op hosted dispatcher invocation: the ~4 facts an invocation
        * appends whether or not it did anything. */
-      function noopInvocation(run: string): RepositoryEventWrite<'dispatcher.run-started'>[] {
+      function noopInvocation(run: string): RepositoryEventWrite[] {
         return [
           {
             actor: DISPATCHER,
