@@ -85,7 +85,7 @@ describe('plugin SDK package surface', () => {
     } satisfies AutobuildPluginManifest
 
     expect(sample.name).toBe('sample-package')
-    expect(PLUGIN_API_VERSION).toBe('1.5.0')
+    expect(PLUGIN_API_VERSION).toBe('1.6.0')
     for (const symbol of [
       describeAgentRunnerContract,
       describeTicketSourceContract,
@@ -296,7 +296,7 @@ describe('plugin SDK package surface', () => {
           describeTicketSourceContract,
         } from '@defrex/autobuild/plugin-sdk'
 
-        if (PLUGIN_API_VERSION !== '1.5.0') {
+        if (PLUGIN_API_VERSION !== '1.6.0') {
           throw new Error(\`unexpected plugin API version: \${PLUGIN_API_VERSION}\`)
         }
         if (typeof FakeTicketSource !== 'function') {
