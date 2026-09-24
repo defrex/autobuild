@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
+- [#552](https://github.com/defrex/autobuild/pull/552) — Serve sandbox.* tools from a hosted operator-sandbox backend
 - [#549](https://github.com/defrex/autobuild/pull/549) — Pin the AUT-342 orchestrator wiring hop (HostedStoreServiceOptions)
 - [#548](https://github.com/defrex/autobuild/pull/548) — Define origin mode's plugin candidate-root semantics
 - [#546](https://github.com/defrex/autobuild/pull/546) — Restore the `sandbox` row to the `[orchestrator]` field table

@@ -64,6 +64,7 @@ import {
 } from '../kernel/harvest'
 import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
+import { createOperatorSandboxService, type OperatorSandboxService } from '../operator/sandbox'
 import type { ArtifactRef } from '../ontology'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type {
@@ -357,6 +358,11 @@ export interface TickReport {
   sandboxIdleStops: number
   /** Contained idle-settlement failures this tick; retried next tick. */
   sandboxSettleFailures: number
+  /** Contained sandbox-backend construction failures this tick (AUT-584):
+   * deterministic and config-shaped, so it re-reports every tick until the
+   * config is repaired. The affected tick runs with sandbox tools filtered
+   * exactly as when no backend exists. */
+  orchestratorSandboxFailures: number
 }
 
 export function emptyTickReport(): TickReport {
@@ -393,6 +399,7 @@ export function emptyTickReport(): TickReport {
     harvestFailed: 0,
     sandboxIdleStops: 0,
     sandboxSettleFailures: 0,
+    orchestratorSandboxFailures: 0,
   }
 }
 
@@ -756,6 +763,29 @@ export class Dispatcher {
           opts.deadlineAt === undefined
             ? undefined
             : Math.max(0, Math.floor((opts.deadlineAt - this.deps.clock().getTime()) / 1000))
+        // The origin-mode tick's sandbox backend (AUT-584), built from the
+        // dispatcher's own deps — the same wired provider and forge the
+        // settlement stage already consumes. Construction is cheap and
+        // network-free (one idempotent ensureRepo), and building per tick
+        // picks up hot config reloads the way the rest of the tick does.
+        // A construction failure is contained: the step runs with sandbox
+        // tools filtered exactly as today, and the standing counter names
+        // the condition (the same discipline as sandboxSettleFailures).
+        let sandbox: OperatorSandboxService | undefined
+        try {
+          sandbox = await createOperatorSandboxService({
+            store: this.deps.store,
+            repo: this.deps.repo,
+            provider: this.deps.workspaces,
+            sandbox: this.deps.config.orchestrator.sandbox,
+            baseBranch: this.deps.config.baseBranch,
+            forge: this.deps.forge,
+            clock: this.deps.clock,
+          })
+        } catch {
+          report.orchestratorSandboxFailures += 1
+          sandbox = undefined
+        }
         await runOrchestratorTickStep({
           store: this.deps.store,
           repo: this.deps.repo,
@@ -763,6 +793,7 @@ export class Dispatcher {
           clock: this.deps.clock,
           ids: this.deps.ids,
           tickets: this.deps.tickets,
+          ...(sandbox !== undefined ? { sandbox } : {}),
           ...(this.deps.orchestratorModel !== undefined
             ? { model: this.deps.orchestratorModel }
             : {}),
