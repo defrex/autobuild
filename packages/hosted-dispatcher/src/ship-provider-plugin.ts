@@ -28,14 +28,19 @@
  * ups to the repository root, the same depth class as the trace's existing
  * `node_modules/.bun/**` entries. It fails loudly when the package, bundle
  * input, or trace is missing, so a deployment can never silently ship
- * without the plugin. Idempotent: a re-run appends nothing.
+ * without the plugin. Idempotent ACROSS PROCESSES: the bundle input is
+ * located through the workspace tree, never through `node_modules`, so a
+ * re-run in a fresh process still finds the source after a previous run
+ * replaced the workspace symlink with the staged directory (finding
+ * f_5b9ade16).
  *
  * The npm published package remains the real `src` — only the deployment
  * stages the bundle. Staged files are build-time artifacts under
  * `node_modules` (gitignored, never committed).
  */
-import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
+import type { Dirent } from 'node:fs'
 
 export interface ShipProviderPluginOptions {
   /** Working directory the repository root is derived from; deploy:build
@@ -86,34 +91,73 @@ export async function findWorkspaceRoot(start: string): Promise<string> {
   }
 }
 
-/** Directory of the installed plugin package, resolved from the repository
- * root's own installation (the workspace link during deploy builds). */
-async function resolvePackageDirectory(repoRoot: string, packageName: string): Promise<string> {
-  let entry: string
+/** Directory of the plugin package's SOURCE, located through the repository
+ * root's `workspaces` tree — never through `node_modules`. Resolving through
+ * the installation would find the workspace link on the first run but the
+ * STAGED bundle directory on every later run (staging replaces the symlink
+ * and `bun install` does not relink a pre-existing directory, so the checkout
+ * never self-heals), making the second deploy build target the staged
+ * directory's nonexistent `src/` (finding f_5b9ade16). The workspace tree is
+ * stable across runs. Pattern support mirrors tools/workspace-manifest-check.ts:
+ * `directory/*` globs only. */
+async function resolvePackageSourceDirectory(
+  repoRoot: string,
+  packageName: string,
+): Promise<string> {
+  let rootManifest: { workspaces?: unknown }
   try {
-    entry = Bun.resolveSync(packageName, repoRoot)
+    rootManifest = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'))
   } catch (error) {
     throw new Error(
-      `plugin package "${packageName}" is not resolvable from the repository root ` +
-        `${repoRoot} — is the workspace link present (bun install)? ${error instanceof Error ? error.message : String(error)}`,
+      `cannot read the workspace root manifest ${join(repoRoot, 'package.json')}: ` +
+        (error instanceof Error ? error.message : String(error)),
     )
   }
-  let current = dirname(resolve(entry))
-  while (true) {
+  if (!Array.isArray(rootManifest.workspaces) || rootManifest.workspaces.length === 0) {
+    throw new Error(
+      `${join(repoRoot, 'package.json')}: workspaces must be a non-empty array — ` +
+        `the plugin source is located through the workspace tree`,
+    )
+  }
+  const candidates: string[] = []
+  for (const pattern of rootManifest.workspaces) {
+    const normalized = typeof pattern === 'string' ? pattern.replaceAll('\\', '/') : ''
+    if (!normalized.endsWith('/*') || normalized.slice(0, -2).includes('*')) {
+      throw new Error(
+        `${join(repoRoot, 'package.json')}: unsupported workspace pattern "${String(pattern)}"; ` +
+          'expected a directory/* glob',
+      )
+    }
+    const parent = resolve(repoRoot, normalized.slice(0, -2))
+    let entries: Dirent[]
     try {
-      const manifest = JSON.parse(await readFile(join(current, 'package.json'), 'utf8')) as {
+      entries = await readdir(parent, { withFileTypes: true })
+    } catch (error) {
+      throw new Error(
+        `${join(repoRoot, 'package.json')}: cannot read workspace directory ` +
+          `${normalized.slice(0, -2)}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) candidates.push(join(parent, entry.name))
+    }
+  }
+  for (const directory of candidates) {
+    try {
+      const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as {
         name?: unknown
       }
-      if (manifest.name === packageName) return current
+      if (manifest.name === packageName) return directory
     } catch {
-      // Keep walking up.
+      // Not a package manifest: keep scanning the workspace tree.
     }
-    const parent = dirname(current)
-    if (parent === current) {
-      throw new Error(`resolved entry "${entry}" has no owning package.json named "${packageName}"`)
-    }
-    current = parent
   }
+  throw new Error(
+    `plugin package "${packageName}" not found in the workspace tree of ${repoRoot} ` +
+      '(workspaces patterns: ' +
+      rootManifest.workspaces.map((pattern) => String(pattern)).join(', ') +
+      ') — is the package a workspace member?',
+  )
 }
 
 /** Single self-contained ESM bundle of the plugin's entrypoint for the Bun
@@ -169,7 +213,7 @@ export async function shipProviderPlugin({
   log = (message) => console.log(message),
 }: ShipProviderPluginOptions = {}): Promise<ShipProviderPluginResult> {
   const repoRoot = await findWorkspaceRoot(cwd)
-  const packageDirectory = await resolvePackageDirectory(repoRoot, packageName)
+  const packageDirectory = await resolvePackageSourceDirectory(repoRoot, packageName)
   const packageManifest = JSON.parse(
     await readFile(join(packageDirectory, 'package.json'), 'utf8'),
   ) as { name?: unknown; version?: unknown }
@@ -180,13 +224,14 @@ export async function shipProviderPlugin({
   const bundle = await buildBundle(join(packageDirectory, 'src', 'index.ts'))
 
   // Stage into the repository-root node_modules. bun install leaves a
-  // workspace symlink there for the root devDependency; a real staged
-  // directory must replace it (the deployment never runs bun install again,
-  // and a later local bun install restores the symlink harmlessly).
+  // workspace symlink there for the root devDependency; it must be replaced
+  // by a real directory (the deployment never runs bun install again). A
+  // pre-existing real directory — a previous run's staging, which bun install
+  // does not relink — is replaced too, so re-runs are clean.
   const staging = join(repoRoot, 'node_modules', ...packageName.split('/'))
   const existing = await lstat(staging).catch(() => undefined)
-  if (existing?.isSymbolicLink()) {
-    await rm(staging)
+  if (existing !== undefined) {
+    await rm(staging, { recursive: true })
   }
   await mkdir(join(staging, 'dist'), { recursive: true })
   const stagedManifest = {

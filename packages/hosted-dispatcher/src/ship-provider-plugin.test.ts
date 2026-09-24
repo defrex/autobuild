@@ -16,10 +16,14 @@ const REAL_ROOT = resolve(import.meta.dir, '..', '..', '..')
 const TRACE_DIRECTORY = join('.next', 'server', 'app', 'api', 'dispatch')
 const PACKAGE_NAME = '@defrex/autobuild-vercel-sandbox'
 
-/** A fixture workspace root whose node_modules links the real plugin package,
- * plus a Next project directory holding a trace file. Mirrors the deployed
- * layout: `<root>/packages/hosted-store-service/.next/server/app/api/dispatch/
- * route.js.nft.json`, staged files six directory levels below the root. */
+/** A fixture workspace root with a real `packages/vercel-sandbox` workspace
+ * member (its `src/index.ts` symlinks to the REAL package source, so staged
+ * bundles inline the genuine plugin-sdk closure), plus a Next project
+ * directory holding a trace file. Mirrors the deployed layout:
+ * `<root>/packages/hosted-store-service/.next/server/app/api/dispatch/
+ * route.js.nft.json`, staged files six directory levels below the root. The
+ * source member is found through the workspace tree, never node_modules
+ * (finding f_5b9ade16) — so no node_modules link is needed here. */
 async function fixture(traceFiles?: string[]): Promise<{ root: string; project: string }> {
   const root = await mkdtemp(join(tmpdir(), 'ab-ship-plugin-'))
   temporary.push(root)
@@ -33,11 +37,16 @@ async function fixture(traceFiles?: string[]): Promise<{ root: string; project: 
     join(project, TRACE_DIRECTORY, 'route.js.nft.json'),
     JSON.stringify({ version: 1, files: traceFiles ?? ['/absolutely/not/real.js'] }),
   )
-  await mkdir(join(root, 'node_modules', '@defrex'), { recursive: true })
+  const member = join(root, 'packages', 'vercel-sandbox')
+  await mkdir(join(member, 'src'), { recursive: true })
+  await writeFile(
+    join(member, 'package.json'),
+    JSON.stringify({ name: PACKAGE_NAME, version: '0.8.0', type: 'module' }),
+  )
   await symlink(
-    join(REAL_ROOT, 'packages', 'vercel-sandbox'),
-    join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox'),
-    'dir',
+    join(REAL_ROOT, 'packages', 'vercel-sandbox', 'src', 'index.ts'),
+    join(member, 'src', 'index.ts'),
+    'file',
   )
   return { root, project }
 }
@@ -100,7 +109,64 @@ describe('ship-provider-plugin', () => {
     expect(await readFile(tracePath, 'utf8')).toBe(before)
   }, 60_000)
 
-  test('throws loudly when the plugin package is not resolvable from the root', async () => {
+  test('stages correctly when node_modules already holds a staged directory instead of the workspace link', async () => {
+    // The state a SECOND deploy build sees in a fresh process (finding
+    // f_5b9ade16): the first run replaced the workspace symlink with the
+    // staged bundle and `bun install` does not relink a pre-existing
+    // directory. Bun's in-process module-resolution cache masks this state
+    // from same-process re-runs, so the fixture starts here without any
+    // symlink — node_modules holds a real staged-looking directory — and
+    // the run must still locate the SOURCE through the workspace tree and
+    // bundle it, never the staged dist/index.js.
+    const { root, project } = await fixture()
+    const staged = join(root, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
+    await rm(staged, { recursive: true, force: true })
+    await mkdir(join(staged, 'dist'), { recursive: true })
+    await writeFile(
+      join(staged, 'package.json'),
+      JSON.stringify({
+        name: PACKAGE_NAME,
+        version: '0.0.0-stale',
+        type: 'module',
+        exports: { '.': './dist/index.js' },
+      }),
+    )
+    await writeFile(join(staged, 'dist', 'index.js'), '// stale staged bundle, not the source')
+
+    const result = await shipProviderPlugin({ cwd: project, log: () => {} })
+    expect(result.staging).toBe(staged)
+    // Re-staged from the real source: the stale manifest version is gone and
+    // the bundle is the real plugin, not the stale placeholder.
+    const manifest = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8')) as {
+      version?: string
+    }
+    expect(manifest.version).not.toBe('0.0.0-stale')
+    const bundle = await readFile(join(staged, 'dist', 'index.js'), 'utf8')
+    expect(bundle).not.toBe('// stale staged bundle, not the source')
+    expect(bundle).toContain('autobuild-vercel-sandbox')
+    expect(result.appended).toBe(2)
+  }, 60_000)
+
+  test('a second run in a FRESH process succeeds after the first consumed the workspace link', async () => {
+    // Direct reproduction of the finding: two separate processes against one
+    // fixture. Run 1 stages over the symlink; run 2 (new process, no cached
+    // module resolution) must not abort with ENOENT on <staging>/src.
+    const { project } = await fixture()
+    const script = join(import.meta.dir, 'ship-provider-plugin.ts')
+    for (let run = 1; run <= 2; run++) {
+      const process = Bun.spawnSync({
+        cmd: ['bun', script],
+        cwd: project,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(process.exitCode).toBe(0)
+      const output = `${process.stdout.toString()}${process.stderr.toString()}`
+      expect(output).toContain(run === 1 ? 'appended 2 entries to' : 'already present in')
+    }
+  }, 120_000)
+
+  test('throws loudly when the plugin package is not a workspace member of the root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ab-ship-plugin-'))
     temporary.push(root)
     await writeFile(
@@ -111,10 +177,9 @@ describe('ship-provider-plugin', () => {
     await mkdir(join(project, TRACE_DIRECTORY), { recursive: true })
     await writeFile(join(project, TRACE_DIRECTORY, 'route.js.nft.json'), '{"version":1,"files":[]}')
     await expect(shipProviderPlugin({ cwd: project, log: () => {} })).rejects.toThrow(
-      /not resolvable from the repository root/,
+      /not found in the workspace tree/,
     )
   })
-
   test('throws loudly when the trace file is missing', async () => {
     const { root, project } = await fixture()
     await rm(join(project, TRACE_DIRECTORY), { recursive: true })
