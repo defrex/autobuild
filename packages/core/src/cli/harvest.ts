@@ -507,7 +507,13 @@ function projectRecovery(run: HarvestRunState | undefined): HarvestRecoveryStatu
  * facts per run without introducing transition state. `streams` is the
  * optional authoritative enrichment from `listStreams` on the repo scope:
  * records whose label matches `session:<id>` supply each session's stream id
- * and open/closed status. */
+ * and open/closed status.
+ *
+ * Verified (AUT-574): no repo-identity comparison happens in this code —
+ * membership is decided store-side by `listStreams({ kind: 'repo', repo })`,
+ * scoped by the same resolved identity the caller passes, and the `scope.kind`
+ * check below is only a defensive kind filter over records the store already
+ * scoped. Store scoping semantics are out of scope here. */
 function projectHarvestSessions(
   events: RepositoryEvent[],
   streams?: readonly StreamRecord[],
