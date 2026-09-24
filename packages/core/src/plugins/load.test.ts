@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -445,5 +445,114 @@ describe('loadPlugins', () => {
     await expect(loadPlugins(['@defrex/autobuild-absent-provider'], repo)).rejects.toThrow(
       /could not be resolved/,
     )
+  })
+
+  describe('disk-first resolution gate (AUT-587)', () => {
+    // Bun's object is mutable in-process: swapping `resolveSync` for a
+    // sentinel turns "did the loader hand a bare specifier to the resolver"
+    // into a portable assertion. The crash class this pins: `Bun.resolveSync`
+    // of a bare specifier absent from every `node_modules` lookup fires the
+    // runtime auto-installer, which exits the process fatally on a read-only
+    // filesystem (the hosted dispatcher). Restored in `afterEach`.
+    const originalResolveSync = Bun.resolveSync
+    let sentinelCalls = 0
+
+    beforeEach(() => {
+      sentinelCalls = 0
+      const sentinel = (): string => {
+        sentinelCalls++
+        throw new Error('sentinel: Bun.resolveSync must not run for a disk miss')
+      }
+      Bun.resolveSync = sentinel as typeof Bun.resolveSync
+    })
+
+    afterEach(() => {
+      Bun.resolveSync = originalResolveSync
+    })
+
+    test('a package absent from disk produces the failed report without ever calling Bun.resolveSync', async () => {
+      const repo = await fixture()
+      // Both candidate roots exist on disk but carry no matching
+      // node_modules entry — the exact state that used to reach the
+      // installer.
+      const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
+      await mkdir(installationRoot, { recursive: true })
+      const diagnosis = await diagnosePlugins(['@defrex/autobuild-absent'], repo, {
+        installationRoot,
+      })
+      expect(diagnosis.healthy).toBe(false)
+      expect(diagnosis.reports[0]).toMatchObject({
+        module: '@defrex/autobuild-absent',
+        status: 'failed',
+        stage: 'resolution',
+      })
+      expect(diagnosis.reports[0]?.error).toContain(`repository "${repo}"`)
+      expect(diagnosis.reports[0]?.error).toContain(`installation "${installationRoot}"`)
+      expect(sentinelCalls).toBe(0)
+    })
+
+    test('a disk-present package reaches Bun.resolveSync exactly once, from the root the walk found', async () => {
+      const repo = await fixture()
+      await write(
+        join(repo, 'node_modules', 'gated-package', 'package.json'),
+        JSON.stringify({ name: 'gated-package', type: 'module', exports: './plugin.ts' }),
+      )
+      await write(
+        join(repo, 'node_modules', 'gated-package', 'plugin.ts'),
+        `export default { name: 'gated', apiVersion: '^1.0.0', forges: { gated: () => ({}) } }\n`,
+      )
+      const seenBases: string[] = []
+      Bun.resolveSync = ((specifier: string, base: string): string => {
+        seenBases.push(base)
+        return originalResolveSync(specifier, base)
+      }) as typeof Bun.resolveSync
+      const diagnosis = await diagnosePlugins(['gated-package'], repo)
+      expect(diagnosis.healthy).toBe(true)
+      expect(diagnosis.reports[0]?.status).toBe('loaded')
+      expect(seenBases).toEqual([repo])
+    })
+
+    test('a subpath export of a disk-present package resolves without failing the gate', async () => {
+      const repo = await fixture()
+      await write(
+        join(repo, 'node_modules', 'subpath-package', 'package.json'),
+        JSON.stringify({
+          name: 'subpath-package',
+          type: 'module',
+          exports: { './plugin': './plugin.ts' },
+        }),
+      )
+      await write(
+        join(repo, 'node_modules', 'subpath-package', 'plugin.ts'),
+        `export default { name: 'subpath', apiVersion: '^1.0.0', forges: { subpath: () => ({}) } }\n`,
+      )
+      Bun.resolveSync = originalResolveSync
+      const diagnosis = await diagnosePlugins(['subpath-package/plugin'], repo)
+      expect(diagnosis.healthy).toBe(true)
+      expect(diagnosis.reports[0]?.status).toBe('loaded')
+      expect(sentinelCalls).toBe(0)
+    })
+  })
+
+  test('a package absent from every existing candidate root fails with the same report shape (no stub)', async () => {
+    const repo = await fixture()
+    const installationRoot = join(repo, '..', 'installed', 'node_modules', '@defrex', 'autobuild')
+    await mkdir(installationRoot, { recursive: true })
+    const diagnosis = await diagnosePlugins(['totally-absent-package'], repo, {
+      installationRoot,
+    })
+    expect(diagnosis.healthy).toBe(false)
+    expect(diagnosis.reports[0]).toMatchObject({
+      module: 'totally-absent-package',
+      status: 'failed',
+      stage: 'resolution',
+      resolutionKind: 'package',
+    })
+    expect(diagnosis.reports[0]?.error).toContain(
+      `could not be resolved from repository "${repo}" or installation "${installationRoot}"`,
+    )
+    await expect(
+      loadPlugins(['totally-absent-package'], repo, { installationRoot }),
+    ).rejects.toThrow(/totally-absent-package.*could not be resolved/)
   })
 })

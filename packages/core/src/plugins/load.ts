@@ -1,4 +1,5 @@
-import { isAbsolute } from 'node:path'
+import { existsSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ZodError } from 'zod'
 import { distributionRoot } from '../distribution'
@@ -14,6 +15,36 @@ import { createPluginRegistry, type PluginRegistry, type PluginResolutionKind } 
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** The package directory a bare specifier names: `@scope/name/sub` names
+ * `@scope/name`, `name/sub` names `name`. Subpath exports resolve inside the
+ * package, so the on-disk gate below must check the package, not the
+ * subpath. */
+function packageNameOf(specifier: string): string {
+  const segments = specifier.split('/')
+  return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : (segments[0] ?? specifier)
+}
+
+/** First directory of `root`'s ancestor chain (inclusive) under which
+ * `node_modules/<specifier>` exists on disk, or undefined. Pure filesystem
+ * syscalls — deliberately no Bun APIs: `Bun.resolveSync` on a bare specifier
+ * that no `node_modules` lookup satisfies hands the specifier to Bun's
+ * runtime auto-installer, which fetches from the network and writes a cache;
+ * on a read-only filesystem (the hosted dispatcher function) that is a
+ * fatal, uncatchable process exit (AUT-587). Gating on a disk hit keeps the
+ * installer unreachable: per the planner-verified Bun 1.4 behavior, a
+ * resolver call whose base chain holds the package on disk resolves from
+ * disk and never touches the installer. */
+function diskNodeModulesDirectory(specifier: string, root: string): string | undefined {
+  const pkg = packageNameOf(specifier)
+  let current = resolve(root)
+  while (true) {
+    if (existsSync(join(current, 'node_modules', pkg))) return current
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
 }
 
 function importUrl(resolved: string): string {
@@ -157,8 +188,17 @@ export async function attemptPlugin(
     let found: { path: string; source: PluginResolutionSource } | undefined
     let lastError: unknown
     for (const candidate of candidates) {
+      // Disk-first gate (AUT-587): only a candidate whose `node_modules`
+      // chain holds the package on disk reaches the resolver. Bun's runtime
+      // auto-installer fires exactly when disk resolution fails, so a miss
+      // here must be recorded without calling `Bun.resolveSync` at all.
+      const diskRoot = diskNodeModulesDirectory(moduleSpecifier, candidate.root)
+      if (diskRoot === undefined) {
+        failures.push(`${candidate.source} "${candidate.root}"`)
+        continue
+      }
       try {
-        found = { path: Bun.resolveSync(moduleSpecifier, candidate.root), source: candidate.source }
+        found = { path: Bun.resolveSync(moduleSpecifier, diskRoot), source: candidate.source }
         break
       } catch (error) {
         lastError = error
@@ -176,10 +216,16 @@ export async function attemptPlugin(
             'guests never construct workspace providers, so the provider plugin is skipped here',
         }
       }
+      // A disk miss never reached the resolver, so there is no Bun error to
+      // quote — say directly what the gate established instead.
+      const detail =
+        lastError !== undefined
+          ? reason(lastError)
+          : `no "node_modules/${packageNameOf(moduleSpecifier)}" entry exists on disk under any candidate root`
       return failed(
         initial,
         'resolution',
-        `plugin module "${moduleSpecifier}" could not be resolved from ${failures.join(' or ')}: ${reason(lastError)}`,
+        `plugin module "${moduleSpecifier}" could not be resolved from ${failures.join(' or ')}: ${detail}`,
         lastError,
       )
     }
