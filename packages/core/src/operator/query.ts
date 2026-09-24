@@ -19,7 +19,8 @@ import {
 } from '../cli/dashboard/model'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { unclaimedObservationCount } from '../processes/harvest'
+import { readRepoEventsIfRecorded, unclaimedObservationCount } from '../processes/harvest'
+import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore, Clock } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
@@ -32,12 +33,6 @@ export class OperatorQueryError extends Error {
     super(message)
     this.name = 'OperatorQueryError'
   }
-}
-
-async function repoEvents(store: BuildStore, repo: string) {
-  // Bounded read (AUT-489): every consumer below reduces durable types or
-  // latest-run facts only, so the subset is replay-equivalent here.
-  return (await store.getRepo(repo)) === null ? [] : store.getRepoStateEvents(repo)
 }
 
 export async function listOperatorBuilds(opts: {
@@ -70,10 +65,10 @@ export async function effectiveConfig(
   repo: string,
 ): Promise<{
   config: Config
-  repositoryEvents: Awaited<ReturnType<typeof repoEvents>>
+  repositoryEvents: RepositoryEvent[]
   status: ReturnType<typeof reduceDispatchStatus>
 }> {
-  const repositoryEvents = await repoEvents(store, repo)
+  const repositoryEvents = await readRepoEventsIfRecorded(store, repo)
   let latestRun: string | undefined
   for (const event of repositoryEvents) {
     if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
@@ -210,14 +205,14 @@ export async function getRepositoryStatus(
   store: BuildStore,
   repo: string,
 ): Promise<RepositoryStatus> {
-  return projectRepositoryStatus(repo, await repoEvents(store, repo))
+  return projectRepositoryStatus(repo, await readRepoEventsIfRecorded(store, repo))
 }
 
 export async function getHarvestStatus(
   store: BuildStore,
   repo: string,
 ): Promise<HarvestStatusView> {
-  return projectHarvestStatus(repo, await repoEvents(store, repo))
+  return projectHarvestStatus(repo, await readRepoEventsIfRecorded(store, repo))
 }
 
 export interface OperatorDashboardSnapshot {
