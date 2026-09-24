@@ -849,4 +849,40 @@ describe('harvest session stream discoverability', () => {
     expect(degraded).toContain('session hs_2 (harvest-review, review@1)')
     expect(degraded).not.toContain('(open)')
   })
+
+  test('a repo-scoped stream recorded under a different repo string does not enrich', async () => {
+    // Membership is store-side (AUT-574): `abHarvestStatus` passes its
+    // resolved identity to `listStreams({ kind: 'repo', repo })`, so a stream
+    // keyed under another repo string never reaches the enrichment regardless
+    // of its label.
+    const deps = await fixture()
+    await sessionEvents(deps.store)
+    await deps.store.ensureRepo('/other/repo')
+    const foreign = await deps.store.createStream(
+      { kind: 'repo', repo: '/other/repo' },
+      'session:hs_1',
+    )
+    const lines: string[] = []
+    const exec = async (cmd: string[]) =>
+      cmd[1] === 'remote'
+        ? // No origin remote: identity falls back to the resolved checkout path.
+          { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+        : {
+            stdout: '/repo/.git\n/repo/.git\n/repo\n',
+            stderr: '',
+            exitCode: 0,
+          }
+    await abHarvestStatus({
+      repo: deps.workspacePath,
+      env: {},
+      exec,
+      stdout: (line: string) => lines.push(line),
+      openStore: () => deps.store,
+    })
+    const text = lines.join('\n')
+    // The payload projection stands in: the foreign-keyed stream contributed
+    // nothing to the session rows.
+    expect(text).toContain('session hs_1 (harvest, synthesize@1) stream st_payload (closed)')
+    expect(text).not.toContain(foreign.id)
+  })
 })

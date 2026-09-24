@@ -341,6 +341,92 @@ describe('watch dynamic membership', () => {
     ).toEqual({ late: 3 })
   })
 
+  test('a legacy checkout-path-keyed record joins via its normalized repoOrigin', async () => {
+    const store = makeStore()
+    // Legacy record keyed by an old checkout path: only the fallback arm of
+    // the identity rule — the record's normalized `repoOrigin` — can match.
+    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        calls += 1
+        if (calls === 1) await appendEscalation(store, 'legacy')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '2' })
+    const records = h.out.slice(0, -1).map((line) => JSON.parse(line) as { build: string })
+    expect(records.map((record) => record.build)).toEqual(['legacy'])
+  })
+
+  test('a record whose repoOrigin is an ssh-spelled variant of the origin still joins', async () => {
+    // The watch's identity is the https origin; the legacy record's stored
+    // origin is scp-like ssh from an older writer vintage. Re-normalizing the
+    // recorded side keeps writer vintage from deciding membership.
+    const exec: Exec = async (cmd) =>
+      cmd[1] === 'remote'
+        ? { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+        : { stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`, stderr: '', exitCode: 0 }
+    const store = makeStore()
+    await store.createBuild({
+      slug: 'legacy',
+      repo: '/old/checkouts/app',
+      repoOrigin: 'git@github.com:acme/app.git',
+    })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    let calls = 0
+    const h = harness(store, {
+      exec,
+      onTick: async () => {
+        calls += 1
+        if (calls === 1) await appendEscalation(store, 'legacy')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '2' })
+    const records = h.out.slice(0, -1).map((line) => JSON.parse(line) as { build: string })
+    expect(records.map((record) => record.build)).toEqual(['legacy'])
+  })
+
+  test('a record with a foreign repoOrigin does not join the watch', async () => {
+    const store = makeStore()
+    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store.createBuild({
+      slug: 'foreign',
+      repo: '/old/checkouts/app',
+      repoOrigin: '/other/repo',
+    })
+    for (const slug of ['legacy', 'foreign']) {
+      await store.append(slug, {
+        actor: KERNEL,
+        type: 'runner.attached',
+        payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+      })
+    }
+    let calls = 0
+    const h = harness(store, {
+      onTick: async () => {
+        calls += 1
+        if (calls === 1) {
+          await appendEscalation(store, 'legacy')
+          await appendEscalation(store, 'foreign')
+        }
+      },
+    })
+    await abWatch({ ...h.base, timeout: '2' })
+    const records = h.out.slice(0, -1).map((line) => JSON.parse(line) as { build: string })
+    // Only the matching record's event is delivered; the foreign-origin
+    // record is invisible to membership discovery.
+    expect(records.map((record) => record.build)).toEqual(['legacy'])
+  })
+
   test('with no slugs, an empty active set does not end the watch', async () => {
     const store = makeStore()
     const h = harness(store)
