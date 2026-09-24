@@ -8,7 +8,12 @@ import { parseConfig } from '../config/load'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceHarvest } from '../kernel/harvest'
-import { harvestProposalKey, makeHarvestScanPacket, scanUnclaimedObservations } from './harvest'
+import {
+  artifactRef,
+  harvestProposalKey,
+  makeHarvestScanPacket,
+  scanUnclaimedObservations,
+} from './harvest'
 import { ScriptedAgentRunner, defaultTurnResult, failedTurnResult } from '../ports/runner/fake'
 import type { SessionStreamEmitter } from '../ports/types'
 import { FakeTicketSource } from '../ports/tickets/fake'
@@ -463,6 +468,131 @@ describe('HarvestRunner', () => {
       { build: 'fresh', seq: 1 },
       { build: 'origin', seq: 1 },
     ])
+  })
+
+  test('the idle gate evaluates pressure from digests without per-build history reads', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-flat-gate-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    // Several settled builds carrying observations — the accumulation the
+    // pre-AUT-521 gate re-read in full on every idle evaluation.
+    for (let index = 0; index < 5; index += 1) {
+      const slug = `settled-${index}`
+      await seedObservation(store, slug, `accumulated ${index}`)
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+    let getEventReads = 0
+    const getEvents = store.getEvents.bind(store)
+    store.getEvents = async (slug) => {
+      getEventReads += 1
+      return getEvents(slug)
+    }
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an idle gate must not launch an agent')
+      },
+    })
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(10),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance-flat',
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    expect(result).toEqual({ outcome: 'idle' })
+    // The flat-cost invariant: the below-threshold idle return performs no
+    // per-build history reads, however many settled builds accumulate.
+    expect(getEventReads).toBe(0)
+    expect(scripted.sessions.size).toBe(0)
+  })
+
+  test('a claim landing in the gate-to-scan window makes the launch a benign idle return', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-window-'))
+    roots.push(workspace)
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.ensureRepo('/repo')
+    await seedObservation(store, 'one', 'window observation')
+
+    // The digest/journal read reports a triggered gate (threshold 1), but a
+    // concurrent run claims every occurrence before the runner's fresh scan
+    // — settlement landing in the window between the two reads.
+    let digestsReads = 0
+    const getDigests = store.getRepoBuildDigests.bind(store)
+    store.getRepoBuildDigests = async (repo: string) => {
+      const digests = await getDigests(repo)
+      digestsReads += 1
+      if (digestsReads === 1) {
+        await store.appendRepoWithArtifacts(
+          '/repo',
+          [{ kind: 'harvest-scan', content: '{}' }],
+          (deposited) => ({
+            actor: KERNEL,
+            type: 'harvest.started',
+            payload: {
+              run: 'h_window',
+              observations: [{ build: 'one', seq: 1 }],
+              scan: artifactRef(deposited[0]!),
+            },
+          }),
+        )
+        await store.appendRepo('/repo', {
+          actor: KERNEL,
+          type: 'harvest.completed',
+          payload: {
+            run: 'h_window',
+            dispositions: [
+              {
+                occurrence: { build: 'one', seq: 1 },
+                action: 'suppressed',
+                reason: 'settled in the gate-to-scan window',
+              },
+            ],
+            report: { kind: 'harvest-report', rev: 0 },
+          },
+        })
+      }
+      return digests
+    }
+
+    const scripted = new ScriptedAgentRunner({
+      script: () => {
+        throw new Error('an emptied window must not launch an agent')
+      },
+    })
+    const result = await new HarvestRunner({
+      store,
+      tickets: new FakeTicketSource(),
+      config: config(1),
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'instance-window',
+      opts: { heartbeatMs: 100_000 },
+    }).run()
+
+    // The re-confirmed gate sees an empty unclaimed set and returns idle —
+    // no empty-packet validation throw escaping as a runner failure.
+    expect(result).toEqual({ outcome: 'idle' })
+    expect(scripted.sessions.size).toBe(0)
+    const events = await store.getRepoEvents('/repo')
+    // The only harvest.started is the window claim itself; the runner
+    // appended no run of its own.
+    expect(events.filter((event) => event.type === 'harvest.started')).toHaveLength(1)
   })
 
   for (const pauseDuring of ['synthesize', 'review'] as const) {

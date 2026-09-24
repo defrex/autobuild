@@ -123,9 +123,8 @@ import {
 } from '../processes/build-execution-state'
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
-  unclaimedObservationCount,
-  scanUnclaimedObservations,
-  evaluateHarvestPressure,
+  sampleUnclaimedObservationCount,
+  evaluateHarvestPressureFromStore,
 } from '../processes/harvest'
 import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
 import type { HarvestExecution } from '../ports/workspace/harvest-execution'
@@ -1097,16 +1096,16 @@ class DispatchLoop {
 
       // Unclaimed observations are display-only and sampled once per interactive
       // dispatcher tick from the journal and one repo-scoped digest read
-      // (AUT-487) — flat in the finished-build count. A failed sample must
-      // neither fail dispatch nor replace the last complete measurement with a
-      // fabricated zero.
+      // (AUT-487) — flat in the finished-build count. A journal record that
+      // does not yet exist reads as an empty journal (AUT-524); the sample
+      // writes nothing. Any other failed sample must neither fail dispatch nor
+      // replace the last complete measurement with a fabricated zero.
       if (this.dashboard) {
         try {
-          const [harvestEvents, digests] = await Promise.all([
-            this.wiring.store.getRepoEvents(this.repoIdentity),
-            this.wiring.store.getRepoBuildDigests(this.repoIdentity),
-          ])
-          this.observationCount = unclaimedObservationCount({ digests, harvestEvents })
+          this.observationCount = await sampleUnclaimedObservationCount(
+            this.wiring.store,
+            this.repoIdentity,
+          )
         } catch {
           // Display-only sampling failures retain the last factual count and
           // retry on the next tick; they are not dashboard failures.
@@ -2285,8 +2284,16 @@ class DispatchLoop {
         control.kind === 'request-recovery' ||
         control.kind === 'exhaust-recovery'
       if (!resumePending) {
-        const scan = await scanUnclaimedObservations(store, repo)
-        const pressure = evaluateHarvestPressure(scan, this.currentConfig().config.policy)
+        // Flat-cost gate (AUT-521): the journal read above plus one
+        // repo-scoped digest batch read — no per-build history reads, so the
+        // per-evaluation cost no longer grows with accumulated finished
+        // builds. The guest rescans authoritatively once provisioned.
+        const pressure = await evaluateHarvestPressureFromStore({
+          store,
+          repo,
+          harvestEvents: events,
+          policy: this.currentConfig().config.policy,
+        })
         if (pressure.trigger === undefined) return
       }
 

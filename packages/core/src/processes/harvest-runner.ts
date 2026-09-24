@@ -46,6 +46,7 @@ import { defaultProposalState } from './dispatcher'
 import {
   artifactRef,
   evaluateHarvestPressure,
+  evaluateHarvestPressureFromDigests,
   HARVEST_REPORT_ARTIFACT,
   HARVEST_SCAN_ARTIFACT,
   HARVEST_TRANSCRIPT_ARTIFACT,
@@ -244,13 +245,40 @@ export class HarvestRunner {
 
       if (!run) {
         await this.controlBoundary()
-        const scan = await scanUnclaimedObservations(store, repo)
-        // Scanning may span many build streams. Treat its completion as a
-        // boundary even when the threshold is not met, so a request arriving
-        // during the read is acknowledged before this runner returns idle.
+        // Flat-cost gate (AUT-521): the pressure trigger is evaluated from
+        // the journal and one repo-scoped digest batch read — no per-build
+        // history reads — so the idle evaluation no longer grows with
+        // accumulated finished builds. Only a tripped gate pays for the full
+        // unclaimed-observation scan, because the packet artifact needs the
+        // observation payloads no bounded source carries.
+        const [gateEvents, digests] = await Promise.all([
+          store.getRepoEvents(repo),
+          store.getRepoBuildDigests(repo),
+        ])
+        const pressure = evaluateHarvestPressureFromDigests({
+          digests,
+          harvestEvents: gateEvents,
+          policy: this.currentConfig().policy,
+        })
+        if (pressure.trigger === undefined) {
+          // Treat the read's completion as a boundary even when the gate did
+          // not trip, so a request arriving during the read is acknowledged
+          // before this runner returns idle.
+          await this.controlBoundary()
+          return { outcome: 'idle' }
+        }
         await this.controlBoundary()
-        const pressure = evaluateHarvestPressure(scan, this.currentConfig().policy)
-        if (pressure.trigger === undefined) return { outcome: 'idle' }
+        const scan = await scanUnclaimedObservations(store, repo)
+        // The trigger came from an earlier read than this scan, and a claim
+        // may have landed in the window. Re-confirm the gate against the
+        // fresh scan (pure, free): an emptied window returns idle exactly as
+        // if the gate had not tripped, so a packet is only ever built from a
+        // scan that itself triggered.
+        const confirmed = evaluateHarvestPressure(scan, this.currentConfig().policy)
+        if (confirmed.trigger === undefined) {
+          await this.controlBoundary()
+          return { outcome: 'idle' }
+        }
         const runId = this.deps.ids('harvest')
         const packet = await makeHarvestScanPacket({
           store,
@@ -280,7 +308,7 @@ export class HarvestRunner {
               run: runId,
               observations: packet.observations.map((item) => item.occurrence),
               scan: artifactRef(deposited[0]!),
-              trigger: pressure.trigger,
+              trigger: confirmed.trigger,
               ...(this.deps.environment !== undefined
                 ? { environment: this.deps.environment }
                 : {}),

@@ -60,21 +60,33 @@ export interface HarvestPressure {
   trigger?: HarvestTrigger
 }
 
-/** Pure two-dimensional Harvest gate. Drift is measured from the oldest
- * unclaimed observation and excludes that observation's own build. */
-export function evaluateHarvestPressure(
-  scan: Pick<HarvestScanResult, 'observations' | 'merges'>,
+/** The build- and occurrence-shaped facts both pressure evaluations project
+ * onto: the unclaimed occurrences with their event timestamps, and the merge
+ * facts. Keeping the oldest-observation selection and drift arithmetic in one
+ * place makes the scan-based and digest-based evaluations equal by
+ * construction rather than by parallel maintenance (AUT-521). */
+interface HarvestPressureFacts {
+  unclaimed: { build: string; seq: number; ts: string }[]
+  merges: { build: string; ts: string }[]
+}
+
+function evaluateHarvestPressureFacts(
+  facts: HarvestPressureFacts,
   policy: { harvestThreshold: number; harvestMaxDrift: number },
 ): HarvestPressure {
-  const observationCount = scan.observations.length
+  const observationCount = facts.unclaimed.length
   if (observationCount === 0) return { observationCount, drift: 0 }
 
-  const oldest = scan.observations.reduce((candidate, observation) =>
-    observation.ts < candidate.ts ? observation : candidate,
-  )
+  // The oldest unclaimed occurrence: min ts, then build ascending, then seq
+  // ascending — exactly what the scan projection's sort-by-(build,seq) then
+  // strict-`<`-reduce produced, now stated as one comparator.
+  const oldest = [...facts.unclaimed].sort(
+    (a, b) =>
+      (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0) || a.build.localeCompare(b.build) || a.seq - b.seq,
+  )[0]!
   const mergedBuilds = new Set<string>()
-  for (const merge of scan.merges) {
-    if (merge.build === oldest.occurrence.build || merge.ts <= oldest.ts) continue
+  for (const merge of facts.merges) {
+    if (merge.build === oldest.build || merge.ts <= oldest.ts) continue
     mergedBuilds.add(merge.build)
   }
   const drift = mergedBuilds.size
@@ -93,6 +105,71 @@ export function evaluateHarvestPressure(
     drift,
     ...(trigger !== undefined ? { trigger } : {}),
   }
+}
+
+/** Pure two-dimensional Harvest gate. Drift is measured from the oldest
+ * unclaimed observation and excludes that observation's own build. */
+export function evaluateHarvestPressure(
+  scan: Pick<HarvestScanResult, 'observations' | 'merges'>,
+  policy: { harvestThreshold: number; harvestMaxDrift: number },
+): HarvestPressure {
+  return evaluateHarvestPressureFacts(
+    {
+      unclaimed: scan.observations.map((observation) => ({
+        build: observation.occurrence.build,
+        seq: observation.occurrence.seq,
+        ts: observation.ts,
+      })),
+      merges: scan.merges,
+    },
+    policy,
+  )
+}
+
+/** The same gate from build digests and the repository journal alone
+ * (AUT-521): claimedness comes from the journal, unclaimed occurrences and
+ * merge facts from the digests — no per-build history reads. The merge facts
+ * use each digest's latest `pr.merged` ts; drift counts a build when any of
+ * its merges is strictly after the oldest unclaimed observation, and
+ * `max(merge.ts) > oldest.ts` is equivalent to `any(merge.ts) > oldest.ts`,
+ * so latest-wins carries exactly the drift fact the scan collects. */
+export function evaluateHarvestPressureFromDigests(input: {
+  digests: Map<string, BuildDigest>
+  harvestEvents: RepositoryEvent[]
+  policy: { harvestThreshold: number; harvestMaxDrift: number }
+}): HarvestPressure {
+  const claimed = claimedOccurrenceKeys(reduceHarvest(input.harvestEvents))
+  const unclaimed: HarvestPressureFacts['unclaimed'] = []
+  const merges: HarvestPressureFacts['merges'] = []
+  for (const digest of input.digests.values()) {
+    for (const observation of digest.observations) {
+      if (claimed.has(occurrenceKey({ build: digest.slug, seq: observation.seq }))) continue
+      unclaimed.push({ build: digest.slug, seq: observation.seq, ts: observation.ts })
+    }
+    if (digest.merged !== undefined) merges.push({ build: digest.slug, ts: digest.merged })
+  }
+  return evaluateHarvestPressureFacts({ unclaimed, merges }, input.policy)
+}
+
+/** The dispatcher harvest-launch gate's read sequence as one named seam
+ * (AUT-521): `ensureRepo`, one repo-scoped digest batch read, and the pure
+ * digest evaluation with the caller's policy. Per-evaluation cost is one
+ * journal read (passed in by the caller, which already holds it) plus one
+ * bounded digest read — flat in the number of accumulated finished builds,
+ * where the previous scan read every build's full history per evaluation. */
+export async function evaluateHarvestPressureFromStore(input: {
+  store: BuildStore
+  repo: string
+  harvestEvents: RepositoryEvent[]
+  policy: { harvestThreshold: number; harvestMaxDrift: number }
+}): Promise<HarvestPressure> {
+  await input.store.ensureRepo(input.repo)
+  const digests = await input.store.getRepoBuildDigests(input.repo)
+  return evaluateHarvestPressureFromDigests({
+    digests,
+    harvestEvents: input.harvestEvents,
+    policy: input.policy,
+  })
 }
 
 /** The deterministic core of the unclaimed-observation scan, over
@@ -148,12 +225,14 @@ export function collectUnclaimedObservations(input: {
 
 /** The unclaimed-observation count from build digests and the repository
  * journal alone (AUT-487): the same reduce/claim/count the store-reading scan
- * performs, with no per-build history reads. The dashboards consume this
- * directly — the count is all they display — while `scanUnclaimedObservations`
+ * performs, with no per-build history reads. The operator query consumes this
+ * directly, and the terminal dashboards consume it through
+ * `sampleUnclaimedObservationCount` (AUT-524), while `scanUnclaimedObservations`
  * keeps the full-scan shape its remaining callers depend on (the harvest
- * runner's own scan and the dispatcher's harvest-launch gate, which also need
- * the merges and observation payloads). Occurrences are keyed `{build, seq}`;
- * payload ids are not assumed globally unique. */
+ * runner's packet scan — the only source of observation payloads — and its
+ * gate re-confirmation; the dispatcher's harvest-launch gate itself evaluates
+ * from digests, AUT-521). Occurrences are keyed `{build, seq}`; payload ids
+ * are not assumed globally unique. */
 export function unclaimedObservationCount(input: {
   digests: Map<string, BuildDigest>
   harvestEvents: RepositoryEvent[]
@@ -161,11 +240,34 @@ export function unclaimedObservationCount(input: {
   const claimed = claimedOccurrenceKeys(reduceHarvest(input.harvestEvents))
   let count = 0
   for (const digest of input.digests.values()) {
-    for (const seq of digest.observations) {
-      if (!claimed.has(occurrenceKey({ build: digest.slug, seq }))) count += 1
+    for (const observation of digest.observations) {
+      if (!claimed.has(occurrenceKey({ build: digest.slug, seq: observation.seq }))) count += 1
     }
   }
   return count
+}
+
+/** The terminal dashboards' observation-pressure sample (AUT-487): build
+ * digests plus the repository journal, reduced to the unclaimed-observation
+ * count. Store traffic is flat in the finished-build count — one journal read
+ * plus one repo-scoped digest read, plus the journal-record probe below.
+ *
+ * Missing-record treatment (AUT-524): a repository whose journal record does
+ * not yet exist has an empty journal by definition, so the probe answers
+ * `[]` instead of letting `getRepoEvents` reject and silently retain a stale
+ * count. The sample writes nothing — a display path must not `ensureRepo` —
+ * mirroring the operator query's missing-record treatment
+ * (operator/query.ts). `scanUnclaimedObservations` keeps its materializing
+ * `ensureRepo` for its remaining callers. */
+export async function sampleUnclaimedObservationCount(
+  store: BuildStore,
+  repo: string,
+): Promise<number> {
+  const [digests, harvestEvents] = await Promise.all([
+    store.getRepoBuildDigests(repo),
+    (async () => ((await store.getRepo(repo)) === null ? [] : store.getRepoEvents(repo)))(),
+  ])
+  return unclaimedObservationCount({ digests, harvestEvents })
 }
 
 /** Raw structured `observation.recorded` envelopes across this repository.

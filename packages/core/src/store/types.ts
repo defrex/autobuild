@@ -91,8 +91,16 @@ export interface ArtifactMeta {
 export interface BuildDigest {
   slug: string
   terminal?: 'done' | 'aborted'
-  /** Ascending seqs of every `observation.recorded` in the build's log. */
-  observations: number[]
+  /** Ascending-seq `{seq, ts}` pairs for every `observation.recorded` in the
+   * build's log; `ts` is the event envelope timestamp (AUT-521: the harvest
+   * pressure gate measures drift from the oldest unclaimed occurrence's ts,
+   * so per-occurrence timestamps travel with the digest). */
+  observations: { seq: number; ts: string }[]
+  /** Envelope ts of the log's latest `pr.merged` event, absent when the log
+   * has none (AUT-521: latest-wins suffices for drift, which counts a build
+   * when any of its merges is strictly after the oldest unclaimed
+   * observation). */
+  merged?: string
 }
 
 export interface RepositoryRecord {
@@ -277,7 +285,7 @@ export interface BuildStore {
   ): Promise<AbEvent[]>
 
   /** One entry for EVERY build whose record's repo is `repo` (completeness is
-   * contractual: a freshly created build whose log holds none of the three
+   * contractual: a freshly created build whose log holds none of the
    * digest-relevant event types still gets its entry, with empty
    * `observations` and no `terminal`), keyed by slug. A read-only, repo-scoped
    * batch query shaped like `listBuilds`: it performs no `ensureRepo`, never

@@ -3,8 +3,15 @@
 ## Unreleased
 
 - [#503](https://github.com/defrex/autobuild/pull/503) — Move remote workspace-provider behavior behind declarations
+- [#499](https://github.com/defrex/autobuild/pull/499) — Deepen schema-parity test to column/type and index-attribute parity
+- [#498](https://github.com/defrex/autobuild/pull/498) — Update operator-api docs to remote store protocol 3 (AUT-535)
+- [#497](https://github.com/defrex/autobuild/pull/497) — Remove dead childDone deferred from AUT-524 frontend pressure test
+- [#496](https://github.com/defrex/autobuild/pull/496) — Make the harvest-launch pressure gate's evaluation cost flat
+- [#495](https://github.com/defrex/autobuild/pull/495) — Declare the SQLite digest index in local/schema.ts
+- [#494](https://github.com/defrex/autobuild/pull/494) — Pin the duplicated execOrThrow helpers’ exit/error semantics with tests
 - [#493](https://github.com/defrex/autobuild/pull/493) — Fix wait.ts's post-drain exit-2 comment after AUT-403 (AUT-528)
 - [#492](https://github.com/defrex/autobuild/pull/492) — Add finalize-fork cross case for explicit local marker over remote-suggestive name
+- [#491](https://github.com/defrex/autobuild/pull/491) — Pin the terminal observation sample's missing-record behavior (AUT-524)
 - [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
 - [#489](https://github.com/defrex/autobuild/pull/489) — Cover getRepoBuildDigests' phase-session authority wrapper in the store tests
 - [#488](https://github.com/defrex/autobuild/pull/488) — Pin marker-over-name precedence in the processes tests (AUT-527)

@@ -3,7 +3,7 @@ import { humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchStatus, type DispatchStatus } from '../kernel/dispatch-status'
 import type { BuildState } from '../kernel/reducer'
-import { unclaimedObservationCount } from '../processes/harvest'
+import { sampleUnclaimedObservationCount } from '../processes/harvest'
 import {
   controlHarvestRun,
   OperatorControlError,
@@ -299,12 +299,10 @@ export class DispatchFrontend {
       // (this class's cached `repositoryEvents` is dashboard-filtered, so the
       // claimed set needs the full journal, exactly as the old per-build scan
       // read it) plus one repo-scoped digest read — the sample's store
-      // traffic stays flat as finished builds accumulate.
-      const [harvestEvents, digests] = await Promise.all([
-        this.opts.store.getRepoEvents(this.opts.repo),
-        this.opts.store.getRepoBuildDigests(this.opts.repo),
-      ])
-      this.observationCount = unclaimedObservationCount({ digests, harvestEvents })
+      // traffic stays flat as finished builds accumulate. A journal record
+      // that does not yet exist reads as an empty journal (AUT-524); the
+      // sample writes nothing.
+      this.observationCount = await sampleUnclaimedObservationCount(this.opts.store, this.opts.repo)
     } catch {
       // Before the first successful sample there is no factual zero to place in
       // a complete frame. Leave the prior frame untouched and retry on the next
