@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#560](https://github.com/defrex/autobuild/pull/560) — Harden the distribution-refresh tests (AUT-557)
 - [#556](https://github.com/defrex/autobuild/pull/556) — Correct trace-depth labels from 'six ups' to seven '..' components
 - [#555](https://github.com/defrex/autobuild/pull/555) — Deny test files from the vercel-sandbox packed tarball (AUT-564)
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
