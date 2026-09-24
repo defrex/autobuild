@@ -104,6 +104,7 @@ describe('hosted store service', () => {
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
+      publications: [],
     })
     expect(opens).toBe(1)
     await client.setIntake('acme/repo', false)

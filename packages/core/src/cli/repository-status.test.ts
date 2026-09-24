@@ -77,6 +77,7 @@ describe('ab repository status', () => {
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
+      publications: [],
     })
     expect(getRepoStateEvents).toBe(0)
     expect(await store.getRepo(REPO)).toBeNull()
@@ -101,6 +102,7 @@ describe('ab repository status', () => {
         paused,
         defaultAutoMerge: true,
         sandboxes: [],
+        publications: [],
       })
       expect(await store.getRepoEvents(REPO)).toEqual(before)
     }

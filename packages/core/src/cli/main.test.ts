@@ -539,6 +539,7 @@ describe('runCli — read-only status routing', () => {
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
+      publications: [],
     })
   })
 
