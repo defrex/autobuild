@@ -39,9 +39,10 @@ const config: NextConfig = {
   // skills/operate/SKILL.md as well. Note: Next 16's default Turbopack builds
   // never apply outputFileTracingIncludes (only webpack builds do), so
   // packages/hosted-dispatcher/src/ship-packed-distribution.ts — the last
-  // step of deploy:build — appends the archive and the skill to both routes'
-  // trace files instead. These entries document the intent and still apply on
-  // any webpack build.
+  // step of deploy:build — appends these extras to the trace files itself:
+  // the archive and the manifest to the dispatch route's trace only, and the
+  // skill to both turn-executing routes. These entries document the intent
+  // and still apply on any webpack build.
   outputFileTracingIncludes: {
     '/api/dispatch': ['./.autobuild-dist/**', './skills/operate/SKILL.md'],
     '/operator/[[...path]]': ['./skills/operate/SKILL.md'],
