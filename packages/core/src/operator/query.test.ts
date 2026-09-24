@@ -237,9 +237,18 @@ describe('operator query wiring', () => {
     // The concurrent-create shape for finding f_3cb67aba: the digest map
     // holds one more build than the record list the listing already read.
     // Records are read first, so the extra entry is harmless — the listing
-    // must succeed with the correct output, not throw.
+    // must succeed with the correct output, not throw. The call log below
+    // also pins the record-before-digest read order: swapping the two reads
+    // in listOperatorBuilds fails the assertion, so this test guards the
+    // order f_3cb67aba fixed, not just the harmless-extra-entry outcome.
     class ConcurrentCreateStore extends MemoryBuildStore {
+      readonly calls: string[] = []
+      override async listBuilds() {
+        this.calls.push('listBuilds')
+        return super.listBuilds()
+      }
       override async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+        this.calls.push('getRepoBuildDigests')
         const digests = await super.getRepoBuildDigests(repo)
         digests.set('concurrent', { slug: 'concurrent', observations: [] })
         return digests
@@ -251,6 +260,7 @@ describe('operator query wiring', () => {
     await seedFinished(store, 'done-1', 'done')
     const summaries = await listOperatorBuilds({ store, repo: REPO, scope: 'active', now })
     expect(summaries.map((b) => b.slug)).toEqual(['active-1'])
+    expect(store.calls).toEqual(['listBuilds', 'getRepoBuildDigests'])
   })
 
   test('a missing digest entry for a filtered record fails loudly as an adapter bug', async () => {
