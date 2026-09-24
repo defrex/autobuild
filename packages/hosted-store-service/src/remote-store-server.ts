@@ -372,6 +372,15 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           ),
         )
       }
+      case 'GET state-events': {
+        // The bounded repository-journal read (AUT-489), inside the same
+        // repo-existence and authorization gates as `GET events` above: an
+        // unknown repo answers the store server's 404, not a generic one.
+        return json(
+          200,
+          await withDisconnect(req, store.getRepoStateEvents(repo), (): RepositoryEvent[] => []),
+        )
+      }
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
         authorizeSession(scope, body.event.actor)

@@ -507,6 +507,19 @@ export class RemoteBuildStore implements BuildStore {
     )
   }
 
+  async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+    // The bounded repository-journal read (AUT-489): one additive route next
+    // to `GET events`, reusing the same wire shape. No protocol-version bump
+    // and no change to existing routes — a client on the previous release
+    // never calls this route, so behavioral identity of the old surface is
+    // the whole cross-version contract.
+    return this.requestJson(
+      'GET',
+      `${this.repoPath(repo)}/state-events`,
+      repositoryEventListSchema,
+    ) as Promise<RepositoryEvent[]>
+  }
+
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
     return this.requestJson(
       'POST',

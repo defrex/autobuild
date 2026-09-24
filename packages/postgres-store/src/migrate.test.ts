@@ -28,6 +28,8 @@ import {
   SCHEMA_V5_DDL,
   SCHEMA_V6_CHECKSUM,
   SCHEMA_V6_DDL,
+  SCHEMA_V7_CHECKSUM,
+  SCHEMA_V7_DDL,
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
@@ -55,6 +57,31 @@ async function schemaHarness(): Promise<{ url: string; cleanup: () => Promise<vo
     },
   }
 }
+
+// A frozen DDL constant must be pre-trimmed: a deployed marker's checksum is
+// taken over the trimmed DDL (the migration runner applies `.trim()` before
+// hashing), so an untrimmed constant hashes surrounding whitespace no deployed
+// database ever carried and its promotion branch never matches — every real
+// database of that version then fails migration with "marker is
+// incompatible". This is the AUT-489 round-2 finding (the v7 freeze shipped
+// without `.trim()`); the assertion makes the whole frozen family unable to
+// regress. Pure constants, so this runs without a live Postgres.
+describe('frozen PostgreSQL schema DDL constants', () => {
+  for (const [name, ddl] of [
+    ['SCHEMA_V1_DDL', SCHEMA_V1_DDL],
+    ['SCHEMA_V2_DDL', SCHEMA_V2_DDL],
+    ['SCHEMA_V3_DDL', SCHEMA_V3_DDL],
+    ['SCHEMA_V4_DDL', SCHEMA_V4_DDL],
+    ['SCHEMA_V5_DDL', SCHEMA_V5_DDL],
+    ['SCHEMA_V6_DDL', SCHEMA_V6_DDL],
+    ['SCHEMA_V7_DDL', SCHEMA_V7_DDL],
+    ['SCHEMA_DDL', SCHEMA_DDL],
+  ] as const) {
+    test(`${name} is pre-trimmed`, () => {
+      expect(ddl).toBe(ddl.trim())
+    })
+  }
+})
 
 if (testUrl) {
   describe('PostgreSQL schema migration', () => {
@@ -466,6 +493,61 @@ if (testUrl) {
           const digests = await store.getRepoBuildDigests('acme/v6')
           expect([...digests.keys()]).toEqual(['v6-build'])
           expect(digests.get('v6-build')).toEqual({ slug: 'v6-build', observations: [] })
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v7 database in place: the repository-journal state-read index, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        // Create a real v7 database: v7 DDL, v7 marker, plus a journal with
+        // dispatcher facts (the noise the new index must stop scanning) and
+        // a durable harvest fact the bounded read must keep.
+        await sql.unsafe(SCHEMA_V7_DDL)
+        // The genuine v7 marker is version 7 literally: SCHEMA_VERSION moves
+        // on with every schema revision, and a v7 checksum under any other
+        // version is (correctly) rejected as incompatible.
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, 7, ${SCHEMA_V7_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO repo_streams (repo, created_at, updated_at)
+          VALUES ('acme/v7', ${CONTRACT_T0}, ${CONTRACT_T0})`
+        await sql`INSERT INTO repo_events (repo, seq, ts, actor, type, payload)
+          VALUES ('acme/v7', 1, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'dispatcher.run-started',
+            '{"run":"r1","pid":1,"effectiveConfig":{"kind":"effective-config","rev":0},"roleWarnings":[]}'),
+          ('acme/v7', 2, ${CONTRACT_T0}, '{"kind":"dispatcher"}', 'dispatcher.tick-completed',
+            '{"run":"r1","queued":0,"counters":{},"janitorDiagnostics":[],"ticketDiagnostics":[],"dependencyDiagnostics":[]}'),
+          ('acme/v7', 3, ${CONTRACT_T0}, '{"kind":"kernel"}', 'harvest.started',
+            '{"run":"h1","observations":[{"build":"b","seq":1}],"scan":{"kind":"harvest-scan","rev":0}}')`
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+
+        // The index exists under its pinned name and the legacy rows survived.
+        const indexes =
+          await sql`SELECT indexname FROM pg_indexes WHERE tablename = 'repo_events' AND indexname = 'repo_events_type_repo_seq'`
+        expect(indexes).toHaveLength(1)
+        const legacy = await sql`SELECT seq, type FROM repo_events WHERE repo = 'acme/v7'`
+        expect(legacy.map((row: Row) => Number(row.seq))).toEqual([1, 2, 3])
+
+        // The migrated store's bounded read keeps the anchor and the tail
+        // from it (the same run's tick fact) plus the durable fact — exactly
+        // the oracle over the full replay.
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const subset = await store.getRepoStateEvents('acme/v7')
+          expect(subset.map((event) => event.seq)).toEqual([1, 2, 3])
         } finally {
           await store.close()
         }

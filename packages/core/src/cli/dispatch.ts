@@ -1058,7 +1058,8 @@ class DispatchLoop {
   }
 
   private async readDispatchSettings(): Promise<ReturnType<typeof reduceDispatchSettings>> {
-    const events = await this.wiring.store.getRepoEvents(this.repoIdentity)
+    // Bounded read (AUT-489): the settings reducer consumes durable types only.
+    const events = await this.wiring.store.getRepoStateEvents(this.repoIdentity)
     return reduceDispatchSettings(events)
   }
 
@@ -2260,7 +2261,9 @@ class DispatchLoop {
       // once provisioned, so a threshold crossing between gate and guest scan
       // is never suppressed by this check.
       const record = await store.getRepo(repo)
-      const events = record === null ? [] : await store.getRepoEvents(repo)
+      // Bounded read (AUT-489): the harvest control decision reduces durable
+      // types only.
+      const events = record === null ? [] : await store.getRepoStateEvents(repo)
       const state = reduceHarvest(events)
       const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
       const resumePending =
@@ -2377,7 +2380,8 @@ class DispatchLoop {
     startedSeq: number,
   ): Promise<HarvestRunnerResult> {
     const { store } = this.wiring
-    const events = await store.getRepoEvents(repo)
+    // Bounded read (AUT-489): classifyHarvestOutcome reduces harvest facts only.
+    const events = await store.getRepoStateEvents(repo)
     const record = await store.getRepo(repo)
     return classifyHarvestOutcome(events, {
       executionStartedSeq: startedSeq,

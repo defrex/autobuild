@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#502](https://github.com/defrex/autobuild/pull/502) — Consolidate operator query's repoEvents onto the shared AUT-524 read
+- [#500](https://github.com/defrex/autobuild/pull/500) — Bound repository-journal reads for stateless repository readers
 - [#499](https://github.com/defrex/autobuild/pull/499) — Deepen schema-parity test to column/type and index-attribute parity
 - [#498](https://github.com/defrex/autobuild/pull/498) — Update operator-api docs to remote store protocol 3 (AUT-535)
 - [#497](https://github.com/defrex/autobuild/pull/497) — Remove dead childDone deferred from AUT-524 frontend pressure test

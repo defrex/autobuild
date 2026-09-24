@@ -772,7 +772,10 @@ export class Dispatcher {
 
   private async repositoryEvents() {
     if ((await this.deps.store.getRepo(this.deps.repo)) === null) return []
-    return this.deps.store.getRepoEvents(this.deps.repo)
+    // Bounded read (AUT-489): every consumer of this helper reduces durable
+    // types (settings, harvest state, sandbox state) or facts of the current
+    // run, all covered by the subset's latest-run-started tail.
+    return this.deps.store.getRepoStateEvents(this.deps.repo)
   }
 
   /** Apply the newest durable `dispatcher.auto-merge-default-set` fact to every
@@ -830,7 +833,8 @@ export class Dispatcher {
       start()
       return
     }
-    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
+    // Bounded read (AUT-489): the harvest reducer consumes durable types only.
+    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
     if (decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !== 'park') {
       start()
     }
