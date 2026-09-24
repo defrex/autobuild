@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#552](https://github.com/defrex/autobuild/pull/552) — Serve sandbox.* tools from a hosted operator-sandbox backend
 - [#544](https://github.com/defrex/autobuild/pull/544) — Stamp the guest distribution marker with the archive digest (AUT-600)
 - [#542](https://github.com/defrex/autobuild/pull/542) — Match excludeProvisioningMarker's empty-stdout error to the fake twin
 - [#541](https://github.com/defrex/autobuild/pull/541) — Make the plugin ancestor-walk terminate on relative candidate roots
