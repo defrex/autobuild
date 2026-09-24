@@ -11,6 +11,7 @@ import {
   resolveRepoOrigin,
   resolveRepoState,
   resolveRepoStatePaths,
+  streamInRepository,
 } from './repo-state'
 
 const cleanup: string[] = []
@@ -298,6 +299,34 @@ describe('buildInRepository', () => {
         otherOrigin,
       ),
     ).toBe(false)
+  })
+})
+
+describe('streamInRepository', () => {
+  const ORIGIN = 'https://github.com/acme/app'
+
+  test('an already-normalized scope matches the same identity', () => {
+    expect(streamInRepository(ORIGIN, ORIGIN)).toBe(true)
+  })
+
+  test('an scp-like ssh-spelled scope matches the https identity (writer-vintage normalization)', () => {
+    expect(streamInRepository('git@github.com:acme/app.git', ORIGIN)).toBe(true)
+  })
+
+  test('a foreign origin is rejected', () => {
+    expect(streamInRepository('https://github.com/other/app', ORIGIN)).toBe(false)
+  })
+
+  test('a legacy physical-path scope stays rejected against an origin identity (the pinned AUT-314 divergence)', () => {
+    // StreamScope carries no `repoOrigin`, so a legacy physical-path scope has
+    // no recorded origin to compare — buildInRepository's forgiveness arm has
+    // no stream analog, and this deliberate divergence is documented on the
+    // helper rather than fixed here.
+    expect(streamInRepository('/host/checkout', ORIGIN)).toBe(false)
+  })
+
+  test('a path identity still matches a path scope (origin-less fixture)', () => {
+    expect(streamInRepository('/repo', '/repo')).toBe(true)
   })
 })
 

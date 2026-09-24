@@ -12,7 +12,7 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import type { Artifact, ArtifactMeta, BuildStore, RepositoryArtifact } from '../store/types'
 import type { CliEnv } from './env'
 import { resolveAmbientReadSession } from './env'
-import { buildInRepository } from './repo-state'
+import { buildInRepository, streamInRepository } from './repo-state'
 import { withAmbientReadStore, withSessionlessStore, type StoreOpener } from './store-opening'
 
 export interface ArtifactDeps {
@@ -271,7 +271,11 @@ export async function artifactDownloadStream(
             `session stream surface (GET /sessions/${record.scope.session}/streams/${streamId})`,
         )
       }
-      if (record.scope.repo !== context.repo) {
+      // Origin-aware membership, mirroring the build-scoped path above.
+      // Unlike a BuildRecord, StreamScope carries no `repoOrigin`, so a legacy
+      // physical-path scope.repo stays rejected here (see
+      // `streamInRepository` for the documented AUT-314-class divergence).
+      if (!streamInRepository(record.scope.repo, context.repo)) {
         throw new Error(
           `stream "${streamId}" belongs to repository "${record.scope.repo}", not "${context.repo}"`,
         )
