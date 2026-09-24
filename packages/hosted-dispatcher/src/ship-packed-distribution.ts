@@ -19,6 +19,10 @@
  * traces; it reached the bundle only while the Next.js project directory was
  * the repository root, and a Root Directory below it drops the file.
  *
+ * The archive and the manifest are appended to the dispatch route's trace
+ * only — the operator function never reads them, so it never carries the
+ * multi-megabyte tarball.
+ *
  * It also appends `skills/operate/SKILL.md` — the canonical `ab-operate`
  * skill the embedded orchestrator reads at runtime through
  * `distributionPath` (AUT-342) — to BOTH function bundles that execute
@@ -51,7 +55,9 @@ export interface EnsureResult {
   archive: string
   bytes: number
   sha256: string
+  /** Whether the archive entry was appended to the dispatch route's trace. */
   appended: boolean
+  /** Whether the manifest entry was appended to the dispatch route's trace. */
   manifestAppended: boolean
   /** The canonical operate skill file carried into the turn-executing bundles. */
   skill: string
@@ -114,8 +120,9 @@ async function readTrace(path: string): Promise<string[]> {
   return (parsed as { files: string[] }).files
 }
 
-/** Append the packed distribution archive and the canonical operate skill to
- * the turn-executing routes' trace files. */
+/** Append the packed distribution archive, the distribution manifest, and the
+ * canonical operate skill to the turn-executing routes' trace files — the
+ * archive and manifest to the dispatch route's trace only, the skill to both. */
 export async function ensureDistributionArchiveInTrace({
   root = process.cwd(),
   distDir = '.next',
@@ -139,9 +146,18 @@ export async function ensureDistributionArchiveInTrace({
         'cannot load in production without it',
     )
   }
-  const routes = [
-    { name: 'dispatch', directory: ROUTE_DIRECTORY },
-    { name: 'operator', directory: OPERATOR_ROUTE_DIRECTORY },
+  // Each route declares the trace entries it requires, matching the intent
+  // recorded in packages/hosted-store-service/next.config.ts: the archive and
+  // the manifest belong to the dispatch route alone (the operator function
+  // never reads them), while both turn-executing routes carry the operate
+  // skill (AUT-342).
+  const routes: {
+    name: string
+    directory: string
+    extras: ('archive' | 'manifest' | 'skill')[]
+  }[] = [
+    { name: 'dispatch', directory: ROUTE_DIRECTORY, extras: ['archive', 'manifest', 'skill'] },
+    { name: 'operator', directory: OPERATOR_ROUTE_DIRECTORY, extras: ['skill'] },
   ]
   const skillAppended: string[] = []
   let appended = false
@@ -153,9 +169,9 @@ export async function ensureDistributionArchiveInTrace({
     const entry = relative(dirname(trace), archive)
     const manifestEntry = relative(dirname(trace), manifest)
     const skillEntry = relative(dirname(trace), skill)
-    const appendedHere = !files.includes(entry)
-    const manifestAppendedHere = !files.includes(manifestEntry)
-    const skillMissing = !files.includes(skillEntry)
+    const appendedHere = route.extras.includes('archive') && !files.includes(entry)
+    const manifestAppendedHere = route.extras.includes('manifest') && !files.includes(manifestEntry)
+    const skillMissing = route.extras.includes('skill') && !files.includes(skillEntry)
     if (skillMissing) skillAppended.push(route.name)
     if (appendedHere || manifestAppendedHere || skillMissing) {
       const parsed = JSON.parse(await readFile(trace, 'utf8'))

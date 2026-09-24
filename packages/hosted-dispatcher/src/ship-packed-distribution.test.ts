@@ -202,6 +202,61 @@ describe('ship-packed-distribution', () => {
     expect(result.manifestAppended).toBe(true)
     expect(files).toContain(relative(join(traceFile, '..'), distributionManifestPath()))
   })
+
+  test('splits the appendage per route: archive and manifest only on dispatch (AUT-589)', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], { operatorTrace: [] })
+    const result = await ensureDistributionArchiveInTrace({
+      root,
+      manifest: manifestOf(root),
+      skill: skillOf(root),
+      log: () => {},
+    })
+    const dispatchTraceFile = join(root, TRACE_DIRECTORY, 'route.js.nft.json')
+    const dispatchFiles = JSON.parse(await readFile(dispatchTraceFile, 'utf8')).files as string[]
+    // The dispatch route carries all three: archive, manifest, and skill.
+    expect(dispatchFiles).toEqual([
+      relative(join(dispatchTraceFile, '..'), result.archive),
+      relative(join(dispatchTraceFile, '..'), manifestOf(root)),
+      relative(join(dispatchTraceFile, '..'), skillOf(root)),
+    ])
+    const operatorTraceFile = join(root, OPERATOR_TRACE_DIRECTORY, 'route.js.nft.json')
+    const operatorFiles = JSON.parse(await readFile(operatorTraceFile, 'utf8')).files as string[]
+    // The operator route carries only the skill — never the multi-megabyte
+    // archive or the manifest it does not read.
+    expect(operatorFiles).toEqual([relative(join(operatorTraceFile, '..'), skillOf(root))])
+    expect(result.skillAppended).toEqual(['dispatch', 'operator'])
+  })
+
+  test('leaves the operator trace byte-for-byte intact when it already carries the skill', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], { operatorTrace: [] })
+    const operatorTraceFile = join(root, OPERATOR_TRACE_DIRECTORY, 'route.js.nft.json')
+    const parsed = JSON.parse(await readFile(operatorTraceFile, 'utf8'))
+    await writeFile(
+      operatorTraceFile,
+      JSON.stringify({
+        ...parsed,
+        files: [relative(join(operatorTraceFile, '..'), skillOf(root))],
+      }),
+    )
+    const before = await readFile(operatorTraceFile, 'utf8')
+    const result = await ensureDistributionArchiveInTrace({
+      root,
+      manifest: manifestOf(root),
+      skill: skillOf(root),
+      log: () => {},
+    })
+    // Per-route idempotence: the operator trace is untouched; the dispatch
+    // trace gains all three entries.
+    expect(await readFile(operatorTraceFile, 'utf8')).toBe(before)
+    const dispatchTraceFile = join(root, TRACE_DIRECTORY, 'route.js.nft.json')
+    const dispatchFiles = JSON.parse(await readFile(dispatchTraceFile, 'utf8')).files as string[]
+    expect(dispatchFiles).toContain(relative(join(dispatchTraceFile, '..'), result.archive))
+    expect(dispatchFiles).toContain(relative(join(dispatchTraceFile, '..'), manifestOf(root)))
+    expect(dispatchFiles).toContain(relative(join(dispatchTraceFile, '..'), skillOf(root)))
+    expect(result.appended).toBe(true)
+    expect(result.manifestAppended).toBe(true)
+    expect(result.skillAppended).toEqual(['dispatch'])
+  })
 })
 
 describe('ship-packed-distribution — operate skill (AUT-342)', () => {
