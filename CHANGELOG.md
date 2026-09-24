@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#494](https://github.com/defrex/autobuild/pull/494) — Pin the duplicated execOrThrow helpers’ exit/error semantics with tests
 - [#493](https://github.com/defrex/autobuild/pull/493) — Fix wait.ts's post-drain exit-2 comment after AUT-403 (AUT-528)
 - [#492](https://github.com/defrex/autobuild/pull/492) — Add finalize-fork cross case for explicit local marker over remote-suggestive name
 - [#490](https://github.com/defrex/autobuild/pull/490) — Remove console.error('FRAME:', …) debug leftover from dispatch.test.ts
