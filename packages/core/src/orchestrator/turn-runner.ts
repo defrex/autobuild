@@ -44,13 +44,14 @@ export const ORCHESTRATOR_MAX_STEPS = 32
  * invocation deadline so the suspension lands durably. */
 export const ORCHESTRATOR_FLUSH_MARGIN_SECONDS = 5
 
-/** The wake input a wake trigger delivers: the attention event record and
- * the build's reduced state, frozen at wake time. Embedded in the
- * `turn.started` payload so reconstruction is byte-identical across
- * invocations even though live build state keeps moving. */
+/** The wake input a wake trigger delivers: the attention event record and —
+ * for a build wake — the build's reduced state, frozen at wake time. A
+ * journal wake omits `buildState`. Embedded in the `turn.started` payload so
+ * reconstruction is byte-identical across invocations even though live build
+ * state keeps moving. */
 export interface WakeTurnInput {
   event: { seq: number; ts: string; type: string; payload: unknown }
-  buildState: unknown
+  buildState?: unknown
 }
 
 export interface TurnOutcome {

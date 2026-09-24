@@ -24,15 +24,37 @@ const positiveInt = z.number().int().positive()
 
 const empty = z.strictObject({})
 
-/** The trigger that started a turn: a human message or a wake event. */
-const turnTriggerSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('message'), messageSeq: positiveInt }),
-  z.strictObject({
+/** The trigger that started a turn: a human message or a wake event. A wake
+ * trigger names exactly one source — a build (the build-log attention scan)
+ * or the repository journal — enforced by the schema's `.check()` below even
+ * though the static type (one object with optional fields) cannot express it:
+ * a two-member union or a nested discriminated union is not a valid
+ * discriminated-union option on zod 4 (both constructions throw at first
+ * parse), so the wake variant stays a single object and call sites branch on
+ * `journal === true`. */
+const turnWakeTriggerSchema = z
+  .strictObject({
     kind: z.literal('wake'),
-    build: z.string().min(1),
+    build: z.string().min(1).optional(),
+    journal: z.literal(true).optional(),
     seq: positiveInt,
     type: z.string().min(1),
-  }),
+  })
+  .check((ctx) => {
+    const hasBuild = ctx.value.build !== undefined
+    const hasJournal = ctx.value.journal === true
+    if (hasBuild === hasJournal) {
+      ctx.issues.push({
+        code: 'custom',
+        input: ctx.value,
+        message: 'a wake trigger names exactly one of build or journal',
+      })
+    }
+  })
+
+const turnTriggerSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('message'), messageSeq: positiveInt }),
+  turnWakeTriggerSchema,
 ])
 
 /** Matches the transcript usage shape (harvest.session.ended, §15.3). The
@@ -70,9 +92,10 @@ export const sessionEventPayloadSchemas = {
   }),
   /** The (later turn runner's) start of one turn on its stream. A wake
    * turn additionally carries the delivered input — the attention event
-   * record and the build's reduced state, frozen at wake time — so a later
-   * invocation reconstructs the identical user message from durable state
-   * alone (live build state keeps moving; the frozen snapshot does not). */
+   * record and, for a build wake, the build's reduced state, frozen at wake
+   * time — so a later invocation reconstructs the identical user message
+   * from durable state alone (live build state keeps moving; the frozen
+   * snapshot does not). A journal wake delivers the event record only. */
   'turn.started': z.strictObject({
     turn: z.string().min(1),
     stream: z.string().min(1),
@@ -85,7 +108,7 @@ export const sessionEventPayloadSchemas = {
           type: z.string().min(1),
           payload: z.record(z.string(), z.unknown()),
         }),
-        buildState: z.record(z.string(), z.unknown()),
+        buildState: z.record(z.string(), z.unknown()).optional(),
       })
       .optional(),
   }),
