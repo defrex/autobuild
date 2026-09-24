@@ -16,6 +16,7 @@ import {
   type VercelSandboxHandle,
 } from '../ports/workspace/vercel-sandbox'
 import { openLocalStore } from '../store/local/store'
+import { loadConfig } from '../config/load'
 import type { BuildStore } from '../store/types'
 import {
   createReadinessRedactor,
@@ -1616,6 +1617,85 @@ readyState = "ready"
         env: { ACME_TOKEN: 'present' },
         exec: spawnExec,
       }),
+    ).rejects.toThrow('workspace provider "acmebox" does not support init readiness validation')
+  })
+
+  test('a plugin-declared sandboxForbiddenEnv is enforced at the registry-aware init seam (AUT-536)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-sandbox-forbidden-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: { sandboxForbiddenEnv: ['ACME_SECRET'] },
+    },
+  },
+}\n`,
+    )
+    const toml = (sandbox: string) => `baseBranch = "main"
+forge = "github"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+[orchestrator]
+enabled = true
+[orchestrator.sandbox]
+environmentVariables = ${sandbox}
+`
+    await writeFile(join(repo, 'autobuild.toml'), toml('["ACME_TOOL_CONFIG", "ACME_SECRET"]'))
+
+    // Config-time enforcement alone would miss the declaration: plugins are
+    // not loaded when config is parsed, so the plugin-declared forbidden name
+    // parses cleanly.
+    const config = await loadConfig(join(repo, 'autobuild.toml'))
+    expect(config.orchestrator.sandbox.environmentVariables).toEqual([
+      'ACME_TOOL_CONFIG',
+      'ACME_SECRET',
+    ])
+
+    // The registry-aware seam refuses it after plugin load, with the verbatim
+    // shared message (thrown through the redactor, which leaves it intact).
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow(
+      'environment variable "ACME_SECRET" is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox',
+    )
+
+    // A name outside the declared extras and the shared set still passes the
+    // seam, mirroring the construction site's name union.
+    await writeFile(join(repo, 'autobuild.toml'), toml('["ACME_TOOL_CONFIG"]'))
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow('workspace provider "acmebox" does not support init readiness validation')
+
+    // The gate matches the construction site's: with the orchestrator disabled
+    // the declaration is not enforced and validation proceeds past the
+    // preflight to the (expected) missing-readiness failure instead.
+    const disabled = `baseBranch = "main"
+forge = "github"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`
+    await writeFile(join(repo, 'autobuild.toml'), disabled)
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
     ).rejects.toThrow('workspace provider "acmebox" does not support init readiness validation')
   })
 
