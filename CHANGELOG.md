@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#541](https://github.com/defrex/autobuild/pull/541) — Make the plugin ancestor-walk terminate on relative candidate roots
 - [#536](https://github.com/defrex/autobuild/pull/536) — Disk-gate plugin resolution so the dispatcher never auto-installs
 - [#535](https://github.com/defrex/autobuild/pull/535) — Guard excludeProvisioningMarker against empty git-path stdout
 - [#534](https://github.com/defrex/autobuild/pull/534) — Name unresolvable guest plugins in the readiness probe detail
