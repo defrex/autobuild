@@ -6,7 +6,7 @@ import {
   type VercelSandboxConfig,
   vercelSandboxConfigSchema,
 } from '../../config/schema'
-import { defaultDistributionArchive, readDistributionIdentityStamp } from './distribution-archive'
+import { distributionStampFor, resolveDistributionArchive } from './distribution-archive'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -49,7 +49,8 @@ export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
 export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
 /** Records the installed distribution's identity stamp — everything the
  * hosted store's skew check compares (package version and remote-store
- * protocol version, see `readDistributionIdentityStamp`). A reused sandbox
+ * protocol version) plus the sha256 digest of the exact packed archive the
+ * dispatcher installs (see `readDistributionIdentityStamp`). A reused sandbox
  * whose marker disagrees with the stamp the current system would deliver is
  * refreshed by reinstalling the archive, so an upgraded dispatcher retrofits
  * its persistent guests (including legacy guests predating this marker)
@@ -888,7 +889,7 @@ export async function validateVercelSandbox(
     }
     await provisionBun(sandbox, config.image, options.signal)
     const provisioning = await runSystemProvisioning(sandbox, config.provisioning, options.signal)
-    const archive = await (options.packageArchive ?? defaultDistributionArchive)()
+    const archive = await effectiveArchive(options.packageArchive)
     checkCancellation()
     await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -1093,6 +1094,17 @@ async function readDistributionVersionMarker(
   }
 }
 
+/** The archive bytes a provider installs: the injected test archive when
+ * present, else the per-process memoized running distribution archive
+ * (`resolveDistributionArchive`), so a deployment without an injected archive
+ * packs or fetches once per process rather than once per install site. */
+async function effectiveArchive(
+  packageArchive: (() => Promise<Uint8Array>) | undefined,
+): Promise<Uint8Array> {
+  if (packageArchive) return packageArchive()
+  return (await resolveDistributionArchive()).archive
+}
+
 export interface VercelSandboxProviderOptions {
   config: VercelSandboxConfig
   env: Record<string, string | undefined>
@@ -1114,11 +1126,12 @@ export interface VercelSandboxProviderOptions {
    * the host. */
   remoteBranchHead?: (branch: string) => Promise<string | undefined>
   /** Test seam: the distribution identity stamp the current archive source
-   * delivers (package version plus remote-store protocol version, see
-   * `readDistributionIdentityStamp`). Default reads the running distribution
-   * (origin mode keys the guest archive to that same version; source mode
-   * packs the same tree `readDistributionIdentity` reads), so the two agree by
-   * construction. */
+   * delivers (package version plus remote-store protocol version plus the
+   * sha256 digest of the archive bytes, see `readDistributionIdentityStamp`).
+   * Default computes the stamp over the effective archive source (origin mode
+   * keys the guest archive to the running version; source mode packs the same
+   * tree `readDistributionIdentity` reads), so the stamp and the installed
+   * bytes agree by construction. */
   distributionIdentity?: () => Promise<string>
   /** Test seam: the bound on the observation path's wait on a command whose
    * lookup shows no exit. Defaults to `VERCEL_OBSERVE_WAIT_MS`. */
@@ -1155,6 +1168,24 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   private readonly origins = new Map<string, ReturnType<typeof cleanGithubOrigin>>()
   private readonly sessions = new Map<string, VercelSandboxHandle>()
   private readonly observeWaitMs: number
+
+  /** The archive bytes this provider installs: the injected `packageArchive`
+   * seam when set, else the per-process memoized running distribution
+   * archive. Every install site routes through here, so the marker digest
+   * always describes the bytes actually installed. */
+  private archiveBytes(): Promise<Uint8Array> {
+    return effectiveArchive(this.options.packageArchive)
+  }
+
+  /** The distribution identity stamp to write and compare: the injected
+   * `distributionIdentity` seam when set (which pins the stamp independent of
+   * the archive), else the default stamp computed over `archiveBytes()` — so
+   * a provider that injects only `packageArchive` stamps the bytes it
+   * actually installs and the seam divergence class is unrepresentable. */
+  private async identityStamp(): Promise<string> {
+    if (this.options.distributionIdentity) return this.options.distributionIdentity()
+    return distributionStampFor(await this.archiveBytes())
+  }
 
   constructor(private readonly options: VercelSandboxProviderOptions) {
     if (!/^https:\/\//i.test(options.storeRef) || options.storeToken === '') {
@@ -1219,9 +1250,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // Resolved once, before the create/reuse branch: the identity stamp the
     // current archive source would deliver, against which both a fresh
     // install's marker and a reused sandbox's marker are compared.
-    const distributionIdentity = await (
-      this.options.distributionIdentity ?? readDistributionIdentityStamp
-    )()
+    const distributionIdentity = await this.identityStamp()
     let sandbox = await this.facade.get(name, this.operationSignal())
     const existing = await this.remoteBranchHead(opts.branch, `remote branch ${opts.branch}`)
     const base =
@@ -1248,7 +1277,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           // without a marker — is refreshed in place. Any refresh failure
           // deletes the sandbox so the next pass rematerializes cleanly.
           try {
-            const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+            const archive = await this.archiveBytes()
             await installDistribution(
               sandbox,
               archive,
@@ -1340,7 +1369,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         }
         await provisionBun(sandbox, this.options.config.image)
         await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
-        const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+        const archive = await this.archiveBytes()
         await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
         // Repository dependencies precede branch-owned package plugin loading.
         // The fixed bootstrap supports the consuming repository's lockfile; its
@@ -1514,13 +1543,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // refreshed before the runner starts, or the hosted store would 409 its
     // heartbeat and the build would strand. Refresh failure deletes the
     // sandbox so the next pass rematerializes it cleanly.
-    const distributionIdentity = await (
-      this.options.distributionIdentity ?? readDistributionIdentityStamp
-    )()
+    const distributionIdentity = await this.identityStamp()
     const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
     if (installed !== distributionIdentity) {
       try {
-        const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+        const archive = await this.archiveBytes()
         await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
       } catch (error) {
         try {
@@ -1676,9 +1703,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     // Resolved once, before the create/reuse branch: the identity stamp the
     // current archive source would deliver, against which both a fresh
     // install's marker and a reused environment's marker are compared.
-    const distributionIdentity = await (
-      this.options.distributionIdentity ?? readDistributionIdentityStamp
-    )()
+    const distributionIdentity = await this.identityStamp()
     let sandbox = await this.facade.get(name, this.operationSignal())
     if (sandbox !== null) {
       const marker = await sandbox.runCommand({
@@ -1699,7 +1724,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
         if (installed !== distributionIdentity) {
           try {
-            const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+            const archive = await this.archiveBytes()
             await installDistribution(
               sandbox,
               archive,
@@ -1784,7 +1809,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         }
         await provisionBun(sandbox, this.options.config.image)
         await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
-        const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+        const archive = await this.archiveBytes()
         await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
         // Repository dependencies precede runtime preflight; the fixed
         // bootstrap is the same one build provisioning runs.
@@ -2005,9 +2030,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }): Promise<SandboxEnvironmentIdentity> {
     const origin = cleanGithubOrigin(await this.origin())
     const name = sandboxEnvironmentName(origin.url, input.operator)
-    const distributionIdentity = await (
-      this.options.distributionIdentity ?? readDistributionIdentityStamp
-    )()
+    const distributionIdentity = await this.identityStamp()
     let sandbox = await this.facade.get(name, this.operationSignal())
     if (sandbox !== null) {
       const marker = await sandbox.runCommand({
@@ -2027,7 +2050,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           // exactly as build guests are. Refresh failure deletes the
           // environment so the next call rematerializes it cleanly.
           try {
-            const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+            const archive = await this.archiveBytes()
             await installDistribution(
               sandbox,
               archive,
@@ -2118,7 +2141,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }
       await provisionBun(sandbox, this.options.config.image)
       await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
-      const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+      const archive = await this.archiveBytes()
       await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
       // Repository dependencies precede the setup command; the fixed
       // bootstrap is the same one build provisioning runs.
