@@ -16,7 +16,10 @@ import type { WorkspaceConfig } from '../config/schema'
 import type { CreateWorkspaceProviderOptions } from '../ports/workspace/create'
 import type { WorkspaceProviderCapabilities } from '../ports/workspace/provider-capabilities'
 import type { WorkspaceProvider } from '../ports/types'
-import { builtinWorkspaceProviderRegistration } from '../ports/workspace/builtin-capabilities'
+import {
+  builtinWorkspaceProviderNames,
+  builtinWorkspaceProviderRegistration,
+} from '../ports/workspace/builtin-capabilities'
 
 /** Host-owned construction closure for a builtin workspace provider. `parsed`
  * is the declared `configSchema`'s parse output, or the raw
@@ -168,11 +171,14 @@ export class PluginRegistry {
     // profile value, so a runtime with the same name could never be selected.
     'split',
   ])
+  // Builtin workspace-provider names are derived from the canonical builtin
+  // list in builtin-capabilities.ts (AUT-579), so a builtin added there
+  // registers here automatically — no registry edit is needed.
   readonly workspaceProviders = new Map<
     string,
     AdapterRegistration<WorkspaceProviderPluginFactory, WorkspaceProviderContractFactory>
   >(
-    (['git-worktree', 'vercel-sandbox'] as const).map((name) => {
+    builtinWorkspaceProviderNames().map((name) => {
       const builtin = builtinWorkspaceProviderRegistration(name)
       if (builtin === undefined) {
         throw new Error(`builtin workspace provider "${name}" has no capability declaration`)
