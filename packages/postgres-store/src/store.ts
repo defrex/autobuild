@@ -77,7 +77,7 @@ import {
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
-import { attemptExec, isPlanChangeError, PlanInvalidations, type Exec, type Row } from './retry'
+import { PlanRetryRunner, type Exec, type Row } from './retry'
 
 // The held-read poll cadence for event waits — a re-export of the canonical
 // core constant (AUT-388), not a second definition. See core
@@ -142,66 +142,27 @@ export class PostgresBuildStore implements BuildStore {
     this.maxRevisions = options.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
   }
 
-  /** Memoized poisoned-statement markers, unique to this store instance (see
+  /** The shared plan-retry mechanics (`./retry`): one runner per pool owner,
+   * so its memoized markers are namespaced to this store instance (see
    * `./retry` for why the memo and the per-instance namespace exist). */
-  private readonly plans = new PlanInvalidations()
+  private readonly retry = new PlanRetryRunner()
 
   /** Run a non-transactional operation on one pinned pooled connection,
    * retrying it exactly once — same connection, statements freshly prepared —
    * when a cached plan fails to revalidate (AUT-396). A run body must not
    * call a public store method: reserving inside a reservation yields a
-   * brand-new connection instead of the pinned one. */
+   * brand-new connection instead of the pinned one — and must execute its
+   * statements sequentially, for failure attribution. See `./retry`. */
   private async run<T>(body: (q: Exec) => Promise<T>): Promise<T> {
-    const conn = await this.sql.reserve()
-    try {
-      const attempt = attemptExec(conn, this.plans)
-      try {
-        return await body(attempt.exec)
-      } catch (error) {
-        if (!isPlanChangeError(error) || attempt.inFlight === null) throw error
-        // The failing statement's plan was invalidated once more: memoize a
-        // fresh marked variant for its text. The retry then re-prepares
-        // *every* statement the body executes — a migration can have
-        // poisoned any `*`-returning plan the body touches, not only the
-        // one that failed first, and a memoized marker minted before the
-        // migration is itself stale — so a body reading two
-        // migration-extended tables recovers in the single retry.
-        const failing = attempt.inFlight
-        this.plans.invalidate(failing)
-        return await body(attemptExec(conn, this.plans, true).exec)
-      }
-    } finally {
-      conn.release()
-    }
+    return this.retry.run(this.sql, body)
   }
 
   /** Run a transactional operation on one pinned pooled connection, retrying
    * the whole body exactly once on a plan-change error: the failed attempt
    * rolls back, and the body re-runs in a fresh transaction on the same
-   * connection with freshly prepared statements (AUT-396). */
+   * connection with freshly prepared statements (AUT-396). See `./retry`. */
   private async tx<T>(body: (q: Exec) => Promise<T>): Promise<T> {
-    const conn = await this.sql.reserve()
-    try {
-      // Attribution lives outside `begin`: the transaction executor only
-      // exists inside the callback, so each attempt builds its own exec and
-      // reports the failing statement's text back here on rejection.
-      let failing: string | null = null
-      try {
-        return await conn.begin((t) => {
-          const attempt = attemptExec(t, this.plans)
-          return body(attempt.exec).catch((error) => {
-            failing = attempt.inFlight
-            throw error
-          })
-        })
-      } catch (error) {
-        if (!isPlanChangeError(error) || failing === null) throw error
-        this.plans.invalidate(failing)
-        return await conn.begin((t) => body(attemptExec(t, this.plans, true).exec))
-      }
-    } finally {
-      conn.release()
-    }
+    return this.retry.tx(this.sql, body)
   }
 
   scopeBuild(slug: string): BuildScopedStore {

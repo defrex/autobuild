@@ -10,6 +10,12 @@ export type Row = Record<string, unknown>
 export type Exec = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<Row[]>
   unsafe(text: string, params?: unknown[]): Promise<Row[]>
+  /** PostgreSQL array parameter builder (`SQL.array`), forwarded to the
+   * underlying target — a pure client-side parameter builder with no round
+   * trip, safe on reserved connections and transaction executors (both
+   * extend `SQL`). It builds a parameter, not a statement: it adds no
+   * marking of its own and does not touch failure attribution. */
+  array: (...args: Parameters<SQL['array']>) => ReturnType<SQL['array']>
 }
 
 /**
@@ -167,6 +173,88 @@ export function attemptExec(target: SQL, plans: PlanInvalidations, retry = false
       mark === '' ? target.unsafe(text, params) : target.unsafe(`${text}${mark}`, params),
     )
   }
+  // Forward the array builder verbatim: it produces a parameter value, not
+  // an execution, so it needs neither marking nor failure attribution.
+  // `Parameters<SQL['array']>` sidesteps Bun's namespace-internal
+  // `SQLArrayParameter`/`ArrayType` types, whose variance (`values: any[]`)
+  // resists a hand-written signature.
+  exec.array = ((...args: Parameters<SQL['array']>) =>
+    (target.array as (...forwarded: unknown[]) => ReturnType<SQL['array']>)(
+      ...args,
+    )) as Exec['array']
   attempt.exec = exec
   return attempt
+}
+
+/** The shared plan-retry mechanics every PostgreSQL-backed store routes its
+ * statements through: reserve one pooled connection per operation, and on a
+ * plan-change failure (AUT-396) retry the whole body exactly once on that
+ * same connection with every statement freshly prepared (see the module
+ * comment for why that is the only thing that recovers, and why the marked
+ * variants are memoized). One runner per pool owner: the memo's markers are
+ * namespaced per runner instance, so sources from different databases never
+ * collide on prepared-statement names, and healing done by one source
+ * benefits every other source on the same pool. */
+export class PlanRetryRunner {
+  private readonly plans = new PlanInvalidations()
+
+  /** Run a non-transactional operation on one pinned pooled connection,
+   * retrying it exactly once — same connection, statements freshly prepared —
+   * when a cached plan fails to revalidate. A run body must not call a
+   * public store method (reserving inside a reservation yields a brand-new
+   * connection instead of the pinned one) and must execute its statements
+   * sequentially: failure attribution (`Attempt.inFlight`) reads the
+   * statement most recently dispatched. */
+  async run<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+    const conn = await pool.reserve()
+    try {
+      const attempt = attemptExec(conn, this.plans)
+      try {
+        return await body(attempt.exec)
+      } catch (error) {
+        if (!isPlanChangeError(error) || attempt.inFlight === null) throw error
+        // The failing statement's plan was invalidated once more: memoize a
+        // fresh marked variant for its text. The retry then re-prepares
+        // *every* statement the body executes — a migration can have
+        // poisoned any `*`-returning plan the body touches, not only the
+        // one that failed first, and a memoized marker minted before the
+        // migration is itself stale — so a body reading two
+        // migration-extended tables recovers in the single retry.
+        const failing = attempt.inFlight
+        this.plans.invalidate(failing)
+        return await body(attemptExec(conn, this.plans, true).exec)
+      }
+    } finally {
+      conn.release()
+    }
+  }
+
+  /** Run a transactional operation on one pinned pooled connection, retrying
+   * the whole body exactly once on a plan-change error: the failed attempt
+   * rolls back, and the body re-runs in a fresh transaction on the same
+   * connection with freshly prepared statements. */
+  async tx<T>(pool: SQL, body: (q: Exec) => Promise<T>): Promise<T> {
+    const conn = await pool.reserve()
+    try {
+      // Attribution lives outside `begin`: the transaction executor only
+      // exists inside the callback, so each attempt builds its own exec and
+      // reports the failing statement's text back here on rejection.
+      let failing: string | null = null
+      try {
+        return await conn.begin((t) => {
+          const attempt = attemptExec(t, this.plans)
+          return body(attempt.exec).catch((error) => {
+            failing = attempt.inFlight
+            throw error
+          })
+        })
+      } catch (error) {
+        if (!isPlanChangeError(error) || failing === null) throw error
+        this.plans.invalidate(failing)
+        return await conn.begin((t) => body(attemptExec(t, this.plans, true).exec))
+      }
+    } finally {
+      conn.release()
+    }
+  }
 }
