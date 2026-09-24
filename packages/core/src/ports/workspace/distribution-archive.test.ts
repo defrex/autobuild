@@ -1,4 +1,5 @@
 import { describe, expect, test, mock } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { afterEach } from 'bun:test'
 import { tmpdir } from 'node:os'
@@ -6,8 +7,12 @@ import { join } from 'node:path'
 import {
   CANONICAL_REPOSITORY_URL,
   defaultDistributionArchive,
+  DISTRIBUTION_ARCHIVE_ENV,
+  distributionStampFor,
   findPrebuiltDistributionArchive,
   PREBUILT_DISTRIBUTION_DIR,
+  resetDistributionArchiveCacheForTest,
+  resolveDistributionArchive,
   writePrebuiltDistributionArchive,
   distributionAssetName,
   fetchDistributionReleaseAsset,
@@ -60,16 +65,91 @@ describe('readDistributionIdentity', () => {
   })
 })
 
+/** Pin the archive source through `AB_DISTRIBUTION_ARCHIVE` and reset the
+ * per-process memo around `fn`, so stamp tests resolve known bytes instead of
+ * packing the real tree — and never leak the pinned env or a stale memo. */
+async function withPinnedArchive(path: string, fn: () => Promise<void>): Promise<void> {
+  const previous = process.env[DISTRIBUTION_ARCHIVE_ENV]
+  process.env[DISTRIBUTION_ARCHIVE_ENV] = path
+  resetDistributionArchiveCacheForTest()
+  try {
+    await fn()
+  } finally {
+    if (previous === undefined) delete process.env[DISTRIBUTION_ARCHIVE_ENV]
+    else process.env[DISTRIBUTION_ARCHIVE_ENV] = previous
+    resetDistributionArchiveCacheForTest()
+  }
+}
+
 describe('readDistributionIdentityStamp', () => {
-  test('combines the package version with the remote-store protocol version', async () => {
-    // The stamp is exactly what the hosted store's skew check compares
-    // (`x-autobuild-version` + `x-autobuild-protocol-version`). Without the
-    // protocol suffix a protocol-only bump (AUT-521) ships the incident
-    // regression: every marker would still match and no path would refresh.
-    const stamp = await readDistributionIdentityStamp()
+  test('combines the package version, the protocol version, and the archive digest', async () => {
+    // The stamp is everything the marker comparison must catch: the hosted
+    // store's skew check (`x-autobuild-version` +
+    // `x-autobuild-protocol-version`; AUT-521) plus the digest of the exact
+    // packed archive the dispatcher installs, so a code-only deploy that
+    // changes guest-visible bytes without bumping either one still mismatches
+    // every guest marker (AUT-600). The archive is pinned through the
+    // `AB_DISTRIBUTION_ARCHIVE` seam and the memo reset, so no test packs the
+    // real tree.
+    const dir = await mkdtemp(join(tmpdir(), 'ab-dist-stamp-'))
+    cleanups.push(dir)
+    const archivePath = join(dir, 'autobuild-1.2.3.tgz')
+    const bytes = new Uint8Array([1, 2, 3, 4])
+    await writeFile(archivePath, bytes)
+    await withPinnedArchive(archivePath, async () => {
+      const stamp = await readDistributionIdentityStamp()
+      const version = await readDistributionIdentity()
+      const digest = createHash('sha256').update(bytes).digest('hex')
+      expect(stamp).toBe(`${version}+protocol${REMOTE_STORE_PROTOCOL_VERSION}+sha256-${digest}`)
+      expect(stamp).not.toBe(version)
+    })
+  })
+})
+
+describe('distributionStampFor', () => {
+  test('archives differing only in bytes produce different stamps; identical bytes do not', async () => {
+    // Same package version and protocol on both sides: only the archive
+    // digest separates the stamps, so a code-only change is a mismatch and an
+    // identical archive is not (AUT-600 acceptance).
+    const stampA = await distributionStampFor(new Uint8Array([1, 2, 3]))
+    const stampB = await distributionStampFor(new Uint8Array([1, 2, 4]))
+    expect(stampA).not.toBe(stampB)
+    expect(stampA).toBe(await distributionStampFor(new Uint8Array([1, 2, 3])))
     const version = await readDistributionIdentity()
-    expect(stamp).toBe(`${version}+protocol${REMOTE_STORE_PROTOCOL_VERSION}`)
-    expect(stamp).not.toBe(version)
+    expect(stampA.startsWith(`${version}+protocol${REMOTE_STORE_PROTOCOL_VERSION}+sha256-`)).toBe(
+      true,
+    )
+  })
+})
+
+describe('resolveDistributionArchive', () => {
+  test('resolves at most once per process and clears the memo on rejection', async () => {
+    // Memoized fulfillment: after the first resolution the backing archive
+    // file can be deleted and a second resolution still succeeds from cache —
+    // proving no second pack/read per tick.
+    const dir = await mkdtemp(join(tmpdir(), 'ab-dist-memo-'))
+    cleanups.push(dir)
+    const archivePath = join(dir, 'autobuild-9.9.9.tgz')
+    await writeFile(archivePath, new Uint8Array([5, 6, 7]))
+    await withPinnedArchive(archivePath, async () => {
+      const first = await resolveDistributionArchive()
+      await rm(archivePath)
+      const second = await resolveDistributionArchive()
+      expect(second).toBe(first)
+      expect(second.archive).toEqual(new Uint8Array([5, 6, 7]))
+    })
+
+    // A rejected resolution is not memoized: the next call retries, so a
+    // transient origin-mode failure cannot poison a long-lived dispatcher.
+    const brokenPath = join(dir, 'missing.tgz')
+    await withPinnedArchive(brokenPath, async () => {
+      await expect(resolveDistributionArchive()).rejects.toThrow(
+        /AB_DISTRIBUTION_ARCHIVE names a file that does not exist/,
+      )
+      await writeFile(brokenPath, new Uint8Array([8]))
+      const repaired = await resolveDistributionArchive()
+      expect(repaired.archive).toEqual(new Uint8Array([8]))
+    })
   })
 })
 
