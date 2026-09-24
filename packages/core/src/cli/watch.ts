@@ -657,9 +657,27 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         try {
           // A fresh store has no repository row; do not create one.
           if (resumeSeq === undefined && (await store.getRepo(repo)) !== null) {
-            const events = await store.getRepoEvents(repo)
-            stream.lastSeq = events.at(-1)?.seq ?? 0
-            positions[REPO_STREAM_KEY] = stream.lastSeq
+            // Bounded baseline (AUT-534): the baseline needs only the
+            // journal's end position, and AUT-489's bounded read answers that
+            // whenever the journal contains a `dispatcher.run-started` — the
+            // tail from the latest anchor runs to the journal end, so the
+            // subset's max seq equals the journal's max seq.
+            const subset = await store.getRepoStateEvents(repo)
+            let last = subset.at(-1)?.seq ?? 0
+            if (!subset.some((event) => event.type === 'dispatcher.run-started')) {
+              // Anchor-less journal: the subset may have dropped run-scoped
+              // facts appended before any anchor, so one bounded delta read
+              // recovers the true end; its events are baselined silently,
+              // exactly as the full read baselines them. The skip condition
+              // is exact: a run-started is its own anchor or lies in a later
+              // anchor's tail, so "no run-started in the subset" means "no
+              // run-started in the journal" — the only case where the subset
+              // can trail.
+              const tail = await store.getRepoEvents(repo, last)
+              last = tail.at(-1)?.seq ?? last
+            }
+            stream.lastSeq = last
+            positions[REPO_STREAM_KEY] = last
           }
           return true
         } catch {

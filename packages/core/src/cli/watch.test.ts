@@ -1284,3 +1284,195 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
     ])
   })
 })
+
+// --- AUT-534: the watch's repository baseline becomes a bounded read ---
+
+function noopTickCounters() {
+  return {
+    merged: 0,
+    closed: 0,
+    conflicted: 0,
+    abandoned: 0,
+    discarded: 0,
+    janitorFailed: 0,
+    recovered: 0,
+    dispatchFailed: 0,
+    resumed: 0,
+    swept: 0,
+    dispatched: 0,
+    authored: 0,
+    bounced: 0,
+    claimRaces: 0,
+    invalidTickets: 0,
+    dependencyBlocked: 0,
+    harvestStarted: 0,
+    harvestResumed: 0,
+    harvestCompleted: 0,
+    harvestEscalated: 0,
+    harvestFailed: 0,
+  }
+}
+
+/** A long no-op journal: `count` completed dispatcher invocations, three
+ * run-scoped facts each — the shape the bounded read exists for. */
+async function seedNoopInvocations(store: MemoryBuildStore, count: number): Promise<number> {
+  await store.ensureRepo(REPO)
+  for (let index = 0; index < count; index += 1) {
+    const run = `r_${index}`
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        pid: index + 1,
+        effectiveConfig: { kind: 'effective-config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run,
+        queued: 0,
+        counters: noopTickCounters(),
+        janitorDiagnostics: [],
+        ticketDiagnostics: [],
+        creationDiagnostics: [],
+        dependencyDiagnostics: [],
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run, outcome: 'normal' },
+    })
+  }
+  return count * 3
+}
+
+/** Counting proxy over a real `MemoryBuildStore`: records every repository
+ * journal read in issue order. */
+function repoReadProbe(backing: MemoryBuildStore) {
+  const calls: Array<{ method: 'getRepoEvents' | 'getRepoStateEvents'; sinceSeq?: number }> = []
+  const store = new Proxy(backing, {
+    get(target, property) {
+      if (property === 'getRepoStateEvents') {
+        return async (repo: string) => {
+          calls.push({ method: 'getRepoStateEvents' })
+          return target.getRepoStateEvents(repo)
+        }
+      }
+      if (property === 'getRepoEvents') {
+        return async (repo: string, sinceSeq = 0) => {
+          calls.push({ method: 'getRepoEvents', sinceSeq })
+          return target.getRepoEvents(repo, sinceSeq)
+        }
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as BuildStore
+  return { store, calls }
+}
+
+test('an anchored journal baselines with one bounded read and no full journal read (AUT-534)', async () => {
+  const backing = makeStore()
+  const journalEnd = await seedNoopInvocations(backing, 20)
+  expect(journalEnd).toBe(60)
+  const probe = repoReadProbe(backing)
+  const h = harness(backing, { openStore: () => probe.store })
+  await abWatch({ ...h.base, repository: true, timeout: '1' })
+
+  // Nothing is emitted: the whole journal is pre-watch history.
+  expect(h.out.slice(0, -1)).toEqual([])
+
+  // Exactly one bounded baseline read; the end-recovery read is skipped
+  // because the subset contains a `dispatcher.run-started`, and every
+  // subsequent journal read is a delta poll at or past the journal end.
+  expect(probe.calls[0]).toEqual({ method: 'getRepoStateEvents' })
+  expect(probe.calls.filter((call) => call.method === 'getRepoStateEvents')).toHaveLength(1)
+  const journalReads = probe.calls.filter((call) => call.method === 'getRepoEvents')
+  expect(journalReads.length).toBeGreaterThan(0)
+  expect(journalReads.every((call) => (call.sinceSeq ?? 0) >= journalEnd)).toBe(true)
+
+  // The recorded cursor equals the journal end — the full read's answer.
+  const cursor = (JSON.parse(h.out.at(-1)!) as { cursor: string }).cursor
+  expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
+    '#repo': journalEnd,
+  })
+})
+
+test('events appended after a bounded baseline are delivered exactly once (AUT-534)', async () => {
+  const store = makeStore()
+  await seedNoopInvocations(store, 20)
+  let appended = false
+  const h = harness(store, {
+    onTick: async () => {
+      if (appended) return
+      appended = true
+      await store.appendRepo(REPO, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-failed',
+        payload: { run: 'r_live', error: 'boom' },
+      })
+    },
+  })
+  await abWatch({ ...h.base, repository: true, timeout: '2' })
+  const records = h.out
+    .slice(0, -1)
+    .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
+  expect(records.map((record) => record.event)).toEqual([
+    expect.objectContaining({ type: 'dispatcher.tick-failed', seq: 61 }),
+  ])
+  const cursor = (JSON.parse(h.out.at(-1)!) as { cursor: string }).cursor
+  expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
+    '#repo': 61,
+  })
+})
+
+test('an anchor-less journal recovers the true end and baselines silently (AUT-534)', async () => {
+  const backing = makeStore()
+  await backing.ensureRepo(REPO)
+  // Run-scoped fact with no `dispatcher.run-started` anywhere: the bounded
+  // subset answers empty, so the baseline must recover the end with one
+  // delta read — and must not emit the recovered fact.
+  await backing.appendRepo(REPO, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.operator-reported',
+    payload: { run: 'r0', level: 'info', message: 'notice before any run' },
+  })
+  const probe = repoReadProbe(backing)
+  const h = harness(backing, { openStore: () => probe.store })
+  await abWatch({ ...h.base, repository: true, timeout: '1' })
+  expect(h.out.slice(0, -1)).toEqual([])
+
+  // The recovery read fired: bounded read first, then the delta read from the
+  // subset's (empty) end — the true journal end here — and every later read
+  // polls from the recovered cursor.
+  expect(probe.calls[0]).toEqual({ method: 'getRepoStateEvents' })
+  expect(probe.calls[1]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
+  expect(
+    probe.calls.slice(2).every((call) => call.method !== 'getRepoEvents' || call.sinceSeq === 1),
+  ).toBe(true)
+  const cursor = (JSON.parse(h.out.at(-1)!) as { cursor: string }).cursor
+  expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
+    '#repo': 1,
+  })
+
+  // Same equivalence with an explicit event filter: the pre-baseline fact is
+  // still never delivered.
+  const filteredBacking = makeStore()
+  const filtered = repoReadProbe(filteredBacking)
+  await filteredBacking.ensureRepo(REPO)
+  await filteredBacking.appendRepo(REPO, {
+    actor: humanActor('operator'),
+    type: 'dispatcher.operator-reported',
+    payload: { run: 'r0', level: 'info', message: 'notice before any run' },
+  })
+  const h2 = harness(filteredBacking, { openStore: () => filtered.store })
+  await abWatch({ ...h2.base, repository: true, events: ['dispatcher.*'], timeout: '1' })
+  expect(h2.out.slice(0, -1)).toEqual([])
+  expect(filtered.calls[0]).toEqual({ method: 'getRepoStateEvents' })
+  expect(filtered.calls[1]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
+})
