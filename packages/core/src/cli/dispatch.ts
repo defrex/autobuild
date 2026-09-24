@@ -316,7 +316,13 @@ const DEFAULT_TIMERS: TimerScheduler = {
 
 export interface DispatchOpts {
   /** Repo the dispatcher serves (§12: one dispatcher per repo) — the cwd, or
-   * in origin mode a private scratch root. Filesystem consumers only. */
+   * in origin mode a private scratch root. Filesystem consumers only.
+   * Callers without a checkout may pass a non-filesystem identity token
+   * instead (e.g. hosted-dispatcher's `'<hosted-dispatcher>'`): it is a
+   * caller-facing label, not a path, and origin-mode state resolution
+   * replaces it with the per-origin scratch root before any filesystem
+   * consumer — plugin loading, worktrees, exec cwd — runs (AUT-604). The
+   * token therefore never participates in cwd-relative disk resolution. */
   targetRepo: string
   /** Checkout-less origin mode (AUT-302): serve the repository at this origin
    * with no local checkout. CLI `--repository <origin>`, env `AB_REPOSITORY`.
@@ -3742,7 +3748,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     // are accepted: the shared loadPlugins below resolves them from the
     // dispatcher's own installation when the scratch root lacks them
     // (AUT-517), which is exactly "resolvable from the dispatcher's own
-    // installation".
+    // installation". The caller-supplied `targetRepo` is an identity token,
+    // not a path, and never reaches plugin resolution: the candidate roots
+    // are the scratch checkout and the installation, per the loadPlugins
+    // call below (AUT-604).
     const repoPathPlugin = (config.plugins ?? []).find(
       (moduleSpecifier) => pluginResolutionKind(moduleSpecifier) === 'repo-path',
     )
@@ -3771,7 +3780,17 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // opens a store, claims a ticket, or launches a runner. Skipped-module
   // notices (builtin duplicate-skip, guest tolerance) surface on dispatch's
   // own stderr channel.
+  // AUT-604: origin mode's repository candidate root for plugin loading is
+  // the per-origin scratch checkout, never the caller-supplied `targetRepo`
+  // token (e.g. hosted-dispatcher's `'<hosted-dispatcher>'`) — that token is
+  // a caller-facing identity label which `resolveOriginModeState` replaced
+  // with `state.checkout` above, so it never participates in cwd-relative
+  // disk resolution. `state.checkout` equals `resolvedOpts.targetRepo` in
+  // both modes, so passing it as `packageRoot` is behavior-preserving; the
+  // installation candidate (AUT-517) and the disk-first EROFS gate (AUT-587)
+  // are unchanged.
   const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo, {
+    packageRoot: state.checkout,
     onNotice: (line) => resolvedOpts.stderr(line),
   })
   // Validate the selector against the complete catalog before either custom

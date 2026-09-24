@@ -10,6 +10,7 @@
  * injected through the `wire` seam, and asserts a Ready ticket reaches PR-open
  * in one pass.
  */
+import { createHash, randomUUID } from 'node:crypto'
 import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
@@ -34,6 +35,7 @@ import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
 import { randomUuids, sequentialIds } from '../ids'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
+import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { reduceHarvest } from '../kernel/harvest'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -649,6 +651,158 @@ describe('abDispatch guards', () => {
           line.includes('autobuild-vercel-sandbox') && line.includes('the builtin keeps serving'),
       ),
     ).toBe(true)
+  }, 10_000)
+
+  test('origin mode resolves plugins from the scratch root, never the targetRepo token (AUT-604)', async () => {
+    // Negative pin for the defined origin-mode candidate-root semantics:
+    // with the exact hosted-dispatcher token as `targetRepo` and an
+    // unresolvable bare specifier, the rejection names the absolute
+    // per-origin scratch root and the installation candidate — and never
+    // contains the token. The token is a caller-facing identity label that
+    // `resolveOriginModeState` replaces before plugin loading; if this ever
+    // fails because the message names '<hosted-dispatcher>', the
+    // normalization guarantee has regressed.
+    const files = new Map<string, string>([
+      [
+        'autobuild.toml',
+        DISPATCH_CONFIG_TOML.replace(
+          '[commands]',
+          'plugins = ["missing-origin-probe-package"]\n[commands]',
+        ),
+      ],
+    ])
+    const transport = (async () => ({
+      status: 200,
+      headers: {},
+      bytes: new TextEncoder().encode(files.get('autobuild.toml')),
+    })) as never
+    const error = await abDispatch({
+      // The exact token hosted-dispatcher passes — not a resolvable path.
+      targetRepo: '<hosted-dispatcher>',
+      // Unique origin: the scratch path is a deterministic hash of the
+      // normalized origin, so uniqueness avoids colliding with another
+      // test's scratch root.
+      repository: `git@github.com:acme/token-exclusion-${randomUUID()}.git`,
+      originConfigTransport: transport,
+      env: {
+        AB_STORE: 'https://store.example.test',
+        AB_TOKEN: 'scoped',
+        GITHUB_TOKEN: 'forge-secret',
+      },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      once: true,
+    } as never).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(Error)
+    const message = (error as Error).message
+    // The repository candidate is the absolute per-origin scratch root.
+    expect(message).toMatch(/could not be resolved from repository "\/.*autobuild\//)
+    // The installation candidate is still offered (AUT-517).
+    expect(message).toContain('or installation "')
+    // The token never reaches resolution — the defined outcome, beyond
+    // non-hanging (which AUT-597's loader-level pin owns).
+    expect(message).not.toContain('<hosted-dispatcher>')
+  }, 10_000)
+
+  test('origin mode seeds plugin resolution with the per-origin scratch root (AUT-604)', async () => {
+    // Positive pin: a bare specifier staged under the scratch root the way
+    // `resolveOriginModeState` computes it (sha256 of the normalized origin,
+    // 16 hex chars under tmpdir()/autobuild) resolves and registers —
+    // origin mode *seeds* the disk walk with the scratch root rather than
+    // merely failing a non-filesystem token.
+    const origin = `git@github.com:acme/scratch-seeded-${randomUUID()}.git`
+    const scratch = join(
+      tmpdir(),
+      'autobuild',
+      createHash('sha256').update(normalizeGitRemoteUrl(origin)).digest('hex').slice(0, 16),
+    )
+    const pluginName = 'origin-scratch-pin-package'
+    await mkdir(join(scratch, 'node_modules', pluginName), { recursive: true })
+    await writeFile(
+      join(scratch, 'node_modules', pluginName, 'package.json'),
+      JSON.stringify({ name: pluginName, type: 'module', exports: './plugin.ts' }),
+    )
+    await writeFile(
+      join(scratch, 'node_modules', pluginName, 'plugin.ts'),
+      `export default { name: '${pluginName}', apiVersion: '^1.0.0', forges: { '${pluginName}': () => ({}) } }\n`,
+    )
+    const files = new Map<string, string>([
+      [
+        'autobuild.toml',
+        DISPATCH_CONFIG_TOML.replace('[commands]', `plugins = ["${pluginName}"]\n[commands]`),
+      ],
+    ])
+    const transport = (async () => ({
+      status: 200,
+      headers: {},
+      bytes: new TextEncoder().encode(files.get('autobuild.toml')),
+    })) as never
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const registries: PluginRegistry[] = []
+    try {
+      const dispatch = abDispatch({
+        targetRepo: '<hosted-dispatcher>',
+        repository: origin,
+        originConfigTransport: transport,
+        env: {
+          AB_STORE: 'https://store.example.test',
+          AB_TOKEN: 'scoped',
+          GITHUB_TOKEN: 'forge-secret',
+        },
+        exec: (async () => {
+          throw new Error('host exec must not run in origin mode')
+        }) as Exec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        wire: (_config, _opts, _state, plugins) => {
+          registries.push(plugins)
+          return {
+            store,
+            tickets: new FakeTicketSource([]),
+            forge: new FakeForge(),
+            workspaces: new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' }),
+            buildExecution: {
+              start: () => {
+                throw new Error('no builds in origin mode')
+              },
+            },
+            runtimes: {
+              claude: {
+                runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+                servesModels: [],
+              },
+            },
+            storeRef: 'https://store.example.test',
+            ids: sequentialIds(),
+            uuids: randomUuids(),
+            clock,
+            plugins: {
+              forges: new Map(),
+              workspaceProviders: new Map(),
+              runtimes: new Map(),
+              ticketSources: new Map(),
+              agentRuntimes: new Map(),
+              adapters: new Map(),
+              registration: [],
+              register: () => undefined,
+            } as unknown as PluginRegistry,
+          }
+        },
+      })
+      await dispatch
+      // Startup proceeded past plugin loading, and the staged package
+      // resolved from the scratch root into the loaded registry.
+      expect(registries).toHaveLength(1)
+      expect(registries[0]!.forges.get(pluginName)?.owner).toEqual({
+        kind: 'plugin',
+        name: pluginName,
+      })
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
   }, 10_000)
 
   test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {
