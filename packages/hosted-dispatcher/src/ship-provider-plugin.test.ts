@@ -227,4 +227,75 @@ describe('ship-provider-plugin', () => {
     expect(parsed.name).toBe('autobuild-vercel-sandbox')
     expect(Object.keys(parsed.workspaceProviders ?? {})).toEqual(['vercel-sandbox'])
   }, 60_000)
+
+  test('the loader resolves the staged plugin from the traced function layout with the installer disabled (AUT-587)', async () => {
+    // The same-layout bound of AUT-587's AC#3, in a `bun --no-install`
+    // subprocess: with the installer disabled, ONLY the traced layout can
+    // satisfy the bare specifier — the staged package at the six-up
+    // repository-root `node_modules` the compiled `distributionRoot()`
+    // yields. This is the condition the failed deployment could not meet:
+    // loading the plugin from disk inside the function, under a
+    // no-install/process-safe loader. Mirrors the deployed call shape
+    // (dispatch's `loadPlugins(config.plugins, targetRepo)`): the scratch
+    // repository root is the repository candidate (no plugin there), the
+    // isolated tree is the installation root the compiled chunk derives.
+    const { project } = await fixture()
+    const staged = await shipProviderPlugin({ cwd: project, log: () => {} })
+
+    const isolated = await mkdtemp(join(tmpdir(), 'ab-plugin-isolated-'))
+    temporary.push(isolated)
+    const chunks = join(isolated, 'packages', 'hosted-store-service', '.next', 'server', 'chunks')
+    await mkdir(chunks, { recursive: true })
+    await writeFile(join(chunks, '[turbopack]_runtime.js'), '// placeholder runtime chunk')
+    const stagedDirectory = join(isolated, 'node_modules', '@defrex', 'autobuild-vercel-sandbox')
+    await mkdir(join(stagedDirectory, 'dist'), { recursive: true })
+    await copyFile(join(staged.staging, 'package.json'), join(stagedDirectory, 'package.json'))
+    await copyFile(
+      join(staged.staging, 'dist', 'index.js'),
+      join(stagedDirectory, 'dist', 'index.js'),
+    )
+
+    // The deployment's dispatch call: packageRoot = the (config-only) target
+    // repository, installationRoot = distributionRoot() derived from the
+    // compiled chunk — the six-up root, here the isolated tree.
+    const scratch = await mkdtemp(join(tmpdir(), 'ab-plugin-scratch-'))
+    temporary.push(scratch)
+    const runner = join(scratch, 'runner.ts')
+    await writeFile(
+      runner,
+      `import { diagnosePlugins } from ${JSON.stringify(join(REAL_ROOT, 'packages', 'core', 'src', 'plugins', 'load.ts'))}
+const diagnosis = await diagnosePlugins([${JSON.stringify(PACKAGE_NAME)}], process.argv[2]!, {
+  installationRoot: process.env.AB_INSTALLATION_ROOT,
+})
+console.log(JSON.stringify({ reports: diagnosis.reports, healthy: diagnosis.healthy }))
+`,
+    )
+    const spawn = Bun.spawnSync({
+      cmd: ['bun', '--no-install', runner, scratch],
+      cwd: isolated,
+      env: { ...process.env, AB_INSTALLATION_ROOT: isolated },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const output = `${spawn.stdout.toString()}${spawn.stderr.toString()}`
+    expect(spawn.exitCode).toBe(0)
+    const { reports, healthy } = JSON.parse(spawn.stdout.toString()) as {
+      reports: Array<{
+        resolved?: string
+        resolvedFrom?: string
+        status: string
+        stage: string
+        notice?: string
+      }>
+      healthy: boolean
+    }
+    expect(reports).toHaveLength(1)
+    expect(reports[0]?.status).toBe('skipped')
+    expect(reports[0]?.stage).toBe('registration')
+    expect(reports[0]?.resolved).toBe(join(stagedDirectory, 'dist', 'index.js'))
+    expect(reports[0]?.resolvedFrom).toBe('installation')
+    expect(reports[0]?.notice).toContain('declares only builtin workspace-provider registration(s)')
+    expect(healthy).toBe(true)
+    expect(output).not.toContain('unable to write files')
+  }, 120_000)
 })
