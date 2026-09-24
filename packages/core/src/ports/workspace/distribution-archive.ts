@@ -27,7 +27,16 @@
  * (`readDistributionIdentityStamp()`) in the guest's `.distribution-version`
  * marker and reinstalls the archive on a later mismatch, so an upgraded
  * dispatcher retrofits its persistent guests (see `vercel-sandbox.ts`).
+ *
+ * The stamp carries the sha256 digest of the packed archive alongside the
+ * version and protocol, so a deploy that changes guest-visible code or
+ * formats without bumping either one still mismatches every marker computed
+ * over the previous archive (AUT-600). The archive and its digest are
+ * resolved together once per process (`resolveDistributionArchive()`) and
+ * the install paths reuse those same bytes, so the marker names exactly the
+ * bytes installed and resolution never adds a second pack per tick.
  */
+import { createHash } from 'node:crypto'
 import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -101,12 +110,53 @@ export async function readDistributionIdentity(): Promise<string> {
  * hosted store's skew check compares — the package version
  * (`x-autobuild-version`) *and* the remote-store protocol version
  * (`x-autobuild-protocol-version`; either mismatch is a 409 at handshake) —
- * combined into one opaque string. A protocol-only change therefore counts as
- * a mismatch against a guest whose marker lacks it, and any future skew
- * dimension the store's handshake gains must be folded into this stamp the
- * same way or the marker comparison misses it. */
+ * plus the sha256 digest of the exact packed archive the dispatcher would
+ * install, combined into one opaque string. A protocol-only bump, a
+ * version-only release, or a code-only deploy that changes the archive bytes
+ * without touching either (AUT-600) each count as a mismatch against a guest
+ * whose marker carries the older stamp, and any future skew dimension the
+ * store's handshake gains must be folded into this stamp the same way or the
+ * marker comparison misses it. */
+export async function distributionStampFor(archive: Uint8Array): Promise<string> {
+  const digest = createHash('sha256').update(archive).digest('hex')
+  return `${await readDistributionIdentity()}+protocol${REMOTE_STORE_PROTOCOL_VERSION}+sha256-${digest}`
+}
+
+/** Per-process memo of the running distribution's archive and its digest.
+ * Holds the fulfilled promise so concurrent first callers share one
+ * resolution; a rejected resolution clears itself so the next call retries
+ * instead of a transient fetch/pack failure poisoning a long-lived process. */
+let distributionArchiveMemo: Promise<{ archive: Uint8Array; digest: string }> | undefined
+
+/** Resolve the archive the dispatcher would install together with its sha256
+ * digest, at most once per process: the memoized resolution wraps
+ * `defaultDistributionArchive()` (see the module docs for the source
+ * precedence), so repeated stamp reads and installs cost no second pack. */
+export function resolveDistributionArchive(): Promise<{ archive: Uint8Array; digest: string }> {
+  if (distributionArchiveMemo === undefined) {
+    const pending = defaultDistributionArchive().then((archive) => ({
+      archive,
+      digest: createHash('sha256').update(archive).digest('hex'),
+    }))
+    distributionArchiveMemo = pending
+    pending.catch(() => {
+      if (distributionArchiveMemo === pending) distributionArchiveMemo = undefined
+    })
+  }
+  return distributionArchiveMemo
+}
+
+/** Test-only: drop the per-process archive memo so each test resolves its own
+ * source. The memo otherwise outlives a single test. */
+export function resetDistributionArchiveCacheForTest(): void {
+  distributionArchiveMemo = undefined
+}
+
+/** The identity stamp of the running distribution: the version + protocol
+ * skew stamp extended with the digest of the memoized running archive. */
 export async function readDistributionIdentityStamp(): Promise<string> {
-  return `${await readDistributionIdentity()}+protocol${REMOTE_STORE_PROTOCOL_VERSION}`
+  const { archive } = await resolveDistributionArchive()
+  return distributionStampFor(archive)
 }
 
 /** The release asset a version's distribution ships under. */
