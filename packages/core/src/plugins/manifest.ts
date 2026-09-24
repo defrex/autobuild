@@ -301,6 +301,34 @@ const workspaceProviderCapabilitiesSchema = z.strictObject({
         validationMessage: z.string().optional(),
       }),
     )
+    // AUT-554: a group carrying neither message is skipped at both
+    // enforcement sites (dispatch.ts omits an undefined dispatchMessage;
+    // init-validation.ts's declaredForgeEnvChecks omits an undefined
+    // validationMessage), so accepting it here would license a declaration
+    // the host never enforces. The issue anchors at the group's index so the
+    // rendered path names it by location and the message names it by its
+    // alternatives. The shape guard keeps the check quiet when the group's
+    // structural diagnostics already speak: zod v4 runs refinements even
+    // after a check-stage failure inside the group (an empty alternatives
+    // array still parses through), and a malformed group must not grow a
+    // second, degraded copy of this issue.
+    .superRefine((groups, ctx) => {
+      groups.forEach((group, index) => {
+        if (group.dispatchMessage !== undefined || group.validationMessage !== undefined) return
+        // Skip a structurally malformed group: its own diagnostics speak.
+        if (
+          group.alternatives.length === 0 ||
+          group.alternatives.some((names) => names.length === 0)
+        )
+          return
+        const alternatives = group.alternatives.map((names) => names.join(', ')).join(' | ')
+        ctx.addIssue({
+          code: 'custom',
+          path: [index],
+          message: `requiredEnv group (alternatives: ${alternatives}) declares neither dispatchMessage nor validationMessage; declare at least one so the host enforces this group — a group with neither is silently skipped at dispatch and init validation`,
+        })
+      })
+    })
     .optional(),
   processEnvOnly: z
     .array(z.strictObject({ name: z.string().min(1), message: z.string() }))

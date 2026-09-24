@@ -333,7 +333,10 @@ requirements, an origin validator, and a remote readiness validation for
 `ab init --validate`. The host enforces every declared capability at its seam
 without naming the provider; required environment belongs on
 `capabilities.requiredEnv` (a descriptor-level `requiredEnv` is rejected at
-manifest parse). API 1.7 extends the workspace-provider factory context with
+manifest parse), and each `capabilities.requiredEnv` group must declare at
+least one of `dispatchMessage` / `validationMessage` — a group with neither is
+rejected at manifest parse, because the host would silently skip it at both
+enforcement sites. API 1.7 extends the workspace-provider factory context with
 the host-derived seams: `storeRef` and `storeToken` (guaranteed present under
 `capabilities.storeRequirements`), `runtimeReferences`, and the checkout-less
 `origin` and `remoteBranchHead` readers, all optional and ignored by factories
