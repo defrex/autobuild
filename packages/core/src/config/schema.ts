@@ -821,9 +821,13 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   // The credential-free sandbox rule (AUT-340): a forwarded variable name may
   // never name a store, forge, ticket-provider, model, or Vercel credential.
   // A workspace provider can declare additional forbidden names beyond the
-  // shared set; the union is checked here at parse time for builtins (the
-  // registry is unknown at parse time) and at the construction seam for
-  // plugin-declared names.
+  // shared set. This check is deliberately builtin-only: plugins are not
+  // loaded when config is parsed, so a plugin provider's declared names cannot
+  // be seen here (AUT-536). The deferral is accepted, not an oversight — the
+  // declared extras are enforced at the registry-aware seams instead,
+  // `createWorkspaceProvider` (construction) and `validateInitReadiness`
+  // (init validation), both of which run after plugin load; no site loads
+  // plugins earlier to widen parse-time coverage.
   if (config.orchestrator.enabled) {
     const providerForbidden =
       BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(config.workspace.provider)?.sandboxForbiddenEnv ?? []

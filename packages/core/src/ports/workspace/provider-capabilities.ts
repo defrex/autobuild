@@ -106,7 +106,12 @@ export interface WorkspaceProviderCapabilities {
    * entries. */
   requireRuntimeProvisioning?: boolean
   /** Names added to the operator-sandbox forbidden-forwarding set beyond
-   * `SANDBOX_FORBIDDEN_ENV`. */
+   * `SANDBOX_FORBIDDEN_ENV`. Enforced at the two registry-aware seams —
+   * `createWorkspaceProvider` construction and the registry-aware
+   * `validateInitReadiness` check — not at config parse: plugins are not
+   * loaded when config is parsed, and no site loads plugins earlier to widen
+   * parse-time coverage. The shared `SANDBOX_FORBIDDEN_ENV` names are
+   * rejected at parse time for every provider (AUT-536). */
   sandboxForbiddenEnv?: readonly string[]
   supportedForges?: readonly string[]
   /** Verbatim texts; dispatch and init validation emit different sentences. */
