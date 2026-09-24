@@ -32,6 +32,7 @@
       "name": "@defrex/autobuild-core",
       "version": "0.8.0",
       "dependencies": {
+        "@ai-sdk/gateway": "4.0.82",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@vercel/sandbox": "^3.1.0",
         "ai": "^7.0.101",

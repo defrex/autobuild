@@ -1704,6 +1704,7 @@ source = "file"
 readyState = "ready"
 [orchestrator]
 enabled = true
+model = "test/mock"
 [orchestrator.sandbox]
 environmentVariables = ${sandbox}
 `

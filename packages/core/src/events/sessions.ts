@@ -68,11 +68,26 @@ export const sessionEventPayloadSchemas = {
   'session.wake-set': z.strictObject({
     globs: z.array(z.string().min(1)).max(100),
   }),
-  /** The (later) turn runner's start of one turn on its stream. */
+  /** The (later turn runner's) start of one turn on its stream. A wake
+   * turn additionally carries the delivered input — the attention event
+   * record and the build's reduced state, frozen at wake time — so a later
+   * invocation reconstructs the identical user message from durable state
+   * alone (live build state keeps moving; the frozen snapshot does not). */
   'turn.started': z.strictObject({
     turn: z.string().min(1),
     stream: z.string().min(1),
     trigger: turnTriggerSchema,
+    wake: z
+      .strictObject({
+        event: z.strictObject({
+          seq: positiveInt,
+          ts: z.string().min(1),
+          type: z.string().min(1),
+          payload: z.record(z.string(), z.unknown()),
+        }),
+        buildState: z.record(z.string(), z.unknown()),
+      })
+      .optional(),
   }),
   /** A turn was suspended for budget or for an approval. */
   'turn.suspended': z.strictObject({

@@ -233,7 +233,7 @@ test('with [orchestrator] enabled the six sandbox tools advertise and one round 
   if ((await commit.exited) !== 0) throw new Error('git commit failed')
   await Bun.write(
     join(tmp, 'autobuild.toml'),
-    '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[orchestrator]\nenabled = true\n',
+    '[tickets]\nsource = "file"\nreadyState = "ready"\n\n[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
   )
   await seed()
   const client = await connect()

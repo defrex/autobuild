@@ -5962,7 +5962,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   }
 
   test('a live sandbox past the idle threshold is stopped with a dispatcher fact', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -5980,7 +5980,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a sandbox inside the threshold is left alone', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
     h.clock.advance(10 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -6000,7 +6000,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a capability-less provider makes the stage a no-op', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     // The logical-mode fake hosts the capability; strip it to model a
     // provider without one.
     const bare = h.workspaces as unknown as Record<string, unknown>
@@ -6014,7 +6014,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a stale-provider environment past the idle threshold gets its trail closed with an unconfirmed release fact', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -6036,7 +6036,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a stale-provider release is not duplicated on the next tick', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(31 * 60 * 1000)
     const first = await h.dispatcher.tick()
@@ -6051,7 +6051,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('the idle gate still applies to stale-provider environments', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(10 * 60 * 1000)
     const report = await h.dispatcher.tick()
@@ -6062,7 +6062,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('an absent environment closes the orphan trail with an unconfirmed release fact', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
     const capability = h.workspaces.orchestratorSandbox!
     ;(capability as unknown as { stop: () => Promise<{ outcome: 'absent' }> }).stop = async () => ({
@@ -6082,7 +6082,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('an unsupported provider is skipped silently', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
     const capability = h.workspaces.orchestratorSandbox!
     ;(capability as unknown as { stop: () => Promise<{ outcome: 'unsupported' }> }).stop =
@@ -6096,7 +6096,7 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 
   test('a contained settlement failure is reported and retried next tick', async () => {
-    const h = harness({ toml: '[orchestrator]\nenabled = true\n' })
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
     const capability = h.workspaces.orchestratorSandbox!
     let failing = true
