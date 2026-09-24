@@ -14,6 +14,7 @@ import {
   REPOSITORY_RUN_SCOPED_EVENT_TYPES,
   REPOSITORY_STATE_EVENT_TYPES,
   projectRepositoryStateEvents,
+  readRepoStateEventsWithAnchorRecheck,
 } from './repo-state-events'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
@@ -144,6 +145,69 @@ function noopInvocation(run: string, baseSeq?: number): RepositoryEvent[] {
     event('dispatcher.run-stopped', { run }),
   ]
 }
+
+/** A scripted probe/select pair for the helper: `anchors` is the sequence of
+ * values consecutive probes return; every call is recorded so the tests can
+ * pin the exact interleaving. */
+function scriptedRead(anchors: (number | undefined)[]) {
+  const probes: (number | undefined)[] = []
+  const selects: (number | undefined)[] = []
+  const probeAnchor = async () => {
+    const value = anchors[probes.length] ?? undefined
+    probes.push(value)
+    return value
+  }
+  const select = async (anchor: number | undefined) => {
+    selects.push(anchor)
+    // Mirrors both adapters' two-branch shape: the durable-only branch when
+    // anchorless, the anchored tail plus durable types otherwise.
+    return anchor === undefined
+      ? [event('harvest.started')]
+      : [
+          event('harvest.started', { seq: anchor - 1 }),
+          event('dispatcher.run-started', { seq: anchor, run: 'r1' }),
+          event('dispatcher.tick-started', { run: 'r1' }),
+        ]
+  }
+  return { probeAnchor, select, probes, selects }
+}
+
+describe('readRepoStateEventsWithAnchorRecheck', () => {
+  test('the AUT-551 interleaving: a run-started appended between the probe and the selection re-runs the anchored select', async () => {
+    // The deterministic stand-in for the wall-clock race: the probe sees no
+    // anchor, the first select returns durable-only events, and the anchor
+    // appears by the re-probe — the helper must re-select against it.
+    const fake = scriptedRead([undefined, 7])
+    const events = await readRepoStateEventsWithAnchorRecheck(fake.probeAnchor, fake.select)
+    // Two probes: the initial probe (no anchor) and the one-shot re-probe,
+    // which found anchor 7; the select call sequence pins the re-selection.
+    expect(fake.probes).toEqual([undefined, 7])
+    expect(fake.probes.length).toBe(2)
+    expect(fake.selects).toEqual([undefined, 7])
+    expect(events.map((e) => e.type)).toEqual([
+      'harvest.started',
+      'dispatcher.run-started',
+      'dispatcher.tick-started',
+    ])
+    expect(events[1]?.type).toBe('dispatcher.run-started')
+  })
+
+  test('an anchor present at the first probe runs exactly one select and no re-probe', async () => {
+    const fake = scriptedRead([7, 9]) // a second probe would be a bug
+    const events = await readRepoStateEventsWithAnchorRecheck(fake.probeAnchor, fake.select)
+    expect(fake.probes.length).toBe(1)
+    expect(fake.selects).toEqual([7])
+    expect(events.map((e) => e.type)).toContain('dispatcher.run-started')
+  })
+
+  test('no anchor at either probe: one select, durable-only result, probe called twice', async () => {
+    const fake = scriptedRead([undefined, undefined])
+    const events = await readRepoStateEventsWithAnchorRecheck(fake.probeAnchor, fake.select)
+    expect(fake.probes.length).toBe(2)
+    expect(fake.selects).toEqual([undefined])
+    expect(events.map((e) => e.type)).toEqual(['harvest.started'])
+  })
+})
 
 describe('REPOSITORY_STATE_EVENT_TYPES partition', () => {
   test('durable and run-scoped types exactly partition the repository catalog, disjointly', () => {
