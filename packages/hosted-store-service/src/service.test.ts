@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { parseConfig } from '@defrex/autobuild/testing'
 import { OperatorApiClient } from './operator-api'
+import { reduceSession } from './session-reducer'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -23,6 +25,77 @@ const env = {
 }
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
+const repo = 'acme/widgets'
+
+const ORCHESTRATOR_CONFIG = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+[orchestrator]
+enabled = true
+model = "test/mock"
+`)
+
+/** Publish an enabled orchestrator effective-config artifact exactly as the
+ * dispatcher does — copied from operator-server.test.ts so the artifact shape
+ * matches what `orchestratorConfig(store, repo)` reads. */
+async function publishOrchestratorConfig(store: MemoryBuildStore): Promise<void> {
+  await store.ensureRepo(repo)
+  const { verify, finalize, ...root } = ORCHESTRATOR_CONFIG
+  await store.putRepoArtifact(repo, {
+    kind: 'dispatcher-effective-config',
+    content: JSON.stringify({
+      ...root,
+      verify: { steps: verify.steps, ...verify.stepConfigs },
+      finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+    }),
+  })
+}
+
+/** The message route's raw response through the service seam — the typed
+ * client collapses the body, and these tests assert its shape. */
+function postMessage(
+  service: ReturnType<typeof createHostedStoreService>,
+  sid: string,
+  text: string,
+): Promise<Response> {
+  return service.fetch(
+    new Request(
+      `http://hosted.test/operator/v1/repos/${encodeURIComponent(repo)}/sessions/${encodeURIComponent(sid)}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
+            operator: { user: 'Ada' },
+            exp: now.getTime() + 60_000,
+          })}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ text }),
+      },
+    ),
+  )
+}
+
+function operatorClientFor(service: ReturnType<typeof createHostedStoreService>) {
+  return new OperatorApiClient({
+    url: 'http://hosted.test',
+    token: mintToken(env.AB_STORE_SECRET, {
+      operator: { user: 'Ada' },
+      exp: now.getTime() + 60_000,
+    }),
+    fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
+      service.fetch(
+        input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+      )) as typeof fetch,
+  })
+}
 
 const token = mintToken(env.AB_STORE_SECRET, {
   build: '*',
@@ -404,5 +477,92 @@ describe('hosted store service', () => {
     )
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ kind: 'validation' })
+  })
+
+  test('forwards scheduleBackground from the service options to the operator server (AUT-342 hop)', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(backing)
+    const scheduled: (() => Promise<void>)[] = []
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+      scheduleBackground: (fn) => {
+        scheduled.push(fn)
+        // The turn loop starts eagerly inside `startTurn` (the outcome
+        // promise is already running when `scheduleBackground` is called),
+        // and this test never awaits the handed function — attach a catch so
+        // whatever the loop's promise does stays contained.
+        void fn().catch(() => {})
+      },
+    })
+    const ada = operatorClientFor(service)
+    const created = await ada.createSession(repo, { title: 'wiring' })
+
+    // The message route awaits only `turn.started` and returns the turn and
+    // stream; the loop continues in the background handed to us above.
+    const posted = await postMessage(service, created.id, 'hello')
+    expect(posted.status).toBe(200)
+    expect(await posted.json()).toEqual({
+      ok: true,
+      turn: expect.stringMatching(/^ot_/),
+      stream: expect.stringMatching(/^st_/),
+    })
+
+    // The invocation itself is the proof: the wiring handed to
+    // `createHostedStoreService` reached the operator server constructed in
+    // `openStoreHandler` — there is no other path for it to travel.
+    expect(scheduled.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('without scheduleBackground the detached-promise default still runs the turn to a durable failure', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(backing)
+    // Neither scheduleBackground nor a reporter: pin only what the default
+    // guarantees through the public surface.
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+    })
+    const ada = operatorClientFor(service)
+    const created = await ada.createSession(repo, { title: 'default' })
+
+    // The HTTP response is unaffected by the option being absent.
+    const posted = await postMessage(service, created.id, 'hello')
+    expect(posted.status).toBe(200)
+    const body = (await posted.json()) as { ok: boolean; turn?: string; stream?: string }
+    expect(body).toEqual({
+      ok: true,
+      turn: expect.stringMatching(/^ot_/),
+      stream: expect.stringMatching(/^st_/),
+    })
+
+    // The detached-promise default ran the loop to its durable outcome: the
+    // turn reaches a terminal failed state without anyone awaiting it.
+    // Only `state: 'failed'` is pinned — the failure `kind` is
+    // environment-dependent. `resolveGatewayModel` reads `process.env`
+    // directly (bypassing the `env` object handed to the service), so in a
+    // gateway-backed environment the configured `test/mock` model answers
+    // 404 `model_not_found` and classifies as `configuration`, while a
+    // gateway-less environment classifies as `credentials`. There is no
+    // model seam at the service boundary (the runner factory is inline by
+    // design), and mutating `process.env` here would be global test-state
+    // mutation — so the environment-independent invariant is the pin.
+    const deadline = Date.now() + 5_000
+    for (;;) {
+      const state = reduceSession(await backing.getSessionEvents(created.id))
+      const turn = state.turns.find((candidate) => candidate.turn === body.turn)
+      if (turn !== undefined && (turn.state === 'completed' || turn.state === 'failed')) {
+        expect(turn.state).toBe('failed')
+        break
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `turn ${body.turn} never reached a terminal state; last: ${JSON.stringify(state)}`,
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
   })
 })
