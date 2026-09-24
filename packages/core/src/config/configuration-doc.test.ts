@@ -369,7 +369,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
-  orchestrator: ['enabled', 'sandbox'],
+  orchestrator: ['enabled', 'model', 'invocationBudgetSeconds', 'approvals', 'wake', 'sandbox'],
 }
 
 function tableSection(table: string): string | undefined {

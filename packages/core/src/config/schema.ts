@@ -21,6 +21,7 @@ import {
 } from '../ports/workspace/provider-capabilities'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
+import { compileEventGlobs } from '../events/globs'
 import { effectiveRuntimeReferences } from './roles'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
@@ -595,9 +596,102 @@ export const orchestratorSandboxSchema = z.strictObject({
 })
 export type OrchestratorSandboxConfig = z.infer<typeof orchestratorSandboxSchema>
 
+/** The turn runner lives inside the hosted operator route and the dispatcher
+ * tick, both of which run under a Vercel function duration limit the config's
+ * invocation budget can never exceed: a value above this is clamped (not
+ * rejected) at parse time so a mis-set budget degrades to the limit instead of
+ * failing every deploy. The operator route pins `maxDuration` to this same
+ * constant, so one number is cited by the config, the route, and the docs. */
+export const ORCHESTRATOR_ROUTE_LIMIT_SECONDS = 300
+
+/** Turn budget floor for the dispatcher tick's orchestrator step: when less
+ * than this many seconds of tick budget remain, the step skips the pass
+ * entirely (suspension state is durable, so skipping is always safe). */
+export const ORCHESTRATOR_MIN_TURN_SECONDS = 30
+
+/** The turn approval entries' shape: a registry tool name, optionally
+ * qualified by the discriminator field's accepted value (`tool:qualifier`).
+ * Validation is syntactic only — an entry naming an absent or unknown tool is
+ * inert by design (documented in docs/configuration.md), because the default
+ * list deliberately names tools later tickets add. */
+const ORCHESTRATOR_APPROVAL_ENTRY = /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
+
+/** The attention set a new session's wake settings inherit when the
+ * repository does not override `wake`: the build events an operator or agent
+ * must wake up for (the same set `ab watch` filters on by default), spelled
+ * as literal globs. The repository-journal attention events are NOT part of
+ * the default — the wake scan reads build logs only. */
+export const defaultOrchestratorWakeGlobs: readonly string[] = [
+  'escalation.raised',
+  'phase.failed',
+  'infrastructure.failed',
+  'runner.setup-failed',
+  'dispatch.failed',
+  'publication.lost',
+  'finalize.completed',
+  'pr.conflicted',
+  'pr.merged',
+  'pr.closed',
+  'build.completed',
+  'build.aborted',
+]
+
+/** The registry tools a turn asks its operator about before executing.
+ * The maintainer sets this to `[]` for autonomous operation. */
+export const defaultOrchestratorApprovals: readonly string[] = [
+  'builds.control:abort',
+  'builds.control:discard',
+  'builds.answer:revise-spec',
+  'sandbox.publish',
+  'tickets.move:ready',
+]
+
+/** A session's effective wake globs: the configured `wake` when declared
+ * (an explicit `[]` means never wake), else the default attention set. Kept
+ * as a resolver rather than a schema default so `wake`'s absence (inherit)
+ * and emptiness (never wake) stay distinct. */
+export function orchestratorWakeGlobs(config: OrchestratorConfig): string[] {
+  return [...(config.wake ?? defaultOrchestratorWakeGlobs)]
+}
+
 export const orchestratorSchema = z.strictObject({
   enabled: z.boolean().default(false),
   sandbox: orchestratorSandboxSchema.prefault({}),
+  /** Provider-qualified model string for the turn runner, in the same
+   * vocabulary as `[roles]` model strings (nonblank; a leading
+   * `vercel-ai-gateway/` prefix is stripped before the gateway provider).
+   * Resolved through the deployment's gateway credential. Required when
+   * `enabled = true` (cross-validated below); the runner never starts a turn
+   * on a repository whose config omits it. */
+  model: z.string().min(1).optional(),
+  /** Wall-clock budget for one turn invocation, in seconds. Clamped — not
+   * rejected — to ORCHESTRATOR_ROUTE_LIMIT_SECONDS, the hosted function
+   * duration the runner runs under. */
+  invocationBudgetSeconds: z
+    .number()
+    .int()
+    .positive()
+    .default(240)
+    .transform((value) => Math.min(value, ORCHESTRATOR_ROUTE_LIMIT_SECONDS)),
+  /** Registry tool names (optionally `tool:qualifier`) whose calls suspend a
+   * turn until the operator answers. Empty means none. Entries naming an
+   * absent or unknown tool are inert by design, which is what keeps the
+   * default list stable while the registry grows. */
+  approvals: z
+    .array(
+      z
+        .string()
+        .regex(
+          ORCHESTRATOR_APPROVAL_ENTRY,
+          'approval entries look like "tool" or "tool:qualifier"',
+        ),
+    )
+    .default([...defaultOrchestratorApprovals]),
+  /** Wake-filter globs a NEW session inherits. Kept schema-optional (not
+   * `.default()`) so absent ("inherit the default attention set") and `[]`
+   * ("never wake") stay distinct. Each glob must match at least one build
+   * event type — validated below with the shared `ab watch` compiler. */
+  wake: z.array(z.string().min(1)).optional(),
 })
 export type OrchestratorConfig = z.infer<typeof orchestratorSchema>
 
@@ -828,7 +922,34 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   // `createWorkspaceProvider` (construction) and `validateInitReadiness`
   // (init validation), both of which run after plugin load; no site loads
   // plugins earlier to widen parse-time coverage.
+  // Wake globs are validated with the same compiler `ab watch` uses, so a
+  // typo'd glob fails at parse time instead of silently matching nothing —
+  // regardless of `enabled`, since a later enablement would inherit the
+  // already-broken value.
+  if (config.orchestrator.wake !== undefined) {
+    try {
+      compileEventGlobs(config.orchestrator.wake, { usage: '[orchestrator].wake' })
+    } catch (error) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['orchestrator', 'wake'],
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   if (config.orchestrator.enabled) {
+    // The turn runner's model is not optional when the orchestrator is on:
+    // an enabled table without one would fail at first turn start, far from
+    // the edit that caused it.
+    if (config.orchestrator.model === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['orchestrator', 'model'],
+        message:
+          '[orchestrator].enabled = true requires [orchestrator].model — name the provider-qualified model string the turn runner uses (same vocabulary as [roles], resolved through the deployment gateway credential)',
+      })
+    }
     const providerForbidden =
       BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(config.workspace.provider)?.sandboxForbiddenEnv ?? []
     config.orchestrator.sandbox.environmentVariables.forEach((name, index) => {

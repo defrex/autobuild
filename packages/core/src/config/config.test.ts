@@ -165,6 +165,16 @@ describe('parseConfig — complete flattened surface', () => {
       orchestrator: {
         enabled: false,
         sandbox: { idleMinutes: 30, environmentVariables: [] },
+        model: undefined,
+        invocationBudgetSeconds: 240,
+        approvals: [
+          'builds.control:abort',
+          'builds.control:discard',
+          'builds.answer:revise-spec',
+          'sandbox.publish',
+          'tickets.move:ready',
+        ],
+        wake: undefined,
       },
     })
   })
@@ -203,6 +213,16 @@ describe('parseConfig — defaults', () => {
       orchestrator: {
         enabled: false,
         sandbox: { idleMinutes: 30, environmentVariables: [] },
+        model: undefined,
+        invocationBudgetSeconds: 240,
+        approvals: [
+          'builds.control:abort',
+          'builds.control:discard',
+          'builds.answer:revise-spec',
+          'sandbox.publish',
+          'tickets.move:ready',
+        ],
+        wake: undefined,
       },
     })
   })
@@ -1103,17 +1123,87 @@ describe('parseConfig — [orchestrator] sandbox gate', () => {
     expect(parseConfig(READY).orchestrator).toEqual({
       enabled: false,
       sandbox: { idleMinutes: 30, environmentVariables: [] },
+      model: undefined,
+      invocationBudgetSeconds: 240,
+      approvals: [
+        'builds.control:abort',
+        'builds.control:discard',
+        'builds.answer:revise-spec',
+        'sandbox.publish',
+        'tickets.move:ready',
+      ],
+      wake: undefined,
     })
   })
 
   test('accepts explicit enablement, idle minutes, and forwarded variables', () => {
     const config = parseConfig(
-      `${READY}[orchestrator]\nenabled = true\n\n[orchestrator.sandbox]\nidleMinutes = 5\nenvironmentVariables = ["MY_TOOL_CONFIG"]\n`,
+      `${READY}[orchestrator]\nenabled = true\nmodel = "anthropic/claude-sonnet-4"\n\n[orchestrator.sandbox]\nidleMinutes = 5\nenvironmentVariables = ["MY_TOOL_CONFIG"]\n`,
     )
     expect(config.orchestrator).toEqual({
       enabled: true,
+      model: 'anthropic/claude-sonnet-4',
       sandbox: { idleMinutes: 5, environmentVariables: ['MY_TOOL_CONFIG'] },
+      invocationBudgetSeconds: 240,
+      approvals: [
+        'builds.control:abort',
+        'builds.control:discard',
+        'builds.answer:revise-spec',
+        'sandbox.publish',
+        'tickets.move:ready',
+      ],
+      wake: undefined,
     })
+  })
+
+  test('enabled without a model is a config error naming the field', () => {
+    const error = parseError(`${READY}[orchestrator]\nenabled = true\n`)
+    expect(error.message).toContain('orchestrator.model')
+    expect(error.message).toContain('requires')
+  })
+
+  test('invocationBudgetSeconds clamps to the route limit instead of rejecting', () => {
+    const config = parseConfig(
+      `${READY}[orchestrator]\nenabled = true\nmodel = "m/x"\ninvocationBudgetSeconds = 900\n`,
+    )
+    expect(config.orchestrator.invocationBudgetSeconds).toBe(300)
+    const boundary = parseConfig(
+      `${READY}[orchestrator]\nenabled = true\nmodel = "m/x"\ninvocationBudgetSeconds = 300\n`,
+    )
+    expect(boundary.orchestrator.invocationBudgetSeconds).toBe(300)
+  })
+
+  test('rejects a nonpositive or fractional invocationBudgetSeconds', () => {
+    expect(parseError(`${READY}[orchestrator]\ninvocationBudgetSeconds = 0\n`).message).toContain(
+      'invocationBudgetSeconds',
+    )
+    expect(parseError(`${READY}[orchestrator]\ninvocationBudgetSeconds = 1.5\n`).message).toContain(
+      'invocationBudgetSeconds',
+    )
+  })
+
+  test('approvals accept bare and qualified entries and reject malformed ones', () => {
+    const config = parseConfig(
+      `${READY}[orchestrator]\napprovals = ["builds.control", "tickets.move:ready"]\n`,
+    )
+    expect(config.orchestrator.approvals).toEqual(['builds.control', 'tickets.move:ready'])
+    expect(
+      parseError(`${READY}[orchestrator]\napprovals = ["Builds.Control"]\n`).message,
+    ).toContain('approval')
+    expect(parseError(`${READY}[orchestrator]\napprovals = ["tool:QUAL"]\n`).message).toContain(
+      'approval',
+    )
+  })
+
+  test('wake stays absent-vs-empty distinct and rejects globs matching no event type', () => {
+    expect(parseConfig(READY).orchestrator.wake).toBeUndefined()
+    const empty = parseConfig(`${READY}[orchestrator]\nwake = []\n`)
+    expect(empty.orchestrator.wake).toEqual([])
+    const explicit = parseConfig(`${READY}[orchestrator]\nwake = ["escalation.*"]\n`)
+    expect(explicit.orchestrator.wake).toEqual(['escalation.*'])
+    const error = parseError(`${READY}[orchestrator]\nwake = ["bogus.*"]\n`)
+    expect(error.message).toContain('bogus.*')
+    expect(error.message).toContain('wake')
   })
 
   test('is strict against unknown keys at both nesting levels', () => {

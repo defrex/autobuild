@@ -38,12 +38,8 @@
  * Output carries no ANSI, ever, in either form (§16).
  */
 import type { AbEvent } from '../events/catalog'
-import { EVENT_TYPES, type EventType } from '../events/payloads'
-import {
-  REPOSITORY_EVENT_TYPES,
-  type RepositoryEvent,
-  type RepositoryEventType,
-} from '../events/repository'
+import type { EventType } from '../events/payloads'
+import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
@@ -117,36 +113,12 @@ export const REPOSITORY_ATTENTION_EVENTS = [
  * the build catalog — or, when `--repository` is given, in the repository
  * catalog — otherwise a usage error naming the glob is thrown before any
  * store read. Supplying any glob replaces the attention set entirely.
+ *
+ * The compiler itself lives in `events/globs.ts`, shared with the
+ * `[orchestrator].wake` configuration validation (AUT-342).
  */
-export function compileEventGlobs(
-  globs: readonly string[],
-  opts: { repository: boolean; usage: string },
-): RegExp[] {
-  return globs.map((glob) => {
-    const source =
-      '^' +
-      [...glob]
-        .map((char) => {
-          if (char === '*') return '.*'
-          if (char === '?') return '.'
-          return char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        })
-        .join('') +
-      '$'
-    const regex = new RegExp(source)
-    const inBuildCatalog = EVENT_TYPES.some((type) => regex.test(type))
-    const inRepositoryCatalog =
-      opts.repository && REPOSITORY_EVENT_TYPES.some((type) => regex.test(type))
-    if (!inBuildCatalog && !inRepositoryCatalog) {
-      throw new Error(
-        `--event "${glob}" matches no known event type${
-          opts.repository ? ' in the build or repository catalogs' : ' in the build event catalog'
-        } — ${opts.usage}`,
-      )
-    }
-    return regex
-  })
-}
+import { compileEventGlobs } from '../events/globs'
+export { compileEventGlobs } from '../events/globs'
 
 function matchesBuildFilter(type: EventType, filters: readonly RegExp[]): boolean {
   return filters.length > 0
