@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#548](https://github.com/defrex/autobuild/pull/548) — Define origin mode's plugin candidate-root semantics
 - [#546](https://github.com/defrex/autobuild/pull/546) — Restore the `sandbox` row to the `[orchestrator]` field table
 - [#545](https://github.com/defrex/autobuild/pull/545) — Guard discoverRepo against empty rev-parse --git-common-dir stdout
 - [#544](https://github.com/defrex/autobuild/pull/544) — Stamp the guest distribution marker with the archive digest (AUT-600)
