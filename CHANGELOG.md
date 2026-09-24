@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#523](https://github.com/defrex/autobuild/pull/523) — Remove the builtin vercel-sandbox provider; switch to plugin opt-in
 - [#514](https://github.com/defrex/autobuild/pull/514) — Ship the Vercel Sandbox provider as a plugin alongside the builtin
 - [#513](https://github.com/defrex/autobuild/pull/513) — Pin registeredClientName's Better Auth lookup contract in tests
 - [#512](https://github.com/defrex/autobuild/pull/512) — Validate the DCR client name shown on the OAuth consent page
