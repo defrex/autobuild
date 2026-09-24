@@ -370,4 +370,70 @@ describe('createSessionStreamSink', () => {
     await sink.close('completed')
     expect(fake.closed).toHaveLength(0)
   })
+
+  test('resume binds to an already-open stream and never calls createStream', async () => {
+    const fake = fakeStore()
+    let created = 0
+    fake.store.createStream = async (...args) => {
+      created += 1
+      return fake.createStream(...args)
+    }
+    const timer = manualScheduler()
+    const sink = createSessionStreamSink({
+      store: fake.store,
+      scope: SCOPE,
+      schedule: timer.schedule,
+    })
+    const first = await sink.open('turn:ot_1')
+    sink.append([{ type: 'start', messageId: 'm1' }])
+    await timer.tick()
+
+    // A fresh resume invocation binds to the recorded stream id.
+    const resumed = createSessionStreamSink({
+      store: fake.store,
+      scope: SCOPE,
+      schedule: timer.schedule,
+    })
+    const bound = await resumed.resume(first)
+    expect(bound).toBe(first)
+    resumed.append([{ type: 'text-delta', id: 't', delta: 'more' }])
+    await timer.tick()
+    expect(created).toBe(1)
+    expect(fake.chunks.map((chunk) => chunk.stream)).toEqual([first, first])
+    expect(fake.chunks[1]!.parts.map((p) => p.type)).toEqual(['text-delta'])
+
+    // Double-binding is refused.
+    await expect(sink.resume(first)).rejects.toThrow('already bound')
+  })
+
+  test('flush awaits the drain without closing; close still flushes first', async () => {
+    const fake = fakeStore()
+    const timer = manualScheduler()
+    const sink = createSessionStreamSink({
+      store: fake.store,
+      scope: SCOPE,
+      schedule: timer.schedule,
+    })
+    await sink.open('turn:ot_1')
+    sink.append([{ type: 'start', messageId: 'm1' }])
+    sink.append([{ type: 'text-delta', id: 't', delta: 'hello' }])
+    // flush makes the checkpoint durable before close.
+    await sink.flush()
+    expect(fake.chunks).toHaveLength(1)
+    expect(fake.closed).toEqual([])
+    sink.append([{ type: 'finish' }])
+    await sink.flush()
+    expect(fake.chunks).toHaveLength(2)
+    await sink.close('completed')
+    expect(fake.closed).toEqual(['completed'])
+
+    // flush before any bind is a no-op.
+    const unbound = createSessionStreamSink({
+      store: fake.store,
+      scope: SCOPE,
+      schedule: timer.schedule,
+    })
+    unbound.append([{ type: 'start' }])
+    await expect(unbound.flush()).resolves.toBeUndefined()
+  })
 })

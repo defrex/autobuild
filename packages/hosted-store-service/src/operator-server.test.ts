@@ -16,6 +16,10 @@ import {
 
 import { OperatorApiClient, OperatorApiError } from './operator-client'
 import { createOperatorServer, REGISTRY_ERROR_STATUS } from './operator-server'
+import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
+import { buildRegistry, createOrchestratorTurnRunner, humanActor } from '@defrex/autobuild/operator'
+import { sequentialIds } from '@defrex/autobuild/testing'
+import { reduceSession } from './session-reducer'
 
 const now = new Date('2026-09-02T00:00:00.000Z')
 const clock = () => now
@@ -446,6 +450,9 @@ describe('operator session routes', () => {
       decision: 'deny',
     })
     const answered = await ada.getSession(repo, created.id)
+    // The answer clears the pending approval; the turn here was never
+    // suspended (the runner suspended nothing), so the open turn keeps the
+    // session `running` — only `turn.resumed` matters for suspended turns.
     expect(answered.state.status).toBe('running')
     expect(answered.state.pendingApproval).toBeUndefined()
 
@@ -661,5 +668,283 @@ describe('the generic tools route', () => {
       refusal: 409,
       internal: 500,
     })
+  })
+})
+
+describe('operator session routes — embedded orchestrator (AUT-342)', () => {
+  const AGENT = agentActor('orchestrator', 'os_turn')
+
+  function operatorClient(
+    server: { fetch(req: Request): Promise<Response> },
+    user: string,
+  ): OperatorApiClient {
+    return new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      fetchFn: fetchFor(server),
+    })
+  }
+
+  /** The message route's raw response — the tests assert its body shape
+   * ({ok, turn, stream}), which the typed client collapses. */
+  function postMessage(
+    server: { fetch(req: Request): Promise<Response> },
+    repoArg: string,
+    sid: string,
+    text: string,
+  ): Promise<Response> {
+    return server.fetch(
+      new Request(
+        `http://operator.test/operator/v1/repos/${encodeURIComponent(repoArg)}/sessions/${encodeURIComponent(sid)}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ text }),
+        },
+      ),
+    )
+  }
+
+  const usage = (inputTokens: number, outputTokens: number) => ({
+    inputTokens: {
+      total: inputTokens,
+      noCache: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: outputTokens,
+      text: undefined,
+      reasoning: undefined,
+      toolCall: undefined,
+    },
+    totalTokens: inputTokens + outputTokens,
+  })
+
+  function textModel(): MockLanguageModelV3 {
+    let call = 0
+    return new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: `turn ${++call}` },
+            { type: 'text-end', id: 't' },
+            { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: usage(10, 5) },
+          ] as never,
+          initialDelayInMs: 0,
+        }),
+      }),
+    })
+  }
+
+  const ORCHESTRATOR_CONFIG = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+[orchestrator]
+enabled = true
+model = "test/mock"
+`)
+
+  async function publishOrchestratorConfig(
+    store: MemoryBuildStore,
+    config: ReturnType<typeof parseConfig> = ORCHESTRATOR_CONFIG,
+  ): Promise<void> {
+    await store.ensureRepo(repo)
+    const { verify, finalize, ...root } = config
+    await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps, ...verify.stepConfigs },
+        finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+      }),
+    })
+  }
+
+  /** A server wired for turns: the runner factory binds the in-process
+   * registry over the same store, exactly as the production wiring does. */
+  function orchestratorServer(store: MemoryBuildStore, model = textModel()) {
+    const backgrounds: Promise<void>[] = []
+    const server = createOperatorServer({
+      store,
+      secret,
+      clock,
+      orchestrator: {
+        createRunner: (config, runnerRepo) =>
+          createOrchestratorTurnRunner({
+            store,
+            registry: buildRegistry({ store, clock, allowedRepo: runnerRepo }),
+            repo: runnerRepo,
+            config,
+            clock,
+            ids: sequentialIds(),
+            model,
+            maxRetries: 0,
+          }),
+        scheduleBackground: (fn) => {
+          backgrounds.push(fn())
+        },
+      },
+    })
+    return { server, backgrounds }
+  }
+
+  test('a message post to an enabled repository starts a turn in the same invocation', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(store)
+    const { server, backgrounds } = orchestratorServer(store)
+    const ada = operatorClient(server, 'Ada')
+
+    // A new session inherits the default wake set (the attention set).
+    const created = await ada.createSession(repo, { title: 'orchestrator' })
+    const events = await store.getSessionEvents(created.id)
+    expect(events.map((event) => event.type)).toEqual(['session.created', 'session.wake-set'])
+    const wakeSet = events.find((event) => event.type === 'session.wake-set')
+    expect(wakeSet?.payload.globs).toContain('escalation.raised')
+    expect(wakeSet?.actor).toEqual({ kind: 'human', user: 'Ada' })
+
+    // The message route awaits only turn.started and returns the turn and
+    // stream; the loop continues in the background.
+    const posted = await postMessage(server, repo, created.id, 'hello')
+    const body = (await posted.json()) as { ok: boolean; turn?: string; stream?: string }
+    expect(body.ok).toBe(true)
+    expect(body.turn).toMatch(/^ot_/)
+    expect(body.stream).toMatch(/^st_/)
+
+    await Promise.all(backgrounds)
+    const state = reduceSession(await store.getSessionEvents(created.id))
+    expect(state.status).toBe('idle')
+    expect(state.turns[0]).toMatchObject({
+      turn: body.turn,
+      stream: body.stream,
+      state: 'completed',
+      trigger: { kind: 'message', messageSeq: 3 },
+      usage: { inputTokens: 10, outputTokens: 5, steps: 1 },
+    })
+    // The turn's stream carried the model's output as protocol parts.
+    const read = await store.readStream(body.stream!)
+    const types = read.chunks.flatMap((chunk) => chunk.parts.map((part) => part.type))
+    expect(types).toContain('text-delta')
+    expect(read.status).toBe('closed')
+  })
+
+  test('a disabled or absent-config repository behaves exactly as before', async () => {
+    const store = new MemoryBuildStore({ clock })
+    // No artifact at all.
+    const { server, backgrounds } = orchestratorServer(store)
+    const ada = operatorClient(server, 'Ada')
+    const created = await ada.createSession(repo, { title: 'plain' })
+    expect((await store.getSessionEvents(created.id)).map((e) => e.type)).toEqual([
+      'session.created',
+    ])
+    const posted = await postMessage(server, repo, created.id, 'hello')
+    expect(await posted.json()).toEqual({ ok: true })
+    await Promise.all(backgrounds)
+    expect(reduceSession(await store.getSessionEvents(created.id)).turns).toHaveLength(0)
+
+    // An artifact whose orchestrator is disabled.
+    const store2 = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(
+      store2,
+      parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+[orchestrator]
+enabled = false
+`),
+    )
+    const server2 = orchestratorServer(store2)
+    const ada2 = operatorClient(server2.server, 'Ada')
+    const created2 = await ada2.createSession(repo, {})
+    expect((await store2.getSessionEvents(created2.id)).map((e) => e.type)).toEqual([
+      'session.created',
+    ])
+    const posted2 = await postMessage(server2.server, repo, created2.id, 'hello')
+    expect(await posted2.json()).toEqual({ ok: true })
+  })
+
+  test('a broken effective-config artifact is a 500, never a silent disable', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(repo)
+    await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: 'not json at all',
+    })
+    const { server } = orchestratorServer(store)
+    const ada = operatorClient(server, 'Ada')
+    // The create route resolves the config too (wake inheritance), so the
+    // broken artifact fails it with a 500 as well — never a silent disable.
+    await expect(ada.createSession(repo, {})).rejects.toMatchObject({ status: 500 })
+  })
+
+  test('an approval answer resumes the suspended turn in the same invocation', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(store)
+    const { server, backgrounds } = orchestratorServer(store)
+    const ada = operatorClient(server, 'Ada')
+
+    // Seed a turn suspended for approval with a persisted request part.
+    const created = await ada.createSession(repo, {})
+    const stream = await store.createStream({ kind: 'session', session: created.id }, 'turn:ot_1')
+    await store.appendStreamParts(stream.id, [
+      { type: 'start', messageId: 'm1' },
+      { type: 'tool-approval-request', approvalId: 'a1', toolCallId: 'c1' },
+    ])
+    await store.appendSessionEvent(created.id, {
+      actor: humanActor('Ada'),
+      type: 'message.posted',
+      payload: { text: 'do it' },
+    })
+    await store.appendSessionEvent(created.id, {
+      actor: AGENT,
+      type: 'turn.started',
+      payload: {
+        turn: 'ot_1',
+        stream: stream.id,
+        trigger: { kind: 'message', messageSeq: 2 },
+      },
+    })
+    await store.appendSessionEvent(created.id, {
+      actor: AGENT,
+      type: 'approval.requested',
+      payload: { turn: 'ot_1', toolCallId: 'c1', toolName: 'notes.write', input: {} },
+    })
+    await store.appendSessionEvent(created.id, {
+      actor: AGENT,
+      type: 'turn.suspended',
+      payload: { turn: 'ot_1', cause: 'approval' },
+    })
+
+    await ada.answerSessionApproval(repo, created.id, {
+      turn: 'ot_1',
+      toolCallId: 'c1',
+      decision: 'approve',
+    })
+    await Promise.all(backgrounds)
+
+    const state = reduceSession(await store.getSessionEvents(created.id))
+    expect(state.status).toBe('idle')
+    expect(state.turns[0]).toMatchObject({ state: 'completed' })
+    // The resume recovered the wire approvalId and appended the response.
+    const parts = (await store.readStream(stream.id)).chunks.flatMap((c) => c.parts)
+    expect(parts.some((part) => part.type === 'tool-approval-response')).toBe(true)
   })
 })

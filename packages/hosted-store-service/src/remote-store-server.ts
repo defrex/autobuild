@@ -46,6 +46,7 @@ import {
   appendStreamBodySchema,
   closeStreamBodySchema,
   conditionalEventBodySchema,
+  conditionalSessionEventBodySchema,
   createStreamBodySchema,
   decodeBase64,
   depositsBodySchema,
@@ -507,6 +508,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
         return json(201, await store.appendSessionEvent(id, body as SessionEventWrite))
+      }
+      case 'POST events/conditional': {
+        const body = await readBody(req, conditionalSessionEventBodySchema)
+        const event = await store.appendSessionEventIfCurrent(id, body.expectedSeq, {
+          ...body.event,
+        } as SessionEventWrite)
+        return json(event === null ? 200 : 201, event)
       }
       case 'GET events': {
         const since = intParam(url, 'since') ?? 0
