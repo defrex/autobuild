@@ -1,6 +1,8 @@
-import { betterAuth, type BetterAuthPlugin } from 'better-auth'
+import { APIError, betterAuth, type BetterAuthPlugin } from 'better-auth'
+import { createAuthMiddleware } from 'better-auth/api'
 import { jwt, mcp } from 'better-auth/plugins'
 import { Pool } from 'pg'
+import { clientNameProblem } from './client-name-policy'
 import { isAllowedEmail, normalizeEmail, parseWebAuthEnv, type WebEnv } from './config'
 
 /** Admission policy is deliberately exported so provider callbacks can be
@@ -82,6 +84,39 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
           oauthApplication: {
             fields: { authenticationScheme: { type: 'string', required: false } },
           },
+        },
+      } satisfies BetterAuthPlugin,
+      // The pinned 1.4.18 MCP plugin's DCR endpoint (/mcp/register) writes
+      // `client_name` straight into the oauthApplication row, and DCR is
+      // unauthenticated when allowDynamicClientRegistration is true — so a
+      // client-supplied name is untrusted input on a security-decision
+      // surface (the consent page renders it). This hook rejects a name
+      // violating the client-name policy with the RFC 7591 error shape the
+      // endpoint itself uses for other metadata problems. The matcher pins
+      // the exact endpoint path the same way the jwks_uri fix is keyed to
+      // its call site: if an upgrade moved the endpoint, the auth.test.ts
+      // rejection tests fail loudly instead of the guard going silently
+      // inert. A name is not an identity — the consent page keeps the raw
+      // client_id visible precisely for that reason.
+      {
+        id: 'client-name-policy',
+        hooks: {
+          before: [
+            {
+              matcher: (context) => context.path === '/mcp/register',
+              handler: createAuthMiddleware(async (ctx) => {
+                const clientName = (ctx.body as { client_name?: unknown } | undefined)?.client_name
+                if (typeof clientName !== 'string') return
+                const problem = clientNameProblem(clientName)
+                if (problem) {
+                  throw new APIError('BAD_REQUEST', {
+                    error: 'invalid_client_metadata',
+                    error_description: problem,
+                  })
+                }
+              }),
+            },
+          ],
         },
       } satisfies BetterAuthPlugin,
       // The MCP plugin turns this app into an OAuth 2.1 authorization server
