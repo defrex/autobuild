@@ -31,6 +31,10 @@
       "types": "./src/web/config.ts",
       "import": "./src/web/config.ts"
     },
+    "./web/client-name-policy": {
+      "types": "./src/web/client-name-policy.ts",
+      "import": "./src/web/client-name-policy.ts"
+    },
     "./web/runtime": {
       "types": "./src/web/runtime.ts",
       "import": "./src/web/runtime.ts"

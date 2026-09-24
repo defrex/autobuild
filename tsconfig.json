@@ -40,6 +40,9 @@
       "@defrex/autobuild-hosted-store-service/web/config": [
         "./packages/hosted-store-service/src/web/config.ts"
       ],
+      "@defrex/autobuild-hosted-store-service/web/client-name-policy": [
+        "./packages/hosted-store-service/src/web/client-name-policy.ts"
+      ],
       "@defrex/autobuild-hosted-store-service/web/runtime": [
         "./packages/hosted-store-service/src/web/runtime.ts"
       ],
