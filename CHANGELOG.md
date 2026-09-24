@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#515](https://github.com/defrex/autobuild/pull/515) — Enforce patchedDependencies exclusion from the packed distribution
 - [#511](https://github.com/defrex/autobuild/pull/511) — Move consent page's lookupClientName test seam off the route page
 - [#510](https://github.com/defrex/autobuild/pull/510) — Enforce plugin-declared sandbox env names at post-load seams
 - [#508](https://github.com/defrex/autobuild/pull/508) — Pin workspace-config refusal to the configRefusalMessage condition
