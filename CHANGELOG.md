@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#538](https://github.com/defrex/autobuild/pull/538) — Close the turn stream on resumeTurn's missing-approval failure path
 - [#534](https://github.com/defrex/autobuild/pull/534) — Name unresolvable guest plugins in the readiness probe detail
 - [#532](https://github.com/defrex/autobuild/pull/532) — Pin the mine filter's repo-identity arms in CLI tests (wait parity)
 - [#533](https://github.com/defrex/autobuild/pull/533) — Derive PluginRegistry builtin workspace-providers from canonical list
