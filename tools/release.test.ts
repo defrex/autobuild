@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { repoRoot } from './git-tracked'
+import { readWorkspaceManifests } from './workspace-manifest-check'
 import type { WorkspaceManifest } from './workspace-manifest-check'
 import {
   normalizeClaudeSummary,
@@ -945,14 +947,46 @@ describe('npm publication', () => {
       },
       { path: 'packages/store/package.json', text: '{"name":"@acme/store"}' },
       { path: 'packages/private/package.json', text: '{"name":"@acme/private","private":true}' },
+      // A plugin peering on the root package (AUT-517): publishable, and it
+      // must not create a root ↔ provider cycle.
+      {
+        path: 'packages/plugin/package.json',
+        text: '{"name":"@acme/plugin","peerDependencies":{"@acme/cli":">=1"}}',
+      },
     ])
     expect(packages.map((entry) => [entry.name, entry.directory])).toEqual([
       ['@acme/cli', '.'],
       ['@acme/store', 'packages/store'],
       ['@acme/service', 'packages/service'],
+      ['@acme/plugin', 'packages/plugin'],
     ])
     expect(publishRecoveryCommand(packages.slice(1))).toBe(
-      '(cd packages/store && bun publish --access public --ignore-scripts)\n(cd packages/service && bun publish --access public --ignore-scripts)',
+      '(cd packages/store && bun publish --access public --ignore-scripts)\n' +
+        '(cd packages/service && bun publish --access public --ignore-scripts)\n' +
+        '(cd packages/plugin && bun publish --access public --ignore-scripts)',
+    )
+  })
+
+  test('the real workspace manifests order without a root ↔ provider cycle (AUT-517)', async () => {
+    const manifests = await readWorkspaceManifests(repoRoot)
+    const packages = publishablePackages(manifests)
+    const names = packages.map((entry) => entry.name)
+    // Every publishable workspace package appears exactly once, and the
+    // ordering completes without the cycle error.
+    const publishable = new Set(
+      manifests
+        .filter((manifest) => manifest.manifest.private !== true)
+        .map((manifest) => manifest.manifest.name),
+    )
+    expect(new Set(names).size).toBe(names.length)
+    expect(new Set(names)).toEqual(publishable)
+    // The plugin peers on the root package, so it must publish after it —
+    // deliberately NOT asserted "last among dependents of the root": with
+    // every sub-package peering on the root, the real order is root,
+    // postgres-store, vercel-sandbox, hosted-store-service,
+    // hosted-dispatcher.
+    expect(names.indexOf('@defrex/autobuild-vercel-sandbox')).toBeGreaterThan(
+      names.indexOf('@defrex/autobuild'),
     )
   })
 
