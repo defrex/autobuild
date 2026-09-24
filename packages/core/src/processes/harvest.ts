@@ -176,7 +176,9 @@ export async function scanUnclaimedObservations(
   repo: string,
 ): Promise<HarvestScanResult> {
   await store.ensureRepo(repo)
-  const harvestEvents = await store.getRepoEvents(repo)
+  // Bounded read (AUT-489): only harvest facts are consumed here; the
+  // per-build history reads stay as AUT-487 left them.
+  const harvestEvents = await store.getRepoStateEvents(repo)
   const records = await store.listBuilds()
   const eventsByBuild = new Map<string, AbEvent[]>()
   for (const record of records) {

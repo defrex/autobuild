@@ -64,7 +64,8 @@ export async function toggleRepositorySetting(opts: {
   run?: string
 }): Promise<{ enabled: boolean; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
-  const settings = reduceDispatchSettings(await opts.store.getRepoEvents(opts.repo))
+  // Bounded read (AUT-489): the settings reducer consumes durable types only.
+  const settings = reduceDispatchSettings(await opts.store.getRepoStateEvents(opts.repo))
   const enabled = opts.setting === 'intake' ? !settings.intake : !settings.defaultAutoMerge
   return setRepositorySetting({ ...opts, enabled })
 }
@@ -76,7 +77,8 @@ export async function toggleHarvestGate(opts: {
   via?: Via
 }): Promise<{ command: 'pause' | 'resume'; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
-  const state = reduceHarvest(await opts.store.getRepoEvents(opts.repo))
+  // Bounded read (AUT-489): the harvest reducer consumes durable types only.
+  const state = reduceHarvest(await opts.store.getRepoStateEvents(opts.repo))
   const pending = state.pendingCommands.at(-1)
   const requestedPaused = pending === undefined ? state.paused : pending.command === 'pause'
   const command = requestedPaused ? 'resume' : 'pause'
@@ -97,7 +99,9 @@ export async function controlHarvestRun(opts: {
   via?: Via
 }): Promise<{ action: HarvestRunAction; event: RepositoryEventEnvelope }> {
   await opts.store.ensureRepo(opts.repo)
-  const events = await opts.store.getRepoEvents(opts.repo)
+  // Bounded read (AUT-489): the harvest reducer and the dashboard harvest
+  // projection consume durable types only.
+  const events = await opts.store.getRepoStateEvents(opts.repo)
   const state = reduceHarvest(events)
   const projected = projectHarvest(events)
   if (projected === undefined || projected.run !== opts.run) {

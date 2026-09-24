@@ -230,7 +230,9 @@ export class HarvestRunner {
     try {
       await this.startHeartbeat()
       await this.ensureLease()
-      let events = await store.getRepoEvents(repo)
+      // Bounded read (AUT-489): reduceHarvest and the verdict/failure filters
+      // below consume durable types only, so the subset is replay-equivalent.
+      let events = await store.getRepoStateEvents(repo)
       let state = reduceHarvest(events)
       run = actionableHarvestRun(state)
 
@@ -238,7 +240,7 @@ export class HarvestRunner {
       // selected run comes from the full journal, so a shadowed failure or
       // exhaustion barrier is recovered/reported before any later open run.
       await this.controlBoundary(run?.run)
-      events = await store.getRepoEvents(repo)
+      events = await store.getRepoStateEvents(repo)
       state = reduceHarvest(events)
       run = openHarvestRun(state)
 
@@ -287,7 +289,8 @@ export class HarvestRunner {
             },
           }),
         )
-        events = await store.getRepoEvents(repo)
+        // Bounded read (AUT-489): reduceHarvest consumes durable types only.
+        events = await store.getRepoStateEvents(repo)
         run = reduceHarvest(events).runs.find((candidate) => candidate.run === runId)
         if (!run) throw new Error(`harvest.started did not reduce run "${runId}"`)
         // A request racing the claim parks this exact run; its snapshot stays
@@ -448,7 +451,9 @@ export class HarvestRunner {
             existing.verdict,
             existing.artifact,
           )
-          const event = (await this.deps.store.getRepoEvents(this.deps.repo)).find(
+          // Bounded read (AUT-489): only harvest.review.verdict facts are
+          // filtered here, and those are durable.
+          const event = (await this.deps.store.getRepoStateEvents(this.deps.repo)).find(
             (
               candidate,
             ): candidate is Extract<RepositoryEvent, { type: 'harvest.review.verdict' }> =>
@@ -515,7 +520,9 @@ export class HarvestRunner {
         event.actor.kind === 'agent' &&
         event.actor.session === session,
     })
-    const events = await this.deps.store.getRepoEvents(this.deps.repo)
+    // Bounded read (AUT-489): only harvest.review.verdict facts are filtered
+    // here, and those are durable.
+    const events = await this.deps.store.getRepoStateEvents(this.deps.repo)
     const verdict = [...events]
       .reverse()
       .find(
@@ -565,7 +572,9 @@ export class HarvestRunner {
   ): Promise<void> {
     const { store, repo, ids, workspacePath } = this.deps
     await this.ensureLease()
-    const events = await store.getRepoEvents(repo)
+    // Bounded read (AUT-489): reduceHarvest and the harvest.failed filter
+    // consume durable types only.
+    const events = await store.getRepoStateEvents(repo)
     const matchingFailures = events.filter(
       (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
         event.type === 'harvest.failed' &&
@@ -823,7 +832,9 @@ export class HarvestRunner {
   }): Promise<void> {
     const { store, repo, ids, workspacePath } = this.deps
     await this.ensureLease()
-    const events = await store.getRepoEvents(repo)
+    // Bounded read (AUT-489): reduceHarvest and the harvest.failed filter
+    // consume durable types only.
+    const events = await store.getRepoStateEvents(repo)
     const matchingFailures = events.filter(
       (event): event is Extract<RepositoryEvent, { type: 'harvest.failed' }> =>
         event.type === 'harvest.failed' &&
@@ -1296,7 +1307,9 @@ export class HarvestRunner {
 
   private async recordWorkflowFailure(run: string, error: unknown): Promise<void> {
     await this.ensureLease()
-    const events = await this.deps.store.getRepoEvents(this.deps.repo)
+    // Bounded read (AUT-489): reduceHarvest and the harvest.failed filter
+    // consume durable types only.
+    const events = await this.deps.store.getRepoStateEvents(this.deps.repo)
     const state = reduceHarvest(events)
     const current = state.runs.find((candidate) => candidate.run === run)
     if (current?.status !== 'running') return
@@ -1349,7 +1362,8 @@ export class HarvestRunner {
    * outer budget and therefore remain recoverable. */
   private async settleRecoveryExhaustion(run: string): Promise<void> {
     await this.ensureLease()
-    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
+    // Bounded read (AUT-489): reduceHarvest consumes durable types only.
+    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
     const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
     if (decision.kind !== 'exhaust-recovery' || decision.run !== run) return
     await this.finalizeRecoveryExhaustion(decision.run, decision.attempts, decision.limit)
@@ -1374,7 +1388,8 @@ export class HarvestRunner {
     })
 
     await this.ensureLease()
-    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
+    // Bounded read (AUT-489): reduceHarvest consumes durable types only.
+    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
     const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
     if (
       decision.kind !== 'exhaust-recovery' ||
@@ -1410,7 +1425,8 @@ export class HarvestRunner {
   private async controlBoundary(run?: string): Promise<void> {
     while (true) {
       await this.ensureLease()
-      const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
+      // Bounded read (AUT-489): reduceHarvest consumes durable types only.
+      const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
       const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
       if (decision.kind === 'proceed') return
       if (decision.kind === 'park') {
@@ -1453,7 +1469,8 @@ export class HarvestRunner {
   }
 
   private async refreshRun(run: string): Promise<HarvestRunState> {
-    const state = reduceHarvest(await this.deps.store.getRepoEvents(this.deps.repo))
+    // Bounded read (AUT-489): reduceHarvest consumes durable types only.
+    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
     const found = state.runs.find((candidate) => candidate.run === run)
     if (!found) throw new Error(`unknown harvest run "${run}"`)
     return found

@@ -738,7 +738,7 @@ command = "postgres"
     // (ACs 2–4, AUT-487).
     expect(counting.counts.get('listBuilds')).toBe(1)
     expect(counting.counts.get('getRepo')).toBe(1)
-    expect(counting.counts.get('getRepoEvents')).toBe(1)
+    expect(counting.counts.get('getRepoStateEvents')).toBe(1)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
     expect(counting.eventSlugs).toHaveLength(rowBuilds.length)
@@ -817,7 +817,7 @@ command = "postgres"
     expect(counting.counts.get('getBuild')).toBe(1)
     expect(counting.counts.get('getEvents')).toBe(1)
     expect(counting.counts.get('getRepo')).toBe(1)
-    expect(counting.counts.get('getRepoEvents')).toBe(1)
+    expect(counting.counts.get('getRepoStateEvents')).toBe(1)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     for (const method of MUTATING_STORE_METHODS) {
       expect(counting.counts.get(method) ?? 0).toBe(0)
