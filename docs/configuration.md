@@ -1296,12 +1296,12 @@ restart-classified as a whole.
 | `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under (`ORCHESTRATOR_ROUTE_LIMIT_SECONDS`, the same number the operator route pins as `maxDuration`). |
 | `approvals` | see below | array of `tool` or `tool:qualifier` strings | Registry tool names whose calls suspend a turn until the operator answers. Default: `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]`. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never a config error: the list stays stable while the registry grows, and a tool's removal cannot break parsing. A `tool:qualifier` entry applies to the named discriminator value only (for example `tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
 | `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Kept schema-optional so absent (inherit the default attention set — the build events `ab watch` filters on by default plus the repository-journal events `ab watch --repository` follows) and `[]` (never wake; message-only) stay distinct. Each glob must match at least one build or repository-journal event type, validated with the same compiler `ab watch` uses. Existing sessions never retroactively inherit; an explicit `PUT .../wake` always wins. |
+| `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
 
 `[orchestrator.sandbox]` fields:
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
-| `sandbox` | — | strict subtable; absence reads as the defaults | Sandbox behavior knobs. |
 | `idleMinutes` | `30` | positive integer | Minutes without a sandbox tool call after which the dispatcher tick's janitor stops the environment, keeping its snapshot; the next tool call resumes it. |
 | `environmentVariables` | `[]` | array of nonblank names | Names of non-secret host variables forwarded into the sandbox — the only non-toolchain environment it ever sees, during provisioning/setup and tool exec/start alike. Unset means none. |
 

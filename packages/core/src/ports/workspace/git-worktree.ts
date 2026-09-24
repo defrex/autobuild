@@ -493,10 +493,25 @@ export class GitWorktreeProvider implements WorkspaceProvider {
 
   /** Main-repo directory owning the worktree at `path`, or null if the path
    * is gone or not a worktree — the release-is-a-no-op cases. Needed when a
-   * restarted process releases a worktree it did not provision (§7.4). */
+   * restarted process releases a worktree it did not provision (§7.4).
+   * A successful `rev-parse --git-common-dir` with empty stdout is a
+   * degenerate input — feeding it to `resolve` would target the worktree
+   * directory itself and misdirect the subsequent `worktree remove` — so it
+   * fails loudly with a `GitError` (same posture as `shaFrom`'s empty-SHA
+   * guard) rather than masquerading as a release-is-a-no-op case. The error
+   * type diverges deliberately from `excludeProvisioningMarker`'s
+   * `SandboxOperationError`: this is provider-level discovery shared by
+   * `release` and `sandboxRelease`, not a sandbox operation. */
   private async discoverRepo(path: string): Promise<string | null> {
     const result = await this.git(path, ['rev-parse', '--git-common-dir'])
     if (result.exitCode !== 0) return null
+    if (result.stdout.trim() === '') {
+      throw new GitError(['-C', path, 'rev-parse', '--git-common-dir'], {
+        ...result,
+        exitCode: 1,
+        stderr: 'git returned no common directory',
+      })
+    }
     const commonDir = resolve(path, result.stdout.trim())
     // The common dir is the main repo's `.git`; worktree commands need the
     // repo directory itself (a bare common dir already is one).

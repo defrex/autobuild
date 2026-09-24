@@ -466,17 +466,20 @@ describe('loadPlugins', () => {
   })
 
   describe('relative candidate roots terminate (AUT-597)', () => {
-    // Candidate roots are passed through as-is, and origin mode passes the
-    // non-filesystem token '<hosted-dispatcher>'
-    // (packages/hosted-dispatcher/src/dispatcher.ts). Since
-    // dirname('.') === '.', a naive while(true) ancestor walk would never
-    // terminate on such a root. `diskNodeModulesDirectory` resolves the root
-    // to an absolute path before iterating, so these tests pin that the
-    // defined outcome — a rejection naming the original root string, or a
-    // guest-mode skip — is reached at all: a hang fails Bun's default test
-    // timeout, a wrong message fails the assertion.
+    // Candidate roots are passed through as-is, so a caller bug could hand
+    // the walk a relative root (e.g. '.'). Since dirname('.') === '.', a
+    // naive while(true) ancestor walk would never terminate on such a root.
+    // `diskNodeModulesDirectory` resolves the root to an absolute path
+    // before iterating, so these tests pin that the defined outcome — a
+    // rejection naming the original root string, or a guest-mode skip — is
+    // reached at all: a hang fails Bun's default test timeout, a wrong
+    // message fails the assertion. Production callers never supply such a
+    // root: origin mode does not pass the '<hosted-dispatcher>' token —
+    // abDispatch normalizes targetRepo to the per-origin scratch root
+    // before loadPlugins (AUT-604) — so a relative root here is a
+    // fail-closed caller bug, not a supported input.
 
-    test('an origin-mode token as packageRoot rejects naming the original root rather than hanging', async () => {
+    test('a non-filesystem candidate root rejects naming the original root rather than hanging', async () => {
       const repo = await fixture()
       await expect(
         loadPlugins(['autobuild-relative-root-pin-origin'], repo, {
