@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
+- [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
 - [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
 - [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
 - [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
