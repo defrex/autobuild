@@ -519,6 +519,64 @@ readyState = "ready"
     )
   })
 
+  test('surfaces an early skip notice on the probe failure path and stops the walk at the failure', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-fail-notices-'))
+    roots.push(repo)
+    // An early guest-tolerated resolution skip, then a failing repo-path
+    // module, then a later module that would emit its own registration-skip
+    // notice if it were attempted (it resolves from this repository's
+    // devDependency). The failure path must still surface the early notice
+    // — previously the post-hoc notice loop ran after the throw and
+    // suppressed it — and must never import/evaluate the later module.
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `plugins = ["@defrex/autobuild-definitely-not-a-plugin", "./absent-plugin.ts", "@defrex/autobuild-vercel-sandbox"]
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const notices: string[] = []
+    const originalError = console.error
+    console.error = (line: unknown) => {
+      notices.push(String(line))
+    }
+    let report: GuestProbeReport
+    try {
+      report = await runGuestReadinessProbe({
+        repo,
+        env: { AB_STORE: 'https://store.example' },
+        runtimes: usableRuntime,
+        openStore: () => readOnlyStore([]),
+      })
+    } finally {
+      console.error = originalError
+    }
+    // Fail-closed rendering unchanged: the `./absent-plugin.ts` resolution
+    // error with the existing remediation; the runtime probe and Store never
+    // run.
+    expect(report.checks.map((check) => check.name)).toEqual([
+      'repository setup',
+      'configuration and plugins',
+    ])
+    const plugins = report.checks.find((check) => check.name === 'configuration and plugins')
+    expect(plugins?.status).toBe('fail')
+    expect(plugins?.detail).toContain('absent-plugin.ts')
+    expect(plugins?.detail).toContain('could not be resolved from repository')
+    expect(plugins?.detail).toContain(
+      'install or correct the configured plugin in this environment',
+    )
+    // The previously suppressed diagnostic now reaches stderr...
+    expect(notices.join('\n')).toContain('@defrex/autobuild-definitely-not-a-plugin')
+    expect(notices.join('\n')).toContain('guests never construct workspace providers')
+    // ...and it is the only notice: the walk stopped at the failure, so the
+    // third module was never imported or evaluated to emit its own skip.
+    expect(notices).toHaveLength(1)
+  })
+
   test('keeps the transitional registration skip out of the guest probe detail', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-regskip-'))
     roots.push(repo)

@@ -143,27 +143,33 @@ export async function runGuestReadinessProbe(opts: {
     // sites stay strict. diagnosePlugins shares attemptPlugin with
     // loadPlugins — same resulting registry — but returns per-module reports,
     // so a resolution-stage skip (the guest tolerance path) can be surfaced
-    // in the check detail instead of degrading silently.
+    // in the check detail instead of degrading silently. The walk is
+    // stop-at-first-failure like loadPlugins, with notices emitted in-walk:
+    // each skip notice is printed as its module is attempted, so a skip
+    // declared before a later failing module still reaches stderr — the
+    // diagnostics this probe exists to surface — and no module past the
+    // failure is ever imported or evaluated. Notice parity with loadPlugins
+    // holds on both the pass and failure paths.
     const diagnosis = await diagnosePlugins(config.plugins, opts.repo, {
       packageRoot,
       guest: true,
+      onNotice: (line) => console.error(line),
+      stopOnFirstFailure: true,
     })
-    // loadPlugins throws on the first failed report; diagnosePlugins does
-    // not, so restore that fail-closed precedence here: repo-path resolution
-    // failures and every post-resolution failure (evaluation, manifest,
-    // registration) stay fatal for the probe exactly as before, rendered by
-    // the surrounding catch into a `configuration and plugins` fail check.
+    // loadPlugins throws on the first failed report; with
+    // `stopOnFirstFailure` the walk already stopped there, so the failed
+    // report (if any) is the last one. Repo-path resolution failures and
+    // every post-resolution failure (evaluation, manifest, registration)
+    // stay fatal for the probe exactly as before, rendered by the
+    // surrounding catch into a `configuration and plugins` fail check.
     const failedReport = diagnosis.reports.find((report) => report.status === 'failed')
     if (failedReport !== undefined)
       throw new Error(failedReport.error, { cause: failedReport.cause })
-    // Notice parity with loadPlugins: skipped loads were announced on stderr.
     // Only resolution-stage skips alter the check detail; the transitional
     // registration-stage skip (a configured plugin re-registering a builtin
-    // workspace provider) is the documented arrangement, not a problem, so it
-    // stays out of the report.
-    for (const report of diagnosis.reports) {
-      if (report.status === 'skipped' && report.notice !== undefined) console.error(report.notice)
-    }
+    // workspace provider) is the documented arrangement, not a problem, so
+    // it stays out of the report. Its stderr notice already flowed through
+    // `onNotice` during the walk.
     const unresolved = diagnosis.reports.filter(
       (report) => report.status === 'skipped' && report.stage === 'resolution',
     )
