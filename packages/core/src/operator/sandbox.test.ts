@@ -605,6 +605,64 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
     }
   })
 
+  test('a legacy sandbox with an unexcluded provisioning marker gets the reset-required diagnostic, not uncommitted changes (AUT-580)', async () => {
+    const fx = await forgeFx()
+    try {
+      // Provision through the normal flow, then make a publishable commit.
+      await fx.service.exec('legacy', { repo: fx.repo, command: 'true' })
+      await fx.service.exec('legacy', {
+        repo: fx.repo,
+        command: 'echo change >> README.md && git add README.md && git commit -q -m change',
+      })
+      // Pre-existing-environment journal: a second provisioned fact written
+      // before baseSha was recorded — operatorState takes .at(-1), so the
+      // fresh state carries no baseSha and publish would reach the baseSha
+      // check if the dirty check passes.
+      const identity = await fx.provider.orchestratorSandbox.describe({
+        repo: fx.repo,
+        operator: 'legacy',
+      })
+      await fx.store.appendRepo(fx.repo, {
+        actor: { kind: 'human', user: 'legacy' },
+        type: 'orchestrator.sandbox.provisioned',
+        payload: {
+          operator: 'legacy',
+          environmentId: identity.environmentId,
+          provider: 'fake',
+          workspacePath: identity.workspacePath,
+        },
+      })
+      // Reproduce the pre-exclusion-era worktree: strip the marker line the
+      // provisioning-time info/exclude write had put there. This exec's own
+      // ensure runs before the strip, so the strip is the last thing that
+      // touches the file before publish.
+      await fx.service.exec('legacy', {
+        repo: fx.repo,
+        command:
+          'sed -i "/autobuild-sandbox-provisioned/d" "$(git rev-parse --git-path info/exclude)"',
+      })
+
+      const error = await fx.service
+        .publish('legacy', { repo: fx.repo, title: 'Fix' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      // Publish's ensure heals the exclusion on the early-return path, so
+      // the dirty check passes and the no-baseSha diagnostic surfaces —
+      // not the misleading uncommitted-changes refusal.
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toMatch(
+        /reset required|no recorded base head/,
+      )
+      expect((error as SandboxOperationError).message).not.toMatch(/uncommitted changes/)
+      expect(fx.provider.publications).toEqual([])
+      const failed = (await factsOf(fx)).find(
+        (event) => event.type === 'orchestrator.sandbox.publish-failed',
+      )!
+      expect(failed.payload).toMatchObject({ operator: 'legacy', stage: 'checks' })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
   test('refuses a non-descendant commit and the degenerate base-equal commit', async () => {
     const fx = await forgeFx()
     try {
