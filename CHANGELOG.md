@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#507](https://github.com/defrex/autobuild/pull/507) — Pin runGuestReadinessProbe's redaction scope to guestEnvNames
 - [#506](https://github.com/defrex/autobuild/pull/506) — Bound the local surfaces' initial repository-journal replays
 - [#505](https://github.com/defrex/autobuild/pull/505) — Make getRepoStateEvents anchor probe test MAX(seq) IS NULL explicitly
 - [#504](https://github.com/defrex/autobuild/pull/504) — Gate active build listings on one digest read (AUT-488)
