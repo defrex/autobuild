@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { runInNewContext } from 'node:vm'
+import { ZodError } from 'zod'
 import {
   PLUGIN_API_VERSION,
   parsePluginManifest,
@@ -402,6 +403,106 @@ describe('workspace-provider registrations', () => {
     ).toThrow(
       'workspaceProviders.<name>.requiredEnv is not supported; declare required environment as workspaceProviders.<name>.capabilities.requiredEnv',
     )
+  })
+
+  test('a requiredEnv group with neither message is rejected at manifest parse (AUT-554)', () => {
+    // Both enforcement sites skip such a group (dispatch omits an undefined
+    // dispatchMessage; init validation omits an undefined validationMessage),
+    // so manifest parse refuses the declaration instead of licensing a
+    // silently ignored one.
+    try {
+      parsePluginManifest({
+        name: 'acme',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: {
+            factory: factory as never,
+            capabilities: {
+              requiredEnv: [
+                { alternatives: [['ACME_TOKEN']], dispatchMessage: 'needs ACME_TOKEN' },
+                { alternatives: [['GITHUB_TOKEN'], ['GH_TOKEN']] },
+              ],
+            },
+          },
+        },
+      })
+      throw new Error('expected the message-less group to be rejected')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ZodError)
+      const issues = (error as ZodError).issues
+      expect(issues).toHaveLength(1)
+      const issue = issues[0]
+      // The path composes through the adapter map, the descriptor object, and
+      // the capabilities object, so the diagnostic names the offending group
+      // by provider, field, and index.
+      expect(issue?.path).toEqual([
+        'workspaceProviders',
+        'podman',
+        'capabilities',
+        'requiredEnv',
+        1,
+      ])
+      // The message names the group by its alternatives variable names.
+      expect(issue?.message).toContain(
+        'requiredEnv group (alternatives: GITHUB_TOKEN | GH_TOKEN) declares neither dispatchMessage nor validationMessage',
+      )
+      expect(issue?.message).toMatch(/declare at least one/)
+    }
+  })
+
+  test('a requiredEnv group may carry only dispatchMessage (AUT-554)', () => {
+    // The existing capabilities-parse test covers a validationMessage-only
+    // group; this pins the other single-message shape so the rejection rule
+    // cannot drift into requiring both.
+    const parsed = parsePluginManifest({
+      name: 'acme',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: factory as never,
+          capabilities: {
+            requiredEnv: [{ alternatives: [['ACME_TOKEN']], dispatchMessage: 'needs ACME_TOKEN' }],
+          },
+        },
+      },
+    })
+    const registration = parsed.workspaceProviders?.podman as
+      | { capabilities?: { requiredEnv?: unknown } }
+      | undefined
+    expect(registration?.capabilities?.requiredEnv).toEqual([
+      { alternatives: [['ACME_TOKEN']], dispatchMessage: 'needs ACME_TOKEN' },
+    ])
+  })
+
+  test('a malformed requiredEnv group reports the structural error, not the missing-message one', () => {
+    // superRefine runs only after the group object parses, so an empty
+    // alternatives array keeps zod's own message and path.
+    try {
+      parsePluginManifest({
+        name: 'acme',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: {
+            factory: factory as never,
+            capabilities: { requiredEnv: [{ alternatives: [] }] },
+          },
+        },
+      })
+      throw new Error('expected the malformed group to be rejected')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ZodError)
+      const issues = (error as ZodError).issues
+      expect(issues).toHaveLength(1)
+      expect(issues[0]?.path).toEqual([
+        'workspaceProviders',
+        'podman',
+        'capabilities',
+        'requiredEnv',
+        0,
+        'alternatives',
+      ])
+      expect(issues[0]?.message).not.toMatch(/dispatchMessage|validationMessage/)
+    }
   })
 
   test('a configSchema with only parse is rejected; parse and safeParse passes (f_69fc887c)', () => {
