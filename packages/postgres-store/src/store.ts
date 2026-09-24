@@ -71,7 +71,11 @@ import {
   isRetentionManagedKind,
   revisionsToPrune,
 } from '@defrex/autobuild/store-adapter'
-import { DIGEST_EVENT_TYPES, reduceBuildDigest } from '@defrex/autobuild/store-adapter'
+import {
+  DIGEST_EVENT_TYPES,
+  REPOSITORY_STATE_EVENT_TYPES,
+  reduceBuildDigest,
+} from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 
 // The held-read poll cadence for event waits — a re-export of the canonical
@@ -873,6 +877,44 @@ export class PostgresBuildStore implements BuildStore {
       signal: opts?.signal,
       pollMs: EVENT_WAIT_POLL_MS,
     })
+  }
+
+  async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+    if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
+    // Two queries, mirroring the oracle's derivation: the latest run-started
+    // anchor (indexed by repo_events_type_repo_seq, v8 — without it MAX(seq)
+    // over the repo's run-started facts degrades to a scan of the repo's
+    // whole PK range, exactly the cost being removed), then one select of
+    // durable types plus the tail from that anchor. A journal with no
+    // run-started answers durable types only — the no-anchor case must not
+    // degenerate into `seq >= 0`, which would select the whole journal.
+    const anchorRows: { seq: string | number | null }[] = await this
+      .sql`SELECT MAX(seq) AS seq FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
+    const anchorRaw = anchorRows[0]?.seq
+    const anchor = anchorRaw === null || anchorRaw === undefined ? undefined : num(anchorRaw)
+    const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
+    // `repo` is $1; the anchored select also spends $2 on the anchor, so the
+    // type list's placeholders start at the right offset per branch.
+    const placeholders = (start: number) =>
+      durableList.map((_, index) => `$${index + start}`).join(', ')
+    const rows: Row[] =
+      anchor === undefined
+        ? await this.sql.unsafe(
+            `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
+            [repo, ...durableList],
+          )
+        : await this.sql.unsafe(
+            `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
+            [repo, anchor, ...durableList],
+          )
+    return rows.map((row) => ({
+      repo: String(row.repo),
+      seq: num(row.seq),
+      ts: iso(row.ts),
+      actor: json(row.actor),
+      type: String(row.type),
+      payload: json(row.payload),
+    })) as RepositoryEvent[]
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {

@@ -141,6 +141,7 @@ describe('local build-session scope', () => {
       () => store.appendRepo(REPO, harvestStartedWrite()),
       () => store.appendRepoWithArtifacts(REPO, [], () => harvestStartedWrite()),
       () => store.getRepoEvents(REPO),
+      () => store.getRepoStateEvents(REPO),
       () => store.getRepoBuildDigests(REPO),
       () => store.putRepoArtifact(REPO, { kind: 'x', content: 'x' }),
       () => store.getRepoArtifact(REPO, 'x'),
@@ -200,6 +201,7 @@ describe('local Harvest-session scope', () => {
 
     expect((await store.getRepo(REPO))?.repo).toBe(REPO)
     expect(await store.getRepoEvents(REPO)).toEqual([])
+    expect(await store.getRepoStateEvents(REPO)).toEqual([])
     expect([...(await store.getRepoBuildDigests(REPO)).keys()]).toEqual(['build-a', 'build-b'])
     expect((await store.putRepoArtifact(REPO, { kind: 'scan', content: 'scan' })).revision).toBe(0)
     expect((await store.getRepoArtifact(REPO, 'scan'))?.content).toEqual(
@@ -255,6 +257,7 @@ describe('local Harvest-session scope', () => {
       () => store.appendRepo(OTHER_REPO, harvestStartedWrite()),
       () => store.appendRepoWithArtifacts(OTHER_REPO, [], () => harvestStartedWrite()),
       () => store.getRepoEvents(OTHER_REPO),
+      () => store.getRepoStateEvents(OTHER_REPO),
       () => store.getRepoBuildDigests(OTHER_REPO),
       () => store.putRepoArtifact(OTHER_REPO, { kind: 'x', content: 'x' }),
       () => store.getRepoArtifact(OTHER_REPO, 'x'),
