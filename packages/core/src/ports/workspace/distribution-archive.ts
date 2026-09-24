@@ -19,18 +19,20 @@
  * version by construction, and source mode packs `distributionRoot()`, whose
  * package.json is the same file `readDistributionIdentity()` reads. The hosted
  * remote store enforces exact version lockstep — a client whose
- * `x-autobuild-version` differs from the server's is rejected (409) — so
- * guest, store, and dispatcher versions must move together through a release
- * cut (`tools/release.ts`) plus store/dispatcher upgrades; there is no code
- * path that safely mixes versions. Provisioning records the installed version
- * in the guest's `.distribution-version` marker and reinstalls the archive on
- * a later mismatch, so an upgraded dispatcher retrofits its persistent guests
- * (see `vercel-sandbox.ts`).
+ * `x-autobuild-version` or `x-autobuild-protocol-version` differs from the
+ * server's is rejected (409) — so guest, store, and dispatcher versions must
+ * move together through a release cut (`tools/release.ts`) plus
+ * store/dispatcher upgrades; there is no code path that safely mixes versions.
+ * Provisioning records the installed distribution's identity stamp
+ * (`readDistributionIdentityStamp()`) in the guest's `.distribution-version`
+ * marker and reinstalls the archive on a later mismatch, so an upgraded
+ * dispatcher retrofits its persistent guests (see `vercel-sandbox.ts`).
  */
 import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { distributionRoot, distributionPath } from '../../distribution'
+import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
 import { registryBaseUrl, registryVersionUrl } from '../../registry'
 import { parseRepoCoordinates } from '../forge/github'
 import {
@@ -91,6 +93,18 @@ async function fileExists(path: string): Promise<boolean> {
 /** The running distribution's version alone. */
 export async function readDistributionIdentity(): Promise<string> {
   return (await readDistributionPackage()).version
+}
+
+/** The distribution identity stamp the guest marker records: everything the
+ * hosted store's skew check compares — the package version
+ * (`x-autobuild-version`) *and* the remote-store protocol version
+ * (`x-autobuild-protocol-version`; either mismatch is a 409 at handshake) —
+ * combined into one opaque string. A protocol-only change therefore counts as
+ * a mismatch against a guest whose marker lacks it, and any future skew
+ * dimension the store's handshake gains must be folded into this stamp the
+ * same way or the marker comparison misses it. */
+export async function readDistributionIdentityStamp(): Promise<string> {
+  return `${await readDistributionIdentity()}+protocol${REMOTE_STORE_PROTOCOL_VERSION}`
 }
 
 /** The release asset a version's distribution ships under. */

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#503](https://github.com/defrex/autobuild/pull/503) — Move remote workspace-provider behavior behind declarations
+- [#501](https://github.com/defrex/autobuild/pull/501) — Refresh a guest's installed distribution on every sandbox restart
 - [#500](https://github.com/defrex/autobuild/pull/500) — Bound repository-journal reads for stateless repository readers
 - [#499](https://github.com/defrex/autobuild/pull/499) — Deepen schema-parity test to column/type and index-attribute parity
 - [#498](https://github.com/defrex/autobuild/pull/498) — Update operator-api docs to remote store protocol 3 (AUT-535)

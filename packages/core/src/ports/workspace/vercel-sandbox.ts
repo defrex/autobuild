@@ -6,7 +6,7 @@ import {
   type VercelSandboxConfig,
   vercelSandboxConfigSchema,
 } from '../../config/schema'
-import { defaultDistributionArchive, readDistributionIdentity } from './distribution-archive'
+import { defaultDistributionArchive, readDistributionIdentityStamp } from './distribution-archive'
 import type {
   WorkspaceHandle,
   WorkspaceProvider,
@@ -46,11 +46,14 @@ export { validateVercelGithubOrigin }
 export const VERCEL_WORKSPACE_PATH = '/vercel/sandbox/workspace'
 export const VERCEL_AUTOBUILD_PATH = '/opt/autobuild'
 export const VERCEL_PROVISIONED_MARKER = `${VERCEL_AUTOBUILD_PATH}/.provisioned`
-/** Records the installed distribution's version. A reused sandbox whose marker
- * disagrees with the version the current system would deliver is refreshed by
- * reinstalling the archive, so an upgraded dispatcher retrofits its persistent
- * guests (including legacy guests predating this marker) instead of resuming a
- * stale distribution that the hosted store would reject. */
+/** Records the installed distribution's identity stamp — everything the
+ * hosted store's skew check compares (package version and remote-store
+ * protocol version, see `readDistributionIdentityStamp`). A reused sandbox
+ * whose marker disagrees with the stamp the current system would deliver is
+ * refreshed by reinstalling the archive, so an upgraded dispatcher retrofits
+ * its persistent guests (including legacy guests predating this marker)
+ * instead of resuming a stale distribution that the hosted store would
+ * reject. */
 export const VERCEL_DISTRIBUTION_VERSION_MARKER = `${VERCEL_AUTOBUILD_PATH}/.distribution-version`
 export const VERCEL_BUN_VERSION = '1.4.0'
 export const VERCEL_BUN_PREFIX = '/opt/autobuild-runtime'
@@ -1009,12 +1012,13 @@ export async function validateVercelSandbox(
 export type { RuntimeReferencesSource } from './provider-capabilities'
 
 /** Install the distribution archive into `/opt/autobuild` and record its
- * version marker. Shared by fresh provisioning and reuse-path refreshes; the
- * readback comparison guards a silently failed write or extraction. */
+ * identity marker. Shared by fresh provisioning, reuse-path refreshes, and
+ * the restart path; the readback comparison guards a silently failed write or
+ * extraction. */
 async function installDistribution(
   sandbox: VercelSandboxHandle,
   archive: Uint8Array,
-  version: string,
+  identity: string,
   signal?: AbortSignal,
 ): Promise<void> {
   await sandbox.writeFiles([{ path: '/tmp/autobuild.tgz', content: archive }], {
@@ -1036,12 +1040,12 @@ async function installDistribution(
     cwd: VERCEL_AUTOBUILD_PATH,
     ...(signal === undefined ? {} : { signal }),
   })
-  await writeDistributionVersionMarker(sandbox, version, signal)
+  await writeDistributionVersionMarker(sandbox, identity, signal)
 }
 
 async function writeDistributionVersionMarker(
   sandbox: VercelSandboxHandle,
-  version: string,
+  identity: string,
   signal?: AbortSignal,
 ): Promise<void> {
   await commandOrThrow(sandbox, {
@@ -1050,7 +1054,7 @@ async function writeDistributionVersionMarker(
       '-c',
       'printf %s "$1" > "$2"',
       'distribution-version',
-      version,
+      identity,
       VERCEL_DISTRIBUTION_VERSION_MARKER,
     ],
     ...(signal === undefined ? {} : { signal }),
@@ -1060,17 +1064,17 @@ async function writeDistributionVersionMarker(
     args: [VERCEL_DISTRIBUTION_VERSION_MARKER],
     ...(signal === undefined ? {} : { signal }),
   })
-  if (readback.trim() !== version) {
+  if (readback.trim() !== identity) {
     throw new Error(
-      `distribution version marker readback mismatch in ${VERCEL_DISTRIBUTION_VERSION_MARKER}: ` +
-        `wrote ${JSON.stringify(version)} but read ${JSON.stringify(readback.trim())}`,
+      `distribution identity marker readback mismatch in ${VERCEL_DISTRIBUTION_VERSION_MARKER}: ` +
+        `wrote ${JSON.stringify(identity)} but read ${JSON.stringify(readback.trim())}`,
     )
   }
 }
 
-/** The installed distribution's version, or `undefined` when the marker is
- * unreadable — which includes every guest provisioned before the marker
- * existed and is treated as a version mismatch by the reuse path. */
+/** The installed distribution's identity stamp, or `undefined` when the marker
+ * is unreadable — which includes every guest provisioned before the marker
+ * existed and is treated as a mismatch by the reuse and restart paths. */
 async function readDistributionVersionMarker(
   sandbox: VercelSandboxHandle,
   signal?: AbortSignal,
@@ -1108,11 +1112,13 @@ export interface VercelSandboxProviderOptions {
    * the branch does not exist. Default runs `git ls-remote` from `repo` on
    * the host. */
   remoteBranchHead?: (branch: string) => Promise<string | undefined>
-  /** Test seam: the distribution version the current archive source delivers.
-   * Default reads the running distribution's package.json (origin mode keys
-   * the guest archive to that same version; source mode packs the same tree
-   * readDistributionIdentity reads), so the two agree by construction. */
-  distributionVersion?: () => Promise<string>
+  /** Test seam: the distribution identity stamp the current archive source
+   * delivers (package version plus remote-store protocol version, see
+   * `readDistributionIdentityStamp`). Default reads the running distribution
+   * (origin mode keys the guest archive to that same version; source mode
+   * packs the same tree `readDistributionIdentity` reads), so the two agree by
+   * construction. */
+  distributionIdentity?: () => Promise<string>
   /** Test seam: the bound on the observation path's wait on a command whose
    * lookup shows no exit. Defaults to `VERCEL_OBSERVE_WAIT_MS`. */
   observeWaitMs?: number
@@ -1200,11 +1206,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const rawOrigin = await this.origin()
     const origin = cleanGithubOrigin(rawOrigin)
     const name = sandboxName(origin.url, opts.branch, opts.generation)
-    // Resolved once, before the create/reuse branch: the version the current
-    // archive source would deliver, against which both a fresh install's
-    // marker and a reused sandbox's marker are compared.
-    const distributionVersion = await (
-      this.options.distributionVersion ?? readDistributionIdentity
+    // Resolved once, before the create/reuse branch: the identity stamp the
+    // current archive source would deliver, against which both a fresh
+    // install's marker and a reused sandbox's marker are compared.
+    const distributionIdentity = await (
+      this.options.distributionIdentity ?? readDistributionIdentityStamp
     )()
     let sandbox = await this.facade.get(name, this.operationSignal())
     const existing = await this.remoteBranchHead(opts.branch, `remote branch ${opts.branch}`)
@@ -1224,7 +1230,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       })
       if (marker.exitCode === 0) {
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
-        if (installed === distributionVersion) {
+        if (installed === distributionIdentity) {
           await sandbox.stop({ signal: this.operationSignal() })
         } else {
           // A completed sandbox whose installed distribution disagrees with
@@ -1233,7 +1239,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
           // deletes the sandbox so the next pass rematerializes cleanly.
           try {
             const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-            await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+            await installDistribution(
+              sandbox,
+              archive,
+              distributionIdentity,
+              this.operationSignal(),
+            )
           } catch (error) {
             try {
               this.sessions.set(name, sandbox)
@@ -1320,7 +1331,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await provisionBun(sandbox, this.options.config.image)
         await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
         const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-        await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+        await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
         // Repository dependencies precede branch-owned package plugin loading.
         // The fixed bootstrap supports the consuming repository's lockfile; its
         // configured setup command still runs at every runner attachment.
@@ -1486,6 +1497,34 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       await sandbox.stop({ signal: this.operationSignal() })
       this.uncertain.delete(ref)
     }
+    // Restart (the lease sweep's re-attach) launches guest code in an existing
+    // sandbox, so it must compare the distribution identity exactly as the
+    // reuse paths do: a guest installed by an older dispatcher — including one
+    // stranded by a protocol-only bump or a missing/unreadable marker — is
+    // refreshed before the runner starts, or the hosted store would 409 its
+    // heartbeat and the build would strand. Refresh failure deletes the
+    // sandbox so the next pass rematerializes it cleanly.
+    const distributionIdentity = await (
+      this.options.distributionIdentity ?? readDistributionIdentityStamp
+    )()
+    const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
+    if (installed !== distributionIdentity) {
+      try {
+        const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
+        await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
+      } catch (error) {
+        try {
+          this.sessions.set(ref, sandbox)
+          await this.reap(ref)
+        } catch (deleteError) {
+          throw new AggregateError(
+            [error, deleteError],
+            `sandbox ${ref} distribution refresh failed and its incomplete environment could not be confirmed deleted`,
+          )
+        }
+        throw error
+      }
+    }
     await preflightBun(sandbox, this.options.config.image)
     await bootstrapRuntimes(
       sandbox,
@@ -1624,11 +1663,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const origin = cleanGithubOrigin(await this.origin())
     const name = harvestSandboxName(origin.url)
     if (this.active.has(name)) throw new Error(`sandbox ${name} already has a live execution`)
-    // Resolved once, before the create/reuse branch: the version the current
-    // archive source would deliver, against which both a fresh install's
-    // marker and a reused environment's marker are compared.
-    const distributionVersion = await (
-      this.options.distributionVersion ?? readDistributionIdentity
+    // Resolved once, before the create/reuse branch: the identity stamp the
+    // current archive source would deliver, against which both a fresh
+    // install's marker and a reused environment's marker are compared.
+    const distributionIdentity = await (
+      this.options.distributionIdentity ?? readDistributionIdentityStamp
     )()
     let sandbox = await this.facade.get(name, this.operationSignal())
     if (sandbox !== null) {
@@ -1648,10 +1687,15 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         // disagrees with what the current system would deliver is refreshed
         // in place, mirroring the build reuse path.
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
-        if (installed !== distributionVersion) {
+        if (installed !== distributionIdentity) {
           try {
             const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-            await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+            await installDistribution(
+              sandbox,
+              archive,
+              distributionIdentity,
+              this.operationSignal(),
+            )
           } catch (error) {
             try {
               this.sessions.set(name, sandbox)
@@ -1731,7 +1775,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await provisionBun(sandbox, this.options.config.image)
         await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
         const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-        await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+        await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
         // Repository dependencies precede runtime preflight; the fixed
         // bootstrap is the same one build provisioning runs.
         await commandOrThrow(sandbox, {
@@ -1951,8 +1995,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }): Promise<SandboxEnvironmentIdentity> {
     const origin = cleanGithubOrigin(await this.origin())
     const name = sandboxEnvironmentName(origin.url, input.operator)
-    const distributionVersion = await (
-      this.options.distributionVersion ?? readDistributionIdentity
+    const distributionIdentity = await (
+      this.options.distributionIdentity ?? readDistributionIdentityStamp
     )()
     let sandbox = await this.facade.get(name, this.operationSignal())
     if (sandbox !== null) {
@@ -1967,14 +2011,19 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         sandbox = null
       } else {
         const installed = await readDistributionVersionMarker(sandbox, this.operationSignal())
-        if (installed !== distributionVersion) {
+        if (installed !== distributionIdentity) {
           // A reused environment whose installed distribution disagrees with
           // what the current system would deliver is refreshed in place,
           // exactly as build guests are. Refresh failure deletes the
           // environment so the next call rematerializes it cleanly.
           try {
             const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-            await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+            await installDistribution(
+              sandbox,
+              archive,
+              distributionIdentity,
+              this.operationSignal(),
+            )
           } catch (error) {
             try {
               this.sessions.set(name, sandbox)
@@ -2060,7 +2109,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       await provisionBun(sandbox, this.options.config.image)
       await runSystemProvisioning(sandbox, this.options.config.provisioning ?? [])
       const archive = await (this.options.packageArchive ?? defaultDistributionArchive)()
-      await installDistribution(sandbox, archive, distributionVersion, this.operationSignal())
+      await installDistribution(sandbox, archive, distributionIdentity, this.operationSignal())
       // Repository dependencies precede the setup command; the fixed
       // bootstrap is the same one build provisioning runs.
       await commandOrThrow(sandbox, {
