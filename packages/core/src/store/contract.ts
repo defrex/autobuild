@@ -819,6 +819,27 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('a journal with durable events but no run-started anchor answers durable types only', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/no-anchor')
+          for (const write of [
+            { actor: humanActor('op'), type: 'dispatcher.intake-set', payload: { enabled: false } },
+            { actor: KERNEL, type: 'harvest.started', payload: harvestStartedWrite('h1').payload },
+            // Run-scoped fact with no anchor anywhere in the journal: if the
+            // read degenerated into a whole-journal select, this would leak
+            // into the result.
+            { actor: DISPATCHER, type: 'dispatcher.tick-started', payload: { run: 'r1' } },
+          ] as RepositoryEventWrite[]) {
+            await store.appendRepo('acme/no-anchor', write)
+          }
+          const subset = await store.getRepoStateEvents('acme/no-anchor')
+          expect(subset.map((event) => event.type)).toEqual([
+            'dispatcher.intake-set',
+            'harvest.started',
+          ])
+        })
+      })
+
       test('a seeded journal answers exactly the oracle over the full replay', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.ensureRepo('acme/state')
