@@ -77,7 +77,7 @@ import {
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
-import { attemptExec, isPlanChangeError, type Exec, type Row } from './retry'
+import { attemptExec, isPlanChangeError, PlanInvalidations, type Exec, type Row } from './retry'
 
 // The held-read poll cadence for event waits — a re-export of the canonical
 // core constant (AUT-388), not a second definition. See core
@@ -93,12 +93,17 @@ export { EVENT_WAIT_POLL_MS }
 // keyed by query text and never rebuilds a rejected plan. Every store read
 // and write path therefore executes through the `run`/`tx` runners below,
 // which pin one pooled connection and retry the whole operation exactly once
-// on a plan-change error. Every `SELECT *` (and `RETURNING *` — none exist
-// today) on the migration-extendable tables — `streams`, `sessions`,
-// `builds`, and every other store table — is kept under that same-connection
-// retry rather than replaced by explicit column lists, which would cover
-// only the tables named today and drift with the schema. See `./retry` for
-// the Bun/PostgreSQL mechanics.
+// on a plan-change error. The retry re-prepares the failing statement under
+// a marked variant, and the variant is memoized per statement text: after
+// the first failure, later executions skip the poisoned plan entirely, so a
+// migration costs one failed execution per connection per statement and a
+// bounded number of extra prepared statements — not one per operation. Every
+// `SELECT *` (and `RETURNING *` — none exist today) on the
+// migration-extendable tables — `streams`, `sessions`, `builds`, and every
+// other store table — is kept under that same-connection retry rather than
+// replaced by explicit column lists, which would cover only the tables named
+// today and drift with the schema. See `./retry` for the Bun/PostgreSQL
+// mechanics.
 
 interface PreparedArtifact {
   kind: string
@@ -134,9 +139,9 @@ export class PostgresBuildStore implements BuildStore {
     this.maxRevisions = options.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
   }
 
-  /** Monotonic source for retry markers, so successive migrations never reuse
-   * a statement name a connection has already prepared (see `./retry`). */
-  private planRetries = 0
+  /** Memoized poisoned-statement markers, unique to this store instance (see
+   * `./retry` for why the memo and the per-instance namespace exist). */
+  private readonly plans = new PlanInvalidations()
 
   /** Run a non-transactional operation on one pinned pooled connection,
    * retrying it exactly once — same connection, statements freshly prepared —
@@ -146,11 +151,16 @@ export class PostgresBuildStore implements BuildStore {
   private async run<T>(body: (q: Exec) => Promise<T>): Promise<T> {
     const conn = await this.sql.reserve()
     try {
+      const attempt = attemptExec(conn, this.plans)
       try {
-        return await body(attemptExec(conn, ''))
+        return await body(attempt.exec)
       } catch (error) {
-        if (!isPlanChangeError(error)) throw error
-        return await body(attemptExec(conn, `/*ab-plan-retry-${++this.planRetries}*/`))
+        if (!isPlanChangeError(error) || attempt.inFlight === null) throw error
+        // The failing statement's plan was invalidated once more: memoize a
+        // fresh marked variant for its text, so this retry — and every later
+        // execution, on any pooled connection — skips the poisoned plan.
+        this.plans.invalidate(attempt.inFlight)
+        return await body(attemptExec(conn, this.plans).exec)
       }
     } finally {
       conn.release()
@@ -164,13 +174,22 @@ export class PostgresBuildStore implements BuildStore {
   private async tx<T>(body: (q: Exec) => Promise<T>): Promise<T> {
     const conn = await this.sql.reserve()
     try {
+      // Attribution lives outside `begin`: the transaction executor only
+      // exists inside the callback, so each attempt builds its own exec and
+      // reports the failing statement's text back here on rejection.
+      let failing: string | null = null
       try {
-        return await conn.begin((t) => body(attemptExec(t, '')))
+        return await conn.begin((t) => {
+          const attempt = attemptExec(t, this.plans)
+          return body(attempt.exec).catch((error) => {
+            failing = attempt.inFlight
+            throw error
+          })
+        })
       } catch (error) {
-        if (!isPlanChangeError(error)) throw error
-        return await conn.begin((t) =>
-          body(attemptExec(t, `/*ab-plan-retry-${++this.planRetries}*/`)),
-        )
+        if (!isPlanChangeError(error) || failing === null) throw error
+        this.plans.invalidate(failing)
+        return await conn.begin((t) => body(attemptExec(t, this.plans).exec))
       }
     } finally {
       conn.release()

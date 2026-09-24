@@ -69,6 +69,13 @@ if (testUrl) {
 
         // The retry prepared its marked statement on that very connection
         // (the pool has one connection, so anything prepared is on it).
+        const markedCount = async (): Promise<number> => {
+          const prepared: { statement: unknown }[] =
+            await sql`SELECT statement FROM pg_prepared_statements`
+          return prepared
+            .map((row) => String(row.statement))
+            .filter((text) => text.includes('ab-plan-retry')).length
+        }
         const prepared: { statement: unknown }[] =
           await sql`SELECT statement FROM pg_prepared_statements`
         const marked = prepared
@@ -82,6 +89,14 @@ if (testUrl) {
           | undefined
         expect(row).toBeDefined()
         expect(Object.keys(row ?? {})).toContain('plan_probe')
+
+        // Healing is memoized, not per-operation: once a statement text has
+        // recovered, later executions skip the poisoned plan entirely — no
+        // further failed round trips and no further prepared statements.
+        // (Growth per call would be the unbounded-leak failure mode.)
+        const healed = await markedCount()
+        for (let i = 0; i < 25; i++) expect(await store.getBuild('plan-probe')).toEqual(warmed)
+        expect(await markedCount()).toBe(healed)
       } finally {
         await store.close()
         await database.cleanup()
@@ -90,7 +105,8 @@ if (testUrl) {
 
     test('a transaction body re-runs whole after ADD COLUMN poisons its lock read', async () => {
       const database = await isolatedDatabase()
-      const store = new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
+      const sql = new SQL(database.url, { max: 1 })
+      const store = new PostgresBuildStore(sql, {
         blobs: new MemoryBlobStore(),
       })
       try {
@@ -106,6 +122,20 @@ if (testUrl) {
         expect(events[0]?.payload).toEqual(
           (sampleEventWrite('after migration').payload as Record<string, unknown>) ?? {},
         )
+
+        // The healed variant is memoized: later appends run without another
+        // failure and without preparing anything new on the connection.
+        const markedCount = async (): Promise<number> => {
+          const prepared: { statement: unknown }[] =
+            await sql`SELECT statement FROM pg_prepared_statements`
+          return prepared
+            .map((row) => String(row.statement))
+            .filter((text) => text.includes('ab-plan-retry')).length
+        }
+        const healed = await markedCount()
+        for (let i = 0; i < 10; i++) await store.append('tx-probe', sampleEventWrite(`steady ${i}`))
+        expect(await markedCount()).toBe(healed)
+        expect((await store.getEvents('tx-probe')).map((e) => e.seq).length).toBe(11)
       } finally {
         await store.close()
         await database.cleanup()
