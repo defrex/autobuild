@@ -55,6 +55,10 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-multirepo-wide:png .ab/web-dashboard-frames/builds-multirepo-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-rest-wide:png .ab/web-dashboard-frames/builds-mixed-rest-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-hover-wide:png .ab/web-dashboard-frames/builds-mixed-hover-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-focus-wide:png .ab/web-dashboard-frames/builds-mixed-focus-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-mixed-paused-wide:png .ab/web-dashboard-frames/builds-mixed-paused-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-auto-merge-on-wide:png .ab/web-dashboard-frames/builds-auto-merge-on-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-parked-no-consent-wide:png .ab/web-dashboard-frames/builds-parked-no-consent-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-selected-narrow:png .ab/web-dashboard-frames/builds-mixed-selected-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-wide:png .ab/web-dashboard-frames/builds-mixed-detail-wide.png --attach
    ab artifact put web-dashboard-frame:builds-mixed-detail-narrow:png .ab/web-dashboard-frames/builds-mixed-detail-narrow.png --attach
@@ -64,6 +68,8 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-longrepo-narrow:png .ab/web-dashboard-frames/builds-longrepo-narrow.png --attach
    ab artifact put web-dashboard-frame:signin-wide:png .ab/web-dashboard-frames/signin-wide.png --attach
    ab artifact put web-dashboard-frame:signin-error-narrow:png .ab/web-dashboard-frames/signin-error-narrow.png --attach
+   ab artifact put web-dashboard-frame:consent-named-wide:png .ab/web-dashboard-frames/consent-named-wide.png --attach
+   ab artifact put web-dashboard-frame:consent-unnamed-narrow:png .ab/web-dashboard-frames/consent-unnamed-narrow.png --attach
    ab verdict pass --notes .ab/web-dashboard-frames/verify-report.md
    ```
 
