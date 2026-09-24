@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#497](https://github.com/defrex/autobuild/pull/497) — Remove dead childDone deferred from AUT-524 frontend pressure test
+- [#495](https://github.com/defrex/autobuild/pull/495) — Declare the SQLite digest index in local/schema.ts
 - [#494](https://github.com/defrex/autobuild/pull/494) — Pin the duplicated execOrThrow helpers’ exit/error semantics with tests
 - [#493](https://github.com/defrex/autobuild/pull/493) — Fix wait.ts's post-drain exit-2 comment after AUT-403 (AUT-528)
 - [#492](https://github.com/defrex/autobuild/pull/492) — Add finalize-fork cross case for explicit local marker over remote-suggestive name

@@ -113,7 +113,9 @@ import {
  * the drizzle schema is the source of truth; this is its inlined form so
  * opening a store never needs a migration step.
  */
-const BOOTSTRAP_DDL = [
+// Exported for the schema-parity test, which pins this DDL against the
+// drizzle schema; schema.ts stays the source of truth, this is its inlined form.
+export const BOOTSTRAP_DDL = [
   `CREATE TABLE IF NOT EXISTS builds (
     slug TEXT PRIMARY KEY,
     repo TEXT NOT NULL,
