@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
+- [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
 - [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
 - [#563](https://github.com/defrex/autobuild/pull/563) — Reject capabilities.requiredEnv groups that carry neither dispatchMessage nor validationMessage
 - [#562](https://github.com/defrex/autobuild/pull/562) — Give describeEnvironment providers a defined config argument
