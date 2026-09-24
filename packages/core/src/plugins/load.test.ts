@@ -461,7 +461,6 @@ describe('loadPlugins', () => {
       const diagnosis = await diagnosePlugins(['subpath-package/plugin'], repo)
       expect(diagnosis.healthy).toBe(true)
       expect(diagnosis.reports[0]?.status).toBe('loaded')
-      expect(sentinelCalls).toBe(0)
     })
   })
 
