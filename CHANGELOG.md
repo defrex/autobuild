@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#571](https://github.com/defrex/autobuild/pull/571) — Close declared-side blind spots in the schema-parity test (AUT-544)
+- [#570](https://github.com/defrex/autobuild/pull/570) — Keep Postgres migration tests bounded as schema versions accumulate
 - [#569](https://github.com/defrex/autobuild/pull/569) — State what the schema pin enforces and catch checksum-only re-pins
 - [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
 - [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
