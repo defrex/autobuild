@@ -208,6 +208,57 @@ describe('workspace manifest invariants', () => {
     ).rejects.toThrow('declare the dependency in the workspace package that imports it instead')
   })
 
+  test('rejects a patched package in the root optionalDependencies and peerDependencies — both survive the pack strip', async () => {
+    // optionalDependencies and peerDependencies are absent from
+    // packedManifestOmittedFields, so they survive the pack strip and reach
+    // every consumer; with the patch declaration stripped the package resolves
+    // unpatched. The name must be absent from the base root dependencies
+    // (gamma is) or the first-match rule reports dependencies instead.
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          {
+            optionalDependencies: { gamma: '^1.0.0' },
+            patchedDependencies: { 'gamma@1.0.0': 'patches/gamma@1.0.0.patch' },
+          },
+        ),
+      ),
+    ).rejects.toThrow(
+      'patchedDependencies entry gamma@1.0.0 patches gamma, which is in the root optionalDependencies',
+    )
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          {
+            peerDependencies: { gamma: '^1.0.0' },
+            patchedDependencies: { 'gamma@1.0.0': 'patches/gamma@1.0.0.patch' },
+          },
+        ),
+      ),
+    ).rejects.toThrow(
+      'patchedDependencies entry gamma@1.0.0 patches gamma, which is in the root peerDependencies',
+    )
+  })
+
+  test('accepts root optionalDependencies and peerDependencies without patches', async () => {
+    // The widened rule is vacuous-by-absence for ordinary manifests: a root
+    // manifest carrying optional and peer entries with no matching patch
+    // declaration passes.
+    await expect(
+      validateWorkspaceManifests(
+        await fixture(
+          {},
+          {},
+          { optionalDependencies: { gamma: '^1.0.0' }, peerDependencies: { delta: '^2.0.0' } },
+        ),
+      ),
+    ).resolves.toBeDefined()
+  })
+
   test('allows a patched package in the root devDependencies only', async () => {
     // devDependencies is stripped from the packed manifest and never
     // production-installed in guests, so a patched dev-only tool ships no
