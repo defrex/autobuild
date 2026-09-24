@@ -216,7 +216,7 @@ export class PostgresBuildStore implements BuildStore {
       events.push({
         type: String(row.type) as AbEvent['type'],
         seq: num(row.seq),
-        ts: String(row.ts),
+        ts: iso(row.ts),
       })
       eventsByBuild.set(String(row.slug), events)
     }
