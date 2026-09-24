@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#545](https://github.com/defrex/autobuild/pull/545) — Guard discoverRepo against empty rev-parse --git-common-dir stdout
 - [#542](https://github.com/defrex/autobuild/pull/542) — Match excludeProvisioningMarker's empty-stdout error to the fake twin
 - [#539](https://github.com/defrex/autobuild/pull/539) — Append distribution archive and manifest to the dispatch trace only
 - [#538](https://github.com/defrex/autobuild/pull/538) — Close the turn stream on resumeTurn's missing-approval failure path
