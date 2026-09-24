@@ -14,6 +14,11 @@
 import { z } from 'zod'
 import { prImageHostSchema } from '../ontology'
 import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
+import {
+  runtimeProvisioningMap,
+  runtimeProvisioningMissingMessage,
+  sandboxForbiddenEnvMessage,
+} from '../ports/workspace/provider-capabilities'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
 import { displayName, effectiveRuntimeReferences, tomlKey } from './roles'
@@ -241,6 +246,57 @@ export const workspaceSchema = z.strictObject({
   config: openMap('[workspace.config]', z.unknown(), { keys: 'any' }),
 })
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>
+
+/**
+ * The parse-time subset of workspace-provider behavior a builtin declares
+ * (AUT-516). This table lives in `config/schema.ts` because the
+ * `[workspace.config]` validation runs inside `configSchema`'s
+ * `superRefine` — at parse time, long before plugins load, in processes that
+ * never touch the registry. The full capability objects (including the
+ * registry-seam declarations) are assembled in
+ * `ports/workspace/builtin-capabilities.ts`, which takes this subset from
+ * here; the construction-site refusal text differs by design from the
+ * parse-site one, so it is NOT copied from this table.
+ */
+export interface WorkspaceProviderConfigDeclaration {
+  /** Strict schema applied to `[workspace.config]`. When absent, nonempty
+   * provider config is refused with `configRefusalMessage`. */
+  configSchema?: z.ZodType
+  /** Parse-site refusal text for a provider that rejects `[workspace.config]`
+   * outright. Distinct from the capability's construction-site `configRefusal`. */
+  configRefusalMessage?: string
+  /** Referenced runtimes must have `[workspace.config.runtimeProvisioning]`
+   * entries (checked only once roles, verify, and finalize are all present). */
+  requireRuntimeProvisioning?: boolean
+  /** Names added to the operator-sandbox forbidden-forwarding set beyond
+   * `SANDBOX_FORBIDDEN_ENV`. */
+  sandboxForbiddenEnv?: readonly string[]
+}
+
+/** Parse-time behavior of every builtin workspace provider, keyed by the
+ * provider name an operator writes in `[workspace].provider`. No provider
+ * name appears in any validation branch — every check reads this table. */
+export const BUILTIN_WORKSPACE_PROVIDER_CONFIG: ReadonlyMap<
+  string,
+  WorkspaceProviderConfigDeclaration
+> = new Map([
+  [
+    'git-worktree',
+    {
+      configRefusalMessage:
+        '[workspace.config] is not supported by the builtin "git-worktree" provider — remove it or select a plugin workspace provider',
+    },
+  ],
+  [
+    'vercel-sandbox',
+    {
+      configSchema: vercelSandboxConfigSchema,
+      requireRuntimeProvisioning: true,
+      // Its credentials are already in SANDBOX_FORBIDDEN_ENV.
+      sandboxForbiddenEnv: [],
+    },
+  ],
+])
 
 // ── [commands] ───────────────────────────────────────────────────────────────
 //
@@ -614,33 +670,31 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
     })
   })
 
-  if (
-    config.workspace.provider === 'git-worktree' &&
-    Object.keys(config.workspace.config).length > 0
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['workspace', 'config'],
-      message:
-        '[workspace.config] is not supported by the builtin "git-worktree" provider — remove it or select a plugin workspace provider',
-    })
-  } else if (config.workspace.provider === 'vercel-sandbox') {
-    const parsed = vercelSandboxConfigSchema.safeParse(config.workspace.config)
+  const workspaceDeclaration = BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(config.workspace.provider)
+  if (workspaceDeclaration?.configSchema === undefined) {
+    if (workspaceDeclaration !== undefined && Object.keys(config.workspace.config).length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['workspace', 'config'],
+        message: workspaceDeclaration.configRefusalMessage,
+      })
+    }
+  } else {
+    const parsed = workspaceDeclaration.configSchema.safeParse(config.workspace.config)
     if (!parsed.success) {
       forwardIssues(parsed.error.issues, ctx, ['workspace', 'config'])
     } else if (
+      workspaceDeclaration.requireRuntimeProvisioning === true &&
       config.roles !== undefined &&
       config.verify !== undefined &&
       config.finalize !== undefined
     ) {
       for (const group of effectiveRuntimeReferences(config)) {
-        if (Object.hasOwn(parsed.data.runtimeProvisioning, group.runtime)) continue
+        if (Object.hasOwn(runtimeProvisioningMap(parsed.data), group.runtime)) continue
         ctx.addIssue({
           code: 'custom',
           path: ['workspace', 'config', 'runtimeProvisioning', group.runtime],
-          message:
-            `runtime ${displayName(group.runtime)} is selected by ${group.references.join(', ')} but has no sandbox provisioning; add ` +
-            `[workspace.config.runtimeProvisioning.${tomlKey(group.runtime)}] with nonblank install and preflight commands`,
+          message: runtimeProvisioningMissingMessage(group),
         })
       }
     }
@@ -758,13 +812,19 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
 
   // The credential-free sandbox rule (AUT-340): a forwarded variable name may
   // never name a store, forge, ticket-provider, model, or Vercel credential.
+  // A workspace provider can declare additional forbidden names beyond the
+  // shared set; the union is checked here at parse time for builtins (the
+  // registry is unknown at parse time) and at the construction seam for
+  // plugin-declared names.
   if (config.orchestrator.enabled) {
+    const providerForbidden =
+      BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(config.workspace.provider)?.sandboxForbiddenEnv ?? []
     config.orchestrator.sandbox.environmentVariables.forEach((name, index) => {
-      if (SANDBOX_FORBIDDEN_ENV.includes(name)) {
+      if (SANDBOX_FORBIDDEN_ENV.includes(name) || providerForbidden.includes(name)) {
         ctx.addIssue({
           code: 'custom',
           path: ['orchestrator', 'sandbox', 'environmentVariables', index],
-          message: `environment variable ${JSON.stringify(name)} is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox`,
+          message: sandboxForbiddenEnvMessage(name),
         })
       }
     })
