@@ -492,13 +492,13 @@ describe('abDispatch guards', () => {
     )
   }, 10_000)
 
-  test('origin mode refuses a config declaring local plugins and missing credentials', async () => {
+  test('origin mode refuses a config declaring repository-path plugins and missing credentials', async () => {
     const files = new Map<string, string>([
       [
         'autobuild.toml',
         DISPATCH_CONFIG_TOML.replace(
           '[commands]',
-          'plugins = ["checkoutless-local-plugin"]\n[commands]',
+          'plugins = ["./checkoutless-local-plugin.ts"]\n[commands]',
         ),
       ],
     ])
@@ -525,7 +525,9 @@ describe('abDispatch guards', () => {
     }
     await expect(
       abDispatch({ ...common, originConfigTransport: transport } as never),
-    ).rejects.toThrow(/origin-mode dispatch cannot load configured plugins/)
+    ).rejects.toThrow(
+      /origin-mode dispatch cannot load the repository-path plugin "\.\/checkoutless-local-plugin\.ts"/,
+    )
 
     // Requirements are validated before the forge fetch.
     await expect(
@@ -564,6 +566,89 @@ describe('abDispatch guards', () => {
       } as never),
     ).rejects.toThrow('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
     expect(probes).toEqual([])
+  }, 10_000)
+
+  test('origin mode accepts a bare provider-plugin specifier, skips it with a notice, and proceeds (AUT-517)', async () => {
+    const files = new Map<string, string>([
+      [
+        'autobuild.toml',
+        DISPATCH_CONFIG_TOML.replace(
+          '[commands]',
+          'plugins = ["@defrex/autobuild-vercel-sandbox"]\n[commands]',
+        ),
+      ],
+    ])
+    const transport = (async (_method: string, path: string) => {
+      if (path.includes('/contents/autobuild.toml')) {
+        const content = files.get('autobuild.toml')
+        if (content === undefined) throw new Error('unreachable')
+        return { status: 200, headers: {}, bytes: new TextEncoder().encode(content) }
+      }
+      throw new Error(`unexpected GitHub request: ${path}`)
+    }) as never
+
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    const stderrLines: string[] = []
+    const dispatch = abDispatch({
+      targetRepo: '/this/checkout/does/not/exist',
+      repository: 'git@github.com:acme/checkoutless.git',
+      originConfigTransport: transport,
+      env: {
+        AB_STORE: 'https://store.example.test',
+        AB_TOKEN: 'scoped',
+        GITHUB_TOKEN: 'forge-secret',
+      },
+      exec: (async () => {
+        throw new Error('host exec must not run in origin mode')
+      }) as Exec,
+      stdout: () => {},
+      stderr: (line) => stderrLines.push(line),
+      once: true,
+      wire: (_config, _opts, state) => {
+        // The tick proceeds past plugin loading with the configured plugin
+        // skipped: the builtin keeps serving vercel-sandbox.
+        expect(state.repo).toBe('https://github.com/acme/checkoutless')
+        return {
+          store,
+          tickets: new FakeTicketSource([]),
+          forge: new FakeForge(),
+          workspaces: new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' }),
+          buildExecution: {
+            start: () => {
+              throw new Error('no builds in origin mode')
+            },
+          },
+          runtimes: {
+            claude: {
+              runner: new ScriptedAgentRunner({ script: () => defaultTurnResult() }),
+              servesModels: [],
+            },
+          },
+          storeRef: 'https://store.example.test',
+          ids: sequentialIds(),
+          uuids: randomUuids(),
+          clock,
+          plugins: {
+            forges: new Map(),
+            workspaceProviders: new Map(),
+            runtimes: new Map(),
+            ticketSources: new Map(),
+            agentRuntimes: new Map(),
+            adapters: new Map(),
+            registration: [],
+            register: () => undefined,
+          } as unknown as PluginRegistry,
+        }
+      },
+    })
+    await dispatch
+    expect(
+      stderrLines.some(
+        (line) =>
+          line.includes('autobuild-vercel-sandbox') && line.includes('the builtin keeps serving'),
+      ),
+    ).toBe(true)
   }, 10_000)
 
   test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {

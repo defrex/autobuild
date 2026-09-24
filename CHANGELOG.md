@@ -3,9 +3,17 @@
 ## Unreleased
 
 - [#520](https://github.com/defrex/autobuild/pull/520) — Retry PostgreSQL cached-plan invalidation once per statement
+- [#519](https://github.com/defrex/autobuild/pull/519) — Give repo-scoped finalized stream artifacts an operator download path
+- [#518](https://github.com/defrex/autobuild/pull/518) — Add a prompt-teardown cap to the stream polls twin (AUT-393)
+- [#517](https://github.com/defrex/autobuild/pull/517) — Guard the Postgres schema against DDL edits that skip a version bump
+- [#516](https://github.com/defrex/autobuild/pull/516) — Pace the SQLite store's held event reads at the event-wait budget
+- [#515](https://github.com/defrex/autobuild/pull/515) — Enforce patchedDependencies exclusion from the packed distribution
+- [#514](https://github.com/defrex/autobuild/pull/514) — Ship the Vercel Sandbox provider as a plugin alongside the builtin
+- [#513](https://github.com/defrex/autobuild/pull/513) — Pin registeredClientName's Better Auth lookup contract in tests
 - [#512](https://github.com/defrex/autobuild/pull/512) — Validate the DCR client name shown on the OAuth consent page
 - [#511](https://github.com/defrex/autobuild/pull/511) — Move consent page's lookupClientName test seam off the route page
 - [#510](https://github.com/defrex/autobuild/pull/510) — Enforce plugin-declared sandbox env names at post-load seams
+- [#509](https://github.com/defrex/autobuild/pull/509) — Render the OAuth consent page in the web-dashboard capture
 - [#508](https://github.com/defrex/autobuild/pull/508) — Pin workspace-config refusal to the configRefusalMessage condition
 - [#507](https://github.com/defrex/autobuild/pull/507) — Pin runGuestReadinessProbe's redaction scope to guestEnvNames
 - [#506](https://github.com/defrex/autobuild/pull/506) — Bound the local surfaces' initial repository-journal replays

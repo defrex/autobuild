@@ -10,7 +10,7 @@
  * synchronous (SQLite) and asynchronous (PostgreSQL) backends is worth more
  * than wake-on-write precision. The loop serves two cadences: held *stream*
  * reads are presentation content and poll at the ~25 ms `STREAM_WAIT_POLL_MS`;
- * held *event* reads (build, repository, session — AUT-334/381/383) take the
+ * held *event* reads (build, repository, session — AUT-334/381/383/394) take the
  * one-second `EVENT_WAIT_POLL_MS` budget when the adapter passes it per call
  * (see `EVENT_WAIT_POLL_MS` for which adapters do). Closed streams never wait.
  *
@@ -28,15 +28,14 @@ export const STREAM_WAIT_POLL_MS = 25
 
 /**
  * The one-second held-event poll budget (the hosted per-query budget,
- * AUT-334/381/383): held event reads — build, repository, and session —
+ * AUT-334/381/383/394): held event reads — build, repository, and session —
  * re-query at most once per second, so an append is observed at the next
  * poll, typically within about one second. Held *stream* reads are excluded:
  * they are presentation content and stay at the ~25 ms `STREAM_WAIT_POLL_MS`
  * cadence. This deliberately diverges from `STREAM_WAIT_POLL_MS`; adapters
  * pass it as `pollMs` on their event-family calls to `readEventsWithWait` —
- * the PostgreSQL and memory stores do on all three families (AUT-334/381/383).
- * The SQLite store has not adopted the budget (out of scope for AUT-383), so
- * its held event reads fall back to the stream default until it does.
+ * the PostgreSQL, memory, and SQLite stores do on all three families
+ * (AUT-334/381/383/394).
  *
  * The PostgreSQL adapter treats the bound as nominal, not hard: a worst-case
  * ≤1 s guarantee would need Postgres LISTEN/NOTIFY wake-on-append — one
