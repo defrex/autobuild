@@ -148,22 +148,29 @@ describe('operator query wiring', () => {
   })
 
   test('empty repository status and Harvest status are read-only defaults', async () => {
-    const store = new MemoryBuildStore({ clock })
-    expect(await getRepositoryStatus(store, REPO)).toEqual({
+    const raw = new MemoryBuildStore({ clock })
+    const counting = countingStore(raw)
+    expect(await getRepositoryStatus(counting.store, REPO)).toEqual({
       repo: REPO,
       intake: true,
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
     })
-    expect(await getHarvestStatus(store, REPO)).toMatchObject({
+    expect(await getHarvestStatus(counting.store, REPO)).toMatchObject({
       repo: REPO,
       status: 'idle',
       paused: false,
       runs: [],
       observations: 0,
     })
-    expect(await store.getRepo(REPO)).toBeNull()
+    // The missing-record journal read must stay write-free (the shared
+    // AUT-524 helper's contract): no repository record is materialized and
+    // no mutating store method is touched by either status read.
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+    expect(await raw.getRepo(REPO)).toBeNull()
   })
 
   test('Harvest status projects gate and concrete run state', async () => {

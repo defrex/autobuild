@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#502](https://github.com/defrex/autobuild/pull/502) — Consolidate operator query's repoEvents onto the shared AUT-524 read
 - [#501](https://github.com/defrex/autobuild/pull/501) — Refresh a guest's installed distribution on every sandbox restart
 - [#500](https://github.com/defrex/autobuild/pull/500) — Bound repository-journal reads for stateless repository readers
 - [#499](https://github.com/defrex/autobuild/pull/499) — Deepen schema-parity test to column/type and index-attribute parity
