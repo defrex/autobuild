@@ -608,7 +608,13 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   test('a legacy sandbox with an unexcluded provisioning marker gets the reset-required diagnostic, not uncommitted changes (AUT-580)', async () => {
     const fx = await forgeFx()
     try {
-      // Provision through the normal flow, then make a publishable commit.
+      // Provision through the normal flow, then make a publishable commit. The
+      // commit is issued inline under the scenario's operator ('legacy'): the
+      // describe-level commitChange helper hardcodes 'ops', which would target
+      // a different sandbox identity. A stray commit under the wrong operator
+      // would be inert here — publish's reset-required check (no recorded
+      // baseSha) precedes any head comparison — but the exercise stays under
+      // 'legacy'.
       await fx.service.exec('legacy', { repo: fx.repo, command: 'true' })
       await fx.service.exec('legacy', {
         repo: fx.repo,
