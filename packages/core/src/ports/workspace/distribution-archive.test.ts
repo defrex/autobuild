@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test, mock } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { afterEach } from 'bun:test'
 import { tmpdir } from 'node:os'
@@ -14,8 +14,10 @@ import {
   fetchDistributionRegistryTarball,
   readDistributionIdentity,
   readDistributionPackage,
+  packageAutobuildDistribution,
   type RegistryFetch,
 } from './distribution-archive'
+import * as gitWorktree from './git-worktree'
 import { GitHubApiError } from '../forge/github-transport'
 
 /** A scripted registry: version-document URL → status/body, tarball URL → bytes. */
@@ -345,5 +347,44 @@ describe('findPrebuiltDistributionArchive', () => {
     expect(path).toBe(join(root, PREBUILT_DISTRIBUTION_DIR, distributionAssetName(version)))
     expect((await readFile(path)).byteLength).toBeGreaterThan(0)
     expect(await findPrebuiltDistributionArchive({}, [root])).toBe(path)
+  })
+})
+
+// `mock.module` is process-global, not per-file: `bun test` loads every file
+// into one module registry, so this override persists into files loaded later.
+// Two guards keep that safe (do not weaken either):
+//  1. the describe-scoped `afterEach` below resets the override after every
+//     test, so sibling suites always see the real `spawnExec`;
+//  2. this describe stays last in the file so no existing real-spawn test in
+//     this file ever runs while an override is set.
+const realSpawnExec = gitWorktree.spawnExec // snapshot BEFORE mock.module, avoids self-recursion
+const spawnOverride: { impl?: typeof gitWorktree.spawnExec } = {}
+mock.module('./git-worktree', () => ({
+  ...gitWorktree, // preserve every other export for the rest of the file's import graph
+  spawnExec: (cmd: string[], opts: { cwd?: string; signal?: AbortSignal }) =>
+    (spawnOverride.impl ?? realSpawnExec)(cmd, opts),
+}))
+
+describe('packageAutobuildDistribution exec failure semantics', () => {
+  afterEach(() => {
+    spawnOverride.impl = undefined // restore real spawn behavior; mandatory, see above
+  })
+
+  test('a failing pack throws with the exit code and the trimmed stderr', async () => {
+    spawnOverride.impl = async () => ({
+      stdout: ' stdout filler ',
+      stderr: 'pack exploded',
+      exitCode: 3,
+    })
+    // The `\S+` wildcard exists only because the `--destination` tmpdir is
+    // random; every other character of the message is pinned.
+    await expect(packageAutobuildDistribution()).rejects.toThrow(
+      /^bun pm pack --ignore-scripts --destination \S+ exited 3: pack exploded$/,
+    )
+  })
+
+  test('with empty stderr the message falls back to the trimmed stdout', async () => {
+    spawnOverride.impl = async () => ({ stdout: '  noisy stdout  ', stderr: '', exitCode: 7 })
+    await expect(packageAutobuildDistribution()).rejects.toThrow(/exited 7: noisy stdout$/)
   })
 })

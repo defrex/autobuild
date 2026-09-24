@@ -225,10 +225,13 @@ export function collectUnclaimedObservations(input: {
 
 /** The unclaimed-observation count from build digests and the repository
  * journal alone (AUT-487): the same reduce/claim/count the store-reading scan
- * performs, with no per-build history reads. The dashboards consume this
- * directly — the count is all they display — while the digest pressure
- * evaluation of AUT-521 and `scanUnclaimedObservations` cover the harvest
- * gate and the packet scan. Occurrences are keyed `{build, seq}`; payload ids
+ * performs, with no per-build history reads. The operator query consumes this
+ * directly, and the terminal dashboards consume it through
+ * `sampleUnclaimedObservationCount` (AUT-524), while `scanUnclaimedObservations`
+ * keeps the full-scan shape its remaining callers depend on (the harvest
+ * runner's packet scan — the only source of observation payloads — and its
+ * gate re-confirmation; the dispatcher's harvest-launch gate itself evaluates
+ * from digests, AUT-521). Occurrences are keyed `{build, seq}`; payload ids
  * are not assumed globally unique. */
 export function unclaimedObservationCount(input: {
   digests: Map<string, BuildDigest>
@@ -242,6 +245,29 @@ export function unclaimedObservationCount(input: {
     }
   }
   return count
+}
+
+/** The terminal dashboards' observation-pressure sample (AUT-487): build
+ * digests plus the repository journal, reduced to the unclaimed-observation
+ * count. Store traffic is flat in the finished-build count — one journal read
+ * plus one repo-scoped digest read, plus the journal-record probe below.
+ *
+ * Missing-record treatment (AUT-524): a repository whose journal record does
+ * not yet exist has an empty journal by definition, so the probe answers
+ * `[]` instead of letting `getRepoEvents` reject and silently retain a stale
+ * count. The sample writes nothing — a display path must not `ensureRepo` —
+ * mirroring the operator query's missing-record treatment
+ * (operator/query.ts). `scanUnclaimedObservations` keeps its materializing
+ * `ensureRepo` for its remaining callers. */
+export async function sampleUnclaimedObservationCount(
+  store: BuildStore,
+  repo: string,
+): Promise<number> {
+  const [digests, harvestEvents] = await Promise.all([
+    store.getRepoBuildDigests(repo),
+    (async () => ((await store.getRepo(repo)) === null ? [] : store.getRepoEvents(repo)))(),
+  ])
+  return unclaimedObservationCount({ digests, harvestEvents })
 }
 
 /** Raw structured `observation.recorded` envelopes across this repository.
