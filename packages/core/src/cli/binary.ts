@@ -165,12 +165,20 @@ export async function runBinary(
   // A scoped phase process is composed from the build worktree's immutable
   // configuration just like dispatch. Load and select the forge before opening
   // the store so plugin failures cannot partially execute terminal plumbing.
+  // Guest tolerance (AUT-517), always on here: in checkout mode `ab dispatch`
+  // already failed startup if a configured plugin did not resolve, and
+  // origin-mode phase processes only run inside guests — so an unresolvable
+  // bare specifier here can only be the provider-plugin case, which a phase
+  // process (never constructing workspace providers) may skip.
   let forge: Awaited<ReturnType<typeof createForge>>
   try {
     const repoRoot = process.cwd()
     const packageRoot = await resolveMainRepo(repoRoot, spawnExec)
     const config = await loadConfig(join(repoRoot, 'autobuild.toml'))
-    const plugins = await loadPlugins(config.plugins, repoRoot, { packageRoot })
+    const plugins = await loadPlugins(config.plugins, repoRoot, {
+      packageRoot,
+      guest: true,
+    })
     forge = await createForge({
       name: config.forge,
       registry: plugins,

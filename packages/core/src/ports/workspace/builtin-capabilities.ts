@@ -7,28 +7,23 @@
  * the builtin registrations by `plugins/registry.ts`.
  *
  * Import graph discipline: this module imports `config/schema.ts`,
- * `git-worktree.ts`, `vercel-sandbox.ts`, and the remote readiness module;
- * nothing imports it from `schema.ts`, so no cycle exists. The
+ * `git-worktree.ts`, `vercel-sandbox.ts`, and the shared vercel capability
+ * module; nothing imports it from `schema.ts`, so no cycle exists. The
+ * `vercel-sandbox` entry's capabilities are the shared
+ * `VERCEL_SANDBOX_CAPABILITIES` object (AUT-517) — the plugin package
+ * references the same object, so the declarations cannot drift. The
  * construction-site `configRefusal` for git-worktree is set EXPLICITLY here,
  * not copied from the table's parse-site `configRefusalMessage` — the two
  * strings differ by design (the parse-site message adds the remediation
  * clause; the construction-site one does not).
  */
 import { join, resolve } from 'node:path'
-import {
-  BUILTIN_WORKSPACE_PROVIDER_CONFIG,
-  type VercelSandboxConfig,
-  type WorkspaceConfig,
-} from '../../config/schema'
-import { validateRemoteReadiness } from '../../cli/init-readiness-remote'
-import type {
-  WorkspaceProviderCapabilities,
-  WorkspaceReadinessContext,
-} from './provider-capabilities'
+import type { VercelSandboxConfig, WorkspaceConfig } from '../../config/schema'
+import type { WorkspaceProviderCapabilities } from './provider-capabilities'
 import type { CreateWorkspaceProviderOptions } from './create'
 import { GitWorktreeProvider } from './git-worktree'
-import { validateVercelGithubOrigin } from './github-origin'
 import { VercelSandboxProvider } from './vercel-sandbox'
+import { VERCEL_SANDBOX_CAPABILITIES } from './vercel-capabilities'
 import type { WorkspaceProvider } from '../types'
 
 /** The git-worktree construction-site refusal: no remediation clause, unlike
@@ -44,8 +39,6 @@ interface BuiltinWorkspaceProviderDeclaration {
     parsed: unknown,
   ) => WorkspaceProvider | Promise<WorkspaceProvider>
 }
-
-const vercelReadiness = (ctx: WorkspaceReadinessContext) => validateRemoteReadiness(ctx)
 
 const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
   'git-worktree': {
@@ -66,75 +59,7 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
     },
   },
   'vercel-sandbox': {
-    capabilities: {
-      // Parse-time subset comes from the config table; the capability carries
-      // no configRefusal because the provider accepts [workspace.config]
-      // through its schema.
-      ...pickConfigDeclaration('vercel-sandbox'),
-      supportedForges: ['github'],
-      forgeDispatchMessage: 'vercel-sandbox requires the builtin github forge',
-      forgeValidationMessage:
-        'vercel-sandbox supports forge = "github" only; configure GitHub publication before validating',
-      requiredEnv: [
-        {
-          alternatives: [['GITHUB_TOKEN'], ['GH_TOKEN']],
-          dispatchMessage:
-            'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment',
-          validationMessage:
-            'vercel-sandbox publication requires push-capable GITHUB_TOKEN or GH_TOKEN',
-        },
-        {
-          alternatives: [
-            ['VERCEL_OIDC_TOKEN'],
-            ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'],
-          ],
-          validationMessage:
-            'Vercel authentication requires VERCEL_OIDC_TOKEN or the durable VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID set',
-        },
-      ],
-      processEnvOnly: [
-        {
-          name: 'VERCEL_OIDC_TOKEN',
-          message:
-            'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to the Vercel SDK; export it in the launcher environment or configure VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
-        },
-      ],
-      storeRequirements: {
-        constructionMessage:
-          'vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority',
-        storeRefMessage:
-          'vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel',
-        storeTokenMessage: 'vercel-sandbox requires nonempty AB_TOKEN for the hosted Store',
-      },
-      validateOrigin: validateVercelGithubOrigin,
-      originReadFailureMessage: 'vercel-sandbox requires a readable Git origin',
-      guestEnvNames: (raw) => {
-        const config = raw as VercelSandboxConfig
-        return [
-          ...config.environmentVariables,
-          ...(config.gitUsernameEnv === undefined ? [] : [config.gitUsernameEnv]),
-          ...(config.gitPasswordEnv === undefined ? [] : [config.gitPasswordEnv]),
-        ]
-      },
-      describeEnvironment: (raw, env) => {
-        const config = raw as VercelSandboxConfig
-        return [
-          `Vercel auth: ${env.VERCEL_OIDC_TOKEN ? 'OIDC' : 'access token'}; team=${env.VERCEL_TEAM_ID ?? '(linked)'}; project=${env.VERCEL_PROJECT_ID ?? '(linked)'}`,
-          `Private clone variables: ${
-            config.gitUsernameEnv === undefined
-              ? '(public repository)'
-              : `${config.gitUsernameEnv}, ${config.gitPasswordEnv}`
-          }`,
-          `Guest environment variable names: ${config.environmentVariables.join(', ') || '(none)'}`,
-          `Runtime provisioning names: ${
-            Object.keys(config.runtimeProvisioning ?? {})
-              .sort()
-              .join(', ') || '(none)'
-          }`,
-        ]
-      },
-      validateReadiness: vercelReadiness,
-    },
+    capabilities: VERCEL_SANDBOX_CAPABILITIES,
     builtinFactory(_config, opts, parsed) {
       // storeRef/storeToken are guaranteed present: the pre-split
       // storeRequirements check in createWorkspaceProvider ran before
@@ -153,22 +78,6 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
       })
     },
   },
-}
-
-/** The parse-time declaration subset from the config table, without the
- * parse-site refusal text (which never belongs on the capability). */
-function pickConfigDeclaration(name: string): WorkspaceProviderCapabilities {
-  const declaration = BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(name)
-  if (declaration === undefined) return {}
-  return {
-    ...(declaration.configSchema !== undefined ? { configSchema: declaration.configSchema } : {}),
-    ...(declaration.requireRuntimeProvisioning === true
-      ? { requireRuntimeProvisioning: true }
-      : {}),
-    ...(declaration.sandboxForbiddenEnv !== undefined
-      ? { sandboxForbiddenEnv: declaration.sandboxForbiddenEnv }
-      : {}),
-  }
 }
 
 /** The FULL capability object of a builtin workspace provider, `undefined`

@@ -136,7 +136,15 @@ export async function runGuestReadinessProbe(opts: {
   let runtimes: RuntimeRegistry
   try {
     const packageRoot = await resolveMainRepo(opts.repo, opts.exec ?? spawnExec)
-    const plugins = await loadPlugins(config.plugins, opts.repo, { packageRoot })
+    // This function IS the guest probe (AUT-517): it runs inside the
+    // disposable environment and never constructs workspace providers, so a
+    // configured provider plugin the guest cannot resolve is skipped with a
+    // notice instead of failing readiness. The host-side validateInitReadiness
+    // sites stay strict.
+    const plugins = await loadPlugins(config.plugins, opts.repo, {
+      packageRoot,
+      guest: true,
+    })
     runtimes = await materializePluginRuntimes(
       opts.runtimes ?? createProductionRuntimes().runtimes,
       plugins,

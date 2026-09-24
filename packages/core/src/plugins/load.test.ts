@@ -256,4 +256,125 @@ describe('loadPlugins', () => {
       name: 'proto-plugin',
     })
   })
+
+  test('a plugin re-registering a builtin workspace provider is skipped, not fatal (AUT-517)', async () => {
+    const repo = await fixture()
+    await write(
+      join(repo, 'dup-provider.ts'),
+      `export default { name: 'dup-provider', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': { factory: () => { throw new Error('never constructed') }, capabilities: {} } } }\n`,
+    )
+    const diagnosis = await diagnosePlugins(['./dup-provider.ts'], repo)
+    expect(diagnosis.healthy).toBe(true)
+    expect(diagnosis.reports[0]).toMatchObject({
+      status: 'skipped',
+      stage: 'registration',
+      pluginName: 'dup-provider',
+    })
+    expect(diagnosis.reports[0]?.notice).toContain('dup-provider')
+    expect(diagnosis.reports[0]?.notice).toContain('vercel-sandbox')
+    // Registry unchanged: the builtin keeps serving the name through its
+    // host-owned factory.
+    const registration = diagnosis.registry.workspaceProviders.get('vercel-sandbox')
+    expect(registration?.owner).toEqual({ kind: 'builtin', name: 'autobuild' })
+    expect(typeof registration?.builtinFactory).toBe('function')
+    expect(registration?.factory).toBeUndefined()
+  })
+
+  test('loadPlugins announces a skipped plugin through the notice channel and continues', async () => {
+    const repo = await fixture()
+    await write(
+      join(repo, 'dup-provider.ts'),
+      `export default { name: 'dup-provider', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': () => ({}) } }\n`,
+    )
+    await write(
+      join(repo, 'good.ts'),
+      `export default { name: 'good', apiVersion: '^1.0.0', forges: { gitlab: () => ({}) } }\n`,
+    )
+    const notices: string[] = []
+    const registry = await loadPlugins(['./dup-provider.ts', './good.ts'], repo, {
+      onNotice: (line) => notices.push(line),
+    })
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('skipping it')
+    expect(registry.forges.get('gitlab')?.owner).toEqual({ kind: 'plugin', name: 'good' })
+  })
+
+  test('a plugin-vs-plugin workspace-provider collision still throws', async () => {
+    const repo = await fixture()
+    await write(
+      join(repo, 'first.ts'),
+      `export default { name: 'first', apiVersion: '^1.0.0', workspaceProviders: { 'acme-sandbox': () => ({}) } }\n`,
+    )
+    await write(
+      join(repo, 'second.ts'),
+      `export default { name: 'second', apiVersion: '^1.0.0', workspaceProviders: { 'acme-sandbox': () => ({}) } }\n`,
+    )
+    await expect(loadPlugins(['./first.ts', './second.ts'], repo)).rejects.toThrow(
+      /workspace provider adapter "acme-sandbox" from plugin "second" collides with plugin "first"/,
+    )
+  })
+
+  test('a manifest mixing a builtin provider name with another colliding port still throws', async () => {
+    const repo = await fixture()
+    // The duplicate-skip rule is all-or-nothing: one extra colliding port
+    // means the module cannot be skipped atomically, so registration throws.
+    await write(
+      join(repo, 'mixed.ts'),
+      `export default { name: 'mixed', apiVersion: '^1.0.0', workspaceProviders: { 'vercel-sandbox': () => ({}) }, forges: { github: () => ({}) } }\n`,
+    )
+    await expect(loadPlugins(['./mixed.ts'], repo)).rejects.toThrow(
+      /workspace provider adapter "vercel-sandbox" from plugin "mixed" collides with builtin adapter/,
+    )
+  })
+
+  test('guest tolerance skips an unresolvable package specifier but stays fail-closed otherwise', async () => {
+    const repo = await fixture()
+    const diagnosis = await diagnosePlugins(['@defrex/autobuild-absent-provider'], repo, {
+      guest: true,
+    })
+    expect(diagnosis.healthy).toBe(true)
+    expect(diagnosis.reports[0]).toMatchObject({
+      module: '@defrex/autobuild-absent-provider',
+      status: 'skipped',
+      stage: 'resolution',
+      resolutionKind: 'package',
+    })
+    expect(diagnosis.reports[0]?.notice).toContain('guests never construct workspace providers')
+
+    // loadPlugins announces the skip through the notice channel and continues.
+    const loadNotices: string[] = []
+    await loadPlugins(['@defrex/autobuild-absent-provider'], repo, {
+      guest: true,
+      onNotice: (line) => loadNotices.push(line),
+    })
+    expect(loadNotices).toHaveLength(1)
+    expect(loadNotices[0]).toContain('@defrex/autobuild-absent-provider')
+    expect(loadNotices[0]).toContain('guests never construct workspace providers')
+
+    // Repo-path specifiers stay fail-closed in guests: a missing checkout file
+    // is a real misconfiguration, not a provider the guest need not load.
+    await expect(loadPlugins(['./absent-plugin.ts'], repo, { guest: true })).rejects.toThrow(
+      /absent-plugin\.ts.*could not be resolved/,
+    )
+
+    // Post-resolution failures stay fail-closed in guests.
+    await write(join(repo, 'guest-throws.ts'), `throw new Error('guest boom')\n`)
+    await expect(loadPlugins(['./guest-throws.ts'], repo, { guest: true })).rejects.toThrow(
+      /guest-throws\.ts.*guest boom/,
+    )
+    await write(
+      join(repo, 'guest-future.ts'),
+      `export default { name: 'guest-future', apiVersion: '^2.0.0' }\n`,
+    )
+    await expect(loadPlugins(['./guest-future.ts'], repo, { guest: true })).rejects.toThrow(
+      /guest-future\.ts.*\^2\.0\.0.*1\.6\.0/,
+    )
+  })
+
+  test('guest tolerance is off by default', async () => {
+    const repo = await fixture()
+    await expect(loadPlugins(['@defrex/autobuild-absent-provider'], repo)).rejects.toThrow(
+      /could not be resolved/,
+    )
+  })
 })
