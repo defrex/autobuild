@@ -35,7 +35,14 @@ function packageNameOf(specifier: string): string {
  * fatal, uncatchable process exit (AUT-587). Gating on a disk hit keeps the
  * installer unreachable: per the planner-verified Bun 1.4 behavior, a
  * resolver call whose base chain holds the package on disk resolves from
- * disk and never touches the installer. */
+ * disk and never touches the installer.
+ *
+ * Termination (AUT-597): `root` is resolved to an absolute path before the
+ * walk begins, so a relative candidate root — origin mode passes the
+ * non-filesystem token `'<hosted-dispatcher>'` — cannot make `dirname` a
+ * fixed point and spin the loop forever. The `parent === current` guard
+ * backstops the fixed point (`dirname('/') === '/'`) should the loop's
+ * start point ever change. */
 function diskNodeModulesDirectory(specifier: string, root: string): string | undefined {
   const pkg = packageNameOf(specifier)
   let current = resolve(root)
