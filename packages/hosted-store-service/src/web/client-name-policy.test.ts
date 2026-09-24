@@ -24,6 +24,20 @@ describe('clientNameProblem', () => {
     expect(problem).toContain('at most 64')
   })
 
+  test('cap counts code points: 33 emoji are 33 characters and pass', () => {
+    // 33 astral emoji measure 66 UTF-16 code units but only 33 code points;
+    // the cap is on characters (code points), so this name is accepted.
+    expect(clientNameProblem('🤖'.repeat(33))).toBeNull()
+  })
+
+  test('rejects names past the cap even when they fit in UTF-16 units', () => {
+    // 64 ASCII 'a' plus one trailing emoji is 65 code points (66 UTF-16 code
+    // units) — over the cap despite measuring 66 units either way, proving
+    // the count is by code point and nothing loosened past 64.
+    const problem = clientNameProblem(`${'a'.repeat(CLIENT_NAME_MAX_LENGTH)}🤖`)
+    expect(problem).toContain('at most 64')
+  })
+
   test('rejects C0 and C1 control characters', () => {
     expect(clientNameProblem('acme\u0000')).toContain('control')
     expect(clientNameProblem('ac\u0001me')).toContain('control')
