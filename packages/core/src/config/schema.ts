@@ -262,9 +262,14 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
  * parse-site one, so it is NOT copied from this table.
  */
 export interface WorkspaceProviderConfigDeclaration {
-  /** Strict schema applied to `[workspace.config]`. When absent, this
-   * declaration must carry `configRefusalMessage` for nonempty provider
-   * config to be refused; providers absent from
+  /** Strict schema applied to `[workspace.config]`. A builtin declaration
+   * carries EXACTLY ONE of `configSchema` / `configRefusalMessage`: when the
+   * schema is absent, the declaration must carry `configRefusalMessage` for
+   * nonempty provider config to be refused (the neither-key side is pinned by
+   * the AUT-565 test in config.test.ts), and carrying BOTH is forbidden —
+   * `configSchema`'s superRefine checks `configRefusalMessage` first, so the
+   * refusal branch would win and the schema would silently never apply (the
+   * both-keys side is pinned by its sibling test). Providers absent from
    * `BUILTIN_WORKSPACE_PROVIDER_CONFIG` are plugin-owned pass-throughs and
    * are never refused here. */
   configSchema?: z.ZodType
