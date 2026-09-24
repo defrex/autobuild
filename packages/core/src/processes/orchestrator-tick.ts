@@ -24,6 +24,7 @@ import { ORCHESTRATOR_MIN_TURN_SECONDS, type Config } from '../config/schema'
 import { compileEventGlobs } from '../events/globs'
 import type { TicketSource } from '../ports/types'
 import { buildRegistry, type OperatorToolRegistry } from '../operator/registry'
+import type { OperatorSandboxService } from '../operator/sandbox'
 import { ticketBackendFromSource } from '../operator/ticket-source-backend'
 import { reduceSession } from '../store/session-reducer'
 import { reduceBuild } from '../kernel/reducer'
@@ -54,6 +55,12 @@ export interface OrchestratorTickOptions {
   tickets: TicketSource
   /** Injected language model; defaults to the configured gateway model. */
   model?: LanguageModel
+  /** The operator-sandbox backend (AUT-584): when supplied, the tick's turns
+   * serve the `sandbox.*` tools under the same configuration/approval gating
+   * every binding applies. Absent (the compatibility case) → the registry
+   * filters them from advertisement AND dispatch. The origin-mode dispatcher
+   * builds it from its own wired provider; every other caller omits it. */
+  sandbox?: OperatorSandboxService
   /** Remaining tick budget in seconds at step entry; every turn's deadline
    * is recomputed from this against the clock, so N sessions draw down the
    * SAME budget instead of each getting a fresh full slice (f_9c1161ae).
@@ -77,6 +84,7 @@ export function orchestratorTickRegistry(options: OrchestratorTickOptions): Oper
   return buildRegistry({
     store: options.store,
     tickets: ticketBackendFromSource({ source: options.tickets, config: options.config }),
+    ...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
     clock: options.clock,
     allowedRepo: options.repo,
   })

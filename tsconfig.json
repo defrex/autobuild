@@ -21,6 +21,7 @@
       "@defrex/autobuild/store-adapter": ["./packages/core/src/store/adapter.ts"],
       "@defrex/autobuild/testing": ["./packages/core/src/testing/index.ts"],
       "@defrex/autobuild/operator": ["./packages/core/src/operator/index.ts"],
+      "@defrex/autobuild/operator-sandbox-host": ["./packages/core/src/operator/sandbox-host.ts"],
       "@defrex/autobuild/operator-presentation": ["./packages/core/src/operator/presentation.ts"],
       "@defrex/autobuild/hosted-tickets": ["./packages/core/src/ports/tickets/hosted-index.ts"],
       "@defrex/autobuild/ticket-update": ["./packages/core/src/ports/tickets/update.ts"],
