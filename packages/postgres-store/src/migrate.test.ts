@@ -123,7 +123,23 @@ if (testUrl) {
           )
           expect(error).toBeInstanceOf(Error)
           expect((error as Error).message).toContain(MIGRATE_COMMAND)
+          // The version-matched, checksum-mismatched marker is exactly the
+          // shape a checksum-only re-pin leaves deployed databases in
+          // (AUT-548); its diagnostic must name the in-place-edit cause. The
+          // other two scenarios are plain version mismatches and keep the
+          // bare messages.
+          if (scenario.name === 'checksum-mismatched') {
+            expect((error as Error).message).toContain('checksum is mismatched')
+            expect((error as Error).message).toContain(
+              'edited in place without bumping the version',
+            )
+          }
           await expect(migratePostgres(harness.url)).rejects.toThrow('incompatible')
+          if (scenario.name === 'checksum-mismatched') {
+            await expect(migratePostgres(harness.url)).rejects.toThrow(
+              'edited in place without bumping the version',
+            )
+          }
         } finally {
           await sql.close()
           await harness.cleanup()
