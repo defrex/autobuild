@@ -21,7 +21,7 @@ import {
 } from '../ports/workspace/provider-capabilities'
 import { defineEntry, openMap, ownEntries, parseEntry } from '../open-map'
 import { forwardIssues } from '../zod-issues'
-import { displayName, effectiveRuntimeReferences, tomlKey } from './roles'
+import { effectiveRuntimeReferences } from './roles'
 
 // ── Open maps ────────────────────────────────────────────────────────────────
 
