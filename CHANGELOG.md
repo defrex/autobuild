@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#522](https://github.com/defrex/autobuild/pull/522) — Pin the schemaless-builtin-needs-configRefusalMessage rule (AUT-565)
 - [#520](https://github.com/defrex/autobuild/pull/520) — Retry PostgreSQL cached-plan invalidation once per statement
 - [#519](https://github.com/defrex/autobuild/pull/519) — Give repo-scoped finalized stream artifacts an operator download path
 - [#518](https://github.com/defrex/autobuild/pull/518) — Add a prompt-teardown cap to the stream polls twin (AUT-393)
