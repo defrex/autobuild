@@ -427,9 +427,12 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   }) => fx.store.getRepoEvents(fx.repo)
 
   /** The fresh sandbox's seed commit IS the provision-time base head, so a
-   * publishable state requires a real commit on top of it. */
-  const commitChange = (fx: { service: OperatorSandboxService; repo: string }) =>
-    fx.service.exec('ops', {
+   * publishable state requires a real commit on top of it. The operator
+   * parameter selects the sandbox identity the commit runs under; call sites
+   * always pass it explicitly so the targeted identity is visible at each
+   * call, rather than silently falling back to the 'ops' default. */
+  const commitChange = (fx: { service: OperatorSandboxService; repo: string }, operator = 'ops') =>
+    fx.service.exec(operator, {
       repo: fx.repo,
       command: 'echo change >> README.md && git add README.md && git commit -q -m change',
     })
@@ -481,7 +484,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   test('happy path: one push, one branch, never the base, PR against base, journaled fact', async () => {
     const fx = await forgeFx()
     try {
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       const result = await fx.service.publish('ops', {
         repo: fx.repo,
         title: 'Fix login',
@@ -518,7 +521,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   test('open-then-update: a later publish pushes the new head to the same branch and adopts the PR', async () => {
     const fx = await forgeFx()
     try {
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       const first = await fx.service.publish('ops', {
         repo: fx.repo,
         title: 'Fix login',
@@ -597,7 +600,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
       // the checkout's info/exclude, so a pristine sandbox is clean for
       // the untracked-inclusive dirty check.
       await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       const result = await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
       expect(result.sha).toMatch(/^[0-9a-f]{40}$/)
     } finally {
@@ -608,18 +611,13 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   test('a legacy sandbox with an unexcluded provisioning marker gets the reset-required diagnostic, not uncommitted changes (AUT-580)', async () => {
     const fx = await forgeFx()
     try {
-      // Provision through the normal flow, then make a publishable commit. The
-      // commit is issued inline under the scenario's operator ('legacy'): the
-      // describe-level commitChange helper hardcodes 'ops', which would target
-      // a different sandbox identity. A stray commit under the wrong operator
-      // would be inert here — publish's reset-required check (no recorded
-      // baseSha) precedes any head comparison — but the exercise stays under
-      // 'legacy'.
+      // Provision through the normal flow, then make a publishable commit
+      // through the parameterized commitChange helper under the scenario's
+      // operator ('legacy'). A stray commit under the wrong operator would be
+      // inert here — publish's reset-required check (no recorded baseSha)
+      // precedes any head comparison — but the exercise stays under 'legacy'.
       await fx.service.exec('legacy', { repo: fx.repo, command: 'true' })
-      await fx.service.exec('legacy', {
-        repo: fx.repo,
-        command: 'echo change >> README.md && git add README.md && git commit -q -m change',
-      })
+      await commitChange(fx, 'legacy')
       // Pre-existing-environment journal: a second provisioned fact written
       // before baseSha was recorded — operatorState takes .at(-1), so the
       // fresh state carries no baseSha and publish would reach the baseSha
@@ -746,7 +744,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
     const fx = await forgeFx()
     try {
       await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       const capability = fx.provider.orchestratorSandbox
       const originalExec = capability.exec.bind(capability)
       capability.exec = async (handle, request) => {
@@ -822,7 +820,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
     const fx = await forgeFx()
     try {
       await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       const identity = await fx.provider.orchestratorSandbox.describe({
         repo: fx.repo,
         operator: 'ops',
@@ -849,7 +847,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   test('failure paths journal publish-failed with the stage and a redacted message', async () => {
     const fx = await forgeFx()
     try {
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       process.env.GITHUB_TOKEN = 'super-secret-token'
       try {
         fx.provider.setPublicationFailure(
@@ -889,7 +887,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
   test('the guest environment stays credential-free during a publish attempt', async () => {
     const fx = await forgeFx()
     try {
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       process.env.GITHUB_TOKEN = 'super-secret-token'
       try {
         await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
@@ -929,7 +927,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
       expect(newBaseSha).toMatch(/^[0-9a-f]{40}$/)
       expect(newBaseSha).not.toBe(firstBaseSha)
       // A publish from the fresh checkout is then accepted.
-      await commitChange(fx)
+      await commitChange(fx, 'ops')
       const result = await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
       expect(result.sha).toMatch(/^[0-9a-f]{40}$/)
     } finally {
