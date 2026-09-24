@@ -194,7 +194,13 @@ export const sessionDepositsResponseSchema = z.object({
 export const buildDigestWireSchema = z.object({
   slug: z.string().min(1),
   terminal: z.enum(['done', 'aborted']).optional(),
-  observations: z.array(z.number().int().positive()),
+  observations: z.array(
+    z.object({
+      seq: z.number().int().positive(),
+      ts: z.string().min(1),
+    }),
+  ),
+  merged: z.string().min(1).optional(),
 })
 export const buildDigestListSchema = z.array(buildDigestWireSchema)
 
