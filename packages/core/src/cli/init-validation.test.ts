@@ -483,6 +483,55 @@ readyState = "ready"
     expect(calls).toEqual(['runtime', 'listBuilds', 'close'])
   })
 
+  test('fails readiness for an unresolvable configured plugin when the caller opts into host strictness', async () => {
+    // Host-side mirror of the tolerance test above (AUT-561): same impossible
+    // specifier, but the git-worktree validateInitReadiness call site passes
+    // `guest: false`, so a resolution-stage skip must fail the
+    // `configuration and plugins` check instead of degrading to a notice.
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-strict-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `plugins = ["@defrex/autobuild-definitely-not-a-plugin"]
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const calls: string[] = []
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example' },
+      guest: false,
+      runtimes: {
+        fake: {
+          runner,
+          servesModels: [],
+          initUsable: async () => {
+            calls.push('runtime')
+            return { usable: true, reason: 'authenticated' }
+          },
+        },
+      },
+      openStore: () => readOnlyStore(calls),
+    })
+    const plugins = report.checks.find((check) => check.name === 'configuration and plugins')
+    // Strictness is fatal at the host seam: the check fails, names the module
+    // and the same loader remediation text, and the probe stops before any
+    // side effects.
+    expect(plugins?.status).toBe('fail')
+    expect(plugins?.detail).toContain('@defrex/autobuild-definitely-not-a-plugin')
+    expect(plugins?.detail).toContain('could not be resolved from')
+    expect(plugins?.detail).toContain(
+      'install or correct the configured plugin in this environment',
+    )
+    // The runtime probe and the Store read never run.
+    expect(calls).toEqual([])
+  })
+
   test('keeps a repo-path plugin resolution failure fail-closed in the guest probe', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-fail-'))
     roots.push(repo)
