@@ -340,6 +340,25 @@ describe('parseConfig — defaults', () => {
     }
   })
 
+  test('every builtin declaration without configSchema carries configRefusalMessage', () => {
+    // The WorkspaceProviderConfigDeclaration JSDoc states the rule: a
+    // schemaless declaration must carry configRefusalMessage for nonempty
+    // [workspace.config] to be refused. The table is host-controlled and
+    // plugin-inaccessible, so the pairing can only drift in an Autobuild PR —
+    // this pin makes that PR fail here instead of silently passing operator
+    // config through.
+    for (const [name, declaration] of BUILTIN_WORKSPACE_PROVIDER_CONFIG) {
+      if (declaration.configSchema === undefined) {
+        expect(
+          declaration.configRefusalMessage,
+          `builtin workspace provider "${name}" declares neither configSchema nor ` +
+            'configRefusalMessage — a schemaless builtin must carry configRefusalMessage ' +
+            'to refuse [workspace.config] (see WorkspaceProviderConfigDeclaration)',
+        ).toBeTruthy()
+      }
+    }
+  })
+
   test('vercel-sandbox accepts only universal managed-image names, tags, and digests', () => {
     const imageConfig = (image: string) =>
       parseConfig(
