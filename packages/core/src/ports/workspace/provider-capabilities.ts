@@ -78,8 +78,10 @@ export interface GuestProbeReport {
 // ── Capability declarations ──────────────────────────────────────────────────
 
 /** One required-environment group: alternatives are tried in order, and one
- * is satisfied when EVERY named variable in it is set nonempty. A site that
- * performs no check today omits its message field. */
+ * is satisfied when EVERY named variable in it is set nonempty. The group must
+ * carry at least one message — a group with neither `dispatchMessage` nor
+ * `validationMessage` is rejected at manifest parse (AUT-554), because both
+ * enforcement sites skip it and the declaration would never be enforced. */
 export interface WorkspaceProviderEnvRequirement {
   alternatives: readonly (readonly string[])[]
   /** Verbatim dispatch-preflight text (`cli/dispatch.ts`). */
