@@ -357,6 +357,70 @@ describe('parseConfig — defaults', () => {
     }
   })
 
+  // Complement of the AUT-565 pin above, which covers the NEITHER-key side
+  // of the pairing; this covers the BOTH-keys side (AUT-572).
+  test('no builtin declaration carries both configSchema and configRefusalMessage', () => {
+    // The WorkspaceProviderConfigDeclaration JSDoc states the rule: a builtin
+    // declaration carries exactly one of configSchema / configRefusalMessage.
+    // `configSchema`'s superRefine in config/schema.ts checks
+    // `configRefusalMessage` BEFORE `configSchema`, so a declaration with
+    // both keys would take the refusal branch and its schema would silently
+    // never apply — dead schema no operator or test would notice. The table
+    // is host-controlled and plugin-inaccessible, so the pairing can only
+    // drift in an Autobuild PR — this pin makes that PR fail here instead of
+    // shipping a builtin whose schema never runs. A future provider that
+    // legitimately needs schema-validated shape AND refusal of all nonempty
+    // config is a deliberate design decision to record: it requires deciding
+    // the superRefine branch ordering explicitly, not adding a second key to
+    // the table.
+    for (const [name, declaration] of BUILTIN_WORKSPACE_PROVIDER_CONFIG) {
+      if (declaration.configSchema !== undefined) {
+        expect(
+          declaration.configRefusalMessage,
+          `builtin workspace provider "${name}" declares both configSchema and ` +
+            'configRefusalMessage — the superRefine in config/schema.ts checks ' +
+            'configRefusalMessage first, so the refusal branch would win and the ' +
+            "declaration's configSchema would silently never apply (dead schema; see " +
+            'WorkspaceProviderConfigDeclaration). A provider needing both semantics is a ' +
+            'deliberate design decision to record, not a table edit — decide the ' +
+            'superRefine ordering explicitly first',
+        ).toBeUndefined()
+      }
+    }
+  })
+
+  // Complement of the AUT-565 pin above, which covers the NEITHER-key side
+  // of the pairing; this covers the BOTH-keys side (AUT-572).
+  test('no builtin declaration carries both configSchema and configRefusalMessage', () => {
+    // The WorkspaceProviderConfigDeclaration JSDoc states the rule: a builtin
+    // declaration carries exactly one of configSchema / configRefusalMessage.
+    // `configSchema`'s superRefine in config/schema.ts checks
+    // `configRefusalMessage` BEFORE `configSchema`, so a declaration with
+    // both keys would take the refusal branch and its schema would silently
+    // never apply — dead schema no operator or test would notice. The table
+    // is host-controlled and plugin-inaccessible, so the pairing can only
+    // drift in an Autobuild PR — this pin makes that PR fail here instead of
+    // shipping a builtin whose schema never runs. A future provider that
+    // legitimately needs schema-validated shape AND refusal of all nonempty
+    // config is a deliberate design decision to record: it requires deciding
+    // the superRefine branch ordering explicitly, not adding a second key to
+    // the table.
+    for (const [name, declaration] of BUILTIN_WORKSPACE_PROVIDER_CONFIG) {
+      if (declaration.configSchema !== undefined) {
+        expect(
+          declaration.configRefusalMessage,
+          `builtin workspace provider "${name}" declares both configSchema and ` +
+            'configRefusalMessage — the superRefine in config/schema.ts checks ' +
+            'configRefusalMessage first, so the refusal branch would win and the ' +
+            "declaration's configSchema would silently never apply (dead schema; see " +
+            'WorkspaceProviderConfigDeclaration). A provider needing both semantics is a ' +
+            'deliberate design decision to record, not a table edit — decide the ' +
+            'superRefine ordering explicitly first',
+        ).toBeUndefined()
+      }
+    }
+  })
+
   test('the git-worktree parse-site refusal still rejects any [workspace.config], including provisioning', () => {
     expect(() =>
       parseConfig(

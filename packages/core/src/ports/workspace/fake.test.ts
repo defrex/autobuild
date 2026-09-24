@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -162,5 +162,162 @@ describe('FakeWorkspaceProvider', () => {
     await expect(provider.release(handle)).rejects.toThrow('locked')
     expect(provider.releases).toEqual([])
     expect(provider.isActive(handle.ref)).toBe(true)
+  })
+
+  test('the build-path publication discriminator is untouched; the sandbox seam exists', () => {
+    const provider = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
+    // `publication` is the dispatcher's remote-workspace discriminator: it
+    // must stay absent on the fake so dispatcher-test builds classify local.
+    expect((provider as unknown as { publication?: unknown }).publication).toBeUndefined()
+    expect(provider.sandboxPublication).toBeDefined()
+  })
+})
+
+describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
+  let tmp: string
+  let source: string
+  let provider: FakeWorkspaceProvider
+
+  const git = async (cwd: string, args: string[]) => {
+    const proc = Bun.spawn(['git', ...args], {
+      cwd,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { exitCode: exitCode ?? -1, stdout, stderr }
+  }
+
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), 'ab-fake-sandbox-'))
+    source = join(tmp, 'source')
+    await mkdir(source, { recursive: true })
+    await writeFile(join(source, 'README.md'), 'hello\n')
+    provider = new FakeWorkspaceProvider({
+      sandboxRoot: join(tmp, 'sandboxes'),
+      envSource: { PATH: process.env.PATH ?? '' },
+    })
+  })
+
+  afterEach(async () => {
+    await rm(tmp, { recursive: true, force: true })
+  })
+
+  const sandbox = async () =>
+    provider.orchestratorSandbox.ensure({ repo: source, operator: 'ops', baseBranch: 'main' })
+
+  test('a fresh provision yields a real git checkout hosting the three publish checks', async () => {
+    const identity = await sandbox()
+    const head = await git(identity.workspacePath, ['rev-parse', 'HEAD'])
+    expect(head.exitCode).toBe(0)
+    expect(head.stdout.trim()).toMatch(/^[0-9a-f]{40}$/)
+    const status = await git(identity.workspacePath, ['status', '--porcelain'])
+    expect(status.exitCode).toBe(0)
+    // The provisioning marker is excluded in info/exclude, so the checkout
+    // is clean for the publish service's untracked-inclusive dirty check.
+    expect(status.stdout.trim()).toBe('')
+    const base = await git(identity.workspacePath, ['rev-parse', 'refs/heads/main'])
+    expect(base.exitCode).toBe(0)
+    expect(base.stdout.trim()).toBe(head.stdout.trim())
+  })
+
+  test('baseSha is present on the fresh identity and absent on reuse', async () => {
+    const fresh = await sandbox()
+    expect(fresh.baseSha).toMatch(/^[0-9a-f]{40}$/)
+    const reused = await sandbox()
+    expect(reused.baseSha).toBeUndefined()
+    expect(reused.environmentId).toBe(fresh.environmentId)
+  })
+
+  test('a git-repository source provisions with its base-branch head as baseSha', async () => {
+    await git(source, ['init', '-q', '-b', 'main'])
+    await git(source, ['config', 'user.email', 't@t.invalid'])
+    await git(source, ['config', 'user.name', 't'])
+    await writeFile(join(source, 'README.md'), 'repo source\n')
+    await git(source, ['add', '-A'])
+    await git(source, ['commit', '-q', '-m', 'seed'])
+    const expected = (await git(source, ['rev-parse', 'refs/heads/main'])).stdout.trim()
+    const identity = await sandbox()
+    expect(identity.baseSha).toBe(expected)
+    expect((await git(identity.workspacePath, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(expected)
+  })
+
+  test('reset re-provisions and refreshes baseSha', async () => {
+    const first = await sandbox()
+    await provider.orchestratorSandbox.release({
+      repo: source,
+      operator: 'ops',
+      environmentId: first.environmentId,
+    })
+    const second = await sandbox()
+    expect(second.baseSha).toMatch(/^[0-9a-f]{40}$/)
+  })
+
+  test('every recorded guest environment holds only PATH and forwarded names', async () => {
+    const recording = new FakeWorkspaceProvider({
+      sandboxRoot: join(tmp, 'sandboxes-fwd'),
+      sandboxEnvironmentVariables: ['MY_TOOL_CONFIG'],
+      sandboxSetupCommand: 'true',
+      envSource: {
+        PATH: process.env.PATH ?? '',
+        MY_TOOL_CONFIG: 'tool-value',
+        AB_TOKEN: 'host-secret',
+      },
+    })
+    await recording.orchestratorSandbox.ensure({
+      repo: source,
+      operator: 'ops',
+      baseBranch: 'main',
+    })
+    const identity = await recording.orchestratorSandbox.describe({
+      repo: source,
+      operator: 'ops',
+    })
+    await recording.orchestratorSandbox.exec(identity, { command: 'true' })
+    const { commandId } = await recording.orchestratorSandbox.start(identity, {
+      command: 'true',
+    })
+    await recording.orchestratorSandbox.wait(identity, { commandId, waitSeconds: 0 })
+    expect(recording.sandboxExecEnvironments.length).toBeGreaterThanOrEqual(3)
+    const ops = new Set(recording.sandboxExecEnvironments.map((entry) => entry.op))
+    expect(ops).toEqual(new Set(['exec', 'start', 'setup']))
+    for (const entry of recording.sandboxExecEnvironments) {
+      expect(Object.keys(entry.env).sort()).toEqual(['MY_TOOL_CONFIG', 'PATH'])
+      expect(entry.env.PATH).not.toBe('')
+    }
+  })
+
+  test('sandboxPublication journals pushes, derives isPublished, ignores ref, fails on injection, refuses the base branch', async () => {
+    const identity = await sandbox()
+    const sha = (await git(identity.workspacePath, ['rev-parse', 'HEAD'])).stdout.trim()
+    const publication = provider.sandboxPublication!
+    expect(await publication.isPublished!({ sha, branch: 'ab/orch-ops-abc12345' })).toBe(false)
+    await publication.publish({ ref: identity.environmentId, sha, branch: 'ab/orch-ops-abc12345' })
+    expect(provider.publications).toEqual([
+      { ref: identity.environmentId, sha, branch: 'ab/orch-ops-abc12345' },
+    ])
+    expect(
+      await publication.isPublished!({
+        ref: identity.environmentId,
+        sha,
+        branch: 'ab/orch-ops-abc12345',
+      }),
+    ).toBe(true)
+
+    provider.setPublicationFailure(new Error('push refused'))
+    await expect(
+      publication.publish({ ref: identity.environmentId, sha, branch: 'ab/orch-ops-other999' }),
+    ).rejects.toThrow('push refused')
+    provider.setPublicationFailure(null)
+
+    await expect(
+      publication.publish({ ref: identity.environmentId, sha, branch: 'main' }),
+    ).rejects.toThrow('base branch')
+    expect(provider.publications).toHaveLength(1)
   })
 })

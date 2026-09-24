@@ -2581,6 +2581,30 @@ describe('operator sandbox capability', () => {
     expect(h.sandbox.commands.length).toBeGreaterThan(refreshCommands)
   })
 
+  test('baseSha rides on the fresh provision and is omitted on reuse', async () => {
+    const h = harness()
+    const fresh = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(fresh.baseSha).toBe(SHA)
+    const reused = await h.provider.orchestratorSandbox.ensure({
+      repo: '/repo',
+      operator: OPERATOR,
+      baseBranch: 'main',
+    })
+    expect(reused.baseSha).toBeUndefined()
+  })
+
+  test('sandboxPublication is the same object as publication on a freshly constructed provider', async () => {
+    // Constructed here, not reused from a harness field: a field-initializer
+    // alias would capture `undefined` and fail exactly this assertion
+    // (the constructor-assignment regression).
+    const h = harness()
+    expect(h.provider.sandboxPublication).toBe(h.provider.publication)
+  })
+
   test('exec is bounded by its own deadline, re-issuing interrupted long-polls', async () => {
     const h = harness()
     await h.provider.orchestratorSandbox.ensure({

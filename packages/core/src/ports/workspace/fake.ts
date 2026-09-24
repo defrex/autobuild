@@ -28,7 +28,12 @@ import {
   type SandboxEnvironmentIdentity,
   type SandboxWaitResult,
 } from './operator-sandbox'
-import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
+import type {
+  WorkspaceHandle,
+  WorkspaceProvider,
+  WorkspaceProvisionResult,
+  WorkspacePublication,
+} from '../types'
 
 export interface ProvisionRecord {
   repo: string
@@ -51,10 +56,23 @@ async function pathExists(path: string): Promise<boolean> {
 export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly name = 'fake'
   readonly orchestratorSandbox: OperatorSandboxExecution
+  readonly sandboxPublication: WorkspacePublication
 
   /** Journals — public so tests assert directly on call order and args. */
   readonly provisions: ProvisionRecord[] = []
   readonly releases: WorkspaceHandle[] = []
+  /** Journal — per-spawn guest environments, recorded by the operator-sandbox
+   * capability's spawn sites (`exec`, `start`, and the setup-command spawn)
+   * just before the child launches. Credential-freeness is asserted against
+   * these records directly: what the provider constructed, not what a shell
+   * reported. */
+  readonly sandboxExecEnvironments: Array<{
+    op: 'exec' | 'start' | 'setup'
+    command: string
+    env: Record<string, string>
+  }> = []
+  /** Journal — sandbox publication pushes, in call order. */
+  readonly publications: Array<{ ref: string; sha: string; branch: string }> = []
 
   private readonly root: string
   private readonly initialBase: WorkspaceBase
@@ -68,6 +86,12 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   /** Durable fake branch heads survive release, like real Git branches. */
   private readonly branchHeads = new Map<string, string>()
   private readonly failures = new Map<'provision' | 'release', Error>()
+  /** Injectable publication failure: while set, `sandboxPublication.publish`
+   * throws it on every call (pass `null` to clear). */
+  private publicationFailure: Error | null = null
+  /** environmentId → the base branch the fresh provision selected, so the
+   * publication capability can refuse the base branch as defense in depth. */
+  private readonly sandboxBaseBranches = new Map<string, string>()
 
   constructor(
     opts: {
@@ -102,6 +126,30 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       stop: () => Promise.resolve({ outcome: 'stopped' as const }),
       release: (input) => this.sandboxRelease(input),
     }
+    this.sandboxPublication = {
+      isPublished: (input) =>
+        Promise.resolve(
+          this.publications.some(
+            (entry) => entry.branch === input.branch && entry.sha === input.sha,
+          ),
+        ),
+      publish: (input) => this.publishSandbox(input),
+    }
+  }
+
+  /** Injectable publication failure: while set, the sandbox publication push
+   * throws `error` on every call (pass `null` to clear). */
+  setPublicationFailure(error: Error | null): void {
+    this.publicationFailure = error
+  }
+
+  private async publishSandbox(input: { ref: string; sha: string; branch: string }): Promise<void> {
+    if (this.publicationFailure) throw this.publicationFailure
+    const baseBranch = this.sandboxBaseBranches.get(input.ref)
+    if (baseBranch !== undefined && input.branch === baseBranch) {
+      throw new Error(`publication refuses the base branch ${baseBranch}`)
+    }
+    this.publications.push({ ...input })
   }
 
   /**
@@ -252,7 +300,55 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     await rm(identity.workspacePath, { recursive: true, force: true })
     await cp(input.repo, identity.workspacePath, { recursive: true })
     try {
+      // Real git checkout (publish-service parity): the three git checks the
+      // publish service runs through capability.exec (rev-parse, status,
+      // merge-base) must work against the fake exactly as against the real
+      // providers, which serve a genuine checkout. A plain fixture source is
+      // not a git repository, so the fake initializes one from the base
+      // branch and makes a seed commit; a source that already IS a git
+      // repository is used as-is. baseSha is the base branch's head after
+      // provisioning — the same value the real providers resolve.
+      if (!(await pathExists(join(identity.workspacePath, '.git')))) {
+        await this.runSandboxGit(identity.workspacePath, ['init', '-b', input.baseBranch])
+        await this.runSandboxGit(identity.workspacePath, ['config', 'user.name', 'autobuild[bot]'])
+        await this.runSandboxGit(identity.workspacePath, [
+          'config',
+          'user.email',
+          'autobuild[bot]@users.noreply.github.com',
+        ])
+        await this.runSandboxGit(identity.workspacePath, ['add', '-A'])
+        const committed = await this.runSandboxGit(identity.workspacePath, [
+          'commit',
+          '--allow-empty',
+          '-q',
+          '-m',
+          'sandbox seed',
+        ])
+        if (committed.exitCode !== 0) {
+          throw new SandboxOperationError(
+            'provision',
+            `operator sandbox git seed failed: ${committed.stderr.trim() || committed.stdout.trim()}`,
+          )
+        }
+      }
+      const head = await this.runSandboxGit(identity.workspacePath, [
+        'rev-parse',
+        `refs/heads/${input.baseBranch}`,
+      ])
+      if (head.exitCode !== 0 || head.stdout.trim() === '') {
+        throw new SandboxOperationError(
+          'provision',
+          `operator sandbox could not resolve base branch ${input.baseBranch}: ${head.stderr.trim() || head.stdout.trim() || `exit ${head.exitCode}`}`,
+        )
+      }
+      const baseSha = head.stdout.trim()
+      this.sandboxBaseBranches.set(identity.environmentId, input.baseBranch)
       if (this.sandboxSetupCommand !== undefined && this.sandboxSetupCommand.trim() !== '') {
+        this.sandboxExecEnvironments.push({
+          op: 'setup',
+          command: this.sandboxSetupCommand,
+          env: this.sandboxEnv(),
+        })
         const proc = Bun.spawn(['sh', '-c', this.sandboxSetupCommand], {
           cwd: identity.workspacePath,
           stdin: 'ignore',
@@ -272,12 +368,61 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           )
         }
       }
+      // Exclude the provisioning marker (written untracked below) in the
+      // checkout's info/exclude so the publish service's
+      // untracked-inclusive dirty check never counts it as dirt
+      // (f_c748dc6a).
+      const exclude = await this.runSandboxGit(identity.workspacePath, [
+        'rev-parse',
+        '--git-path',
+        'info/exclude',
+      ])
+      if (exclude.exitCode !== 0 || exclude.stdout.trim() === '') {
+        throw new SandboxOperationError(
+          'provision',
+          `operator sandbox could not resolve info/exclude: ${exclude.stderr.trim() || `exit ${exclude.exitCode}`}`,
+        )
+      }
+      const excludePath = resolve(identity.workspacePath, exclude.stdout.trim())
+      await mkdir(dirname(excludePath), { recursive: true })
+      const existingExclude = await fsReadFile(excludePath, 'utf8').then(
+        (content) => content,
+        () => '',
+      )
+      if (!existingExclude.split('\n').includes('.autobuild-sandbox-provisioned')) {
+        const prefix =
+          existingExclude === '' || existingExclude.endsWith('\n')
+            ? existingExclude
+            : `${existingExclude}\n`
+        await fsWriteFile(excludePath, `${prefix}.autobuild-sandbox-provisioned\n`)
+      }
       await fsWriteFile(join(identity.workspacePath, '.autobuild-sandbox-provisioned'), '')
+      return { ...identity, baseSha }
     } catch (error) {
       await rm(identity.workspacePath, { recursive: true, force: true })
       throw error
     }
-    return identity
+  }
+
+  /** One git invocation inside the sandbox checkout with the same
+   * credential-free guest environment as every exec. */
+  private async runSandboxGit(
+    cwd: string,
+    args: string[],
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn(['git', ...args], {
+      cwd,
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: this.sandboxEnv(),
+    })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { exitCode: exitCode ?? -1, stdout, stderr }
   }
 
   private sandboxCwd(handle: SandboxEnvironmentIdentity, cwd: string | undefined): string {
@@ -289,12 +434,14 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     request: { command: string; cwd?: string; timeoutSeconds?: number },
   ): Promise<SandboxCommandResult> {
     const timeoutSeconds = Math.min(Math.max(request.timeoutSeconds ?? 120, 1), 300)
+    const env = this.sandboxEnv()
+    this.sandboxExecEnvironments.push({ op: 'exec', command: request.command, env })
     const proc = Bun.spawn(['sh', '-c', request.command], {
       cwd: this.sandboxCwd(handle, request.cwd),
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
-      env: this.sandboxEnv(),
+      env,
     })
     const timer = AbortSignal.timeout(timeoutSeconds * 1000)
     const outcome = await Promise.race([
@@ -331,12 +478,14 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     handle: SandboxEnvironmentIdentity,
     request: { command: string; cwd?: string },
   ): Promise<{ commandId: string }> {
+    const env = this.sandboxEnv()
+    this.sandboxExecEnvironments.push({ op: 'start', command: request.command, env })
     const proc = Bun.spawn(['sh', '-c', request.command], {
       cwd: this.sandboxCwd(handle, request.cwd),
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
-      env: this.sandboxEnv(),
+      env,
     })
     const commandId = `sbcmd-${Math.random().toString(36).slice(2, 12)}`
     const tracked = { proc, stdout: '', stderr: '', exitCode: null as number | null }
