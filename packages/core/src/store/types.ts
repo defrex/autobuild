@@ -344,6 +344,13 @@ export interface BuildStore {
     sinceSeq?: number,
     opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<RepositoryEvent[]>
+  /** Bounded repository-journal read for stateless full-state readers
+   * (AUT-489): every durable fact (REPOSITORY_STATE_EVENT_TYPES) plus — when
+   * the journal has one — the tail from the latest `dispatcher.run-started`.
+   * Reducing this subset with the state readers yields exactly what a full
+   * replay yields (`projectRepositoryStateEvents` is the normative oracle).
+   * Unknown repo rejects like `getRepoEvents`. */
+  getRepoStateEvents(repo: string): Promise<RepositoryEvent[]>
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>

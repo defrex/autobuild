@@ -35,7 +35,9 @@ export class OperatorQueryError extends Error {
 }
 
 async function repoEvents(store: BuildStore, repo: string) {
-  return (await store.getRepo(repo)) === null ? [] : store.getRepoEvents(repo)
+  // Bounded read (AUT-489): every consumer below reduces durable types or
+  // latest-run facts only, so the subset is replay-equivalent here.
+  return (await store.getRepo(repo)) === null ? [] : store.getRepoStateEvents(repo)
 }
 
 export async function listOperatorBuilds(opts: {

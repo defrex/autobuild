@@ -527,6 +527,16 @@ decisions evaluate from digests and the repository journal alone, so
 gate-evaluation cost is flat in accumulated build history, with the full
 per-build scan paid only when a gate actually trips and a scan packet is built.
 
+Stateless repository-level readers also have a bounded journal read,
+`getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type
+(all harvest facts, operator-sandbox facts, and the three dispatcher setting
+types) plus, when the journal has one, the tail from the latest
+`dispatcher.run-started`. Reducing this subset with the state readers yields
+exactly what a full replay yields, so the cost of reading repository state no
+longer grows with the number of past dispatcher invocations. The journal
+itself stays append-only: full replay remains the normative truth, and
+`ab watch` still sees every recorded fact.
+
 ### 7.3 Persistence granularity
 
 Required phase outputs persist at **phase/round boundaries**; a killed phase

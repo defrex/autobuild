@@ -20,6 +20,11 @@ export { createBuildScopedStore } from './build-scope'
 export { createSessionScopedStore } from './session-handle'
 export { DIGEST_EVENT_TYPES, reduceBuildDigest } from './digest'
 export {
+  projectRepositoryStateEvents,
+  REPOSITORY_RUN_SCOPED_EVENT_TYPES,
+  REPOSITORY_STATE_EVENT_TYPES,
+} from './repo-state-events'
+export {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   DISPATCHER_RETENTION_BUILD_KINDS,
   DISPATCHER_RETENTION_REPO_KINDS,

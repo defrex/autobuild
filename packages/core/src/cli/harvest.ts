@@ -121,7 +121,8 @@ async function readArtifactJson(
 
 export async function buildHarvestContext(deps: HarvestCliDeps): Promise<HarvestContextManifest> {
   const { store, env, workspacePath } = deps
-  const events = await store.getRepoEvents(env.repo)
+  // Bounded read (AUT-489): runForEnv reduces harvest facts only.
+  const events = await store.getRepoStateEvents(env.repo)
   const run = runForEnv(events, env)
   const packet = await loadScanPacket(store, env.repo, run.scan)
   const abDir = join(workspacePath, '.ab')
@@ -217,7 +218,9 @@ export async function submitHarvestProposals(
       `'ab harvest submit' is only valid in synthesize@<round>; current phase is ${env.phase}@${env.round}`,
     )
   }
-  const events = await store.getRepoEvents(env.repo)
+  // Bounded read (AUT-489): runForEnv and assertNoSessionTerminal consume
+  // harvest facts only.
+  const events = await store.getRepoStateEvents(env.repo)
   const run = runForEnv(events, env)
   assertNoSessionTerminal(events, env)
 
@@ -307,7 +310,9 @@ export async function submitHarvestVerdict(
       `harvest verdict "${opts.verdict}" is invalid — expected approve | revise | escalate`,
     )
   }
-  const events = await store.getRepoEvents(env.repo)
+  // Bounded read (AUT-489): runForEnv and assertNoSessionTerminal consume
+  // harvest facts only.
+  const events = await store.getRepoStateEvents(env.repo)
   const run = runForEnv(events, env)
   assertNoSessionTerminal(events, env)
   if (proposalArtifactForRound(run, env.round) === undefined) {
@@ -689,7 +694,8 @@ export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
     },
     async ({ store, repo }) => {
       const record = await store.getRepo(repo)
-      const events = record === null ? [] : await store.getRepoEvents(repo)
+      // Bounded read (AUT-489): projectHarvestStatus reduces harvest facts only.
+      const events = record === null ? [] : await store.getRepoStateEvents(repo)
       const view = projectHarvestStatus(repo, events, opts.events)
       if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
       else for (const line of renderHarvestStatus(view)) opts.stdout(line)
