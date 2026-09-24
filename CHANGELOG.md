@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#569](https://github.com/defrex/autobuild/pull/569) — State what the schema pin enforces and catch checksum-only re-pins
+- [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
 - [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
 - [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
 - [#563](https://github.com/defrex/autobuild/pull/563) — Reject capabilities.requiredEnv groups that carry neither dispatchMessage nor validationMessage
