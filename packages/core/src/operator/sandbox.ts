@@ -508,22 +508,24 @@ export async function createOperatorSandboxService(
           }
           const sha = resolveResult.stdout.trim()
           // 2. Refuse a dirty checkout: staged or unstaged changes to
-          // tracked files. Untracked files do not refuse (they cannot
-          // enter the published commit, and providers leave untracked
-          // provisioning markers in the checkout).
+          // tracked files, and untracked files — a new file the operator
+          // never committed would otherwise be silently left out of the
+          // published commit. The providers exclude their own
+          // provisioning marker in the checkout's info/exclude, so the
+          // marker itself never counts as dirt (f_c748dc6a).
           const statusResult = await capability.exec(resolved, {
-            command: 'git status --porcelain -uno',
+            command: 'git status --porcelain',
             timeoutSeconds: 30,
           })
           if (statusResult.exitCode !== 0) {
             throw new Error(
-              `git status --porcelain -uno exited ${statusResult.exitCode}: ${statusResult.stderr.trim() || statusResult.stdout.trim() || '(no output)'}`,
+              `git status --porcelain exited ${statusResult.exitCode}: ${statusResult.stderr.trim() || statusResult.stdout.trim() || '(no output)'}`,
             )
           }
           if (statusResult.stdout.trim() !== '') {
             throw new SandboxOperationError(
               'publish',
-              'the sandbox checkout has uncommitted changes to tracked files; commit or discard them before publishing',
+              'the sandbox checkout has uncommitted changes; commit or discard them before publishing',
             )
           }
           // 3. Refuse a commit that is not a descendant of the base head

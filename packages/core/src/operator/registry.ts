@@ -915,7 +915,7 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'sandbox.publish',
-    "Publish your operator sandbox's work as a pull request: push the checkout's current head commit (or an explicit commit) to your operator's dedicated branch and open or update a PR against the base branch. Refuses when the checkout has uncommitted changes to tracked files, when the commit is not a descendant of the base head recorded at provision or reset time, or when the base branch head itself would be published. The sandbox itself never pushes and holds no credential — the push and PR creation are kernel plumbing; a publication is a durable repository-journal fact. PR only: the base branch is never pushed to.",
+    "Publish your operator sandbox's work as a pull request: push the checkout's current head commit (or an explicit commit) to your operator's dedicated branch and open or update a PR against the base branch. Refuses when the checkout has uncommitted changes (tracked or untracked; the sandbox's own provisioning marker is excluded), when the commit is not a descendant of the base head recorded at provision or reset time, or when the base branch head itself would be published. The sandbox itself never pushes and holds no credential — the push and PR creation are kernel plumbing; a publication is a durable repository-journal fact. PR only: the base branch is never pushed to.",
     sandboxPublishInput,
     '{branch, sha, pr: {number, url, headSha}}: the publication branch, the published commit, and the opened or updated pull request.',
     async (raw, ctx) => {

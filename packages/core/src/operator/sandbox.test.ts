@@ -557,9 +557,7 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
           .catch((e: unknown) => e as unknown as SandboxOperationError)
         expect(error).toBeInstanceOf(SandboxOperationError)
         expect((error as SandboxOperationError).stage).toBe('publish')
-        expect((error as SandboxOperationError).message).toMatch(
-          /uncommitted changes to tracked files/,
-        )
+        expect((error as SandboxOperationError).message).toMatch(/uncommitted changes/)
         expect(fx.provider.publications).toEqual([])
         const failed = (await factsOf(fx)).find(
           (event) => event.type === 'orchestrator.sandbox.publish-failed',
@@ -571,12 +569,34 @@ describe('OperatorSandboxService.publish (AUT-343)', () => {
     }
   })
 
-  test('an untracked-files-only checkout publishes (including the provisioning marker)', async () => {
+  test('refuses a checkout whose only uncommitted work is an untracked file (f_c748dc6a)', async () => {
     const fx = await forgeFx()
     try {
-      // A fresh sandbox carries the untracked .autobuild-sandbox-provisioned
-      // marker; add another untracked file — neither may refuse.
+      // A brand-new file the operator never committed must refuse, or a
+      // publish would silently ship the previous HEAD without it.
       await fx.service.exec('ops', { repo: fx.repo, command: 'echo scratch > scratch.txt' })
+      const error = await fx.service
+        .publish('ops', { repo: fx.repo, title: 'Fix' })
+        .catch((e: unknown) => e as unknown as SandboxOperationError)
+      expect(error).toBeInstanceOf(SandboxOperationError)
+      expect((error as SandboxOperationError).message).toMatch(/uncommitted changes/)
+      expect(fx.provider.publications).toEqual([])
+      const failed = (await factsOf(fx)).find(
+        (event) => event.type === 'orchestrator.sandbox.publish-failed',
+      )!
+      expect(failed.payload).toMatchObject({ operator: 'ops', stage: 'checks' })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test('a fresh sandbox whose only untracked file is the provisioning marker publishes', async () => {
+    const fx = await forgeFx()
+    try {
+      // The provider excludes its .autobuild-sandbox-provisioned marker in
+      // the checkout's info/exclude, so a pristine sandbox is clean for
+      // the untracked-inclusive dirty check.
+      await fx.service.exec('ops', { repo: fx.repo, command: 'true' })
       await commitChange(fx)
       const result = await fx.service.publish('ops', { repo: fx.repo, title: 'Fix' })
       expect(result.sha).toMatch(/^[0-9a-f]{40}$/)

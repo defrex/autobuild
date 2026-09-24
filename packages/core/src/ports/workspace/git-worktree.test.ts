@@ -717,6 +717,12 @@ describe('GitWorktreeProvider operator sandbox', () => {
     expect(readFileSync(join(identity.workspacePath, 'setup-marker.txt'), 'utf8')).toContain(
       'setup-ran',
     )
+    // The provisioning marker is excluded in the worktree's info/exclude, so
+    // it never counts as dirt for the publish service's untracked-inclusive
+    // dirty check. (setup-marker.txt is real untracked dirt and stays.)
+    expect(await run(['git', 'status', '--porcelain'], identity.workspacePath)).not.toContain(
+      '.autobuild-sandbox-provisioned',
+    )
 
     // Reuse: the marker and setup are not re-run. The reuse identity omits
     // `baseSha` (only a fresh provision resolves it), so compare with the

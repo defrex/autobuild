@@ -368,6 +368,34 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           )
         }
       }
+      // Exclude the provisioning marker (written untracked below) in the
+      // checkout's info/exclude so the publish service's
+      // untracked-inclusive dirty check never counts it as dirt
+      // (f_c748dc6a).
+      const exclude = await this.runSandboxGit(identity.workspacePath, [
+        'rev-parse',
+        '--git-path',
+        'info/exclude',
+      ])
+      if (exclude.exitCode !== 0 || exclude.stdout.trim() === '') {
+        throw new SandboxOperationError(
+          'provision',
+          `operator sandbox could not resolve info/exclude: ${exclude.stderr.trim() || `exit ${exclude.exitCode}`}`,
+        )
+      }
+      const excludePath = resolve(identity.workspacePath, exclude.stdout.trim())
+      await mkdir(dirname(excludePath), { recursive: true })
+      const existingExclude = await fsReadFile(excludePath, 'utf8').then(
+        (content) => content,
+        () => '',
+      )
+      if (!existingExclude.split('\n').includes('.autobuild-sandbox-provisioned')) {
+        const prefix =
+          existingExclude === '' || existingExclude.endsWith('\n')
+            ? existingExclude
+            : `${existingExclude}\n`
+        await fsWriteFile(excludePath, `${prefix}.autobuild-sandbox-provisioned\n`)
+      }
       await fsWriteFile(join(identity.workspacePath, '.autobuild-sandbox-provisioned'), '')
       return { ...identity, baseSha }
     } catch (error) {

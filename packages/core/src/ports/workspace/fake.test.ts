@@ -218,6 +218,9 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     expect(head.stdout.trim()).toMatch(/^[0-9a-f]{40}$/)
     const status = await git(identity.workspacePath, ['status', '--porcelain'])
     expect(status.exitCode).toBe(0)
+    // The provisioning marker is excluded in info/exclude, so the checkout
+    // is clean for the publish service's untracked-inclusive dirty check.
+    expect(status.stdout.trim()).toBe('')
     const base = await git(identity.workspacePath, ['rev-parse', 'refs/heads/main'])
     expect(base.exitCode).toBe(0)
     expect(base.stdout.trim()).toBe(head.stdout.trim())

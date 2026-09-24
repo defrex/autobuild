@@ -563,7 +563,29 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       baseHead,
     ])
     try {
-      const marker = join(identity.workspacePath, '.autobuild-sandbox-provisioned')
+      // Exclude the provisioning marker in this worktree's info/exclude so
+      // it never counts as dirt for the publish service's
+      // untracked-inclusive dirty check (f_c748dc6a). The marker is
+      // written untracked below; without the exclusion every first
+      // publish would refuse.
+      const markerName = '.autobuild-sandbox-provisioned'
+      const exclude = await this.gitOrThrow(identity.workspacePath, [
+        'rev-parse',
+        '--git-path',
+        'info/exclude',
+      ])
+      const excludePath = resolve(identity.workspacePath, exclude.stdout.trim())
+      await mkdir(excludePath.slice(0, excludePath.lastIndexOf(sep)), { recursive: true })
+      const existing = await fsReadFile(excludePath, 'utf8').then(
+        (content) => content,
+        () => '',
+      )
+      const lines = existing.split('\n')
+      if (!lines.includes(markerName)) {
+        const prefix = existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`
+        await fsWriteFile(excludePath, `${prefix}${markerName}\n`)
+      }
+      const marker = join(identity.workspacePath, markerName)
       const provisioned = await stat(marker).then(
         () => true,
         () => false,
