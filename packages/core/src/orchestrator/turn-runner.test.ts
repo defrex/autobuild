@@ -637,4 +637,55 @@ describe('orchestrator turn runner', () => {
     const state = reduceSession(await store.getSessionEvents(sessionId))
     expect(state.wakeCursors).toEqual({ b1: 7 })
   })
+
+  test('a journal wake turn reconstructs its frozen input across invocations, without build state', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    await store.ensureRepo(REPO)
+    const sessionId = await store.createSession({ repo: REPO, operator: 'op' }).then((s) => s.id)
+    await store.appendSessionEvent(sessionId, {
+      actor: humanActor('op'),
+      type: 'session.wake-set',
+      payload: { globs: ['harvest.escalated'] },
+    })
+    const model = stepwiseModel(
+      clock,
+      [toolCallStep('t1', 'c1', 'repository.status', '{}'), textStep('t2', 'On it.')],
+      300_000,
+    )
+    const runner = runnerFor(store, clock, model)
+
+    const wake = {
+      event: {
+        seq: 7,
+        ts: '2026-09-15T00:01:00Z',
+        type: 'harvest.escalated',
+        payload: { run: 'run-1', source: 'policy', reason: 'Code loop stalled' },
+      },
+    }
+    const start = await runner.startTurn(
+      sessionId,
+      { kind: 'wake', journal: true, seq: 7, type: 'harvest.escalated' },
+      wake,
+    )
+    expect(start.started).toBe(true)
+    // Budget fires after the first step (clock advances 300 s per call).
+    const suspended = await start.outcome!
+    expect(suspended).toEqual({ kind: 'suspended', cause: 'budget' })
+
+    const resumed = await runner.resumeTurn(sessionId)
+    await resumed.outcome!
+    // The resumed prompt still carries the frozen event record, named as a
+    // repository-journal event — and carries no build-state section, which a
+    // journal wake does not have.
+    const resumedJson = JSON.stringify(model.doStreamCalls[1]!.prompt)
+    expect(resumedJson).toContain('Repository-journal attention event')
+    expect(resumedJson).toContain('Code loop stalled')
+    expect(resumedJson).not.toContain('Build state')
+    // The journal wake cursor advanced through the recorded trigger; no
+    // build cursor moved.
+    const state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.journalWakeCursor).toBe(7)
+    expect(state.wakeCursors).toEqual({})
+  })
 })
