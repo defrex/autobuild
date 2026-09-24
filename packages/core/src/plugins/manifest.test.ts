@@ -28,7 +28,7 @@ describe('plugin manifest', () => {
       factory,
       requiredEnv: ['JIRA_TOKEN', 'JIRA_SITE'],
     })
-    expect(PLUGIN_API_VERSION).toBe('1.5.0')
+    expect(PLUGIN_API_VERSION).toBe('1.6.0')
   })
 
   test('ticket descriptor validation is strict and environment names are nonblank and unique', () => {
@@ -110,7 +110,7 @@ describe('plugin manifest', () => {
 
   test('returns structured compatibility status', () => {
     expect(pluginApiCompatibility('^1.0.0')).toMatchObject({
-      hostVersion: '1.5.0',
+      hostVersion: '1.6.0',
       status: 'compatible',
     })
     expect(pluginApiCompatibility('not-semver').status).toBe('invalid')
@@ -126,10 +126,10 @@ describe('plugin manifest', () => {
   test('rejects malformed, invalid-range, and incompatible manifests', () => {
     expect(() => parsePluginManifest({ name: 'x', apiVersion: '^1', extra: true })).toThrow()
     expect(() => parsePluginManifest({ name: 'x', apiVersion: 'not-semver' })).toThrow(
-      /invalid plugin API range.*host provides 1\.5\.0/,
+      /invalid plugin API range.*host provides 1\.6\.0/,
     )
     expect(() => parsePluginManifest({ name: 'future', apiVersion: '^2.0.0' })).toThrow(
-      /future.*\^2\.0\.0.*1\.5\.0/,
+      /future.*\^2\.0\.0.*1\.6\.0/,
     )
   })
 })
@@ -345,5 +345,97 @@ describe('plugin manifest adapter-name preservation', () => {
       const parsed = parseAdapters(map, container)
       expect(Object.getOwnPropertyNames(parsed)).toEqual(['acme'])
     }
+  })
+})
+
+describe('workspace-provider registrations', () => {
+  test('a bare 1.5-style factory still parses (back-compat)', () => {
+    const parsed = parsePluginManifest({
+      name: 'acme',
+      apiVersion: '^1.0.0',
+      workspaceProviders: { podman: factory as never },
+    })
+    expect(typeof parsed.workspaceProviders?.podman).toBe('function')
+  })
+
+  test('a descriptor with capabilities parses and carries the object verbatim', () => {
+    const capabilities = {
+      supportedForges: ['github'],
+      requiredEnv: [
+        { alternatives: [['ACME_TOKEN']], validationMessage: 'podman needs ACME_TOKEN' },
+      ],
+    }
+    const parsed = parsePluginManifest({
+      name: 'acme',
+      apiVersion: '^1.6.0',
+      workspaceProviders: { podman: { factory: factory as never, capabilities } },
+    })
+    const registration = parsed.workspaceProviders?.podman as
+      | {
+          capabilities?: unknown
+        }
+      | undefined
+    expect(registration?.capabilities).toEqual(capabilities)
+  })
+
+  test('capabilities are strict: an unrecognized declaration key is rejected', () => {
+    expect(() =>
+      parsePluginManifest({
+        name: 'acme',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: { factory: factory as never, capabilities: { requiredEnvs: [] } },
+        },
+      }),
+    ).toThrow(/unrecognized key/i)
+  })
+
+  test('a top-level requiredEnv is rejected with the capabilities.requiredEnv remediation', () => {
+    expect(() =>
+      parsePluginManifest({
+        name: 'acme',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: { factory: factory as never, requiredEnv: ['ACME_TOKEN'] },
+        },
+      }),
+    ).toThrow(
+      'workspaceProviders.<name>.requiredEnv is not supported; declare required environment as workspaceProviders.<name>.capabilities.requiredEnv',
+    )
+  })
+
+  test('a configSchema with only parse is rejected; parse and safeParse passes (f_69fc887c)', () => {
+    // create.ts consumes `safeParse` and init-validation consumes `parse`, so a
+    // schema accepted by manifest parsing must carry both — a parse-only object
+    // would otherwise crash dispatch with a TypeError instead of the config
+    // diagnostic.
+    expect(() =>
+      parsePluginManifest({
+        name: 'acme',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: {
+            factory: factory as never,
+            capabilities: { configSchema: { parse: () => ({}) } },
+          },
+        },
+      }),
+    ).toThrow('must be a Zod schema')
+    const parsed = parsePluginManifest({
+      name: 'acme',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: factory as never,
+          capabilities: {
+            configSchema: { parse: () => ({}), safeParse: () => ({ success: true, data: {} }) },
+          },
+        },
+      },
+    })
+    const registration = parsed.workspaceProviders?.podman as
+      | { capabilities?: { configSchema?: unknown } }
+      | undefined
+    expect(registration?.capabilities?.configSchema).toBeDefined()
   })
 })

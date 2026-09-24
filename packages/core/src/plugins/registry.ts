@@ -12,6 +12,20 @@ import type { AgentRunnerContractFactory } from '../ports/runner/contract'
 import type { TicketSourceContractFactory } from '../ports/tickets/contract'
 import type { WorkspaceProviderContractFactory } from '../ports/workspace/contract'
 import type { ForgeContractFactory } from '../ports/forge/contract'
+import type { WorkspaceConfig } from '../config/schema'
+import type { CreateWorkspaceProviderOptions } from '../ports/workspace/create'
+import type { WorkspaceProviderCapabilities } from '../ports/workspace/provider-capabilities'
+import type { WorkspaceProvider } from '../ports/types'
+import { builtinWorkspaceProviderRegistration } from '../ports/workspace/builtin-capabilities'
+
+/** Host-owned construction closure for a builtin workspace provider. `parsed`
+ * is the declared `configSchema`'s parse output, or the raw
+ * `[workspace.config]` when no schema is declared. */
+export type BuiltinWorkspaceProviderFactory = (
+  config: WorkspaceConfig,
+  opts: CreateWorkspaceProviderOptions,
+  parsed: unknown,
+) => WorkspaceProvider | Promise<WorkspaceProvider>
 
 export type PluginPort = 'ticket-source' | 'agent-runtime' | 'workspace-provider' | 'forge'
 
@@ -49,6 +63,14 @@ export interface AdapterRegistration<Factory, ContractFactory = unknown> {
    * builtins and every other plugin port. */
   requiredEnv?: readonly string[]
   contract?: PluginContractDescriptor<ContractFactory>
+  /** Workspace-provider capability declarations (AUT-516). Attached to the
+   * builtin registrations and normalized from plugin descriptors; every other
+   * port leaves it undefined. */
+  capabilities?: WorkspaceProviderCapabilities
+  /** Builtin workspace providers construct their host-owned adapters through
+   * this closure (`createWorkspaceProvider` calls it after the uniform
+   * capability checks); plugins keep `factory`. */
+  builtinFactory?: BuiltinWorkspaceProviderFactory
   source: RegistrationSource
 }
 
@@ -92,6 +114,7 @@ interface PendingRegistration {
   factory: unknown
   requiredEnv?: readonly string[]
   contract?: PluginContractDescriptor<unknown>
+  capabilities?: WorkspaceProviderCapabilities
   target: Map<string, AdapterRegistration<unknown, unknown>>
 }
 
@@ -101,6 +124,7 @@ type InternalRegistration<AdapterFactory, ContractFactory> =
       factory: AdapterFactory
       requiredEnv?: readonly string[]
       contract?: PluginContractDescriptor<ContractFactory>
+      capabilities?: WorkspaceProviderCapabilities
     }
 
 function normalize<AdapterFactory, ContractFactory>(
@@ -109,6 +133,7 @@ function normalize<AdapterFactory, ContractFactory>(
   factory: AdapterFactory
   requiredEnv?: readonly string[]
   contract?: PluginContractDescriptor<ContractFactory>
+  capabilities?: WorkspaceProviderCapabilities
 } {
   if (typeof registration === 'function') {
     return { factory: registration as AdapterFactory }
@@ -117,11 +142,13 @@ function normalize<AdapterFactory, ContractFactory>(
     factory: AdapterFactory
     requiredEnv?: readonly string[]
     contract?: PluginContractDescriptor<ContractFactory>
+    capabilities?: WorkspaceProviderCapabilities
   }
   return {
     factory: object.factory,
     ...(object.requiredEnv !== undefined ? { requiredEnv: [...object.requiredEnv] } : {}),
     ...(object.contract !== undefined ? { contract: object.contract } : {}),
+    ...(object.capabilities !== undefined ? { capabilities: object.capabilities } : {}),
   }
 }
 
@@ -141,10 +168,26 @@ export class PluginRegistry {
     // profile value, so a runtime with the same name could never be selected.
     'split',
   ])
-  readonly workspaceProviders = reserved<
-    WorkspaceProviderPluginFactory,
-    WorkspaceProviderContractFactory
-  >(['git-worktree', 'vercel-sandbox'])
+  readonly workspaceProviders = new Map<
+    string,
+    AdapterRegistration<WorkspaceProviderPluginFactory, WorkspaceProviderContractFactory>
+  >(
+    (['git-worktree', 'vercel-sandbox'] as const).map((name) => {
+      const builtin = builtinWorkspaceProviderRegistration(name)
+      if (builtin === undefined) {
+        throw new Error(`builtin workspace provider "${name}" has no capability declaration`)
+      }
+      return [
+        name,
+        {
+          owner: BUILTIN,
+          source: { kind: 'builtin' } as const,
+          capabilities: builtin.capabilities,
+          builtinFactory: builtin.builtinFactory,
+        },
+      ]
+    }),
+  )
   readonly forges = reserved<ForgePluginFactory, ForgeContractFactory>(['github', 'local-git'])
 
   register(
@@ -183,6 +226,9 @@ export class PluginRegistry {
           ...(normalized.requiredEnv !== undefined ? { requiredEnv: normalized.requiredEnv } : {}),
           ...(normalized.contract !== undefined
             ? { contract: normalized.contract as PluginContractDescriptor<unknown> }
+            : {}),
+          ...(normalized.capabilities !== undefined
+            ? { capabilities: normalized.capabilities }
             : {}),
           target: target as Map<string, AdapterRegistration<unknown, unknown>>,
         })
@@ -223,6 +269,9 @@ export class PluginRegistry {
           ? { requiredEnv: registration.requiredEnv }
           : {}),
         ...(registration.contract !== undefined ? { contract: registration.contract } : {}),
+        ...(registration.capabilities !== undefined
+          ? { capabilities: registration.capabilities }
+          : {}),
         source,
       })
     }

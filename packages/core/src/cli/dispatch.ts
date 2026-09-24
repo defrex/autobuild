@@ -112,7 +112,6 @@ import {
   type BuildExecutionHandle,
 } from '../ports/workspace/build-execution'
 import type { Exec } from '../ports/workspace/git-worktree'
-import { validateVercelGithubOrigin } from '../ports/workspace/vercel-sandbox'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   BUILD_RUNNER_DIAGNOSTIC_ARTIFACT,
@@ -451,22 +450,36 @@ async function defaultWire(
   // Origin mode: no checkout exists, so the provider's host git seams are
   // replaced by the injected origin and the forge's remote reads.
   const originMode = opts.repository !== undefined
-  if (config.workspace.provider === 'vercel-sandbox') {
-    if (config.forge !== 'github') {
-      throw new Error('vercel-sandbox requires the builtin github forge')
-    }
-    if (!originMode) {
-      const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], {
-        cwd: opts.targetRepo,
-      })
-      if (origin.exitCode !== 0) throw new Error('vercel-sandbox requires a readable Git origin')
-      validateVercelGithubOrigin(origin.stdout.trim())
-    }
-    if (githubTokenFromEnv(opts.env) === undefined) {
+  // Dispatch preflight is capability-driven (AUT-516): forge support, origin
+  // validation, and required environment all read the selected provider's
+  // registration declarations — builtin and plugin alike — instead of naming
+  // a provider.
+  const workspaceCaps = plugins.workspaceProviders.get(config.workspace.provider)?.capabilities
+  if (workspaceCaps?.supportedForges !== undefined) {
+    if (!workspaceCaps.supportedForges.includes(config.forge)) {
       throw new Error(
-        'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment',
+        workspaceCaps.forgeDispatchMessage ??
+          `workspace provider "${config.workspace.provider}" does not support forge "${config.forge}"`,
       )
     }
+  }
+  if (workspaceCaps?.validateOrigin !== undefined && !originMode) {
+    const origin = await opts.exec(['git', 'remote', 'get-url', 'origin'], {
+      cwd: opts.targetRepo,
+    })
+    if (origin.exitCode !== 0)
+      throw new Error(
+        workspaceCaps.originReadFailureMessage ??
+          `workspace provider "${config.workspace.provider}" requires a readable Git origin`,
+      )
+    workspaceCaps.validateOrigin(origin.stdout.trim())
+  }
+  for (const group of workspaceCaps?.requiredEnv ?? []) {
+    if (group.dispatchMessage === undefined) continue
+    const satisfied = group.alternatives.some((names) =>
+      names.every((name) => opts.env[name] !== undefined && opts.env[name] !== ''),
+    )
+    if (!satisfied) throw new Error(group.dispatchMessage)
   }
   // The builtin GitHub forge resolves its credential lazily on its first
   // request (GITHUB_TOKEN, GH_TOKEN, then the gh CLI login) and names the
@@ -523,6 +536,7 @@ async function defaultWire(
     sandboxSetupCommand: config.commands.setup,
     sandboxRoot: resolve(join(opened.localStateRoot, 'orchestrator-sandboxes')),
     sandboxEnvironmentVariables: config.orchestrator.sandbox.environmentVariables,
+    orchestratorSandboxEnabled: config.orchestrator.enabled,
     ...providerSeams,
     ...(opened.token !== undefined ? { storeToken: opened.token } : {}),
   })
