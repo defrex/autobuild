@@ -356,12 +356,11 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(await store.getRepo('acme/never-seen')).toBeNull()
         })
       })
-
       test('one entry per repo build — including a build with no digest-relevant events — and only that repo', async () => {
         await withStore(factory, undefined, async (store) => {
           await store.createBuild(sampleBuildInput('dg-a', { repo: 'acme/dga' }))
           await store.createBuild(sampleBuildInput('dg-other', { repo: 'acme/dgb' }))
-          // A freshly created queued build whose log holds none of the three
+          // A freshly created queued build whose log holds none of the
           // digest-relevant event types keeps its contractual entry — a join
           // that started from the events side would silently drop it.
           const digests = await store.getRepoBuildDigests('acme/dga')
@@ -435,14 +434,19 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
 
           const digests = await store.getRepoBuildDigests(repo)
           const expectedStatuses: Record<string, string> = {}
-          const expectedObservations: Record<string, number[]> = {}
+          const expectedObservations: Record<string, { seq: number; ts: string }[]> = {}
+          const expectedMerged: Record<string, string | undefined> = {}
           for (const record of await store.listBuilds()) {
             if (record.repo !== repo) continue
             const events = await store.getEvents(record.slug)
             expectedStatuses[record.slug] = reduceBuild(events).status
             expectedObservations[record.slug] = events
               .filter((event) => event.type === 'observation.recorded')
-              .map((event) => event.seq)
+              .map((event) => ({ seq: event.seq, ts: event.ts }))
+            const merges = events
+              .filter((event) => event.type === 'pr.merged')
+              .map((event) => event.ts)
+            expectedMerged[record.slug] = merges[merges.length - 1]
           }
           expect([...digests.keys()].sort()).toEqual(Object.keys(expectedStatuses).sort())
           for (const [slug, digest] of digests) {
@@ -452,18 +456,28 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               status === 'done' ? 'done' : status === 'aborted' ? 'aborted' : undefined,
             )
             expect(digest.observations).toEqual(expectedObservations[slug] ?? [])
+            // The merge fact is the log's latest `pr.merged` ts, absent when
+            // the log has none.
+            if (expectedMerged[slug] === undefined) expect(digest.merged).toBeUndefined()
+            else expect(digest.merged).toBe(expectedMerged[slug])
           }
-          // Explicit shape pins (independent of the loop above):
-          expect(digests.get('dg-open')).toEqual({ slug: 'dg-open', observations: [2] })
+          // Explicit shape pins (independent of the loop above); the ts
+          // values come from the same ground-truth events.
+          const tsOf = (slug: string, seq: number): string =>
+            expectedObservations[slug]!.find((item) => item.seq === seq)!.ts
+          expect(digests.get('dg-open')).toEqual({
+            slug: 'dg-open',
+            observations: [{ seq: 2, ts: tsOf('dg-open', 2) }],
+          })
           expect(digests.get('dg-done')).toEqual({
             slug: 'dg-done',
             terminal: 'done',
-            observations: [3],
+            observations: [{ seq: 3, ts: tsOf('dg-done', 3) }],
           })
           expect(digests.get('dg-cleaning')).toEqual({
             slug: 'dg-cleaning',
             terminal: 'aborted',
-            observations: [3],
+            observations: [{ seq: 3, ts: tsOf('dg-cleaning', 3) }],
           })
           expect(digests.get('dg-abandoned')).toEqual({
             slug: 'dg-abandoned',
@@ -486,19 +500,45 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
 
           await store.append('dg-paths', sampleEventWrite('first'))
           let digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
-          expect(digest?.observations).toEqual([1])
+          expect(digest?.observations).toEqual([
+            { seq: 1, ts: (await store.getEvents('dg-paths'))[0]!.ts },
+          ])
           expect(digest?.terminal).toBeUndefined()
 
           const conditional = await store.appendIfCurrent('dg-paths', 1, sampleEventWrite('second'))
           expect(conditional).not.toBeNull()
           digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
-          expect(digest?.observations).toEqual([1, 2])
+          expect(digest?.observations.map((item) => item.seq)).toEqual([1, 2])
 
           await store.appendWithArtifacts('dg-paths', [{ kind: 'dg-notes', content: 'note' }], () =>
             sampleEventWrite('third'),
           )
           digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
-          expect(digest?.observations).toEqual([1, 2, 3])
+          expect(digest?.observations).toEqual([
+            { seq: 1, ts: (await store.getEvents('dg-paths'))[0]!.ts },
+            { seq: 2, ts: (await store.getEvents('dg-paths'))[1]!.ts },
+            { seq: 3, ts: (await store.getEvents('dg-paths'))[2]!.ts },
+          ])
+          expect(digest?.merged).toBeUndefined()
+
+          // The merge fact reflects appends through every write path too,
+          // keeping the latest `pr.merged` ts.
+          const merge = async (sha: string) =>
+            (
+              await store.append('dg-paths', {
+                actor: DISPATCHER,
+                type: 'pr.merged',
+                payload: { sha },
+              })
+            ).ts
+          const firstMergeTs = await merge('abc111')
+          digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
+          expect(digest?.merged).toBe(firstMergeTs)
+
+          const secondMergeTs = await merge('abc222')
+          digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
+          expect(digest?.merged).toBe(secondMergeTs)
+          expect(secondMergeTs >= firstMergeTs).toBe(true)
 
           await store.append('dg-paths', {
             actor: DISPATCHER,
@@ -509,7 +549,12 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(digest).toEqual({
             slug: 'dg-paths',
             terminal: 'done',
-            observations: [1, 2, 3],
+            merged: secondMergeTs,
+            observations: [
+              { seq: 1, ts: (await store.getEvents('dg-paths'))[0]!.ts },
+              { seq: 2, ts: (await store.getEvents('dg-paths'))[1]!.ts },
+              { seq: 3, ts: (await store.getEvents('dg-paths'))[2]!.ts },
+            ],
           })
         })
       })
