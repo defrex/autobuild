@@ -403,4 +403,39 @@ describe('workspace-provider registrations', () => {
       'workspaceProviders.<name>.requiredEnv is not supported; declare required environment as workspaceProviders.<name>.capabilities.requiredEnv',
     )
   })
+
+  test('a configSchema with only parse is rejected; parse and safeParse passes (f_69fc887c)', () => {
+    // create.ts consumes `safeParse` and init-validation consumes `parse`, so a
+    // schema accepted by manifest parsing must carry both — a parse-only object
+    // would otherwise crash dispatch with a TypeError instead of the config
+    // diagnostic.
+    expect(() =>
+      parsePluginManifest({
+        name: 'acme',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: {
+            factory: factory as never,
+            capabilities: { configSchema: { parse: () => ({}) } },
+          },
+        },
+      }),
+    ).toThrow('must be a Zod schema')
+    const parsed = parsePluginManifest({
+      name: 'acme',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: factory as never,
+          capabilities: {
+            configSchema: { parse: () => ({}), safeParse: () => ({ success: true, data: {} }) },
+          },
+        },
+      },
+    })
+    const registration = parsed.workspaceProviders?.podman as
+      | { capabilities?: { configSchema?: unknown } }
+      | undefined
+    expect(registration?.capabilities?.configSchema).toBeDefined()
+  })
 })

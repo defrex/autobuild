@@ -235,14 +235,17 @@ const capabilityFunctionSchema = z.custom<(...args: never[]) => unknown>(
 )
 
 const workspaceProviderCapabilitiesSchema = z.strictObject({
+  // A Zod schema carries both `parse` and `safeParse`; the consumers use each
+  // (`create.ts` parses with `safeParse`, `init-validation.ts` with `parse`),
+  // so requiring only one would let a half-shaped object past manifest parsing
+  // and crash the other seam with a TypeError instead of the config
+  // diagnostic (f_69fc887c).
   configSchema: z
-    .custom<z.ZodType>(
-      (value) =>
-        value !== null &&
-        typeof value === 'object' &&
-        typeof (value as { parse?: unknown }).parse === 'function',
-      'must be a Zod schema',
-    )
+    .custom<z.ZodType>((value) => {
+      if (value === null || typeof value !== 'object') return false
+      const shape = value as { parse?: unknown; safeParse?: unknown }
+      return typeof shape.parse === 'function' && typeof shape.safeParse === 'function'
+    }, 'must be a Zod schema')
     .optional(),
   configRefusal: z.string().optional(),
   requireRuntimeProvisioning: z.boolean().optional(),

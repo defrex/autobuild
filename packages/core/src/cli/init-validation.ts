@@ -335,11 +335,18 @@ export async function validateInitReadiness(opts: {
     declaredForgeEnvChecks(caps, config, opts.env)
     // The registration's own configSchema and guestEnvNames take over from the
     // builtin table, so a plugin provider's readiness context carries its
-    // parsed config and its declared names are redacted (f_55ba7591).
+    // parsed config and its declared names are redacted (f_55ba7591). A
+    // declared guestEnvNames with no declared configSchema still feeds the
+    // redactor — it is called with the raw `[workspace.config]` then, mirroring
+    // how createWorkspaceProvider falls back to the raw config for
+    // requireRuntimeProvisioning (f_1ddf1415).
     if (caps?.configSchema !== undefined)
       providerConfig = caps.configSchema.parse(config.workspace.config)
-    if (providerConfig !== undefined && caps?.guestEnvNames !== undefined)
-      redact = createReadinessRedactor(opts.env, caps.guestEnvNames(providerConfig))
+    if (caps?.guestEnvNames !== undefined)
+      redact = createReadinessRedactor(
+        opts.env,
+        caps.guestEnvNames(providerConfig !== undefined ? providerConfig : config.workspace.config),
+      )
     // Registry-aware process-env-only check: a declared name present in the
     // dotenv-augmented `env` but absent from the raw launcher map fails here,
     // so plugin-declared requirements and non-CLI callers are covered too

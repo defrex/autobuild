@@ -1642,6 +1642,13 @@ readyState = "ready"
             }
             return { guestName: value.guestName }
           },
+          safeParse: function (value) {
+            try {
+              return { success: true, data: this.parse(value) }
+            } catch (error) {
+              return { success: false, error }
+            }
+          },
         },
         guestEnvNames: () => ['ACME_VAR'],
         validateReadiness: async (ctx) => ({
@@ -1712,6 +1719,14 @@ readyState = "ready"
           parse: () => {
             throw new Error('guestName must be a string')
           },
+          safeParse: function () {
+            try {
+              this.parse()
+            } catch (error) {
+              return { success: false, error }
+            }
+            return { success: false, error: new Error('unreachable') }
+          },
         },
       },
     },
@@ -1737,5 +1752,67 @@ readyState = "ready"
     await expect(
       validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
     ).rejects.toThrow('guestName must be a string')
+  })
+
+  test('a plugin-declared guestEnvNames without a configSchema is still redacted (f_1ddf1415)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-guest-names-only-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        guestEnvNames: () => ['ACME_VAR'],
+        validateReadiness: async (ctx) => ({
+          provider: 'acmebox',
+          context: 'remote',
+          exitCode: 0,
+          checks: [
+            {
+              name: 'context',
+              status: 'pass',
+              detail: 'config=' + JSON.stringify(ctx.providerConfig) + ' value=' + ctx.env.ACME_VAR,
+            },
+          ],
+        }),
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[workspace.config]
+region = "acme-region"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+
+    // No configSchema is declared, so the readiness context's providerConfig
+    // stays undefined — but the declared guest env name must still reach the
+    // redactor (it is called with the raw [workspace.config]), or the value
+    // leaks into the detail verbatim.
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env: { ACME_VAR: 'sekret-value-123' },
+      exec: spawnExec,
+    })
+    expect(report.provider).toBe('acmebox')
+    const detail = report.checks[0]?.detail ?? ''
+    expect(detail).toContain('[REDACTED]')
+    expect(detail).not.toContain('sekret-value-123')
   })
 })
