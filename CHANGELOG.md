@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#536](https://github.com/defrex/autobuild/pull/536) — Disk-gate plugin resolution so the dispatcher never auto-installs
 - [#533](https://github.com/defrex/autobuild/pull/533) — Derive PluginRegistry builtin workspace-providers from canonical list
 - [#529](https://github.com/defrex/autobuild/pull/529) — Map sandbox.publish foreign-repo failures to the sandbox-publish code
 - [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
