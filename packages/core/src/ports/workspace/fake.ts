@@ -375,6 +375,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         }
       }
       await this.excludeProvisioningMarker(identity.workspacePath)
+      // The marker file write deliberately stays outside
+      // excludeProvisioningMarker: that helper is the info/exclude exclusion
+      // logic alone (the early-return heal runs it too), while this write is
+      // provisioning-specific.
       await fsWriteFile(join(identity.workspacePath, '.autobuild-sandbox-provisioned'), '')
       return { ...identity, baseSha }
     } catch (error) {
