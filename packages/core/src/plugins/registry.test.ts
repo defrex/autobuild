@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AutobuildPluginManifest } from './manifest'
 import { parsePluginManifest } from './manifest'
+import { builtinWorkspaceProviderNames } from '../ports/workspace/builtin-capabilities'
 import { PluginRegistry } from './registry'
 
 const factory = (() => ({})) as never
@@ -210,6 +211,25 @@ describe('workspace-provider capability declarations', () => {
     expect(registry.workspaceProviders.get('git-worktree')?.capabilities?.configRefusal).toBe(
       '[workspace.config] is not supported by the builtin "git-worktree" provider',
     )
+  })
+
+  test('builtin workspace-provider set is exactly builtinWorkspaceProviderNames() (AUT-579)', () => {
+    const registry = new PluginRegistry()
+    const builtinEntries = [...registry.workspaceProviders.entries()].filter(
+      ([, registration]) => registration.owner.kind === 'builtin',
+    )
+    const registryNames = [...registry.workspaceProviders.keys()].sort()
+    const canonicalNames = [...builtinWorkspaceProviderNames()].sort()
+    expect(
+      registryNames,
+      `PluginRegistry's builtin workspace-provider set must match ` +
+        `builtinWorkspaceProviderNames() (registry: ${registryNames.join(', ')}, ` +
+        `canonical: ${canonicalNames.join(', ')})`,
+    ).toEqual(canonicalNames)
+    for (const [, registration] of builtinEntries) {
+      expect(typeof registration.builtinFactory).toBe('function')
+      expect(registration.capabilities).toBeDefined()
+    }
   })
 
   test('builtinWorkspaceProviderCollisions reports builtin-owned names only (AUT-517)', () => {
