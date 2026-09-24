@@ -26,6 +26,7 @@ import { validateVercelGithubOrigin } from './github-origin'
 
 export const VERCEL_SANDBOX_CAPABILITIES: WorkspaceProviderCapabilities = {
   configSchema: vercelSandboxConfigSchema,
+  requireRuntimeProvisioning: true,
   supportedForges: ['github'],
   forgeDispatchMessage: 'vercel-sandbox requires the builtin github forge',
   forgeValidationMessage:

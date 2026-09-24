@@ -1,10 +1,10 @@
 /**
- * `@defrex/autobuild-vercel-sandbox` — the Vercel Sandbox workspace provider
- * as an Autobuild plugin (AUT-505). The provider's implementation, schema,
+ * This package — the Vercel Sandbox workspace provider as an Autobuild plugin
+ * (AUT-505). The provider's implementation, schema,
  * capability declaration, and remote readiness validation live in this
  * package; core carries neither the provider nor its SDK. A repository opts
- * in by installing this package next to the CLI and declaring
- * `plugins = ["@defrex/autobuild-vercel-sandbox"]` in `autobuild.toml`.
+ * in by installing this package next to the CLI and declaring the package in
+ * the `plugins` list of `autobuild.toml`.
  */
 import {
   parsePluginManifest,

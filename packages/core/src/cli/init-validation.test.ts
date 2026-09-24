@@ -8,13 +8,14 @@ import { DISPATCHER } from '../events/envelope'
 import type { AgentRunner } from '../ports/types'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
-import { builtinWorkspaceProviderCapabilities } from '../ports/workspace/builtin-capabilities'
 import {
   validateVercelSandbox,
   type VercelSandboxFacade,
   type VercelSnapshotInfo,
   type VercelSandboxHandle,
-} from '../ports/workspace/vercel-sandbox'
+} from '@defrex/autobuild-vercel-sandbox'
+import manifest from '@defrex/autobuild-vercel-sandbox'
+import { createPluginRegistry } from '../plugins/registry'
 import { openLocalStore } from '../store/local/store'
 import { loadConfig } from '../config/load'
 import type { BuildStore } from '../store/types'
@@ -325,6 +326,7 @@ async function vercelPreflightFixture(forge = 'github') {
     join(repo, 'autobuild.toml'),
     `baseBranch = "main"
 forge = "${forge}"
+plugins = ["@defrex/autobuild-vercel-sandbox"]
 [workspace]
 provider = "vercel-sandbox"
 [workspace.config]
@@ -350,7 +352,7 @@ readyState = "ready"
     reached.remoteGit += 1
     throw new Error(`remote Git validation must not run: ${command.join(' ')}`)
   }
-  const vercelFacade: VercelSandboxFacade = {
+  const providerFacade: VercelSandboxFacade = {
     get: async () => {
       reached.sandbox += 1
       throw new Error('Vercel validation must not run')
@@ -379,7 +381,7 @@ readyState = "ready"
     })
   }
 
-  return { repo, exec, vercelFacade, packageArchive, expectValidationNotReached }
+  return { repo, exec, providerFacade, packageArchive, expectValidationNotReached }
 }
 
 describe('init readiness probe', () => {
@@ -502,7 +504,8 @@ readyState = "ready"
     roots.push(repo)
     await writeFile(
       join(repo, 'autobuild.toml'),
-      `[workspace]
+      `plugins = ["@defrex/autobuild-vercel-sandbox"]
+[workspace]
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 600
@@ -541,7 +544,8 @@ readyState = "ready"
     roots.push(repo)
     await writeFile(
       join(repo, 'autobuild.toml'),
-      `[workspace]
+      `plugins = ["@defrex/autobuild-vercel-sandbox"]
+[workspace]
 provider = "vercel-sandbox"
 [workspace.config]
 timeoutSeconds = 600
@@ -992,7 +996,7 @@ readyState = "ready"
         targetRepo: fixture.repo,
         env: { ...completeVercelPreflightEnv },
         exec: fixture.exec,
-        vercelFacade: fixture.vercelFacade,
+        providerFacade: fixture.providerFacade,
         packageArchive: fixture.packageArchive,
       }),
     ).rejects.toThrow(
@@ -1009,7 +1013,7 @@ readyState = "ready"
         targetRepo: fixture.repo,
         env: { ...completeVercelPreflightEnv, GITHUB_TOKEN: '', GH_TOKEN: undefined },
         exec: fixture.exec,
-        vercelFacade: fixture.vercelFacade,
+        providerFacade: fixture.providerFacade,
         packageArchive: fixture.packageArchive,
       }),
     ).rejects.toThrow('vercel-sandbox publication requires push-capable GITHUB_TOKEN or GH_TOKEN')
@@ -1025,7 +1029,7 @@ readyState = "ready"
           targetRepo: fixture.repo,
           env: { ...completeVercelPreflightEnv, VERCEL_OIDC_TOKEN: '', [missing]: '' },
           exec: fixture.exec,
-          vercelFacade: fixture.vercelFacade,
+          providerFacade: fixture.providerFacade,
           packageArchive: fixture.packageArchive,
         }),
       ).rejects.toThrow(
@@ -1043,7 +1047,7 @@ readyState = "ready"
         targetRepo: fixture.repo,
         env: { ...completeVercelPreflightEnv, AB_STORE: 'http://store.example' },
         exec: fixture.exec,
-        vercelFacade: fixture.vercelFacade,
+        providerFacade: fixture.providerFacade,
         packageArchive: fixture.packageArchive,
       }),
     ).rejects.toThrow('vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel')
@@ -1056,6 +1060,7 @@ readyState = "ready"
     const secret = 'readiness-provision-secret'
     const config = `baseBranch = "main"
 forge = "github"
+plugins = ["@defrex/autobuild-vercel-sandbox"]
 [workspace]
 provider = "vercel-sandbox"
 [workspace.config]
@@ -1128,7 +1133,7 @@ readyState = "ready"
         targetRepo: repo,
         env: { ...completeVercelPreflightEnv, PROVISION_SECRET: secret },
         exec,
-        vercelFacade: facade,
+        providerFacade: facade,
         packageArchive: async () => {
           packageArchives += 1
           return new Uint8Array()
@@ -1156,6 +1161,7 @@ readyState = "ready"
     roots.push(repo)
     const config = `baseBranch = "main"
 forge = "github"
+plugins = ["@defrex/autobuild-vercel-sandbox"]
 [workspace]
 provider = "vercel-sandbox"
 [workspace.config]
@@ -1221,7 +1227,7 @@ readyState = "ready"
           VERCEL_PROJECT_ID: 'project-id',
         },
         exec,
-        vercelFacade: facade,
+        providerFacade: facade,
         packageArchive: async () => new Uint8Array(),
       }),
     ).rejects.toThrow('malformed-sandbox was deleted')
@@ -1522,25 +1528,129 @@ readyState = "ready"
     expect(calls.at(-1)).toContain('cannot be combined')
   })
 
-  test('rejects target-only OIDC before invoking the SDK-backed validation', async () => {
+  test('rejects target-only OIDC through the registry-aware check with a fixture plugin', async () => {
+    // Rewritten for AUT-505 (f_7f9dac4b): the main.ts pre-guard is gone, so
+    // the user-visible scenario is pinned at the CLI seam through the real
+    // validateInitReadiness — a fixture plugin declares processEnvOnly for
+    // VERCEL_OIDC_TOKEN, the target .env carries only that variable, and the
+    // dotenv-augmented env with an empty launcher map must fail validation.
     const repo = await mkdtemp(join(tmpdir(), 'ab-target-env-'))
     roots.push(repo)
     await writeFile(join(repo, '.env'), 'VERCEL_OIDC_TOKEN=target-only\n')
+    await writeFile(
+      join(repo, 'fixture-plugin.ts'),
+      `export default {
+  name: 'fixture-oidc',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    fixturebox: {
+      factory: () => ({}),
+      capabilities: {
+        processEnvOnly: [
+          {
+            name: 'VERCEL_OIDC_TOKEN',
+            message: 'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to this provider; export it in the launcher environment',
+          },
+        ],
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./fixture-plugin.ts"]
+[workspace]
+provider = "fixturebox"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
     const errors: string[] = []
-    let invoked = false
     const code = await runCli(['init', repo, '--validate'], {
       workspacePath: '/different-cwd',
       processEnv: {},
       stdout: () => {},
       stderr: (line) => errors.push(line),
-      initValidation: async () => {
-        invoked = true
-        throw new Error('must not run')
-      },
     })
     expect(code).toBe(1)
-    expect(invoked).toBe(false)
     expect(errors.join('\n')).toContain('export it in the launcher environment')
+  })
+
+  test('a config selecting a provider without the plugins line fails with the unregistered-provider message', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-unregistered-provider-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow(
+      /unknown workspace provider "vercel-sandbox"; add the plugin package that provides it to the plugins list in autobuild\.toml \(available providers: git-worktree\)/,
+    )
+  })
+
+  test('a registered remote provider preflights its ticket-source credential (LINEAR_API_KEY)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-linear-preflight-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        validateReadiness: async () => ({
+          provider: 'acmebox',
+          context: 'remote',
+          exitCode: 0,
+          checks: [],
+        }),
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "linear"
+teamKey = "ACME"
+readyState = "ready"
+`,
+    )
+    // The registry-aware preflight fires before ticket acquisition: no
+    // LINEAR_API_KEY in the environment means the credential message throws
+    // before the ticket source is ever constructed.
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow('ticket source "linear" requires LINEAR_API_KEY')
   })
 
   test('a plugin-declared processEnvOnly variable present only in the dotenv-augmented env fails validation', async () => {
@@ -1604,9 +1714,11 @@ readyState = "ready"
     ).rejects.toThrow('workspace provider "acmebox" does not support init readiness validation')
   })
 
-  test('the builtin processEnvOnly declaration message is byte-identical to the main.ts guard text', () => {
+  test('the registered processEnvOnly declaration message is byte-identical to the former main.ts guard text', () => {
+    const registry = createPluginRegistry()
+    registry.register(manifest)
     const message =
-      builtinWorkspaceProviderCapabilities('vercel-sandbox')?.processEnvOnly?.[0]?.message
+      registry.workspaceProviders.get('vercel-sandbox')?.capabilities?.processEnvOnly?.[0]?.message
     expect(message).toBe(
       'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to the Vercel SDK; export it in the launcher environment or configure VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
     )
@@ -1723,7 +1835,7 @@ environmentVariables = ${sandbox}
     await expect(
       validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
     ).rejects.toThrow(
-      'environment variable "ACME_SECRET" is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox',
+      'environment variable "ACME_SECRET" is a store, forge, ticket-provider, model, or workspace-provider credential and may never be forwarded into an operator sandbox',
     )
 
     // A name outside the declared extras and the shared set still passes the

@@ -1,14 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { NetworkPolicy } from '@vercel/sandbox'
 import { parse as parseToml } from 'smol-toml'
 import {
   HARVEST_RUNNER_OPTIONS_ENV,
   SANDBOX_FORBIDDEN_ENV,
   SandboxOperationError,
-  spawnExec,
   type Exec,
 } from '@defrex/autobuild/plugin-sdk'
 import {

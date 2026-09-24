@@ -7,7 +7,6 @@ import {
   parsePluginManifest,
   pluginApiCompatibility,
   PluginApiCompatibilityError,
-  type AutobuildPluginManifest,
   type PluginApiCompatibility,
 } from './manifest'
 import { createPluginRegistry, type PluginRegistry, type PluginResolutionKind } from './registry'

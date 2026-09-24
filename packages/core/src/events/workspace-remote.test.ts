@@ -9,8 +9,8 @@ describe('isRemoteWorkspace', () => {
     expect(isRemoteWorkspace({ provider: 'git-worktree', remote: false })).toBe(false)
   })
 
-  test('an absent marker falls back to the legacy provider-name reading', () => {
-    expect(isRemoteWorkspace({ provider: 'vercel-sandbox' })).toBe(true)
+  test('an absent marker reads as local (marker-only semantics, AUT-505)', () => {
+    expect(isRemoteWorkspace({ provider: 'vercel-sandbox' })).toBe(false)
     expect(isRemoteWorkspace({ provider: 'git-worktree' })).toBe(false)
   })
 })

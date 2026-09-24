@@ -93,20 +93,17 @@ describe('ab plugin', () => {
     expect(io.stdout.join('\n')).toContain('OK ./good.ts')
   })
 
-  test('a skipped duplicate registration renders as SKIP, exits 0, and keeps the builtin owner', async () => {
+  test('a duplicate workspace-provider registration now fails as a collision (AUT-505)', async () => {
     const root = await repo(['./dup.ts'], {
-      'dup.ts': `export default { name: 'dup', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': () => ({}) } }\n`,
+      'dup.ts': `export default { name: 'dup', apiVersion: '^1.6.0', workspaceProviders: { 'git-worktree': () => ({}) } }\n`,
     })
     const io = output(root)
-    expect(await abPlugin(['list'], io.opts)).toBe(0)
-    expect(await abPlugin(['doctor'], io.opts)).toBe(0)
-    const text = io.stdout.join('\n')
-    expect(text).toContain('SKIP ./dup.ts')
+    expect(await abPlugin(['list'], io.opts)).toBe(1)
+    expect(await abPlugin(['doctor'], io.opts)).toBe(1)
+    const text = io.stderr.join('\n')
+    expect(text).toContain('FAIL ./dup.ts')
     expect(text).toContain('stage=registration')
-    expect(text).toContain('the builtin keeps serving the provider')
-    expect(text).toContain('vercel-sandbox owner=builtin')
-    // Skips are not failures: nothing on stderr.
-    expect(io.stderr.join('\n')).toBe('')
+    expect(text).toContain('collides with builtin adapter')
   })
 
   test('validates port, adapter, and missing descriptor actionably', async () => {
