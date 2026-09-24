@@ -380,6 +380,7 @@ without a journal record, or a repository without builds.
 | `getRepo` | `GET /repos/{repo}` | none | `200` + `RepositoryRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
 | `getRepoEvents` | `GET /repos/{repo}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
+| `getRepoStateEvents` | `GET /repos/{repo}/state-events` | none | `200` + the bounded repository-journal subset (AUT-489): every durable event type (`harvest.*`, `orchestrator.sandbox.*`, the three dispatcher setting types) plus, when the journal has one, the tail from the latest `dispatcher.run-started`, in increasing sequence order; served inside the repository-existence gate like `GET events`, so an unknown repository is `404` |
 | `appendRepoWithArtifacts` | `POST /repos/{repo}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using repository shapes |
 | `putRepoArtifact` | `POST /repos/{repo}/artifacts` | artifact input | `201` + repository artifact metadata |
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
@@ -697,12 +698,12 @@ resource access; an explicit resource whose id is `"*"` is not admin.
 
 ### Resource authorization matrix
 
-| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | `/repos/{repo}/build-digests` | one matching session |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| admin (`build: "*"`) | yes | any | yes | any | yes | any | any |
-| build | no | exact id only | no | no | no | no | no |
-| repo | no | no | no | exact id only | yes | exact id only | no |
-| session | no | no | no | no | no | no | exact id only |
+| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | `/repos/{repo}/build-digests` | `/repos/{repo}/state-events` | one matching session |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| admin (`build: "*"`) | yes | any | yes | any | yes | any | any | any |
+| build | no | exact id only | no | no | no | no | no | no |
+| repo | no | no | no | exact id only | yes | exact id only | exact id only | no |
+| session | no | no | no | no | no | no | no | exact id only |
 
 A valid token used for the wrong resource receives `403 auth`. Resource scope
 gates all operations, including reads, artifact operations, and leases. A

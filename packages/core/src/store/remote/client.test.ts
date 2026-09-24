@@ -497,6 +497,12 @@ describe('request construction', () => {
         path: '/repos/acme%2Frate-limiter/build-digests',
         method: 'GET',
       },
+      getRepoStateEvents: {
+        responses: [{ body: [wireRepoEvent()] }],
+        act: (s) => s.getRepoStateEvents('acme/rate-limiter'),
+        path: '/repos/acme%2Frate-limiter/state-events',
+        method: 'GET',
+      },
       claimRepoLease: {
         responses: [{ body: { ok: true } }],
         act: (s) => s.claimRepoLease('acme/rate-limiter', 'harvest-1', 1_000),

@@ -522,6 +522,16 @@ terminal fact and observation occurrences, derived from the event log on each
 call. It lets a dashboard snapshot count unclaimed observations and gate rows
 without reading the full history of finished builds (§16.1).
 
+Stateless repository-level readers also have a bounded journal read,
+`getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type
+(all harvest facts, operator-sandbox facts, and the three dispatcher setting
+types) plus, when the journal has one, the tail from the latest
+`dispatcher.run-started`. Reducing this subset with the state readers yields
+exactly what a full replay yields, so the cost of reading repository state no
+longer grows with the number of past dispatcher invocations. The journal
+itself stays append-only: full replay remains the normative truth, and
+`ab watch` still sees every recorded fact.
+
 ### 7.3 Persistence granularity
 
 Required phase outputs persist at **phase/round boundaries**; a killed phase

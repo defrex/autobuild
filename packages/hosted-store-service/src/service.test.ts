@@ -225,6 +225,34 @@ describe('hosted store service', () => {
     expect(opens).toBe(0)
   })
 
+  test('GET /repos/{repo}/state-events classifies as a store route and reaches the repo gate', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    let opens = 0
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => {
+        opens++
+        return backing
+      },
+    })
+    // The bounded repository-journal read (AUT-489) is classified in
+    // `storeResourceRoutes`, so it reaches the store server's repository
+    // gate — an unknown repo answers the store server's own 404 (which
+    // opened persistence), never the generic unclassified 404.
+    const response = await service.fetch(
+      new Request('http://hosted.test/repos/acme%2Fnever-seen/state-events', {
+        headers: machineHeaders,
+      }),
+    )
+    expect(opens).toBe(1)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: 'unknown repo "acme/never-seen"',
+      kind: 'not-found',
+    })
+  })
+
   test('retries lazy store initialization after a rejected attempt', async () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })

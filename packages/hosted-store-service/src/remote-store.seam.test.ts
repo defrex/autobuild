@@ -29,8 +29,35 @@ import {
   StreamClosedError,
 } from '@defrex/autobuild/plugin-sdk'
 import { AuthError, RemoteBuildStore } from '@defrex/autobuild/remote-store'
+import { repositoryEventListSchema } from '@defrex/autobuild/remote-store'
 import { createStoreServer, startStoreServer } from './remote-store-server'
 import { mintToken, verifyToken } from '@defrex/autobuild/remote-store'
+
+function noopTickCounters() {
+  return {
+    merged: 0,
+    closed: 0,
+    conflicted: 0,
+    abandoned: 0,
+    discarded: 0,
+    janitorFailed: 0,
+    recovered: 0,
+    dispatchFailed: 0,
+    resumed: 0,
+    swept: 0,
+    dispatched: 0,
+    authored: 0,
+    bounced: 0,
+    claimRaces: 0,
+    invalidTickets: 0,
+    dependencyBlocked: 0,
+    harvestStarted: 0,
+    harvestResumed: 0,
+    harvestCompleted: 0,
+    harvestEscalated: 0,
+    harvestFailed: 0,
+  }
+}
 
 // ── The contract, over the wire ──────────────────────────────────────────────
 //
@@ -338,6 +365,84 @@ describe('D8 scope enforcement over the wire', () => {
       expect(await client.getEvents('build-a').catch((error: unknown) => error)).toBeInstanceOf(
         AuthError,
       )
+    })
+  })
+
+  test('the state-events route: repo-token scope, the repo-existence gate, and the bounded wire shape', async () => {
+    await withSecureStore(async ({ url, admin, backing }) => {
+      await admin.createBuild(sampleBuildInput('build-a'))
+      await admin.ensureRepo('acme/repo')
+      // A journal with dispatcher noise and a durable fact: the bounded read
+      // answers durable types plus the tail from the latest run-started.
+      await admin.appendRepo('acme/repo', {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_1',
+          observations: [{ build: 'build-a', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await admin.appendRepo('acme/repo', {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'r_1',
+          pid: 1,
+          effectiveConfig: { kind: 'effective-config', rev: 0 },
+          roleWarnings: [],
+        },
+      })
+      await admin.appendRepo('acme/repo', {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: {
+          run: 'r_1',
+          queued: 0,
+          counters: noopTickCounters(),
+          janitorDiagnostics: [],
+          ticketDiagnostics: [],
+          dependencyDiagnostics: [],
+        },
+      })
+      const client = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, {
+          resource: { kind: 'repo', id: 'acme/repo' },
+          session: 'hs_one',
+          exp: EXP,
+        }),
+      })
+      const subset = await client.getRepoStateEvents('acme/repo')
+      expect(subset.map((event) => [event.seq, event.type])).toEqual([
+        [1, 'harvest.started'],
+        [2, 'dispatcher.run-started'],
+        [3, 'dispatcher.tick-completed'],
+      ])
+      // The wire shape is the same repository-event list the client parses:
+      // the raw HTTP body parses through repositoryEventListSchema directly.
+      const response = await fetch(`${url}/repos/acme%2Frepo/state-events`, {
+        headers: {
+          authorization: `Bearer ${mintToken(SECRET, { resource: { kind: 'repo', id: 'acme/repo' }, session: 'hs_one', exp: EXP })}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+      })
+      expect(response.status).toBe(200)
+      expect(repositoryEventListSchema.parse(await response.json())).toHaveLength(3)
+
+      // The repo-existence gate applies (unlike build-digests): with a
+      // wildcard token (no repo scope to reject first), an unknown repo
+      // answers the store server's own 404.
+      const wildcard = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
+      })
+      const unknown = await wildcard
+        .getRepoStateEvents('acme/never-seen')
+        .catch((error: unknown) => error)
+      expect((unknown as Error).message).toContain('unknown repo "acme/never-seen"')
+      expect(await backing.getRepo('acme/never-seen')).toBeNull()
     })
   })
 
