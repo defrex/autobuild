@@ -259,11 +259,16 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
  * parse-site one, so it is NOT copied from this table.
  */
 export interface WorkspaceProviderConfigDeclaration {
-  /** Strict schema applied to `[workspace.config]`. When absent, nonempty
-   * provider config is refused with `configRefusalMessage`. */
+  /** Strict schema applied to `[workspace.config]`. When absent, this
+   * declaration must carry `configRefusalMessage` for nonempty provider
+   * config to be refused; providers absent from
+   * `BUILTIN_WORKSPACE_PROVIDER_CONFIG` are plugin-owned pass-throughs and
+   * are never refused here. */
   configSchema?: z.ZodType
   /** Parse-site refusal text for a provider that rejects `[workspace.config]`
-   * outright. Distinct from the capability's construction-site `configRefusal`. */
+   * outright. This is the sole parse-site refusal key: a declaration without
+   * it never refuses `[workspace.config]` here, with or without a schema.
+   * Distinct from the capability's construction-site `configRefusal`. */
   configRefusalMessage?: string
   /** Referenced runtimes must have `[workspace.config.runtimeProvisioning]`
    * entries (checked only once roles, verify, and finalize are all present). */
@@ -671,15 +676,18 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
   })
 
   const workspaceDeclaration = BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(config.workspace.provider)
-  if (workspaceDeclaration?.configSchema === undefined) {
-    if (workspaceDeclaration !== undefined && Object.keys(config.workspace.config).length > 0) {
+  // The parse-site refusal fires only for a declaration carrying
+  // `configRefusalMessage`; providers absent from the table are plugin-owned
+  // pass-throughs and are never refused here.
+  if (workspaceDeclaration?.configRefusalMessage !== undefined) {
+    if (Object.keys(config.workspace.config).length > 0) {
       ctx.addIssue({
         code: 'custom',
         path: ['workspace', 'config'],
         message: workspaceDeclaration.configRefusalMessage,
       })
     }
-  } else {
+  } else if (workspaceDeclaration?.configSchema !== undefined) {
     const parsed = workspaceDeclaration.configSchema.safeParse(config.workspace.config)
     if (!parsed.success) {
       forwardIssues(parsed.error.issues, ctx, ['workspace', 'config'])
