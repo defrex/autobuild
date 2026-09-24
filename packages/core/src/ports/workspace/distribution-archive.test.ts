@@ -13,12 +13,14 @@ import {
   fetchDistributionReleaseAsset,
   fetchDistributionRegistryTarball,
   readDistributionIdentity,
+  readDistributionIdentityStamp,
   readDistributionPackage,
   packageAutobuildDistribution,
   type RegistryFetch,
 } from './distribution-archive'
 import * as gitWorktree from './git-worktree'
 import { GitHubApiError } from '../forge/github-transport'
+import { REMOTE_STORE_PROTOCOL_VERSION } from '../../store/remote/version'
 
 /** A scripted registry: version-document URL → status/body, tarball URL → bytes. */
 function registryStub(
@@ -55,6 +57,19 @@ describe('readDistributionIdentity', () => {
     // running version. A malformed root manifest still fails hard.
     const identity = await readDistributionIdentity()
     expect(identity).toMatch(/^\d+\.\d+\.\d+/)
+  })
+})
+
+describe('readDistributionIdentityStamp', () => {
+  test('combines the package version with the remote-store protocol version', async () => {
+    // The stamp is exactly what the hosted store's skew check compares
+    // (`x-autobuild-version` + `x-autobuild-protocol-version`). Without the
+    // protocol suffix a protocol-only bump (AUT-521) ships the incident
+    // regression: every marker would still match and no path would refresh.
+    const stamp = await readDistributionIdentityStamp()
+    const version = await readDistributionIdentity()
+    expect(stamp).toBe(`${version}+protocol${REMOTE_STORE_PROTOCOL_VERSION}`)
+    expect(stamp).not.toBe(version)
   })
 })
 
