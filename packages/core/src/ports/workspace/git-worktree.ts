@@ -19,7 +19,12 @@ import {
   type SandboxEnvironmentIdentity,
   type SandboxWaitResult,
 } from './operator-sandbox'
-import type { WorkspaceHandle, WorkspaceProvider, WorkspaceProvisionResult } from '../types'
+import type {
+  WorkspaceHandle,
+  WorkspaceProvider,
+  WorkspaceProvisionResult,
+  WorkspacePublication,
+} from '../types'
 
 export interface ExecResult {
   stdout: string
@@ -107,6 +112,7 @@ function parseWorktreeList(porcelain: string): WorktreeEntry[] {
 export class GitWorktreeProvider implements WorkspaceProvider {
   readonly name = 'git-worktree'
   readonly orchestratorSandbox: OperatorSandboxExecution
+  readonly sandboxPublication: WorkspacePublication
   private readonly root: string
   private readonly sandboxRoot: string
   private readonly setupCommand: string | undefined
@@ -158,6 +164,10 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       writeFile: (handle, path, content) => this.sandboxWriteFile(handle, path, content),
       stop: () => Promise.resolve({ outcome: 'unsupported' as const }),
       release: (input) => this.sandboxRelease(input),
+    }
+    this.sandboxPublication = {
+      isPublished: (input) => this.sandboxIsPublished(input),
+      publish: (input) => this.publishSandbox(input),
     }
   }
 
@@ -553,7 +563,29 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       baseHead,
     ])
     try {
-      const marker = join(identity.workspacePath, '.autobuild-sandbox-provisioned')
+      // Exclude the provisioning marker in this worktree's info/exclude so
+      // it never counts as dirt for the publish service's
+      // untracked-inclusive dirty check (f_c748dc6a). The marker is
+      // written untracked below; without the exclusion every first
+      // publish would refuse.
+      const markerName = '.autobuild-sandbox-provisioned'
+      const exclude = await this.gitOrThrow(identity.workspacePath, [
+        'rev-parse',
+        '--git-path',
+        'info/exclude',
+      ])
+      const excludePath = resolve(identity.workspacePath, exclude.stdout.trim())
+      await mkdir(excludePath.slice(0, excludePath.lastIndexOf(sep)), { recursive: true })
+      const existing = await fsReadFile(excludePath, 'utf8').then(
+        (content) => content,
+        () => '',
+      )
+      const lines = existing.split('\n')
+      if (!lines.includes(markerName)) {
+        const prefix = existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`
+        await fsWriteFile(excludePath, `${prefix}${markerName}\n`)
+      }
+      const marker = join(identity.workspacePath, markerName)
       const provisioned = await stat(marker).then(
         () => true,
         () => false,
@@ -578,7 +610,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       await this.git(input.repo, ['worktree', 'prune'])
       throw error
     }
-    return identity
+    return { ...identity, baseSha: baseHead }
   }
 
   /** One `sh -c` command inside the sandbox worktree with the credential-free
@@ -903,5 +935,94 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     this.repos.delete(path)
     // A local worktree has no snapshot concept; release is always complete.
     return { snapshots: { outcome: 'confirmed' } }
+  }
+
+  // ── Operator-sandbox publication (PR-only) ──────────────────
+  //
+  // The push and its probe run host-side in the sandbox worktree with the
+  // host's own forge configuration — exactly the transport a local build's
+  // finalize push uses (GitHubForge.pushBranch runs `git push` in the
+  // worktree); the only difference is an exact sha rather than HEAD, because
+  // publish accepts an explicit commit. No credential is ever handed to the
+  // sandbox itself: the sandbox performs no push, the provider does.
+
+  /** Same shape validation as the vercel publication adapter: an exact
+   * commit SHA and a canonical publication branch. */
+  private static assertPublicationInput(input: { sha: string; branch: string }): void {
+    if (!/^[0-9a-f]{40,64}$/i.test(input.sha) || !/^ab\/[a-z0-9][a-z0-9-]*$/.test(input.branch)) {
+      throw new Error('publication requires an exact commit SHA and canonical build branch')
+    }
+  }
+
+  /** Linked worktrees share the origin remote configuration with the main
+   * repository, so the probe runs from the worktree path itself. */
+  private async hasOriginRemote(cwd: string): Promise<boolean> {
+    const result = await this.git(cwd, ['remote'])
+    if (result.exitCode !== 0) return false
+    return result.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .includes('origin')
+  }
+
+  private async sandboxIsPublished(input: {
+    ref?: string
+    sha: string
+    branch: string
+  }): Promise<boolean> {
+    GitWorktreeProvider.assertPublicationInput(input)
+    if (input.ref === undefined || input.ref === '') {
+      throw new Error('the git-worktree publication probe requires the workspace ref')
+    }
+    const ref = resolve(input.ref)
+    if (await this.hasOriginRemote(ref)) {
+      const result = await this.git(ref, ['ls-remote', 'origin', `refs/heads/${input.branch}`])
+      if (result.exitCode !== 0) {
+        throw new GitError(['-C', ref, 'ls-remote', 'origin', `refs/heads/${input.branch}`], result)
+      }
+      return result.stdout
+        .split('\n')
+        .some((line) => line.trim() === `${input.sha}\trefs/heads/${input.branch}`)
+    }
+    // No origin remote (local-git-forge deployments, where a local finalize
+    // performs no network push): compare the branch locally. Linked
+    // worktrees share all refs with the main repository, so no bookkeeping
+    // beyond the worktree path is needed.
+    const head = await this.resolveOptionalCommit(ref, `refs/heads/${input.branch}`)
+    return head === input.sha
+  }
+
+  private async publishSandbox(input: { ref: string; sha: string; branch: string }): Promise<void> {
+    GitWorktreeProvider.assertPublicationInput(input)
+    const ref = resolve(input.ref)
+    if (await this.hasOriginRemote(ref)) {
+      const args = [
+        '-C',
+        ref,
+        'push',
+        '--no-verify',
+        'origin',
+        `${input.sha}:refs/heads/${input.branch}`,
+      ]
+      const result = await this.exec(['git', ...args], {})
+      if (result.exitCode !== 0) throw new GitError(args, result)
+      return
+    }
+    // Local equivalent of the finalize push for deployments without an
+    // origin remote: a ref move guarded so it can never be a
+    // non-fast-forward. The service refuses the base branch before this
+    // seam is reached.
+    const existing = await this.resolveOptionalCommit(ref, `refs/heads/${input.branch}`)
+    if (existing !== null && existing !== input.sha) {
+      if (!(await this.isAncestor(ref, existing, input.sha))) {
+        throw new Error(
+          `refusing to move refs/heads/${input.branch}: its current tip ${existing} ` +
+            `is not an ancestor of ${input.sha}`,
+        )
+      }
+    }
+    const args = ['-C', ref, 'update-ref', `refs/heads/${input.branch}`, input.sha]
+    const result = await this.git(ref, ['update-ref', `refs/heads/${input.branch}`, input.sha])
+    if (result.exitCode !== 0) throw new GitError(args, result)
   }
 }

@@ -278,6 +278,7 @@ describe('operator query wiring', () => {
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
+      publications: [],
     })
     expect(await getHarvestStatus(counting.store, REPO)).toMatchObject({
       repo: REPO,

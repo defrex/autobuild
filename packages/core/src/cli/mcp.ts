@@ -26,6 +26,8 @@ import type { Config } from '../config/schema'
 import type { Via } from '../events/envelope'
 import { defaultTriageState } from '../processes/dispatcher'
 import { createWorkspaceProvider } from '../ports/workspace/create'
+import { createForge } from '../ports/forge/create'
+import type { Forge } from '../ports/types'
 import { createTicketSource } from '../ports/tickets/create'
 import { loadPlugins } from '../plugins/load'
 import { AUTOBUILD_VERSION } from '../store/remote/version'
@@ -221,8 +223,9 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
         throw error
       }
       if (mcpConfig.orchestrator.enabled) {
+        const plugins = await loadPlugins(mcpConfig.plugins, context.checkout)
         const provider = await createWorkspaceProvider(mcpConfig.workspace, {
-          registry: await loadPlugins(mcpConfig.plugins, context.checkout),
+          registry: plugins,
           worktreeRoot: context.worktreeRoot,
           repoRoot: context.checkout,
           env: opts.env,
@@ -233,12 +236,30 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
           sandboxEnvironmentVariables: mcpConfig.orchestrator.sandbox.environmentVariables,
           orchestratorSandboxEnabled: true,
         })
+        // The forge is needed only for sandbox.publish; a construction
+        // failure must not drop every sandbox tool, so it is contained here
+        // and publication is silently omitted (canPublish stays false).
+        let forge: Forge | undefined
+        try {
+          forge = await createForge({
+            name: mcpConfig.forge,
+            registry: plugins,
+            env: opts.env,
+            repoRoot: context.checkout,
+            repository: context.repo,
+          })
+        } catch (forgeError) {
+          opts.stderr(
+            `ab mcp: forge unavailable, sandbox.publish omitted: ${forgeError instanceof Error ? forgeError.message : String(forgeError)}`,
+          )
+        }
         sandbox = await createOperatorSandboxService({
           store: context.store,
           repo: context.repo,
           provider,
           sandbox: mcpConfig.orchestrator.sandbox,
           baseBranch: mcpConfig.baseBranch,
+          ...(forge !== undefined ? { forge } : {}),
           ...(opts.clock !== undefined ? { clock: opts.clock } : {}),
         })
       }

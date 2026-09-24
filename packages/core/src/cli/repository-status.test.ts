@@ -77,6 +77,7 @@ describe('ab repository status', () => {
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
+      publications: [],
     })
     expect(getRepoStateEvents).toBe(0)
     expect(await store.getRepo(REPO)).toBeNull()
@@ -101,6 +102,7 @@ describe('ab repository status', () => {
         paused,
         defaultAutoMerge: true,
         sandboxes: [],
+        publications: [],
       })
       expect(await store.getRepoEvents(REPO)).toEqual(before)
     }
@@ -177,6 +179,82 @@ describe('ab repository status', () => {
     })
     const after = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
     expect(after.sandboxes.map((sandbox) => sandbox.operator)).toEqual(['other'])
+  })
+
+  test('publications project from the journal: newest first, latest per (operator, branch)', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo(REPO)
+    const publish = (operator: string, branch: string, sha: string, pr: number) =>
+      store.appendRepo(REPO, {
+        actor: humanActor(operator),
+        type: 'orchestrator.sandbox.published',
+        payload: {
+          operator,
+          environmentId: `autobuild-sandbox-${operator}`,
+          branch,
+          sha,
+          pr: {
+            number: pr,
+            url: `https://github.com/acme/widgets/pull/${pr}`,
+            headSha: sha,
+          },
+        },
+      })
+    await publish('ops', 'ab/orch-ops-11111111', 'a'.repeat(40), 1)
+    await publish('ops', 'ab/orch-ops-11111111', 'b'.repeat(40), 1)
+    await publish('other', 'ab/orch-other-22222222', 'c'.repeat(40), 2)
+    await publish('other', 'ab/orch-other-33333333', 'd'.repeat(40), 3)
+    const status = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
+    expect(status.publications).toEqual([
+      {
+        operator: 'other',
+        branch: 'ab/orch-other-33333333',
+        sha: 'd'.repeat(40),
+        prNumber: 3,
+        prUrl: 'https://github.com/acme/widgets/pull/3',
+        at: expect.any(String),
+      },
+      {
+        operator: 'other',
+        branch: 'ab/orch-other-22222222',
+        sha: 'c'.repeat(40),
+        prNumber: 2,
+        prUrl: 'https://github.com/acme/widgets/pull/2',
+        at: expect.any(String),
+      },
+      {
+        operator: 'ops',
+        branch: 'ab/orch-ops-11111111',
+        sha: 'b'.repeat(40),
+        prNumber: 1,
+        prUrl: 'https://github.com/acme/widgets/pull/1',
+        at: expect.any(String),
+      },
+    ])
+
+    // The session rides through when the fact carries one.
+    await store.appendRepo(REPO, {
+      actor: humanActor('ops'),
+      type: 'orchestrator.sandbox.published',
+      payload: {
+        operator: 'ops',
+        environmentId: 'autobuild-sandbox-ops',
+        branch: 'ab/orch-ops-44444444',
+        sha: 'e'.repeat(40),
+        session: 'sess-1',
+        pr: {
+          number: 4,
+          url: 'https://github.com/acme/widgets/pull/4',
+          headSha: 'e'.repeat(40),
+        },
+      },
+    })
+    const updated = projectRepositoryStatus(REPO, await store.getRepoEvents(REPO))
+    expect(updated.publications[0]).toMatchObject({ session: 'sess-1' })
+    const lines = renderRepositoryStatus(updated)
+    expect(
+      lines.some((line) => line.includes('PR #4') && line.includes('ab/orch-ops-44444444')),
+    ).toBe(true)
   })
 
   test('the query leaves repository events and unrelated build state unchanged', async () => {

@@ -182,6 +182,12 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'sandbox.publish': {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    approval: 'default',
+  },
 } as const satisfies Record<string, ToolAnnotationsTableEntry>
 
 export type OperatorToolName = keyof typeof OPERATOR_TOOL_ANNOTATIONS
