@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#537](https://github.com/defrex/autobuild/pull/537) — Pin the corrected AUT-580 plan steps at their code seams
 - [#532](https://github.com/defrex/autobuild/pull/532) — Pin the mine filter's repo-identity arms in CLI tests (wait parity)
 - [#533](https://github.com/defrex/autobuild/pull/533) — Derive PluginRegistry builtin workspace-providers from canonical list
 - [#531](https://github.com/defrex/autobuild/pull/531) — Heal the provisioning-marker exclusion on ensure's early return
