@@ -16,6 +16,8 @@ import type {
   ReadinessCheck,
   WorkspaceProviderCapabilities,
 } from '../ports/workspace/provider-capabilities'
+import { sandboxForbiddenEnvMessage } from '../ports/workspace/provider-capabilities'
+import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
 import type { VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
 import { loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
@@ -279,10 +281,34 @@ function declaredForgeEnvChecks(
   }
 }
 
+/** Sandbox-forwarding check driven by one provider's declared
+ * `sandboxForbiddenEnv` extras. Enforced at the registry-aware init seam so a
+ * plugin-declared forbidden name is refused before any infrastructure is
+ * provisioned, mirroring `createWorkspaceProvider`'s construction-site check:
+ * same gate (`[orchestrator].enabled`), same name union
+ * (`SANDBOX_FORBIDDEN_ENV` plus the declared extras), same message. A no-op
+ * repeat for builtins — config parse already rejected every shared and
+ * builtin-declared name — and a no-op when the declaration is absent. */
+function declaredSandboxForbiddenEnvCheck(
+  caps: WorkspaceProviderCapabilities | undefined,
+  config: Config,
+): void {
+  if (!config.orchestrator.enabled || caps?.sandboxForbiddenEnv === undefined) return
+  for (const name of config.orchestrator.sandbox.environmentVariables) {
+    if (SANDBOX_FORBIDDEN_ENV.includes(name) || caps.sandboxForbiddenEnv.includes(name)) {
+      throw new Error(sandboxForbiddenEnvMessage(name))
+    }
+  }
+}
+
 function hostPreflight(config: Config, env: Record<string, string | undefined>): void {
   // Pre-registry site: the builtin capability table drives the provider's
   // declared forge and environment requirements (AUT-516). Plugin providers
   // are checked registry-aware after plugin load in validateInitReadiness.
+  // The sandbox-forwarding rule is never enforced here: it is enforced at
+  // config parse for builtins (plugins are not loaded when config is parsed)
+  // and at the two post-load seams — this file's registry-aware check and
+  // createWorkspaceProvider construction — for plugin-declared names.
   const caps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
   declaredForgeEnvChecks(caps, config, env)
   // Stays exactly where today's remote-provider branch put it: only a
@@ -344,6 +370,9 @@ export async function validateInitReadiness(opts: {
     // builtins the registration carries the same declarations, so the check is
     // a no-op repeat after the preflight already passed.
     declaredForgeEnvChecks(caps, config, opts.env)
+    // Same seam, declared sandbox-forbidden extras (AUT-536): forge/env
+    // failures keep today's precedence, ticket acquisition follows.
+    declaredSandboxForbiddenEnvCheck(caps, config)
     // The registration's own configSchema and guestEnvNames take over from the
     // builtin table, so a plugin provider's readiness context carries its
     // parsed config and its declared names are redacted (f_55ba7591). A
