@@ -9,6 +9,7 @@ import type { TicketSourceContractFactory } from '../ports/tickets/contract'
 import type { ForgeContractFactory } from '../ports/forge/contract'
 import type { WorkspaceProviderContractFactory } from '../ports/workspace/contract'
 import type { WorkspaceProviderCapabilities } from '../ports/workspace/provider-capabilities'
+import type { RuntimeReferencesSource } from '../ports/workspace/provider-capabilities'
 
 /** Version of the in-process plugin contract exposed by `@defrex/autobuild/plugin-sdk`. */
 export const PLUGIN_API_VERSION = '1.6.0' as const
@@ -52,10 +53,47 @@ export type AgentRuntimePluginFactory<Config = Record<string, unknown>> = Plugin
   RuntimeRegistration,
   Config
 >
-export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> = PluginFactory<
-  WorkspaceProvider,
-  Config
->
+
+/** Context supplied when a registered workspace provider is constructed, on
+ * top of the shared `PluginFactoryContext` (AUT-505). Every field is optional
+ * and additive: only workspace-provider construction supplies them, and a
+ * plugin that ignores them stays source-compatible with API 1.6.0. The host
+ * supplies the same host-derived seams the former builtin construction closure
+ * received — store coordinates, effective runtime references, checkout-less
+ * origin/branch-head readers, and the operator-sandbox construction options —
+ * so a moved-out remote provider needs no further host changes. */
+export interface WorkspaceProviderPluginContext<Config = Record<string, unknown>>
+  extends PluginFactoryContext<Config> {
+  /** HTTPS BuildStore URL and scoped token, present when the host opened a
+   * store for this dispatch (remote providers require both). */
+  storeRef?: string
+  storeToken?: string
+  /** Host-derived effective routes; consumed only by remote providers. */
+  runtimeReferences?: RuntimeReferencesSource
+  /** Checkout-less seams: the repository's HTTPS origin, and a remote
+   * branch-head reader returning `undefined` for an absent branch. Absent
+   * seams fall back to host `git` from `repoRoot`. */
+  origin?: () => Promise<string>
+  remoteBranchHead?: (branch: string) => Promise<string | undefined>
+  /** Operator-sandbox options (AUT-340), set once at construction: the raw
+   * `[commands].setup` shell string and the forwarded non-secret variable
+   * names. The service never re-receives setup or variables. */
+  sandboxSetupCommand?: string
+  sandboxEnvironmentVariables?: readonly string[]
+  /** Whether `[orchestrator].enabled` is set at the call site. Gates the
+   * construction-site `sandboxForbiddenEnv` check, which the host runs before
+   * the factory is invoked; present so a plugin can reproduce the gate if it
+   * re-checks. */
+  orchestratorSandboxEnabled?: boolean
+}
+
+export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> = {
+  /** The method-index form intentionally makes this callback bivariant, so a
+   * plugin can retain its concrete config type across the erased manifest. */
+  invoke(
+    context: WorkspaceProviderPluginContext<Config>,
+  ): WorkspaceProvider | Promise<WorkspaceProvider>
+}['invoke']
 export type ForgePluginFactory<Config = Record<string, unknown>> = PluginFactory<Forge, Config>
 
 /** Optional host-enforced metadata for a workspace provider. Bare factories
