@@ -19,7 +19,7 @@ import type {
 import { sandboxForbiddenEnvMessage } from '../ports/workspace/provider-capabilities'
 import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
 import type { VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
-import { loadPlugins } from '../plugins/load'
+import { diagnosePlugins, loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
 import { inspectLocalStoreSnapshot } from '../store/local/store'
@@ -140,20 +140,48 @@ export async function runGuestReadinessProbe(opts: {
     // disposable environment and never constructs workspace providers, so a
     // configured provider plugin the guest cannot resolve is skipped with a
     // notice instead of failing readiness. The host-side validateInitReadiness
-    // sites stay strict.
-    const plugins = await loadPlugins(config.plugins, opts.repo, {
+    // sites stay strict. diagnosePlugins shares attemptPlugin with
+    // loadPlugins — same resulting registry — but returns per-module reports,
+    // so a resolution-stage skip (the guest tolerance path) can be surfaced
+    // in the check detail instead of degrading silently.
+    const diagnosis = await diagnosePlugins(config.plugins, opts.repo, {
       packageRoot,
       guest: true,
     })
+    // loadPlugins throws on the first failed report; diagnosePlugins does
+    // not, so restore that fail-closed precedence here: repo-path resolution
+    // failures and every post-resolution failure (evaluation, manifest,
+    // registration) stay fatal for the probe exactly as before, rendered by
+    // the surrounding catch into a `configuration and plugins` fail check.
+    const failedReport = diagnosis.reports.find((report) => report.status === 'failed')
+    if (failedReport !== undefined)
+      throw new Error(failedReport.error, { cause: failedReport.cause })
+    // Notice parity with loadPlugins: skipped loads were announced on stderr.
+    // Only resolution-stage skips alter the check detail; the transitional
+    // registration-stage skip (a configured plugin re-registering a builtin
+    // workspace provider) is the documented arrangement, not a problem, so it
+    // stays out of the report.
+    for (const report of diagnosis.reports) {
+      if (report.status === 'skipped' && report.notice !== undefined) console.error(report.notice)
+    }
+    const unresolved = diagnosis.reports.filter(
+      (report) => report.status === 'skipped' && report.stage === 'resolution',
+    )
+    let pluginDetail = `${config.plugins.length} configured plugin(s) loaded`
+    for (const report of unresolved) {
+      pluginDetail +=
+        `; ${report.notice}; to make "${report.module}" available to guests, ` +
+        "add the package to the repository's dependencies so it resolves from the repository install during commands.setup"
+    }
     runtimes = await materializePluginRuntimes(
       opts.runtimes ?? createProductionRuntimes().runtimes,
-      plugins,
+      diagnosis.registry,
       { repoRoot: opts.repo, env: opts.env },
     )
     checks.push({
       name: 'configuration and plugins',
       status: 'pass',
-      detail: `${config.plugins.length} configured plugin(s) loaded`,
+      detail: pluginDetail,
     })
   } catch (error) {
     return {

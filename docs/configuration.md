@@ -300,7 +300,12 @@ plugin module "@defrex/autobuild-vercel-sandbox" could not be resolved from repo
 ```
 
 Repository-path specifiers and every post-resolution failure (evaluation,
-manifest, collision) stay fail-closed everywhere, including guests.
+manifest, collision) stay fail-closed everywhere, including guests. The guest
+readiness probe surfaces a resolution-stage skip in its `configuration and
+plugins` check detail: the detail names the missing module (the skip notice
+quoted above) and the remediation — add the package to the repository's
+dependencies so it resolves from the repository install during
+`commands.setup`.
 
 Plugin authors import the stable surface from `@defrex/autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
