@@ -22,6 +22,7 @@ import {
   createReadinessRedactor,
   runGuestReadinessProbe,
   validateInitReadiness,
+  type GuestProbeReport,
   type InitValidationReport,
 } from './init-validation'
 import { runCli } from './main'
@@ -419,6 +420,144 @@ readyState = "ready"
 
     expect(report.checks.every((check) => check.status === 'pass')).toBe(true)
     expect(calls).toEqual(['runtime', 'listBuilds', 'close'])
+  })
+
+  test('surfaces a guest-unresolvable configured plugin in the check detail without failing readiness', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-skip-'))
+    roots.push(repo)
+    // Deliberately not the real plugin name: the impossible specifier must
+    // resolve from neither the repository root nor the installation root
+    // regardless of workspace layout.
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `plugins = ["@defrex/autobuild-definitely-not-a-plugin"]
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const calls: string[] = []
+    const notices: string[] = []
+    const originalError = console.error
+    console.error = (line: unknown) => {
+      notices.push(String(line))
+    }
+    let report: GuestProbeReport
+    try {
+      report = await runGuestReadinessProbe({
+        repo,
+        env: { AB_STORE: 'https://store.example' },
+        runtimes: {
+          fake: {
+            runner,
+            servesModels: [],
+            initUsable: async () => {
+              calls.push('runtime')
+              return { usable: true, reason: 'authenticated' }
+            },
+          },
+        },
+        openStore: () => readOnlyStore(calls),
+      })
+    } finally {
+      console.error = originalError
+    }
+    const plugins = report.checks.find((check) => check.name === 'configuration and plugins')
+    // The skip is deliberate, not a failure: the check stays pass but names
+    // the missing module (the loader's own notice text) and the sanctioned
+    // remediation — make the package resolvable from the repository.
+    expect(plugins?.status).toBe('pass')
+    expect(plugins?.detail).toContain('@defrex/autobuild-definitely-not-a-plugin')
+    expect(plugins?.detail).toContain('could not be resolved from')
+    expect(plugins?.detail).toContain('guests never construct workspace providers')
+    expect(plugins?.detail).toContain(
+      "add the package to the repository's dependencies so it resolves from the repository install during commands.setup",
+    )
+    // stderr notice parity with loadPlugins.
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('@defrex/autobuild-definitely-not-a-plugin')
+    // The skip is non-fatal: the runtime probe and the Store read still run.
+    expect(calls).toEqual(['runtime', 'listBuilds', 'close'])
+  })
+
+  test('keeps a repo-path plugin resolution failure fail-closed in the guest probe', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-fail-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `plugins = ["./absent-plugin.ts"]
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: { AB_STORE: 'https://store.example' },
+      runtimes: usableRuntime,
+      openStore: () => readOnlyStore([]),
+    })
+    // loadPlugins' fail-closed precedence is preserved: the probe stops at
+    // the plugin failure and renders the loader's error with the existing
+    // remediation; the runtime probe never runs.
+    expect(report.checks.map((check) => check.name)).toEqual([
+      'repository setup',
+      'configuration and plugins',
+    ])
+    const plugins = report.checks.find((check) => check.name === 'configuration and plugins')
+    expect(plugins?.status).toBe('fail')
+    expect(plugins?.detail).toContain('absent-plugin.ts')
+    expect(plugins?.detail).toContain('could not be resolved from repository')
+    expect(plugins?.detail).toContain(
+      'install or correct the configured plugin in this environment',
+    )
+  })
+
+  test('keeps the transitional registration skip out of the guest probe detail', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-plugin-regskip-'))
+    roots.push(repo)
+    // The real plugin resolves from this repository's root devDependency and
+    // is then registration-skipped against the builtin vercel-sandbox
+    // provider — the documented transitional arrangement, so the check detail
+    // must stay exactly as it was before the skip-surfacing change.
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `plugins = ["@defrex/autobuild-vercel-sandbox"]
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    const notices: string[] = []
+    const originalError = console.error
+    console.error = (line: unknown) => {
+      notices.push(String(line))
+    }
+    let report: GuestProbeReport
+    try {
+      report = await runGuestReadinessProbe({
+        repo,
+        env: { AB_STORE: 'https://store.example' },
+        runtimes: usableRuntime,
+        openStore: () => readOnlyStore([]),
+      })
+    } finally {
+      console.error = originalError
+    }
+    const plugins = report.checks.find((check) => check.name === 'configuration and plugins')
+    expect(plugins?.status).toBe('pass')
+    expect(plugins?.detail).toBe('1 configured plugin(s) loaded')
+    // The registration skip still announces itself on stderr, as before.
+    expect(notices.join('\n')).toContain('the builtin keeps serving')
   })
 
   test('probes both explicit and registry-default models selected on the same runtime', async () => {
@@ -1704,6 +1843,7 @@ source = "file"
 readyState = "ready"
 [orchestrator]
 enabled = true
+model = "test/mock"
 [orchestrator.sandbox]
 environmentVariables = ${sandbox}
 `

@@ -35,12 +35,28 @@ const turnTriggerSchema = z.discriminatedUnion('kind', [
   }),
 ])
 
-/** Matches the transcript usage shape (harvest.session.ended, §15.3). */
+/** Matches the transcript usage shape (harvest.session.ended, §15.3). The
+ * turn runner records the AI SDK's totalUsage token counts plus the step
+ * count. Old `turn.completed` events without `steps` still reduce. */
 const usageSchema = z.strictObject({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
+  steps: z.number().int().nonnegative(),
   turns: z.number().int().nonnegative().optional(),
 })
+
+/** The typed model-failure vocabulary (AUT-342): provider availability,
+ * exhaustion, credentials, and configuration are distinguished so a failed
+ * turn's class is visible in the session's reduced state and nothing is ever
+ * retried unboundedly. `internal` covers non-model failures — the dispatcher
+ * tick's crash reaper among them. */
+const turnFailureKindSchema = z.enum([
+  'provider-unavailable',
+  'exhausted',
+  'credentials',
+  'configuration',
+  'internal',
+])
 
 export const sessionEventPayloadSchemas = {
   /** The fact of creation; the session record carries the same title. */
@@ -52,11 +68,26 @@ export const sessionEventPayloadSchemas = {
   'session.wake-set': z.strictObject({
     globs: z.array(z.string().min(1)).max(100),
   }),
-  /** The (later) turn runner's start of one turn on its stream. */
+  /** The (later turn runner's) start of one turn on its stream. A wake
+   * turn additionally carries the delivered input — the attention event
+   * record and the build's reduced state, frozen at wake time — so a later
+   * invocation reconstructs the identical user message from durable state
+   * alone (live build state keeps moving; the frozen snapshot does not). */
   'turn.started': z.strictObject({
     turn: z.string().min(1),
     stream: z.string().min(1),
     trigger: turnTriggerSchema,
+    wake: z
+      .strictObject({
+        event: z.strictObject({
+          seq: positiveInt,
+          ts: z.string().min(1),
+          type: z.string().min(1),
+          payload: z.record(z.string(), z.unknown()),
+        }),
+        buildState: z.record(z.string(), z.unknown()),
+      })
+      .optional(),
   }),
   /** A turn was suspended for budget or for an approval. */
   'turn.suspended': z.strictObject({
@@ -80,8 +111,13 @@ export const sessionEventPayloadSchemas = {
   }),
   /** One turn finished. */
   'turn.completed': z.strictObject({ turn: z.string().min(1), usage: usageSchema }),
-  /** One turn failed. */
-  'turn.failed': z.strictObject({ turn: z.string().min(1), error: z.string().min(1) }),
+  /** One turn failed: `kind` is the typed failure class, `error` the
+   * human-readable message surfaced in the session's reduced state. */
+  'turn.failed': z.strictObject({
+    turn: z.string().min(1),
+    kind: turnFailureKindSchema,
+    error: z.string().min(1),
+  }),
   /** Terminal. The session is read-only afterwards. */
   'session.archived': empty,
 } as const

@@ -12,8 +12,18 @@ afterEach(async () => {
 })
 
 const TRACE_DIRECTORY = join('.next', 'server', 'app', 'api', 'dispatch')
+const OPERATOR_TRACE_DIRECTORY = join('.next', 'server', 'app', 'operator', '[[...path]]')
 
-async function fixture(archives: string[], trace?: string[]): Promise<string> {
+async function fixture(
+  archives: string[],
+  trace?: string[],
+  opts: {
+    operatorTrace?: string[]
+    withSkill?: boolean
+    /** Omit the operator route's trace file entirely (the missing-trace test). */
+    skipOperatorTrace?: boolean
+  } = {},
+): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'ab-ship-dist-'))
   temporary.push(root)
   await writeFile(join(root, 'package.json'), '{"name":"@defrex/autobuild","version":"0.6.0"}')
@@ -21,15 +31,38 @@ async function fixture(archives: string[], trace?: string[]): Promise<string> {
   for (const name of archives) {
     await writeFile(join(root, '.autobuild-dist', name), `archive ${name}`)
   }
+  // The canonical operate skill the ship step carries into both turn bundles.
+  if (opts.withSkill !== false) {
+    await mkdir(join(root, 'skills', 'operate'), { recursive: true })
+    await writeFile(join(root, 'skills', 'operate', 'SKILL.md'), '# operate skill\n')
+  }
   if (trace !== undefined) {
-    await mkdir(join(root, TRACE_DIRECTORY), { recursive: true })
+    // Both turn-executing routes ship trace files; the tool requires both.
+    for (const directory of [
+      TRACE_DIRECTORY,
+      opts.operatorTrace === undefined && opts.skipOperatorTrace !== true
+        ? OPERATOR_TRACE_DIRECTORY
+        : null,
+    ]) {
+      if (directory === null) continue
+      await mkdir(join(root, directory), { recursive: true })
+      await writeFile(
+        join(root, directory, 'route.js.nft.json'),
+        JSON.stringify({ version: 1, files: trace }),
+      )
+    }
+  }
+  if (opts.operatorTrace !== undefined) {
+    await mkdir(join(root, OPERATOR_TRACE_DIRECTORY), { recursive: true })
     await writeFile(
-      join(root, TRACE_DIRECTORY, 'route.js.nft.json'),
-      JSON.stringify({ version: 1, files: trace }),
+      join(root, OPERATOR_TRACE_DIRECTORY, 'route.js.nft.json'),
+      JSON.stringify({ version: 1, files: opts.operatorTrace }),
     )
   }
   return root
 }
+
+const skillOf = (root: string) => join(root, 'skills', 'operate', 'SKILL.md')
 
 const manifestOf = (root: string) => join(root, 'package.json')
 
@@ -40,6 +73,7 @@ describe('ship-packed-distribution', () => {
     const result = await ensureDistributionArchiveInTrace({
       root,
       manifest: manifestOf(root),
+      skill: skillOf(root),
       log: (message) => lines.push(message),
     })
     const traceFile = join(root, TRACE_DIRECTORY, 'route.js.nft.json')
@@ -48,6 +82,7 @@ describe('ship-packed-distribution', () => {
       '/absolutely/not/real.js',
       relative(join(traceFile, '..'), result.archive),
       relative(join(traceFile, '..'), manifestOf(root)),
+      relative(join(traceFile, '..'), skillOf(root)),
     ])
     expect(result.appended).toBe(true)
     expect(result.manifestAppended).toBe(true)
@@ -68,12 +103,19 @@ describe('ship-packed-distribution', () => {
       join(root, '.autobuild-dist', 'autobuild-0.6.0.tgz'),
     )
     const manifestEntry = relative(join(traceFile, '..'), manifestOf(root))
-    await writeFile(traceFile, JSON.stringify({ version: 1, files: [entry, manifestEntry] }))
+    await writeFile(
+      traceFile,
+      JSON.stringify({
+        version: 1,
+        files: [entry, manifestEntry, relative(join(traceFile, '..'), skillOf(root))],
+      }),
+    )
     const before = await readFile(traceFile, 'utf8')
     const lines: string[] = []
     const result = await ensureDistributionArchiveInTrace({
       root,
       manifest: manifestOf(root),
+      skill: skillOf(root),
       log: (m) => lines.push(m),
     })
     expect(result.appended).toBe(false)
@@ -85,21 +127,25 @@ describe('ship-packed-distribution', () => {
   test('throws when no archive has been packed', async () => {
     const root = await fixture([], ['/real.js'])
     await expect(
-      ensureDistributionArchiveInTrace({ root, manifest: manifestOf(root) }),
+      ensureDistributionArchiveInTrace({ root, manifest: manifestOf(root), skill: skillOf(root) }),
     ).rejects.toThrow('pack-distribution')
   })
 
   test('throws when more than one archive exists', async () => {
     const root = await fixture(['autobuild-0.6.0.tgz', 'autobuild-0.5.0.tgz'], ['/real.js'])
     await expect(
-      ensureDistributionArchiveInTrace({ root, manifest: manifestOf(root) }),
+      ensureDistributionArchiveInTrace({
+        root,
+        manifest: manifestOf(root),
+        skill: skillOf(root),
+      }),
     ).rejects.toThrow('expected exactly one archive')
   })
 
   test('throws when the trace file is missing', async () => {
     const root = await fixture(['autobuild-0.6.0.tgz'])
     await expect(
-      ensureDistributionArchiveInTrace({ root, manifest: manifestOf(root) }),
+      ensureDistributionArchiveInTrace({ root, manifest: manifestOf(root), skill: skillOf(root) }),
     ).rejects.toThrow('after `next build`')
   })
 
@@ -110,14 +156,25 @@ describe('ship-packed-distribution', () => {
       join(traceFile, '..'),
       join(root, '.autobuild-dist', 'autobuild-0.6.0.tgz'),
     )
-    await writeFile(traceFile, JSON.stringify({ version: 1, files: [entry] }))
+    await writeFile(
+      traceFile,
+      JSON.stringify({
+        version: 1,
+        files: [entry, relative(join(traceFile, '..'), skillOf(root))],
+      }),
+    )
     const result = await ensureDistributionArchiveInTrace({
       root,
       manifest: manifestOf(root),
+      skill: skillOf(root),
       log: () => {},
     })
     const { files } = JSON.parse(await readFile(traceFile, 'utf8'))
-    expect(files).toEqual([entry, relative(join(traceFile, '..'), manifestOf(root))])
+    expect(files).toEqual([
+      entry,
+      relative(join(traceFile, '..'), skillOf(root)),
+      relative(join(traceFile, '..'), manifestOf(root)),
+    ])
     expect(result.appended).toBe(false)
     expect(result.manifestAppended).toBe(true)
   })
@@ -125,16 +182,88 @@ describe('ship-packed-distribution', () => {
   test('throws when the distribution manifest is missing', async () => {
     const root = await fixture(['autobuild-0.6.0.tgz'], [])
     await expect(
-      ensureDistributionArchiveInTrace({ root, manifest: join(root, 'absent.json') }),
+      ensureDistributionArchiveInTrace({
+        root,
+        manifest: join(root, 'absent.json'),
+        skill: skillOf(root),
+      }),
     ).rejects.toThrow('missing distribution manifest')
   })
 
   test('defaults the manifest to the file provisioning reads', async () => {
     const root = await fixture(['autobuild-0.6.0.tgz'], [])
-    const result = await ensureDistributionArchiveInTrace({ root, log: () => {} })
+    const result = await ensureDistributionArchiveInTrace({
+      root,
+      skill: skillOf(root),
+      log: () => {},
+    })
     const traceFile = join(root, TRACE_DIRECTORY, 'route.js.nft.json')
     const { files } = JSON.parse(await readFile(traceFile, 'utf8'))
     expect(result.manifestAppended).toBe(true)
     expect(files).toContain(relative(join(traceFile, '..'), distributionManifestPath()))
+  })
+})
+
+describe('ship-packed-distribution — operate skill (AUT-342)', () => {
+  test('appends the operate skill to both turn-executing trace files', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], {
+      operatorTrace: [],
+    })
+    const result = await ensureDistributionArchiveInTrace({
+      root,
+      manifest: manifestOf(root),
+      skill: skillOf(root),
+      log: () => {},
+    })
+    expect(result.skillAppended).toEqual(['dispatch', 'operator'])
+    for (const directory of [TRACE_DIRECTORY, OPERATOR_TRACE_DIRECTORY]) {
+      const traceFile = join(root, directory, 'route.js.nft.json')
+      const { files } = JSON.parse(await readFile(traceFile, 'utf8'))
+      expect(files).toContain(relative(join(traceFile, '..'), skillOf(root)))
+    }
+  })
+
+  test('is a no-op for the skill when both traces already carry it', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], { operatorTrace: [] })
+    for (const directory of [TRACE_DIRECTORY, OPERATOR_TRACE_DIRECTORY]) {
+      const traceFile = join(root, directory, 'route.js.nft.json')
+      const parsed = JSON.parse(await readFile(traceFile, 'utf8'))
+      await writeFile(
+        traceFile,
+        JSON.stringify({
+          ...parsed,
+          files: [...parsed.files, relative(join(traceFile, '..'), skillOf(root))],
+        }),
+      )
+    }
+    const result = await ensureDistributionArchiveInTrace({
+      root,
+      manifest: manifestOf(root),
+      skill: skillOf(root),
+      log: () => {},
+    })
+    expect(result.skillAppended).toEqual([])
+  })
+
+  test('throws loudly when the operate skill file is missing', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], { withSkill: false, operatorTrace: [] })
+    await expect(
+      ensureDistributionArchiveInTrace({
+        root,
+        manifest: manifestOf(root),
+        skill: skillOf(root),
+      }),
+    ).rejects.toThrow('missing canonical operate skill')
+  })
+
+  test('throws loudly when the operator route trace file is missing', async () => {
+    const root = await fixture(['autobuild-0.6.0.tgz'], [], { skipOperatorTrace: true })
+    await expect(
+      ensureDistributionArchiveInTrace({
+        root,
+        manifest: manifestOf(root),
+        skill: skillOf(root),
+      }),
+    ).rejects.toThrow('operator/[[...path]]/route.js.nft.json')
   })
 })

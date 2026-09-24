@@ -223,6 +223,13 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     ): Promise<SessionEventEnvelope<T>> {
       return Promise.reject(new BuildScopeError(scope, 'appendSessionEvent', id))
     },
+    appendSessionEventIfCurrent<T extends SessionEventType>(
+      id: string,
+      _expectedSeq: number,
+      _event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T> | null> {
+      return Promise.reject(new BuildScopeError(scope, 'appendSessionEventIfCurrent', id))
+    },
     getSessionEvents(id: string, _sinceSeq?: number): Promise<SessionEvent[]> {
       return Promise.reject(new BuildScopeError(scope, 'getSessionEvents', id))
     },
