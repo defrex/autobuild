@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
 - [#561](https://github.com/defrex/autobuild/pull/561) — Extend the plugin workspace-provider factory context (AUT-560)
 - [#559](https://github.com/defrex/autobuild/pull/559) — Retry PostgresTicketSource on cached-plan invalidation (AUT-559)
 - [#558](https://github.com/defrex/autobuild/pull/558) — Make the git-worktree readiness call site strict via a guest option
