@@ -458,7 +458,14 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           // The embedded orchestrator (AUT-342): the turn runner binds the
           // in-process registry exactly as the tools route does — same store,
           // same ticket backend, repository-scoped — and its model resolves
-          // through the deployment's gateway credential.
+          // through the deployment's gateway credential. The factory is
+          // constructed here deliberately, not threaded through
+          // `HostedStoreServiceOptions`: only `openStoreHandler` holds the
+          // store, clock, and ticket backend it binds. web/runtime.ts reaches
+          // this operator server only through
+          // `HostedStoreServiceOptions.scheduleBackground` (Next's `after()`
+          // in the hosted route's request context); standalone deployments
+          // and tests fall back to the detached-promise default below.
           orchestrator: {
             createRunner: async (orchestratorConfig, repo, credentials) => {
               // The sandbox backend degrades the sandbox tools only: a

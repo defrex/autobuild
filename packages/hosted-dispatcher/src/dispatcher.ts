@@ -384,6 +384,11 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
         }
         try {
           await dispatch({
+            // `targetRepo` here is a caller-facing identity token, not a
+            // path: origin mode (AUT-302) has no checkout. `abDispatch`
+            // replaces it with the per-origin scratch root before plugin
+            // loading or any other filesystem consumer runs, so the token
+            // never participates in cwd-relative disk resolution (AUT-604).
             targetRepo: '<hosted-dispatcher>',
             repository,
             once: true,
