@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#534](https://github.com/defrex/autobuild/pull/534) — Name unresolvable guest plugins in the readiness probe detail
 - [#529](https://github.com/defrex/autobuild/pull/529) — Map sandbox.publish foreign-repo failures to the sandbox-publish code
 - [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
 - [#526](https://github.com/defrex/autobuild/pull/526) — Add PR-only publication from operator sandboxes via sandbox.publish
