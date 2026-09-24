@@ -111,7 +111,7 @@ describe('session reducer', () => {
       started,
       event(3, RUNNER, 'turn.completed', {
         turn: 't1',
-        usage: { inputTokens: 10, outputTokens: 5, turns: 1 },
+        usage: { inputTokens: 10, outputTokens: 5, steps: 2, turns: 1 },
       }),
     ])
     expect(completed.status).toBe('idle')
@@ -122,16 +122,43 @@ describe('session reducer', () => {
       startedSeq: 2,
       trigger: { kind: 'message', messageSeq: 1 },
       state: 'completed',
-      usage: { inputTokens: 10, outputTokens: 5, turns: 1 },
+      usage: { inputTokens: 10, outputTokens: 5, steps: 2, turns: 1 },
     })
 
     const failed = reduceSession([
       ...base,
       started,
-      event(3, RUNNER, 'turn.failed', { turn: 't1', error: 'provider 500' }),
+      event(3, RUNNER, 'turn.failed', {
+        turn: 't1',
+        kind: 'provider-unavailable',
+        error: 'provider 500',
+      }),
     ])
     expect(failed.status).toBe('idle')
-    expect(failed.turns[0]).toMatchObject({ state: 'failed', error: 'provider 500' })
+    expect(failed.turns[0]).toMatchObject({
+      state: 'failed',
+      error: 'provider 500',
+      kind: 'provider-unavailable',
+    })
+
+    // An old-format turn.completed without steps still reduces (the reducer
+    // never re-validates; the store validated at append time).
+    const legacy = reduceSession([
+      ...base,
+      started,
+      {
+        session: 's1',
+        seq: 3,
+        ts: '2026-01-01T00:00:00Z',
+        actor: RUNNER,
+        type: 'turn.completed',
+        payload: { turn: 't1', usage: { inputTokens: 3, outputTokens: 2 } },
+      } as never,
+    ])
+    expect(legacy.turns[0]).toMatchObject({
+      state: 'completed',
+      usage: { inputTokens: 3, outputTokens: 2 },
+    })
   })
 
   test('a requested approval raises awaiting-approval above running and suspended', () => {
@@ -159,7 +186,7 @@ describe('session reducer', () => {
     expect(suspended.suspendedCause).toBeUndefined()
   })
 
-  test('an answered approval clears the pending approval and hands status back to the open turn', () => {
+  test('an answered approval clears the pending approval; only turn.resumed resumes the turn', () => {
     const events = [
       event(1, OPERATOR, 'session.created', {}),
       turnStarted(2, 't1', { kind: 'message', messageSeq: 1 }),
@@ -171,15 +198,20 @@ describe('session reducer', () => {
         decision: 'approve',
       }),
     ]
+    // The answer clears the pending approval but the turn stays suspended:
+    // `turn.resumed` — recorded by the runner when it actually picks the turn
+    // up — is the sole resume fact, so an answered approval whose resuming
+    // invocation dies remains recoverable by the dispatcher tick.
     const answered = reduceSession(events)
-    expect(answered.status).toBe('running')
+    expect(answered.status).toBe('suspended')
+    expect(answered.suspendedCause).toBe('approval')
     expect(answered.pendingApproval).toBeUndefined()
-    expect(answered.turns[0]?.state).toBe('open')
+    expect(answered.turns[0]?.state).toBe('suspended')
 
-    // The runner's turn.resumed acknowledgement is idempotent afterwards.
-    expect(
-      reduceSession([...events, event(6, RUNNER, 'turn.resumed', { turn: 't1' })]).status,
-    ).toBe('running')
+    // The runner's turn.resumed moves the turn back to open.
+    const resumed = reduceSession([...events, event(6, RUNNER, 'turn.resumed', { turn: 't1' })])
+    expect(resumed.status).toBe('running')
+    expect(resumed.turns[0]?.state).toBe('open')
   })
 
   test('a deny answers the same way; a non-matching answer leaves the approval pending', () => {
@@ -224,7 +256,7 @@ describe('session reducer', () => {
       event(3, OPERATOR, 'session.archived', {}),
       event(4, RUNNER, 'turn.completed', {
         turn: 't1',
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, steps: 1 },
       }),
       requestApproval(5),
     ])
@@ -249,7 +281,7 @@ describe('session reducer', () => {
     const complete = (seq: number) =>
       event(seq, RUNNER, 'turn.completed', {
         turn: 't1',
-        usage: { inputTokens: 0, outputTokens: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, steps: 1 },
       })
 
     // idle (created only)
@@ -264,9 +296,9 @@ describe('session reducer', () => {
     expect(
       reduceSession([created, started, suspend(3, 'approval'), requestApproval(4)]).status,
     ).toBe('awaiting-approval')
-    // the answer clears the approval and resumes the turn (the runner's
-    // `turn.resumed` is only an acknowledgement) — even when the suspension
-    // was for budget.
+    // the answer clears the approval; the turn stays suspended and the
+    // dispatcher tick's resume pass (or the next runner) records `turn.resumed`
+    // — even when the suspension was for budget.
     const answeredBudget = reduceSession([
       created,
       started,
@@ -274,8 +306,8 @@ describe('session reducer', () => {
       requestApproval(4),
       answer(5),
     ])
-    expect(answeredBudget.status).toBe('running')
-    expect(answeredBudget.suspendedCause).toBeUndefined()
+    expect(answeredBudget.status).toBe('suspended')
+    expect(answeredBudget.suspendedCause).toBe('budget')
     // answer then resume → running
     expect(
       reduceSession([

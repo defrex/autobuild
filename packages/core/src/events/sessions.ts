@@ -35,12 +35,28 @@ const turnTriggerSchema = z.discriminatedUnion('kind', [
   }),
 ])
 
-/** Matches the transcript usage shape (harvest.session.ended, §15.3). */
+/** Matches the transcript usage shape (harvest.session.ended, §15.3). The
+ * turn runner records the AI SDK's totalUsage token counts plus the step
+ * count. Old `turn.completed` events without `steps` still reduce. */
 const usageSchema = z.strictObject({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
+  steps: z.number().int().nonnegative(),
   turns: z.number().int().nonnegative().optional(),
 })
+
+/** The typed model-failure vocabulary (AUT-342): provider availability,
+ * exhaustion, credentials, and configuration are distinguished so a failed
+ * turn's class is visible in the session's reduced state and nothing is ever
+ * retried unboundedly. `internal` covers non-model failures — the dispatcher
+ * tick's crash reaper among them. */
+const turnFailureKindSchema = z.enum([
+  'provider-unavailable',
+  'exhausted',
+  'credentials',
+  'configuration',
+  'internal',
+])
 
 export const sessionEventPayloadSchemas = {
   /** The fact of creation; the session record carries the same title. */
@@ -80,8 +96,13 @@ export const sessionEventPayloadSchemas = {
   }),
   /** One turn finished. */
   'turn.completed': z.strictObject({ turn: z.string().min(1), usage: usageSchema }),
-  /** One turn failed. */
-  'turn.failed': z.strictObject({ turn: z.string().min(1), error: z.string().min(1) }),
+  /** One turn failed: `kind` is the typed failure class, `error` the
+   * human-readable message surfaced in the session's reduced state. */
+  'turn.failed': z.strictObject({
+    turn: z.string().min(1),
+    kind: turnFailureKindSchema,
+    error: z.string().min(1),
+  }),
   /** Terminal. The session is read-only afterwards. */
   'session.archived': empty,
 } as const

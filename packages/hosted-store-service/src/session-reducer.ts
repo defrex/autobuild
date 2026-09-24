@@ -21,8 +21,11 @@ export interface SessionTurn {
   startedSeq: number
   trigger: SessionTurnTrigger
   state: TurnOutcomeState
-  usage?: { inputTokens: number; outputTokens: number; turns?: number }
+  usage?: { inputTokens: number; outputTokens: number; steps: number; turns?: number }
   error?: string
+  /** The typed failure class of a failed turn (provider-unavailable,
+   * exhausted, credentials, configuration, or internal). */
+  kind?: 'provider-unavailable' | 'exhausted' | 'credentials' | 'configuration' | 'internal'
 }
 
 export interface SessionState {
@@ -118,11 +121,13 @@ export function reduceSession(events: SessionEvent[]): SessionState {
           pendingApproval.toolCallId === event.payload.toolCallId
         ) {
           pendingApproval = undefined
-          // The answer resumes the turn; `turn.resumed` is the runner's
-          // acknowledgement of the same fact, so between answer and resume
-          // the status is already `running` when a turn is open.
-          const entry = turns.findLast((candidate) => candidate.turn === event.payload.turn)
-          if (entry && entry.state === 'suspended') entry.state = 'open'
+          // The answer only clears the pending approval — `turn.resumed` is
+          // the sole resume fact, recorded by the runner when it actually
+          // picks the turn up. Flipping the turn state here (the earlier
+          // behavior) made a session look `running` while no runner existed:
+          // an answered approval whose resuming invocation died would be
+          // unrecoverable. The status sequence after an answer is therefore
+          // awaiting-approval → suspended(approval) → running.
         }
         break
       }
@@ -139,6 +144,7 @@ export function reduceSession(events: SessionEvent[]): SessionState {
         if (entry && !isTerminal(entry.state)) {
           entry.state = 'failed'
           entry.error = event.payload.error
+          entry.kind = event.payload.kind
         }
         break
       }
