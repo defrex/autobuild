@@ -1300,7 +1300,16 @@ forge, ticket-provider, or model credential, and naming any of `AB_STORE`,
 `AB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY`, `VERCEL_OIDC_TOKEN`,
 `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, or `AI_GATEWAY_API_KEY`
 in `environmentVariables` is a config error. The typed operator tools remain
-the only route to build state from inside the sandbox. Tool bounds:
+the only route to build state from inside the sandbox. A workspace-provider
+plugin can declare additional forbidden names via its registration's
+`capabilities.sandboxForbiddenEnv`; those are enforced at the post-load seams
+(provider construction and `ab init --validate`) rather than at config parse,
+because plugins are not loaded when configuration is parsed — a deliberate
+deferral, not an oversight. Concretely, the shared names above are rejected
+when the config is parsed, plugin-declared extras are rejected when the
+provider is constructed (dispatch and `ab mcp`), and `ab init --validate`
+re-checks both sets after plugins load, before any infrastructure is
+provisioned. Tool bounds:
 `sandbox.exec` waits at most 300 seconds; stdout and stderr are each truncated
 at 65,536 bytes with a `[truncated by autobuild: output exceeded 65536 bytes]`
 marker; `sandbox.reset` and archiving an operator's last session are

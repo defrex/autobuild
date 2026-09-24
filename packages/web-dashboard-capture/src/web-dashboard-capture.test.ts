@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { DashboardBuild, DashboardModel } from '@defrex/autobuild/operator-presentation'
 import {
@@ -118,10 +120,10 @@ function models(): WebFixtureModels {
   return { happy, mixed }
 }
 
-test('every web frame renders its required evidence and none of the forbidden', () => {
+test('every web frame renders its required evidence and none of the forbidden', async () => {
   const fixtures = models()
   for (const spec of WEB_FRAME_SPECS) {
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     expect(() => checkEvidence(spec, html), spec.id).not.toThrow()
     expect(html, spec.id).not.toContain('<script')
     expect(html, spec.id).toContain('<!doctype html>')
@@ -134,12 +136,12 @@ test('every web frame renders its required evidence and none of the forbidden', 
   }
 })
 
-test('selected Harvest frames keep the run action in the row register without a footer', () => {
+test('selected Harvest frames keep the run action in the row register without a footer', async () => {
   const fixtures = models()
   for (const id of ['builds-harvest-wide', 'builds-harvest-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
 
     expect(html).toContain('aria-label="RESUME Harvest run h1"')
     expect(html).not.toContain('class="fastext"')
@@ -147,7 +149,7 @@ test('selected Harvest frames keep the run action in the row register without a 
   }
 })
 
-test('Harvest acknowledge is rendered as a run-qualified row control', () => {
+test('Harvest acknowledge is rendered as a run-qualified row control', async () => {
   const fixtures = models()
   const harvest = fixtures.happy.harvest
   if (!harvest) throw new Error('happy fixture has no Harvest run')
@@ -156,20 +158,20 @@ test('Harvest acknowledge is rendered as a run-qualified row control', () => {
     harvest: { ...harvest, status: 'escalated', action: 'acknowledge' },
   }
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-harvest-wide')!
-  const html = renderWebFrame(spec, { ...fixtures, happy: model }, { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, { ...fixtures, happy: model }, { css: '', fontCss: '' })
 
   expect(html).toContain('aria-label="ACKNOWLEDGE Harvest run h1"')
   expect(html).toContain('>ACKNOWLEDGE</button>')
 })
 
-test('singleton capture frames omit the repository selector', () => {
+test('singleton capture frames omit the repository selector', async () => {
   const fixtures = models()
   const singletonFrames = WEB_FRAME_SPECS.filter(
     (spec) => spec.id.startsWith('builds-') && spec.id !== 'builds-multirepo-wide',
   )
 
   for (const spec of singletonFrames) {
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
     expect(nav, spec.id).toBeDefined()
     expect(nav, spec.id).not.toContain('<label class="repo">')
@@ -177,10 +179,10 @@ test('singleton capture frames omit the repository selector', () => {
   }
 })
 
-test('multi-repository capture frame exposes the selector and both options', () => {
+test('multi-repository capture frame exposes the selector and both options', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-multirepo-wide')
   if (!spec) throw new Error('multi-repository frame spec is missing')
-  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
 
   expect(html).toContain('<label class="repo">')
   expect(html).toContain('<span class="slack">repo </span>')
@@ -188,10 +190,10 @@ test('multi-repository capture frame exposes the selector and both options', () 
   expect(html).toContain('<option selected="">example/repository</option>')
   expect(html).toContain('<option>example/alternate</option>')
 })
-test('signed-in frames are tabless and Builds ticket ids remain plain text', () => {
+test('signed-in frames are tabless and Builds ticket ids remain plain text', async () => {
   const fixtures = models()
   for (const spec of WEB_FRAME_SPECS.filter((frame) => frame.id.startsWith('builds-'))) {
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     const nav = html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0]
     expect(nav, spec.id).toBeDefined()
     expect(nav, spec.id).not.toContain('BUILDS')
@@ -201,17 +203,17 @@ test('signed-in frames are tabless and Builds ticket ids remain plain text', () 
 
   const happy = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')
   if (!happy) throw new Error('happy frame spec is missing')
-  const html = renderWebFrame(happy, fixtures, { css: '', fontCss: '' })
+  const html = await renderWebFrame(happy, fixtures, { css: '', fontCss: '' })
   expect(html).toContain('<span class="ticket">AUT-131</span>')
   expect(html).not.toMatch(/<a[^>]*>AUT-131<\/a>/)
 })
 
-test('loading frames preserve shell landmarks and expose only one hidden announcement', () => {
+test('loading frames preserve shell landmarks and expose only one hidden announcement', async () => {
   const fixtures = models()
   for (const id of ['builds-loading-wide', 'builds-loading-narrow']) {
     const spec = WEB_FRAME_SPECS.find((entry) => entry.id === id)
     expect(spec).toBeDefined()
-    const html = renderWebFrame(spec!, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec!, fixtures, { css: '', fontCss: '' })
     expect(html).toContain('<main class="frame">')
     expect(html).toContain('<header class="masthead">')
     expect(html).toContain('<nav class="line navline"')
@@ -234,12 +236,12 @@ test('loading frames preserve shell landmarks and expose only one hidden announc
   }
 })
 
-test('running and paused repositories use terminal-compatible control vocabulary', () => {
+test('running and paused repositories use terminal-compatible control vocabulary', async () => {
   const fixtures = models()
   const happySpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-happy-wide')!
   const mixedSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-rest-wide')!
-  const happy = renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
-  const mixed = renderWebFrame(mixedSpec, fixtures, { css: '', fontCss: '' })
+  const happy = await renderWebFrame(happySpec, fixtures, { css: '', fontCss: '' })
+  const mixed = await renderWebFrame(mixedSpec, fixtures, { css: '', fontCss: '' })
   const controlLandmark = (html: string) =>
     html.match(/<nav class="line navline"[\s\S]*?<\/nav>/)?.[0] ?? ''
 
@@ -267,10 +269,10 @@ test('build row controls contain only authoritative lifecycle and destructive ac
   }
 })
 
-test('rendered build controls follow previews and direct controls name their target', () => {
+test('rendered build controls follow previews and direct controls name their target', async () => {
   const fixtures = models()
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-focus-wide')!
-  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const slug = 'plan-blocked-dashboard'
   const start = html.indexOf(`id="build-${slug}"`)
   const end = html.indexOf('id="build-implement-blocked-dashboard"', start)
@@ -286,7 +288,7 @@ test('rendered build controls follow previews and direct controls name their tar
     expect(row).not.toContain(`aria-label="${label} ${slug}"`)
   }
   const detailSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
-  const detail = renderWebFrame(detailSpec, fixtures, { css: '', fontCss: '' })
+  const detail = await renderWebFrame(detailSpec, fixtures, { css: '', fontCss: '' })
   const toolbar = detail.match(
     /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
   )?.[0]
@@ -295,11 +297,11 @@ test('rendered build controls follow previews and direct controls name their tar
     expect(toolbar).toContain(`aria-label="${label} ${slug}"`)
   }
   const harvestSpec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-harvest-wide')!
-  const harvest = renderWebFrame(harvestSpec, fixtures, { css: '', fontCss: '' })
+  const harvest = await renderWebFrame(harvestSpec, fixtures, { css: '', fontCss: '' })
   expect(harvest).toContain('aria-label="RESUME Harvest run')
 })
 
-test('auto-merge indicator exposes all states and maps desired-state commands', () => {
+test('auto-merge indicator exposes all states and maps desired-state commands', async () => {
   expect(autoMergeAction(build({ autoMerge: 'off' }))).toBe('auto-merge-on')
   for (const state of ['requested', 'enabled', 'cancelling'] as const) {
     expect(autoMergeAction(build({ autoMerge: state })), state).toBe('auto-merge-off')
@@ -318,7 +320,7 @@ test('auto-merge indicator exposes all states and maps desired-state commands', 
         ),
       },
     }
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     const button = html.match(
       new RegExp(
         `<button[^>]*(?:data-am="${state}"[^>]*aria-label="Auto merge ${state} for ${slug}"|aria-label="Auto merge ${state} for ${slug}"[^>]*data-am="${state}")[^>]*>`,
@@ -331,7 +333,7 @@ test('auto-merge indicator exposes all states and maps desired-state commands', 
     expect(button?.includes('disabled=""'), state).toBe(false)
   }
 
-  const pendingHtml = renderWebFrame({ ...spec, controlPending: true }, base, {
+  const pendingHtml = await renderWebFrame({ ...spec, controlPending: true }, base, {
     css: '',
     fontCss: '',
   })
@@ -348,7 +350,7 @@ test('auto-merge indicator exposes all states and maps desired-state commands', 
       ),
     },
   }
-  const unavailableHtml = renderWebFrame(spec, unavailable, { css: '', fontCss: '' })
+  const unavailableHtml = await renderWebFrame(spec, unavailable, { css: '', fontCss: '' })
   expect(
     unavailableHtml.match(
       new RegExp(`<button[^>]*disabled=""[^>]*Auto merge off for ${slug}[^>]*>`),
@@ -356,10 +358,10 @@ test('auto-merge indicator exposes all states and maps desired-state commands', 
   ).toBeTruthy()
 })
 
-test('hover frame keeps committed and preview state independent', () => {
+test('hover frame keeps committed and preview state independent', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-hover-wide')
   if (!spec) throw new Error('hover frame spec is missing')
-  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
 
   expect(html.match(/data-selected="true"/g)).toHaveLength(1)
   expect(html.match(/data-hovered="true"/g)).toHaveLength(1)
@@ -378,10 +380,10 @@ test('hover frame keeps committed and preview state independent', () => {
   )
 })
 
-test('expanded detail is controlled and named by the build title', () => {
+test('expanded detail is controlled and named by the build title', async () => {
   const fixtures = models()
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-detail-wide')!
-  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const slug = 'plan-blocked-dashboard'
 
   expect(html).toContain(`aria-label="Close details for ${slug}"`)
@@ -389,12 +391,12 @@ test('expanded detail is controlled and named by the build title', () => {
   expect(html).toContain(`id="detail-${slug}" aria-label="${slug} detail"`)
 })
 
-test('answer frames expose only row-local submit and cancel while retaining focused input and detail', () => {
+test('answer frames expose only row-local submit and cancel while retaining focused input and detail', async () => {
   const fixtures = models()
   for (const id of ['builds-mixed-answer-wide', 'builds-mixed-answer-narrow']) {
     const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
     if (!spec) throw new Error(`${id} frame spec is missing`)
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     const toolbar = html.match(
       /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
     )?.[0]
@@ -418,17 +420,17 @@ test('answer frames expose only row-local submit and cancel while retaining focu
     expect(html).not.toContain('class="fastext"')
   }
   const wide = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
-  expect(evidenceText(renderWebFrame(wide, fixtures, { css: '', fontCss: '' }))).toContain(
+  expect(evidenceText(await renderWebFrame(wide, fixtures, { css: '', fontCss: '' }))).toContain(
     'Answer escalation',
   )
 })
 
-test('pending answer context disables row-local submit and cancel', () => {
+test('pending answer context disables row-local submit and cancel', async () => {
   const fixtures = models()
   const model = fixtures.mixed
   const selected = model.builds.find((row) => row.blockers.length > 0)!
   const base = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-answer-wide')!
-  const pendingHtml = renderWebFrame({ ...base, answerPending: true }, fixtures, {
+  const pendingHtml = await renderWebFrame({ ...base, answerPending: true }, fixtures, {
     css: '',
     fontCss: '',
   })
@@ -441,10 +443,10 @@ test('pending answer context disables row-local submit and cancel', () => {
   )
 })
 
-test('post-cancel abort frame replaces answer mode with local confirmation controls', () => {
+test('post-cancel abort frame replaces answer mode with local confirmation controls', async () => {
   const fixtures = models()
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-mixed-abort-wide')!
-  const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
   const toolbar = html.match(
     /<div class="controls actions" role="toolbar" aria-label="Controls for plan-blocked-dashboard"[\s\S]*?<\/div>/,
   )?.[0]
@@ -456,10 +458,10 @@ test('post-cancel abort frame replaces answer mode with local confirmation contr
   expect(toolbar).not.toContain('aria-label="SUBMIT answer for plan-blocked-dashboard"')
 })
 
-test('narrow capture frames never supply a hover preview', () => {
+test('narrow capture frames never supply a hover preview', async () => {
   const fixtures = models()
   for (const spec of WEB_FRAME_SPECS.filter((frame) => frame.width === 390)) {
-    const html = renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
+    const html = await renderWebFrame(spec, fixtures, { css: '', fontCss: '' })
     expect(html, spec.id).not.toContain('data-hovered="true"')
   }
 })
@@ -492,16 +494,16 @@ test('evidence text decodes the entities the renderer escapes', () => {
   )
 })
 
-test('a frame missing its evidence fails the capture by name', () => {
+test('a frame missing its evidence fails the capture by name', async () => {
   const spec = { ...WEB_FRAME_SPECS[0]!, requires: ['NOT PRESENT'] }
-  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
   expect(() => checkEvidence(spec, html)).toThrow(/required evidence "NOT PRESENT"/)
 })
 
-test('the parked no-consent frame renders the shared reason in row and detail (f_b163d7ca)', () => {
+test('the parked no-consent frame renders the shared reason in row and detail (f_b163d7ca)', async () => {
   const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'builds-parked-no-consent-wide')
   if (!spec) throw new Error('builds-parked-no-consent-wide frame spec is missing')
-  const html = renderWebFrame(spec, models(), { css: '', fontCss: '' })
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
   const reason = 'no auto-merge consent has been requested'
   // Both surfaces, same words: the row register and the open detail register.
   expect(evidenceText(html).split(reason)).toHaveLength(3)
@@ -509,6 +511,56 @@ test('the parked no-consent frame renders the shared reason in row and detail (f
   // The observed mismatch is visible in the row markup, not just the words:
   // default ON with the build's consent off marks the token.
   expect(html).toContain('data-mismatch')
+})
+
+test('the named consent frame renders the real page with its registered client', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'consent-named-wide')
+  if (!spec) throw new Error('consent-named-wide frame spec is missing')
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+
+  // The page reuses the sign-in frame classes and the shared button outline.
+  expect(html).toContain('frame signin')
+  expect(html).toContain('class="btn"')
+  const text = evidenceText(html)
+  expect(text).toContain('Capture MCP Console')
+  expect(text).toContain('registered as')
+  expect(text).toContain('mcp-capture-console')
+  expect(text).toContain('Requested scopes: openid profile email')
+})
+
+test('the unnamed consent frame falls back to the raw client id', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'consent-unnamed-narrow')
+  if (!spec) throw new Error('consent-unnamed-narrow frame spec is missing')
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+
+  const text = evidenceText(html)
+  expect(text).toContain('A client registered as mcp-capture-console')
+  expect(text).not.toContain('Capture MCP Console')
+})
+
+test('consent frames never render the missing-authorization-code notice', async () => {
+  for (const id of ['consent-named-wide', 'consent-unnamed-narrow']) {
+    const spec = WEB_FRAME_SPECS.find((frame) => frame.id === id)
+    if (!spec) throw new Error(`${id} frame spec is missing`)
+    const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+    expect(evidenceText(html), id).not.toContain('missing its authorization code')
+  }
+})
+
+test('the skill artifact list names exactly the frames the capture renders', async () => {
+  const skill = await readFile(
+    join(import.meta.dir, '../../../.agents/skills/verify-web-dashboard/SKILL.md'),
+    'utf8',
+  )
+  const listed = [...skill.matchAll(/web-dashboard-frame:([a-z0-9-]+):png/g)].map(
+    (match) => match[1]!,
+  )
+  const rendered = WEB_FRAME_SPECS.map((frame) => frame.id)
+  // Name the drift so a legitimate frame addition points at the skill line to add.
+  const missing = rendered.filter((id) => !listed.includes(id))
+  const extra = listed.filter((id) => !rendered.includes(id))
+  expect(missing, 'frames the capture renders but the skill never attaches').toEqual([])
+  expect(extra, 'skill artifact ids the capture does not render').toEqual([])
 })
 
 test('chromium detection prefers the configured binary and reports absence', () => {
