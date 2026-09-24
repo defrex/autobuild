@@ -24,6 +24,7 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
   imageHostSchema,
+  orchestratorSchema,
   prSchema,
   finalizeAgentStepSchema,
   finalizeCheckStepSchema,
@@ -79,7 +80,9 @@ const TABLE_FIELDS: Record<string, string[]> = {
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
   tickets: Object.keys(ticketsSchema.shape),
-  orchestrator: ['enabled', 'sandbox'],
+  // Derived like the strict-shape entries above: a schema field added without
+  // a matching guide row fails the coverage loop rather than passing silently.
+  orchestrator: Object.keys(orchestratorSchema.shape),
 }
 
 /** The guide text under a level-three heading, up to the next one. */
