@@ -93,11 +93,14 @@ export { EVENT_WAIT_POLL_MS }
 // keyed by query text and never rebuilds a rejected plan. Every store read
 // and write path therefore executes through the `run`/`tx` runners below,
 // which pin one pooled connection and retry the whole operation exactly once
-// on a plan-change error. The retry re-prepares the failing statement under
-// a marked variant, and the variant is memoized per statement text: after
-// the first failure, later executions skip the poisoned plan entirely, so a
-// migration costs one failed execution per connection per statement and a
-// bounded number of extra prepared statements — not one per operation. Every
+// on a plan-change error. The retry re-prepares every statement the body
+// executes under freshly minted marked variants — a migration can have
+// poisoned any `*`-returning plan the body touches, not only the statement
+// that failed first — and the variants are memoized per statement text:
+// after the first failure, later executions skip the poisoned plans
+// entirely, so a migration costs one failed execution per connection per
+// statement and a bounded number of extra prepared statements — not one per
+// operation. Every
 // `SELECT *` (and `RETURNING *` — none exist today) on the
 // migration-extendable tables — `streams`, `sessions`, `builds`, and every
 // other store table — is kept under that same-connection retry rather than
@@ -157,10 +160,15 @@ export class PostgresBuildStore implements BuildStore {
       } catch (error) {
         if (!isPlanChangeError(error) || attempt.inFlight === null) throw error
         // The failing statement's plan was invalidated once more: memoize a
-        // fresh marked variant for its text, so this retry — and every later
-        // execution, on any pooled connection — skips the poisoned plan.
-        this.plans.invalidate(attempt.inFlight)
-        return await body(attemptExec(conn, this.plans).exec)
+        // fresh marked variant for its text. The retry then re-prepares
+        // *every* statement the body executes — a migration can have
+        // poisoned any `*`-returning plan the body touches, not only the
+        // one that failed first, and a memoized marker minted before the
+        // migration is itself stale — so a body reading two
+        // migration-extended tables recovers in the single retry.
+        const failing = attempt.inFlight
+        this.plans.invalidate(failing)
+        return await body(attemptExec(conn, this.plans, true).exec)
       }
     } finally {
       conn.release()
@@ -189,7 +197,7 @@ export class PostgresBuildStore implements BuildStore {
       } catch (error) {
         if (!isPlanChangeError(error) || failing === null) throw error
         this.plans.invalidate(failing)
-        return await conn.begin((t) => body(attemptExec(t, this.plans).exec))
+        return await conn.begin((t) => body(attemptExec(t, this.plans, true).exec))
       }
     } finally {
       conn.release()

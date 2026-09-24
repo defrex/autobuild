@@ -166,4 +166,59 @@ describe('attemptExec', () => {
     await attempt.exec`SELECT 1`
     expect(attempt.inFlight).toBeNull()
   })
+
+  test('retry mode freshly mints and memoizes a marker for every statement', async () => {
+    const { conn, calls } = recordingConn()
+    const plans = new PlanInvalidations()
+    // Poison two texts before the retry (earlier migrations' variants, all
+    // themselves stale now); a third text was never poisoned at all.
+    const stale = plans.invalidate('SELECT * FROM builds')
+    plans.invalidate('SELECT * FROM sessions')
+
+    const retry = attemptExec(conn, plans, true)
+    await retry.exec`SELECT * FROM builds`
+    await retry.exec`SELECT * FROM streams`
+    await retry.exec`SELECT * FROM sessions`
+
+    expect(calls).toHaveLength(3)
+    // No memoized marker is reused — each was minted before the migration
+    // that triggered this retry, so its plan is poisoned too; fresh
+    // variants are minted and memoized instead.
+    expect(String(calls[0]?.strings?.raw?.[0])).toBe(
+      `SELECT * FROM builds${plans.markerFor('SELECT * FROM builds')}`,
+    )
+    expect(plans.markerFor('SELECT * FROM builds')).not.toBe(stale)
+    expect(String(calls[1]?.strings?.raw?.[0])).toBe(
+      `SELECT * FROM streams${plans.markerFor('SELECT * FROM streams')}`,
+    )
+    // Every fresh variant is memoized, so later normal-path executions skip
+    // the poisoned plans entirely.
+    for (const text of [
+      'SELECT * FROM builds',
+      'SELECT * FROM streams',
+      'SELECT * FROM sessions',
+    ]) {
+      expect(plans.markerFor(text)).toMatch(/^ \/\*ab-plan-retry-s\d+-\d+\*\/$/)
+    }
+  })
+
+  test('retry mode marks unsafe texts the same way', async () => {
+    const { conn, unsafeCalls } = recordingConn()
+    const plans = new PlanInvalidations()
+    await attemptExec(conn, plans, true).exec.unsafe('SELECT * FROM streams WHERE id = $1', [
+      'st_x',
+    ])
+    expect(unsafeCalls[0]?.text).toBe(
+      `SELECT * FROM streams WHERE id = $1${plans.markerFor('SELECT * FROM streams WHERE id = $1')}`,
+    )
+  })
+
+  test('outside retry mode a memoized marker is reused, never re-minted', async () => {
+    const { conn, calls } = recordingConn()
+    const plans = new PlanInvalidations()
+    const marker = plans.invalidate('SELECT * FROM builds')
+    await attemptExec(conn, plans).exec`SELECT * FROM builds`
+    expect(plans.markerFor('SELECT * FROM builds')).toBe(marker)
+    expect(String(calls[0]?.strings?.raw?.[0])).toBe(`SELECT * FROM builds${marker}`)
+  })
 })

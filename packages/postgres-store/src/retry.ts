@@ -47,6 +47,18 @@ export type Exec = {
  * prepared statement names (a fresh store's memo may lag; its own failure
  * then heals under its own namespace instead of colliding with a stale
  * variant another store prepared before a later migration).
+ *
+ * One memo entry is not enough to heal a retry, though. A migration can
+ * poison *any* `*`-returning plan a body touches, not only the statement
+ * that failed first — a body reading two migration-extended tables fails on
+ * the first, heals it, and would then abort on the second if the retry only
+ * re-prepared the memoized text. So a retry attempt re-prepares **every**
+ * statement the body executes: each text gets a freshly minted, memoized
+ * marker. Fresh minting (not marker reuse) is deliberate — a memoized
+ * marker prepared before the migration is itself stale, and reusing it
+ * would fail the retry with a second 0A000. The runner's catch also
+ * invalidates the failing statement's text before retrying, so the text is
+ * memoized even if the re-run body takes a branch that skips it.
  */
 
 /** Distinguishes statement texts inside the memo. Raw parts joined by NUL —
@@ -113,8 +125,10 @@ export interface Attempt {
  * forwarded verbatim, so normal-path prepared-statement behavior is
  * unchanged; poisoned texts get their memoized marker appended (see the
  * module comment), and `attempt.inFlight` tracks the statement text in
- * flight for failure attribution. */
-export function attemptExec(target: SQL, plans: PlanInvalidations): Attempt {
+ * flight for failure attribution. In retry mode (`retry`), every text is
+ * freshly minted and memoized instead, so the whole re-run body re-prepares
+ * against the post-migration schema. */
+export function attemptExec(target: SQL, plans: PlanInvalidations, retry = false): Attempt {
   const attempt: Attempt = { exec: undefined as unknown as Exec, inFlight: null }
   /** Dispatch one call, keeping `inFlight` set while (and after) it fails,
    * clearing it once it succeeds. */
@@ -125,26 +139,32 @@ export function attemptExec(target: SQL, plans: PlanInvalidations): Attempt {
       return rows
     })
   }
+  const marker = (key: string): string => {
+    if (!retry) return plans.markerFor(key)
+    // Retry mode: a memoized marker may itself be stale (minted before the
+    // migration that triggered this retry), so mint fresh and memoize.
+    return plans.invalidate(key)
+  }
   const exec = ((strings: TemplateStringsArray, ...values: unknown[]) => {
     const key = statementKey(strings)
-    const marker = plans.markerFor(key)
+    const mark = marker(key)
     return dispatch(key, () => {
-      if (marker === '') return target(strings, ...values)
+      if (mark === '') return target(strings, ...values)
       // Copy the template array and mark the last raw part. A plain array
       // copy drops the non-enumerable `raw` property — without it Bun treats
       // the array as a query *value*, not a template — so re-attach it,
       // pointing at the marked copy itself (comment-only changes make cooked
       // and raw identical).
       const parts: string[] = [...strings]
-      parts[parts.length - 1] += marker
+      parts[parts.length - 1] += mark
       Object.assign(parts, { raw: parts })
       return target(parts as unknown as TemplateStringsArray, ...values)
     })
   }) as unknown as Exec
   exec.unsafe = (text: string, params?: unknown[]) => {
-    const marker = plans.markerFor(text)
+    const mark = marker(text)
     return dispatch(text, () =>
-      marker === '' ? target.unsafe(text, params) : target.unsafe(`${text}${marker}`, params),
+      mark === '' ? target.unsafe(text, params) : target.unsafe(`${text}${mark}`, params),
     )
   }
   attempt.exec = exec

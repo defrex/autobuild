@@ -208,6 +208,44 @@ if (testUrl) {
       }
     })
 
+    test('a body touching two extended tables recovers in the single retry', async () => {
+      // The failure mode this pins: a migration extending two tables that one
+      // transaction body reads (here sessions + streams, the session-scoped
+      // stream create's lock pair) poisons two plans. Healing only the
+      // statement that failed first would let the retry abort on the second
+      // one — a caller-visible 0A000. Every statement the retry re-runs is
+      // re-prepared, so the first call after the migration succeeds.
+      const database = await isolatedDatabase()
+      const store = new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
+        blobs: new MemoryBlobStore(),
+      })
+      try {
+        const session = await store.createSession({
+          repo: 'https://github.com/acme/rate-limiter',
+          operator: 'op',
+        })
+        // Warm both `SELECT * … FOR UPDATE` plans inside one transaction
+        // body — the shape of a session-scoped stream create.
+        const warm = await store.createStream({ kind: 'session', session: session.id }, 'warm')
+        await addColumn(database.url, 'sessions', 'multi_probe_a')
+        await addColumn(database.url, 'streams', 'multi_probe_b')
+
+        // First call after the migration: must succeed, not surface 0A000.
+        const stream = await store.createStream({ kind: 'session', session: session.id }, 'after')
+        expect(stream.status).toBe('open')
+        expect(
+          (await store.listStreams({ kind: 'session', session: session.id })).map((s) => s.id),
+        ).toEqual([warm.id, stream.id])
+
+        // The healed variants are memoized: the next create runs clean.
+        const next = await store.createStream({ kind: 'session', session: session.id }, 'steady')
+        expect(next.status).toBe('open')
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    })
+
     test('errors that are not plan changes propagate unchanged', async () => {
       const database = await isolatedDatabase()
       const store = new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
