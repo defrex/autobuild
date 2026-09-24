@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#570](https://github.com/defrex/autobuild/pull/570) — Keep Postgres migration tests bounded as schema versions accumulate
 - [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
 - [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
 - [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
