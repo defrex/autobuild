@@ -64,6 +64,13 @@ export interface PluginLoadOptions {
   guest?: boolean
   /** Notice channel for skipped loads. Defaults to one line on stderr. */
   onNotice?: (line: string) => void
+  /** The fail-fast walk used by dispatch loading and the guest readiness
+   * probe: the loop stops at the first `failed` report, so later modules are
+   * never imported or evaluated past the failure. Leave unset for exhaustive
+   * operator diagnostics (`ab plugin`), which is the deliberate default of
+   * `diagnosePlugins` — its per-module reports must not hide later
+   * diagnostics behind an earlier failure. */
+  stopOnFirstFailure?: boolean
 }
 
 export function pluginResolutionKind(moduleSpecifier: string): PluginResolutionKind {
@@ -280,10 +287,19 @@ export async function attemptPlugin(
   }
 }
 
-/** Exhaustively attempt configured modules in declaration order. Failed
- * modules leave no registrations; later healthy modules still load. Skipped
+/** Attempt configured modules in declaration order, exhaustive by default:
+ * failed modules leave no registrations, later healthy modules still load,
+ * and every per-module report is returned — `ab plugin list/doctor` renders
+ * all of them and must not lose later diagnostics behind an earlier failure.
+ * That exhaustive walk is this function's deliberate default; pass
+ * `stopOnFirstFailure` to restore `loadPlugins`' fail-closed ordering for
+ * fail-closed walkers (dispatch loading, the guest readiness probe). Skipped
  * modules (builtin duplicate-skip, guest tolerance) register nothing and
- * count as healthy. */
+ * count as healthy; when `onNotice` is provided, each skip notice is emitted
+ * immediately after that module's attempt, so notices precede any later
+ * module's import/evaluation and appear in declaration order. Without
+ * `onNotice`, nothing is emitted (callers like `ab plugin` render the
+ * reports themselves). */
 export async function diagnosePlugins(
   modules: readonly string[],
   repoRoot: string,
@@ -292,7 +308,12 @@ export async function diagnosePlugins(
 ): Promise<PluginDiagnosis> {
   const reports: PluginModuleReport[] = []
   for (const moduleSpecifier of modules) {
-    reports.push(await attemptPlugin(moduleSpecifier, repoRoot, registry, options))
+    const report = await attemptPlugin(moduleSpecifier, repoRoot, registry, options)
+    reports.push(report)
+    if (report.status === 'skipped' && report.notice !== undefined && options.onNotice) {
+      options.onNotice(report.notice)
+    }
+    if (report.status === 'failed' && options.stopOnFirstFailure === true) break
   }
   return {
     registry,
@@ -306,23 +327,28 @@ function defaultPluginNotice(line: string): void {
 }
 
 /** Dispatch compatibility wrapper: preserve first-failure, fail-closed startup.
- * Skipped modules are announced through the notice channel and load
- * continues. */
+ * Delegates to the shared walk with `stopOnFirstFailure`, then rethrows the
+ * first failed report. Skipped modules are announced through the notice
+ * channel (defaulting to stderr) and load continues. */
 export async function loadPlugins(
   modules: readonly string[],
   repoRoot: string,
   options: PluginLoadOptions = {},
   registry: PluginRegistry = createPluginRegistry(),
 ): Promise<PluginRegistry> {
-  const onNotice = options.onNotice ?? defaultPluginNotice
-  for (const moduleSpecifier of modules) {
-    const report = await attemptPlugin(moduleSpecifier, repoRoot, registry, options)
-    if (report.status === 'failed') {
-      throw new Error(report.error, { cause: report.cause })
-    }
-    if (report.status === 'skipped' && report.notice !== undefined) {
-      onNotice(report.notice)
-    }
+  const diagnosis = await diagnosePlugins(
+    modules,
+    repoRoot,
+    {
+      ...options,
+      onNotice: options.onNotice ?? defaultPluginNotice,
+      stopOnFirstFailure: true,
+    },
+    registry,
+  )
+  const failedReport = diagnosis.reports.find((report) => report.status === 'failed')
+  if (failedReport !== undefined) {
+    throw new Error(failedReport.error, { cause: failedReport.cause })
   }
-  return registry
+  return diagnosis.registry
 }

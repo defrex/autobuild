@@ -327,6 +327,75 @@ describe('loadPlugins', () => {
     )
   })
 
+  test('stopOnFirstFailure stops the walk at the first failing module', async () => {
+    const repo = await fixture()
+    await write(join(repo, 'throws.ts'), `throw new Error('diagnostic boom')\n`)
+    await write(
+      join(repo, 'good.ts'),
+      `export default { name: 'good', apiVersion: '^1.1.0', forges: { gitlab: () => ({}) } }\n`,
+    )
+    const diagnosis = await diagnosePlugins(['./missing.ts', './throws.ts', './good.ts'], repo, {
+      stopOnFirstFailure: true,
+    })
+    // `reports` ends at the failure: the later modules were never attempted,
+    // so nothing past it was imported or evaluated.
+    expect(diagnosis.healthy).toBe(false)
+    expect(diagnosis.reports.map((report) => [report.module, report.stage])).toEqual([
+      ['./missing.ts', 'resolution'],
+    ])
+    // The later healthy module produced no registration.
+    expect(diagnosis.registry.forges.has('gitlab')).toBe(false)
+  })
+
+  test('stopOnFirstFailure emits earlier skip notices before the failure and nothing after', async () => {
+    const repo = await fixture()
+    await write(join(repo, 'throws.ts'), `throw new Error('diagnostic boom')\n`)
+    await write(
+      join(repo, 'good.ts'),
+      `export default { name: 'good', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': () => ({}) } }\n`,
+    )
+    const notices: string[] = []
+    const diagnosis = await diagnosePlugins(
+      ['@defrex/autobuild-absent-provider', './throws.ts', './good.ts'],
+      repo,
+      { guest: true, stopOnFirstFailure: true, onNotice: (line) => notices.push(line) },
+    )
+    // The guest-tolerated resolution skip was announced before the failure;
+    // the later module's registration skip never fired because the walk
+    // stopped.
+    expect(diagnosis.healthy).toBe(false)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('@defrex/autobuild-absent-provider')
+  })
+
+  test('without stopOnFirstFailure the walk stays exhaustive and honors onNotice for every skip', async () => {
+    const repo = await fixture()
+    await write(
+      join(repo, 'first.ts'),
+      `export default { name: 'first', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': () => ({}) } }\n`,
+    )
+    await write(join(repo, 'throws.ts'), `throw new Error('diagnostic boom')\n`)
+    await write(
+      join(repo, 'second.ts'),
+      `export default { name: 'second', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': () => ({}) } }\n`,
+    )
+    const notices: string[] = []
+    const diagnosis = await diagnosePlugins(['./first.ts', './throws.ts', './second.ts'], repo, {
+      onNotice: (line) => notices.push(line),
+    })
+    // Operator diagnostics keep seeing every report, so both registration
+    // skips are announced even though a failure sits between them.
+    expect(diagnosis.healthy).toBe(false)
+    expect(notices).toHaveLength(2)
+    expect(notices[0]).toContain('"first"')
+    expect(notices[1]).toContain('"second"')
+    expect(diagnosis.reports.map((report) => report.module)).toEqual([
+      './first.ts',
+      './throws.ts',
+      './second.ts',
+    ])
+  })
+
   test('guest tolerance skips an unresolvable package specifier but stays fail-closed otherwise', async () => {
     const repo = await fixture()
     const diagnosis = await diagnosePlugins(['@defrex/autobuild-absent-provider'], repo, {
