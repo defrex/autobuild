@@ -2166,7 +2166,11 @@ readyState = "ready"
             ) {
               throw new Error('guestName must be a string')
             }
-            return { guestName: value.guestName }
+            // Rename the key: the parsed shape must stringify differently
+            // from the raw workspace.config table, so this test's assertion
+            // can only pass when the parsed config (not the raw fallback)
+            // reaches describeEnvironment.
+            return { guest: value.guestName }
           },
           safeParse: function (value) {
             try {
@@ -2207,7 +2211,9 @@ readyState = "ready"
 
     // A declared configSchema still wins: describeEnvironment receives the
     // parsed config, not the raw table, so the fallback did not shadow the
-    // parse.
+    // parse. The schema renames the key (guestName → guest), so the raw
+    // table would stringify as {"guestName":...} and only the parsed shape
+    // satisfies the assertion.
     const lines: string[] = []
     await validateInitReadiness({
       targetRepo: repo,
@@ -2215,6 +2221,6 @@ readyState = "ready"
       exec: spawnExec,
       stdout: (line) => lines.push(line),
     })
-    expect(lines).toContain('config={"guestName":"acme-guest"}')
+    expect(lines).toContain('config={"guest":"acme-guest"}')
   })
 })
