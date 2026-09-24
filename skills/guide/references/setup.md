@@ -220,14 +220,17 @@ same lockstep window. If the release is cut but the store upgrade lags, guests
 carrying the new distribution fail loudly against the old store (409) rather
 than running silently stale.
 
-Provisioning records the installed distribution's version in the guest's
-`/opt/autobuild/.distribution-version` marker. A reused persistent sandbox
-whose marker disagrees with the version the current system would deliver —
-which includes every guest provisioned before the marker existed — is
-refreshed in place (archive re-fetched, extracted, and production-installed)
-before being reused, so an upgraded dispatcher retrofits its existing guests
-instead of resuming a stale distribution. A refresh failure deletes the
-sandbox so the next provisioning pass rematerializes it from scratch.
+Provisioning records the installed distribution's identity — package version
+and remote-store protocol version — in the guest's
+`/opt/autobuild/.distribution-version` marker. Every path that launches guest
+code in an existing sandbox — provisioning reuse, harvest reuse, the operator
+sandbox, and build execution restart after a lease sweep — compares the marker
+against the identity the current system would deliver and, when they disagree
+(which includes every guest provisioned before the marker existed), refreshes
+it in place (archive re-fetched, extracted, and production-installed) first,
+so an upgraded dispatcher retrofits its existing guests instead of resuming a
+stale distribution the hosted store would reject. A refresh failure deletes
+the sandbox so the next provisioning pass rematerializes it from scratch.
 
 After a lockstep upgrade, confirm a fix-bearing guest from the guest
 perspective:
