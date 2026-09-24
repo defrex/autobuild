@@ -264,13 +264,20 @@ export const harvestEventPayloadSchemas = {
  * `processes/sandbox-state.ts`, mirroring harvest execution settlement. */
 export const orchestratorSandboxEventPayloadSchemas = {
   /** First use of one operator's environment for this repository, or a
-   * post-reset reprovision. Carries the full environment identity. */
+   * post-reset reprovision. Carries the full environment identity, plus the
+   * base branch head the fresh provision selected — the publication
+   * precondition's reference point (a publish must be a descendant of it).
+   * Optional so historical journals replay unchanged. */
   'orchestrator.sandbox.provisioned': z.strictObject({
     operator: z.string().min(1),
     environmentId: z.string().min(1),
     provider: z.string().min(1),
     sessionId: z.string().min(1).optional(),
     workspacePath: z.string().min(1),
+    baseSha: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/i)
+      .optional(),
   }),
   /** A stopped environment resumed for a later tool call. */
   'orchestrator.sandbox.resumed': z.strictObject({
@@ -310,6 +317,34 @@ export const orchestratorSandboxEventPayloadSchemas = {
   'orchestrator.sandbox.reset': z.strictObject({
     operator: z.string().min(1),
     environmentId: z.string().min(1),
+  }),
+  /** One PR-only publication from an operator sandbox: the operator, the
+   * delegated orchestrator session when one triggered the tool, the
+   * deterministic branch the commit was pushed to, the published commit, and
+   * the opened-or-adopted PR. Written after both the push and the forge call
+   * succeed; the push-before-fact discipline makes a retry complete the
+   * journal rather than re-push. */
+  'orchestrator.sandbox.published': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    branch: z.string().min(1),
+    sha: z.string().regex(/^[0-9a-f]{40,64}$/i),
+    session: z.string().min(1).optional(),
+    pr: z.strictObject({
+      number: z.number().int().positive(),
+      url: z.string().min(1),
+      headSha: z.string().min(1),
+    }),
+  }),
+  /** A refused or failed publication attempt. `stage` names where it stopped
+   * (the precondition checks, the push, or the forge PR call); `message` is
+   * the provider's or forge's text, redacted of credential values by the
+   * service. */
+  'orchestrator.sandbox.publish-failed': z.strictObject({
+    operator: z.string().min(1),
+    environmentId: z.string().min(1),
+    stage: z.enum(['checks', 'push', 'pr']),
+    message: z.string().min(1),
   }),
 } as const
 
@@ -487,6 +522,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   // `harvest.execution.released` is dispatcher-authored.
   'orchestrator.sandbox.released': ['human', 'dispatcher'],
   'orchestrator.sandbox.reset': ['human'],
+  'orchestrator.sandbox.published': ['human'],
+  'orchestrator.sandbox.publish-failed': ['human'],
   'dispatcher.run-started': ['dispatcher'],
   'dispatcher.run-stopped': ['dispatcher'],
   'dispatcher.tick-yielded': ['dispatcher'],
