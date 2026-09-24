@@ -429,6 +429,25 @@ const sandboxWriteFileInput = z.strictObject({
 
 const sandboxResetInput = z.strictObject({ repo: repoField })
 
+const sandboxPublishInput = z.strictObject({
+  repo: repoField,
+  title: z.string().min(1).max(200).describe('Pull-request title, 1-200 characters.'),
+  body: z
+    .string()
+    .max(65_536)
+    .optional()
+    .describe(
+      'Optional pull-request body, at most 65,536 characters; an attribution block naming the operator and session is appended automatically.',
+    ),
+  commit: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Optional commit-ish to publish instead of the checkout HEAD; must resolve to a commit that is a descendant of the base head recorded at provision or reset time.',
+    ),
+})
+
 // ── The closed version-one table ─────────────────────────────────────────────
 
 function defineTool(
@@ -456,7 +475,7 @@ function defineTool(
 
 /** The closed version-one tool table. Adding a tool means adding an entry
  * here and a row in `operator/annotations.ts`; the contract suite proves the
- * two stay in lockstep. Sandbox and publish tools are later tickets. */
+ * two stay in lockstep. */
 export const TOOLS: readonly ToolEntry[] = [
   defineTool(
     'builds.list',
@@ -894,6 +913,22 @@ export const TOOLS: readonly ToolEntry[] = [
       return { ok: true as const }
     },
   ),
+  defineTool(
+    'sandbox.publish',
+    "Publish your operator sandbox's work as a pull request: push the checkout's current head commit (or an explicit commit) to your operator's dedicated branch and open or update a PR against the base branch. Refuses when the checkout has uncommitted changes to tracked files, when the commit is not a descendant of the base head recorded at provision or reset time, or when the base branch head itself would be published. The sandbox itself never pushes and holds no credential — the push and PR creation are kernel plumbing; a publication is a durable repository-journal fact. PR only: the base branch is never pushed to.",
+    sandboxPublishInput,
+    '{branch, sha, pr: {number, url, headSha}}: the publication branch, the published commit, and the opened or updated pull request.',
+    async (raw, ctx) => {
+      const input = raw as z.infer<typeof sandboxPublishInput>
+      return sandboxOf(ctx).publish(attributed(ctx), {
+        repo: input.repo,
+        title: input.title,
+        ...(input.body !== undefined ? { body: input.body } : {}),
+        ...(input.commit !== undefined ? { commit: input.commit } : {}),
+        ...(ctx.via !== undefined ? { via: ctx.via } : {}),
+      })
+    },
+  ),
 ]
 
 // ── The registry constructor ─────────────────────────────────────────────────
@@ -901,8 +936,9 @@ export const TOOLS: readonly ToolEntry[] = [
 export interface RegistryOptions {
   store: BuildStore
   tickets?: OperatorTicketBackend
-  /** The operator-sandbox backend; when absent the six sandbox tools are
-   * neither advertised nor callable (the compatibility case). */
+  /** The operator-sandbox backend; when absent the sandbox tools are
+   * neither advertised nor callable (the compatibility case). When present
+   * but `canPublish` is false, only `sandbox.publish` is filtered. */
   sandbox?: OperatorSandboxService
   clock?: Clock
   /** Constrain every call to this repository identity (the `ab mcp --repo` flag). */
@@ -978,15 +1014,22 @@ function mapDomainError(error: unknown): RegistryError {
 /** Bind the closed table to an opened store (and optional ticket and sandbox
  * backends). The returned registry is the in-process binding; every other
  * binding is generated from `entries`. Advertisement and dispatch share ONE
- * table: without a sandbox backend the six sandbox tools are filtered from
- * `entries` AND from `call()` dispatch, so a binding that cannot provision
- * sandboxes never advertises or serves them. */
+ * table: a filtered tool is neither advertised nor served. */
 export function buildRegistry(options: RegistryOptions): OperatorToolRegistry {
   const sandboxToolNames = new Set(
     Object.keys(OPERATOR_TOOL_ANNOTATIONS).filter((name) => name.startsWith('sandbox.')),
   )
-  const table =
-    options.sandbox === undefined ? TOOLS.filter((tool) => !sandboxToolNames.has(tool.name)) : TOOLS
+  // Without a sandbox backend every sandbox tool is filtered; with a backend
+  // that cannot publish (no forge or no provider publication capability),
+  // only `sandbox.publish` is filtered. Filtered tools are absent from
+  // `entries` AND from `call()` dispatch.
+  const filtered = new Set<string>()
+  if (options.sandbox === undefined) {
+    for (const name of sandboxToolNames) filtered.add(name)
+  } else if (options.sandbox.canPublish === false) {
+    filtered.add('sandbox.publish')
+  }
+  const table = filtered.size === 0 ? TOOLS : TOOLS.filter((tool) => !filtered.has(tool.name))
   return {
     entries: table,
     async call(name, input, partial = {}) {
