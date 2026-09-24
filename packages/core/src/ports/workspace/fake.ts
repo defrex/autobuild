@@ -288,6 +288,12 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   }): Promise<SandboxEnvironmentIdentity> {
     const identity = this.sandboxIdentity(input.repo, input.operator)
     if (await pathExists(join(identity.workspacePath, '.autobuild-sandbox-provisioned'))) {
+      // Pre-existing sandboxes provisioned before the info/exclude write
+      // landed (AUT-580) keep an unexcluded marker; write the exclusion on
+      // every ensure, mirroring GitWorktreeProvider, so the publish
+      // service's untracked-inclusive dirty check never counts the marker
+      // as dirt.
+      await this.excludeProvisioningMarker(identity.workspacePath)
       return identity
     }
     if (this.mode !== 'filesystem') {
@@ -368,39 +374,45 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           )
         }
       }
-      // Exclude the provisioning marker (written untracked below) in the
-      // checkout's info/exclude so the publish service's
-      // untracked-inclusive dirty check never counts it as dirt
-      // (f_c748dc6a).
-      const exclude = await this.runSandboxGit(identity.workspacePath, [
-        'rev-parse',
-        '--git-path',
-        'info/exclude',
-      ])
-      if (exclude.exitCode !== 0 || exclude.stdout.trim() === '') {
-        throw new SandboxOperationError(
-          'provision',
-          `operator sandbox could not resolve info/exclude: ${exclude.stderr.trim() || `exit ${exclude.exitCode}`}`,
-        )
-      }
-      const excludePath = resolve(identity.workspacePath, exclude.stdout.trim())
-      await mkdir(dirname(excludePath), { recursive: true })
-      const existingExclude = await fsReadFile(excludePath, 'utf8').then(
-        (content) => content,
-        () => '',
-      )
-      if (!existingExclude.split('\n').includes('.autobuild-sandbox-provisioned')) {
-        const prefix =
-          existingExclude === '' || existingExclude.endsWith('\n')
-            ? existingExclude
-            : `${existingExclude}\n`
-        await fsWriteFile(excludePath, `${prefix}.autobuild-sandbox-provisioned\n`)
-      }
+      await this.excludeProvisioningMarker(identity.workspacePath)
       await fsWriteFile(join(identity.workspacePath, '.autobuild-sandbox-provisioned'), '')
       return { ...identity, baseSha }
     } catch (error) {
       await rm(identity.workspacePath, { recursive: true, force: true })
       throw error
+    }
+  }
+
+  /** Idempotently exclude the provisioning marker in the checkout's
+   * info/exclude so the publish service's untracked-inclusive dirty check
+   * never counts it as dirt (f_c748dc6a). Runs on both ensure paths —
+   * fresh provisioning and the marker-exists early return — so sandboxes
+   * provisioned before the write landed are healed the next time they are
+   * ensured. Mirrors GitWorktreeProvider. */
+  private async excludeProvisioningMarker(workspacePath: string): Promise<void> {
+    const exclude = await this.runSandboxGit(workspacePath, [
+      'rev-parse',
+      '--git-path',
+      'info/exclude',
+    ])
+    if (exclude.exitCode !== 0 || exclude.stdout.trim() === '') {
+      throw new SandboxOperationError(
+        'provision',
+        `operator sandbox could not resolve info/exclude: ${exclude.stderr.trim() || `exit ${exclude.exitCode}`}`,
+      )
+    }
+    const excludePath = resolve(workspacePath, exclude.stdout.trim())
+    await mkdir(dirname(excludePath), { recursive: true })
+    const existingExclude = await fsReadFile(excludePath, 'utf8').then(
+      (content) => content,
+      () => '',
+    )
+    if (!existingExclude.split('\n').includes('.autobuild-sandbox-provisioned')) {
+      const prefix =
+        existingExclude === '' || existingExclude.endsWith('\n')
+          ? existingExclude
+          : `${existingExclude}\n`
+      await fsWriteFile(excludePath, `${prefix}.autobuild-sandbox-provisioned\n`)
     }
   }
 

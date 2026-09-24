@@ -552,7 +552,15 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     baseBranch: string
   }): Promise<SandboxEnvironmentIdentity> {
     const identity = this.sandboxIdentity(input.repo, input.operator)
-    if (await this.isRegisteredWorktree(identity.environmentId, input.repo)) return identity
+    if (await this.isRegisteredWorktree(identity.environmentId, input.repo)) {
+      // Pre-existing sandboxes provisioned before the info/exclude write
+      // landed (AUT-580) keep an unexcluded marker; write the exclusion on
+      // every ensure so the publish service's untracked-inclusive dirty
+      // check never counts the marker as dirt and the correct baseSha /
+      // reset-required diagnostic surfaces.
+      await this.excludeProvisioningMarker(identity.workspacePath)
+      return identity
+    }
     await mkdir(this.sandboxRoot, { recursive: true })
     const baseHead = await this.resolveCommit(input.repo, `refs/heads/${input.baseBranch}`)
     await this.gitOrThrow(input.repo, [
@@ -563,29 +571,8 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       baseHead,
     ])
     try {
-      // Exclude the provisioning marker in this worktree's info/exclude so
-      // it never counts as dirt for the publish service's
-      // untracked-inclusive dirty check (f_c748dc6a). The marker is
-      // written untracked below; without the exclusion every first
-      // publish would refuse.
-      const markerName = '.autobuild-sandbox-provisioned'
-      const exclude = await this.gitOrThrow(identity.workspacePath, [
-        'rev-parse',
-        '--git-path',
-        'info/exclude',
-      ])
-      const excludePath = resolve(identity.workspacePath, exclude.stdout.trim())
-      await mkdir(excludePath.slice(0, excludePath.lastIndexOf(sep)), { recursive: true })
-      const existing = await fsReadFile(excludePath, 'utf8').then(
-        (content) => content,
-        () => '',
-      )
-      const lines = existing.split('\n')
-      if (!lines.includes(markerName)) {
-        const prefix = existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`
-        await fsWriteFile(excludePath, `${prefix}${markerName}\n`)
-      }
-      const marker = join(identity.workspacePath, markerName)
+      await this.excludeProvisioningMarker(identity.workspacePath)
+      const marker = join(identity.workspacePath, '.autobuild-sandbox-provisioned')
       const provisioned = await stat(marker).then(
         () => true,
         () => false,
@@ -611,6 +598,33 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       throw error
     }
     return { ...identity, baseSha: baseHead }
+  }
+
+  /** Idempotently exclude the provisioning marker in the worktree's
+   * info/exclude so it never counts as dirt for the publish service's
+   * untracked-inclusive dirty check (f_c748dc6a). Runs on both ensure
+   * paths — fresh provisioning and the registered-worktree early return —
+   * so sandboxes provisioned before the write landed are healed the next
+   * time they are ensured. Errors propagate: a failed exclusion write
+   * aborts provisioning, mirroring fail-closed behavior. */
+  private async excludeProvisioningMarker(workspacePath: string): Promise<void> {
+    const markerName = '.autobuild-sandbox-provisioned'
+    const exclude = await this.gitOrThrow(workspacePath, [
+      'rev-parse',
+      '--git-path',
+      'info/exclude',
+    ])
+    const excludePath = resolve(workspacePath, exclude.stdout.trim())
+    await mkdir(excludePath.slice(0, excludePath.lastIndexOf(sep)), { recursive: true })
+    const existing = await fsReadFile(excludePath, 'utf8').then(
+      (content) => content,
+      () => '',
+    )
+    const lines = existing.split('\n')
+    if (!lines.includes(markerName)) {
+      const prefix = existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`
+      await fsWriteFile(excludePath, `${prefix}${markerName}\n`)
+    }
   }
 
   /** One `sh -c` command inside the sandbox worktree with the credential-free
