@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#516](https://github.com/defrex/autobuild/pull/516) — Pace the SQLite store's held event reads at the event-wait budget
 - [#513](https://github.com/defrex/autobuild/pull/513) — Pin registeredClientName's Better Auth lookup contract in tests
 - [#512](https://github.com/defrex/autobuild/pull/512) — Validate the DCR client name shown on the OAuth consent page
 - [#511](https://github.com/defrex/autobuild/pull/511) — Move consent page's lookupClientName test seam off the route page
