@@ -2,8 +2,8 @@
  * Declarative capabilities a workspace-provider registration can supply, plus
  * the readiness contract those capabilities speak. Core honours these
  * declarations at registry-aware seams without naming any provider, which is
- * what lets a third-party remote provider receive the same treatment as the
- * builtin `vercel-sandbox` registration (AUT-516).
+ * what lets every provider — builtin or plugin — receive the same treatment
+ * (AUT-516); since AUT-505 every non-git-worktree provider is a plugin.
  *
  * This module is a leaf: runtime imports are limited to `config/roles`
  * helpers, everything else is types. `config/schema.ts` imports the message
@@ -48,7 +48,23 @@ export function runtimeProvisioningMissingMessage(group: RuntimeReferenceGroup):
 /** Verbatim credential-free operator-sandbox diagnostic (AUT-340). Shared by
  * the config parse and the construction seam so the two cannot drift. */
 export function sandboxForbiddenEnvMessage(name: string): string {
-  return `environment variable ${JSON.stringify(name)} is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox`
+  return `environment variable ${JSON.stringify(name)} is a store, forge, ticket-provider, model, or workspace-provider credential and may never be forwarded into an operator sandbox`
+}
+
+/** Shared diagnostic for a configured workspace provider no registration
+ * serves (AUT-505): fired at the two registry-aware seams after plugins load —
+ * dispatch/mcp construction and init-readiness validation — so the refusal
+ * happens before any workspace is provisioned. Core keeps no
+ * provider-name→package mapping; the message tells the operator the mechanism
+ * (the `plugins` list) and names the providers that ARE available. */
+export function unknownWorkspaceProviderMessage(
+  name: string,
+  available: readonly string[],
+): string {
+  return (
+    `unknown workspace provider ${JSON.stringify(name)}; add the plugin package that provides it ` +
+    `to the plugins list in autobuild.toml (available providers: ${available.join(', ')})`
+  )
 }
 
 // ── Readiness contract ───────────────────────────────────────────────────────
@@ -61,13 +77,13 @@ export interface ReadinessCheck {
 
 export interface InitValidationReport {
   provider: string
-  context: 'local worktree' | 'Vercel Sandbox'
+  context: string
   workspace?: string
   revision?: string
   checks: ReadinessCheck[]
   exitCode: number
-  /** Vercel only: automatic snapshots deleted while releasing the disposable
-   * environment; zero proves no snapshot storage was left behind. */
+  /** Remote providers only: automatic snapshots deleted while releasing the
+   * disposable environment; zero proves no snapshot storage was left behind. */
   snapshotsDeleted?: number
 }
 
@@ -144,7 +160,7 @@ export interface WorkspaceProviderCapabilities {
 }
 
 /** Everything a readiness implementation reads. `facade` and `packageArchive`
- * are the host's test seams, passed opaquely — the vercel implementation
+ * are the host's test seams, passed opaquely — the provider implementation
  * narrows them. */
 export interface WorkspaceReadinessContext {
   config: Config

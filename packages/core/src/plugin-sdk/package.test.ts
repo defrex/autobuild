@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { packageAutobuildDistribution } from '../ports/workspace/distribution-archive'
-import { spawnExec } from '../ports/workspace/git-worktree'
 import { installPackedDistribution } from '../testing/packed-install'
 import {
   FakeForge,
@@ -13,13 +12,29 @@ import {
   MemoryBlobStore,
   MemoryBuildStore,
   PLUGIN_API_VERSION,
+  SANDBOX_FORBIDDEN_ENV,
+  SandboxOperationError,
+  BUILD_RUNNER_OPTIONS_ENV,
+  HARVEST_RUNNER_OPTIONS_ENV,
   ScriptedAgentRunner,
+  currentRuntimeReferences,
+  defaultDistributionArchive,
   describeAgentRunnerContract,
   describeBlobStoreContract,
   describeBuildStoreContract,
   describeForgeContract,
   describeTicketSourceContract,
   describeWorkspaceProviderContract,
+  displayName,
+  gitText,
+  openMap,
+  parseGuestOutput,
+  readDistributionIdentityStamp,
+  runtimeProvisioningMap,
+  runtimeProvisioningMissingMessage,
+  sandboxForbiddenEnvMessage,
+  spawnExec,
+  tomlKey,
   type AutobuildPluginManifest,
   type TicketSourcePluginDescriptor,
 } from './index'
@@ -100,6 +115,24 @@ describe('plugin SDK package surface', () => {
       ScriptedAgentRunner,
       MemoryBuildStore,
       MemoryBlobStore,
+      // Runtime primitives exported for the moved workspace-provider
+      // implementation (AUT-505).
+      spawnExec,
+      SandboxOperationError,
+      HARVEST_RUNNER_OPTIONS_ENV,
+      BUILD_RUNNER_OPTIONS_ENV,
+      defaultDistributionArchive,
+      readDistributionIdentityStamp,
+      displayName,
+      tomlKey,
+      currentRuntimeReferences,
+      runtimeProvisioningMap,
+      runtimeProvisioningMissingMessage,
+      sandboxForbiddenEnvMessage,
+      gitText,
+      parseGuestOutput,
+      SANDBOX_FORBIDDEN_ENV,
+      openMap,
     ]) {
       expect(symbol).toBeDefined()
     }

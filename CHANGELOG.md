@@ -8,6 +8,7 @@
 - [#527](https://github.com/defrex/autobuild/pull/527) — Verify and align CLI repo-identity comparisons with AUT-567's rule
 - [#525](https://github.com/defrex/autobuild/pull/525) — Enforce parity between builtin workspace-provider declaration tables
 - [#524](https://github.com/defrex/autobuild/pull/524) — Make repo-scoped stream download membership origin-aware (AUT-567)
+- [#523](https://github.com/defrex/autobuild/pull/523) — Remove the builtin vercel-sandbox provider; switch to plugin opt-in
 - [#522](https://github.com/defrex/autobuild/pull/522) — Pin the schemaless-builtin-needs-configRefusalMessage rule (AUT-565)
 - [#521](https://github.com/defrex/autobuild/pull/521) — Count code points in clientNameProblem's 64-character cap
 - [#520](https://github.com/defrex/autobuild/pull/520) — Retry PostgreSQL cached-plan invalidation once per statement

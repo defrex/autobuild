@@ -257,45 +257,32 @@ describe('loadPlugins', () => {
     })
   })
 
-  test('a plugin re-registering a builtin workspace provider is skipped, not fatal (AUT-517)', async () => {
+  test('a plugin re-registering a builtin workspace provider now throws (AUT-505)', async () => {
     const repo = await fixture()
     await write(
       join(repo, 'dup-provider.ts'),
-      `export default { name: 'dup-provider', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': { factory: () => { throw new Error('never constructed') }, capabilities: {} } } }\n`,
+      `export default { name: 'dup-provider', apiVersion: '^1.6.0', workspaceProviders: { 'git-worktree': { factory: () => { throw new Error('never constructed') }, capabilities: {} } } }\n`,
     )
-    const diagnosis = await diagnosePlugins(['./dup-provider.ts'], repo)
-    expect(diagnosis.healthy).toBe(true)
-    expect(diagnosis.reports[0]).toMatchObject({
-      status: 'skipped',
-      stage: 'registration',
-      pluginName: 'dup-provider',
-    })
-    expect(diagnosis.reports[0]?.notice).toContain('dup-provider')
-    expect(diagnosis.reports[0]?.notice).toContain('vercel-sandbox')
-    // Registry unchanged: the builtin keeps serving the name through its
-    // host-owned factory.
-    const registration = diagnosis.registry.workspaceProviders.get('vercel-sandbox')
-    expect(registration?.owner).toEqual({ kind: 'builtin', name: 'autobuild' })
-    expect(typeof registration?.builtinFactory).toBe('function')
-    expect(registration?.factory).toBeUndefined()
+    await expect(loadPlugins(['./dup-provider.ts'], repo)).rejects.toThrow(
+      /workspace provider adapter "git-worktree" from plugin "dup-provider" collides with builtin adapter/,
+    )
   })
 
   test('loadPlugins announces a skipped plugin through the notice channel and continues', async () => {
     const repo = await fixture()
-    await write(
-      join(repo, 'dup-provider.ts'),
-      `export default { name: 'dup-provider', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': () => ({}) } }\n`,
-    )
+    // Re-pointed at the guest-resolution skip (AUT-505 removed the builtin
+    // duplicate-skip; the guest skip keeps its notice).
     await write(
       join(repo, 'good.ts'),
       `export default { name: 'good', apiVersion: '^1.0.0', forges: { gitlab: () => ({}) } }\n`,
     )
     const notices: string[] = []
-    const registry = await loadPlugins(['./dup-provider.ts', './good.ts'], repo, {
+    const registry = await loadPlugins(['@defrex/autobuild-absent-provider', './good.ts'], repo, {
+      guest: true,
       onNotice: (line) => notices.push(line),
     })
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toContain('skipping it')
+    expect(notices[0]).toContain('guests never construct workspace providers')
     expect(registry.forges.get('gitlab')?.owner).toEqual({ kind: 'plugin', name: 'good' })
   })
 
@@ -314,16 +301,20 @@ describe('loadPlugins', () => {
     )
   })
 
-  test('a manifest mixing a builtin provider name with another colliding port still throws', async () => {
+  test('a plugin-vs-plugin collision across ports still throws', async () => {
     const repo = await fixture()
-    // The duplicate-skip rule is all-or-nothing: one extra colliding port
-    // means the module cannot be skipped atomically, so registration throws.
+    // With the duplicate-skip rule gone (AUT-505), every collision throws via
+    // ordinary registration semantics.
     await write(
       join(repo, 'mixed.ts'),
-      `export default { name: 'mixed', apiVersion: '^1.0.0', workspaceProviders: { 'vercel-sandbox': () => ({}) }, forges: { github: () => ({}) } }\n`,
+      `export default { name: 'mixed', apiVersion: '^1.0.0', workspaceProviders: { 'acme-a': () => ({}) }, forges: { gitlab: () => ({}) } }\n`,
     )
-    await expect(loadPlugins(['./mixed.ts'], repo)).rejects.toThrow(
-      /workspace provider adapter "vercel-sandbox" from plugin "mixed" collides with builtin adapter/,
+    await write(
+      join(repo, 'other.ts'),
+      `export default { name: 'other', apiVersion: '^1.0.0', forges: { gitlab: () => ({}) } }\n`,
+    )
+    await expect(loadPlugins(['./other.ts', './mixed.ts'], repo)).rejects.toThrow(
+      /forge adapter "gitlab" from plugin "mixed" collides with plugin "other"/,
     )
   })
 

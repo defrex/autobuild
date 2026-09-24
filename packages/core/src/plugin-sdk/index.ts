@@ -77,6 +77,7 @@ export type {
   TicketSourcePluginDescriptor,
   TicketSourcePluginFactory,
   TicketSourcePluginRegistration,
+  WorkspaceProviderPluginContext,
   WorkspaceProviderPluginDescriptor,
   WorkspaceProviderPluginFactory,
   WorkspaceProviderPluginRegistration,
@@ -89,13 +90,43 @@ export type {
   WorkspaceProviderEnvRequirement,
   WorkspaceReadinessContext,
 } from '../ports/workspace/provider-capabilities'
+export {
+  currentRuntimeReferences,
+  runtimeProvisioningMap,
+  runtimeProvisioningMissingMessage,
+  sandboxForbiddenEnvMessage,
+} from '../ports/workspace/provider-capabilities'
+export type { RuntimeReferencesSource } from '../ports/workspace/provider-capabilities'
 
-/** The single shared capability object for the `vercel-sandbox` provider
- * (AUT-517): the builtin registration and the
- * `@defrex/autobuild-vercel-sandbox` plugin reference the same runtime value,
- * so their declarations cannot drift. The one runtime value a provider plugin
- * needs from the SDK. */
-export { VERCEL_SANDBOX_CAPABILITIES } from '../ports/workspace/vercel-capabilities'
+// Runtime primitives the moved workspace-provider implementation builds on
+// (AUT-505): execution seams, sandbox operation errors, harvest/build runner
+// option channels, the distribution archive source, and the config-role
+// display helpers.
+export { SandboxOperationError, SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
+export type {
+  OperatorSandboxExecution,
+  SandboxCommandRequest,
+  SandboxCommandResult,
+  SandboxEnvironmentIdentity,
+  SandboxWaitResult,
+} from '../ports/workspace/operator-sandbox'
+export { HARVEST_RUNNER_OPTIONS_ENV } from '../ports/workspace/harvest-execution'
+export type {
+  HarvestExecution,
+  HarvestExecutionStart,
+  HarvestRunnerLaunch,
+} from '../ports/workspace/harvest-execution'
+export { BUILD_RUNNER_OPTIONS_ENV } from '../ports/workspace/local-build-execution'
+export { spawnExec } from '../ports/workspace/git-worktree'
+export type { Exec } from '../ports/workspace/git-worktree'
+export {
+  defaultDistributionArchive,
+  readDistributionIdentityStamp,
+} from '../ports/workspace/distribution-archive'
+export { displayName, tomlKey } from '../config/roles'
+export type { RuntimeReferenceGroup } from '../config/roles'
+export { gitText, parseGuestOutput } from '../cli/init-readiness-shared'
+export { openMap } from '../open-map'
 
 export {
   describeTicketSourceContract,

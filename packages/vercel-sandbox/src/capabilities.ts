@@ -1,50 +1,32 @@
 /**
- * The single shared capability object for the `vercel-sandbox` workspace
- * provider (AUT-517). During the transitional state in which the builtin
- * hosts the provider implementation, both the builtin registration (in
- * `builtin-capabilities.ts`) and the `@defrex/autobuild-vercel-sandbox`
- * plugin reference THIS object, so the two declarations cannot drift: any
- * future divergence is a compile-time split, not a silently duplicated
- * closure.
+ * The `vercel-sandbox` workspace provider's capability declaration (AUT-516).
+ * The registry-seam behaviors and the closures (`validateOrigin`,
+ * `guestEnvNames`, `describeEnvironment`, `validateReadiness`) are assembled
+ * here once; the parse-time subset is gone with the builtin config table
+ * (AUT-505) — `[workspace.config]` is validated through `configSchema` at the
+ * registry-aware construction seam instead.
  *
- * The parse-time subset comes from `BUILTIN_WORKSPACE_PROVIDER_CONFIG` in
- * `config/schema.ts`; the registry-seam behaviors and the closures
- * (`validateOrigin`, `guestEnvNames`, `describeEnvironment`,
- * `validateReadiness`) are assembled here once.
+ * The four Vercel credential names are declared as `sandboxForbiddenEnv`
+ * extras: they left core's shared `SANDBOX_FORBIDDEN_ENV` with the builtin's
+ * removal, and the two registry-aware forwarding gates (construction and
+ * init validation) enforce them for `vercel-sandbox` selections exactly as
+ * the AUT-536 deferral designed.
  *
- * Import graph discipline: this module imports `config/schema.ts`,
- * `github-origin.ts`, and `init-readiness-remote.ts`; nothing imports it
- * from `schema.ts`, so no cycle exists.
+ * Import graph discipline: this module imports `schema.ts`, `github-origin.ts`,
+ * and `readiness.ts` from this package plus the plugin-sdk surface; nothing
+ * imports it from `schema.ts`, so no cycle exists.
  */
-import { BUILTIN_WORKSPACE_PROVIDER_CONFIG, type VercelSandboxConfig } from '../../config/schema'
-import { validateRemoteReadiness } from '../../cli/init-readiness-remote'
 import type {
   WorkspaceProviderCapabilities,
   WorkspaceReadinessContext,
-} from './provider-capabilities'
+} from '@defrex/autobuild/plugin-sdk'
+import { vercelSandboxConfigSchema, type VercelSandboxConfig } from './schema'
+import { validateRemoteReadiness } from './readiness'
 import { validateVercelGithubOrigin } from './github-origin'
 
-/** The parse-time declaration subset from the config table, without the
- * parse-site refusal text (which never belongs on the capability). */
-function pickConfigDeclaration(name: string): WorkspaceProviderCapabilities {
-  const declaration = BUILTIN_WORKSPACE_PROVIDER_CONFIG.get(name)
-  if (declaration === undefined) return {}
-  return {
-    ...(declaration.configSchema !== undefined ? { configSchema: declaration.configSchema } : {}),
-    ...(declaration.requireRuntimeProvisioning === true
-      ? { requireRuntimeProvisioning: true }
-      : {}),
-    ...(declaration.sandboxForbiddenEnv !== undefined
-      ? { sandboxForbiddenEnv: declaration.sandboxForbiddenEnv }
-      : {}),
-  }
-}
-
 export const VERCEL_SANDBOX_CAPABILITIES: WorkspaceProviderCapabilities = {
-  // Parse-time subset comes from the config table; the capability carries
-  // no configRefusal because the provider accepts [workspace.config]
-  // through its schema.
-  ...pickConfigDeclaration('vercel-sandbox'),
+  configSchema: vercelSandboxConfigSchema,
+  requireRuntimeProvisioning: true,
   supportedForges: ['github'],
   forgeDispatchMessage: 'vercel-sandbox requires the builtin github forge',
   forgeValidationMessage:
@@ -79,6 +61,7 @@ export const VERCEL_SANDBOX_CAPABILITIES: WorkspaceProviderCapabilities = {
     storeRefMessage: 'vercel-sandbox requires AB_STORE to be an HTTPS URL reachable from Vercel',
     storeTokenMessage: 'vercel-sandbox requires nonempty AB_TOKEN for the hosted Store',
   },
+  sandboxForbiddenEnv: ['VERCEL_OIDC_TOKEN', 'VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID'],
   validateOrigin: validateVercelGithubOrigin,
   originReadFailureMessage: 'vercel-sandbox requires a readable Git origin',
   guestEnvNames: (raw) => {

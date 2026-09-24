@@ -7,7 +7,6 @@ import {
   parsePluginManifest,
   pluginApiCompatibility,
   PluginApiCompatibilityError,
-  type AutobuildPluginManifest,
   type PluginApiCompatibility,
 } from './manifest'
 import { createPluginRegistry, type PluginRegistry, type PluginResolutionKind } from './registry'
@@ -89,14 +88,6 @@ function failed(
     error: message,
     ...(cause !== undefined ? { cause } : {}),
   }
-}
-
-/** True when the manifest declares no registrations outside the
- * workspace-provider map. */
-function declaresOnlyWorkspaceProviderRegistrations(manifest: AutobuildPluginManifest): boolean {
-  const empty = (registrations: Record<string, unknown> | undefined): boolean =>
-    registrations === undefined || Object.keys(registrations).length === 0
-  return empty(manifest.ticketSources) && empty(manifest.agentRuntimes) && empty(manifest.forges)
 }
 
 function manifestIdentity(value: unknown): {
@@ -231,33 +222,6 @@ export async function attemptPlugin(
     pluginName: manifest.name,
     api,
   }
-  // Transitional duplicate-skip (AUT-517): while the builtin hosts the
-  // vercel-sandbox implementation, a configured plugin that re-registers the
-  // same workspace-provider name must be accepted and skipped, not thrown
-  // out of startup. Skip the whole module IFF it declares at least one
-  // registration, only workspace-provider registrations, and EVERY declared
-  // name collides with a builtin workspace-provider registration. Any other
-  // collision (other ports, plugin-vs-plugin, mixed fresh/colliding) throws
-  // exactly as before via registry.register below. Keyed on builtin
-  // ownership, so the rule retires itself when the builtin is removed.
-  const collisions = registry.builtinWorkspaceProviderCollisions(manifest)
-  if (
-    collisions.length > 0 &&
-    declaresOnlyWorkspaceProviderRegistrations(manifest) &&
-    collisions.length === Object.keys(manifest.workspaceProviders ?? {}).length
-  ) {
-    const names = Object.keys(manifest.workspaceProviders ?? {})
-      .map((name) => JSON.stringify(name))
-      .join(', ')
-    return {
-      ...identified,
-      status: 'skipped',
-      stage: 'registration',
-      notice:
-        `plugin "${manifest.name}" declares only builtin workspace-provider registration(s) ${names}; ` +
-        'skipping it — the builtin keeps serving the provider',
-    }
-  }
   try {
     registry.register(manifest, {
       module: moduleSpecifier,
@@ -282,8 +246,7 @@ export async function attemptPlugin(
 
 /** Exhaustively attempt configured modules in declaration order. Failed
  * modules leave no registrations; later healthy modules still load. Skipped
- * modules (builtin duplicate-skip, guest tolerance) register nothing and
- * count as healthy. */
+ * modules (guest tolerance) register nothing and count as healthy. */
 export async function diagnosePlugins(
   modules: readonly string[],
   repoRoot: string,

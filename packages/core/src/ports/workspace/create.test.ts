@@ -5,6 +5,7 @@ import type { WorkspaceProvider } from '../types'
 import { FakeWorkspaceProvider } from './fake'
 import { GitWorktreeProvider } from './git-worktree'
 import { createPluginRegistry } from '../../plugins/registry'
+import manifest from '@defrex/autobuild-vercel-sandbox'
 import { parseConfig } from '../../config/load'
 import {
   createWorkspaceProvider,
@@ -145,7 +146,7 @@ readyState = "ready"
     await expect(
       createWorkspaceProvider({ provider: 'missing', config: {} }, opts),
     ).rejects.toThrow(
-      'unknown workspace provider "missing"; available providers: alpha, git-worktree, vercel-sandbox, zeta',
+      'unknown workspace provider "missing"; add the plugin package that provides it to the plugins list in autobuild.toml (available providers: alpha, git-worktree, zeta)',
     )
   })
 
@@ -269,7 +270,7 @@ readyState = "ready"
     await expect(
       createWorkspaceProvider({ provider: 'podman', config: {} }, enabled),
     ).rejects.toThrow(
-      'environment variable "ACME_SECRET" is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox',
+      'environment variable "ACME_SECRET" is a store, forge, ticket-provider, model, or workspace-provider credential and may never be forwarded into an operator sandbox',
     )
     // The parse-time rule is reproduced exactly: with the orchestrator
     // disabled the declaration is not enforced at construction.
@@ -314,16 +315,18 @@ readyState = "ready"
     )
   })
 
-  test('the vercel-sandbox builtin refuses a missing store with its construction message', async () => {
+  test('the registered vercel-sandbox plugin refuses a missing store with its construction message', async () => {
+    const opts = baseOpts()
+    opts.registry.register(manifest)
     await expect(
       createWorkspaceProvider(
         { provider: 'vercel-sandbox', config: { timeoutSeconds: 600 } },
-        baseOpts(),
+        opts,
       ),
     ).rejects.toThrow('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
   })
 
-  test('the vercel-sandbox builtin enforces requireRuntimeProvisioning at construction', async () => {
+  test('the registered vercel-sandbox plugin enforces requireRuntimeProvisioning at construction', async () => {
     const opts = {
       ...baseOpts(),
       runtimeReferences: [
@@ -335,6 +338,7 @@ readyState = "ready"
         },
       ],
     }
+    opts.registry.register(manifest)
     await expect(
       createWorkspaceProvider(
         { provider: 'vercel-sandbox', config: { timeoutSeconds: 600 } },
@@ -342,6 +346,53 @@ readyState = "ready"
       ),
     ).rejects.toThrow(
       'runtime "node" is selected by role author but has no sandbox provisioning; add [workspace.config.runtimeProvisioning.node] with nonblank install and preflight commands',
+    )
+  })
+
+  test('the registered vercel-sandbox plugin enforces its declared sandboxForbiddenEnv extras at construction', async () => {
+    // Migrated from config.test.ts (AUT-505): the four credential names left
+    // the shared SANDBOX_FORBIDDEN_ENV with the builtin, so their forwarding
+    // refusal is enforced here through the plugin's declared extras.
+    const opts = {
+      ...baseOpts(),
+      env: {
+        ...baseOpts().env,
+        VERCEL_TOKEN: 'tok',
+        VERCEL_TEAM_ID: 'team',
+        VERCEL_PROJECT_ID: 'proj',
+      },
+      storeRef: 'https://store.example',
+      storeToken: 'token',
+      sandboxEnvironmentVariables: ['VERCEL_TOKEN'],
+      orchestratorSandboxEnabled: true,
+    }
+    opts.registry.register(manifest)
+    await expect(
+      createWorkspaceProvider(
+        { provider: 'vercel-sandbox', config: { timeoutSeconds: 600 } },
+        opts,
+      ),
+    ).rejects.toThrow(
+      'environment variable "VERCEL_TOKEN" is a store, forge, ticket-provider, model, or workspace-provider credential and may never be forwarded into an operator sandbox',
+    )
+    // With the orchestrator disabled the declaration is not enforced at
+    // construction, mirroring the parse-time gate it replaces.
+    const disabled = {
+      ...baseOpts(),
+      env: {
+        ...baseOpts().env,
+        VERCEL_TOKEN: 'tok',
+        VERCEL_TEAM_ID: 'team',
+        VERCEL_PROJECT_ID: 'proj',
+      },
+      storeRef: 'https://store.example',
+      storeToken: 'token',
+      sandboxEnvironmentVariables: ['VERCEL_TOKEN'],
+    }
+    disabled.registry.register(manifest)
+    await createWorkspaceProvider(
+      { provider: 'vercel-sandbox', config: { timeoutSeconds: 600 } },
+      disabled,
     )
   })
 })

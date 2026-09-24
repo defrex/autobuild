@@ -172,7 +172,7 @@ export class PluginRegistry {
     string,
     AdapterRegistration<WorkspaceProviderPluginFactory, WorkspaceProviderContractFactory>
   >(
-    (['git-worktree', 'vercel-sandbox'] as const).map((name) => {
+    (['git-worktree'] as const).map((name) => {
       const builtin = builtinWorkspaceProviderRegistration(name)
       if (builtin === undefined) {
         throw new Error(`builtin workspace provider "${name}" has no capability declaration`)
@@ -315,20 +315,6 @@ export class PluginRegistry {
       case 'forge':
         return this.forges.get(name)
     }
-  }
-
-  /** Workspace-provider names a manifest declares that currently belong to a
-   * BUILTIN registration (AUT-517). Names owned by another plugin are not
-   * reported — those collisions throw as always. The loader uses this for
-   * the transitional duplicate-skip: while the builtin hosts the
-   * vercel-sandbox implementation, a configured plugin re-registering the
-   * name is skipped instead of failing startup. Keyed on builtin ownership,
-   * so the rule retires itself when the builtin is removed (AUT-505). */
-  builtinWorkspaceProviderCollisions(manifest: AutobuildPluginManifest): string[] {
-    return Object.keys(manifest.workspaceProviders ?? {}).filter((name) => {
-      const existing = this.workspaceProviders.get(name)
-      return existing !== undefined && existing.owner.kind === 'builtin'
-    })
   }
 }
 

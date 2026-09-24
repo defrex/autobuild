@@ -202,35 +202,26 @@ describe('workspace-provider capability declarations', () => {
 
   test('builtin workspace providers carry their capability declarations and constructors', () => {
     const registry = new PluginRegistry()
-    const vercel = registry.workspaceProviders.get('vercel-sandbox')
-    expect(vercel?.owner).toEqual({ kind: 'builtin', name: 'autobuild' })
-    expect(vercel?.capabilities?.supportedForges).toEqual(['github'])
-    expect(vercel?.capabilities?.requireRuntimeProvisioning).toBe(true)
-    expect(typeof vercel?.builtinFactory).toBe('function')
+    expect(registry.workspaceProviders.has('vercel-sandbox')).toBe(false)
     expect(registry.workspaceProviders.get('git-worktree')?.capabilities?.configRefusal).toBe(
       '[workspace.config] is not supported by the builtin "git-worktree" provider',
     )
+    expect(typeof registry.workspaceProviders.get('git-worktree')?.builtinFactory).toBe('function')
   })
 
-  test('builtinWorkspaceProviderCollisions reports builtin-owned names only (AUT-517)', () => {
+  test('a plugin registering vercel-sandbox on a fresh registry now registers', () => {
     const registry = new PluginRegistry()
-    expect(
-      registry.builtinWorkspaceProviderCollisions(
-        plugin('dup', { workspaceProviders: { 'vercel-sandbox': factory } }),
-      ),
-    ).toEqual(['vercel-sandbox'])
-    // Fresh names and names owned by another plugin are not reported: those
-    // collisions throw at registration as always.
-    expect(
-      registry.builtinWorkspaceProviderCollisions(
-        plugin('fresh', { workspaceProviders: { 'acme-sandbox': factory } }),
-      ),
-    ).toEqual([])
-    registry.register(plugin('owner', { workspaceProviders: { 'acme-sandbox': factory } }))
-    expect(
-      registry.builtinWorkspaceProviderCollisions(
-        plugin('second', { workspaceProviders: { 'acme-sandbox': factory } }),
-      ),
-    ).toEqual([])
+    registry.register(plugin('vercel', { workspaceProviders: { 'vercel-sandbox': factory } }))
+    expect(registry.workspaceProviders.get('vercel-sandbox')?.owner).toEqual({
+      kind: 'plugin',
+      name: 'vercel',
+    })
+  })
+
+  test('collisions vs the git-worktree builtin still throw', () => {
+    const registry = new PluginRegistry()
+    expect(() =>
+      registry.register(plugin('dup', { workspaceProviders: { 'git-worktree': factory } })),
+    ).toThrow()
   })
 })

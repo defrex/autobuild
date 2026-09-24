@@ -2,11 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { ConfigError, loadConfig, parseConfig } from './load'
 import {
   BUILTIN_WORKSPACE_PROVIDER_CONFIG,
-  vercelSandboxConfigSchema,
   type WorkspaceProviderConfigDeclaration,
 } from './schema'
 
@@ -391,208 +389,44 @@ describe('parseConfig — defaults', () => {
     }
   })
 
-  test('vercel-sandbox accepts only universal managed-image names, tags, and digests', () => {
-    const imageConfig = (image: string) =>
-      parseConfig(
-        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
-      ).workspace.config
-
-    for (const image of [
-      'vercel/sandbox/universal',
-      'vercel/sandbox/universal:latest',
-      'vercel/sandbox/universal:2025-03-03',
-      `vercel/sandbox/universal@sha256:${'a'.repeat(64)}`,
-    ]) {
-      expect(imageConfig(image).image).toBe(image)
-    }
-
-    for (const image of [
-      'vercel/sandbox/node:latest',
-      'vercel/sandbox/python:latest',
-      'vercel/sandbox/ubuntu:latest',
-      'acme/project/custom:latest',
-      'vcr.vercel.com/acme/project/custom:latest',
-    ]) {
-      const error = parseError(
-        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
-      )
-      expect(error.message).toContain('workspace.config.image')
-      expect(error.message).toContain('Bun provisioning is validated only')
-    }
-
-    for (const digest of [`A${'a'.repeat(63)}`, 'a'.repeat(63), `${'a'.repeat(63)}g`]) {
-      const image = `vercel/sandbox/universal@sha256:${digest}`
-      const error = parseError(
-        `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\nimage = "${image}"\n${READY}`,
-      )
-      expect(error.message).toContain('workspace.config.image')
-      expect(error.message).toContain('64 lowercase hexadecimal characters')
+  // Complement of the AUT-565 pin above, which covers the NEITHER-key side
+  // of the pairing; this covers the BOTH-keys side (AUT-572).
+  test('no builtin declaration carries both configSchema and configRefusalMessage', () => {
+    // The WorkspaceProviderConfigDeclaration JSDoc states the rule: a builtin
+    // declaration carries exactly one of configSchema / configRefusalMessage.
+    // `configSchema`'s superRefine in config/schema.ts checks
+    // `configRefusalMessage` BEFORE `configSchema`, so a declaration with
+    // both keys would take the refusal branch and its schema would silently
+    // never apply — dead schema no operator or test would notice. The table
+    // is host-controlled and plugin-inaccessible, so the pairing can only
+    // drift in an Autobuild PR — this pin makes that PR fail here instead of
+    // shipping a builtin whose schema never runs. A future provider that
+    // legitimately needs schema-validated shape AND refusal of all nonempty
+    // config is a deliberate design decision to record: it requires deciding
+    // the superRefine branch ordering explicitly, not adding a second key to
+    // the table.
+    for (const [name, declaration] of BUILTIN_WORKSPACE_PROVIDER_CONFIG) {
+      if (declaration.configSchema !== undefined) {
+        expect(
+          declaration.configRefusalMessage,
+          `builtin workspace provider "${name}" declares both configSchema and ` +
+            'configRefusalMessage — the superRefine in config/schema.ts checks ' +
+            'configRefusalMessage first, so the refusal branch would win and the ' +
+            "declaration's configSchema would silently never apply (dead schema; see " +
+            'WorkspaceProviderConfigDeclaration). A provider needing both semantics is a ' +
+            'deliberate design decision to record, not a table edit — decide the ' +
+            'superRefine ordering explicitly first',
+        ).toBeUndefined()
+      }
     }
   })
 
-  test('vercel-sandbox provisioning is ordered, strict, named, and declarative', () => {
-    const config = parseConfig(`[workspace]
-provider = "vercel-sandbox"
-[workspace.config]
-timeoutSeconds = 600
-provisioning = [
-  { name = "browser packages", command = """apt-get update
-apt-get install -y chromium""" },
-  { name = "browser smoke", command = "CHROMIUM_BIN=/usr/bin/chromium ./scripts/browser-smoke.sh" },
-]
-${READY}`).workspace.config
-    expect(config.provisioning).toEqual([
-      { name: 'browser packages', command: 'apt-get update\napt-get install -y chromium' },
-      {
-        name: 'browser smoke',
-        command: 'CHROMIUM_BIN=/usr/bin/chromium ./scripts/browser-smoke.sh',
-      },
-    ])
-    expect(
-      vercelSandboxConfigSchema.parse(
-        parseConfig(
-          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n${READY}`,
-        ).workspace.config,
-      ).provisioning,
-    ).toEqual([])
-
-    for (const declaration of [
-      'provisioning = [{ name = "", command = "ok" }]',
-      'provisioning = [{ name = "blank", command = "   " }]',
-      'provisioning = [{ name = "same", command = "one" }, { name = "same", command = "two" }]',
-      'provisioning = [{ name = "step", command = "ok", unknown = true }]',
-    ]) {
-      expect(() =>
-        parseConfig(
-          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n${declaration}\n${READY}`,
-        ),
-      ).toThrow(/workspace\.config\.provisioning/)
-    }
+  test('the git-worktree parse-site refusal still rejects any [workspace.config], including provisioning', () => {
     expect(() =>
       parseConfig(
         `[workspace]\nprovider = "git-worktree"\n[workspace.config]\nprovisioning = []\n${READY}`,
       ),
     ).toThrow(/is not supported by the builtin "git-worktree" provider/)
-  })
-
-  test('vercel-sandbox config is strict, bounded, and references secrets by name', () => {
-    const workspace = parseConfig(`[workspace]
-provider = "vercel-sandbox"
-[workspace.config]
-timeoutSeconds = 2700
-operationTimeoutMs = 30000
-vcpus = 8
-image = "vercel/sandbox/universal:latest"
-region = "iad1"
-failoverRegions = ["sfo1"]
-environmentVariables = ["ANTHROPIC_API_KEY"]
-gitUsernameEnv = "AB_GIT_READ_USER"
-gitPasswordEnv = "AB_GIT_READ_TOKEN"
-${READY}`).workspace
-    expect(workspace.provider).toBe('vercel-sandbox')
-    expect(workspace.config.timeoutSeconds).toBe(2700)
-    expect(workspace.config.operationTimeoutMs).toBe(30_000)
-    expect(workspace.config.snapshotExpirationSeconds).toBeUndefined()
-    expect(
-      parseConfig(`[workspace]
-provider = "vercel-sandbox"
-[workspace.config]
-timeoutSeconds = 2700
-snapshotExpirationSeconds = 86400
-${READY}`).workspace.config.snapshotExpirationSeconds,
-    ).toBe(86_400)
-
-    for (const table of [
-      'timeoutSeconds = 59',
-      'timeoutSeconds = 86401',
-      'timeoutSeconds = 600\noperationTimeoutMs = 999',
-      'timeoutSeconds = 600\noperationTimeoutMs = 300001',
-      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 299',
-      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 2592001',
-      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 86400.5',
-      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 0',
-      'timeoutSeconds = 600\nsnapshotExpirationSeconds = -1',
-      'timeoutSeconds = 600\nsnapshotExpirationSeconds = 86400\nunknown = true',
-      'timeoutSeconds = 600\nunknown = true',
-      'timeoutSeconds = 600\nenvironmentVariables = ["TOKEN", "TOKEN"]',
-      'timeoutSeconds = 600\ngitPasswordEnv = "AB_GIT_READ_TOKEN"',
-      'timeoutSeconds = 600\ngitUsernameEnv = "x"\ngitPasswordEnv = "GITHUB_TOKEN"',
-    ]) {
-      expect(() =>
-        parseConfig(
-          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\n${table}\n${READY}`,
-        ),
-      ).toThrow(/workspace\.config/)
-    }
-  })
-
-  test('vercel runtime provisioning is open by runtime name, strict by entry, and covers every effective route', () => {
-    const source = `[workspace]
-provider = "vercel-sandbox"
-[workspace.config]
-timeoutSeconds = 600
-[workspace.config.runtimeProvisioning.pi]
-install = "npm install -g pi@1.2.3"
-preflight = "pi --version"
-[workspace.config.runtimeProvisioning."plugin.runtime"]
-install = "install-plugin@abc123"
-preflight = "plugin-runtime --version"
-[roles.default]
-runtime = "pi"
-alternates = [{ runtime = "plugin.runtime" }]
-${READY}`
-    const parsed = parseConfig(source)
-    expect(
-      Object.keys(vercelSandboxConfigSchema.parse(parsed.workspace.config).runtimeProvisioning),
-    ).toEqual(['pi', 'plugin.runtime'])
-
-    for (const entry of [
-      'install = ""\npreflight = "pi --version"',
-      'install = "npm install pi@1"',
-      'install = "npm install pi@1"\npreflight = "pi --version"\nunknown = true',
-    ]) {
-      expect(() =>
-        parseConfig(
-          `[workspace]\nprovider = "vercel-sandbox"\n[workspace.config]\ntimeoutSeconds = 600\n[workspace.config.runtimeProvisioning.pi]\n${entry}\n[roles.default]\nruntime = "pi"\n${READY}`,
-        ),
-      ).toThrow(/workspace\.config\.runtimeProvisioning\.pi/)
-    }
-  })
-
-  test('vercel missing-runtime remediation round-trips every supported TOML key shape', () => {
-    const cases = [
-      ['pi', 'pi'],
-      ['plugin.runtime', '"plugin.runtime"'],
-      ['plugin"runtime', '"plugin\\"runtime"'],
-      ['plugin\\runtime', '"plugin\\\\runtime"'],
-      ['plugin\u0001runtime', '"plugin\\u0001runtime"'],
-      ['plugin\u007fruntime', '"plugin\\u007Fruntime"'],
-      ['插件', '"\\u63D2\\u4EF6"'],
-      ['plugin😀', '"plugin\\U0001F600"'],
-    ] as const
-
-    for (const [runtime, renderedKey] of cases) {
-      const source = stringifyToml({
-        workspace: {
-          provider: 'vercel-sandbox',
-          config: { timeoutSeconds: 600 },
-        },
-        roles: { default: { runtime } },
-        tickets: { source: 'file', readyState: 'ready' },
-      })
-      const error = parseError(source)
-      const header = error.message.match(
-        /add (\[workspace\.config\.runtimeProvisioning\..+?\]) with/,
-      )?.[1]
-
-      expect(header, `missing remediation header for ${JSON.stringify(runtime)}`).toBe(
-        `[workspace.config.runtimeProvisioning.${renderedKey}]`,
-      )
-      const parsed = parseToml(header!) as {
-        workspace: { config: { runtimeProvisioning: Record<string, unknown> } }
-      }
-      expect(Object.keys(parsed.workspace.config.runtimeProvisioning)).toEqual([runtime])
-    }
   })
 
   test('forge defaults to GitHub and accepts nonblank plugin adapter names', () => {
@@ -1188,10 +1022,6 @@ describe('parseConfig — [orchestrator] sandbox gate', () => {
       'GITHUB_TOKEN',
       'GH_TOKEN',
       'LINEAR_API_KEY',
-      'VERCEL_OIDC_TOKEN',
-      'VERCEL_TOKEN',
-      'VERCEL_TEAM_ID',
-      'VERCEL_PROJECT_ID',
       'AI_GATEWAY_API_KEY',
     ]) {
       const error = parseError(

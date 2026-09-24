@@ -1,29 +1,24 @@
 /**
- * The full capability objects for the builtin workspace providers (AUT-516).
+ * The full capability object for the builtin workspace providers (AUT-516).
  * The parse-time subset lives in `config/schema.ts`'s
  * `BUILTIN_WORKSPACE_PROVIDER_CONFIG` because config validation must be
  * statically reachable without the registry; this module assembles the FULL
  * declarations — including the registry-seam behaviors — and is attached to
  * the builtin registrations by `plugins/registry.ts`.
  *
- * Import graph discipline: this module imports `config/schema.ts`,
- * `git-worktree.ts`, `vercel-sandbox.ts`, and the shared vercel capability
- * module; nothing imports it from `schema.ts`, so no cycle exists. The
- * `vercel-sandbox` entry's capabilities are the shared
- * `VERCEL_SANDBOX_CAPABILITIES` object (AUT-517) — the plugin package
- * references the same object, so the declarations cannot drift. The
- * construction-site `configRefusal` for git-worktree is set EXPLICITLY here,
- * not copied from the table's parse-site `configRefusalMessage` — the two
- * strings differ by design (the parse-site message adds the remediation
- * clause; the construction-site one does not).
+ * Import graph discipline: this module imports `config/schema.ts` and
+ * `git-worktree.ts`; nothing imports it from `schema.ts`, so no cycle exists.
+ * The construction-site `configRefusal` for git-worktree is set EXPLICITLY
+ * here, not copied from the table's parse-site `configRefusalMessage` — the
+ * two strings differ by design (the parse-site message adds the remediation
+ * clause; the construction-site one does not). Every non-builtin workspace
+ * provider arrives through a plugin registration (AUT-505).
  */
 import { join, resolve } from 'node:path'
-import type { VercelSandboxConfig, WorkspaceConfig } from '../../config/schema'
+import type { WorkspaceConfig } from '../../config/schema'
 import type { WorkspaceProviderCapabilities } from './provider-capabilities'
 import type { CreateWorkspaceProviderOptions } from './create'
 import { GitWorktreeProvider } from './git-worktree'
-import { VercelSandboxProvider } from './vercel-sandbox'
-import { VERCEL_SANDBOX_CAPABILITIES } from './vercel-capabilities'
 import type { WorkspaceProvider } from '../types'
 
 /** The git-worktree construction-site refusal: no remediation clause, unlike
@@ -55,26 +50,6 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
         setupCommand: opts.sandboxSetupCommand,
         sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
         envSource: opts.env,
-      })
-    },
-  },
-  'vercel-sandbox': {
-    capabilities: VERCEL_SANDBOX_CAPABILITIES,
-    builtinFactory(_config, opts, parsed) {
-      // storeRef/storeToken are guaranteed present: the pre-split
-      // storeRequirements check in createWorkspaceProvider ran before
-      // construction.
-      return new VercelSandboxProvider({
-        config: parsed as VercelSandboxConfig,
-        env: opts.env,
-        storeRef: opts.storeRef!,
-        storeToken: opts.storeToken!,
-        repo: resolve(opts.repoRoot),
-        runtimeReferences: opts.runtimeReferences ?? [],
-        setupCommand: opts.sandboxSetupCommand,
-        sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
-        ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
-        ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
       })
     },
   },
