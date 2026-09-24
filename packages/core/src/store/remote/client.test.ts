@@ -488,7 +488,14 @@ describe('request construction', () => {
         responses: [
           {
             body: buildDigestListSchema.parse([
-              { slug: 'build-a', terminal: 'done', observations: [1, 4] },
+              {
+                slug: 'build-a',
+                terminal: 'done',
+                observations: [
+                  { seq: 1, ts: '2026-07-15T12:00:00.000Z' },
+                  { seq: 4, ts: '2026-07-15T12:03:00.000Z' },
+                ],
+              },
               { slug: 'build-b', observations: [] },
             ]),
           },

@@ -20,7 +20,7 @@ document and the package's executable contracts together.
   `AB_STORE`; the shipped client appends the routes below.
 - Every `/builds`, `/repos`, and `/sessions` request sends
   `X-Autobuild-Version` with the exact client package version and
-  `X-Autobuild-Protocol-Version` with the remote protocol version (`2` in this
+  `X-Autobuild-Protocol-Version` with the remote protocol version (`3` in this
   distribution). Before authentication,
   body parsing, or resource lookup, the server compares both exact strings.
   Missing or different values receive `409 {"kind":"conflict","error":"…"}`;
@@ -357,7 +357,8 @@ requires. A held request's authentication, token scope, and version-skew rules
 are identical to the immediate form: a `401`, `403`, or `409` identity failure
 is answered immediately, never held.
 
-The parameter is purely additive, so the protocol version stays `2`: a server
+The parameter is purely additive in the version it landed in (protocol `2`,
+where the event-wait rules were introduced): a server
 that ignores `wait` remains conforming — its immediate empty answers only raise
 the client's request rate — and a client that sends `wait` to such a server
 observes no other difference. This is the same reasoning the stream and session
@@ -403,14 +404,26 @@ and its `observation.recorded` occurrences:
 {
   "slug": "ab-fix-login-3",
   "terminal": "done",               // optional: "done" | "aborted", omitted while the log has neither
-  "observations": [1, 4]            // ascending seqs of the log's observation.recorded events
+  "observations": [                 // ascending-seq pairs for the log's observation.recorded events
+    { "seq": 1, "ts": "2026-07-15T12:00:01.000Z" },
+    { "seq": 4, "ts": "2026-07-15T12:00:04.000Z" }
+  ],
+  "merged": "2026-07-15T12:00:06.000Z" // optional: ts of the log's latest pr.merged, omitted when none
 }
 ```
 
 The digest is derived from the event log on every call — the server persists
-nothing and there is no refresh step. The route is purely additive: the
-protocol version stays `2`, matching the streams/sessions precedent of
-section 6.
+nothing and there is no refresh step. Protocol version `3` reshaped the
+digest's `observations` from bare sequence numbers to `{seq, ts}` pairs and
+added the optional `merged` fact, so the harvest pressure gate can evaluate
+launch decisions from digests and the repository journal alone instead of
+reading every build's full history per evaluation. That is a breaking wire
+change, not an additive one: a server that predates it returns the old shape
+and would fail the client's schema parse mid-request, which is why the version
+moved — a stale peer is now rejected at the handshake (`409 conflict`) instead.
+This is the same discipline the transport's exact-match version rules promise:
+wire shapes that independently implemented servers must reproduce update this
+document and the protocol version together.
 
 The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals, including the event-read bounded
@@ -622,7 +635,8 @@ by this rule (their retention belongs to the open archival thread), and open
 streams are never pruned. A read of a stream whose chunks were pruned returns
 no chunks, `status: "closed"`, and the artifact reference.
 
-These additions are purely additive: the protocol version stays `2`, and a
+These additions were purely additive in the version they landed in (protocol
+`2`, where the stream routes were introduced), and a
 conforming server implements the stream routes together with this document's
 rules exactly as it does for the event and artifact routes.
 
@@ -939,7 +953,7 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"2"}`. It reports HTTP-process availability and identity,
+  "protocolVersion":"3"}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
 There is no push/WebSocket subscription protocol, repository listing, artifact

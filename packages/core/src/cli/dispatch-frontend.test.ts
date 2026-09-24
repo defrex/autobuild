@@ -682,6 +682,109 @@ test('frontend owns live observation pressure and retains the last factual sampl
   await running
 })
 
+test('the terminal observation sample reads a missing journal record as an empty journal (AUT-524)', async () => {
+  const repo = '/missing-record-repo'
+  const backing = new MemoryBuildStore()
+  await backing.ensureRepo(repo)
+  await backing.createBuild({ slug: 'source', repo })
+  await backing.append('source', {
+    actor: agentActor('implement', 's_observe_1'),
+    type: 'observation.recorded',
+    payload: { id: 'obs-1', kind: 'followup', summary: 'first pending observation' },
+  })
+
+  // The missing-record stand-in: `getRepo` answers null (no journal record on
+  // a hosted store) while `getRepoEvents` rejects with the adapters'
+  // unknown-repo message — but ONLY for the sample's single-arg call.
+  // `renderOnce`'s first statement awaits `events()`, whose two-arg
+  // incremental read must succeed for any frame to paint, so failing every
+  // `getRepoEvents` call could never reach the path under decision. In the
+  // real missing-record state every call would reject; the resulting `events()`
+  // failure is presentation retention outside the sample, which this arity
+  // split deliberately scopes away.
+  let sampleJournalReads = 0
+  const store = new Proxy(backing, {
+    get(target, property) {
+      if (property === 'getRepo') return async () => null
+      if (property === 'getRepoEvents') {
+        return async (...args: Parameters<BuildStore['getRepoEvents']>) => {
+          if (args.length === 1) {
+            sampleJournalReads += 1
+            throw new Error(`unknown repo "${repo}"`)
+          }
+          return target.getRepoEvents(...args)
+        }
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as BuildStore
+
+  const frames: Array<{ current: number; limit: number }> = []
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns: 100,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: false,
+    resolveDashboardRenderer: () => (model) => {
+      frames.push({ current: model.observations.current, limit: model.observations.limit })
+      return ['frame']
+    },
+    launchChild: ({ run }) => {
+      const completed = backing
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                capacity: 1,
+                roles: { default: { runtime: 'claude' } },
+                policy: { harvestThreshold: 7 },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              roleWarnings: [],
+            },
+          }),
+        )
+        .then(() => ({ outcome: 'normal', exitCode: 0 }) as const)
+      return { completed, async stop() {} }
+    },
+  })
+
+  const running = frontend.run()
+  // The missing journal record reads as an empty journal: the sample counts
+  // the digest observations (1) instead of retaining a stale count or staying
+  // frameless, and the sample never touches the journal read it cannot serve.
+  await waitFor(
+    () => frames.some((frame) => frame.current === 1 && frame.limit === 7),
+    'missing-record frame with the digest-derived count',
+  )
+  expect(sampleJournalReads).toBe(0)
+  await running
+})
+
 test('harvest run controls preserve the frontend no-action compatibility report', async () => {
   const invoke = async (
     name: string,
@@ -1968,7 +2071,7 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
   // one digest read) is identical regardless of finished-build count. The
   // dashboard row cache may still read row-rendering histories on its first
   // refresh, but that is outside the sample and unchanged in behavior.
-  const sampleMethods = ['getRepoEvents', 'getRepoBuildDigests'] as const
+  const sampleMethods = ['getRepo', 'getRepoEvents', 'getRepoBuildDigests'] as const
   for (const method of sampleMethods) {
     expect(more.counts.get(method) ?? 0).toBe(baseline.counts.get(method) ?? 0)
   }

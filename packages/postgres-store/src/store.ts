@@ -200,12 +200,12 @@ export class PostgresBuildStore implements BuildStore {
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
     // From the builds side (AUT-487), matching the SQLite adapter: the type
     // filter lives in the ON clause so a build whose log holds none of the
-    // three digest-relevant event types still yields its row, and only those
+    // digest-relevant event types still yields its row, and only those
     // types are fetched. The `events_type_build_seq` index (schema.ts) makes
     // the join's per-build probes type-leading, so the cost grows with the
     // actual signal, not with total history.
     const rows: Row[] = await this.sql.unsafe(
-      `SELECT b.slug AS slug, e.seq AS seq, e.type AS type
+      `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type
        FROM builds b
        LEFT JOIN events e
          ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map((_, i) => `$${i + 2}`).join(', ')})
@@ -213,11 +213,15 @@ export class PostgresBuildStore implements BuildStore {
        ORDER BY b.slug, e.seq`,
       [repo, ...DIGEST_EVENT_TYPES],
     )
-    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq'>[]>()
+    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq' | 'ts'>[]>()
     for (const row of rows) {
       if (row.seq === null || row.seq === undefined) continue
       const events = eventsByBuild.get(String(row.slug)) ?? []
-      events.push({ type: String(row.type) as AbEvent['type'], seq: num(row.seq) })
+      events.push({
+        type: String(row.type) as AbEvent['type'],
+        seq: num(row.seq),
+        ts: iso(row.ts),
+      })
       eventsByBuild.set(String(row.slug), events)
     }
     const digests = new Map<string, BuildDigest>()

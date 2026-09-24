@@ -3,7 +3,7 @@
 The hosted ticket protocol exposes the complete `TicketSource` port without
 exposing backend credentials. It shares the Autobuild and remote protocol
 version headers with the remote BuildStore. Both must exactly match the service;
-this release uses remote protocol version `2`.
+this release uses remote protocol version `3`.
 
 ## Authentication and context
 

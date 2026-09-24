@@ -518,9 +518,14 @@ conformance suite):
 
 Operator UIs additionally have a repository-scoped batch read,
 `getRepoBuildDigests(repo)`: the projection of every build's log onto its
-terminal fact and observation occurrences, derived from the event log on each
-call. It lets a dashboard snapshot count unclaimed observations and gate rows
-without reading the full history of finished builds (§16.1).
+terminal fact, its `observation.recorded` occurrences with their event
+timestamps, and the ts of its latest `pr.merged`, derived from the event log on
+each call. It lets a dashboard snapshot count unclaimed observations and gate
+rows without reading the full history of finished builds (§16.1), and it backs
+the harvest-launch pressure gate (dispatcher and harvest runner alike): launch
+decisions evaluate from digests and the repository journal alone, so
+gate-evaluation cost is flat in accumulated build history, with the full
+per-build scan paid only when a gate actually trips and a scan packet is built.
 
 Stateless repository-level readers also have a bounded journal read,
 `getRepoStateEvents(repo)` (AUT-489): every durable, slow-growing event type

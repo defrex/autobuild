@@ -9,7 +9,7 @@
  * be kept in lockstep with this schema (this file is the drizzle-kit source
  * of truth).
  */
-import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 import type { Actor } from '../../events/envelope'
 import type { TicketRef } from '../../ontology'
 import type { StreamPart } from '../streams/types'
@@ -39,7 +39,12 @@ export const events = sqliteTable(
     type: text('type').notNull(),
     payload: text('payload', { mode: 'json' }).notNull(),
   },
-  (t) => [primaryKey({ columns: [t.build, t.seq] })],
+  // Mirrors the BOOTSTRAP_DDL digest-scan index (AUT-487), type-leading so the
+  // digest query's cost grows with digest-relevant events, not total history.
+  (t) => [
+    primaryKey({ columns: [t.build, t.seq] }),
+    index('events_type_build_seq').on(t.type, t.build, t.seq),
+  ],
 )
 
 export const repoStreams = sqliteTable('repo_streams', {

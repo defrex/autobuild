@@ -1,9 +1,9 @@
 # Operator API v1
 
 The hosted service exposes the polling-oriented operator surface at
-`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **2**.
+`/operator/v1/repos/{repo}`. It is versioned with remote store protocol **3**.
 Every request must send `X-Autobuild-Version`,
-`X-Autobuild-Protocol-Version: 2`, and `Authorization: Bearer …`. Identity is
+`X-Autobuild-Protocol-Version: 3`, and `Authorization: Bearer …`. Identity is
 checked before authentication or resource lookup.
 
 Mint a token offline; the signed user is used as the human actor on every write:
