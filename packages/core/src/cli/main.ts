@@ -19,7 +19,7 @@ import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
 import { reduceBuild } from '../kernel/reducer'
-import { artifactDownload, artifactGet, artifactPut } from './artifact'
+import { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } from './artifact'
 import { multiFlag, parseArgs, stringFlag, type ParsedArgs } from './args'
 import { abBuildControl, type BuildControlAction, type BuildControlResult } from './build-control'
 import {
@@ -1204,8 +1204,37 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         const usage =
           'usage: ab artifact download <build> <kind>[@rev] --output <file> [--store <ref>] (§8.2)'
         const parsed = parseArgs(more, { output: 'value', store: 'value' }, usage)
-        const [build, spec] = parsed.positionals
+        const [first, second] = parsed.positionals
         const outputPath = stringFlag(parsed, 'output')
+        const storeRef = stringFlag(parsed, 'store')
+        if (deps.exec === undefined) {
+          throw new Error(
+            "'ab artifact download' needs an exec seam — this is a wiring bug in the ab binary",
+          )
+        }
+        // A stream-addressed first positional can never be a build slug: the
+        // dispatcher's slug charset forbids ':'. Repo-scoped streams take the
+        // one-positional operator form; everything else stays on the unchanged
+        // build-scoped path.
+        if (first?.startsWith('stream:')) {
+          const streamUsage =
+            'usage: ab artifact download stream:<id>[@rev] --output <file> [--store <ref>] (§8.2)'
+          if (second !== undefined || outputPath === undefined) throw new Error(streamUsage)
+          const downloaded = await artifactDownloadStream({
+            targetRepo: deps.workspacePath,
+            env: deps.processEnv ?? {},
+            exec: deps.exec,
+            spec: first,
+            outputPath,
+            ...(storeRef !== undefined ? { storeRef } : {}),
+            ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+          })
+          stdout(
+            `downloaded ${downloaded.artifact.meta.kind}@${downloaded.artifact.meta.revision} to ${downloaded.outputPath}`,
+          )
+          return 0
+        }
+        const [build, spec] = parsed.positionals
         if (
           build === undefined ||
           spec === undefined ||
@@ -1213,12 +1242,6 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           outputPath === undefined
         ) {
           throw new Error(usage)
-        }
-        const storeRef = stringFlag(parsed, 'store')
-        if (deps.exec === undefined) {
-          throw new Error(
-            "'ab artifact download' needs an exec seam — this is a wiring bug in the ab binary",
-          )
         }
         const downloaded = await artifactDownload({
           targetRepo: deps.workspacePath,

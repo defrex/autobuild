@@ -428,5 +428,71 @@ describe('plugin SDK package surface', () => {
         join(consumer, 'node_modules', '@defrex', 'autobuild', 'bin', 'ab.ts'),
       ).exists(),
     ).toBe(true)
+
+    // Negative control, in the consumed-manifest shape a non-stripped packed
+    // manifest would impose (probed against the pinned bun 1.4.0): a tiny
+    // synthetic dependency package ships a patches/better-auth@1.4.18.patch
+    // file (content irrelevant — the failure precedes patch application) and
+    // declares patchedDependencies for it, and is installed into a consumer
+    // whose dependency set also contains better-auth@1.4.18.
+    //
+    // The synthetic package must be a packed tarball (`bun pm pack`), not a
+    // directory `file:` dep: only the tarball shape reproduces the panic a
+    // non-stripped `bun pm pack`-produced artifact imposes on its consumer
+    // (exit 134, `Option::unwrap`, before patch application, triggered by the
+    // patched package's presence in the consumer tree, output not naming the
+    // patch). A directory `file:` dep with the same manifest never reaches
+    // the panic: bun resolves the patch path against the consumer root, so
+    // it either fails gracefully (exit 1, `Couldn't find patch file`, when
+    // the path does not resolve there) or installs successfully (exit 0,
+    // patch applied, when it does) — the latter is also a false failure for
+    // this control, since the strip is fine.
+    // Assert only the non-zero exit: a future bun that converts the panic
+    // into a graceful error still fails here, and if
+    // packedManifestOmittedFields ever loses 'patchedDependencies' the
+    // successful install above fails with exactly this shape.
+    const syntheticPackage = join(destination, 'patched-dependency-fixture')
+    await mkdir(join(syntheticPackage, 'patches'), { recursive: true })
+    await writeFile(
+      join(syntheticPackage, 'package.json'),
+      JSON.stringify({
+        name: 'ab-packed-patch-negative-control',
+        version: '1.0.0',
+        patchedDependencies: {
+          'better-auth@1.4.18': 'patches/better-auth@1.4.18.patch',
+        },
+      }),
+    )
+    await writeFile(join(syntheticPackage, 'patches', 'better-auth@1.4.18.patch'), 'irrelevant')
+    const packed = await spawnExec(['bun', 'pm', 'pack'], { cwd: syntheticPackage })
+    if (packed.exitCode !== 0) {
+      throw new Error(
+        `bun pm pack of the negative-control fixture failed:\n${packed.stdout}${packed.stderr}`,
+      )
+    }
+    const syntheticTarball = join(syntheticPackage, 'ab-packed-patch-negative-control-1.0.0.tgz')
+    if (!(await Bun.file(syntheticTarball).exists())) {
+      throw new Error(`bun pm pack produced no tarball:\n${packed.stdout}${packed.stderr}`)
+    }
+    const negativeConsumer = join(destination, 'negative-control-consumer')
+    await mkdir(negativeConsumer)
+    await writeFile(
+      join(negativeConsumer, 'package.json'),
+      JSON.stringify({
+        name: 'packed-patch-negative-control-consumer',
+        private: true,
+        type: 'module',
+        dependencies: {
+          'ab-packed-patch-negative-control': `file:${syntheticTarball}`,
+          'better-auth': '1.4.18',
+        },
+      }),
+    )
+    const failing = await installPackedDistribution([], negativeConsumer)
+    if (failing.exitCode === 0) {
+      throw new Error(
+        `the consumed-manifest negative control installed successfully — the patchedDependencies strip no longer guards the failure it exists for:\n${failing.stdout}${failing.stderr}`,
+      )
+    }
   }, 600_000)
 })

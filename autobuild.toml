@@ -58,7 +58,7 @@ setup = "bun install"
 lint = "bun run check"
 typecheck = "bun run typecheck"
 test = "bun run test"
-test-postgres = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun test packages/postgres-store/src/store.live.test.ts packages/postgres-store/src/migrate.test.ts packages/postgres-store/src/tickets.live.test.ts packages/hosted-store-service/src/service.live.test.ts packages/hosted-store-service/src/web/mcp.live.test.ts"
+test-postgres = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_URL='postgres://postgres:postgres@127.0.0.1:5432/postgres' bun test packages/postgres-store/src/store.live.test.ts packages/postgres-store/src/plan-invalidation.live.test.ts packages/postgres-store/src/migrate.test.ts packages/postgres-store/src/schema-guard.test.ts packages/postgres-store/src/tickets.live.test.ts packages/hosted-store-service/src/service.live.test.ts packages/hosted-store-service/src/web/mcp.live.test.ts"
 
 # The configured universe and order of verification. A plan may deselect
 # optional steps in its opening `verifySteps` front matter; a plan without that
