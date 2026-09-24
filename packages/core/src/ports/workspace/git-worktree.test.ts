@@ -786,6 +786,46 @@ describe('GitWorktreeProvider operator sandbox', () => {
     expect(existsSync(join(legacy.workspacePath, 'setup-marker.txt'))).toBe(false)
   })
 
+  test('ensure fails typed when rev-parse --git-path info/exclude succeeds with empty stdout', async () => {
+    // The guard mirrors the fake workspace's degenerate-input handling: a
+    // successful git-path probe with empty output would otherwise feed '' into
+    // resolve(workspacePath, …) and target the workspace directory itself.
+    // Unreachable for real git output — pinned at the exec seam, the same
+    // injection point the suite uses for error shapes git cannot produce.
+    let intercepted = false
+    const emptyGitPath: Exec = async (cmd, opts) => {
+      if (cmd[0] === 'git' && cmd.slice(-3).join(' ') === 'rev-parse --git-path info/exclude') {
+        intercepted = true
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }
+      return spawnExec(cmd, opts)
+    }
+    const broken = new GitWorktreeProvider({ root, sandboxRoot, exec: emptyGitPath })
+    const error = await broken.orchestratorSandbox
+      .ensure({ repo, operator: 'ops-empty', baseBranch: 'main' })
+      .catch((e: unknown) => e)
+    expect(intercepted).toBe(true)
+    expect(error).toBeInstanceOf(SandboxOperationError)
+    expect((error as SandboxOperationError).stage).toBe('provision')
+    expect((error as Error).message).toMatch(/could not resolve info\/exclude/)
+
+    // The guard fired before any filesystem side effect: the fresh-provision
+    // catch path removed the half-provisioned worktree, so nothing is
+    // registered and a healthy ensure provisions the same sandbox cleanly.
+    const identity = await broken.orchestratorSandbox.describe({ repo, operator: 'ops-empty' })
+    expect(await registrationCount(repo, identity.workspacePath)).toBe(0)
+    expect(existsSync(identity.workspacePath)).toBe(false)
+    const healed = await provider.orchestratorSandbox.ensure({
+      repo,
+      operator: 'ops-empty',
+      baseBranch: 'main',
+    })
+    expect(healed.baseSha).toBe(await run(['git', 'rev-parse', 'refs/heads/main'], repo))
+    expect(await run(['git', 'status', '--porcelain'], healed.workspacePath)).not.toContain(
+      '.autobuild-sandbox-provisioned',
+    )
+  })
+
   test('setup runs with the scrubbed guest environment, never the host environment', async () => {
     process.env.AB_SANDBOX_SETUP_CANARY = 'host-canary'
     try {
