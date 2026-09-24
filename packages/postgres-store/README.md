@@ -48,6 +48,15 @@ adds team-scoped tickets, comments, and blockers without replacing the
 established BuildStore marker. Opening against a missing, older/newer, or
 checksum-mismatched schema fails; schema creation is never implicit.
 
+The current DDL of every marker — build store, ticket, and auth — is immutable
+once a database has deployed it: deployed databases carry that exact DDL's
+checksum, and editing the DDL in place leaves them all incompatible. Every
+schema change is therefore a new version: freeze the previous DDL verbatim with
+its checksum, add an upgrade branch for it in `migratePostgres`, bump the
+schema version, and update the committed pin in `schema-guard.test.ts`, which
+fails the unit suite the moment any current DDL or version is edited without
+following all four steps.
+
 ## Public entry points
 
 The package exposes four subpaths, each named after the source module it
