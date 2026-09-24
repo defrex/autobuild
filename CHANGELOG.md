@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#558](https://github.com/defrex/autobuild/pull/558) — Make the git-worktree readiness call site strict via a guest option
 - [#555](https://github.com/defrex/autobuild/pull/555) — Deny test files from the vercel-sandbox packed tarball (AUT-564)
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
 - [#553](https://github.com/defrex/autobuild/pull/553) — Derive [orchestrator] doc-coverage expectations from schema
