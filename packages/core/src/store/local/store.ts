@@ -51,7 +51,7 @@ import {
 import { pollingSubscribe } from '../subscribe'
 import { StreamLocks } from '../streams/lock'
 import { assembleUIMessageDocument } from '../streams/assemble'
-import { readEventsWithWait, readStreamWithWait } from '../streams/wait'
+import { EVENT_WAIT_POLL_MS, readEventsWithWait, readStreamWithWait } from '../streams/wait'
 import {
   serializedBatchSize,
   STREAM_BATCH_MAX_BYTES,
@@ -714,6 +714,10 @@ export class SqliteBuildStore implements BuildStore {
       },
       waitSeconds: opts?.waitSeconds,
       signal: opts?.signal,
+      // Hosted budget: held build-event reads poll at most once per second
+      // (AUT-394) — not the 25 ms stream default, which is presentation
+      // content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
     })
   }
 
@@ -985,6 +989,10 @@ export class SqliteBuildStore implements BuildStore {
       },
       waitSeconds: opts?.waitSeconds,
       signal: opts?.signal,
+      // Hosted budget: held repository-event reads poll at most once per
+      // second (AUT-394) — not the 25 ms stream default, which is
+      // presentation content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
     })
   }
 
@@ -1313,7 +1321,15 @@ export class SqliteBuildStore implements BuildStore {
           }) as SessionEvent,
       )
     }
-    return readEventsWithWait({ read, waitSeconds: opts?.waitSeconds, signal: opts?.signal })
+    return readEventsWithWait({
+      read,
+      waitSeconds: opts?.waitSeconds,
+      signal: opts?.signal,
+      // Hosted budget: held session-event reads poll at most once per second
+      // (AUT-394), matching the build and repository event reads — not the
+      // 25 ms stream default, which is presentation content's cadence.
+      pollMs: EVENT_WAIT_POLL_MS,
+    })
   }
 
   /** Runs inside an open transaction — see `depositInTx` for `prune`. */
