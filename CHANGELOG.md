@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#561](https://github.com/defrex/autobuild/pull/561) — Extend the plugin workspace-provider factory context (AUT-560)
+- [#560](https://github.com/defrex/autobuild/pull/560) — Harden the distribution-refresh tests (AUT-557)
 - [#559](https://github.com/defrex/autobuild/pull/559) — Retry PostgresTicketSource on cached-plan invalidation (AUT-559)
 - [#558](https://github.com/defrex/autobuild/pull/558) — Make the git-worktree readiness call site strict via a guest option
 - [#557](https://github.com/defrex/autobuild/pull/557) — Restore workspace plugin symlink after a local deploy:build
