@@ -536,6 +536,61 @@ readyState = "ready"
     expect(details).not.toContain('local validation environment')
   })
 
+  test('redacts guestEnvNames-declared git credentials in readiness details (AUT-539)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-readiness-git-env-redact-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 600
+environmentVariables = ["MODEL_API_KEY"]
+gitUsernameEnv = "AB_GIT_READ_USER"
+gitPasswordEnv = "AB_GIT_READ_PASSCODE"
+[workspace.config.runtimeProvisioning.fake]
+install = "install-fake@1.0.0"
+preflight = "fake --version"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    // Both names deliberately avoid the redactor's name heuristic
+    // (/(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i), so any redaction of
+    // their values is attributable to `guestEnvNames` feeding the redactor,
+    // not the regex.
+    const report = await runGuestReadinessProbe({
+      repo,
+      env: {
+        AB_STORE: 'https://store.example',
+        AB_GIT_READ_USER: 'git-user-42',
+        AB_GIT_READ_PASSCODE: 'git-passcode-99',
+      },
+      runtimes: {
+        fake: {
+          runner,
+          servesModels: [],
+          initUsable: async () => ({
+            usable: false,
+            reason: 'clone failed for git-user-42 with git-passcode-99 (benign-context-marker)',
+          }),
+        },
+      },
+      openStore: () => readOnlyStore([]),
+    })
+    const details = report.checks.map((check) => check.detail).join('\n')
+    expect(details).toContain('[REDACTED]')
+    expect(details).not.toContain('git-user-42')
+    expect(details).not.toContain('git-passcode-99')
+    // The control proves redaction came from the declared names, not from
+    // heuristic or whole-text suppression.
+    expect(details).toContain('benign-context-marker')
+  })
+
   test('private probe transports a structured failure with exit zero', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'ab-probe-crash-'))
     roots.push(repo)
