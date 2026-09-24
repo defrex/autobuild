@@ -1325,8 +1325,8 @@ describe('prompt teardown of held reads', () => {
       // tick — which is why the count is settled first (see settlePolls).
       // This settle-then-freeze tail alone pinned prompt teardown only up to
       // its 2 s deadline; the prompt cap above now bounds lingering loops at
-      // ~300 ms. The stream twin below is deliberately left without a cap —
-      // its jitter tolerance is AUT-393's scope.
+      // ~300 ms. The stream twin below now carries the same prompt cap and
+      // grace window (AUT-393).
       const settled = await settlePolls(() => backing.sessionPolls)
       await Bun.sleep(150)
       expect(backing.sessionPolls).toBe(settled)
@@ -1356,13 +1356,32 @@ describe('prompt teardown of held reads', () => {
       }).catch(() => undefined)
       await Bun.sleep(100)
       expect(backing.streamPolls).toBeGreaterThan(0)
+      const pollsAtAbort = backing.streamPolls
+      // The peer goes away mid-hold.
       controller.abort()
 
+      // Prompt-teardown bound (AUT-416 shape, carried over per AUT-393): the
+      // abort must reach the backing loop well before the 2 s settle deadline.
+      // The grace window and +6 headroom mirror the session twin's verbatim
+      // because the two counted loops run at the same cadence here — the
+      // CountingMemoryStore helpers pass no pollMs, so readEventsWithWait and
+      // readStreamWithWait both default to STREAM_WAIT_POLL_MS (25 ms). Allow
+      // one poll in flight at sample time plus five slow scheduler ticks of
+      // socket-close detection headroom; a lingering 25 ms loop adds ~12 polls
+      // in the 300 ms window (40 polls/s), far past this bound. Legit teardown
+      // that only settles later is still covered by the settle-then-freeze
+      // tail below.
+      await Bun.sleep(300)
+      expect(backing.streamPolls).toBeLessThanOrEqual(pollsAtAbort + 6)
+
       // Same guarantee, same shape as the session twin above: the count must
-      // settle after the disconnect and then stay frozen. This replaces the
-      // AUT-389 `pollsAtAbort + 1` bound, which assumed the overshoot was one
-      // in-flight poll — the abort's arrival is actually gated on socket-close
-      // detection, whose lag under load no fixed bound covers.
+      // settle after the disconnect and then stay frozen. The prompt cap above
+      // now bounds lingering loops at ~300 ms; this tail proves they stay
+      // stopped. The settle-then-freeze form is kept (rather than an exact-
+      // equality-against-the-pre-abort-sample assertion) for the same load
+      // robustness reason recorded on the session twin: the socket-close
+      // detection can lag the sample past a tick under a full-suite run
+      // (see settlePolls).
       const settled = await settlePolls(() => backing.streamPolls)
       await Bun.sleep(150)
       expect(backing.streamPolls).toBe(settled)

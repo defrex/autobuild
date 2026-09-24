@@ -35,7 +35,7 @@ import {
   loadScanPacket,
   validateProposalCoverage,
 } from '../processes/harvest'
-import type { BuildStore } from '../store/types'
+import type { BuildStore, StreamRecord } from '../store/types'
 import type { HarvestCliEnv } from './env'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
@@ -403,6 +403,22 @@ export interface HarvestFiledStatusView {
   blockers?: { declared: string[]; derived: string[] }
 }
 
+/** One harvest session's discoverability row: its stream id and open/closed
+ * status, at parity with the build-session rows. `stream` is absent on
+ * sessions that never streamed. */
+export interface HarvestSessionStatusView {
+  session: string
+  role: 'harvest' | 'harvest-review'
+  step: 'synthesize' | 'review'
+  round: number
+  /** Live-view stream id (SPEC §9); absent on sessions that never streamed. */
+  stream?: string
+  /** Open until the session's `harvest.session.ended` lands; the store's
+   * records refine this to the stream's authoritative status when available. */
+  streamStatus: 'open' | 'closed'
+  status: 'open' | 'ended'
+}
+
 export interface HarvestRunStatusView {
   run: string
   status: HarvestRunState['status']
@@ -413,6 +429,7 @@ export interface HarvestRunStatusView {
   steps: HarvestRunState['steps']
   rounds: number
   filed: HarvestFiledStatusView[]
+  sessions: HarvestSessionStatusView[]
   escalation?: HarvestRunState['escalation']
   failure?: HarvestRunState['failure']
   recovery: HarvestRecoveryStatus
@@ -486,7 +503,67 @@ function projectRecovery(run: HarvestRunState | undefined): HarvestRecoveryStatu
   }
 }
 
-function projectHarvestRunStatus(run: HarvestRunState): HarvestRunStatusView {
+/** Pair the append-only `harvest.session.started` / `harvest.session.ended`
+ * facts per run without introducing transition state. `streams` is the
+ * optional authoritative enrichment from `listStreams` on the repo scope:
+ * records whose label matches `session:<id>` supply each session's stream id
+ * and open/closed status. */
+function projectHarvestSessions(
+  events: RepositoryEvent[],
+  streams?: readonly StreamRecord[],
+): Map<string, HarvestSessionStatusView[]> {
+  const recordsByLabel = new Map<string, StreamRecord>()
+  if (streams !== undefined) {
+    for (const record of streams) {
+      if (record.scope.kind === 'repo') recordsByLabel.set(record.label, record)
+    }
+  }
+
+  const byRun = new Map<string, HarvestSessionStatusView[]>()
+  const open = new Map<string, HarvestSessionStatusView>()
+  for (const event of events) {
+    if (event.type === 'harvest.session.started') {
+      const record = recordsByLabel.get(`session:${event.payload.session}`)
+      const view: HarvestSessionStatusView = {
+        session: event.payload.session,
+        role: event.payload.role,
+        step: event.payload.step,
+        round: event.payload.round,
+        status: 'open',
+        // The store's records are authoritative when available; without them
+        // the pairing degrades gracefully (open until `harvest.session.ended`).
+        ...(record !== undefined
+          ? { stream: record.id, streamStatus: record.status }
+          : {
+              ...(event.payload.stream !== undefined ? { stream: event.payload.stream } : {}),
+              streamStatus: event.payload.stream !== undefined ? 'open' : 'closed',
+            }),
+      }
+      const list = byRun.get(event.payload.run) ?? []
+      list.push(view)
+      byRun.set(event.payload.run, list)
+      open.set(view.session, view)
+      continue
+    }
+    if (event.type !== 'harvest.session.ended') continue
+    const started = open.get(event.payload.session)
+    if (started === undefined) continue
+    started.status = 'ended'
+    // A session bracket has ended: without an authoritative record its
+    // stream reads closed.
+    const record = recordsByLabel.get(`session:${started.session}`)
+    if (record !== undefined) {
+      started.stream = record.id
+      started.streamStatus = record.status
+    } else {
+      started.streamStatus = 'closed'
+    }
+    open.delete(started.session)
+  }
+  return byRun
+}
+
+function projectHarvestRunStatus(run: HarvestRunState): Omit<HarvestRunStatusView, 'sessions'> {
   return {
     run: run.run,
     status: run.status,
@@ -511,6 +588,7 @@ export function projectHarvestStatus(
   repo: string,
   events: RepositoryEvent[],
   newestEvents?: number,
+  streams?: readonly StreamRecord[],
 ): HarvestStatusView {
   const state = reduceHarvest(events)
   const history =
@@ -520,7 +598,13 @@ export function projectHarvestStatus(
   const included = new Set(
     [...unresolved, ...open, ...(state.latest ? [state.latest] : [])].map((run) => run.run),
   )
-  const runs = state.runs.filter((run) => included.has(run.run)).map(projectHarvestRunStatus)
+  const sessionsByRun = projectHarvestSessions(events, streams)
+  const runs = state.runs
+    .filter((run) => included.has(run.run))
+    .map((run) => ({
+      ...projectHarvestRunStatus(run),
+      sessions: sessionsByRun.get(run.run) ?? [],
+    }))
   const unresolvedIds = new Set(unresolved.map((run) => run.run))
   const primary =
     runs.find((run) => unresolvedIds.has(run.run)) ??
@@ -571,6 +655,13 @@ function renderHarvestRunStatus(run: HarvestRunStatusView, paused: boolean): str
     lines.push(
       `  ${step.step}${step.round !== undefined ? ` r${step.round}` : ''}: ` +
         `${step.outcome ?? (step.completedSeq === undefined ? 'running' : 'done')}`,
+    )
+  }
+  for (const session of run.sessions) {
+    const stream =
+      session.stream !== undefined ? ` stream ${session.stream} (${session.streamStatus})` : ''
+    lines.push(
+      `  session ${session.session} (${session.role}, ${session.step}@${session.round})${stream}`,
     )
   }
   if (run.recovery.stopped !== undefined) {
@@ -696,7 +787,18 @@ export async function abHarvestStatus(opts: HarvestStatusOpts): Promise<void> {
       const record = await store.getRepo(repo)
       // Bounded read (AUT-489): projectHarvestStatus reduces harvest facts only.
       const events = record === null ? [] : await store.getRepoStateEvents(repo)
-      const view = projectHarvestStatus(repo, events, opts.events)
+      // Best-effort stream enrichment for the session rows, mirroring the
+      // degrade-gracefully pattern of 'ab build status': a store that cannot
+      // list streams keeps the payload-derived projection instead of failing.
+      let streams: StreamRecord[] | undefined
+      if (record !== null) {
+        try {
+          streams = await store.listStreams({ kind: 'repo', repo })
+        } catch {
+          streams = undefined
+        }
+      }
+      const view = projectHarvestStatus(repo, events, opts.events, streams)
       if (opts.json === true) opts.stdout(JSON.stringify(view, null, 2))
       else for (const line of renderHarvestStatus(view)) opts.stdout(line)
     },

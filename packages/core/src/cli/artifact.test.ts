@@ -11,7 +11,13 @@ import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
 import { PhaseSessionError } from '../store/phase-session'
 import { textContent } from '../store/types'
-import { artifactDownload, artifactGet, artifactPut, parseArtifactSpec } from './artifact'
+import {
+  artifactDownload,
+  artifactDownloadStream,
+  artifactGet,
+  artifactPut,
+  parseArtifactSpec,
+} from './artifact'
 import { makeEnv, seedStore } from './testkit'
 
 let tmp: string
@@ -433,5 +439,275 @@ describe('artifact download', () => {
       /non-empty <kind>/,
     )
     expect(opens).toBe(0)
+  })
+})
+
+describe('artifact download stream:<id>', () => {
+  const REPO = () => resolve(tmp)
+
+  /** A closed repo-scoped stream whose close deposited `stream:<id>@0`. */
+  async function seedClosedStream(
+    parts: Array<{ type: string } & Record<string, unknown>> = [{ type: 'unknown-part' }],
+  ): Promise<string> {
+    await store.ensureRepo(REPO())
+    const stream = await store.createStream({ kind: 'repo', repo: REPO() }, 'session:hs_1')
+    await store.appendStreamParts(stream.id, parts)
+    await store.closeStream(stream.id, 'completed')
+    return stream.id
+  }
+
+  function streamOpts(streamId: string, outputPath: string) {
+    return {
+      targetRepo: tmp,
+      env: {},
+      exec: spawnExec,
+      spec: `stream:${streamId}`,
+      outputPath,
+      openStore: () => store,
+    }
+  }
+
+  test('retrieves the exact finalized-document bytes; @0 pin works; the store closes once', async () => {
+    let closeCount = 0
+    store.close = async () => {
+      closeCount += 1
+    }
+    const streamId = await seedClosedStream()
+    const output = join(tmp, 'downloads', 'session.json')
+
+    const result = await artifactDownloadStream(streamOpts(streamId, output))
+    expect(result.artifact.meta.kind).toBe(`stream:${streamId}`)
+    expect(result.artifact.meta.revision).toBe(0)
+    expect(result.outputPath).toBe(output)
+    const stored = await store.getRepoArtifact(REPO(), `stream:${streamId}`)
+    expect(stored).not.toBeNull()
+    expect(new Uint8Array(await readFile(output))).toEqual(new Uint8Array(stored!.content))
+    expect(closeCount).toBe(1)
+
+    const pinned = join(tmp, 'pinned.json')
+    await artifactDownloadStream({ ...streamOpts(streamId, pinned), spec: `stream:${streamId}@0` })
+    expect(new Uint8Array(await readFile(pinned))).toEqual(new Uint8Array(stored!.content))
+    expect(closeCount).toBe(2)
+  })
+
+  test('complete ambient build or Harvest identity fails closed before any store read (§8.2)', async () => {
+    const streamId = await seedClosedStream()
+    let opens = 0
+    const common = {
+      targetRepo: tmp,
+      exec: spawnExec,
+      spec: `stream:${streamId}`,
+      outputPath: join(tmp, 'denied.json'),
+      openStore: () => {
+        opens += 1
+        return store
+      },
+    }
+    await expect(
+      artifactDownloadStream({
+        ...common,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_BUILD: 'auth-rate-limit',
+          AB_PHASE: 'implement@1',
+          AB_SESSION: 's_phase',
+        },
+      }),
+    ).rejects.toThrow(/operator reads.*§8\.2.*never extends/s)
+    await expect(
+      artifactDownloadStream({
+        ...common,
+        env: {
+          AB_STORE: '/phase/store',
+          AB_REPO: REPO(),
+          AB_HARVEST: 'h_1',
+          AB_PHASE: 'synthesize@1',
+          AB_SESSION: 'hs_1',
+        },
+      }),
+    ).rejects.toThrow(/operator reads.*§8\.2.*never extends/s)
+    expect(opens).toBe(0)
+    expect(await Bun.file(common.outputPath).exists()).toBe(false)
+  })
+
+  test('unknown stream ids, open streams, foreign repos, and non-repo scopes name the fix', async () => {
+    const output = join(tmp, 'unused.json')
+
+    await expect(artifactDownloadStream(streamOpts('st_nope', output))).rejects.toThrow(
+      'no stream "st_nope" in this store',
+    )
+
+    await store.ensureRepo(REPO())
+    const open = await store.createStream({ kind: 'repo', repo: REPO() }, 'session:hs_2')
+    await store.appendStreamParts(open.id, [{ type: 'start', messageId: 'm1' }])
+    await expect(artifactDownloadStream(streamOpts(open.id, output))).rejects.toThrow(
+      `stream "${open.id}" is open — its finalized artifact exists only after the stream closes (§7.6)`,
+    )
+
+    await store.ensureRepo('/other/repo')
+    const foreign = await store.createStream({ kind: 'repo', repo: '/other/repo' }, 'session:hs_3')
+    await store.appendStreamParts(foreign.id, [{ type: 'start', messageId: 'm1' }])
+    await store.closeStream(foreign.id, 'completed')
+    await expect(artifactDownloadStream(streamOpts(foreign.id, output))).rejects.toThrow(
+      `stream "${foreign.id}" belongs to repository "/other/repo", not "${REPO()}"`,
+    )
+
+    const buildStream = await store.createStream(
+      { kind: 'build', build: 'auth-rate-limit' },
+      'session:s_1',
+    )
+    await expect(artifactDownloadStream(streamOpts(buildStream.id, output))).rejects.toThrow(
+      `stream "${buildStream.id}" is build-scoped — download it with 'ab artifact download auth-rate-limit stream:${buildStream.id}'`,
+    )
+
+    await store.createSession({ repo: REPO(), operator: 'op' })
+    const sessions = await store.listSessions(REPO())
+    const sessionStream = await store.createStream(
+      { kind: 'session', session: sessions[0]!.id },
+      'turn',
+    )
+    await expect(artifactDownloadStream(streamOpts(sessionStream.id, output))).rejects.toThrow(
+      `stream "${sessionStream.id}" is session-scoped`,
+    )
+    expect(await Bun.file(output).exists()).toBe(false)
+  })
+
+  test('a missing finalized artifact names the available refs for the stream kind', async () => {
+    await store.ensureRepo(REPO())
+    const stream = await store.createStream({ kind: 'repo', repo: REPO() }, 'session:hs_4')
+    await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'm1' }])
+    await store.closeStream(stream.id, 'completed')
+    // Directly depositing under the stream kind is impossible through the
+    // stream API without chunks, so force the miss by pinning an absent rev.
+    await expect(
+      artifactDownloadStream({
+        ...streamOpts(stream.id, join(tmp, 'x.json')),
+        spec: `stream:${stream.id}@3`,
+      }),
+    ).rejects.toThrow(`no "stream:${stream.id}" artifact at rev 3 in repository "${REPO()}"`)
+  })
+
+  test('validates the stream ref before opening a store', async () => {
+    let opens = 0
+    await expect(
+      artifactDownloadStream({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        spec: 'stream:',
+        outputPath: join(tmp, 'x.json'),
+        openStore: () => {
+          opens += 1
+          return store
+        },
+      }),
+    ).rejects.toThrow(/invalid stream ref "stream:"/)
+    await expect(
+      artifactDownloadStream({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        spec: 'st_nope',
+        outputPath: join(tmp, 'x.json'),
+        openStore: () => {
+          opens += 1
+          return store
+        },
+      }),
+    ).rejects.toThrow(/invalid stream ref "st_nope"/)
+    expect(opens).toBe(0)
+  })
+
+  test('the unchanged build-scoped path still rejects a repo-scoped stream kind exactly as today', async () => {
+    const streamId = await seedClosedStream()
+    await store.createBuild({ slug: 'stream-host', repo: REPO() })
+    await store.putArtifact('stream-host', { kind: 'spec', content: 'spec bytes' })
+    const output = join(tmp, 'still-no.json')
+    await expect(
+      artifactDownload({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        build: 'stream-host',
+        spec: `stream:${streamId}`,
+        outputPath: output,
+        openStore: () => store,
+      }),
+    ).rejects.toThrow(
+      `no "stream:${streamId}" artifact in build "stream-host" — available refs: spec@0`,
+    )
+    expect(await Bun.file(output).exists()).toBe(false)
+
+    // A nonexistent build named like a stream path is untouched behavior.
+    await expect(
+      artifactDownload({
+        targetRepo: tmp,
+        env: {},
+        exec: spawnExec,
+        build: 'stream:not-a-build',
+        spec: 'spec',
+        outputPath: output,
+        openStore: () => store,
+      }),
+    ).rejects.toThrow('no build "stream:not-a-build"')
+  })
+
+  test('accepts origin-equivalent scope.repo spellings; a legacy physical-path scope stays rejected', async () => {
+    // Mirror the build-scoped origin test's guest: the checkout's origin
+    // remote is ssh-spelled, so `context.repo` resolves to the https form.
+    const exec: Exec = async (cmd) =>
+      cmd[1] === 'remote'
+        ? { stdout: 'git@github.com:acme/app.git\n', stderr: '', exitCode: 0 }
+        : {
+            stdout: '/guest/checkout/.git\n/guest/checkout/.git\n/guest/checkout\n',
+            stderr: '',
+            exitCode: 0,
+          }
+    const ORIGIN = 'https://github.com/acme/app'
+    const guestStore = new MemoryBuildStore()
+
+    const seed = async (scopeRepo: string): Promise<string> => {
+      await guestStore.ensureRepo(scopeRepo)
+      const stream = await guestStore.createStream(
+        { kind: 'repo', repo: scopeRepo },
+        'session:hs_9',
+      )
+      await guestStore.appendStreamParts(stream.id, [{ type: 'start', messageId: 'm1' }])
+      await guestStore.closeStream(stream.id, 'completed')
+      return stream.id
+    }
+
+    const opts = (streamId: string, outputPath: string) => ({
+      targetRepo: '/guest/checkout',
+      env: {},
+      exec,
+      spec: `stream:${streamId}`,
+      outputPath,
+      openStore: () => guestStore,
+    })
+
+    // The scope recorded in the normalized https form downloads normally.
+    const canonical = await seed(ORIGIN)
+    const canonicalOut = join(tmp, 'origin-canonical.json')
+    const canonicalResult = await artifactDownloadStream(opts(canonical, canonicalOut))
+    expect(canonicalResult.outputPath).toBe(resolve(canonicalOut))
+
+    // The same origin spelled scp-like ssh also downloads: the membership
+    // guard normalizes the recorded side like `buildInRepository` normalizes
+    // `record.repoOrigin`, so writer vintage no longer decides membership.
+    const scp = await seed('git@github.com:acme/app.git')
+    const scpOut = join(tmp, 'origin-scp.json')
+    const scpResult = await artifactDownloadStream(opts(scp, scpOut))
+    expect(scpResult.outputPath).toBe(resolve(scpOut))
+
+    // A legacy physical-path scope stays rejected: StreamScope carries no
+    // `repoOrigin`, so the recorded origin is unrecoverable and the guard
+    // cannot forgive the mismatch (the accepted AUT-314-class limitation).
+    const legacy = await seed('/host/checkout')
+    const legacyOut = join(tmp, 'legacy.json')
+    await expect(artifactDownloadStream(opts(legacy, legacyOut))).rejects.toThrow(
+      `stream "${legacy}" belongs to repository "/host/checkout", not "${ORIGIN}"`,
+    )
+    expect(await Bun.file(legacyOut).exists()).toBe(false)
   })
 })
