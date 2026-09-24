@@ -9,10 +9,11 @@ import { basename, dirname, resolve } from 'node:path'
 import { agentActor } from '../events/envelope'
 import { prAttachmentSchema } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { Artifact, ArtifactMeta, BuildStore } from '../store/types'
+import type { Artifact, ArtifactMeta, BuildStore, RepositoryArtifact } from '../store/types'
 import type { CliEnv } from './env'
+import { resolveAmbientReadSession } from './env'
 import { buildInRepository } from './repo-state'
-import { withAmbientReadStore, type StoreOpener } from './store-opening'
+import { withAmbientReadStore, withSessionlessStore, type StoreOpener } from './store-opening'
 
 export interface ArtifactDeps {
   store: BuildStore
@@ -174,9 +175,128 @@ export async function artifactDownload(
       )
     }
 
-    const outputPath = resolve(opts.targetRepo, opts.outputPath)
-    await mkdir(dirname(outputPath), { recursive: true })
-    await writeFile(outputPath, artifact.content)
+    const outputPath = await writeArtifactBytes(opts.targetRepo, opts.outputPath, artifact.content)
     return { artifact, outputPath }
   })
+}
+
+/** Shared download tail: exact bytes under the resolved output path (parent
+ * directories created), used by both the build-scoped and stream-addressed
+ * forms so neither can drift on byte handling. */
+async function writeArtifactBytes(
+  targetRepo: string,
+  outputPath: string,
+  content: Uint8Array,
+): Promise<string> {
+  const resolved = resolve(targetRepo, outputPath)
+  await mkdir(dirname(resolved), { recursive: true })
+  await writeFile(resolved, content)
+  return resolved
+}
+
+export interface ArtifactDownloadStreamOpts {
+  /** Current checkout; repository identity resolves to its main worktree. */
+  targetRepo: string
+  env: Record<string, string | undefined>
+  exec: Exec
+  /** `stream:<id>` or `stream:<id>@<rev>`; rev pins the finalized artifact. */
+  spec: string
+  outputPath: string
+  /** Explicit --store; precedence remains flag > AB_STORE > local default. */
+  storeRef?: string
+  /** Adapter seam for local/remote selection tests. */
+  openStore?: StoreOpener
+}
+
+export interface ArtifactDownloadStreamResult {
+  artifact: RepositoryArtifact
+  outputPath: string
+}
+
+/** Operator retrieval of a finalized, repo-scoped stream artifact (the harvest
+ * session analog of the build-scoped form). A stream id is store-assigned and
+ * globally unique, so no build or repo argument is needed: the command reads
+ * the stream record, checks its scope, then fetches the close-deposited
+ * repository artifact.
+ *
+ * Authorization is the operator-wide read rule only (§8.2): this form requires
+ * a sessionless invocation and fails closed under any complete ambient phase
+ * identity — repository-scoped targets are never reachable by ambient
+ * own-build or own-harvest authority. The check runs here, before any store
+ * call, because local harvest-ambient handles would permit own-repo
+ * `getRepoArtifact` while remote handles rely on the core to enforce scope. */
+export async function artifactDownloadStream(
+  opts: ArtifactDownloadStreamOpts,
+): Promise<ArtifactDownloadStreamResult> {
+  const ambient = resolveAmbientReadSession(opts.env)
+  if (ambient !== undefined) {
+    throw new Error(
+      'repo-scoped stream downloads are operator reads (§8.2): ambient phase ' +
+        'identity (build or Harvest) never extends to repository-scoped targets — ' +
+        'run this command without agent identity markers',
+    )
+  }
+  const { kind, rev } = parseArtifactSpec(opts.spec)
+  const streamId = kind.startsWith('stream:') ? kind.slice('stream:'.length) : ''
+  if (streamId.trim() === '') {
+    throw new Error(
+      `invalid stream ref "${opts.spec}" — expected 'stream:<id>' or 'stream:<id>@<rev>'`,
+    )
+  }
+  return withSessionlessStore(
+    {
+      targetRepo: opts.targetRepo,
+      env: opts.env,
+      exec: opts.exec,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.openStore !== undefined ? { openStore: opts.openStore } : {}),
+    },
+    async (context) => {
+      const record = await context.store.getStream(streamId)
+      if (record === null) {
+        throw new Error(
+          `no stream "${streamId}" in this store — run 'ab harvest status' to find ` +
+            'session stream ids, or pass --store <ref>',
+        )
+      }
+      if (record.scope.kind === 'build') {
+        throw new Error(
+          `stream "${streamId}" is build-scoped — download it with ` +
+            `'ab artifact download ${record.scope.build} stream:${streamId}'`,
+        )
+      }
+      if (record.scope.kind === 'session') {
+        throw new Error(
+          `stream "${streamId}" is session-scoped — read it through the operator ` +
+            `session stream surface (GET /sessions/${record.scope.session}/streams/${streamId})`,
+        )
+      }
+      if (record.scope.repo !== context.repo) {
+        throw new Error(
+          `stream "${streamId}" belongs to repository "${record.scope.repo}", not "${context.repo}"`,
+        )
+      }
+      if (record.status === 'open') {
+        throw new Error(
+          `stream "${streamId}" is open — its finalized artifact exists only after ` +
+            'the stream closes (§7.6)',
+        )
+      }
+      const artifact = await context.store.getRepoArtifact(record.scope.repo, kind, rev)
+      if (artifact === null) {
+        const available = await context.store.listRepoArtifacts(record.scope.repo, kind)
+        const refs = available.map((meta) => `${meta.kind}@${meta.revision}`)
+        throw new Error(
+          `no "${kind}" artifact${rev !== undefined ? ` at rev ${rev}` : ''} in ` +
+            `repository "${record.scope.repo}" — available refs: ${refs.join(', ') || '(none)'}`,
+        )
+      }
+      const outputPath = await writeArtifactBytes(
+        opts.targetRepo,
+        opts.outputPath,
+        artifact.content,
+      )
+      return { artifact, outputPath }
+    },
+  )
 }
