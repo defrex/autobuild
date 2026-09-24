@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#532](https://github.com/defrex/autobuild/pull/532) — Pin the mine filter's repo-identity arms in CLI tests (wait parity)
 - [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
 - [#526](https://github.com/defrex/autobuild/pull/526) — Add PR-only publication from operator sandboxes via sandbox.publish
 - [#527](https://github.com/defrex/autobuild/pull/527) — Verify and align CLI repo-identity comparisons with AUT-567's rule
