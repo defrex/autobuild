@@ -65,7 +65,7 @@ export const FROZEN: Record<'build' | 'ticket' | 'auth', Map<number, FrozenSchem
 interface GuardedFamily {
   marker: string
   /** The frozen constants' naming prefix (`SCHEMA_V<N>_DDL`, …), so the guard
-   * message can point at the constant that is missing. */
+   * message can point at the constant to freeze. */
   ddlPrefix: string
   version: number
   checksum: string
@@ -125,9 +125,15 @@ const FAMILIES: GuardedFamily[] = [
  * tripped it. Thrown as a plain `Error` rather than asserted with `expect`,
  * so the failure output *is* the instruction. */
 function guardMessage(family: GuardedFamily): string {
+  // The freeze target is the version the pin currently records, in both
+  // failure modes: an un-bumped DDL edit must be preserved under that
+  // version's constant (its content is what every deployed database carries),
+  // and a bumped-but-unfrozen edit must freeze the replaced DDL under the same
+  // constant. `family.version - 1` would name an already-frozen constant in
+  // the un-bumped mode — the exact incident this guard exists to teach.
   const steps =
     family.version > 1
-      ? `freeze the previous DDL (${family.ddlPrefix}_V${family.version - 1}_DDL + its checksum), add its upgrade branch in migratePostgres, bump the schema version, and update the pinned version and checksum in schema-guard.test.ts`
+      ? `freeze the DDL the pin currently records (${family.ddlPrefix}_V${family.pin.version}_DDL + its checksum) as that version's frozen constant, add its upgrade branch in migratePostgres, bump the schema version, and update the pinned version and checksum in schema-guard.test.ts`
       : `bump the schema version and update the pinned version and checksum in schema-guard.test.ts (no frozen predecessor exists yet; the freeze-and-branch steps apply from the first version bump on)`
   return (
     `${family.marker} DDL or version no longer matches the committed pin. The current DDL ` +
