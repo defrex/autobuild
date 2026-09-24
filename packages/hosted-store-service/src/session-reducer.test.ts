@@ -43,7 +43,13 @@ function requestApproval(seq: number, turn = 't1', toolCallId = 'c1'): SessionEv
 
 describe('session reducer', () => {
   test('an empty log reduces to idle with no turns and default wake settings', () => {
-    expect(reduceSession([])).toEqual({ status: 'idle', wakeGlobs: [], wakeCursors: {}, turns: [] })
+    expect(reduceSession([])).toEqual({
+      status: 'idle',
+      wakeGlobs: [],
+      wakeCursors: {},
+      journalWakeCursor: 0,
+      turns: [],
+    })
   })
 
   test('creation, messages, and wake-set facts accumulate without touching status', () => {
