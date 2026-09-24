@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#532](https://github.com/defrex/autobuild/pull/532) — Pin the mine filter's repo-identity arms in CLI tests (wait parity)
 - [#533](https://github.com/defrex/autobuild/pull/533) — Derive PluginRegistry builtin workspace-providers from canonical list
 - [#531](https://github.com/defrex/autobuild/pull/531) — Heal the provisioning-marker exclusion on ensure's early return
 - [#529](https://github.com/defrex/autobuild/pull/529) — Map sandbox.publish foreign-repo failures to the sandbox-publish code
