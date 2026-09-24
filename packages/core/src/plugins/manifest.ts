@@ -8,7 +8,10 @@ import type { RuntimeRegistration } from '../ports/runner/runtime'
 import type { TicketSourceContractFactory } from '../ports/tickets/contract'
 import type { ForgeContractFactory } from '../ports/forge/contract'
 import type { WorkspaceProviderContractFactory } from '../ports/workspace/contract'
-import type { WorkspaceProviderCapabilities } from '../ports/workspace/provider-capabilities'
+import type {
+  RuntimeReferencesSource,
+  WorkspaceProviderCapabilities,
+} from '../ports/workspace/provider-capabilities'
 
 /** Version of the in-process plugin contract exposed by `@defrex/autobuild/plugin-sdk`. */
 export const PLUGIN_API_VERSION = '1.6.0' as const
@@ -23,11 +26,47 @@ export interface PluginFactoryContext<Config = Record<string, unknown>> {
   repoRoot: string
 }
 
-export type PluginFactory<Adapter, Config = Record<string, unknown>> = {
+export type PluginFactory<
+  Adapter,
+  Config = Record<string, unknown>,
+  Context = PluginFactoryContext<Config>,
+> = {
   /** The method-index form intentionally makes this callback bivariant, so a
-   * plugin can retain its concrete config type across the erased manifest. */
-  invoke(context: PluginFactoryContext<Config>): Adapter | Promise<Adapter>
+   * plugin can retain its concrete config type across the erased manifest —
+   * and a port that widens the context (workspace providers receive the
+   * host-derived seams, AUT-560) keeps every base-context factory assignable. */
+  invoke(context: Context): Adapter | Promise<Adapter>
 }['invoke']
+
+/** Context supplied to a workspace-provider factory: the shared
+ * `{ config, env, repoRoot }` context plus the host-derived seams a
+ * store-requiring remote provider needs (AUT-560). Every added field is
+ * optional — the shared call sites that carry no seam construct the plain
+ * shared context, and a factory that ignores the new fields changes nothing.
+ * Plugin API 1.7.0. */
+export interface WorkspaceProviderPluginFactoryContext<Config = Record<string, unknown>>
+  extends PluginFactoryContext<Config> {
+  /** Git store URL the dispatcher selected (`AB_STORE`). Guaranteed present
+   * when the registration declares `capabilities.storeRequirements`:
+   * `createWorkspaceProvider` refuses construction before the factory runs
+   * when either store seam is missing. */
+  storeRef?: string
+  /** Scoped store token (`AB_TOKEN`). Guaranteed present under
+   * `capabilities.storeRequirements` for the same reason. */
+  storeToken?: string
+  /** Host-derived effective runtime routes (the referenced runtimes and their
+   * selection provenance). Absent at call sites that reference no runtimes
+   * (for example the MCP server), which never construct a workspace. */
+  runtimeReferences?: RuntimeReferencesSource
+  /** Checkout-less seam: the repository's HTTPS origin. When absent the
+   * provider falls back to host `git` from `repoRoot` — the same default the
+   * builtin `VercelSandboxProvider` applies. */
+  origin?: () => Promise<string>
+  /** Checkout-less seam: the remote branch's current head, `undefined` when
+   * the branch does not exist. When absent the provider falls back to host
+   * `git` from `repoRoot`. */
+  remoteBranchHead?: (branch: string) => Promise<string | undefined>
+}
 
 export type TicketSourcePluginFactory<Config = Record<string, unknown>> = PluginFactory<
   TicketSource,
@@ -54,7 +93,8 @@ export type AgentRuntimePluginFactory<Config = Record<string, unknown>> = Plugin
 >
 export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> = PluginFactory<
   WorkspaceProvider,
-  Config
+  Config,
+  WorkspaceProviderPluginFactoryContext<Config>
 >
 export type ForgePluginFactory<Config = Record<string, unknown>> = PluginFactory<Forge, Config>
 
