@@ -382,6 +382,13 @@ export function createOrchestratorTurnRunner(
             kind: 'internal',
             error: `approval answer for tool call ${JSON.stringify(opts.approval.toolCallId)} matches no persisted approval request`,
           })
+          // The failed resume is terminal, so the turn's stream closes here
+          // like every other terminal path — the reaper only watches running
+          // turns and would otherwise never close it. Closing an
+          // already-closed stream is a contract-pinned no-op, so the
+          // non-open-stream leg of recoverApprovalResponse's null is covered
+          // too.
+          await store.closeStream(open.stream, 'aborted').catch(() => undefined)
           return { resumed: false }
         }
       }
