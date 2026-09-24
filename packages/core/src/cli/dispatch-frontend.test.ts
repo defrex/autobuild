@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import type { BuildStore } from '../store/types'
 import { MemoryBuildStore } from '../store/memory'
+import { steppingClock } from '../testing/fixed'
+import type { RepositoryEventWrite } from '../events/repository'
 import { assembleUIMessageDocument } from '../store/streams/assemble'
 import {
   abortPart,
@@ -218,13 +220,21 @@ test('frontend input and captured controls remain responsive while the kernel is
   const intakeEntered = deferred<void>()
   const releaseIntake = deferred<void>()
   let delayed = false
-  const repositoryReads: number[] = []
+  const repositoryReads: Array<{ sinceSeq: number; count: number }> = []
+  let boundedReads = 0
   const store = new Proxy(backing, {
     get(target, property) {
       if (property === 'getRepoEvents') {
         return async (requestedRepo: string, sinceSeq = 0) => {
-          repositoryReads.push(sinceSeq)
-          return target.getRepoEvents(requestedRepo, sinceSeq)
+          const events = await target.getRepoEvents(requestedRepo, sinceSeq)
+          repositoryReads.push({ sinceSeq, count: events.length })
+          return events
+        }
+      }
+      if (property === 'getRepoStateEvents') {
+        return async (requestedRepo: string) => {
+          boundedReads += 1
+          return target.getRepoStateEvents(requestedRepo)
         }
       }
       if (property === 'appendRepo') {
@@ -306,10 +316,22 @@ test('frontend input and captured controls remain responsive while the kernel is
 
   const running = frontend.run()
   await waitFor(() => output.includes('alpha') && input !== undefined, 'first dashboard frame')
-  await waitFor(() => repositoryReads.some((sinceSeq) => sinceSeq > 0), 'incremental repo cursor')
+  await waitFor(() => repositoryReads.some((read) => read.sinceSeq > 0), 'incremental repo cursor')
   // The frontend journal cursor still advances incrementally. The independent
   // observation scan legitimately performs its own full repository reduction.
-  expect(repositoryReads.filter((sinceSeq) => sinceSeq > 0).length).toBeGreaterThan(0)
+  expect(repositoryReads.filter((read) => read.sinceSeq > 0).length).toBeGreaterThan(0)
+  // AUT-534: the initial fold is the bounded seed read (issued pre-launch by
+  // the warm-up). With an empty-at-seed journal the seed leaves the cursor at
+  // 0, so the delta path may read from zero until the child's first facts
+  // advance it — the same reads today's full read performed. The invariant
+  // that rules out a whole-journal rescan is monotonicity: once the cursor
+  // has advanced, no read ever returns to zero.
+  expect(boundedReads).toBeGreaterThan(0)
+  let cursorAdvanced = false
+  for (const read of repositoryReads) {
+    if (read.sinceSeq > 0) cursorAdvanced = true
+    else expect(cursorAdvanced, 'a from-zero journal read after the cursor advanced').toBe(false)
+  }
 
   // Occupy the Store-action queue, then navigate and confirm abort while both
   // that action and the child kernel remain unresolved.
@@ -2075,4 +2097,487 @@ test('observation sample traffic stays flat as finished builds accumulate (AUT-4
   for (const method of sampleMethods) {
     expect(more.counts.get(method) ?? 0).toBe(baseline.counts.get(method) ?? 0)
   }
+})
+
+// --- AUT-534: the interactive surfaces' initial replays become bounded reads ---
+
+interface ProbeCall {
+  method: 'getRepoEvents' | 'getRepoStateEvents'
+  sinceSeq?: number
+  order: number
+  failed: boolean
+}
+
+/** A counting proxy over a real `MemoryBuildStore`: records every repository
+ * journal read (bounded or delta) in issue order, can fail the bounded read,
+ * and can defeat the bound by answering `getRepoStateEvents` with the full
+ * journal. `markLaunch` stamps the shared order counter when `launchChild` is
+ * invoked, so every recorded call is attributable to the pre- or post-launch
+ * window. */
+function frontendProbe(
+  backing: MemoryBuildStore,
+  opts: {
+    failBounded?: boolean
+    failPreLaunchFullRead?: boolean
+    boundedReturnsFull?: boolean
+  } = {},
+) {
+  let counter = 0
+  let launchOrder: number | undefined
+  let launched = false
+  const calls: ProbeCall[] = []
+  const store = new Proxy(backing, {
+    get(target, property) {
+      if (property === 'getRepoStateEvents') {
+        return async (requestedRepo: string) => {
+          const order = counter++
+          try {
+            // The failure is confined to the pre-launch window: the warm-up
+            // seed attempt is what must fail; the observation sample's own
+            // bounded reads (post-launch) stay served.
+            if (opts.failBounded === true && !launched) throw new Error('bounded read unavailable')
+            const result =
+              opts.boundedReturnsFull === true
+                ? await target.getRepoEvents(requestedRepo, 0)
+                : await target.getRepoStateEvents(requestedRepo)
+            calls.push({ method: 'getRepoStateEvents', order, failed: false })
+            return result
+          } catch (error) {
+            calls.push({ method: 'getRepoStateEvents', order, failed: true })
+            throw error
+          }
+        }
+      }
+      if (property === 'getRepoEvents') {
+        return async (requestedRepo: string, sinceSeq = 0) => {
+          const order = counter++
+          if (opts.failPreLaunchFullRead === true && !launched) {
+            calls.push({ method: 'getRepoEvents', sinceSeq, order, failed: true })
+            throw new Error('pre-launch journal read unavailable')
+          }
+          try {
+            const result = await target.getRepoEvents(requestedRepo, sinceSeq)
+            calls.push({ method: 'getRepoEvents', sinceSeq, order, failed: false })
+            return result
+          } catch (error) {
+            calls.push({ method: 'getRepoEvents', sinceSeq, order, failed: true })
+            throw error
+          }
+        }
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as BuildStore
+  return {
+    store,
+    calls,
+    markLaunch: () => {
+      launched = true
+      launchOrder = counter++
+    },
+    get launchOrder() {
+      return launchOrder
+    },
+  }
+}
+
+/** An aged journal: two completed dispatcher invocations interleaved with the
+ * durable facts the dashboard folds. The bounded subset drops the first
+ * invocation's run-scoped facts entirely; equivalence must not depend on
+ * them, because `reduceDispatchStatus(…, this.runId)` skips every event whose
+ * run is not the frontend's own (not yet launched) run, and the dashboard
+ * filter keeps only durable types. */
+async function seedAgedJournal(store: MemoryBuildStore, repo: string): Promise<number> {
+  await store.ensureRepo(repo)
+  const tick = (run: string) => ({
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-completed',
+    payload: {
+      run,
+      queued: 0,
+      counters: tickCounters,
+      janitorDiagnostics: [] as string[],
+      ticketDiagnostics: [] as string[],
+      creationDiagnostics: [] as string[],
+      dependencyDiagnostics: [] as string[],
+    },
+  })
+  for (const write of [
+    {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'old-1',
+        pid: 1,
+        effectiveConfig: { kind: 'effective-config', rev: 0 },
+        roleWarnings: [],
+      },
+    },
+    tick('old-1'),
+    {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'old-1', outcome: 'normal' },
+    },
+    {
+      actor: humanActor('operator'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: false },
+    },
+    { actor: humanActor('operator'), type: 'harvest.pause-requested', payload: {} },
+    {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'old-2',
+        pid: 2,
+        effectiveConfig: { kind: 'effective-config', rev: 0 },
+        roleWarnings: [],
+      },
+    },
+    tick('old-2'),
+    {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: 'old-2', outcome: 'normal' },
+    },
+    {
+      actor: humanActor('operator'),
+      type: 'dispatcher.pause-set',
+      payload: { enabled: true },
+    },
+    {
+      actor: KERNEL,
+      type: 'harvest.started',
+      payload: {
+        run: 'old-h',
+        observations: [{ build: 'b1', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    },
+  ] as RepositoryEventWrite[]) {
+    await store.appendRepo(repo, write)
+  }
+  return 10
+}
+
+/** Run the interactive frontend against an aged journal until the first frame
+ * paints, then stop the child cleanly. The child appends its own
+ * `run-started` (with a durable effective-config artifact) and a
+ * `tick-completed`, plus any caller-supplied extra facts after those. */
+async function runBoundedSeed(input: {
+  repo: string
+  backing: MemoryBuildStore
+  probe: ReturnType<typeof frontendProbe>
+  afterChildFacts?: (backing: MemoryBuildStore, repo: string, run: string) => Promise<unknown>
+}): Promise<string[]> {
+  const childDone = deferred<DispatchChildResult>()
+  const frames: string[] = []
+  const frontend = new DispatchFrontend({
+    repo: input.repo,
+    storeRef: 'memory',
+    store: input.probe.store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns: 100,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: false,
+    resolveDashboardRenderer: () => (model) => {
+      frames.push(JSON.stringify(model))
+      return ['frame']
+    },
+    launchChild: ({ run }) => {
+      input.probe.markLaunch()
+      const startup = input.backing
+        .appendRepoWithArtifacts(
+          input.repo,
+          [
+            {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                policy: { harvestThreshold: 9 },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              roleWarnings: ['durable role warning'],
+            },
+          }),
+        )
+        .then(() =>
+          input.backing.appendRepo(input.repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run,
+              queued: 3,
+              counters: tickCounters,
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              creationDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          }),
+        )
+        .then(() => input.afterChildFacts?.(input.backing, input.repo, run))
+      return { completed: startup.then(() => childDone.promise), async stop() {} }
+    },
+  })
+  const running = frontend.run()
+  // The first paint can precede the child's tick fact (queued 0); wait for
+  // the complete frame the run's facts produce — nothing changes afterwards.
+  await waitFor(
+    () => frames.some((frame) => (JSON.parse(frame) as DashboardModel).queued === 3),
+    'first complete dashboard frame',
+  )
+  childDone.resolve({ outcome: 'normal', exitCode: 0 })
+  await running
+  return frames
+}
+
+test('the interactive frontend seeds its initial fold with the bounded read before launch (AUT-534)', async () => {
+  const repo = '/bounded-seed-repo'
+  const backing = new MemoryBuildStore({ clock: steppingClock() })
+  const journalEnd = await seedAgedJournal(backing, repo)
+  const probe = frontendProbe(backing)
+  const frames = await runBoundedSeed({ repo, backing, probe })
+
+  // Exactly one pre-launch store call — the bounded seed read — and it
+  // completes before `launchChild` is invoked.
+  expect(probe.launchOrder).toBeDefined()
+  const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
+  expect(preLaunch).toHaveLength(1)
+  expect(preLaunch[0]).toEqual({
+    method: 'getRepoStateEvents',
+    order: preLaunch[0]!.order,
+    failed: false,
+  })
+
+  // Every journal read after the seed is a delta read from the subset's end —
+  // no whole-journal read remains on the successful path. The independent
+  // observation scan's own bounded reads are not journal reads.
+  const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
+  expect(post.length).toBeGreaterThan(0)
+  expect(post.every((call) => call.method !== 'getRepoEvents' || (call.sinceSeq ?? 0) > 0)).toBe(
+    true,
+  )
+  expect(post.some((call) => call.method === 'getRepoEvents' && call.sinceSeq === journalEnd)).toBe(
+    true,
+  )
+
+  // The first complete frame folds the child's run facts through the delta
+  // path: the aged journal's facts stayed silently baselined, and the frame
+  // is complete.
+  const model = JSON.parse(
+    frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!,
+  ) as DashboardModel
+  expect(model.queued).toBe(3)
+  expect(model.warningLines).toEqual(['durable role warning'])
+  expect(model.observations.limit).toBe(9)
+})
+
+test('a failed bounded seed falls back to the full journal read within the same pre-launch attempt (AUT-534)', async () => {
+  const repo = '/bounded-fallback-repo'
+  const backing = new MemoryBuildStore({ clock: steppingClock() })
+  await seedAgedJournal(backing, repo)
+  const probe = frontendProbe(backing, { failBounded: true })
+  const frames = await runBoundedSeed({ repo, backing, probe })
+
+  // Pre-launch: the bounded read failed, the fallback full read served the
+  // seed — the exact pre-AUT-534 behavior — and both happened before launch.
+  expect(probe.launchOrder).toBeDefined()
+  const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
+  expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
+    ['getRepoStateEvents', null, true],
+    ['getRepoEvents', 0, false],
+  ])
+
+  // The frame is complete and identical in shape to the bounded run's.
+  const model = JSON.parse(
+    frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!,
+  ) as DashboardModel
+  expect(model.queued).toBe(3)
+  expect(model.warningLines).toEqual(['durable role warning'])
+})
+
+test('a post-launch seed attempt takes the full read and survives a competitor anchor (AUT-534)', async () => {
+  const repo = '/post-launch-seed-repo'
+  const backing = new MemoryBuildStore({ clock: steppingClock() })
+  await seedAgedJournal(backing, repo)
+  // Both warm-up reads reject, so the seed flag stays unset and the first
+  // post-launch seed attempt decides the path. The competitor's run-started
+  // lands AFTER the child's facts: it is the journal's latest anchor, so a
+  // bounded subset taken now would drop the child's run-started and the
+  // frame would never render.
+  const probe = frontendProbe(backing, {
+    failBounded: true,
+    failPreLaunchFullRead: true,
+  })
+  const frames = await runBoundedSeed({
+    repo,
+    backing,
+    probe,
+    afterChildFacts: async (store, repoArg) => {
+      await store.appendRepo(repoArg, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'competitor',
+          pid: 7,
+          effectiveConfig: { kind: 'effective-config', rev: 0 },
+          roleWarnings: [],
+        },
+      })
+    },
+  })
+
+  // Pre-launch: both reads failed (bounded, then the full fallback).
+  expect(probe.launchOrder).toBeDefined()
+  const preLaunch = probe.calls.filter((call) => call.order < probe.launchOrder!)
+  expect(preLaunch.map((call) => [call.method, call.sinceSeq ?? null, call.failed])).toEqual([
+    ['getRepoStateEvents', null, true],
+    ['getRepoEvents', 0, true],
+  ])
+
+  // Post-launch: the first repository read is the full `getRepoEvents(repo, 0)`
+  // seed — never a bounded read — and the frame renders with the child's own
+  // facts despite the competitor's later anchor.
+  const post = probe.calls.filter((call) => call.order > probe.launchOrder!)
+  expect(post[0]).toEqual({
+    method: 'getRepoEvents',
+    sinceSeq: 0,
+    order: post[0]!.order,
+    failed: false,
+  })
+  const model = JSON.parse(
+    frames.find((frame) => (JSON.parse(frame) as DashboardModel).queued === 3)!,
+  ) as DashboardModel
+  expect(model.queued).toBe(3)
+  expect(model.warningLines).toEqual(['durable role warning'])
+})
+
+test('once mode keeps its unbounded teardown fold (AUT-534 exclusion)', async () => {
+  const repo = '/once-exclusion-repo'
+  const backing = new MemoryBuildStore({ clock: steppingClock() })
+  await seedAgedJournal(backing, repo)
+  const probe = frontendProbe(backing)
+  const frames: string[] = []
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store: probe.store,
+    env: {},
+    terminal: {
+      write: () => {},
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+      columns: 100,
+      rows: 24,
+      interactive: true,
+    },
+    input: { start: () => () => {} },
+    once: true,
+    resolveDashboardRenderer: () => (model) => {
+      frames.push(JSON.stringify(model))
+      return ['frame']
+    },
+    launchChild: ({ run }) => {
+      probe.markLaunch()
+      const completed = backing
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                policy: { harvestThreshold: 9 },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              roleWarnings: ['durable role warning'],
+            },
+          }),
+        )
+        .then(() =>
+          backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run,
+              queued: 3,
+              counters: tickCounters,
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              creationDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          }),
+        )
+        .then(() => ({ outcome: 'normal', exitCode: 0 }) as const)
+      return { completed, async stop() {} }
+    },
+  })
+  await frontend.run()
+
+  // Once mode's single fold runs from `finishPresentation()` after the child
+  // exits — with the child set, the guard routes it to the full read. The
+  // journal's first read is that full read, never a bounded one: at teardown
+  // the child's run-scoped facts are in the journal and a bounded subset
+  // cannot guarantee their inclusion under a competitor's later anchor.
+  expect(probe.calls[0]).toEqual({
+    method: 'getRepoEvents',
+    sinceSeq: 0,
+    order: probe.calls[0]!.order,
+    failed: false,
+  })
+  expect(frames).toHaveLength(1)
+  const model = JSON.parse(frames[0]!) as DashboardModel
+  expect(model.queued).toBe(3)
+  expect(model.warningLines).toEqual(['durable role warning'])
+})
+
+test('the bounded seed renders the same first frame as the full-journal seed (AUT-534 equivalence)', async () => {
+  const run = async (opts: { boundedReturnsFull?: boolean }): Promise<string> => {
+    const repo = '/equivalence-repo'
+    const backing = new MemoryBuildStore({ clock: steppingClock() })
+    await seedAgedJournal(backing, repo)
+    const probe = frontendProbe(backing, opts)
+    const frames = await runBoundedSeed({ repo, backing, probe })
+    return frames[0]!
+  }
+  // Same journal, same child facts, same clock: the only difference is
+  // whether the seed read is bounded or the whole journal.
+  const bounded = await run({})
+  const full = await run({ boundedReturnsFull: true })
+  expect(bounded).toEqual(full)
 })

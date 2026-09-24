@@ -8,9 +8,10 @@ import type { RuntimeRegistration } from '../ports/runner/runtime'
 import type { TicketSourceContractFactory } from '../ports/tickets/contract'
 import type { ForgeContractFactory } from '../ports/forge/contract'
 import type { WorkspaceProviderContractFactory } from '../ports/workspace/contract'
+import type { WorkspaceProviderCapabilities } from '../ports/workspace/provider-capabilities'
 
 /** Version of the in-process plugin contract exposed by `@defrex/autobuild/plugin-sdk`. */
-export const PLUGIN_API_VERSION = '1.5.0' as const
+export const PLUGIN_API_VERSION = '1.6.0' as const
 
 /** Context supplied when a registered adapter or contract fixture is selected. */
 export interface PluginFactoryContext<Config = Record<string, unknown>> {
@@ -57,6 +58,24 @@ export type WorkspaceProviderPluginFactory<Config = Record<string, unknown>> = P
 >
 export type ForgePluginFactory<Config = Record<string, unknown>> = PluginFactory<Forge, Config>
 
+/** Optional host-enforced metadata for a workspace provider. Bare factories
+ * remain valid for plugin API 1.0 compatibility. Required environment lives
+ * on `capabilities.requiredEnv` — a descriptor-level `requiredEnv` is
+ * rejected at manifest parse (see `workspaceProviderRegistrationSchema`). */
+export interface WorkspaceProviderPluginDescriptor<Config = Record<string, unknown>> {
+  factory: WorkspaceProviderPluginFactory<Config>
+  /** Optional shared-suite certification fixture. */
+  contract?: PluginContractDescriptor<WorkspaceProviderContractFactory>
+  /** Behavior declarations the host enforces without naming the provider
+   * (AUT-516): config schema, forges, environment groups, store requirements,
+   * origin validation, and remote readiness. */
+  capabilities?: WorkspaceProviderCapabilities
+}
+
+export type WorkspaceProviderPluginRegistration<Config = Record<string, unknown>> =
+  | WorkspaceProviderPluginFactory<Config>
+  | WorkspaceProviderPluginDescriptor<Config>
+
 export interface PluginContractDescriptor<ContractFactory, Config = Record<string, unknown>> {
   /** Creates the unchanged shared-suite harness factory when the test verb runs. */
   factory: PluginFactory<ContractFactory, Config>
@@ -74,10 +93,6 @@ export type PluginAdapterRegistration<AdapterFactory, ContractFactory> =
 export type AgentRuntimePluginRegistration = PluginAdapterRegistration<
   AgentRuntimePluginFactory,
   AgentRunnerContractFactory
->
-export type WorkspaceProviderPluginRegistration = PluginAdapterRegistration<
-  WorkspaceProviderPluginFactory,
-  WorkspaceProviderContractFactory
 >
 export type ForgePluginRegistration = PluginAdapterRegistration<
   ForgePluginFactory,
@@ -212,6 +227,92 @@ const ticketSourceRegistrationSchema = z.unknown().transform((value, ctx) => {
   return z.NEVER
 })
 
+/** Function-valued capability fields (origin validation, redaction, summary
+ * lines, remote readiness). */
+const capabilityFunctionSchema = z.custom<(...args: never[]) => unknown>(
+  (value) => typeof value === 'function',
+  'must be a function',
+)
+
+const workspaceProviderCapabilitiesSchema = z.strictObject({
+  // A Zod schema carries both `parse` and `safeParse`; the consumers use each
+  // (`create.ts` parses with `safeParse`, `init-validation.ts` with `parse`),
+  // so requiring only one would let a half-shaped object past manifest parsing
+  // and crash the other seam with a TypeError instead of the config
+  // diagnostic (f_69fc887c).
+  configSchema: z
+    .custom<z.ZodType>((value) => {
+      if (value === null || typeof value !== 'object') return false
+      const shape = value as { parse?: unknown; safeParse?: unknown }
+      return typeof shape.parse === 'function' && typeof shape.safeParse === 'function'
+    }, 'must be a Zod schema')
+    .optional(),
+  configRefusal: z.string().optional(),
+  requireRuntimeProvisioning: z.boolean().optional(),
+  sandboxForbiddenEnv: z.array(z.string()).optional(),
+  supportedForges: z.array(z.string()).optional(),
+  forgeDispatchMessage: z.string().optional(),
+  forgeValidationMessage: z.string().optional(),
+  requiredEnv: z
+    .array(
+      z.strictObject({
+        alternatives: z.array(z.array(z.string().min(1)).min(1)).min(1),
+        dispatchMessage: z.string().optional(),
+        validationMessage: z.string().optional(),
+      }),
+    )
+    .optional(),
+  processEnvOnly: z
+    .array(z.strictObject({ name: z.string().min(1), message: z.string() }))
+    .optional(),
+  storeRequirements: z
+    .strictObject({
+      constructionMessage: z.string(),
+      storeRefMessage: z.string(),
+      storeTokenMessage: z.string(),
+    })
+    .optional(),
+  validateOrigin: capabilityFunctionSchema.optional(),
+  originReadFailureMessage: z.string().optional(),
+  guestEnvNames: capabilityFunctionSchema.optional(),
+  describeEnvironment: capabilityFunctionSchema.optional(),
+  validateReadiness: capabilityFunctionSchema.optional(),
+})
+
+const workspaceProviderDescriptorSchema = z.strictObject({
+  factory: factorySchema,
+  contract: contractSchema.optional(),
+  capabilities: workspaceProviderCapabilitiesSchema.optional(),
+})
+
+/**
+ * The workspace-provider counterpart of `ticketSourceRegistrationSchema`, with
+ * one deliberate tightening (AUT-516): a top-level `requiredEnv` key is
+ * rejected with a bespoke remediation message instead of the generic
+ * unrecognized-key complaint. The generic registration schema accepts the key
+ * today, but its only consumer is ticket-source construction — routing
+ * workspace-provider env requirements there would leave the declaration
+ * parsed and never checked, exactly the ignored-declaration failure mode this
+ * port's capabilities exist to eliminate. Required environment belongs on
+ * `capabilities.requiredEnv`, which carries the per-site messages a bare name
+ * list cannot.
+ */
+const workspaceProviderRegistrationSchema = z.unknown().transform((value, ctx) => {
+  if (typeof value === 'function') return value
+  if (value !== null && typeof value === 'object' && 'requiredEnv' in value) {
+    ctx.addIssue({
+      code: 'custom',
+      message:
+        'workspaceProviders.<name>.requiredEnv is not supported; declare required environment as workspaceProviders.<name>.capabilities.requiredEnv',
+    })
+    return z.NEVER
+  }
+  const parsed = workspaceProviderDescriptorSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+  forwardIssues(parsed.error.issues, ctx)
+  return z.NEVER
+})
+
 /** Strict runtime contract for a plugin module's default export.
  *
  * `.optional()` stays outermost, so an undeclared port remains `undefined`
@@ -221,7 +322,11 @@ export const pluginManifestSchema = z.strictObject({
   apiVersion: nonblank,
   ticketSources: openMap('ticketSources', ticketSourceRegistrationSchema, ADAPTER_MAP).optional(),
   agentRuntimes: registrationMap('agentRuntimes').optional(),
-  workspaceProviders: registrationMap('workspaceProviders').optional(),
+  workspaceProviders: openMap(
+    'workspaceProviders',
+    workspaceProviderRegistrationSchema,
+    ADAPTER_MAP,
+  ).optional(),
   forges: registrationMap('forges').optional(),
 })
 

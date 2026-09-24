@@ -181,3 +181,34 @@ describe('PluginRegistry with a preserved adapter name', () => {
     })
   })
 })
+
+describe('workspace-provider capability declarations', () => {
+  test('a descriptor with capabilities normalizes into AdapterRegistration.capabilities', () => {
+    const registry = new PluginRegistry()
+    const capabilities = {
+      supportedForges: ['github'],
+      requiredEnv: [{ alternatives: [['ACME_TOKEN']], dispatchMessage: 'needs ACME_TOKEN' }],
+    }
+    registry.register(
+      plugin('acme', {
+        workspaceProviders: { podman: { factory, capabilities } },
+      }),
+    )
+    const registration = registry.workspaceProviders.get('podman')
+    expect(registration?.capabilities).toEqual(capabilities)
+    expect(registration?.builtinFactory).toBeUndefined()
+    expect(registration?.factory).toBe(factory)
+  })
+
+  test('builtin workspace providers carry their capability declarations and constructors', () => {
+    const registry = new PluginRegistry()
+    const vercel = registry.workspaceProviders.get('vercel-sandbox')
+    expect(vercel?.owner).toEqual({ kind: 'builtin', name: 'autobuild' })
+    expect(vercel?.capabilities?.supportedForges).toEqual(['github'])
+    expect(vercel?.capabilities?.requireRuntimeProvisioning).toBe(true)
+    expect(typeof vercel?.builtinFactory).toBe('function')
+    expect(registry.workspaceProviders.get('git-worktree')?.capabilities?.configRefusal).toBe(
+      '[workspace.config] is not supported by the builtin "git-worktree" provider',
+    )
+  })
+})

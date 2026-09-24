@@ -994,6 +994,17 @@ export class SqliteBuildStore implements BuildStore {
     // run-started anchor, then one select of durable types plus the tail
     // from that anchor. No new index: local journals are small and the
     // existing (repo, seq) PK index keeps the anchor scan acceptable.
+    //
+    // This probe is a LIMIT 1 select, not an aggregate: it returns zero or
+    // one rows, so row absence is the deliberate empty-journal signal — no
+    // MAX() NULL semantics involved (contrast the Postgres adapter's
+    // MAX(seq) probe, which always returns one row and must test the NULL
+    // explicitly). The `anchor === undefined` branch in the select below is
+    // the explicit durable-only path; a null anchor must never reach the
+    // gte(repoEvents.seq, anchor) arm (in either dialect the comparison is
+    // never true, so the durable-only outcome would then survive only by
+    // accident), and the no-anchor case must not degenerate into
+    // gte(repoEvents.seq, 0), which would select the whole journal.
     const anchorRows = this.db
       .select({ seq: repoEvents.seq })
       .from(repoEvents)

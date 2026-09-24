@@ -728,9 +728,43 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
     const wanted = new Set(statusFilter(opts.all, opts.queued))
     // Cross-repo aggregation is out of scope (§12: one dispatcher per repo,
     // one repo's builds per answer).
+    // Records are read and held before the digest read: builds are never
+    // deleted, so every identity-keyed record iterated below is guaranteed an
+    // entry in the digest map fetched after it — a build created between the
+    // two reads appears only in the digest map, which is harmless — and the
+    // completeness check can only ever catch a genuine adapter bug, never a
+    // concurrent dispatch (AUT-488 finding f_3cb67aba).
     const records = (await store.listBuilds()).filter(mine)
+    // One digest read gates the per-build history reads (AUT-488): the active
+    // and queued scopes never show a terminal build, so an identity-keyed
+    // build whose digest already carries a terminal fact skips its `getEvents`
+    // round trip and the listing's store cost stays flat as finished builds
+    // accumulate. The `--all` scope includes terminal statuses, so it takes no
+    // digest read and skips nothing — byte-for-byte the old loop.
+    const digests = opts.all === true ? undefined : await store.getRepoBuildDigests(identity)
     const summaries: BuildSummary[] = []
     for (const record of records) {
+      if (digests !== undefined && record.repo === identity) {
+        // Completeness is contractual (one entry per repo build); a missing
+        // entry is an adapter bug and must fail loudly rather than silently
+        // drop the build from the listing.
+        const digest = digests.get(record.slug)
+        if (digest === undefined) {
+          throw new Error(`getRepoBuildDigests is missing an entry for build "${record.slug}"`)
+        }
+        // The digest's `terminal` follows `reduceBuild`'s terminal rule
+        // exactly (in-order overwrite of `build.completed`/`build.aborted`,
+        // never cleared — pinned against `reduceBuild` in
+        // store/digest.test.ts), so `terminal !== undefined` is exactly
+        // reduced status `done`/`aborted`, which the active and queued status
+        // sets never include. Skipping the history read therefore cannot
+        // change the emitted summaries.
+        if (digest.terminal !== undefined) continue
+      }
+      // A record matched only through the legacy `repoOrigin` path has no
+      // entry under `identity` — `getRepoBuildDigests` groups by `record.repo`
+      // exactly — so it keeps its per-build history read (correct, just not
+      // accelerated).
       const summary = summarize(record, await store.getEvents(record.slug), now)
       if (wanted.has(summary.status)) summaries.push(summary)
     }

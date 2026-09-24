@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import { resolve } from 'node:path'
+import { z } from 'zod'
 import type { WorkspaceProvider } from '../types'
 import { FakeWorkspaceProvider } from './fake'
 import { GitWorktreeProvider } from './git-worktree'
 import { createPluginRegistry } from '../../plugins/registry'
 import { parseConfig } from '../../config/load'
-import { createWorkspaceProvider, createWorkspaceRuntime } from './create'
+import {
+  createWorkspaceProvider,
+  createWorkspaceRuntime,
+  type CreateWorkspaceProviderOptions,
+} from './create'
 import type { BuildExecution } from './build-execution'
 import { LocalBuildExecution } from './local-build-execution'
 
@@ -158,5 +163,185 @@ readyState = "ready"
     await expect(
       createWorkspaceProvider({ provider: 'container', config: {} }, opts),
     ).rejects.toThrow('workspace provider "container" failed to initialize: daemon unavailable')
+  })
+
+  test('a plugin-declared configRefusal is enforced at construction before the factory runs', async () => {
+    const opts = baseOpts()
+    let constructed = 0
+    opts.registry.register({
+      name: 'containers',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: () => {
+            constructed += 1
+            return new FakeWorkspaceProvider({ mode: 'logical' })
+          },
+          capabilities: { configRefusal: '[workspace.config] is not supported by podman' },
+        },
+      },
+    })
+    await expect(
+      createWorkspaceProvider({ provider: 'podman', config: { image: 'bun:latest' } }, opts),
+    ).rejects.toThrow('[workspace.config] is not supported by podman')
+    expect(constructed).toBe(0)
+    // Empty provider config passes through to the factory.
+    await createWorkspaceProvider({ provider: 'podman', config: {} }, opts)
+    expect(constructed).toBe(1)
+  })
+
+  test('a plugin-declared configSchema is parsed before construction', async () => {
+    const opts = baseOpts()
+    let constructed = 0
+    opts.registry.register({
+      name: 'containers',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: () => {
+            constructed += 1
+            return new FakeWorkspaceProvider({ mode: 'logical' })
+          },
+          capabilities: { configSchema: z.strictObject({ image: z.string() }) },
+        },
+      },
+    })
+    await expect(
+      createWorkspaceProvider({ provider: 'podman', config: { image: 4 } }, opts),
+    ).rejects.toThrow('invalid podman config:')
+    expect(constructed).toBe(0)
+    await createWorkspaceProvider({ provider: 'podman', config: { image: 'bun:latest' } }, opts)
+    expect(constructed).toBe(1)
+  })
+
+  test('a plugin-declared storeRequirements.constructionMessage refuses before the factory runs', async () => {
+    const opts = baseOpts()
+    let constructed = 0
+    opts.registry.register({
+      name: 'containers',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: () => {
+            constructed += 1
+            return new FakeWorkspaceProvider({ mode: 'logical' })
+          },
+          capabilities: {
+            storeRequirements: {
+              constructionMessage: 'podman requires an HTTPS store and token',
+              storeRefMessage: 'podman requires an HTTPS AB_STORE',
+              storeTokenMessage: 'podman requires nonempty AB_TOKEN',
+            },
+          },
+        },
+      },
+    })
+    await expect(createWorkspaceProvider({ provider: 'podman', config: {} }, opts)).rejects.toThrow(
+      'podman requires an HTTPS store and token',
+    )
+    expect(constructed).toBe(0)
+    await createWorkspaceProvider(
+      { provider: 'podman', config: {} },
+      { ...opts, storeRef: 'https://store.example', storeToken: 'token' },
+    )
+    expect(constructed).toBe(1)
+  })
+
+  test('a plugin-declared sandboxForbiddenEnv is honored only when the orchestrator sandbox is enabled', async () => {
+    const register = (opts: CreateWorkspaceProviderOptions) => {
+      opts.registry.register({
+        name: 'containers',
+        apiVersion: '^1.6.0',
+        workspaceProviders: {
+          podman: {
+            factory: () => new FakeWorkspaceProvider({ mode: 'logical' }),
+            capabilities: { sandboxForbiddenEnv: ['ACME_SECRET'] },
+          },
+        },
+      })
+      return opts
+    }
+    const enabled = register({
+      ...baseOpts(),
+      sandboxEnvironmentVariables: ['ACME_SECRET'],
+      orchestratorSandboxEnabled: true,
+    })
+    await expect(
+      createWorkspaceProvider({ provider: 'podman', config: {} }, enabled),
+    ).rejects.toThrow(
+      'environment variable "ACME_SECRET" is a store, forge, ticket-provider, model, or Vercel credential and may never be forwarded into an operator sandbox',
+    )
+    // The parse-time rule is reproduced exactly: with the orchestrator
+    // disabled the declaration is not enforced at construction.
+    const disabled = register({
+      ...baseOpts(),
+      sandboxEnvironmentVariables: ['ACME_SECRET'],
+    })
+    await createWorkspaceProvider({ provider: 'podman', config: {} }, disabled)
+  })
+
+  test('a plugin-declared requireRuntimeProvisioning is honored at construction', async () => {
+    const opts = baseOpts()
+    opts.registry.register({
+      name: 'containers',
+      apiVersion: '^1.6.0',
+      workspaceProviders: {
+        podman: {
+          factory: () => new FakeWorkspaceProvider({ mode: 'logical' }),
+          capabilities: { requireRuntimeProvisioning: true },
+        },
+      },
+    })
+    const withReferences = {
+      ...opts,
+      runtimeReferences: [
+        {
+          runtime: 'node',
+          references: ['role author'],
+          models: [],
+          usesRuntimeDefaultModel: false,
+        },
+      ],
+    }
+    await expect(
+      createWorkspaceProvider({ provider: 'podman', config: {} }, withReferences),
+    ).rejects.toThrow(
+      'runtime "node" is selected by role author but has no sandbox provisioning; add [workspace.config.runtimeProvisioning.node] with nonblank install and preflight commands',
+    )
+    await createWorkspaceProvider(
+      { provider: 'podman', config: { runtimeProvisioning: { node: {} } } },
+      withReferences,
+    )
+  })
+
+  test('the vercel-sandbox builtin refuses a missing store with its construction message', async () => {
+    await expect(
+      createWorkspaceProvider(
+        { provider: 'vercel-sandbox', config: { timeoutSeconds: 600 } },
+        baseOpts(),
+      ),
+    ).rejects.toThrow('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
+  })
+
+  test('the vercel-sandbox builtin enforces requireRuntimeProvisioning at construction', async () => {
+    const opts = {
+      ...baseOpts(),
+      runtimeReferences: [
+        {
+          runtime: 'node',
+          references: ['role author'],
+          models: [],
+          usesRuntimeDefaultModel: false,
+        },
+      ],
+    }
+    await expect(
+      createWorkspaceProvider(
+        { provider: 'vercel-sandbox', config: { timeoutSeconds: 600 } },
+        opts,
+      ),
+    ).rejects.toThrow(
+      'runtime "node" is selected by role author but has no sandbox provisioning; add [workspace.config.runtimeProvisioning.node] with nonblank install and preflight commands',
+    )
   })
 })

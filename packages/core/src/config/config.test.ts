@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { ConfigError, loadConfig, parseConfig } from './load'
-import { vercelSandboxConfigSchema } from './schema'
+import {
+  BUILTIN_WORKSPACE_PROVIDER_CONFIG,
+  vercelSandboxConfigSchema,
+  type WorkspaceProviderConfigDeclaration,
+} from './schema'
 
 const READY = '[tickets]\nsource = "file"\nreadyState = "ready"\n'
 
@@ -297,6 +301,42 @@ describe('parseConfig — defaults', () => {
       `[workspace.config]\n${READY}`,
     ]) {
       expect(Object.keys(parseConfig(source).workspace.config)).toHaveLength(0)
+    }
+  })
+
+  test('the parse-site refusal fires only for a declaration carrying configRefusalMessage', () => {
+    // A provider absent from BUILTIN_WORKSPACE_PROVIDER_CONFIG passes its
+    // [workspace.config] through unchanged; only git-worktree — whose
+    // declaration carries configRefusalMessage — refuses, with its message.
+    const passThrough = parseConfig(
+      `[workspace]\nprovider = "container"\n[workspace.config]\nimage = "bun:latest"\n${READY}`,
+    ).workspace
+    expect(passThrough.config).toEqual({ image: 'bun:latest' })
+    expect(() =>
+      parseConfig(
+        `[workspace]\nprovider = "git-worktree"\n[workspace.config]\nimage = "bun:latest"\n${READY}`,
+      ),
+    ).toThrow(/is not supported by the builtin "git-worktree" provider/)
+  })
+
+  test('a builtin declaration with neither configSchema nor configRefusalMessage never refuses at parse time', () => {
+    // The shipped table cannot express this case — its only schemaless entry
+    // (git-worktree) carries the message — so a temporary declaration is
+    // injected. The const is typed ReadonlyMap but is a runtime Map, hence
+    // the cast; it is restored in the finally so no other test observes it.
+    const table = BUILTIN_WORKSPACE_PROVIDER_CONFIG as unknown as Map<
+      string,
+      WorkspaceProviderConfigDeclaration
+    >
+    table.set('schemaless', {})
+    try {
+      expect(
+        parseConfig(
+          `[workspace]\nprovider = "schemaless"\n[workspace.config]\nimage = "bun:latest"\n${READY}`,
+        ).workspace.config,
+      ).toEqual({ image: 'bun:latest' })
+    } finally {
+      table.delete('schemaless')
     }
   })
 

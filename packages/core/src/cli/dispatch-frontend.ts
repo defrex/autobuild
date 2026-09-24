@@ -120,6 +120,9 @@ export class DispatchFrontend {
   private readonly keyboard
   private child: DispatchChildHandle | undefined
   private repositorySeq = 0
+  /** Set only after a successful initial fold; every later `events()` call
+   * takes the delta path. */
+  private seeded = false
   private repositoryEvents: RepositoryEvent[] = []
   private dispatchStatus: DispatchStatus = reduceDispatchStatus([], this.runId)
   private eventRefreshTail: Promise<void> = Promise.resolve()
@@ -164,6 +167,36 @@ export class DispatchFrontend {
    * are retained for their existing replay reducers. */
   private async events(): Promise<RepositoryEvent[]> {
     const refresh = this.eventRefreshTail.then(async () => {
+      if (!this.seeded) {
+        // Initial fold (AUT-534): the whole-journal read the first poll used
+        // to pay is replaced by AUT-489's bounded read where that is provably
+        // equivalent. The bounded attempt is confined to the pre-launch
+        // window (`this.child === undefined`): before `launchChild` no
+        // run-scoped journal fact can carry `this.runId` (only the supervised
+        // child appends run-scoped facts with it), so every run-scoped event
+        // in the bounded subset is skipped by `reduceDispatchStatus` exactly
+        // as it would be in a full replay, and the dashboard filter keeps
+        // only durable types, which the subset carries in full. After launch
+        // a bounded subset cannot guarantee the child's `run-started` under a
+        // competing dispatcher's later anchor — dropping it would leave
+        // `effectiveConfig` unset and the first frame would never render —
+        // so a post-launch seed always takes the full read (the pre-AUT-534
+        // behavior). `once` mode's teardown fold runs after the child exits,
+        // so the same guard routes it to the full read.
+        const seed =
+          this.child === undefined
+            ? await this.opts.store.getRepoStateEvents(this.opts.repo).catch(() =>
+                // Bounded-read failure falls back to the exact pre-AUT-534
+                // full read within this same seed attempt.
+                this.opts.store.getRepoEvents(this.opts.repo, 0),
+              )
+            : await this.opts.store.getRepoEvents(this.opts.repo, 0)
+        this.repositorySeq = seed.at(-1)?.seq ?? 0
+        this.dispatchStatus = reduceDispatchStatus(seed, this.runId)
+        this.repositoryEvents.push(...seed.filter(isDashboardRepositoryEvent))
+        this.seeded = true
+        return
+      }
       const delta = await this.opts.store.getRepoEvents(this.opts.repo, this.repositorySeq)
       if (delta.length === 0) return
       this.repositorySeq = delta.at(-1)!.seq
@@ -1008,6 +1041,14 @@ export class DispatchFrontend {
         payload: { enabled: this.opts.defaultAutoMerge, run: this.runId },
       })
     }
+
+    // Warm the initial fold before `launchChild` (AUT-534): the bounded seed
+    // is only safe while `this.child === undefined`, so the one opportunity
+    // to take it is here. A failed warm-up leaves the seed unset; the poll
+    // loop's existing failure reporting covers the retry, which then takes
+    // the full-read path post-launch. `once` mode gains no read — its single
+    // fold runs from `finishPresentation()` after the child exits.
+    if (!this.opts.once) await this.events().catch(() => {})
 
     const options: DispatchChildOptions = {
       targetRepo: this.opts.checkout ?? this.opts.repo,

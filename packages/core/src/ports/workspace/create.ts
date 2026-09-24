@@ -1,11 +1,17 @@
-import { join, resolve } from 'node:path'
-import { vercelSandboxConfigSchema, type WorkspaceConfig } from '../../config/schema'
+import { resolve } from 'node:path'
+import { SANDBOX_FORBIDDEN_ENV } from './operator-sandbox'
+import type { WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
 import type { WorkspaceProvider } from '../types'
 import type { BuildExecution } from './build-execution'
-import { GitWorktreeProvider } from './git-worktree'
+import {
+  currentRuntimeReferences,
+  runtimeProvisioningMap,
+  runtimeProvisioningMissingMessage,
+  sandboxForbiddenEnvMessage,
+} from './provider-capabilities'
 import { LocalBuildExecution } from './local-build-execution'
-import { type RuntimeReferencesSource, VercelSandboxProvider } from './vercel-sandbox'
+import type { RuntimeReferencesSource } from './vercel-sandbox'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
@@ -31,6 +37,11 @@ export interface CreateWorkspaceProviderOptions {
   sandboxSetupCommand?: string
   sandboxRoot?: string
   sandboxEnvironmentVariables?: readonly string[]
+  /** Whether `[orchestrator].enabled` is set at the call site. Gates the
+   * construction-site `sandboxForbiddenEnv` check so the parse-time rule is
+   * reproduced exactly (the config validation only runs when the orchestrator
+   * is enabled). */
+  orchestratorSandboxEnabled?: boolean
 }
 
 export interface WorkspaceRuntime {
@@ -53,44 +64,56 @@ export async function createWorkspaceProvider(
     )
   }
 
+  // Uniform capability enforcement (AUT-516): every declaration that needs
+  // the registry is honoured here, before the builtin/plugin split, where
+  // `registration.capabilities`, `opts.storeRef`, and `opts.storeToken` are
+  // already in hand — a plugin declaring any of them is enforced too, never
+  // accepted by manifest parsing and silently ignored. Order preserves the
+  // builtin failure precedence.
+  const capabilities = registration.capabilities
+  const hasConfig = Object.keys(config.config).length > 0
+  if (capabilities?.configRefusal !== undefined && hasConfig) {
+    throw new Error(capabilities.configRefusal)
+  }
+  let parsed: { data: unknown } | undefined
+  if (capabilities?.configSchema !== undefined) {
+    const result = capabilities.configSchema.safeParse(config.config)
+    if (!result.success) {
+      throw new Error(`invalid ${config.provider} config: ${result.error.message}`)
+    }
+    parsed = result as { data: unknown }
+  }
+  if (capabilities?.requireRuntimeProvisioning === true && opts.runtimeReferences !== undefined) {
+    // `mcp.ts` passes no `runtimeReferences` because it references no runtimes;
+    // dispatch and init validation always do.
+    const provisioning = runtimeProvisioningMap(parsed !== undefined ? parsed.data : config.config)
+    for (const group of currentRuntimeReferences(opts.runtimeReferences)) {
+      if (Object.hasOwn(provisioning, group.runtime)) continue
+      throw new Error(runtimeProvisioningMissingMessage(group))
+    }
+  }
+  if (opts.orchestratorSandboxEnabled === true && capabilities?.sandboxForbiddenEnv !== undefined) {
+    for (const name of opts.sandboxEnvironmentVariables ?? []) {
+      if (SANDBOX_FORBIDDEN_ENV.includes(name) || capabilities.sandboxForbiddenEnv.includes(name)) {
+        throw new Error(sandboxForbiddenEnvMessage(name))
+      }
+    }
+  }
+  if (
+    capabilities?.storeRequirements !== undefined &&
+    (opts.storeRef === undefined || opts.storeToken === undefined)
+  ) {
+    throw new Error(capabilities.storeRequirements.constructionMessage)
+  }
+
   if (registration.owner.kind === 'builtin') {
-    if (config.provider === 'git-worktree') {
-      if (Object.keys(config.config).length > 0) {
-        throw new Error(
-          '[workspace.config] is not supported by the builtin "git-worktree" provider',
-        )
-      }
-      return new GitWorktreeProvider({
-        root: resolve(opts.worktreeRoot),
-        sandboxRoot:
-          opts.sandboxRoot ?? resolve(join(opts.worktreeRoot, '..', 'orchestrator-sandboxes')),
-        setupCommand: opts.sandboxSetupCommand,
-        sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
-        envSource: opts.env,
-      })
+    const builtinFactory = registration.builtinFactory
+    if (builtinFactory === undefined) {
+      throw new Error(
+        `workspace provider "${config.provider}" is registered as a builtin but has no constructor`,
+      )
     }
-    if (config.provider === 'vercel-sandbox') {
-      const parsed = vercelSandboxConfigSchema.safeParse(config.config)
-      if (!parsed.success) throw new Error(`invalid vercel-sandbox config: ${parsed.error.message}`)
-      if (opts.storeRef === undefined || opts.storeToken === undefined) {
-        throw new Error('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
-      }
-      return new VercelSandboxProvider({
-        config: parsed.data,
-        env: opts.env,
-        storeRef: opts.storeRef,
-        storeToken: opts.storeToken,
-        repo: resolve(opts.repoRoot),
-        runtimeReferences: opts.runtimeReferences ?? [],
-        setupCommand: opts.sandboxSetupCommand,
-        sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables,
-        ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
-        ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
-      })
-    }
-    throw new Error(
-      `workspace provider "${config.provider}" is registered as a builtin but has no constructor`,
-    )
+    return builtinFactory(config, opts, parsed !== undefined ? parsed.data : config.config)
   }
 
   const factory = registration.factory

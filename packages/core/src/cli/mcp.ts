@@ -231,6 +231,7 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
           sandboxSetupCommand: mcpConfig.commands.setup,
           sandboxRoot: join(context.localStateRoot, 'orchestrator-sandboxes'),
           sandboxEnvironmentVariables: mcpConfig.orchestrator.sandbox.environmentVariables,
+          orchestratorSandboxEnabled: true,
         })
         sandbox = await createOperatorSandboxService({
           store: context.store,
