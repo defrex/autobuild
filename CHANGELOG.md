@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#556](https://github.com/defrex/autobuild/pull/556) — Correct trace-depth labels from 'six ups' to seven '..' components
 - [#555](https://github.com/defrex/autobuild/pull/555) — Deny test files from the vercel-sandbox packed tarball (AUT-564)
 - [#554](https://github.com/defrex/autobuild/pull/554) — Remove full-input code-point materialization from clientNameProblem
 - [#553](https://github.com/defrex/autobuild/pull/553) — Derive [orchestrator] doc-coverage expectations from schema
