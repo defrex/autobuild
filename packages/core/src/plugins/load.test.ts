@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { diagnosePlugins, loadPlugins } from './load'
 
 const roots: string[] = []
@@ -462,6 +462,76 @@ describe('loadPlugins', () => {
       expect(diagnosis.healthy).toBe(true)
       expect(diagnosis.reports[0]?.status).toBe('loaded')
       expect(sentinelCalls).toBe(0)
+    })
+  })
+
+  describe('relative candidate roots terminate (AUT-597)', () => {
+    // Candidate roots are passed through as-is, and origin mode passes the
+    // non-filesystem token '<hosted-dispatcher>'
+    // (packages/hosted-dispatcher/src/dispatcher.ts). Since
+    // dirname('.') === '.', a naive while(true) ancestor walk would never
+    // terminate on such a root. `diskNodeModulesDirectory` resolves the root
+    // to an absolute path before iterating, so these tests pin that the
+    // defined outcome — a rejection naming the original root string, or a
+    // guest-mode skip — is reached at all: a hang fails Bun's default test
+    // timeout, a wrong message fails the assertion.
+
+    test('an origin-mode token as packageRoot rejects naming the original root rather than hanging', async () => {
+      const repo = await fixture()
+      await expect(
+        loadPlugins(['autobuild-relative-root-pin-origin'], repo, {
+          packageRoot: '<hosted-dispatcher>',
+        }),
+      ).rejects.toThrow('from repository "<hosted-dispatcher>"')
+    })
+
+    test('the relative root "." rejects naming the original root rather than hanging', async () => {
+      const repo = await fixture()
+      await expect(
+        loadPlugins(['autobuild-relative-root-pin-dot'], repo, { packageRoot: '.' }),
+      ).rejects.toThrow('from repository "."')
+    })
+
+    test('a relative packageRoot that holds the package still resolves and registers', async () => {
+      const repo = await fixture()
+      const packageRoot = join(repo, '..', 'relative-consumer')
+      await write(
+        join(packageRoot, 'node_modules', 'autobuild-relative-root-pin-present', 'package.json'),
+        JSON.stringify({
+          name: 'autobuild-relative-root-pin-present',
+          type: 'module',
+          exports: './plugin.ts',
+        }),
+      )
+      await write(
+        join(packageRoot, 'node_modules', 'autobuild-relative-root-pin-present', 'plugin.ts'),
+        `export default { name: 'relative-root', apiVersion: '^1.0.0', forges: { relative: () => ({}) } }\n`,
+      )
+      // Derived from process.cwd() at test time so the relative path is
+      // stable wherever the suite runs; resolve-first must give relative
+      // roots their intended filesystem meaning, not merely fail them.
+      const registry = await loadPlugins(['autobuild-relative-root-pin-present'], repo, {
+        packageRoot: relative(process.cwd(), packageRoot),
+      })
+      expect(registry.forges.get('relative')?.owner).toEqual({
+        kind: 'plugin',
+        name: 'relative-root',
+      })
+    })
+
+    test('guest mode with a relative root terminates as a skip naming the root', async () => {
+      const repo = await fixture()
+      const diagnosis = await diagnosePlugins(['autobuild-relative-root-pin-guest'], repo, {
+        packageRoot: '<hosted-dispatcher>',
+        guest: true,
+      })
+      expect(diagnosis.healthy).toBe(true)
+      expect(diagnosis.reports[0]).toMatchObject({
+        module: 'autobuild-relative-root-pin-guest',
+        status: 'skipped',
+        stage: 'resolution',
+      })
+      expect(diagnosis.reports[0]?.notice).toContain('repository "<hosted-dispatcher>"')
     })
   })
 

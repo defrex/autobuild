@@ -867,6 +867,123 @@ describe('VercelSandboxProvider', () => {
     expect(h.sandbox.writes).toHaveLength(writesBefore)
   })
 
+  test('restart after a code-only deploy (same version and protocol, new archive digest) reinstalls (AUT-600)', async () => {
+    const h = harness()
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The 2026-09-24 13:46 UTC incident: the deploy changed guest-visible code
+    // with version 0.8.0 and protocol 3 unchanged, so every guest marker —
+    // then the pre-digest `<version>+protocol<N>` shape — still matched and
+    // the builds stranded. A legacy pre-digest marker is exactly that shape.
+    h.sandbox.distributionVersion = '1.2.3+protocol3'
+    h.distributionIdentity = `1.2.3+protocol3+sha256-${'a'.repeat(64)}`
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-code-only-deploy',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // The refresh sequence strictly precedes the detached runner launch: the
+    // archive is installed and the marker rewritten before any guest code runs.
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    expect(h.sandbox.distributionVersion).toBe(`1.2.3+protocol3+sha256-${'a'.repeat(64)}`)
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+  })
+
+  test('restart with a marker equal to the full digest stamp reinstalls nothing', async () => {
+    const h = harness()
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // An identical archive must not reinstall: the guest marker carries the
+    // full current stamp, digest included, so the comparison matches.
+    const fullStamp = `1.2.3+protocol3+sha256-${'b'.repeat(64)}`
+    h.sandbox.distributionVersion = fullStamp
+    h.distributionIdentity = fullStamp
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-identical-archive',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // One marker read (the comparison itself) then Bun's preflight — no
+    // archive fetch, no writes, no tar, no reinstall.
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    expect(h.sandbox.writes).toHaveLength(writesBefore)
+    expect(h.sandbox.distributionVersion).toBe(fullStamp)
+  })
+
+  test('a digest-mismatch refresh never touches the workspace checkout (AUT-600)', async () => {
+    const h = harness()
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    h.sandbox.distributionVersion = '1.2.3+protocol3'
+    h.distributionIdentity = `1.2.3+protocol3+sha256-${'c'.repeat(64)}`
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-refresh-workspace-safety',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    // The refresh window runs from the first marker read to the runner launch.
+    // FakeSandbox models no git state, so the assertion is on the command
+    // surface: no command executes with a workspace cwd or references the
+    // workspace path — the checkout and its unpushed commits are untouched.
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    for (const command of restart.slice(0, runner)) {
+      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
+      expect(JSON.stringify(command)).not.toContain(VERCEL_WORKSPACE_PATH)
+    }
+    // The only new write is the archive into /tmp; the install lands under
+    // /opt/autobuild (mkdir) and the marker readback is a cat, never a write
+    // under the workspace.
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+  })
+
   test('retains provisioning output and remediation while deleting an unready sandbox', async () => {
     const h = harness({
       provisioning: [
