@@ -814,6 +814,20 @@ and archiving an operator's last session are **destructive** (reset re-provision
 from the current base head); there is at most **one** environment per operator
 and repository.
 
+Publication: `sandbox.publish` takes a title (1–200 characters), an optional
+body (≤65,536 characters), and an optional explicit commit, and takes your
+sandbox's current head commit to a pull request. It refuses when the checkout
+has uncommitted changes — tracked or untracked (the sandbox's own provisioning
+marker is excluded) — and when the commit is not a descendant of the base head
+recorded when the sandbox was provisioned or last reset — a pre-existing environment without a recorded
+base head asks you to run `sandbox.reset` first. The rule is PR only, never the
+base branch: the sandbox itself never pushes and holds no credential — the push
+and the PR creation are kernel plumbing through the workspace provider's
+publication capability, to one deterministic operator branch per operator and
+repository, so a later publish updates the same PR's head. A publication is a
+repository-journal fact naming the operator, the session, the branch, the
+commit, and the PR; a refused or failed attempt is journaled too.
+
 ## Setup and upgrades
 
 **`ab init <target> [--force]`** runs *outside* build sessions — it takes a

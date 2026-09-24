@@ -11,6 +11,7 @@ import type {
   WorkspaceHandle,
   WorkspaceProvider,
   WorkspaceProvisionResult,
+  WorkspacePublication,
   WorkspaceReapOutcome,
 } from '../types'
 import {
@@ -1144,6 +1145,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   readonly harvestExecution: HarvestExecution
   readonly orchestratorSandbox: OperatorSandboxExecution
   readonly publication
+  readonly sandboxPublication: WorkspacePublication
   readonly recovery
   private readonly facade: VercelSandboxFacade
   private readonly exec: Exec
@@ -1194,6 +1196,14 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       isPublished: (input: { sha: string; branch: string }) => this.isPublished(input),
       publish: (input: { ref: string; sha: string; branch: string }) => this.publish(input),
     }
+    // The operator-sandbox publication path reuses the SAME capability: its
+    // publish pushes an exact sha from any sandbox ref, including an operator
+    // environment, and its isPublished ignores the optional `ref` field.
+    // Constructor-body assignment, never a field initializer — the class
+    // assigns `publication` in the constructor too, and under the repo's
+    // `useDefineForClassFields` semantics a field initializer would run
+    // before that assignment and capture `undefined`.
+    this.sandboxPublication = this.publication
   }
 
   async provision(opts: {
@@ -2176,6 +2186,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       environmentId: name,
       ...(sessionId !== undefined ? { sessionId } : {}),
       workspacePath: VERCEL_WORKSPACE_PATH,
+      baseSha: head,
     }
   }
 

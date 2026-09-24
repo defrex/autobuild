@@ -10,7 +10,10 @@
  * environments from empty records); redaction here keeps credential VALUES
  * out of typed error messages that travel to tool callers.
  */
+import { createHash } from 'node:crypto'
 import { humanActor } from '../events/envelope'
+import type { Via } from '../events/envelope'
+import type { Forge } from '../ports/types'
 import {
   SANDBOX_FORBIDDEN_ENV,
   SandboxOperationError,
@@ -107,12 +110,41 @@ function describeError(error: unknown): string {
   return redactSandboxMessage(error instanceof Error ? error.message : String(error))
 }
 
+/** The canonical publication branch grammar every provider adapter enforces. */
+const PUBLICATION_BRANCH_PATTERN = /^ab\/[a-z0-9][a-z0-9-]*$/
+
+/** Deterministic PR branch name for one operator × repository:
+ * `ab/orch-<operator-slug>-<hash8>` where hash8 is the first 8 hex chars of
+ * sha256(`<repo>\0<operator>`) and the slug is the operator lowercased with
+ * non-`[a-z0-9]` runs collapsed to `-` and trimmed. One operator always maps
+ * to one branch per repository, so a later publish updates the same PR's
+ * head. An identity with no `[a-z0-9]` characters yields `ab/orch--<hash8>`,
+ * which still matches the canonical grammar — no fallback token. */
+export function sandboxPublicationBranch(repo: string, operator: string): string {
+  const slug = operator
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  const hash8 = createHash('sha256').update(`${repo}\0${operator}`).digest('hex').slice(0, 8)
+  const branch = `ab/orch-${slug}-${hash8}`
+  if (!PUBLICATION_BRANCH_PATTERN.test(branch)) {
+    throw new SandboxOperationError(
+      'publish',
+      `derived publication branch ${JSON.stringify(branch)} is not a canonical branch name`,
+    )
+  }
+  return branch
+}
+
 export interface OperatorSandboxConfig {
   idleMinutes: number
   environmentVariables: readonly string[]
 }
 
 export interface OperatorSandboxService {
+  /** True when both a forge and the provider's sandbox publication
+   * capability are present, i.e. `publish` is callable. */
+  readonly canPublish: boolean
   exec(
     identity: string,
     input: { repo: string; command: string; cwd?: string; timeoutSeconds?: number },
@@ -133,6 +165,20 @@ export interface OperatorSandboxService {
   /** Destructive: journal `reset`, full teardown + snapshot purge, then a
    * fresh provision from the CURRENT base head. */
   reset(identity: string, input: { repo: string }): Promise<void>
+  /** PR-only publication (AUT-343): push the sandbox checkout's head (or an
+   * explicit commit) to a deterministic operator branch and open or update
+   * the PR against the base branch. The base branch itself is never pushed
+   * to; the sandbox performs no push and receives no credential. */
+  publish(
+    identity: string,
+    input: {
+      repo: string
+      title: string
+      body?: string
+      commit?: string
+      via?: Via
+    },
+  ): Promise<{ branch: string; sha: string; pr: { number: number; url: string; headSha: string } }>
   /** Full teardown + snapshot purge of the operator's environment, without
    * provisioning. A no-op when the journal shows no environment. Used by
    * `reset` and the session-archive hook. */
@@ -148,6 +194,9 @@ export interface OperatorSandboxServiceOptions {
    * branch's current head. A hot baseBranch reload is picked up when the
    * `ab mcp` process restarts. */
   baseBranch: string
+  /** The forge used to open or update the PR. Absent = publication is
+   * unavailable and the service reports `canPublish: false`. */
+  forge?: Forge
   clock?: Clock
   capability?: WorkspaceProvider['orchestratorSandbox']
 }
@@ -165,6 +214,7 @@ export async function createOperatorSandboxService(
     )
   }
   const clock = options.clock ?? systemClock
+  const canPublish = options.forge !== undefined && provider.sandboxPublication !== undefined
   await store.ensureRepo(repo)
 
   /** Per-environment serialization: one in-process promise chain keyed by
@@ -188,7 +238,9 @@ export async function createOperatorSandboxService(
       | 'orchestrator.sandbox.resumed'
       | 'orchestrator.sandbox.activity'
       | 'orchestrator.sandbox.released'
-      | 'orchestrator.sandbox.reset',
+      | 'orchestrator.sandbox.reset'
+      | 'orchestrator.sandbox.published'
+      | 'orchestrator.sandbox.publish-failed',
     payload: Record<string, unknown>,
   ): Promise<void> => {
     await store.appendRepo(repo, {
@@ -229,6 +281,7 @@ export async function createOperatorSandboxService(
         provider: resolved.provider,
         ...(resolved.sessionId !== undefined ? { sessionId: resolved.sessionId } : {}),
         workspacePath: resolved.workspacePath,
+        ...(resolved.baseSha !== undefined ? { baseSha: resolved.baseSha } : {}),
       })
     } else if (state.state === 'stopped') {
       await append(identity, 'orchestrator.sandbox.resumed', {
@@ -268,7 +321,7 @@ export async function createOperatorSandboxService(
 
   const run = async <T>(
     identity: string,
-    stage: 'provision' | 'resume' | 'exec',
+    stage: 'provision' | 'resume' | 'exec' | 'publish',
     operation: (
       resolved: SandboxEnvironmentIdentity,
       state: ReturnType<typeof operatorState>,
@@ -300,6 +353,10 @@ export async function createOperatorSandboxService(
   }
 
   return {
+    /** True only when both a forge and a sandbox publication capability are
+     * wired; the registry filters `sandbox.publish` when false. */
+    canPublish,
+
     async exec(identity, input) {
       requireRepo(input.repo)
       const timeoutSeconds = validateBoundedInt(
@@ -392,6 +449,179 @@ export async function createOperatorSandboxService(
       }
       await run(identity, 'exec', async (resolved) => {
         await capability.writeFile(resolved, path, new Uint8Array(content))
+      })
+    },
+
+    async publish(
+      identity,
+      input: {
+        repo: string
+        title: string
+        body?: string
+        commit?: string
+        via?: Via
+      },
+    ) {
+      requireRepo(input.repo)
+      const title = input.title.trim()
+      if (title === '') {
+        throw new SandboxOperationError('publish', 'title must not be empty')
+      }
+      if (title.length > 200) {
+        throw new SandboxOperationError('publish', 'title must be at most 200 characters')
+      }
+      if (input.body !== undefined && input.body.length > 65_536) {
+        throw new SandboxOperationError('publish', 'body must be at most 65,536 characters')
+      }
+      if (input.commit !== undefined && input.commit.trim() === '') {
+        throw new SandboxOperationError('publish', 'commit must be a nonempty commit-ish')
+      }
+      if (!canPublish) {
+        throw new SandboxOperationError(
+          'publish',
+          'publication is unavailable: no forge or no sandbox publication capability is wired',
+        )
+      }
+      const forge = options.forge!
+      const publication = provider.sandboxPublication!
+      // run() already serializes per environment; wrapping it in another
+      // serialize on the same key would deadlock the chain.
+      return run(identity, 'publish', async (resolved, freshState) => {
+        let stage: 'checks' | 'push' | 'pr' = 'checks'
+        try {
+          // 1. Resolve the commit inside the sandbox checkout.
+          const commitExpr = input.commit?.trim() || 'HEAD'
+          const resolveResult = await capability.exec(resolved, {
+            command: `git rev-parse --verify ${commitExpr}^{commit}`,
+            timeoutSeconds: 30,
+          })
+          if (resolveResult.exitCode === 1) {
+            throw new SandboxOperationError(
+              'publish',
+              `commit ${JSON.stringify(commitExpr)} does not resolve to a commit in the sandbox checkout`,
+            )
+          }
+          if (resolveResult.exitCode !== 0) {
+            throw new Error(
+              `git rev-parse --verify ${commitExpr}^{commit} exited ${resolveResult.exitCode}: ${resolveResult.stderr.trim() || resolveResult.stdout.trim() || '(no output)'}`,
+            )
+          }
+          const sha = resolveResult.stdout.trim()
+          // 2. Refuse a dirty checkout: staged or unstaged changes to
+          // tracked files, and untracked files — a new file the operator
+          // never committed would otherwise be silently left out of the
+          // published commit. The providers exclude their own
+          // provisioning marker in the checkout's info/exclude, so the
+          // marker itself never counts as dirt (f_c748dc6a).
+          const statusResult = await capability.exec(resolved, {
+            command: 'git status --porcelain',
+            timeoutSeconds: 30,
+          })
+          if (statusResult.exitCode !== 0) {
+            throw new Error(
+              `git status --porcelain exited ${statusResult.exitCode}: ${statusResult.stderr.trim() || statusResult.stdout.trim() || '(no output)'}`,
+            )
+          }
+          if (statusResult.stdout.trim() !== '') {
+            throw new SandboxOperationError(
+              'publish',
+              'the sandbox checkout has uncommitted changes; commit or discard them before publishing',
+            )
+          }
+          // 3. Refuse a commit that is not a descendant of the base head
+          // at provision or reset time.
+          const baseSha = freshState?.baseSha
+          if (baseSha === undefined) {
+            throw new SandboxOperationError(
+              'publish',
+              'this environment has no recorded base head; run sandbox.reset to re-provision before publishing',
+            )
+          }
+          if (sha === baseSha) {
+            throw new SandboxOperationError(
+              'publish',
+              'the checkout head is the base commit itself; there is nothing to publish',
+            )
+          }
+          const ancestorResult = await capability.exec(resolved, {
+            command: `git merge-base --is-ancestor ${baseSha} ${sha}`,
+            timeoutSeconds: 30,
+          })
+          if (ancestorResult.exitCode === 1) {
+            throw new SandboxOperationError(
+              'publish',
+              `the commit is not a descendant of the base head ${baseSha} recorded at provision time; rebase onto the current base or run sandbox.reset`,
+            )
+          }
+          if (ancestorResult.exitCode !== 0) {
+            throw new Error(
+              `git merge-base --is-ancestor ${baseSha} ${sha} exited ${ancestorResult.exitCode}: ${ancestorResult.stderr.trim() || ancestorResult.stdout.trim() || '(no output)'}`,
+            )
+          }
+          // 4. Deterministic branch; the helper self-validates the grammar.
+          const branch = sandboxPublicationBranch(repo, identity)
+          if (branch === options.baseBranch) {
+            throw new SandboxOperationError(
+              'publish',
+              'the derived publication branch collides with the base branch; refusing',
+            )
+          }
+          // 5. Push-before-fact crash safety, mirroring
+          // publication-settlement: a crashed prior attempt is owed its
+          // completion, not a re-push.
+          const alreadyPublished =
+            (await publication.isPublished?.({
+              ref: resolved.environmentId,
+              sha,
+              branch,
+            })) === true
+          stage = 'push'
+          if (!alreadyPublished) {
+            await publication.publish({ ref: resolved.environmentId, sha, branch })
+          }
+          // 6. Open (or adopt) the PR against the base branch; a later
+          // publish to the same branch moves the same PR's head.
+          stage = 'pr'
+          const session =
+            input.via !== undefined && input.via.kind === 'session' ? input.via.id : undefined
+          const body =
+            (input.body ?? '') +
+            (input.body !== undefined && input.body !== '' ? '\n\n' : '') +
+            `Published from an Autobuild operator sandbox by ${identity}` +
+            (session !== undefined ? ` via orchestrator session ${session}` : '') +
+            ' — agent-authored, not a pipeline build.'
+          const pr = await forge.openPr({
+            workspacePath: resolved.workspacePath,
+            head: branch,
+            base: options.baseBranch,
+            title,
+            body,
+          })
+          // 7. The publication is a repository-journal fact.
+          await append(identity, 'orchestrator.sandbox.published', {
+            operator: identity,
+            environmentId: resolved.environmentId,
+            branch,
+            sha,
+            ...(session !== undefined ? { session } : {}),
+            pr: { number: pr.number, url: pr.url, headSha: pr.headSha },
+          })
+          return { branch, sha, pr: { number: pr.number, url: pr.url, headSha: pr.headSha } }
+        } catch (error) {
+          // 8. Every refusal or failure at steps 1-6 is a journal fact
+          // naming the stage, with credential values redacted from the
+          // message.
+          const message = describeError(error)
+          await append(identity, 'orchestrator.sandbox.publish-failed', {
+            operator: identity,
+            environmentId: resolved.environmentId,
+            stage,
+            message,
+          }).catch(() => {})
+          throw new SandboxOperationError('publish', message, {
+            cause: error instanceof SandboxOperationError ? error.cause : error,
+          })
+        }
       })
     },
 

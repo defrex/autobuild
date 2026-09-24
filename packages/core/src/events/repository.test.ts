@@ -647,4 +647,88 @@ describe('operator sandbox facts (AUT-340)', () => {
       }),
     ).toThrow(/may not emit/)
   })
+
+  test('publication facts are human-attributed; provisioned admits optional baseSha', () => {
+    const sha = 'a'.repeat(40)
+    // baseSha is optional and shape-checked.
+    expect(
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.provisioned',
+        payload: {
+          operator: 'ops',
+          environmentId: 'autobuild-sandbox-abc123',
+          provider: 'vercel-sandbox',
+          workspacePath: '/vercel/sandbox/workspace',
+          baseSha: sha,
+        },
+      }).payload,
+    ).toMatchObject({ baseSha: sha })
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.provisioned',
+        payload: {
+          operator: 'ops',
+          environmentId: 'autobuild-sandbox-abc123',
+          provider: 'vercel-sandbox',
+          workspacePath: '/vercel/sandbox/workspace',
+          baseSha: 'nothash',
+        },
+      }),
+    ).toThrow(/invalid payload/)
+
+    const published = {
+      operator: 'ops',
+      environmentId: 'autobuild-sandbox-abc123',
+      branch: 'ab/orch-ops-abc12345',
+      sha,
+      session: 'sess-1',
+      pr: { number: 7, url: 'https://github.com/acme/widgets/pull/7', headSha: sha },
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.published',
+        payload: published,
+      }).payload,
+    ).toEqual(published)
+    for (const actor of [DISPATCHER, { kind: 'agent', role: 'implement', session: 's' }]) {
+      expect(() =>
+        validateRepositoryEventWrite({
+          actor: actor as never,
+          type: 'orchestrator.sandbox.published',
+          payload: published,
+        }),
+      ).toThrow(/may not emit/)
+    }
+
+    const failed = {
+      operator: 'ops',
+      environmentId: 'autobuild-sandbox-abc123',
+      stage: 'push' as const,
+      message: 'push rejected',
+    }
+    expect(
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.publish-failed',
+        payload: failed,
+      }).payload,
+    ).toEqual(failed)
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.publish-failed',
+        payload: { ...failed, stage: 'unknown-stage' },
+      }),
+    ).toThrow(/invalid payload/)
+    expect(() =>
+      validateRepositoryEventWrite({
+        actor: DISPATCHER,
+        type: 'orchestrator.sandbox.publish-failed',
+        payload: failed,
+      }),
+    ).toThrow(/may not emit/)
+  })
 })

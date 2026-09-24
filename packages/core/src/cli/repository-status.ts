@@ -15,6 +15,17 @@ export interface RepositoryStatus extends DispatchSettings {
     state: 'live' | 'stopped'
     lastEvidenceAt: string
   }>
+  /** PR-only publications from operator sandboxes (AUT-343), newest first,
+   * latest per (operator, branch). */
+  publications: Array<{
+    operator: string
+    branch: string
+    sha: string
+    prNumber: number
+    prUrl: string
+    session?: string
+    at: string
+  }>
 }
 
 export interface RepositoryStatusOpts {
@@ -31,6 +42,27 @@ export interface RepositoryStatusOpts {
 }
 
 export function projectRepositoryStatus(repo: string, events: RepositoryEvent[]): RepositoryStatus {
+  const publications: RepositoryStatus['publications'] = []
+  for (const event of events) {
+    if (event.type !== 'orchestrator.sandbox.published') continue
+    const payload = event.payload
+    // Latest per (operator, branch): a later fact for the same pair
+    // supersedes the earlier one.
+    const index = publications.findIndex(
+      (entry) => entry.operator === payload.operator && entry.branch === payload.branch,
+    )
+    if (index !== -1) publications.splice(index, 1)
+    publications.push({
+      operator: payload.operator,
+      branch: payload.branch,
+      sha: payload.sha,
+      prNumber: payload.pr.number,
+      prUrl: payload.pr.url,
+      ...(payload.session !== undefined ? { session: payload.session } : {}),
+      at: event.ts,
+    })
+  }
+  publications.reverse()
   return {
     repo,
     ...reduceDispatchSettings(events),
@@ -43,6 +75,7 @@ export function projectRepositoryStatus(repo: string, events: RepositoryEvent[])
         state: state.state === 'stopped' ? ('stopped' as const) : ('live' as const),
         lastEvidenceAt: state.lastEvidenceTs,
       })),
+    publications,
   }
 }
 
@@ -56,6 +89,10 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
     ...status.sandboxes.map(
       (sandbox) =>
         `operator sandbox ${sandbox.environmentId} (${sandbox.provider}) — ${sandbox.state}, idle since ${sandbox.lastEvidenceAt}`,
+    ),
+    ...status.publications.map(
+      (publication) =>
+        `publication by ${publication.operator} — ${publication.branch} at ${publication.sha.slice(0, 8)} → PR #${publication.prNumber} (${publication.prUrl})`,
     ),
   ]
 }
