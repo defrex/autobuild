@@ -14,7 +14,7 @@ import {
   GatewayRateLimitError,
 } from '@ai-sdk/gateway'
 import { parseConfig } from '../config/load'
-import { humanActor } from '../events/envelope'
+import { agentActor, humanActor } from '../events/envelope'
 import { MemoryBuildStore } from '../store/memory'
 import type { Clock } from '../store/types'
 import { sequentialIds } from '../ids'
@@ -431,6 +431,77 @@ describe('orchestrator turn runner', () => {
     expect(denied).toContain('execution-denied')
     state = reduceSession(await store.getSessionEvents(sessionId))
     expect(state.status).toBe('idle')
+  })
+
+  test('a resume whose answered call has no persisted approval request fails the turn and closes the stream', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    await store.ensureRepo(REPO)
+    const runner = runnerFor(store, clock, stepwiseModel(clock, [textStep('t1', 'Ready.')]))
+
+    // Fabricate the suspended-for-approval shape directly — no runner can
+    // produce a missing request part through the normal flow — mirroring the
+    // tick-test fixture but leaving the tool-approval-request part off the
+    // stream entirely.
+    const sessionId = await store.createSession({ repo: REPO, operator: 'op' }).then((s) => s.id)
+    const streamId = await store
+      .createStream({ kind: 'session', session: sessionId }, 'turn:ot_x')
+      .then((s) => s.id)
+    await store.appendStreamParts(streamId, [{ type: 'start', messageId: 'm1' }])
+    for (const event of [
+      { actor: humanActor('op'), type: 'message.posted' as const, payload: { text: 'go' } },
+      {
+        actor: agentActor('orchestrator', 'ot_x'),
+        type: 'turn.started' as const,
+        payload: {
+          turn: 'ot_x',
+          stream: streamId,
+          trigger: { kind: 'message' as const, messageSeq: 2 },
+        },
+      },
+      {
+        actor: agentActor('orchestrator', 'ot_x'),
+        type: 'approval.requested' as const,
+        payload: { turn: 'ot_x', toolCallId: 'c1', toolName: 'notes.write', input: {} },
+      },
+      {
+        actor: agentActor('orchestrator', 'ot_x'),
+        type: 'turn.suspended' as const,
+        payload: { turn: 'ot_x', cause: 'approval' as const },
+      },
+      {
+        actor: humanActor('op'),
+        type: 'approval.answered' as const,
+        payload: { turn: 'ot_x', toolCallId: 'c1', decision: 'approve' as const },
+      },
+    ]) {
+      await store.appendSessionEvent(sessionId, event)
+    }
+    let state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.status).toBe('suspended')
+    expect(state.pendingApproval).toBeUndefined()
+    expect(state.openTurn).toMatchObject({ turn: 'ot_x', stream: streamId })
+
+    const resumed = await runner.resumeTurn(sessionId, {
+      approval: { decision: 'approve', toolCallId: 'c1' },
+    })
+    expect(resumed.resumed).toBe(false)
+
+    // The typed failure landed and the session is terminal...
+    const types = await eventTypes(store, sessionId)
+    expect(types[types.length - 1]).toBe('turn.failed')
+    state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.status).toBe('idle')
+    expect(state.turns[0]).toMatchObject({
+      state: 'failed',
+      error: expect.stringContaining('matches no persisted approval request'),
+    })
+    // ...and the stream closed aborted — no orphan open stream for the
+    // reaper (which only reaps running turns) to never close.
+    expect(await store.getStream(streamId)).toMatchObject({
+      status: 'closed',
+      outcome: 'aborted',
+    })
   })
 
   test('each typed model failure records turn.failed with its class and leaves the session idle', async () => {
