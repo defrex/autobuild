@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
+- [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
 - [#563](https://github.com/defrex/autobuild/pull/563) — Reject capabilities.requiredEnv groups that carry neither dispatchMessage nor validationMessage
 - [#562](https://github.com/defrex/autobuild/pull/562) — Give describeEnvironment providers a defined config argument
 - [#561](https://github.com/defrex/autobuild/pull/561) — Extend the plugin workspace-provider factory context (AUT-560)
