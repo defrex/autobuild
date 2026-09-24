@@ -11,12 +11,7 @@ Keep the default `git-worktree` provider unless the maintainer explicitly opts
 into remote builds. It creates local disposable worktrees and uses the tools,
 network, and credentials available to the dispatcher machine.
 
-The remote provider ships as a plugin package, not a builtin: the complete
-opt-in is two steps. Install the plugin next to the CLI with
-`bun add -g @defrex/autobuild-vercel-sandbox`, then declare it in
-`autobuild.toml` by adding `plugins = ["@defrex/autobuild-vercel-sandbox"]`
-among the root scalars (before the first table). Then set
-`[workspace].provider = "vercel-sandbox"`. A Vercel
+For remote execution, set `[workspace].provider = "vercel-sandbox"`. A Vercel
 Sandbox is a fresh independent machine; a runtime that works on the setup
 machine is not evidence that it works there. Confirm all of these with the
 maintainer before selecting it:

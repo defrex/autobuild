@@ -1,46 +1,46 @@
 import { createHash } from 'node:crypto'
 import { Sandbox, Snapshot, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
+import { displayName, tomlKey, type RuntimeReferenceGroup } from '../../config/roles'
 import {
-  BUILD_RUNNER_OPTIONS_ENV,
-  HARVEST_RUNNER_OPTIONS_ENV,
+  type VercelProvisioningStep,
+  type VercelSandboxConfig,
+  vercelSandboxConfigSchema,
+} from '../../config/schema'
+import { defaultDistributionArchive, readDistributionIdentityStamp } from './distribution-archive'
+import type {
+  WorkspaceHandle,
+  WorkspaceProvider,
+  WorkspaceProvisionResult,
+  WorkspacePublication,
+  WorkspaceReapOutcome,
+} from '../types'
+import {
   SandboxOperationError,
-  currentRuntimeReferences,
-  defaultDistributionArchive,
-  displayName,
-  readDistributionIdentityStamp,
-  spawnExec,
-  tomlKey,
-} from '@defrex/autobuild/plugin-sdk'
+  type OperatorSandboxExecution,
+  type SandboxCommandRequest,
+  type SandboxCommandResult,
+  type SandboxEnvironmentIdentity,
+  type SandboxWaitResult,
+} from './operator-sandbox'
 import type {
   BuildExecution,
   BuildExecutionExit,
   BuildExecutionHandle,
   BuildExecutionIdentity,
   BuildExecutionStart,
-  Exec,
   ExecutionObservation,
-  HarvestExecution,
-  HarvestExecutionStart,
-  HarvestRunnerLaunch,
-  OperatorSandboxExecution,
-  RuntimeReferenceGroup,
-  RuntimeReferencesSource,
-  SandboxCommandRequest,
-  SandboxCommandResult,
-  SandboxEnvironmentIdentity,
-  SandboxWaitResult,
-  WorkspaceHandle,
-  WorkspaceProvider,
-  WorkspacePublication,
-  WorkspaceProvisionResult,
-  WorkspaceReapOutcome,
-} from '@defrex/autobuild/plugin-sdk'
+} from './build-execution'
 import {
-  type VercelProvisioningStep,
-  type VercelSandboxConfig,
-  vercelSandboxConfigSchema,
-} from './schema'
+  HARVEST_RUNNER_OPTIONS_ENV,
+  type HarvestExecution,
+  type HarvestExecutionStart,
+  type HarvestRunnerLaunch,
+} from './harvest-execution'
+import { BUILD_RUNNER_OPTIONS_ENV } from './local-build-execution'
+import type { Exec } from './git-worktree'
+import { spawnExec } from './git-worktree'
 import { validateVercelGithubOrigin } from './github-origin'
+import { currentRuntimeReferences, type RuntimeReferencesSource } from './provider-capabilities'
 
 export { validateVercelGithubOrigin }
 
@@ -1010,7 +1010,7 @@ export async function validateVercelSandbox(
   return { ...readiness!, snapshotsDeleted }
 }
 
-export type { RuntimeReferencesSource }
+export type { RuntimeReferencesSource } from './provider-capabilities'
 
 /** Install the distribution archive into `/opt/autobuild` and record its
  * identity marker. Shared by fresh provisioning, reuse-path refreshes, and

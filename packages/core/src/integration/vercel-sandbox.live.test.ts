@@ -6,11 +6,11 @@ import { validateInitReadiness } from '../cli/init-validation'
 import { openProductionStore } from '../cli/store-opening'
 import { loadConfig } from '../config/load'
 import { effectiveRuntimeReferences } from '../config/roles'
-import { vercelSandboxConfigSchema } from '@defrex/autobuild-vercel-sandbox'
+import { vercelSandboxConfigSchema } from '../config/schema'
 import type { AbEvent } from '../events/catalog'
 import { humanActor } from '../events/envelope'
 import { spawnExec } from '../ports/workspace/git-worktree'
-import { createVercelSdkFacade } from '@defrex/autobuild-vercel-sandbox'
+import { createVercelSdkFacade } from '../ports/workspace/vercel-sandbox'
 
 const enabled = process.env.AB_RUN_VERCEL_SANDBOX_LIVE === '1'
 

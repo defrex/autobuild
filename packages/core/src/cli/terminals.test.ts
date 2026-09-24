@@ -449,7 +449,10 @@ describe('ab done — implement', () => {
     expect(await eventTypes()).not.toContain('implement.completed')
   })
 
-  test.each([['a provisioned payload carrying the remote marker', true]])(
+  test.each([
+    ['a legacy vercel-sandbox journal without a marker', undefined],
+    ['a provisioned payload carrying the remote marker', true],
+  ])(
     'remote implementation deposits a publication request without pushing or completing (%s)',
     async (_name, remote) => {
       await store.append(BUILD, {
@@ -886,7 +889,6 @@ describe('ab done — finalize', () => {
         provider: 'vercel-sandbox',
         ref: 'sandbox-finalize',
         path: '/vercel/sandbox/workspace',
-        remote: true,
         branch: BRANCH,
         base: { source: 'existing', sha: 'a'.repeat(40) },
       },
@@ -1601,7 +1603,6 @@ describe('ab done — reconcile', () => {
         provider: 'vercel-sandbox',
         ref: 'sandbox-reconcile',
         path: '/vercel/sandbox/workspace',
-        remote: true,
         branch: BRANCH,
         base: { source: 'existing', sha: 'a'.repeat(40) },
       },

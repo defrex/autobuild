@@ -1,52 +1,28 @@
 # @defrex/autobuild-vercel-sandbox
 
 The Vercel Sandbox workspace provider as an Autobuild plugin package
-(AUT-505). The provider's implementation, its `[workspace.config]` schema,
-its capability declarations, and its remote readiness validation live in
-this package; core carries neither the provider nor its SDK.
+(AUT-517).
 
-## Complete opt-in
+## Transitional arrangement
 
-1. Install the plugin next to the CLI:
+Until the builtin provider is removed (AUT-505), the provider's
+implementation stays **builtin-hosted** in `@defrex/autobuild`: its
+implementation depends on core internals that are not on the
+`@defrex/autobuild/plugin-sdk` surface, and moving it now would force the
+root package to depend on this plugin, recreating a root ↔ provider
+publish cycle.
 
-   ```sh
-   bun add -g @defrex/autobuild-vercel-sandbox
-   ```
-
-2. Declare it in `autobuild.toml` among the root scalars (before the first
-   table):
-
-   ```toml
-   plugins = ["@defrex/autobuild-vercel-sandbox"]
-   ```
-
-A configuration that selects `vercel-sandbox` without the plugin installed
-and declared fails before any workspace is provisioned, with a message that
-names the unregistered provider and points at the `plugins` list.
-
-## What the provider does
-
-`vercel-sandbox` runs the complete build in an isolated Vercel VM while the
-local supervisor retains credentialed branch/PR publication. Remote execution
-requires the hosted HTTPS BuildStore plus its scoped token, an HTTPS
-`github.com/owner/repository` origin, `forge = "github"`, and Vercel
-authentication (`VERCEL_OIDC_TOKEN`, or all of `VERCEL_TOKEN`,
-`VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`). The dispatcher also requires a
-push-capable `GITHUB_TOKEN` or `GH_TOKEN`, validated before ready tickets are
-listed or claimed.
-
-The plugin manifest declares the provider's full capability set — the
-`[workspace.config]` schema, supported forges, required environment groups,
-process-env-only requirements, store requirements, the four Vercel credential
-names as `sandboxForbiddenEnv` extras, origin validation, and remote
-readiness validation — so the host enforces the same contracts at the
-registry-aware seams as it did for the builtin registration.
-
-The `[workspace.config]` keys the provider accepts (`image`, `vcpus`,
-`timeoutSeconds`, `operationTimeoutMs`, `snapshotExpirationSeconds`,
-`region`, `failoverRegions`, `environmentVariables`, `provisioning`,
-`runtimeProvisioning`, `gitUsernameEnv`, `gitPasswordEnv`) are documented in
-the [configuration reference](../../docs/configuration.md#vercel-sandbox).
+This package therefore ships the plugin manifest with the full AUT-516
+capability declarations — the exact shared `VERCEL_SANDBOX_CAPABILITIES`
+object the builtin registration references — and a guarded factory that
+throws naming AUT-505 if it is ever reached. While the builtin exists, the
+plugin loader's duplicate-skip rule guarantees the factory is never
+invoked: a configured plugin whose registrations all collide with builtin
+workspace-provider registrations is skipped with a one-line notice, and the
+builtin keeps serving the provider. After AUT-505 removes the builtin and
+moves the implementation here, the skip rule retires itself (it keys on
+builtin ownership) and a second plugin registering `vercel-sandbox`
+collides and fails startup as today.
 
 ## Hosted deployment bundle
 

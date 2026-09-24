@@ -22,7 +22,7 @@ import {
   type VercelCommandLookup,
   type VercelSandboxFacade,
   type VercelSandboxHandle,
-} from '@defrex/autobuild-vercel-sandbox'
+} from '../ports/workspace/vercel-sandbox'
 import { MemoryBuildStore } from '../store/memory'
 import { systemClock } from '../store/types'
 

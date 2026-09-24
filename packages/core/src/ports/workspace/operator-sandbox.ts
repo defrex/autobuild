@@ -19,19 +19,21 @@
  */
 
 /** Environment variable names that may never be forwarded into an operator
- * sandbox — store, forge, ticket-provider, and model credentials. One set,
- * two enforcers: `[orchestrator].sandbox.environmentVariables` config
- * validation (refuses any of these names) and the guest command environment
- * both adapters build (starts from an empty record and adds only forwarded
- * names plus the toolchain PATH). Provider-specific credential names arrive
- * through a registration's `sandboxForbiddenEnv` capability declaration,
- * enforced at the two registry-aware seams (AUT-536, AUT-505). */
+ * sandbox — store, forge, ticket-provider, model, and Vercel credentials.
+ * One set, two enforcers: `[orchestrator].sandbox.environmentVariables`
+ * config validation (refuses any of these names) and the guest command
+ * environment both adapters build (starts from an empty record and adds only
+ * forwarded names plus the toolchain PATH). */
 export const SANDBOX_FORBIDDEN_ENV: readonly string[] = [
   'AB_STORE',
   'AB_TOKEN',
   'GITHUB_TOKEN',
   'GH_TOKEN',
   'LINEAR_API_KEY',
+  'VERCEL_OIDC_TOKEN',
+  'VERCEL_TOKEN',
+  'VERCEL_TEAM_ID',
+  'VERCEL_PROJECT_ID',
   'AI_GATEWAY_API_KEY',
 ]
 

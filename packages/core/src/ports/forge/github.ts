@@ -11,7 +11,7 @@
  * a local operator needs only `gh auth login`. The one deliberate subprocess
  * exception on the API side is that probe; `pushBranch` remains `git push`
  * from the workspace — it is only ever called from worktree-side terminals
- * and contract fixtures; remote-provider builds publish through the
+ * and contract fixtures; `vercel-sandbox` builds publish through the
  * sandbox's receive-pack proxy and the host never pushes.
  *
  * Native auto-merge is the one operation GitHub exposes only through its

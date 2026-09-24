@@ -3614,9 +3614,10 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
     throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
   }
   // Checkout-less hosts (serverless functions, sandboxes) have no gh CLI and
-  // no keyring, and a remote workspace provider injects this same credential
-  // for publication, so origin mode requires an exported token: the gh
-  // fallback is a checkout-mode convenience only.
+  // no keyring, and the only workspace provider origin mode can run —
+  // vercel-sandbox — injects this same credential for publication, so origin
+  // mode requires an exported token: the gh fallback is a checkout-mode
+  // convenience only.
   if (githubTokenFromEnv(opts.env) === undefined) {
     throw new Error('origin-mode dispatch requires GITHUB_TOKEN or GH_TOKEN for the GitHub API')
   }

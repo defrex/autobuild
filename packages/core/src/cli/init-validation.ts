@@ -16,11 +16,9 @@ import type {
   ReadinessCheck,
   WorkspaceProviderCapabilities,
 } from '../ports/workspace/provider-capabilities'
-import {
-  sandboxForbiddenEnvMessage,
-  unknownWorkspaceProviderMessage,
-} from '../ports/workspace/provider-capabilities'
+import { sandboxForbiddenEnvMessage } from '../ports/workspace/provider-capabilities'
 import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
+import type { VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
 import { loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
@@ -92,15 +90,14 @@ export async function runGuestReadinessProbe(opts: {
   const checks: ReadinessCheck[] = []
   const config = await loadConfig(join(opts.repo, 'autobuild.toml'))
   // Pre-registry site: plugins are not loaded yet, so provider behavior comes
-  // from the builtin capability table (AUT-516) — after AUT-505 that is the
-  // git-worktree declaration alone, so a plugin provider's redaction scope
-  // here is the name heuristic only until the post-load re-derivation below.
+  // from the builtin capability table (AUT-516).
   const builtinCaps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
-  let caps = builtinCaps
-  let providerConfig =
-    caps?.configSchema !== undefined ? caps.configSchema.parse(config.workspace.config) : undefined
+  const providerConfig =
+    builtinCaps?.configSchema !== undefined
+      ? builtinCaps.configSchema.parse(config.workspace.config)
+      : undefined
   // Redaction scope is the provider's declared `guestEnvNames` (AUT-539) —
-  // for a remote provider that is `environmentVariables` plus
+  // for vercel-sandbox that is `environmentVariables` plus
   // `gitUsernameEnv`/`gitPasswordEnv`, deliberately wider than
   // `environmentVariables` alone: the capability contract documents
   // `guestEnvNames` as the readiness-redaction surface, and a git credential
@@ -110,9 +107,9 @@ export async function runGuestReadinessProbe(opts: {
   // check detail now see `[REDACTED]` there. Providers without a
   // `guestEnvNames`/`configSchema` declaration fall back to the name-heuristic
   // redaction only.
-  let redact = createReadinessRedactor(
+  const redact = createReadinessRedactor(
     opts.env,
-    providerConfig !== undefined ? (caps?.guestEnvNames?.(providerConfig) ?? []) : [],
+    providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
   )
   try {
     const setup = config.commands.setup
@@ -148,20 +145,6 @@ export async function runGuestReadinessProbe(opts: {
       packageRoot,
       guest: true,
     })
-    // The registration's own declarations take over from the builtin table
-    // once plugins load (AUT-505): the parsed config and the declared
-    // guestEnvNames rebuild the redactor for every later check (runtime
-    // probes, Store). When the guest could not resolve the provider plugin,
-    // the builtin fallback (undefined for non-builtin providers) keeps the
-    // name-heuristic redaction — the same trade-off the guest skip makes.
-    caps = plugins.workspaceProviders.get(config.workspace.provider)?.capabilities ?? builtinCaps
-    if (caps?.configSchema !== undefined)
-      providerConfig = caps.configSchema.parse(config.workspace.config)
-    if (caps?.guestEnvNames !== undefined)
-      redact = createReadinessRedactor(
-        opts.env,
-        caps.guestEnvNames(providerConfig !== undefined ? providerConfig : config.workspace.config),
-      )
     runtimes = await materializePluginRuntimes(
       opts.runtimes ?? createProductionRuntimes().runtimes,
       plugins,
@@ -186,7 +169,7 @@ export async function runGuestReadinessProbe(opts: {
   }
 
   const runtimeRemediation = (runtime: string, preflightOnly: boolean): string =>
-    caps?.requireRuntimeProvisioning !== true
+    builtinCaps?.requireRuntimeProvisioning !== true
       ? 'install/authenticate this runtime in the local validation environment'
       : `fix workspace.config.runtimeProvisioning.${runtime}${preflightOnly ? '.preflight' : ''} and expose API credential names in workspace.config.environmentVariables`
 
@@ -328,18 +311,24 @@ function declaredSandboxForbiddenEnvCheck(
 
 function hostPreflight(config: Config, env: Record<string, string | undefined>): void {
   // Pre-registry site: the builtin capability table drives the provider's
-  // declared forge and environment requirements (AUT-516). After AUT-505 the
-  // table holds git-worktree alone, so a plugin provider's declarations are
-  // checked registry-aware after plugin load in validateInitReadiness.
+  // declared forge and environment requirements (AUT-516). Plugin providers
+  // are checked registry-aware after plugin load in validateInitReadiness.
   // The sandbox-forwarding rule is never enforced here: it is enforced at
   // config parse for builtins (plugins are not loaded when config is parsed)
   // and at the two post-load seams — this file's registry-aware check and
   // createWorkspaceProvider construction — for plugin-declared names.
-  // The ticket-source credential preflight is registry-aware too (it gates on
-  // `validateReadiness`, which only a registered remote provider declares),
-  // and lives in the post-load try below, still before ticket acquisition.
   const caps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
   declaredForgeEnvChecks(caps, config, env)
+  // Stays exactly where today's remote-provider branch put it: only a
+  // provider with remote readiness preflights its ticket-source credential
+  // here, because remote provisioning acquires tickets before allocating
+  // disposable infrastructure.
+  if (
+    caps?.validateReadiness !== undefined &&
+    config.tickets.source === 'linear' &&
+    !env.LINEAR_API_KEY
+  )
+    throw new Error('ticket source "linear" requires LINEAR_API_KEY')
 }
 
 export async function validateInitReadiness(opts: {
@@ -353,9 +342,7 @@ export async function validateInitReadiness(opts: {
   exec?: Exec
   openStore?: StoreOpener
   runtimes?: RuntimeRegistry
-  /** The workspace provider's SDK facade test seam, passed opaquely — the
-   * readiness implementation narrows it. */
-  providerFacade?: unknown
+  vercelFacade?: VercelSandboxFacade
   packageArchive?: () => Promise<Uint8Array>
   signal?: AbortSignal
 }): Promise<InitValidationReport> {
@@ -383,21 +370,6 @@ export async function validateInitReadiness(opts: {
     // Ticket acquisition is a host responsibility for both workspace providers.
     // Exercise its read surface before allocating disposable infrastructure.
     const hostPlugins = await loadPlugins(config.plugins, repo, { packageRoot: repo })
-    // Registry-aware unregistered-provider refusal (AUT-505): a config whose
-    // provider is neither builtin nor plugin-registered fails HERE, before any
-    // workspace is provisioned and before the misleading "does not support
-    // init readiness validation" branch could claim it.
-    if (
-      config.workspace.provider !== 'git-worktree' &&
-      hostPlugins.workspaceProviders.get(config.workspace.provider) === undefined
-    ) {
-      throw new Error(
-        unknownWorkspaceProviderMessage(
-          config.workspace.provider,
-          [...hostPlugins.workspaceProviders.keys()].sort(),
-        ),
-      )
-    }
     caps =
       hostPlugins.workspaceProviders.get(config.workspace.provider)?.capabilities ?? builtinCaps
     // Registry-aware declaration checks. The pre-registry preflight above could
@@ -409,17 +381,6 @@ export async function validateInitReadiness(opts: {
     // Same seam, declared sandbox-forbidden extras (AUT-536): forge/env
     // failures keep today's precedence, ticket acquisition follows.
     declaredSandboxForbiddenEnvCheck(caps, config)
-    // Only a provider with remote readiness preflights its ticket-source
-    // credential here, because remote provisioning acquires tickets before
-    // allocating disposable infrastructure. Gated on the registration's own
-    // capabilities (the pre-registry builtin table no longer carries remote
-    // providers), and still before ticket acquisition below.
-    if (
-      caps?.validateReadiness !== undefined &&
-      config.tickets.source === 'linear' &&
-      !opts.env.LINEAR_API_KEY
-    )
-      throw new Error('ticket source "linear" requires LINEAR_API_KEY')
     // The registration's own configSchema and guestEnvNames take over from the
     // builtin table, so a plugin provider's readiness context carries its
     // parsed config and its declared names are redacted (f_55ba7591). A
@@ -563,7 +524,7 @@ export async function validateInitReadiness(opts: {
       runtimeReferences: effectiveRuntimeReferences(config),
       stdout: opts.stdout ?? (() => {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      ...(opts.providerFacade !== undefined ? { facade: opts.providerFacade } : {}),
+      ...(opts.vercelFacade !== undefined ? { facade: opts.vercelFacade } : {}),
       ...(opts.packageArchive !== undefined ? { packageArchive: opts.packageArchive } : {}),
     })
   } else {

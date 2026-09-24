@@ -1,44 +1,36 @@
 /**
- * This package — the Vercel Sandbox workspace provider as an Autobuild plugin
- * (AUT-505). The provider's implementation, schema,
- * capability declaration, and remote readiness validation live in this
- * package; core carries neither the provider nor its SDK. A repository opts
- * in by installing this package next to the CLI and declaring the package in
- * the `plugins` list of `autobuild.toml`.
+ * `@defrex/autobuild-vercel-sandbox` — the Vercel Sandbox workspace provider
+ * as an Autobuild plugin (AUT-517).
+ *
+ * Transitional state: the provider's implementation is builtin-hosted in
+ * core, because it depends on core internals that are not on the plugin-sdk
+ * surface (`config/schema`, `distribution-archive`, `operator-sandbox`,
+ * `build-execution`, `harvest-execution`, `git-worktree`) and the package
+ * must typecheck with only `@defrex/autobuild/plugin-sdk` imports. The
+ * capabilities are the shared `VERCEL_SANDBOX_CAPABILITIES` object imported
+ * from the SDK — the same runtime value the builtin registration references,
+ * so the two declarations cannot drift.
+ *
+ * While the builtin exists, the loader's duplicate-skip rule guarantees this
+ * manifest's factory is never invoked: every declared registration collides
+ * with a builtin workspace-provider registration, so the whole module is
+ * skipped with a notice and the builtin keeps serving the name. After the
+ * builtin's removal (AUT-505) the skip rule retires itself and a moved-in
+ * implementation replaces the guarded factory below.
  */
 import {
   parsePluginManifest,
+  VERCEL_SANDBOX_CAPABILITIES,
   type AutobuildPluginManifest,
-  type WorkspaceProviderPluginContext,
   type WorkspaceProviderPluginDescriptor,
 } from '@defrex/autobuild/plugin-sdk'
-import { VercelSandboxProvider } from './provider'
-import { vercelSandboxConfigSchema } from './schema'
-import { VERCEL_SANDBOX_CAPABILITIES } from './capabilities'
 
 const vercelSandboxRegistration: WorkspaceProviderPluginDescriptor = {
-  factory(context: WorkspaceProviderPluginContext) {
-    return new VercelSandboxProvider({
-      // `[workspace.config]` is parsed here with the moved schema; the host's
-      // registry-aware construction seam has already validated it through the
-      // declared `configSchema` capability, so this parse cannot fail for a
-      // config that reached the factory.
-      config: vercelSandboxConfigSchema.parse(context.config),
-      env: { ...context.env },
-      // storeRef/storeToken are guaranteed present: the pre-invocation
-      // storeRequirements check in createWorkspaceProvider ran before the
-      // factory, and the provider's own constructor re-checks them.
-      storeRef: context.storeRef ?? '',
-      storeToken: context.storeToken ?? '',
-      repo: context.repoRoot,
-      runtimeReferences: context.runtimeReferences ?? [],
-      setupCommand: context.sandboxSetupCommand,
-      sandboxEnvironmentVariables: context.sandboxEnvironmentVariables,
-      ...(context.origin !== undefined ? { origin: context.origin } : {}),
-      ...(context.remoteBranchHead !== undefined
-        ? { remoteBranchHead: context.remoteBranchHead }
-        : {}),
-    })
+  factory() {
+    throw new Error(
+      'the vercel-sandbox implementation is builtin-hosted in this distribution; ' +
+        "plugin construction arrives with the builtin's removal (AUT-505)",
+    )
   },
   capabilities: VERCEL_SANDBOX_CAPABILITIES,
 }
@@ -57,12 +49,3 @@ const manifest: AutobuildPluginManifest = {
 parsePluginManifest(manifest)
 
 export default manifest
-
-// The moved provider module's full public surface, re-exported as named
-// exports so every cross-package consumer imports through the package
-// surface, never relative src paths.
-export * from './provider'
-export * from './schema'
-export { VERCEL_SANDBOX_CAPABILITIES } from './capabilities'
-export { validateVercelGithubOrigin } from './github-origin'
-export { validateRemoteReadiness } from './readiness'

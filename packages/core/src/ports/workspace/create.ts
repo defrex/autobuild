@@ -2,7 +2,6 @@ import { resolve } from 'node:path'
 import { SANDBOX_FORBIDDEN_ENV } from './operator-sandbox'
 import type { WorkspaceConfig } from '../../config/schema'
 import type { PluginRegistry } from '../../plugins/registry'
-import type { WorkspaceProviderPluginContext } from '../../plugins/manifest'
 import type { WorkspaceProvider } from '../types'
 import type { BuildExecution } from './build-execution'
 import {
@@ -10,10 +9,9 @@ import {
   runtimeProvisioningMap,
   runtimeProvisioningMissingMessage,
   sandboxForbiddenEnvMessage,
-  unknownWorkspaceProviderMessage,
-  type RuntimeReferencesSource,
 } from './provider-capabilities'
 import { LocalBuildExecution } from './local-build-execution'
+import type { RuntimeReferencesSource } from './vercel-sandbox'
 
 export interface CreateWorkspaceProviderOptions {
   registry: PluginRegistry
@@ -61,7 +59,9 @@ export async function createWorkspaceProvider(
   const available = [...opts.registry.workspaceProviders.keys()].sort()
   const registration = opts.registry.workspaceProviders.get(config.provider)
   if (registration === undefined) {
-    throw new Error(unknownWorkspaceProviderMessage(config.provider, available))
+    throw new Error(
+      `unknown workspace provider "${config.provider}"; available providers: ${available.join(', ')}`,
+    )
   }
 
   // Uniform capability enforcement (AUT-516): every declaration that needs
@@ -124,30 +124,11 @@ export async function createWorkspaceProvider(
   }
 
   try {
-    const context: WorkspaceProviderPluginContext = {
+    return await factory({
       config: config.config,
       env: opts.env,
       repoRoot: resolve(opts.repoRoot),
-      // Host-derived seams for remote providers (AUT-505): the same fields the
-      // former builtin construction closure received, forwarded opaquely.
-      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-      ...(opts.storeToken !== undefined ? { storeToken: opts.storeToken } : {}),
-      ...(opts.runtimeReferences !== undefined
-        ? { runtimeReferences: opts.runtimeReferences }
-        : {}),
-      ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
-      ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
-      ...(opts.sandboxSetupCommand !== undefined
-        ? { sandboxSetupCommand: opts.sandboxSetupCommand }
-        : {}),
-      ...(opts.sandboxEnvironmentVariables !== undefined
-        ? { sandboxEnvironmentVariables: opts.sandboxEnvironmentVariables }
-        : {}),
-      ...(opts.orchestratorSandboxEnabled !== undefined
-        ? { orchestratorSandboxEnabled: opts.orchestratorSandboxEnabled }
-        : {}),
-    }
-    return await factory(context)
+    })
   } catch (error) {
     throw new Error(
       `workspace provider "${config.provider}" failed to initialize: ${

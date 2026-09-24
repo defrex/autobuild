@@ -1,13 +1,17 @@
 /**
- * The `vercel-sandbox` provider's remote readiness validation (AUT-516): the
- * body of `validateInitReadiness`'s remote branch, moved here so the
- * capability declaration can point at it. Store precondition checks
+ * The builtin `vercel-sandbox` provider's remote readiness validation
+ * (AUT-516): the body of `validateInitReadiness`'s remote branch, moved here
+ * so the capability declaration can point at it without
+ * `cli/init-validation.ts` naming the provider. Store precondition checks
  * stay with the caller, driven by the `storeRequirements` declaration.
  */
-import type { InitValidationReport, WorkspaceReadinessContext } from '@defrex/autobuild/plugin-sdk'
-import { gitText, parseGuestOutput } from '@defrex/autobuild/plugin-sdk'
-import type { VercelSandboxConfig } from './schema'
-import { validateVercelSandbox, type VercelSandboxFacade } from './provider'
+import type { VercelSandboxConfig } from '../config/schema'
+import type {
+  InitValidationReport,
+  WorkspaceReadinessContext,
+} from '../ports/workspace/provider-capabilities'
+import { validateVercelSandbox, type VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
+import { gitText, parseGuestOutput } from './init-readiness-shared'
 
 export async function validateRemoteReadiness(
   ctx: WorkspaceReadinessContext,

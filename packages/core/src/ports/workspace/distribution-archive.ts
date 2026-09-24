@@ -26,8 +26,7 @@
  * Provisioning records the installed distribution's identity stamp
  * (`readDistributionIdentityStamp()`) in the guest's `.distribution-version`
  * marker and reinstalls the archive on a later mismatch, so an upgraded
- * dispatcher retrofits its persistent guests (see the provider packages that
- * consume this archive).
+ * dispatcher retrofits its persistent guests (see `vercel-sandbox.ts`).
  */
 import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

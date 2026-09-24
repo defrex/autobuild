@@ -2124,8 +2124,11 @@ describe('finalize post-step publication', () => {
     expect(h.execCalls.map((call) => call.cmd)).not.toContainEqual(['git', 'diff', '--cached'])
   })
 
-  test('a remote workspace forks the finalize push into a publication request, by marker', async () => {
-    for (const provisioned of [{ provider: 'fake', remote: true }]) {
+  test('a remote workspace forks the finalize push into a publication request, by marker and by legacy name', async () => {
+    for (const provisioned of [
+      { provider: 'fake', remote: true },
+      { provider: 'vercel-sandbox' },
+    ]) {
       const h = await readyHarness({
         finalizeStatuses: ['', ''],
         finalizeHeads: [FINALIZE_HEAD],

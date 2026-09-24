@@ -370,7 +370,6 @@ describe('abDispatch guards', () => {
     const repo = join(tmp, 'repo')
     const toml =
       'forge = "github"\n' +
-      'plugins = ["./fixture-provider.ts"]\n' +
       '[workspace]\nprovider = "vercel-sandbox"\n' +
       '[workspace.config]\ntimeoutSeconds = 2700\n' +
       '[workspace.config.runtimeProvisioning.claude]\ninstall = "true"\npreflight = "true"\n' +
@@ -378,15 +377,6 @@ describe('abDispatch guards', () => {
       '[tickets]\nsource = "file"\nreadyState = "ready"\n'
     try {
       await initOrigin(repo, toml)
-      // Fixture plugin declaring the requiredEnv capability so the
-      // capabilities-driven dispatch preflight still fires (AUT-505 removed
-      // the builtin registration).
-      await writeFile(
-        join(repo, 'fixture-provider.ts'),
-        `export default { name: 'fixture-vercel', apiVersion: '^1.6.0', workspaceProviders: { 'vercel-sandbox': { factory: () => { throw new Error('never constructed') }, capabilities: { requiredEnv: [{ alternatives: [['GITHUB_TOKEN'], ['GH_TOKEN']], dispatchMessage: 'vercel-sandbox publication requires GITHUB_TOKEN or GH_TOKEN in the dispatcher environment' }] } } } }\n`,
-      )
-      await git(['add', '-A'], repo)
-      await git([...GIT_ID, 'commit', '-q', '-m', 'fixture plugin'], repo)
       const exec: Exec = async (cmd, opts) =>
         cmd.includes('get-url')
           ? { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
@@ -402,35 +392,6 @@ describe('abDispatch guards', () => {
           storeRef: 'https://store.example.test',
         }),
       ).rejects.toThrow(/publication requires GITHUB_TOKEN or GH_TOKEN/)
-    } finally {
-      await rm(tmp, { recursive: true, force: true })
-    }
-  })
-
-  test('a repo selecting vercel-sandbox with no plugins line fails with the unregistered-provider message', async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'ab-dispatch-vercel-unregistered-'))
-    const repo = join(tmp, 'repo')
-    const toml =
-      'forge = "github"\n' +
-      '[workspace]\nprovider = "vercel-sandbox"\n' +
-      '[workspace.config]\ntimeoutSeconds = 2700\n' +
-      '[roles.default]\nruntime = "claude"\n' +
-      '[tickets]\nsource = "file"\nreadyState = "ready"\n'
-    try {
-      await initOrigin(repo, toml)
-      await expect(
-        abDispatch({
-          targetRepo: repo,
-          env: { VERCEL_OIDC_TOKEN: 'oidc', AB_TOKEN: 'scoped' },
-          exec: spawnExec,
-          stdout: () => {},
-          stderr: () => {},
-          once: true,
-          storeRef: 'https://store.example.test',
-        }),
-      ).rejects.toThrow(
-        /unknown workspace provider "vercel-sandbox"; add the plugin package that provides it to the plugins list in autobuild\.toml/,
-      )
     } finally {
       await rm(tmp, { recursive: true, force: true })
     }
@@ -607,7 +568,7 @@ describe('abDispatch guards', () => {
     expect(probes).toEqual([])
   }, 10_000)
 
-  test('origin mode accepts a bare provider-plugin specifier and proceeds with it registered (AUT-505)', async () => {
+  test('origin mode accepts a bare provider-plugin specifier, skips it with a notice, and proceeds (AUT-517)', async () => {
     const files = new Map<string, string>([
       [
         'autobuild.toml',
@@ -629,7 +590,6 @@ describe('abDispatch guards', () => {
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
     const stderrLines: string[] = []
-    let capturedRegistry: PluginRegistry | undefined
     const dispatch = abDispatch({
       targetRepo: '/this/checkout/does/not/exist',
       repository: 'git@github.com:acme/checkoutless.git',
@@ -645,10 +605,9 @@ describe('abDispatch guards', () => {
       stdout: () => {},
       stderr: (line) => stderrLines.push(line),
       once: true,
-      wire: (_config, _opts, state, plugins) => {
-        // With the duplicate-skip rule gone (AUT-505), the plugin REGISTERS:
-        // no skip notice is emitted and the provider resolves from the plugin.
-        capturedRegistry = plugins
+      wire: (_config, _opts, state) => {
+        // The tick proceeds past plugin loading with the configured plugin
+        // skipped: the builtin keeps serving vercel-sandbox.
         expect(state.repo).toBe('https://github.com/acme/checkoutless')
         return {
           store,
@@ -684,13 +643,12 @@ describe('abDispatch guards', () => {
       },
     })
     await dispatch
-    expect(stderrLines.some((line) => line.includes('skipping it') || line.includes('SKIP'))).toBe(
-      false,
-    )
-    expect(capturedRegistry?.workspaceProviders.get('vercel-sandbox')?.owner).toEqual({
-      kind: 'plugin',
-      name: 'autobuild-vercel-sandbox',
-    })
+    expect(
+      stderrLines.some(
+        (line) =>
+          line.includes('autobuild-vercel-sandbox') && line.includes('the builtin keeps serving'),
+      ),
+    ).toBe(true)
   }, 10_000)
 
   test('--once with an already-passed deadline skips the tick and the drain but still tears down', async () => {

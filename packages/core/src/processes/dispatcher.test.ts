@@ -3843,6 +3843,7 @@ describe('Dispatcher janitor', () => {
   })
 
   test.each([
+    ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
     ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
     [
       'a provisioned payload carrying the local marker over a remote-suggestive name',
@@ -3855,10 +3856,10 @@ describe('Dispatcher janitor', () => {
       // Harness wiring follows the provider name only: the dispatcher routes
       // release and reap by the name on the provisioned fact, so the fake
       // provider must present under that name. Outcome expectations below
-      // derive from the durable marker only (AUT-505 removed the legacy
-      // name fallback), mirroring isRemoteWorkspace — not from the name.
+      // derive from the marker (with the legacy fallback), mirroring
+      // isRemoteWorkspace — not from the name.
       const nameSuggestsRemote = provider === 'vercel-sandbox'
-      const expectRemote = remote ?? false
+      const expectRemote = remote ?? nameSuggestsRemote
       const h = harness({
         workspaceName: nameSuggestsRemote ? 'vercel-sandbox' : undefined,
         tickets: [readyTicket('T-1', { labels: [] })],
@@ -4195,6 +4196,7 @@ describe('Dispatcher janitor', () => {
   // orthogonal (the closePr call precedes any settlement branch), so an open
   // PR pins the path decision for every settlement case.
   test.each([
+    ['a legacy vercel-sandbox journal without a marker', 'vercel-sandbox', undefined],
     ['a provisioned payload carrying the remote marker over a local-suggestive name', 'fake', true],
     [
       'a provisioned payload carrying the local marker over a remote-suggestive name',
@@ -4207,10 +4209,10 @@ describe('Dispatcher janitor', () => {
       // Harness wiring follows the provider name only: the dispatcher routes
       // release and reap by the name on the provisioned fact, so the fake
       // provider must present under that name. The closePr path expectation
-      // derives from the durable marker only (AUT-505 removed the legacy name
-      // fallback), mirroring isRemoteWorkspace — not from the name.
+      // derives from the marker (with the legacy fallback), mirroring
+      // isRemoteWorkspace — not from the name.
       const nameSuggestsRemote = provider === 'vercel-sandbox'
-      const expectRemote = remote ?? false
+      const expectRemote = remote ?? nameSuggestsRemote
       const h = harness({
         workspaceName: nameSuggestsRemote ? 'vercel-sandbox' : undefined,
         tickets: [readyTicket('T-1', { labels: [] })],

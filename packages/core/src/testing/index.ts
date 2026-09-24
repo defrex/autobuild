@@ -27,7 +27,6 @@ export { abBulkControl } from '../cli/bulk-control'
 export { createTicketSource } from '../ports/tickets/create'
 export { createOperatorSandboxService } from '../operator/sandbox'
 export { parseConfig } from '../config/load'
-export { expectRows, headingSection } from '../config/doc-sections'
 export { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 // Durable guest-launch state readers + the in-process guest runner for the
 // hosted-dispatcher integration test's GuestExecution double, which supervises

@@ -32,18 +32,14 @@ cmd_install() {
 
 cmd_ensure_running() {
   detect_version
-  if ! pg_isready -q -h 127.0.0.1 -p 5432; then
-    sudo pg_ctlcluster "$VERSION" main start
+  if pg_isready -q -h 127.0.0.1 -p 5432; then
+    exit 0
   fi
-  if ! pg_isready -q -h 127.0.0.1 -p 5432; then
+  sudo pg_ctlcluster "$VERSION" main start
+  if ! pg_isready -h 127.0.0.1 -p 5432; then
     echo 'postgres-live failure: cluster did not become ready after start' >&2
     exit 1
   fi
-  # Re-seed the role password idempotently. A rehydrated workspace can come
-  # back with the cluster running but the install step's password seed gone,
-  # and the gated suites authenticate with this fixed credential, not the
-  # bootstrap one.
-  sudo -u postgres psql -qtc "ALTER ROLE postgres PASSWORD 'postgres'"
 }
 
 case "${1:-}" in
