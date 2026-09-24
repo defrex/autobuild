@@ -2163,6 +2163,20 @@ describe('finalize post-step publication', () => {
     expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
   })
 
+  test('an explicit local marker keeps the finalize push direct even over a remote-suggestive provider name', async () => {
+    const h = await readyHarness({
+      finalizeStatuses: ['', ''],
+      finalizeHeads: [FINALIZE_HEAD],
+      finalizeAncestors: [true],
+      workspaceProvider: 'vercel-sandbox',
+      workspaceRemote: false,
+    })
+
+    expect((await h.br.step()).kind).toBe('run-finalize-step')
+    expect(h.forge.pushes).toEqual([{ workspacePath: h.workspacePath, branch: BRANCH }])
+    expect(ofType(await h.store.getEvents(SLUG), 'publication.requested')).toEqual([])
+  })
+
   test('scratch commits fail tolerantly with an observation and no push', async () => {
     const h = await readyHarness({
       finalizeStatuses: ['', ''],
