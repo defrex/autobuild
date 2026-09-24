@@ -54,9 +54,11 @@ export interface OrchestratorTickOptions {
   tickets: TicketSource
   /** Injected language model; defaults to the configured gateway model. */
   model?: LanguageModel
-  /** Remaining tick budget in seconds; the turn deadline is
-   * min(configured, remaining), and less than ORCHESTRATOR_MIN_TURN_SECONDS
-   * skips the whole step (suspension state is durable — skipping is safe). */
+  /** Remaining tick budget in seconds at step entry; every turn's deadline
+   * is recomputed from this against the clock, so N sessions draw down the
+   * SAME budget instead of each getting a fresh full slice (f_9c1161ae).
+   * Less than ORCHESTRATOR_MIN_TURN_SECONDS skips the whole step
+   * (suspension state is durable — skipping is safe). */
   remainingBudgetSeconds?: number
   log?: (message: string) => void
 }
@@ -102,11 +104,20 @@ export async function runOrchestratorTickStep(
 ): Promise<OrchestratorTickReport> {
   const { store, repo, config, clock } = options
   const report: OrchestratorTickReport = { resumed: 0, reaped: 0, woken: 0 }
-  const remaining =
+  const entry =
     options.remainingBudgetSeconds === undefined
       ? config.orchestrator.invocationBudgetSeconds
       : options.remainingBudgetSeconds
-  if (remaining < ORCHESTRATOR_MIN_TURN_SECONDS) return report
+  if (entry < ORCHESTRATOR_MIN_TURN_SECONDS) return report
+
+  // The step's deadline, fixed at entry: every turn's slice is recomputed
+  // from the clock against THIS deadline, so the step can only consume the
+  // remaining slack no matter how many sessions it serves. (A fixed
+  // per-session value handed to each turn would let N sessions run
+  // N × remaining seconds past the tick deadline — f_9c1161ae.)
+  const deadlineMs = clock().getTime() + entry * 1000
+  const remainingNow = (): number =>
+    Math.max(0, Math.floor((deadlineMs - clock().getTime()) / 1000))
 
   const runner = orchestratorTickRunner(options)
   const sessions = await store.listSessions(repo)
@@ -133,9 +144,14 @@ export async function runOrchestratorTickStep(
       }
       if (approval === undefined) continue
     }
+    // Draw down the shared deadline: a session is skipped — suspension state
+    // is durable, so skipping is always safe — when the step's remaining
+    // slack no longer leaves the floor for a meaningful turn slice.
+    const remaining = remainingNow() - ORCHESTRATOR_MIN_TURN_SECONDS
+    if (remaining < ORCHESTRATOR_MIN_TURN_SECONDS) break
     const resumed = await runner.resumeTurn(record.id, {
       ...(approval !== undefined ? { approval } : {}),
-      remainingBudgetSeconds: remaining - ORCHESTRATOR_MIN_TURN_SECONDS,
+      remainingBudgetSeconds: remaining,
     })
     if (resumed.resumed) {
       report.resumed += 1
@@ -208,6 +224,12 @@ export async function runOrchestratorTickStep(
     }
     if (newest === undefined) continue
 
+    // Same drawdown for wake turns: one turn per session per tick, bounded
+    // by the step's shared deadline; past the floor the wake defers to a
+    // later tick.
+    const remaining = remainingNow() - ORCHESTRATOR_MIN_TURN_SECONDS
+    if (remaining < ORCHESTRATOR_MIN_TURN_SECONDS) break
+
     const buildEvents = await store.getEvents(newest.build)
     const start = await runner.startTurn(
       record.id,
@@ -226,6 +248,7 @@ export async function runOrchestratorTickStep(
         },
         buildState: reduceBuild(buildEvents) as unknown as Record<string, unknown>,
       },
+      { remainingBudgetSeconds: remaining },
     )
     if (start.started) {
       report.woken += 1

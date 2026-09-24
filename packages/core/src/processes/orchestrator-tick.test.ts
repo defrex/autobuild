@@ -401,17 +401,75 @@ describe('orchestrator tick step', () => {
     const clock = manualClock()
     const sessionId = await seedSession(store, clock, { wake: ['escalation.raised'] })
     await seedBuild(store, 'b1', { escalate: true })
+
+    // The ticket backend the tick adapts from the dispatcher's ticket source
+    // reads the effective config out of the repository's deposited artifact
+    // (openOperatorTickets → effectiveConfig) — so the test deposits the
+    // real durable shape: a `dispatcher-effective-config` artifact plus the
+    // `dispatcher.run-started` fact that references it. Without these the
+    // tool refuses, a refusal the old assertion ("the turn completed")
+    // could not tell from a real listing (f_15fa9981).
+    await store.appendRepoWithArtifacts(
+      REPO,
+      [
+        {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            capacity: 4,
+            roles: { default: { runtime: 'claude' } },
+            policy: { harvestThreshold: 9 },
+            tickets: { source: 'hosted', teamKey: 'acme', readyState: 'ready' },
+          }),
+        },
+      ],
+      (artifacts) => ({
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started' as const,
+        payload: {
+          run: 'run-1',
+          pid: 999,
+          effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+          roleWarnings: [],
+        },
+      }),
+    )
+
+    // A real ticket in the effective triage state: the listing must name it.
+    const tickets = new FakeTicketSource([
+      {
+        ref: { source: 'fake', id: 'T-9' },
+        title: 'Fix the flake',
+        body: 'It flakes.',
+        state: 'Backlog',
+        labels: [],
+      },
+    ])
     const model = sequenceModel([
       toolCallStep('c1', 'tickets.list', '{}'),
       textStep('Checked the queue.'),
     ])
-    const report = await runOrchestratorTickStep(tickOptions(store, clock, model))
+    const report = await runOrchestratorTickStep({
+      ...tickOptions(store, clock, model),
+      tickets,
+    })
     expect(report.woken).toBe(1)
-    // The ticket tool ran against the adapted backend (no refusal) and the
-    // turn completed.
     const state = reduceSession(await store.getSessionEvents(sessionId))
     expect(state.status).toBe('idle')
     expect(state.turns[0]?.state).toBe('completed')
+
+    // The tool output is a REAL queue listing resolved through the adapted
+    // backend — the effective lifecycle names and the seeded ticket — not
+    // the `{kind, error}` refusal body a RegistryError would have produced.
+    const turnStream = state.turns[0]!.stream
+    const parts = (await store.readStream(turnStream)).chunks.flatMap((c) => c.parts)
+    const output = parts.find(
+      (part) => part.type === 'tool-output-available' && part.toolCallId === 'c1',
+    ) as
+      | { output: { tickets?: Array<{ ref?: { id?: string } }>; triageState?: string } }
+      | undefined
+    expect(output).toBeDefined()
+    expect(output!.output.triageState).toBe('Backlog')
+    expect(output!.output.tickets?.map((ticket) => ticket.ref?.id)).toContain('T-9')
   })
 
   test('a nearly exhausted tick budget skips the step entirely', async () => {
@@ -425,5 +483,71 @@ describe('orchestrator tick step', () => {
     })
     expect(report).toEqual({ resumed: 0, reaped: 0, woken: 0 })
     expect(reduceSession(await store.getSessionEvents(sessionId)).turns).toHaveLength(0)
+  })
+
+  test('every resumed turn draws down the same tick deadline, not a fresh slice each', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    await store.ensureRepo(REPO)
+    const sessionIds: string[] = []
+    for (let index = 0; index < 5; index++) {
+      const session = await store.createSession({ repo: REPO, operator: 'op' })
+      const stream = await store.createStream(
+        { kind: 'session', session: session.id },
+        `turn:ot_${index}`,
+      )
+      await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'm1' }])
+      for (const event of [
+        { actor: humanActor('op'), type: 'message.posted' as const, payload: { text: 'go' } },
+        {
+          actor: agentActor('orchestrator', `ot_${index}`),
+          type: 'turn.started' as const,
+          payload: {
+            turn: `ot_${index}`,
+            stream: stream.id,
+            trigger: { kind: 'message' as const, messageSeq: 2 },
+          },
+        },
+        {
+          actor: agentActor('orchestrator', `ot_${index}`),
+          type: 'turn.suspended' as const,
+          payload: { turn: `ot_${index}`, cause: 'budget' as const },
+        },
+      ]) {
+        await store.appendSessionEvent(session.id, event)
+      }
+      sessionIds.push(session.id)
+    }
+
+    // A model whose every call consumes 90 s of the shared clock. With a
+    // fixed per-session slice (the f_9c1161ae bug) five one-step turns would
+    // each get remaining − floor and overrun the 300 s tick budget by 150 s;
+    // drawn down against one deadline, the step serves only the sessions
+    // that fit and defers the rest to a later tick (durable state makes
+    // deferral safe).
+    const slowModel = new MockLanguageModelV3({
+      doStream: async () => {
+        clock.advance(90_000)
+        return {
+          stream: simulateReadableStream({
+            chunks: textStep('done') as never,
+            initialDelayInMs: 0,
+          }),
+        }
+      },
+    })
+
+    const report = await runOrchestratorTickStep({
+      ...tickOptions(store, clock, slowModel),
+      remainingBudgetSeconds: 300,
+    })
+    expect(report.resumed).toBe(3)
+    // The sessions the step could no longer fit stay suspended, untouched —
+    // a later tick resumes them.
+    for (const id of sessionIds.slice(3)) {
+      const state = reduceSession(await store.getSessionEvents(id))
+      expect(state.status).toBe('suspended')
+      expect(state.suspendedCause).toBe('budget')
+    }
   })
 })

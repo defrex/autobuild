@@ -61,6 +61,13 @@ export interface TurnOutcome {
   error?: string
 }
 
+export interface StartTurnOptions {
+  /** Remaining invocation budget in seconds (the tick's), clamping the
+   * configured `invocationBudgetSeconds` for this run. The tick recomputes
+   * it per session so every turn draws down the same deadline. */
+  remainingBudgetSeconds?: number
+}
+
 export interface StartTurnResult {
   /** False when the session was not idle (or the CAS lost the race) — no
    * turn was started and no loop is running. */
@@ -95,6 +102,7 @@ export interface OrchestratorTurnRunner {
     sessionId: string,
     trigger: SessionTurnTrigger,
     wake?: WakeTurnInput,
+    opts?: StartTurnOptions,
   ): Promise<StartTurnResult>
   resumeTurn(sessionId: string, opts?: ResumeTurnOptions): Promise<ResumeTurnResult>
 }
@@ -315,7 +323,7 @@ export function createOrchestratorTurnRunner(
   }
 
   return {
-    async startTurn(sessionId, trigger, wake) {
+    async startTurn(sessionId, trigger, wake, opts = {}) {
       const { state, lastSeq } = await reduceSessionState(store, sessionId)
       if (state.status !== 'idle') return { started: false }
       // Sessions with empty wake settings are never woken.
@@ -352,7 +360,7 @@ export function createOrchestratorTurnRunner(
         record?.operator ?? '',
         turn,
         stream.id,
-        deadlineMs(options.remainingBudgetSeconds),
+        deadlineMs(opts.remainingBudgetSeconds ?? options.remainingBudgetSeconds),
       )
       return { started: true, turn, stream: stream.id, outcome }
     },
