@@ -720,7 +720,6 @@ test('the terminal observation sample reads a missing journal record as an empty
     },
   }) as BuildStore
 
-  const childDone = deferred<DispatchChildResult>()
   const frames: Array<{ current: number; limit: number }> = []
   const frontend = new DispatchFrontend({
     repo,
@@ -783,8 +782,6 @@ test('the terminal observation sample reads a missing journal record as an empty
     'missing-record frame with the digest-derived count',
   )
   expect(sampleJournalReads).toBe(0)
-
-  childDone.resolve({ outcome: 'normal', exitCode: 0 })
   await running
 })
 
