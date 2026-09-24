@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#509](https://github.com/defrex/autobuild/pull/509) — Render the OAuth consent page in the web-dashboard capture
 - [#504](https://github.com/defrex/autobuild/pull/504) — Gate active build listings on one digest read (AUT-488)
 - [#502](https://github.com/defrex/autobuild/pull/502) — Consolidate operator query's repoEvents onto the shared AUT-524 read
 - [#501](https://github.com/defrex/autobuild/pull/501) — Refresh a guest's installed distribution on every sandbox restart
