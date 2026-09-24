@@ -6596,6 +6596,7 @@ describe('dispatcher — orchestrator step gates (AUT-342)', () => {
     })
     const h = harness({
       toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+      orchestratorModel: model,
     })
     // A session that WOULD be woken, and a build carrying a matching event,
     // if the gate leaked into local dispatch.
@@ -6636,7 +6637,10 @@ describe('dispatcher — orchestrator step gates (AUT-342)', () => {
       },
     })
     // Origin mode (repoOrigin set), orchestrator table absent → disabled.
-    const h = harness({ repoOrigin: 'https://github.com/acme/widgets' })
+    const h = harness({
+      repoOrigin: 'https://github.com/acme/widgets',
+      orchestratorModel: model,
+    })
     await h.store.ensureRepo(REPO)
     const session = await h.store.createSession({ repo: REPO, operator: 'op' })
     await h.store.appendSessionEvent(session.id, {

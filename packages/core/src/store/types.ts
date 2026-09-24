@@ -24,6 +24,7 @@ import type {
   SessionEventType,
   SessionEventWrite,
 } from '../events/sessions'
+export type { SessionEventEnvelope }
 import type { TicketRef } from '../ontology'
 import type {
   StreamChunk,

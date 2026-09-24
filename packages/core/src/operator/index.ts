@@ -51,7 +51,18 @@ export {
   getRepositoryStatus,
   listOperatorBuilds,
   OperatorQueryError,
+  OrchestratorConfigError,
+  orchestratorConfig,
 } from './query'
+export {
+  orchestratorWakeGlobs,
+  ORCHESTRATOR_ROUTE_LIMIT_SECONDS,
+  type OrchestratorConfig,
+} from '../config/schema'
+export type { OrchestratorTurnRunner } from '../orchestrator/turn-runner'
+export { createOrchestratorTurnRunner } from '../orchestrator/turn-runner'
+export { randomIds } from '../ids'
+export type { Config } from '../config/schema'
 export {
   OPERATOR_NOTES_ARTIFACT,
   TOOLS,
