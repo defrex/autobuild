@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'bun:test'
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
 import { parseConfig } from '../config/load'
-import { agentActor, humanActor, DISPATCHER } from '../events/envelope'
+import { agentActor, humanActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { FakeTicketSource } from '../ports/tickets/fake'
 import type { OperatorToolName } from '../operator/annotations'
 import { MemoryBuildStore } from '../store/memory'
@@ -231,6 +231,131 @@ describe('orchestrator tick step', () => {
     expect(second.woken).toBe(1) // b2's event, not b1's again
     const state = reduceSession(await store.getSessionEvents(woken))
     expect(state.wakeCursors).toEqual({ b1: 2, b2: 2 })
+  })
+
+  test('a journal wake: harvest.escalated wakes a session the build-log-only pass could not', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    // A glob matching only the repository catalog — also proof the tick's
+    // compileEventGlobs call accepts journal-only globs (a build-catalog-only
+    // compile would throw and the session would silently never wake).
+    const sessionId = await seedSession(store, clock, { wake: ['harvest.escalated'] })
+    const journalEvent = await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'run-1',
+        source: 'policy',
+        reason: 'Code loop stalled',
+        observations: [{ build: 'b1', seq: 1 }],
+      },
+    })
+
+    const report = await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    expect(report.woken).toBe(1)
+
+    const state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.status).toBe('idle') // the wake turn completed
+    expect(state.journalWakeCursor).toBe(journalEvent.seq)
+    expect(state.wakeCursors).toEqual({})
+    const started = (await store.getSessionEvents(sessionId)).find(
+      (event) => event.type === 'turn.started',
+    )
+    expect(started).toBeDefined()
+    if (started?.type !== 'turn.started') throw new Error('unreachable')
+    if (started.payload.trigger.kind !== 'wake') throw new Error('unreachable')
+    expect(started.payload.trigger).toMatchObject({
+      kind: 'wake',
+      journal: true,
+      seq: journalEvent.seq,
+      type: 'harvest.escalated',
+    })
+    expect(started.payload.trigger.build).toBeUndefined()
+    // The delivered input is the frozen journal event record only — no
+    // reduced build state is coupled in.
+    if (started.payload.wake === undefined) throw new Error('unreachable')
+    expect(started.payload.wake.buildState).toBeUndefined()
+    expect(JSON.stringify(started.payload.wake)).toContain('Code loop stalled')
+  })
+
+  test('journal and build wake sources keep separate cursors and re-trigger independently', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    const sessionId = await seedSession(store, clock, {
+      wake: ['escalation.raised', 'harvest.escalated'],
+    })
+
+    // A non-matching journal event wakes nothing.
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-started',
+      payload: { run: 'run-1' },
+    })
+    const quiet = await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    expect(quiet.woken).toBe(0)
+
+    // The journal event wakes once; a second tick does not re-wake from the
+    // same event (the journal cursor advanced through the recorded trigger).
+    const first = await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'run-2',
+        source: 'stall',
+        reason: 'Round ceiling reached',
+        observations: [{ build: 'b1', seq: 2 }],
+      },
+    })
+    expect((await runOrchestratorTickStep(tickOptions(store, clock, textModel()))).woken).toBe(1)
+    expect((await runOrchestratorTickStep(tickOptions(store, clock, textModel()))).woken).toBe(0)
+    let state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.journalWakeCursor).toBe(first.seq)
+    expect(state.wakeCursors).toEqual({})
+
+    // A matching build event wakes through the BUILD source: wakeCursors
+    // advances, the journal cursor stays put, and the trigger names the build.
+    await seedBuild(store, 'b1', { escalate: true })
+    expect((await runOrchestratorTickStep(tickOptions(store, clock, textModel()))).woken).toBe(1)
+    state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.wakeCursors).toEqual({ b1: 2 })
+    expect(state.journalWakeCursor).toBe(first.seq)
+    const started = (await store.getSessionEvents(sessionId)).filter(
+      (event) => event.type === 'turn.started',
+    )
+    expect(started[1]?.payload.trigger).toMatchObject({ kind: 'wake', build: 'b1' })
+
+    // A newer journal event wakes again from the journal source.
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'run-3',
+        source: 'agent',
+        reason: 'Which way?',
+        observations: [{ build: 'b1', seq: 3 }],
+      },
+    })
+    expect((await runOrchestratorTickStep(tickOptions(store, clock, textModel()))).woken).toBe(1)
+    state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.journalWakeCursor).toBe(first.seq + 1)
+  })
+
+  test('explicit empty wake settings stay message-only against journal events too', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    await seedSession(store, clock, { wake: [] })
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'run-1',
+        source: 'policy',
+        reason: 'Code loop stalled',
+        observations: [{ build: 'b1', seq: 1 }],
+      },
+    })
+    const report = await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    expect(report.woken).toBe(0)
   })
 
   test('a budget-suspended turn resumes and completes; an answered approval resumes too', async () => {
