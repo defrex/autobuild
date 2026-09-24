@@ -279,6 +279,9 @@ function harness(
   let createInput: Record<string, unknown> | undefined
   let created = false
   let creates = 0
+  /** The identity stamp the provider's seam currently resolves; mutable so a
+   * test can model a dispatcher upgrade after provisioning. */
+  const identityState = { current: '1.2.3' }
   /** Snapshot rows keyed by the exact environment name the purge uses. */
   const snapshotLists = new Map<string, VercelSnapshotInfo[]>()
   const facade: VercelSandboxFacade = {
@@ -368,7 +371,7 @@ function harness(
       }
       return new Uint8Array([1, 2, 3])
     },
-    distributionVersion: async () => '1.2.3',
+    distributionIdentity: async () => identityState.current,
     // Bounded observation waits resolve in milliseconds, never the 5 s default.
     observeWaitMs: 25,
     ...(options.setupCommand !== undefined ? { setupCommand: options.setupCommand } : {}),
@@ -387,6 +390,14 @@ function harness(
     },
     get creates() {
       return creates
+    },
+    /** The seam's current identity stamp; assign to model a dispatcher
+     * upgrade between provider calls. */
+    get distributionIdentity() {
+      return identityState.current
+    },
+    set distributionIdentity(value: string) {
+      identityState.current = value
     },
   }
 }
@@ -718,7 +729,7 @@ describe('VercelSandboxProvider', () => {
         branch: 'ab/remote-build',
       }),
     ).rejects.toThrow(
-      /distribution version marker readback mismatch.*wrote "1\.2\.3" but read "corrupted"/s,
+      /distribution identity marker readback mismatch.*wrote "1\.2\.3" but read "corrupted"/s,
     )
     expect(mismatch.sandbox.deletes).toBe(1)
     expect(mismatch.sandbox.provisioned).toBe(false)
@@ -731,6 +742,129 @@ describe('VercelSandboxProvider', () => {
       branch: 'ab/remote-build',
     })
     expect(h.sandbox.distributionVersion).toBe('1.2.3')
+  })
+
+  test('restart after a protocol-only bump reinstalls before the runner starts (AUT-521 regression)', async () => {
+    const h = harness()
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // The 2026-09-24 incident: the deployed dispatcher bumped
+    // REMOTE_STORE_PROTOCOL_VERSION 2→3 without a package version bump, so
+    // every guest's marker — then a bare version — still matched and no path
+    // refreshed them; their store handshakes 409ed and the builds stranded. A
+    // legacy bare-version marker is exactly the pre-bump shape here.
+    h.distributionIdentity = '1.2.3+protocol3'
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-protocol-bump',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // The refresh sequence strictly precedes the detached runner launch, with
+    // Bun's preflight after the reinstall.
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    expect((restart[runner - 1] as { args?: string[] }).args).toEqual(['--version'])
+    // The marker now carries the full identity stamp.
+    expect(h.sandbox.distributionVersion).toBe('1.2.3+protocol3')
+    // Exactly one new write — the archive into /tmp — never the workspace.
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+    // No git command and no workspace-cwd command before the runner: the
+    // checkout and its unpushed commits are untouched by the refresh.
+    for (const command of restart.slice(0, runner)) {
+      expect(command.cmd).not.toBe('git')
+      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
+    }
+  })
+
+  test('restart after a version-only bump reinstalls before the runner starts', async () => {
+    const h = harness()
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    // A release cut without a protocol change: the full stamp differs.
+    h.distributionIdentity = '2.0.0+protocol3'
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-version-bump',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      'mkdir',
+      'tar',
+      VERCEL_BUN_EXECUTABLE,
+      'sh',
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    expect(h.sandbox.distributionVersion).toBe('2.0.0+protocol3')
+    expect(h.sandbox.writes).toHaveLength(writesBefore + 1)
+    expect(h.sandbox.writes.at(-1)!.path).toBe('/tmp/autobuild.tgz')
+    for (const command of restart.slice(0, runner)) {
+      expect(command.cmd).not.toBe('git')
+      expect(command.cwd).not.toBe(VERCEL_WORKSPACE_PATH)
+    }
+  })
+
+  test('restart with an unchanged identity stamp reinstalls nothing', async () => {
+    const h = harness()
+    const provisioned = await h.provider.provision({
+      repo: '/repo',
+      baseBranch: 'main',
+      branch: 'ab/remote-build',
+    })
+    const commandsBefore = h.sandbox.commands.length
+    const writesBefore = h.sandbox.writes.length
+
+    const execution = await h.provider.buildExecution.start({
+      slug: 'remote-build',
+      storeRef: 'https://store.example.test',
+      instance: 'i-unchanged',
+      workspaceRef: provisioned.ref,
+    })
+    expect(await execution.completion).toEqual({ exitCode: 0 })
+
+    const restart = h.sandbox.commands.slice(commandsBefore)
+    const runner = restart.findIndex((command) => command.detached === true)
+    expect(runner).toBeGreaterThan(0)
+    // One marker read (the comparison itself) then Bun's preflight — no
+    // archive fetch, no writes, no reinstall.
+    expect(restart.slice(0, runner).map((command) => command.cmd)).toEqual([
+      'cat',
+      VERCEL_BUN_EXECUTABLE,
+    ])
+    expect(h.sandbox.writes).toHaveLength(writesBefore)
   })
 
   test('retains provisioning output and remediation while deleting an unready sandbox', async () => {
