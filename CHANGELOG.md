@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#524](https://github.com/defrex/autobuild/pull/524) — Make repo-scoped stream download membership origin-aware (AUT-567)
 - [#521](https://github.com/defrex/autobuild/pull/521) — Count code points in clientNameProblem's 64-character cap
 - [#520](https://github.com/defrex/autobuild/pull/520) — Retry PostgreSQL cached-plan invalidation once per statement
 - [#519](https://github.com/defrex/autobuild/pull/519) — Give repo-scoped finalized stream artifacts an operator download path
