@@ -95,7 +95,7 @@ describe('DCR client-name policy (AUT-399)', () => {
   // file-local plugin in createWebAuth, not a mock, and the endpoint is the
   // pinned 1.4.18 MCP plugin's own registerMcpClient at /mcp/register —
   // mounted under the app's /api/auth prefix.
-  const db = {
+  const db: Record<string, Record<string, unknown>[]> = {
     user: [],
     session: [],
     account: [],
