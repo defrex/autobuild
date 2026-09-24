@@ -3,10 +3,17 @@ import { parseWebAuthEnv } from './config'
 import { webAuth } from './auth'
 import { createWebGateway } from './gateway'
 import { createMcpEndpoint } from './mcp'
+import { after } from 'next/server'
 
 let service: ReturnType<typeof createHostedStoreService> | undefined
 export function hostedService() {
-  service ??= createHostedStoreService({ env: process.env })
+  service ??= createHostedStoreService({
+    env: process.env,
+    // The embedded orchestrator's turn loops must outlive the HTTP response
+    // (AUT-342): `after()` keeps the work in the machine route's request
+    // context, which is live because `hostedService().fetch` runs inside it.
+    scheduleBackground: (fn) => after(fn),
+  })
   return service
 }
 

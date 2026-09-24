@@ -465,6 +465,99 @@ over the remote protocol the read is
 stream read's ([docs/remote-store-protocol.md](docs/remote-store-protocol.md),
 §5).
 
+#### 7.1.2 The embedded orchestrator (turns)
+
+The orchestrator is the agent that files tickets, watches builds, unblocks
+them, and discusses direction — played in the hosted service by a stateless
+turn runner over the operator tool registry, not by an agent living in a
+sandbox (parity with MCP; no credential plumbing) and not by an external
+workflow engine (durability comes from the store; the tick pattern already
+exists). Posting a message to a session of an enabled repository starts a
+turn in the same invocation: an AI SDK tool-loop agent, running with the
+registry bound in process, reads the conversation from the session's durable
+state, streams its output as protocol parts onto the turn's session-scoped
+stream (§7.6), calls tools with the operator's attributed identity — the
+session operator as the human actor, `via: {kind: "session", id}` —
+checkpoints as it goes, and completes or suspends.
+
+**Turn lifecycle.** `turn.started` (naming a new session-scoped stream and
+the trigger — a message or a wake) → running → either `turn.completed`
+(with input/output token usage and the step count), `turn.suspended`
+(cause `budget` or `approval`), or typed `turn.failed`. A suspended turn
+resumes via `turn.resumed` — the sole resume fact, recorded by the runner
+when it actually picks the turn up; `approval.answered` only clears the
+pending approval, so an answered approval whose resuming invocation died
+stays recoverable. The stream stays open across a suspension and is the
+resume checkpoint; it closes `completed` or `aborted` at the outcome.
+Conversation state is reconstructed from durable state alone — the finalized
+artifacts of earlier turns, the live stream of the open turn, and the session
+events — so a turn resumed in a fresh invocation continues from the last
+checkpointed step with identical model input; no process memory survives
+between invocations. A turn's assembled messages attach at its `turn.started`
+event, so a message posted during a suspension reads as the next user message
+after the checkpoint, never interleaved into it.
+
+**Budget suspension.** `[orchestrator].invocationBudgetSeconds` (default 240,
+clamped to the 300-second hosted function limit) bounds one invocation. When
+elapsed time approaches the budget — or a hard abort at the deadline
+interrupts a runaway step — the runner records `turn.suspended` cause
+`budget` and ends the invocation; a new invocation resumes it within 60
+seconds (immediately when the service can self-trigger, otherwise on the
+next dispatcher tick). The dispatcher tick's orchestrator step runs LAST,
+after every build stage, against min(configured, remaining tick budget) with
+a 30-second floor: it can only consume slack, and skipping is always safe
+because suspension state is durable.
+
+**Approval suspension.** A call to a tool named in
+`[orchestrator].approvals` records `approval.requested`, emits the protocol's
+tool-approval-request part, and suspends the turn with cause `approval`. An
+`approve` answer resumes the turn and executes the call; a `deny` answer
+resumes it with a denied tool output. Tools not on the list run without
+pause. Entries are `tool` or `tool:qualifier`; an entry naming an absent or
+unknown tool is inert by design.
+
+**Wake rule.** The dispatcher tick's orchestrator step wakes each idle
+session with non-empty wake settings: it scans the repository's builds for
+events after the session's per-build wake cursor matching the settings, and
+starts one turn per session per tick with a `wake` trigger naming the build,
+seq, and type, delivering the event record and the build's reduced state —
+frozen into the `turn.started` fact — as the turn's input. The wake cursor
+advances only through the recorded trigger, so a crash between scan and start
+cannot skip or duplicate a wake, and other builds' matching events re-trigger
+on later ticks. Sessions with empty wake settings are never woken. The
+repository-journal attention events are not wake sources (the scan reads
+build logs only).
+
+**Crash recovery.** A turn invocation that dies without an outcome leaves the
+session `running` with a silent open stream; the tick's reaper fails such a
+turn (`turn.failed`, kind `internal`) after 15 minutes of stream silence,
+closing the stream `aborted` and leaving the session `idle`. The reaper never
+touches suspended or awaiting-approval sessions — a turn suspended for
+approval is precisely an open stream that goes quiet for however long the
+operator takes.
+
+**Typed failures.** Model failures are typed on `turn.failed`:
+`provider-unavailable`, `exhausted`, `credentials`, `configuration` (plus
+`internal` for non-model failures) — never retried unboundedly; a failed
+turn leaves the session `idle` with the error class visible in the session's
+reduced state.
+
+**Opt-in guarantee.** The whole feature is off unless a repository's
+effective config enables it, and it is doubly gated: the tick step is
+constructed only in origin mode (a local `ab dispatch` never constructs it —
+enabled = true in a local autobuild.toml lists no sessions, builds no
+registry, and calls no model), and in origin mode it returns immediately
+unless the effective config enables the orchestrator. The system prompt is
+the canonical `ab-operate` skill shipped in `skills/operate/` — self-contained
+per the vendored-skill rule, teaching the tool surface, the attention set,
+and when to escalate to the operator rather than act — plus the current
+`operator-notes` artifact, the session's wake settings, and the session's
+repository identity. The model never supplies a repository argument: the
+tools' model-facing schemas strip `repo`, and the runner injects the
+session's repository before the registry re-validates. A message posted
+while a turn is open is durable and enters the conversation at the next
+resume or turn — no second turn, no concurrent turns, no subagents.
+
 ### 7.2 Interface and adapters
 
 Deliberately narrow: build runners need `append(event)`, `putArtifact`,

@@ -3,8 +3,15 @@ import {
   openPostgresTicketDatabase,
   type PostgresTicketDatabase,
 } from '@defrex/autobuild-postgres-store'
-import type { BuildStore, Clock, TicketSource } from '@defrex/autobuild/plugin-sdk'
+import {
+  systemClock,
+  type BuildStore,
+  type Clock,
+  type TicketSource,
+} from '@defrex/autobuild/plugin-sdk'
 import { createOperatorServer } from './operator-server'
+import { createOrchestratorTurnRunner } from '@defrex/autobuild/operator'
+import { buildRegistry, randomIds } from '@defrex/autobuild/operator'
 import {
   createTicketServer,
   HOSTED_TICKET_OPERATIONS,
@@ -51,6 +58,11 @@ export interface HostedStoreServiceOptions {
     error: unknown,
     context: HostedStoreErrorContext,
   ) => unknown | Promise<unknown>
+  /** Background scheduler for the embedded orchestrator's turn loops
+   * (AUT-342): the web wiring passes Next's `after()` so a turn outlives the
+   * HTTP response inside its request context. Default: a fire-and-forget
+   * detached promise reporting failures through `reportInternalError`. */
+  scheduleBackground?: (fn: () => Promise<void>) => void
 }
 
 const internalError = (): Response =>
@@ -70,6 +82,9 @@ const ticketOperations = new Set<string>(HOSTED_TICKET_OPERATIONS)
 const storeResourceRoutes = new Set([
   'GET events',
   'POST events',
+  // The session-events compare-and-append (AUT-342): the same resource route
+  // shape the build stream's conditional append uses.
+  'POST events/conditional',
   'POST deposits',
   'GET artifacts',
   'POST artifacts',
@@ -317,6 +332,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         const config = parseHostedStoreEnv(env)
         const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
         const shared = options.clock === undefined ? {} : { clock: options.clock }
+        const clock = options.clock ?? systemClock
         const storeServer = createStoreServer({
           store,
           secret: config.secret,
@@ -332,6 +348,40 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
             statesFor: async (context, source) =>
               (await openTicketBackend()).statesFor(context, source),
+          },
+          // The embedded orchestrator (AUT-342): the turn runner binds the
+          // in-process registry exactly as the tools route does — same store,
+          // same ticket backend, repository-scoped — and its model resolves
+          // through the deployment's gateway credential.
+          orchestrator: {
+            createRunner: (orchestratorConfig, repo) =>
+              createOrchestratorTurnRunner({
+                store,
+                registry: buildRegistry({
+                  store,
+                  clock,
+                  tickets: {
+                    sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
+                    statesFor: async (context, source) =>
+                      (await openTicketBackend()).statesFor(context, source),
+                  },
+                  allowedRepo: repo,
+                }),
+                repo,
+                config: orchestratorConfig,
+                clock,
+                ids: randomIds(),
+              }),
+            scheduleBackground:
+              options.scheduleBackground ??
+              ((fn) => {
+                // Standalone deployments (and tests): a fire-and-forget
+                // detached promise; failures surface through the same
+                // internal-error reporter every backend uses.
+                void fn().catch((error) =>
+                  report(error, new Request('ab://orchestrator-background'), 'operator'),
+                )
+              }),
           },
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'operator'),
           ...shared,

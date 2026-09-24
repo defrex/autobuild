@@ -171,8 +171,12 @@ const DEFAULT_INTERVAL_MS = 10_000
 const REPO_LEASE_TTL_MS = 60_000
 const REPO_LEASE_HEARTBEAT_MS = 20_000
 /** Repository artifact containing the schema-validated composed Config used by
- * one dispatch run. It is the frontend's only config source. */
-export const DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT = 'dispatcher-effective-config'
+ * one dispatch run. It is the frontend's only config source. Defined in
+ * `store/retention.ts` beside the other kind constants and re-exported here
+ * (the long-standing import path). */
+export { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
+// Local uses within this module.
+import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT as _effectiveConfigKind } from '../store/retention'
 
 /** JSON encoding in the config schema's declarative input shape. Parsed Config
  * has normalized `{steps, stepConfigs}` sections; flattening named step tables
@@ -3824,7 +3828,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
             metadata: { restartRequired: [...restartRequired], effectiveChanged },
           },
           {
-            kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+            kind: _effectiveConfigKind,
             content: effectiveConfigContent(effectiveConfig),
             metadata: { run: runId, effectiveChanged },
           },
@@ -3880,7 +3884,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     state.repo,
     [
       {
-        kind: DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT,
+        kind: _effectiveConfigKind,
         content: effectiveConfigContent(config),
         metadata: { run: runId, revision: 0 },
       },

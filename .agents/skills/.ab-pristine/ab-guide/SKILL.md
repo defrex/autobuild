@@ -782,15 +782,21 @@ environment variable instead and say why.
 
 ### `[orchestrator]`
 
-Gates the operator-sandbox feature (AUT-340): a persistent, **credential-free**
-environment per operator × repository that an operator agent drives through the
-`sandbox.*` registry tools (`ab mcp`, and every later binding). The whole table
-is **closed to unknown keys** and restart-classified: changing it requires a
-dispatcher restart.
+Gates the operator-agent feature (AUT-340, AUT-342): the persistent,
+**credential-free** sandbox environment per operator × repository that an
+operator agent drives through the `sandbox.*` registry tools (`ab mcp`, and
+every later binding), and — when the embedded orchestrator is enabled — the
+turn runner that answers operator sessions and wakes on build attention
+events. The whole table is **closed to unknown keys** and restart-classified:
+changing it requires a dispatcher restart.
 
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
-| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding and no environment is ever provisioned. |
+| `enabled` | `false` | boolean | Master gate. With the table absent or `enabled = false`, the sandbox tools are absent from every binding, no environment is ever provisioned, and no dispatcher tick or message post ever runs orchestrator code — a local dispatcher is inert even when enabled, because the turn runner exists only in the hosted deployment. |
+| `model` | — (required when `enabled = true`) | nonblank provider-qualified string, same vocabulary as `[roles]` | The turn runner's model, resolved through the deployment's gateway credential; a leading `vercel-ai-gateway/` prefix is accepted and stripped. |
+| `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under. |
+| `approvals` | `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]` | array of `tool` or `tool:qualifier` strings | Registry tool calls that suspend a turn until the operator answers. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never an error. A qualified entry applies to one discriminator value only (`tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
+| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the default attention set (the events `ab watch` filters on by default); an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
 | `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
 
 `[orchestrator.sandbox]` fields:
@@ -841,7 +847,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   `[commands]`, no verify or finalize steps, a valid local ticket gate, and one
   explicit runtime solely as a schema placeholder. It reads no package or
   language manifest and invents no command.
-- Vendors 11 skills before handoff, including the locally editable
+- Vendors 12 skills before handoff, including the locally editable
   [repository setup reference](references/setup.md) in the installed `ab-guide`
   tree. On an interactive terminal it starts the selected coding-agent CLI in
   the target repository with a short prompt to read that reference and
@@ -1809,12 +1815,16 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
+| `ab-operate` | hosted only | The embedded orchestrator's own operating manual: its role, the registry tool surface with the approval semantics, the attention set, wake-trigger input, budget/approval suspension, and when to escalate to the operator rather than act. Invoked by the embedded orchestrator, never vendored into a build session. |
 
-Autobuild installs 11 skills. Everything except `ab-spec`, `ab-tickets`, and
-`ab-guide` is **runner-invoked** by the kernel and carries
-`disable-model-invocation: true` — do not invoke a phase skill yourself, and do
-not remove that key to make one convenient to call. A model starting a pipeline
-phase by pattern-matching a description is exactly what the flag prevents. The
-three exceptions drive no phase, which is the criterion for membership (§16.3):
-`ab-spec` and `ab-tickets` are human/agent-facing pre-build surfaces, and
-`ab-guide` is read-only reference including the setup handoff guidance.
+Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`, and
+`ab-guide` carries `disable-model-invocation: true` — do not invoke a phase
+skill yourself, and do not remove that key to make one convenient to call. A
+model starting a pipeline phase by pattern-matching a description is exactly
+what the flag prevents. Those three exceptions drive no build phase, which is
+the criterion for membership (§16.3): `ab-spec` and `ab-tickets` are
+human/agent-facing pre-build surfaces, and `ab-guide` is read-only reference
+including the setup handoff guidance. The fourth skill outside the
+model-invocable set, `ab-operate`, is not a build-phase skill either: it is the
+embedded orchestrator's own operating manual, read by the hosted turn runner as
+its system prompt and never invoked by a model in a build session.

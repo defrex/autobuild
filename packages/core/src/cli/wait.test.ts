@@ -914,6 +914,86 @@ describe('wait no-slug membership', () => {
   })
 })
 
+// ── The mine filter's repository identity (AUT-567 parity with watch) ───────
+
+describe('wait mine filter — repository identity parity', () => {
+  test('a legacy checkout-path-keyed record joins via its normalized repoOrigin', async () => {
+    // The wait and the watch carry the identical AUT-567 identity rule: a
+    // legacy record keyed by an old checkout path matches only through the
+    // fallback arm — its normalized `repoOrigin`.
+    const store = makeStore()
+    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    await appendEscalation(store, 'legacy')
+    const h = harness(store)
+    // Discovery in the initial scan registers the record and the
+    // registration state check ends the wait at once; a broken fallback arm
+    // would discover nothing and time out with exit 3 instead.
+    expect(await abWait({ ...h.base, timeout: '2' })).toBe(0)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'legacy',
+      event: { type: 'escalation.raised' },
+      condition: 'blocked',
+    })
+  })
+
+  test('a record whose repoOrigin is an ssh-spelled variant of the origin still joins', async () => {
+    // The wait's identity is the https origin; the legacy record's stored
+    // origin is scp-like ssh from an older writer vintage. Re-normalizing the
+    // recorded side keeps writer vintage from deciding membership here too.
+    const exec: Exec = async (cmd) =>
+      cmd[1] === 'remote'
+        ? { stdout: 'https://github.com/acme/app.git\n', stderr: '', exitCode: 0 }
+        : { stdout: `${REPO}/.git\n${REPO}/.git\n${REPO}\n`, stderr: '', exitCode: 0 }
+    const store = makeStore()
+    await store.createBuild({
+      slug: 'legacy',
+      repo: '/old/checkouts/app',
+      repoOrigin: 'git@github.com:acme/app.git',
+    })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    await appendEscalation(store, 'legacy')
+    const h = harness(store, { exec })
+    expect(await abWait({ ...h.base, timeout: '2' })).toBe(0)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'legacy',
+      event: { type: 'escalation.raised' },
+      condition: 'blocked',
+    })
+  })
+
+  test('a record with a foreign repoOrigin does not join the wait', async () => {
+    const store = makeStore()
+    // A matching build that never satisfies keeps the wait genuinely live;
+    // a foreign, satisfying build must never be discovered — if the filter
+    // leaked, the foreign escalation would end the wait with exit 0.
+    await seedRunningBuild(store, 'mine')
+    await store.createBuild({
+      slug: 'foreign',
+      repo: '/old/checkouts/app',
+      repoOrigin: '/other/repo',
+    })
+    await store.append('foreign', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    await appendEscalation(store, 'foreign')
+    const h = harness(store)
+    expect(await abWait({ ...h.base, timeout: '1' })).toBe(3)
+    // Only bare cursor records: no foreign record was ever delivered.
+    for (const line of h.out) expect(Object.keys(JSON.parse(line))).toEqual(['cursor'])
+  })
+})
+
 // ── Ambient scope ────────────────────────────────────────────────────────────
 
 describe('wait ambient scope', () => {

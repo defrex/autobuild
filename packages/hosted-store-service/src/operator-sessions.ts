@@ -14,6 +14,7 @@
 import { humanActor } from '@defrex/autobuild/operator'
 import type { SessionEventWrite } from '@defrex/autobuild/remote-store'
 import { reduceSession, type SessionState, type SessionTurn } from './session-reducer'
+import type { SessionEventEnvelope } from '@defrex/autobuild/plugin-sdk'
 import type { StreamRead, BuildStore, SessionRecord } from '@defrex/autobuild/plugin-sdk'
 import type { OperatorSandboxService } from '@defrex/autobuild/operator'
 
@@ -56,13 +57,13 @@ async function appendAs(
   record: SessionRecord,
   user: string,
   event: SessionEventWrite,
-): Promise<void> {
+): Promise<SessionEventEnvelope> {
   requireOwner(record, user, `write ${event.type}`)
   const state = reduceSession(await store.getSessionEvents(record.id))
   if (state.status === 'archived') {
     throw new OperatorSessionError('refusal', `session "${record.id}" is archived and read-only`)
   }
-  await store.appendSessionEvent(record.id, event)
+  return store.appendSessionEvent(record.id, event)
 }
 
 export async function listOperatorSessions(
@@ -78,12 +79,26 @@ export async function createOperatorSession(
   repo: string,
   user: string,
   title?: string,
+  /** When the repository's effective config enables the orchestrator, the
+   * resolved wake globs a NEW session inherits (AUT-342): the configured
+   * `wake`, else the default attention set. Absent → no wake-set fact
+   * (message-only). Existing sessions never retroactively inherit; a
+   * `PUT .../wake` always wins thereafter. */
+  inheritedWakeGlobs?: string[],
 ): Promise<SessionRecord> {
-  return store.createSession({
+  const record = await store.createSession({
     repo,
     operator: user,
     ...(title !== undefined ? { title } : {}),
   })
+  if (inheritedWakeGlobs !== undefined) {
+    await store.appendSessionEvent(record.id, {
+      actor: humanActor(user),
+      type: 'session.wake-set',
+      payload: { globs: inheritedWakeGlobs },
+    })
+  }
+  return record
 }
 
 export interface OperatorSessionView {
@@ -108,13 +123,14 @@ export async function postOperatorMessage(
   sid: string,
   user: string,
   text: string,
-): Promise<void> {
+): Promise<number> {
   const record = await requireSession(store, repo, sid)
-  await appendAs(store, record, user, {
+  const event = await appendAs(store, record, user, {
     actor: humanActor(user),
     type: 'message.posted',
     payload: { text },
   })
+  return event.seq
 }
 
 export async function setOperatorWake(

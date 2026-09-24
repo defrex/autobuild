@@ -23,7 +23,6 @@
  * never reorder), retries re-queue at the front under the same discipline,
  * and `close` waits out any in-flight drain before closing the stream.
  */
-import type { SessionStreamSink } from '../../ports/types'
 import { STREAM_PART_MAX_BYTES, truncationPart } from '../../ports/runner/stream-parts'
 import type { JsonRecord } from '../../ports/runner/json-record'
 import {
@@ -50,6 +49,22 @@ export interface SessionStreamSinkOptions {
   flushMs?: number
   /** Injectable scheduler for tests. Default: an unref'ed interval. */
   schedule?: (flush: () => void, ms: number) => () => void
+}
+
+/** The sink's concrete surface. Structurally a superset of the
+ * `SessionStreamSink` port (ports/types.ts): `open` keeps its port-declared
+ * shape for the build-runner's `openSessionStreamLabel` caller, while the
+ * orchestrator turn runner additionally uses `resume` (bind to an
+ * already-open stream — a resumed invocation must append to the turn's
+ * existing stream, never create a second one) and `flush` (await the drain,
+ * so a step-boundary checkpoint is durable before the next step starts). */
+export type SessionStreamWriter = {
+  open(label: string): Promise<string>
+  append(parts: StreamPart[]): void
+  close(outcome: StreamOutcome): Promise<void>
+} & {
+  resume(streamId: string): Promise<string>
+  flush(): Promise<void>
 }
 
 /** Consecutive failed flushes before the writer stops streaming a session. */
@@ -131,8 +146,10 @@ function boundPart(part: StreamPart, maxBytes: number): StreamPart[] {
 /**
  * Create the bracket-scoped sink. `open` creates the store stream and
  * returns its id; appends buffer until then and flush on the cadence.
+ * `resume` binds to an already-open stream instead of creating one;
+ * `flush` awaits the drain without closing.
  */
-export function createSessionStreamSink(options: SessionStreamSinkOptions): SessionStreamSink {
+export function createSessionStreamSink(options: SessionStreamSinkOptions): SessionStreamWriter {
   const { store, scope } = options
   const flushMs = options.flushMs ?? 250
   const maxPartBytes = STREAM_PART_MAX_BYTES
@@ -286,6 +303,29 @@ export function createSessionStreamSink(options: SessionStreamSinkOptions): Sess
         openError = error
         throw error
       }
+    },
+
+    /** Bind to an already-open stream — the resume path. Never calls
+     * `createStream`, so a fresh invocation appends to the turn's existing
+     * stream instead of creating a second one nothing reads. Appends made
+     * before the bind stay buffered and flush right after. */
+    async resume(boundStreamId) {
+      if (streamId !== undefined) {
+        throw new Error(`session stream sink already bound to "${streamId}"`)
+      }
+      streamId = boundStreamId
+      ensureTimer()
+      await requestFlush()
+      return streamId
+    },
+
+    /** Await the drain of everything appended so far (joining the in-flight
+     * drain under the single-flight rule), so a caller can make a checkpoint
+     * durable without closing. Best-effort like `append`: a defunct writer
+     * resolves without throwing, and the diagnostic hook already fired. */
+    async flush() {
+      if (streamId === undefined) return
+      await requestFlush()
     },
 
     append(parts) {

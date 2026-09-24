@@ -206,6 +206,14 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
       own('appendSessionEvent', id)
       return store.appendSessionEvent(id, event)
     },
+    async appendSessionEventIfCurrent<T extends SessionEventType>(
+      id: string,
+      expectedSeq: number,
+      event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T> | null> {
+      own('appendSessionEventIfCurrent', id)
+      return store.appendSessionEventIfCurrent(id, expectedSeq, event)
+    },
     async getSessionEvents(
       id: string,
       sinceSeq?: number,
