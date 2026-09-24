@@ -90,6 +90,13 @@ export type {
   WorkspaceReadinessContext,
 } from '../ports/workspace/provider-capabilities'
 
+/** The single shared capability object for the `vercel-sandbox` provider
+ * (AUT-517): the builtin registration and the
+ * `@defrex/autobuild-vercel-sandbox` plugin reference the same runtime value,
+ * so their declarations cannot drift. The one runtime value a provider plugin
+ * needs from the SDK. */
+export { VERCEL_SANDBOX_CAPABILITIES } from '../ports/workspace/vercel-capabilities'
+
 export {
   describeTicketSourceContract,
   CONTRACT_TICKET_BODY,

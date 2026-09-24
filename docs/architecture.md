@@ -58,7 +58,11 @@ surface with `packages/postgres-store`; the separate optional
 `packages/hosted-dispatcher` workspace owns the cron-driven hosted dispatcher
 (the `/api/dispatch` route driver, the deploy-time `pack-distribution` command,
 and the packed-distribution trace helper) and peers on both the core and the
-store service. Neither package enters an ordinary CLI
+store service. The optional `packages/vercel-sandbox` workspace publishes the
+`@defrex/autobuild-vercel-sandbox` provider plugin (AUT-517): while the
+builtin hosts the implementation, its manifest re-registers the provider name
+over the shared capability object and the loader skips it with a notice.
+Neither optional package enters an ordinary CLI
 installation's runtime dependency closure. `tools/` is repository-only
 maintainer tooling. All workspace manifests share one version because the
 remote-store protocol requires matching client and server versions.
@@ -77,6 +81,7 @@ remote-store protocol requires matching client and server versions.
 | `packages/core/src/store/streams/` | The stream primitive's shared core (§7.6): record/chunk types and the `ai-ui-message-stream/v1` constants, SDK-backed close-time `UIMessage[]` assembly, and the uniform bounded-wait read loop | §7.6 |
 | `packages/hosted-store-service/` | Environment-only hosted Fetch handler, lazy PostgreSQL/blob composition, offline token binary, the Next.js operator web app (`app/`, `server.ts`, `next.config.ts`, `vercel.json`), tests, and deployment guide | §7.2, §18 |
 | `packages/hosted-dispatcher/` | The optional cron-driven hosted dispatcher: endpoint driver, deploy-time `pack-distribution` binary, packed-distribution trace helper, tests, and operator guide | §7.2, §12, §18 |
+| `packages/vercel-sandbox/` | Published `@defrex/autobuild-vercel-sandbox` provider plugin: transitional manifest over the shared capability object with a guarded factory (implementation stays builtin-hosted until AUT-505) | §3.2.1 |
 | `packages/hosted-store-service/server.ts`, `packages/hosted-store-service/vercel.json` | One host-neutral Bun listener used locally and by Vercel's Bun preset | §7.2 |
 | `packages/core/src/kernel/` | Phase table, build reducer, engine; pure harvest, dispatcher-settings, dispatcher-status, and PR-attachment selectors; converge, stall detection, verify gating | §5, §7.5, §10, §12, §14, §15.4–15.5 |
 | `packages/core/src/ports/` | TicketSource / Workspace / Forge / AgentRunner / Telemetry interfaces, adapters, and fakes; registry-aware builtin/plugin construction; eager primary/alternate runtime routing and provider-failure classification under `ports/runner/` | §3.2, §9, §13 |

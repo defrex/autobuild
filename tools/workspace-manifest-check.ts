@@ -12,6 +12,7 @@ export interface PackageManifest {
   peerDependencies?: unknown
   private?: unknown
   bin?: unknown
+  patchedDependencies?: unknown
 }
 
 export interface WorkspaceManifest {
@@ -141,6 +142,15 @@ function describe(value: string | undefined): string {
   return value ?? 'not pinned'
 }
 
+/** Derive the package name from a `patchedDependencies` key. Keys look like
+ * `<name>@<version>`; cut at the last `@` that follows the name — for scoped
+ * names (`@scope/pkg@1.2.3`) the leading `@` belongs to the scope, so a key
+ * whose only `@` is the leading one carries no version to strip. */
+function patchedPackageName(key: string): string {
+  const at = key.lastIndexOf('@')
+  return at > 0 ? key.slice(0, at) : key
+}
+
 export async function validateWorkspaceManifests(root: string): Promise<WorkspaceManifest[]> {
   const manifests = await readWorkspaceManifests(root)
   const rootManifest = manifests[0]!
@@ -176,6 +186,32 @@ export async function validateWorkspaceManifests(root: string): Promise<Workspac
       throw new Error(
         `${core.path}: dependency ${name} must match root (${rootDependencies[name] ?? 'missing'}; found ${coreDependencies[name] ?? 'missing'})`,
       )
+    }
+  }
+
+  // The packed dependency set must not include a package the root manifest
+  // patches. The distribution packer strips `patchedDependencies` from the
+  // packed manifest (`packedManifestOmittedFields` in
+  // packages/core/src/ports/workspace/distribution-archive.ts) because bun
+  // resolves a consumed manifest's patch declarations against the consuming
+  // project's root and panics on one naming a package in the consumer tree —
+  // so a patched package in the root `dependencies` (the packed dependency
+  // set) would ship unpatched to every consumer while the workspace installs
+  // the patched copy. `devDependencies` is allowed: it is stripped from the
+  // packed manifest and never production-installed in guests. This check
+  // makes the better-auth avoidance deliberate: a root manifest that needs a
+  // patched package fails here with the remedy instead of silently shipping
+  // the divergence.
+  const patchedRaw = rootManifest.manifest.patchedDependencies
+  if (patchedRaw !== undefined) {
+    const patchedDependencies = stringMap(patchedRaw, 'package.json patchedDependencies')
+    for (const key of Object.keys(patchedDependencies)) {
+      const name = patchedPackageName(key)
+      if (rootDependencies[name] !== undefined) {
+        throw new Error(
+          `package.json: patchedDependencies entry ${key} patches ${name}, which is in the root dependencies: the packer strips patchedDependencies from the packed manifest (packedManifestOmittedFields in packages/core/src/ports/workspace/distribution-archive.ts), so a patched package in the packed dependency set would ship unpatched to every consumer while the workspace installs the patched copy — declare the dependency in the workspace package that imports it instead, as @defrex/autobuild-hosted-store-service does for better-auth`,
+        )
+      }
     }
   }
 

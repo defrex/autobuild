@@ -23,11 +23,17 @@ function message(error: unknown): string {
 }
 
 /** Child-side composition. The launch envelope supplies identity only; all
- * execution location/configuration is discovered through the scoped Store. */
+ * execution location/configuration is discovered through the scoped Store.
+ * `opts.guest` marks a structurally guest process (environment-supervised
+ * launch): plugin loading then tolerates a configured package specifier the
+ * guest cannot resolve — guests never construct workspace providers, so a
+ * provider plugin configured in autobuild.toml is skipped with a notice
+ * instead of failing the build (AUT-517). */
 export async function runBuildChild(
   input: BuildExecutionStart,
   env: Record<string, string | undefined> = process.env,
   openStore: (ref: string, token?: string) => BuildStore = openProductionStore,
+  opts: { guest?: boolean } = {},
 ): Promise<void> {
   const fullStore = openStore(input.storeRef, env.AB_TOKEN)
   const store = fullStore.scopeBuild(input.slug)
@@ -51,6 +57,7 @@ export async function runBuildChild(
     let currentConfig = parseEffectiveBuildConfig(configArtifact)
     const plugins = await loadPlugins(currentConfig.plugins, workspace.path, {
       packageRoot: record.repo,
+      ...(opts.guest === true ? { guest: true } : {}),
     })
     const { runtimes: builtins } = createProductionRuntimes()
     const runtimes = await materializePluginRuntimes(builtins, plugins, {

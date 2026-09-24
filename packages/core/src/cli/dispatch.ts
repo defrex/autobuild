@@ -42,7 +42,7 @@ import {
 } from '../config/pipeline-source'
 import { effectiveRuntimeReferences, roleKeyWarnings, SLUG_ROLE } from '../config/roles'
 import type { Config } from '../config/schema'
-import { loadPlugins } from '../plugins/load'
+import { loadPlugins, pluginResolutionKind } from '../plugins/load'
 import type { PluginRegistry } from '../plugins/registry'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { DISPATCHER, KERNEL, humanActor } from '../events/envelope'
@@ -3732,10 +3732,20 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         `origin-mode dispatch requires the builtin github forge, but the fetched autobuild.toml selects ${JSON.stringify(config.forge)}`,
       )
     }
-    if (config.plugins !== undefined && config.plugins.length > 0) {
+    // Origin mode has no checkout, so repository-path plugin specifiers
+    // (relative, absolute, file:) cannot resolve — reject them with the
+    // existing remediation tone before any wiring. Bare package specifiers
+    // are accepted: the shared loadPlugins below resolves them from the
+    // dispatcher's own installation when the scratch root lacks them
+    // (AUT-517), which is exactly "resolvable from the dispatcher's own
+    // installation".
+    const repoPathPlugin = (config.plugins ?? []).find(
+      (moduleSpecifier) => pluginResolutionKind(moduleSpecifier) === 'repo-path',
+    )
+    if (repoPathPlugin !== undefined) {
       throw new Error(
-        'origin-mode dispatch cannot load configured plugins: plugin code is checkout-relative ' +
-          'and there is no checkout. Remove [plugins] from the base branch autobuild.toml or run from a checkout',
+        `origin-mode dispatch cannot load the repository-path plugin ${JSON.stringify(repoPathPlugin)}: ` +
+          'plugin code is checkout-relative and there is no checkout. Remove repository-path entries from [plugins] in the base branch autobuild.toml or run from a checkout',
       )
     }
   } else {
@@ -3754,8 +3764,12 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   }
   // Configured plugin code is trusted like configured shell commands, but it
   // must resolve, evaluate, validate, and register before production wiring
-  // opens a store, claims a ticket, or launches a runner.
-  const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo)
+  // opens a store, claims a ticket, or launches a runner. Skipped-module
+  // notices (builtin duplicate-skip, guest tolerance) surface on dispatch's
+  // own stderr channel.
+  const plugins = await loadPlugins(config.plugins, resolvedOpts.targetRepo, {
+    onNotice: (line) => resolvedOpts.stderr(line),
+  })
   // Validate the selector against the complete catalog before either custom
   // wiring or production wiring can open state or perform side effects.
   resolveForgeRegistration(config.forge, plugins)
