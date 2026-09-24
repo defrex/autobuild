@@ -7,6 +7,7 @@ import {
   parsePluginManifest,
   pluginApiCompatibility,
   PluginApiCompatibilityError,
+  type AutobuildPluginManifest,
   type PluginApiCompatibility,
 } from './manifest'
 import { createPluginRegistry, type PluginRegistry, type PluginResolutionKind } from './registry'
@@ -30,12 +31,15 @@ export interface PluginModuleReport {
   resolutionKind: PluginResolutionKind
   resolved?: string
   resolvedFrom?: PluginResolutionSource
-  status: 'loaded' | 'failed'
+  status: 'loaded' | 'failed' | 'skipped'
   stage: PluginLoadStage | 'loaded'
   pluginName?: string
   api?: PluginApiCompatibility
   error?: string
   cause?: unknown
+  /** One-line explanation for a `skipped` report, emitted through the
+   * loader's notice channel. Undefined for `loaded` and `failed`. */
+  notice?: string
 }
 
 export interface PluginDiagnosis {
@@ -52,6 +56,14 @@ export interface PluginLoadOptions {
    * loads without being added to the repository. Defaults to the running
    * distribution's root. */
   installationRoot?: string
+  /** Guest context (AUT-517): a package-kind specifier that cannot be
+   * resolved from either candidate is skipped with a notice instead of
+   * failing the process, because guests never construct workspace providers
+   * and may legitimately be handed a provider plugin they need not load.
+   * Repo-path specifiers and every post-resolution failure stay fail-closed. */
+  guest?: boolean
+  /** Notice channel for skipped loads. Defaults to one line on stderr. */
+  onNotice?: (line: string) => void
 }
 
 export function pluginResolutionKind(moduleSpecifier: string): PluginResolutionKind {
@@ -77,6 +89,14 @@ function failed(
     error: message,
     ...(cause !== undefined ? { cause } : {}),
   }
+}
+
+/** True when the manifest declares no registrations outside the
+ * workspace-provider map. */
+function declaresOnlyWorkspaceProviderRegistrations(manifest: AutobuildPluginManifest): boolean {
+  const empty = (registrations: Record<string, unknown> | undefined): boolean =>
+    registrations === undefined || Object.keys(registrations).length === 0
+  return empty(manifest.ticketSources) && empty(manifest.agentRuntimes) && empty(manifest.forges)
 }
 
 function manifestIdentity(value: unknown): {
@@ -139,6 +159,16 @@ export async function attemptPlugin(
       }
     }
     if (found === undefined) {
+      if (options.guest === true) {
+        return {
+          ...initial,
+          status: 'skipped',
+          stage: 'resolution',
+          notice:
+            `plugin module "${moduleSpecifier}" could not be resolved from ${failures.join(' or ')}; ` +
+            'guests never construct workspace providers, so the provider plugin is skipped here',
+        }
+      }
       return failed(
         initial,
         'resolution',
@@ -201,6 +231,33 @@ export async function attemptPlugin(
     pluginName: manifest.name,
     api,
   }
+  // Transitional duplicate-skip (AUT-517): while the builtin hosts the
+  // vercel-sandbox implementation, a configured plugin that re-registers the
+  // same workspace-provider name must be accepted and skipped, not thrown
+  // out of startup. Skip the whole module IFF it declares at least one
+  // registration, only workspace-provider registrations, and EVERY declared
+  // name collides with a builtin workspace-provider registration. Any other
+  // collision (other ports, plugin-vs-plugin, mixed fresh/colliding) throws
+  // exactly as before via registry.register below. Keyed on builtin
+  // ownership, so the rule retires itself when the builtin is removed.
+  const collisions = registry.builtinWorkspaceProviderCollisions(manifest)
+  if (
+    collisions.length > 0 &&
+    declaresOnlyWorkspaceProviderRegistrations(manifest) &&
+    collisions.length === Object.keys(manifest.workspaceProviders ?? {}).length
+  ) {
+    const names = Object.keys(manifest.workspaceProviders ?? {})
+      .map((name) => JSON.stringify(name))
+      .join(', ')
+    return {
+      ...identified,
+      status: 'skipped',
+      stage: 'registration',
+      notice:
+        `plugin "${manifest.name}" declares only builtin workspace-provider registration(s) ${names}; ` +
+        'skipping it — the builtin keeps serving the provider',
+    }
+  }
   try {
     registry.register(manifest, {
       module: moduleSpecifier,
@@ -224,7 +281,9 @@ export async function attemptPlugin(
 }
 
 /** Exhaustively attempt configured modules in declaration order. Failed
- * modules leave no registrations; later healthy modules still load. */
+ * modules leave no registrations; later healthy modules still load. Skipped
+ * modules (builtin duplicate-skip, guest tolerance) register nothing and
+ * count as healthy. */
 export async function diagnosePlugins(
   modules: readonly string[],
   repoRoot: string,
@@ -238,21 +297,31 @@ export async function diagnosePlugins(
   return {
     registry,
     reports,
-    healthy: reports.every((report) => report.status === 'loaded'),
+    healthy: reports.every((report) => report.status !== 'failed'),
   }
 }
 
-/** Dispatch compatibility wrapper: preserve first-failure, fail-closed startup. */
+function defaultPluginNotice(line: string): void {
+  console.error(line)
+}
+
+/** Dispatch compatibility wrapper: preserve first-failure, fail-closed startup.
+ * Skipped modules are announced through the notice channel and load
+ * continues. */
 export async function loadPlugins(
   modules: readonly string[],
   repoRoot: string,
   options: PluginLoadOptions = {},
   registry: PluginRegistry = createPluginRegistry(),
 ): Promise<PluginRegistry> {
+  const onNotice = options.onNotice ?? defaultPluginNotice
   for (const moduleSpecifier of modules) {
     const report = await attemptPlugin(moduleSpecifier, repoRoot, registry, options)
     if (report.status === 'failed') {
       throw new Error(report.error, { cause: report.cause })
+    }
+    if (report.status === 'skipped' && report.notice !== undefined) {
+      onNotice(report.notice)
     }
   }
   return registry

@@ -211,4 +211,26 @@ describe('workspace-provider capability declarations', () => {
       '[workspace.config] is not supported by the builtin "git-worktree" provider',
     )
   })
+
+  test('builtinWorkspaceProviderCollisions reports builtin-owned names only (AUT-517)', () => {
+    const registry = new PluginRegistry()
+    expect(
+      registry.builtinWorkspaceProviderCollisions(
+        plugin('dup', { workspaceProviders: { 'vercel-sandbox': factory } }),
+      ),
+    ).toEqual(['vercel-sandbox'])
+    // Fresh names and names owned by another plugin are not reported: those
+    // collisions throw at registration as always.
+    expect(
+      registry.builtinWorkspaceProviderCollisions(
+        plugin('fresh', { workspaceProviders: { 'acme-sandbox': factory } }),
+      ),
+    ).toEqual([])
+    registry.register(plugin('owner', { workspaceProviders: { 'acme-sandbox': factory } }))
+    expect(
+      registry.builtinWorkspaceProviderCollisions(
+        plugin('second', { workspaceProviders: { 'acme-sandbox': factory } }),
+      ),
+    ).toEqual([])
+  })
 })

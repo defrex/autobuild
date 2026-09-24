@@ -61,8 +61,13 @@ export async function runHarvestChild(
     // Full build-child composition parity, in the same order: plugins load
     // first or materializePluginRuntimes silently no-ops and leaves any
     // plugin-provided runtime unrouted in the guest.
+    // Guest tolerance (AUT-517): a harvest runner launch is always
+    // environment-supervised — the process is structurally a guest and never
+    // constructs a workspace provider — so a configured provider plugin the
+    // guest cannot resolve is skipped with a notice instead of failing.
     const plugins = await loadPlugins(config.plugins, workspacePath, {
       packageRoot: input.repo,
+      ...(input.supervision.kind === 'environment' ? { guest: true } : {}),
     })
     const { runtimes: builtins } = createProductionRuntimes()
     const runtimes = await materializePluginRuntimes(builtins, plugins, {
