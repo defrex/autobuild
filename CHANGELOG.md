@@ -3,6 +3,16 @@
 ## Unreleased
 
 - [#530](https://github.com/defrex/autobuild/pull/530) — Add a durable embedded orchestrator over the tool registry (AUT-342)
+- [#529](https://github.com/defrex/autobuild/pull/529) — Map sandbox.publish foreign-repo failures to the sandbox-publish code
+- [#528](https://github.com/defrex/autobuild/pull/528) — Pin the both-keys builtin-declaration pairing (AUT-572)
+- [#526](https://github.com/defrex/autobuild/pull/526) — Add PR-only publication from operator sandboxes via sandbox.publish
+- [#527](https://github.com/defrex/autobuild/pull/527) — Verify and align CLI repo-identity comparisons with AUT-567's rule
+- [#525](https://github.com/defrex/autobuild/pull/525) — Enforce parity between builtin workspace-provider declaration tables
+- [#524](https://github.com/defrex/autobuild/pull/524) — Make repo-scoped stream download membership origin-aware (AUT-567)
+- [#522](https://github.com/defrex/autobuild/pull/522) — Pin the schemaless-builtin-needs-configRefusalMessage rule (AUT-565)
+- [#521](https://github.com/defrex/autobuild/pull/521) — Count code points in clientNameProblem's 64-character cap
+- [#520](https://github.com/defrex/autobuild/pull/520) — Retry PostgreSQL cached-plan invalidation once per statement
+- [#519](https://github.com/defrex/autobuild/pull/519) — Give repo-scoped finalized stream artifacts an operator download path
 - [#518](https://github.com/defrex/autobuild/pull/518) — Add a prompt-teardown cap to the stream polls twin (AUT-393)
 - [#517](https://github.com/defrex/autobuild/pull/517) — Guard the Postgres schema against DDL edits that skip a version bump
 - [#516](https://github.com/defrex/autobuild/pull/516) — Pace the SQLite store's held event reads at the event-wait budget

@@ -982,22 +982,26 @@ describe('sandbox registry tools (AUT-340)', () => {
     const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-registry-'))
     const source = await mkdtemp(join(tmpdir(), 'ab-sandbox-registry-src-'))
     await Bun.write(join(source, 'README.md'), 'hello\n')
+    const { FakeForge } = await import('@defrex/autobuild/plugin-sdk')
     const provider = new FakeWorkspaceProvider({
       root: join(workspaces, 'wt'),
       sandboxRoot: join(workspaces, 'sb'),
       envSource: { PATH: process.env.PATH ?? '' },
     })
+    const forge = new FakeForge()
     const sandbox = await createOperatorSandboxService({
       store: world.store,
       repo: source,
       provider,
       sandbox: { idleMinutes: 30, environmentVariables: [] },
       baseBranch: 'main',
+      forge,
       clock,
     })
     return {
       world,
       sandbox,
+      forge,
       source,
       async cleanup() {
         await world.store.close()
@@ -1007,7 +1011,7 @@ describe('sandbox registry tools (AUT-340)', () => {
     }
   }
 
-  test('tool↔annotation lockstep covers the six sandbox tools', () => {
+  test('tool↔annotation lockstep covers the seven sandbox tools', () => {
     for (const name of [
       'sandbox.exec',
       'sandbox.start',
@@ -1015,6 +1019,7 @@ describe('sandbox registry tools (AUT-340)', () => {
       'sandbox.read_file',
       'sandbox.write_file',
       'sandbox.reset',
+      'sandbox.publish',
     ]) {
       const tool = TOOLS.find((entry) => entry.name === name)
       expect(tool).toBeDefined()
@@ -1062,11 +1067,11 @@ describe('sandbox registry tools (AUT-340)', () => {
     }
   })
 
-  test('with a backend the six tools advertise and execute end to end', async () => {
+  test('with a backend the seven tools advertise and execute end to end', async () => {
     const fx = await sandboxWorld()
     try {
       const registry = buildRegistry({ store: fx.world.store, clock, sandbox: fx.sandbox })
-      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(6)
+      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(7)
       const result = (await registry.call(
         'sandbox.exec',
         { repo: fx.source, command: 'echo hi' },
@@ -1077,6 +1082,85 @@ describe('sandbox registry tools (AUT-340)', () => {
       await fx.cleanup()
     }
   })
+
+  test('without a forge, sandbox.publish is filtered and refused as unknown-tool', async () => {
+    const world = await seedWorld()
+    const { FakeWorkspaceProvider } = await import('@defrex/autobuild/plugin-sdk')
+    const { createOperatorSandboxService: createSandbox } = await import(
+      '@defrex/autobuild/testing'
+    )
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const workspaces = await mkdtemp(join(tmpdir(), 'ab-sandbox-noforge-'))
+    const source = await mkdtemp(join(tmpdir(), 'ab-sandbox-noforge-src-'))
+    await Bun.write(join(source, 'README.md'), 'hello\n')
+    try {
+      const provider = new FakeWorkspaceProvider({
+        sandboxRoot: join(workspaces, 'sb'),
+        envSource: { PATH: process.env.PATH ?? '' },
+      })
+      const sandbox = await createSandbox({
+        store: world.store,
+        repo: source,
+        provider,
+        sandbox: { idleMinutes: 30, environmentVariables: [] },
+        baseBranch: 'main',
+        clock,
+      })
+      const registry = buildRegistry({ store: world.store, clock, sandbox })
+      expect(sandbox.canPublish).toBe(false)
+      expect(registry.entries.some((tool) => tool.name === 'sandbox.publish')).toBe(false)
+      expect(registry.entries.filter((tool) => tool.name.startsWith('sandbox.'))).toHaveLength(6)
+      const error = await registry
+        .call('sandbox.publish', { repo: source, title: 'Fix' }, { identity: 'Ada' })
+        .catch((e) => e)
+      expect(error).toBeInstanceOf(RegistryError)
+      expect((error as RegistryError).reason).toBe('unknown-tool')
+    } finally {
+      await world.store.close()
+      await rm(workspaces, { recursive: true, force: true })
+      await rm(source, { recursive: true, force: true })
+    }
+  })
+
+  test('sandbox.publish round-trips end to end with a JSON-serializable result', async () => {
+    const fx = await sandboxWorld()
+    try {
+      const registry = buildRegistry({ store: fx.world.store, clock, sandbox: fx.sandbox })
+      // Make a real commit so the checkout head is a descendant of the base.
+      await registry.call(
+        'sandbox.exec',
+        {
+          repo: fx.source,
+          command: 'echo change >> README.md && git add README.md && git commit -q -m change',
+        },
+        { identity: 'Ada' },
+      )
+      const result = (await registry.call(
+        'sandbox.publish',
+        { repo: fx.source, title: 'Fix login', body: 'small fix' },
+        { identity: 'Ada', via: { kind: 'session', id: 'sess-9' } },
+      )) as {
+        branch: string
+        sha: string
+        pr: { number: number; url: string; headSha: string }
+      }
+      expect(result.branch).toMatch(/^ab\/orch-ada-[0-9a-f]{8}$/)
+      expect(result.sha).toMatch(/^[0-9a-f]{40}$/)
+      expect(result.pr).toMatchObject({ number: 1, url: expect.any(String) })
+      JSON.stringify(result)
+      const events = await fx.world.store.getRepoStateEvents(fx.source)
+      const published = events.find((event) => event.type === 'orchestrator.sandbox.published')!
+      expect(published.payload).toMatchObject({
+        operator: 'Ada',
+        session: 'sess-9',
+        branch: result.branch,
+      })
+    } finally {
+      await fx.cleanup()
+    }
+  }, 20_000)
 
   test('exec-timeout and not-found failures map to their stage codes; identity is required', async () => {
     const fx = await sandboxWorld()

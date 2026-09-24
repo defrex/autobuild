@@ -256,13 +256,21 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>
  * never touch the registry. The full capability objects (including the
  * registry-seam declarations) are assembled in
  * `ports/workspace/builtin-capabilities.ts`, which takes this subset from
- * here; the construction-site refusal text differs by design from the
+ * here — a parity now enforced by
+ * `ports/workspace/builtin-capabilities.test.ts` (AUT-573), so a builtin
+ * added to only one table fails tests rather than compiling silently. The
+ * construction-site refusal text differs by design from the
  * parse-site one, so it is NOT copied from this table.
  */
 export interface WorkspaceProviderConfigDeclaration {
-  /** Strict schema applied to `[workspace.config]`. When absent, this
-   * declaration must carry `configRefusalMessage` for nonempty provider
-   * config to be refused; providers absent from
+  /** Strict schema applied to `[workspace.config]`. A builtin declaration
+   * carries EXACTLY ONE of `configSchema` / `configRefusalMessage`: when the
+   * schema is absent, the declaration must carry `configRefusalMessage` for
+   * nonempty provider config to be refused (the neither-key side is pinned by
+   * the AUT-565 test in config.test.ts), and carrying BOTH is forbidden —
+   * `configSchema`'s superRefine checks `configRefusalMessage` first, so the
+   * refusal branch would win and the schema would silently never apply (the
+   * both-keys side is pinned by its sibling test). Providers absent from
    * `BUILTIN_WORKSPACE_PROVIDER_CONFIG` are plugin-owned pass-throughs and
    * are never refused here. */
   configSchema?: z.ZodType
@@ -612,8 +620,10 @@ export const ORCHESTRATOR_MIN_TURN_SECONDS = 30
 /** The turn approval entries' shape: a registry tool name, optionally
  * qualified by the discriminator field's accepted value (`tool:qualifier`).
  * Validation is syntactic only — an entry naming an absent or unknown tool is
- * inert by design (documented in docs/configuration.md), because the default
- * list deliberately names tools later tickets add. */
+ * inert by design (documented in docs/configuration.md), because the list
+ * is meant to stay stable while the registry grows — e.g. `sandbox.publish`
+ * was named here before its ticket landed, and stays inert in bindings
+ * where no sandbox backend is bound (the hosted default). */
 const ORCHESTRATOR_APPROVAL_ENTRY = /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
 
 /** The attention set a new session's wake settings inherit when the

@@ -206,7 +206,7 @@ test('ab mcp fails closed inside a phase session, before any MCP traffic', async
   expect(malformedOut).toBe('')
 })
 
-test('with [orchestrator] enabled the six sandbox tools advertise and one round trip works', async () => {
+test('with [orchestrator] enabled the seven sandbox tools advertise and one round trip works', async () => {
   // A real local git checkout with a main branch: the git-worktree sandbox
   // provisions a detached worktree from it.
   const gitInit = Bun.spawn(['git', 'init', '-q', '-b', 'main', '.'], {
@@ -239,7 +239,7 @@ test('with [orchestrator] enabled the six sandbox tools advertise and one round 
   const client = await connect()
   try {
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(TOOL_NAMES + 6)
+    expect(tools).toHaveLength(TOOL_NAMES + 7)
     const names = tools.map((tool) => tool.name).sort()
     for (const name of [
       'sandbox.exec',
@@ -248,6 +248,7 @@ test('with [orchestrator] enabled the six sandbox tools advertise and one round 
       'sandbox.read_file',
       'sandbox.write_file',
       'sandbox.reset',
+      'sandbox.publish',
     ]) {
       expect(names).toContain(name)
     }
@@ -255,6 +256,12 @@ test('with [orchestrator] enabled the six sandbox tools advertise and one round 
     expect(exec.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false })
     const reset = tools.find((tool) => tool.name === 'sandbox.reset')!
     expect(reset.annotations).toMatchObject({ destructiveHint: true })
+    const publish = tools.find((tool) => tool.name === 'sandbox.publish')!
+    expect(publish.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    })
 
     const roundTrip = await client.callTool({
       name: 'sandbox.exec',

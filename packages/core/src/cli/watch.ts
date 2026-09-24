@@ -492,6 +492,14 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       const sinceStreams =
         opts.since !== undefined ? decodeCursor(opts.since, { store: storeRef, repo }).streams : {}
 
+      // Verified (AUT-574): this is the full normalized-identity rule of
+      // AUT-567 — the same `mine` predicate as status.ts and wait.ts, with
+      // buildInRepository's semantics. `identity` is resolveRepoState's
+      // `origin ?? resolved checkout`, already normalized (re-normalizing is
+      // a no-op); the first arm is the whole test for new records, whose
+      // `record.repo` IS the normalized origin, and the second arm forgives
+      // legacy path-keyed records via their normalized `repoOrigin`. A
+      // foreign origin, or an origin-less legacy record, is excluded.
       const identity = normalizeGitRemoteUrl(repo)
       const mine = (record: BuildRecord): boolean =>
         record.repo === identity ||

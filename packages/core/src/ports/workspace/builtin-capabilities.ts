@@ -80,6 +80,13 @@ const BUILTINS: Record<string, BuiltinWorkspaceProviderDeclaration> = {
   },
 }
 
+/** Every builtin provider name, for parity checks over the declaration
+ * tables (AUT-573): the parse-time table in `config/schema.ts` and the FULL
+ * declarations here must cover the same provider set. */
+export function builtinWorkspaceProviderNames(): readonly string[] {
+  return Object.keys(BUILTINS)
+}
+
 /** The FULL capability object of a builtin workspace provider, `undefined`
  * for any other name. Used by pre-registry seams (guest probe, init
  * preflight) that cannot consult the plugin registry. */

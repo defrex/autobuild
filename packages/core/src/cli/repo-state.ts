@@ -190,6 +190,28 @@ export async function buildInRepository(
   return normalizeGitRemoteUrl(record.repoOrigin) === identity
 }
 
+/**
+ * Whether a repo-scoped stream's recorded scope belongs to `identity` — the
+ * same origin-aware first arm `buildInRepository` applies to builds, with the
+ * recorded side normalized like `record.repoOrigin` there so the guard never
+ * depends on the writer's normalizer vintage (an scp-like ssh-spelled scope
+ * equals the https identity of the same origin).
+ *
+ * Full parity with `buildInRepository` is impossible by construction:
+ * `StreamScope` carries no `repoOrigin`, so a legacy physical-path
+ * `scope.repo` (which `normalizeGitRemoteUrl` passes through unchanged) has no
+ * recorded origin to compare and can never match an origin identity — it stays
+ * rejected. That is the accepted AUT-314-class limitation, not something this
+ * guard can forgive.
+ *
+ * No `exec` parameter: the caller's identity is already resolved (the
+ * context's `repo` is `origin ?? resolved checkout` from `resolveRepoState`),
+ * so re-running git would be redundant.
+ */
+export function streamInRepository(scopeRepo: string, identity: string): boolean {
+  return normalizeGitRemoteUrl(scopeRepo) === identity
+}
+
 /** Resolve repository identity, then select all state paths from it.
  *
  * Identity is the resolved main checkout's normalized origin remote, falling

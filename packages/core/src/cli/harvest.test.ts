@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { humanActor, KERNEL } from '../events/envelope'
 import { sequentialIds } from '../ids'
 import { MemoryBuildStore } from '../store/memory'
+import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import type { HarvestCliEnv } from './env'
 import {
@@ -633,5 +634,255 @@ describe('harvest CLI', () => {
     const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
     expect(view.run).toBe('h_1')
     expect(view.rounds).toBe(1)
+  })
+})
+
+describe('harvest session stream discoverability', () => {
+  async function sessionEvents(store: MemoryBuildStore): Promise<void> {
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_1',
+        session: 'hs_1',
+        role: 'harvest',
+        runner: 'codex',
+        step: 'synthesize',
+        round: 1,
+        stream: 'st_payload',
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_1',
+        session: 'hs_2',
+        role: 'harvest-review',
+        runner: 'codex',
+        step: 'review',
+        round: 1,
+      },
+    })
+    await store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.ended',
+      payload: {
+        run: 'h_1',
+        session: 'hs_1',
+        transcript: { kind: 'harvest-transcript:hs_1', rev: 0 },
+        usage: { inputTokens: 1, outputTokens: 2, turns: 1 },
+      },
+    })
+  }
+
+  test('pairs started/ended facts per run and degrades without stream enrichment', async () => {
+    const deps = await fixture()
+    await sessionEvents(deps.store)
+    const events = await deps.store.getRepoEvents('/repo')
+
+    const view = projectHarvestStatus('/repo', events)
+    expect(view.runs[0]!.sessions).toEqual([
+      {
+        session: 'hs_1',
+        role: 'harvest',
+        step: 'synthesize',
+        round: 1,
+        stream: 'st_payload',
+        streamStatus: 'closed',
+        status: 'ended',
+      },
+      {
+        session: 'hs_2',
+        role: 'harvest-review',
+        step: 'review',
+        round: 1,
+        streamStatus: 'closed',
+        status: 'open',
+      },
+    ])
+
+    // Degrade grace: the payload's stream id renders open until the pairing
+    // ends the bracket.
+    const openOnly = await fixture()
+    await openOnly.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_1',
+        session: 'hs_3',
+        role: 'harvest',
+        runner: 'codex',
+        step: 'synthesize',
+        round: 1,
+        stream: 'st_open',
+      },
+    })
+    const openView = projectHarvestStatus('/repo', await openOnly.store.getRepoEvents('/repo'))
+    expect(openView.runs[0]!.sessions).toEqual([
+      {
+        session: 'hs_3',
+        role: 'harvest',
+        step: 'synthesize',
+        round: 1,
+        stream: 'st_open',
+        streamStatus: 'open',
+        status: 'open',
+      },
+    ])
+  })
+
+  test('repo-scope stream records refine the payload projection by session label', async () => {
+    const deps = await fixture()
+    await sessionEvents(deps.store)
+    const closed = await deps.store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_1')
+    await deps.store.appendStreamParts(closed.id, [{ type: 'start', messageId: 'm1' }])
+    await deps.store.closeStream(closed.id, 'completed')
+    const stillOpen = await deps.store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_2')
+    // A build-scoped record with the same label must not enrich repo rows.
+    await deps.store.createBuild({ slug: 'b1', repo: '/repo' })
+    await deps.store.createStream({ kind: 'build', build: 'b1' }, 'session:hs_2')
+
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'), undefined, [
+      stillOpen,
+      ...(await deps.store.listStreams({ kind: 'repo', repo: '/repo' })),
+    ])
+    expect(view.runs[0]!.sessions).toEqual([
+      {
+        session: 'hs_1',
+        role: 'harvest',
+        step: 'synthesize',
+        round: 1,
+        stream: closed.id,
+        streamStatus: 'closed',
+        status: 'ended',
+      },
+      {
+        session: 'hs_2',
+        role: 'harvest-review',
+        step: 'review',
+        round: 1,
+        stream: stillOpen.id,
+        streamStatus: 'open',
+        status: 'open',
+      },
+    ])
+  })
+
+  test('sessions of runs outside the projected window are excluded', async () => {
+    const deps = await fixture()
+    await deps.store.appendRepo('/repo', {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'h_other',
+        session: 'hs_9',
+        role: 'harvest',
+        runner: 'codex',
+        step: 'synthesize',
+        round: 1,
+      },
+    })
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'))
+    expect(view.runs[0]!.sessions).toEqual([])
+  })
+
+  test('rendered rows show stream id and status; JSON carries the additive sessions array', async () => {
+    const deps = await fixture()
+    await sessionEvents(deps.store)
+    const closed = await deps.store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_1')
+    await deps.store.closeStream(closed.id, 'completed')
+    const stillOpen = await deps.store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_2')
+    const view = projectHarvestStatus('/repo', await deps.store.getRepoEvents('/repo'), undefined, [
+      ...(await deps.store.listStreams({ kind: 'repo', repo: '/repo' })),
+    ])
+    const rendered = renderHarvestStatus(view).join('\n')
+    expect(rendered).toContain(`session hs_1 (harvest, synthesize@1) stream ${closed.id} (closed)`)
+    expect(rendered).toContain(
+      `session hs_2 (harvest-review, review@1) stream ${stillOpen.id} (open)`,
+    )
+    expect(JSON.parse(JSON.stringify(view)).runs[0].sessions).toHaveLength(2)
+  })
+
+  test('abHarvestStatus enriches the session rows and degrades when listing streams fails', async () => {
+    const deps = await fixture()
+    await sessionEvents(deps.store)
+    const closed = await deps.store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_1')
+    await deps.store.closeStream(closed.id, 'completed')
+
+    const lines: string[] = []
+    const exec = async (cmd: string[]) =>
+      cmd[1] === 'remote'
+        ? // No origin remote: identity falls back to the resolved checkout path.
+          { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+        : {
+            stdout: '/repo/.git\n/repo/.git\n/repo\n',
+            stderr: '',
+            exitCode: 0,
+          }
+    const common = {
+      repo: deps.workspacePath,
+      env: {},
+      exec,
+      stdout: (line: string) => lines.push(line),
+      openStore: () => deps.store,
+    }
+    await abHarvestStatus(common)
+    expect(lines.join('\n')).toContain(
+      `session hs_1 (harvest, synthesize@1) stream ${closed.id} (closed)`,
+    )
+
+    // Prototype delegation keeps every other store method; the own
+    // `listStreams` override shadows the healthy one.
+    const degrading = Object.create(deps.store) as BuildStore
+    degrading.listStreams = async () => {
+      throw new Error('stream list unavailable')
+    }
+    const degradedLines: string[] = []
+    await abHarvestStatus({
+      ...common,
+      openStore: () => degrading,
+      stdout: (line: string) => degradedLines.push(line),
+    })
+    const degraded = degradedLines.join('\n')
+    expect(degraded).toContain('session hs_1 (harvest, synthesize@1) stream st_payload (closed)')
+    expect(degraded).toContain('session hs_2 (harvest-review, review@1)')
+    expect(degraded).not.toContain('(open)')
+  })
+
+  test('a repo-scoped stream recorded under a different repo string does not enrich', async () => {
+    // Membership is store-side (AUT-574): `abHarvestStatus` passes its
+    // resolved identity to `listStreams({ kind: 'repo', repo })`, so a stream
+    // keyed under another repo string never reaches the enrichment regardless
+    // of its label.
+    const deps = await fixture()
+    await sessionEvents(deps.store)
+    await deps.store.ensureRepo('/other/repo')
+    const foreign = await deps.store.createStream(
+      { kind: 'repo', repo: '/other/repo' },
+      'session:hs_1',
+    )
+    const lines: string[] = []
+    const exec = async (cmd: string[]) =>
+      cmd[1] === 'remote'
+        ? // No origin remote: identity falls back to the resolved checkout path.
+          { stdout: '', stderr: "error: No such remote 'origin'\n", exitCode: 2 }
+        : {
+            stdout: '/repo/.git\n/repo/.git\n/repo\n',
+            stderr: '',
+            exitCode: 0,
+          }
+    await abHarvestStatus({
+      repo: deps.workspacePath,
+      env: {},
+      exec,
+      stdout: (line: string) => lines.push(line),
+      openStore: () => deps.store,
+    })
+    const text = lines.join('\n')
+    // The payload projection stands in: the foreign-keyed stream contributed
+    // nothing to the session rows.
+    expect(text).toContain('session hs_1 (harvest, synthesize@1) stream st_payload (closed)')
+    expect(text).not.toContain(foreign.id)
   })
 })

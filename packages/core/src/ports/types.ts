@@ -177,8 +177,11 @@ export interface WorkspaceProvisionResult extends WorkspaceHandle {
 
 export interface WorkspacePublication {
   /** Observe whether the exact requested commit already reached the durable
-   * remote branch after an interrupted acknowledgement. */
-  isPublished?(input: { sha: string; branch: string }): Promise<boolean>
+   * remote branch after an interrupted acknowledgement. `ref` optionally
+   * names the workspace whose git database the probe runs against — used by
+   * the operator-sandbox publication path, whose provider probes from the
+   * sandbox checkout; the build-path callers omit it. */
+  isPublished?(input: { ref?: string; sha: string; branch: string }): Promise<boolean>
   /** Publish exactly one commit to exactly one branch; no arbitrary command
    * surface is exposed to the dispatcher or build child. */
   publish(input: { ref: string; sha: string; branch: string }): Promise<void>
@@ -221,6 +224,14 @@ export interface WorkspaceProvider {
   readonly orchestratorSandbox?: OperatorSandboxExecution
   /** Trusted dispatcher-only publication capability for remote workspaces. */
   readonly publication?: WorkspacePublication
+  /** Publication capability for the operator sandbox (PR-only publication):
+   * deliberately distinct from `publication`, which is the dispatcher's
+   * remote-workspace discriminator — its presence reclassifies every build
+   * workspace as remote and reroutes build publication. `sandboxPublication`
+   * is never consulted by the dispatcher; it is consumed only by the
+   * operator-sandbox publish service, and present only on providers that can
+   * host operator sandboxes. */
+  readonly sandboxPublication?: WorkspacePublication
   /** Optional only for remote/disposable providers. */
   readonly recovery?: WorkspaceRecovery
   provision(opts: {
