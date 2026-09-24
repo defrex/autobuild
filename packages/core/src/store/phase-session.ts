@@ -317,6 +317,10 @@ export function scopeLocalStoreToPhaseSession(
       own('getRepoEvents', 'repo', repo)
       return store.getRepoEvents(repo, sinceSeq, opts)
     },
+    async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+      own('getRepoStateEvents', 'repo', repo)
+      return store.getRepoStateEvents(repo)
+    },
     async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       own('getRepoBuildDigests', 'repo', repo)
       return store.getRepoBuildDigests(repo)
