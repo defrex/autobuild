@@ -13,6 +13,7 @@ import {
   partitionHarvestExhaustion,
   reconcileOriginatingTickets,
   resolveHarvestCreateBlockers,
+  sampleUnclaimedObservationCount,
   scanUnclaimedObservations,
 } from './harvest'
 
@@ -296,6 +297,45 @@ describe('harvest pressure', () => {
         2,
       ),
     ).toEqual({ observationCount: 2, drift: 1 })
+  })
+})
+
+describe('terminal observation sample (AUT-524)', () => {
+  test('a missing journal record with no builds samples zero and writes nothing', async () => {
+    const store = new MemoryBuildStore()
+    let ensureRepoCalls = 0
+    const ensureRepo = store.ensureRepo.bind(store)
+    store.ensureRepo = async (repo) => {
+      ensureRepoCalls += 1
+      return ensureRepo(repo)
+    }
+
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(0)
+    // The display path must not materialize the record: the record is still
+    // absent after the sample, and `getRepoEvents` was never asked about a
+    // repo whose journal it would reject.
+    expect(await store.getRepo('/repo')).toBeNull()
+    expect(ensureRepoCalls).toBe(0)
+  })
+
+  test('a missing journal record with unclaimed observations counts every digest observation', async () => {
+    const store = new MemoryBuildStore()
+    await observation(store, 'a', 'a1')
+    await observation(store, 'b', 'b1')
+
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(2)
+    expect(await store.getRepo('/repo')).toBeNull()
+  })
+
+  test('an ensured store samples the same count the store-reading scan reports', async () => {
+    const store = new MemoryBuildStore()
+    await observation(store, 'a', 'a1')
+    await observation(store, 'b', 'b1')
+    await claim(store, 'h_1', [{ build: 'a', seq: 1 }])
+
+    expect(await sampleUnclaimedObservationCount(store, '/repo')).toBe(
+      (await scanUnclaimedObservations(store, '/repo')).observations.length,
+    )
   })
 })
 
