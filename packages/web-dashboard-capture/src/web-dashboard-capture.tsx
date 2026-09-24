@@ -39,7 +39,8 @@ import {
 import { LoadingControls } from '../../hosted-store-service/app/dashboard/frame'
 import { OperatorShell } from '../../hosted-store-service/app/dashboard/Shell'
 import { SignIn } from '../../hosted-store-service/app/sign-in/SignIn'
-import { Consent as ConsentPage } from '../../hosted-store-service/app/oauth/consent/Consent'
+import { Consent } from '../../hosted-store-service/app/oauth/consent/Consent'
+import ConsentPage from '../../hosted-store-service/app/oauth/consent/page'
 import { captureDashboardFrames, RENDER_NOW } from '../../../tools/dashboard-capture'
 
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -301,6 +302,29 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
       FIXTURE_CLIENT_ID,
     ],
     forbids: [FIXTURE_CLIENT_NAME, 'missing its authorization code'],
+  },
+  {
+    id: 'consent-missing-code-wide',
+    width: 1440,
+    height: 900,
+    requires: [
+      'Autobuild operator',
+      'Authorize client',
+      'This consent request is missing its authorization code',
+    ],
+    forbids: ['Requested scopes'],
+  },
+  {
+    id: 'consent-route-narrow',
+    width: 390,
+    height: 900,
+    requires: [
+      'Autobuild operator',
+      'Authorize client',
+      'A client requests operator access',
+      FIXTURE_SCOPE,
+    ],
+    forbids: ['missing its authorization code', FIXTURE_CLIENT_NAME, FIXTURE_CLIENT_ID],
   },
 ]
 
@@ -603,9 +627,10 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       // The view is an async component: the awaited element must be produced
       // here, mirroring Consent.test.tsx. The stubbed lookup selects the
       // named-client path (wide) and the client_id fallback path (narrow).
-      // The lookupClientName seam lives on the Consent component, not the
-      // route module's exported page (AUT-402).
-      return await ConsentPage({
+      // These frames render the Consent component rather than the route
+      // module's page because only the component carries the lookupClientName
+      // seam the stub needs (AUT-402).
+      return await Consent({
         query:
           spec.id === 'consent-named-wide'
             ? {
@@ -617,6 +642,21 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
         lookupClientName: () =>
           Promise.resolve(spec.id === 'consent-named-wide' ? FIXTURE_CLIENT_NAME : null),
       })
+    case 'consent-missing-code-wide':
+    case 'consent-route-narrow': {
+      const query =
+        spec.id === 'consent-missing-code-wide'
+          ? {}
+          : { consent_code: FIXTURE_CONSENT_CODE, scope: FIXTURE_SCOPE }
+      // Both frames go through the real route page wrapper. Neither query
+      // carries client_id, so the registered-name lookup never fires and no
+      // database is needed (the seam lives on Consent, not the page — AUT-402).
+      const element = await ConsentPage({ searchParams: Promise.resolve(query) })
+      // Awaiting the wrapper yields the Consent element; renderToStaticMarkup
+      // cannot take it (React 19 throws on suspended sync renders — the reason
+      // Consent.test.tsx streams), so resolve the component to its static tree.
+      return await Consent({ query: element.props.query })
+    }
     default:
       throw new Error(`web dashboard capture: unknown frame "${spec.id}"`)
   }
@@ -927,7 +967,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake, auto merge, and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles, auto-merge indicators, and detail action words, are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds a red `!` notice beneath the heading and nothing in the masthead.',
-    '- [ ] Consent frames: they keep the sign-in masthead and `frame signin` classes; the named wide frame shows the bold registered client name with the raw client id beside it and the requested scopes, while the unnamed narrow frame falls back to the raw client id alone; both end in one ink-outline `Authorize client` primary button, and neither shows the missing-authorization-code notice.',
+    '- [ ] Consent frames: they keep the sign-in masthead and `frame signin` classes. `consent-named-wide.png` shows the bold registered client name with the raw client id beside it and the requested scopes; `consent-unnamed-narrow.png` falls back to the raw client id alone; `consent-missing-code-wide.png` shows the missing-authorization-code notice with no form and no button; `consent-route-narrow.png` is rendered through the route page wrapper and shows the unnamed-client copy, the requested scopes, and one ink-outline `Authorize client` primary button with no notice.',
     '- [ ] Across every frame: state is never color-only (each colored state has its word or glyph), no text overlaps or clips, no borders except the shared-width button outlines and keyboard focus rings, no shadows, gradients, or icon glyphs appear, corners are square, and no emoji comes from the interface itself (emoji inside fixture message text is content).',
     '',
     '## Web dashboard visual verdict',

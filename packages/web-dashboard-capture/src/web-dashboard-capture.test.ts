@@ -547,6 +547,35 @@ test('consent frames never render the missing-authorization-code notice', async 
   }
 })
 
+test('the missing-code consent frame shows the notice without a form', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'consent-missing-code-wide')
+  if (!spec) throw new Error('consent-missing-code-wide frame spec is missing')
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+
+  const text = evidenceText(html)
+  expect(text).toContain('This consent request is missing its authorization code')
+  expect(text).not.toContain('Requested scopes')
+  // The form is absent on this path: no button anywhere in the frame.
+  expect(html).not.toContain('<button')
+})
+
+test('the route consent frame renders through the page wrapper without a client lookup', async () => {
+  const spec = WEB_FRAME_SPECS.find((frame) => frame.id === 'consent-route-narrow')
+  if (!spec) throw new Error('consent-route-narrow frame spec is missing')
+  const html = await renderWebFrame(spec, models(), { css: '', fontCss: '' })
+
+  const text = evidenceText(html)
+  // The unnamed-client copy, the requested scopes, and the rendered form.
+  expect(text).toContain("A client requests operator access to this deployment's Autobuild tools.")
+  expect(text).toContain('Requested scopes: openid profile email')
+  expect(html).toContain('class="btn"')
+  expect(html).toContain('<button')
+  // The query carries no client_id, so no lookup fires and no client identity
+  // appears — pinning the no-lookup/no-database invariant.
+  expect(text).not.toContain('mcp-capture-console')
+  expect(text).not.toContain('Capture MCP Console')
+})
+
 test('the skill artifact list names exactly the frames the capture renders', async () => {
   const skill = await readFile(
     join(import.meta.dir, '../../../.agents/skills/verify-web-dashboard/SKILL.md'),
