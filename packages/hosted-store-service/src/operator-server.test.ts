@@ -948,3 +948,263 @@ enabled = false
     expect(parts.some((part) => part.type === 'tool-approval-response')).toBe(true)
   })
 })
+
+describe('request credential threading and sandboxFor (AUT-584)', () => {
+  const usage = (inputTokens: number, outputTokens: number) => ({
+    inputTokens: {
+      total: inputTokens,
+      noCache: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: outputTokens,
+      text: undefined,
+      reasoning: undefined,
+      toolCall: undefined,
+    },
+    totalTokens: inputTokens + outputTokens,
+  })
+
+  const AGENT = agentActor('orchestrator', 'os_turn')
+  const ORCHESTRATOR_CONFIG = parseConfig(`
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+[orchestrator]
+enabled = true
+model = "test/mock"
+`)
+
+  async function publishOrchestratorConfig(store: MemoryBuildStore): Promise<void> {
+    await store.ensureRepo(repo)
+    const { verify, finalize, ...root } = ORCHESTRATOR_CONFIG
+    await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps, ...verify.stepConfigs },
+        finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+      }),
+    })
+  }
+
+  function operatorClient(
+    server: { fetch(req: Request): Promise<Response> },
+    user: string,
+  ): OperatorApiClient {
+    return new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      fetchFn: fetchFor(server),
+    })
+  }
+
+  /** Raw session POST with caller-supplied extra headers (the OIDC header the
+   * routes thread into the runner factory). */
+  function sessionPost(
+    server: { fetch(req: Request): Promise<Response> },
+    repoArg: string,
+    sid: string,
+    leaf: 'messages' | 'approvals',
+    payload: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<Response> {
+    return server.fetch(
+      new Request(
+        `http://operator.test/operator/v1/repos/${encodeURIComponent(repoArg)}/sessions/${encodeURIComponent(sid)}/${leaf}`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            'content-type': 'application/json',
+            ...extraHeaders,
+          },
+          body: JSON.stringify(payload),
+        },
+      ),
+    )
+  }
+
+  function localTextModel(): MockLanguageModelV3 {
+    let call = 0
+    return new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: `turn ${++call}` },
+            { type: 'text-end', id: 't' },
+            { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: usage(10, 5) },
+          ] as never,
+          initialDelayInMs: 0,
+        }),
+      }),
+    })
+  }
+
+  /** The production-shaped wiring: a createRunner double that records its
+   * arguments and returns a real runner over the in-process registry. */
+  function recordingOrchestratorServer(store: MemoryBuildStore, model = localTextModel()) {
+    const runnerCalls: Array<{
+      repo: string
+      credentials: { oidcToken?: string } | undefined
+    }> = []
+    const backgrounds: Promise<void>[] = []
+    const server = createOperatorServer({
+      store,
+      secret,
+      clock,
+      orchestrator: {
+        createRunner: (config, runnerRepo, credentials) => {
+          runnerCalls.push({ repo: runnerRepo, credentials })
+          return createOrchestratorTurnRunner({
+            store,
+            registry: buildRegistry({ store, clock, allowedRepo: runnerRepo }),
+            repo: runnerRepo,
+            config,
+            clock,
+            ids: sequentialIds(),
+            model,
+            maxRetries: 0,
+          })
+        },
+        scheduleBackground: (fn) => {
+          backgrounds.push(fn())
+        },
+      },
+    })
+    return { server, runnerCalls, backgrounds }
+  }
+
+  test('a message post whose request carries the OIDC header threads it into createRunner; no header passes undefined', async () => {
+    const store = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(store)
+    const { server, runnerCalls, backgrounds } = recordingOrchestratorServer(store)
+    const ada = operatorClient(server, 'Ada')
+
+    const created = await ada.createSession(repo, { title: 'one' })
+    await sessionPost(
+      server,
+      repo,
+      created.id,
+      'messages',
+      { text: 'hello' },
+      {
+        'x-vercel-oidc-token': '  req-oidc-token  ',
+      },
+    )
+    await Promise.all(backgrounds)
+    expect(runnerCalls).toHaveLength(1)
+    // The header value is threaded (trimmed — a blank header is absent).
+    expect(runnerCalls[0]!.credentials).toEqual({ oidcToken: 'req-oidc-token' })
+
+    const second = await ada.createSession(repo, { title: 'two' })
+    await sessionPost(server, repo, second.id, 'messages', { text: 'hello again' })
+    await Promise.all(backgrounds)
+    expect(runnerCalls).toHaveLength(2)
+    expect(runnerCalls[1]!.credentials).toBeUndefined()
+  })
+
+  test("an approval answer threads the request's credential into the resuming createRunner", async () => {
+    const store = new MemoryBuildStore({ clock })
+    await publishOrchestratorConfig(store)
+    const { server, runnerCalls, backgrounds } = recordingOrchestratorServer(store)
+
+    // Seed a turn suspended for approval, exactly as the same-invocation
+    // resume test does.
+    const created = await store.createSession({ repo, operator: 'Ada' })
+    const stream = await store.createStream({ kind: 'session', session: created.id }, 'turn:ot_1')
+    await store.appendStreamParts(stream.id, [
+      { type: 'start', messageId: 'm1' },
+      { type: 'tool-approval-request', approvalId: 'a1', toolCallId: 'c1' },
+    ])
+    await store.appendSessionEvent(created.id, {
+      actor: humanActor('Ada'),
+      type: 'message.posted',
+      payload: { text: 'do it' },
+    })
+    await store.appendSessionEvent(created.id, {
+      actor: AGENT,
+      type: 'turn.started',
+      payload: { turn: 'ot_1', stream: stream.id, trigger: { kind: 'message', messageSeq: 2 } },
+    })
+    await store.appendSessionEvent(created.id, {
+      actor: agentActor('orchestrator', 'ot_1'),
+      type: 'approval.requested',
+      payload: { turn: 'ot_1', toolCallId: 'c1', toolName: 'notes.write', input: {} },
+    })
+    await store.appendSessionEvent(created.id, {
+      actor: agentActor('orchestrator', 'ot_1'),
+      type: 'turn.suspended',
+      payload: { turn: 'ot_1', cause: 'approval' },
+    })
+
+    await sessionPost(
+      server,
+      repo,
+      created.id,
+      'approvals',
+      { turn: 'ot_1', toolCallId: 'c1', decision: 'approve' },
+      { 'x-vercel-oidc-token': 'resume-token' },
+    )
+    await Promise.all(backgrounds)
+    expect(runnerCalls).toHaveLength(1)
+    expect(runnerCalls[0]!.credentials).toEqual({ oidcToken: 'resume-token' })
+  })
+
+  test('sandboxFor wins over the static option and a disabled/unresolvable resolution releases nothing', async () => {
+    const store = new MemoryBuildStore({ clock })
+    const staticReleases: string[] = []
+    const dynamicReleases: string[] = []
+    const staticBackend = {
+      release: async (identity: string) => {
+        staticReleases.push(identity)
+      },
+    }
+    const dynamicBackend = {
+      release: async (identity: string) => {
+        dynamicReleases.push(identity)
+      },
+    }
+    const server = createOperatorServer({
+      store,
+      secret,
+      clock,
+      sandbox: staticBackend as never,
+      sandboxFor: async (repoArg) => {
+        // Service-shaped wiring: disabled config → undefined (contained).
+        if (repoArg === 'https://github.com/acme/disabled') return undefined
+        return dynamicBackend as never
+      },
+    })
+
+    // The last open session's archive releases through sandboxFor's backend.
+    const ada = operatorClient(server, 'Ada')
+    const first = await ada.createSession(repo, { title: 'one' })
+    const second = await ada.createSession(repo, { title: 'two' })
+    await ada.archiveSession(repo, first.id)
+    expect(dynamicReleases).toEqual([])
+    expect(staticReleases).toEqual([])
+    await ada.archiveSession(repo, second.id)
+    expect(dynamicReleases).toEqual(['Ada'])
+    expect(staticReleases).toEqual([]) // sandboxFor wins
+
+    // A disabled repository resolves to undefined: the archive still
+    // succeeds and releases nothing (the dispatcher's idle settlement stops
+    // the environment later).
+    const disabledRepo = 'https://github.com/acme/disabled'
+    const solo = await ada.createSession(disabledRepo, { title: 'x' })
+    await ada.archiveSession(disabledRepo, solo.id)
+    expect(dynamicReleases).toEqual(['Ada'])
+    expect(staticReleases).toEqual([])
+  })
+})
