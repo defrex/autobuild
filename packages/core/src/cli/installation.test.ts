@@ -76,7 +76,7 @@ describe('installed distribution identity and Bun provenance', () => {
     const { dist } = await fixture()
     const identity = await readDistributionIdentity(dist)
     expect(formatInstalledVersion(identity)).toBe(
-      'autobuild 2.0.0 (commit a1b2c3d)\nplugin API 1.6.0',
+      'autobuild 2.0.0 (commit a1b2c3d)\nplugin API 1.7.0',
     )
 
     const out: string[] = []

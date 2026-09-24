@@ -124,10 +124,22 @@ export async function createWorkspaceProvider(
   }
 
   try {
+    // Conditional spreads keep the existing exactness guarantee: a call site
+    // that supplies no seams constructs exactly `{ config, env, repoRoot }`,
+    // so plugin factories see no `undefined`-valued additions. With seams,
+    // the context widens in place (AUT-560) — the seams the builtin factory
+    // receives through `opts` reach the plugin factory through the context.
     return await factory({
       config: config.config,
       env: opts.env,
       repoRoot: resolve(opts.repoRoot),
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.storeToken !== undefined ? { storeToken: opts.storeToken } : {}),
+      ...(opts.runtimeReferences !== undefined
+        ? { runtimeReferences: opts.runtimeReferences }
+        : {}),
+      ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
+      ...(opts.remoteBranchHead !== undefined ? { remoteBranchHead: opts.remoteBranchHead } : {}),
     })
   } catch (error) {
     throw new Error(

@@ -86,6 +86,13 @@ export async function runGuestReadinessProbe(opts: {
   openStore?: StoreOpener
   exec?: Exec
   signal?: AbortSignal
+  /**
+   * Guest tolerance mode (default `true`): a configured package plugin that
+   * cannot be resolved from the candidate roots is skipped with a notice
+   * instead of failing readiness. Host-side call sites pass `false` so
+   * resolution failures stay fatal.
+   */
+  guest?: boolean
 }): Promise<GuestProbeReport> {
   const checks: ReadinessCheck[] = []
   const config = await loadConfig(join(opts.repo, 'autobuild.toml'))
@@ -139,14 +146,16 @@ export async function runGuestReadinessProbe(opts: {
     // This function IS the guest probe (AUT-517): it runs inside the
     // disposable environment and never constructs workspace providers, so a
     // configured provider plugin the guest cannot resolve is skipped with a
-    // notice instead of failing readiness. The host-side validateInitReadiness
-    // sites stay strict. diagnosePlugins shares attemptPlugin with
+    // notice instead of failing readiness. The validateInitReadiness call
+    // sites stay strict — the git-worktree branch below passes `guest: false`
+    // (AUT-561); the private probe `bin/ab-init-probe.ts` keeps the default
+    // guest tolerance. diagnosePlugins shares attemptPlugin with
     // loadPlugins — same resulting registry — but returns per-module reports,
     // so a resolution-stage skip (the guest tolerance path) can be surfaced
     // in the check detail instead of degrading silently.
     const diagnosis = await diagnosePlugins(config.plugins, opts.repo, {
       packageRoot,
-      guest: true,
+      guest: opts.guest ?? true,
     })
     // loadPlugins throws on the first failed report; diagnosePlugins does
     // not, so restore that fail-closed precedence here: repo-path resolution
@@ -483,9 +492,18 @@ export async function validateInitReadiness(opts: {
         throw new Error(
           `autobuild.toml differs from committed ${config.baseBranch}; commit setup changes before validating`,
         )
+      // The host's strict `loadPlugins(config.plugins, repo, { packageRoot: repo })`
+      // above is the operative gate: it already threw on the first unresolvable
+      // package plugin before this branch is entered, and it shares the probe's
+      // resolution root — `resolveMainRepo` maps a linked worktree back to the
+      // main checkout — so `guest: false` cannot change today's outcomes. It is
+      // defense in depth that keeps this call site strict per the "host-side
+      // sites stay strict" rationale even if that pre-check is ever weakened or
+      // reordered (AUT-561).
       const guest = await runGuestReadinessProbe({
         repo: workspace,
         env: { ...opts.env, AB_STORE: state.storeRef },
+        guest: false,
         ...(opts.openStore !== undefined ? { openStore: opts.openStore } : {}),
         ...(opts.runtimes !== undefined ? { runtimes: opts.runtimes } : {}),
         exec,

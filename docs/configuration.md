@@ -333,7 +333,11 @@ requirements, an origin validator, and a remote readiness validation for
 `ab init --validate`. The host enforces every declared capability at its seam
 without naming the provider; required environment belongs on
 `capabilities.requiredEnv` (a descriptor-level `requiredEnv` is rejected at
-manifest parse).
+manifest parse). API 1.7 extends the workspace-provider factory context with
+the host-derived seams: `storeRef` and `storeToken` (guaranteed present under
+`capabilities.storeRequirements`), `runtimeReferences`, and the checkout-less
+`origin` and `remoteBranchHead` readers, all optional and ignored by factories
+that do not read them. A plugin reading the new seams should require `^1.7.0`.
 
 ```ts
 import type { AutobuildPluginManifest } from '@defrex/autobuild/plugin-sdk'

@@ -80,16 +80,21 @@ export type {
   TicketSourcePluginRegistration,
   WorkspaceProviderPluginDescriptor,
   WorkspaceProviderPluginFactory,
+  WorkspaceProviderPluginFactoryContext,
   WorkspaceProviderPluginRegistration,
 } from '../plugins/manifest'
 export type {
   GuestProbeReport,
   InitValidationReport,
   ReadinessCheck,
+  RuntimeReferencesSource,
   WorkspaceProviderCapabilities,
   WorkspaceProviderEnvRequirement,
   WorkspaceReadinessContext,
 } from '../ports/workspace/provider-capabilities'
+// The runtime-route group shape behind `RuntimeReferencesSource`, so plugin
+// authors can name it without reaching for an internal path.
+export type { RuntimeReferenceGroup } from '../config/roles'
 
 /** The single shared capability object for the `vercel-sandbox` provider
  * (AUT-517): the builtin registration and the
