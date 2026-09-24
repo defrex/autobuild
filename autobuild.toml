@@ -168,7 +168,6 @@ readyLabels = []                # additional label gate ([] = none)
 claimedState = "In Progress"    # claim() moves the issue here
 createState = "Todo"            # new tickets are filed here
 triageState = "Backlog"         # bounced, aborted, and closed-unmerged tickets return here
-proposalState = "Todo"          # harvest files proposals straight into the ready state: this
-                                # repository runs its own harvest unattended and waives the
-                                # grooming gate. Deliberately not triageState — a bounce landing
-                                # in Todo would be reclaimed and bounced every tick.
+proposalState = "Backlog"       # harvest proposals wait for a human to groom them to Todo.
+                                # Auto-dispatching them (proposalState = readyState) ran away:
+                                # each proposal build's observations filed more proposals.

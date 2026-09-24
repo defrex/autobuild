@@ -141,6 +141,6 @@ test('remote rollout preserves this repository pipeline and hosted integration',
     claimedState: 'In Progress',
     createState: 'Todo',
     triageState: 'Backlog',
-    proposalState: 'Todo',
+    proposalState: 'Backlog',
   })
 })
