@@ -399,6 +399,13 @@ export function scopeLocalStoreToPhaseSession(
     ): Promise<SessionEventEnvelope<T>> {
       return admin('appendSessionEvent')
     },
+    appendSessionEventIfCurrent<T extends SessionEventType>(
+      _id: string,
+      _expectedSeq: number,
+      _event: SessionEventWrite<T>,
+    ): Promise<SessionEventEnvelope<T> | null> {
+      return admin('appendSessionEventIfCurrent')
+    },
     getSessionEvents(_id: string, _sinceSeq?: number): Promise<SessionEvent[]> {
       return admin('getSessionEvents')
     },

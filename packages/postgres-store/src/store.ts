@@ -621,6 +621,25 @@ export class PostgresBuildStore implements BuildStore {
     )) as SessionEventEnvelope<T>
   }
 
+  async appendSessionEventIfCurrent<T extends SessionEventType>(
+    id: string,
+    expectedSeq: number,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T> | null> {
+    validateExpectedSeq(expectedSeq)
+    const validated = validateSessionEventWrite(event)
+    return (await this.sql.begin(async (tx) => {
+      // The session advisory lock serializes this comparison and append
+      // against every concurrent writer of the session, exactly as
+      // `appendSessionEvent` serializes two plain appends.
+      await this.lockSession(tx, id)
+      const tails: Row[] =
+        await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM session_events WHERE session = ${id}`
+      if (num(tails[0]?.seq) !== expectedSeq) return null
+      return this.appendSessionLocked(tx, id, validated, true)
+    })) as SessionEventEnvelope<T> | null
+  }
+
   async getSessionEvents(
     id: string,
     sinceSeq = 0,

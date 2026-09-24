@@ -2506,6 +2506,73 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           })
         })
 
+        test('appendSessionEventIfCurrent (atomic session compare-and-append): win, stale miss leaves the log untouched, concurrent race yields exactly one winner', async () => {
+          await withStore(factory, undefined, async (store) => {
+            const session = await store.createSession({ repo: 'acme/a', operator: 'op' })
+            // session.created is seq 1, so the current tail is 1.
+            const won = await store.appendSessionEventIfCurrent(
+              session.id,
+              1,
+              messagePostedWrite('winner'),
+            )
+            expect(won?.seq).toBe(2)
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([1, 2])
+
+            // A stale expected sequence appends nothing and leaves the record
+            // untouched.
+            const before = await store.getSession(session.id)
+            expect(
+              await store.appendSessionEventIfCurrent(session.id, 1, messagePostedWrite('stale')),
+            ).toBeNull()
+            expect(await store.getSession(session.id)).toEqual(before)
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([1, 2])
+
+            // Two contenders for one sequence produce exactly one winner.
+            const results = await Promise.all([
+              store.appendSessionEventIfCurrent(session.id, 2, messagePostedWrite('a')),
+              store.appendSessionEventIfCurrent(session.id, 2, messagePostedWrite('b')),
+            ])
+            expect(results.filter((result) => result !== null)).toHaveLength(1)
+            expect(results.filter((result) => result === null)).toHaveLength(1)
+            const next = await store.appendSessionEventIfCurrent(
+              session.id,
+              3,
+              messagePostedWrite('next'),
+            )
+            expect(next?.seq).toBe(4)
+
+            // Invalid candidates and unknown sessions reject without writes.
+            const invalid = {
+              actor: humanActor('op'),
+              type: 'no.such-type',
+              payload: {},
+            } as unknown as SessionEventWrite
+            expect(
+              await store.appendSessionEventIfCurrent(session.id, 4, invalid).then(
+                () => 'no-error',
+                (error: unknown) => error,
+              ),
+            ).toBeInstanceOf(EventValidationError)
+            const negativeSeq = await store
+              .appendSessionEventIfCurrent(session.id, -1, messagePostedWrite())
+              .then(
+                () => 'no-error',
+                (error: unknown) => error,
+              )
+            expect(negativeSeq).toBeInstanceOf(Error)
+            const unknownSession = await store
+              .appendSessionEventIfCurrent('os_ghost', 0, messagePostedWrite())
+              .then(
+                () => 'no-error',
+                (error: unknown) => error,
+              )
+            expect(unknownSession).toBeInstanceOf(Error)
+            expect((await store.getSessionEvents(session.id)).map((e) => e.seq)).toEqual([
+              1, 2, 3, 4,
+            ])
+          })
+        })
+
         test('bounded-wait session event read: early return on append, waits out the bound when empty, clamps above 30', async () => {
           await withStore(factory, undefined, async (store) => {
             const session = await store.createSession({ repo: 'acme/a', operator: 'op' })

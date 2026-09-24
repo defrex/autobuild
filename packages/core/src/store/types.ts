@@ -385,6 +385,21 @@ export interface BuildStore {
     id: string,
     event: SessionEventWrite<T>,
   ): Promise<SessionEventEnvelope<T>>
+  /** Atomically append one validated session event only when the session's
+   * current sequence equals `expectedSeq` (0 would only match a session with
+   * no facts — impossible, since `session.created` is always seq 1). Returns
+   * null when the session has advanced; a comparison miss must not mutate the
+   * log or the record's `updatedAt`. The three turn-start sites (message
+   * route, answer route, dispatcher tick) race on the same idle session, and
+   * two concurrent `turn.started` facts would break the single-open-turn
+   * invariant — this is the sessions mirror of the build log's
+   * `appendIfCurrent`. Invalid events and unknown sessions reject just as
+   * they do for `appendSessionEvent`. */
+  appendSessionEventIfCurrent<T extends SessionEventType>(
+    id: string,
+    expectedSeq: number,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T> | null>
   /** Events with seq strictly greater than `sinceSeq` (default 0), in order.
    * When nothing newer exists, an adapter honors `waitSeconds` with the
    * same clamp/early-return rules as stream reads (§7.6): whole seconds,

@@ -818,6 +818,32 @@ export class MemoryBuildStore implements BuildStore {
     return envelope
   }
 
+  async appendSessionEventIfCurrent<T extends SessionEventType>(
+    id: string,
+    expectedSeq: number,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T> | null> {
+    const state = this.sessionState(id)
+    validateExpectedSeq(expectedSeq)
+    const validated = validateSessionEventWrite(event)
+
+    // No await occurs between comparison and mutation. JavaScript's run-to-
+    // completion semantics make this one atomic critical section even when
+    // concurrent remote requests interleave elsewhere in the adapter.
+    if (state.events.length !== expectedSeq) return null
+    const envelope = {
+      session: id,
+      seq: expectedSeq + 1,
+      ts: this.now(),
+      actor: validated.actor,
+      type: validated.type,
+      payload: validated.payload,
+    } as SessionEventEnvelope<T>
+    state.events.push(structuredClone(envelope) as SessionEvent)
+    state.record.updatedAt = envelope.ts
+    return envelope
+  }
+
   async getSessionEvents(
     id: string,
     sinceSeq = 0,

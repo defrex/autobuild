@@ -73,6 +73,7 @@ import {
   buildRecordListSchema,
   buildRecordWireSchema,
   conditionalEventResponseSchema,
+  conditionalSessionEventResponseSchema,
   decodeBase64,
   depositsResponseSchema,
   encodeBase64,
@@ -621,6 +622,23 @@ export class RemoteBuildStore implements BuildStore {
       { actor: event.actor, type: event.type, payload: event.payload },
     )
     return envelope as unknown as SessionEventEnvelope<T>
+  }
+
+  async appendSessionEventIfCurrent<T extends SessionEventType>(
+    id: string,
+    expectedSeq: number,
+    event: SessionEventWrite<T>,
+  ): Promise<SessionEventEnvelope<T> | null> {
+    const envelope = await this.requestJson(
+      'POST',
+      `${this.sessionPath(id)}/events/conditional`,
+      conditionalSessionEventResponseSchema,
+      {
+        expectedSeq,
+        event: { actor: event.actor, type: event.type, payload: event.payload },
+      },
+    )
+    return envelope as SessionEventEnvelope<T> | null
   }
 
   async getSessionEvents(
