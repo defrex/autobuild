@@ -34,7 +34,7 @@
  * stages the bundle. Staged files are build-time artifacts under
  * `node_modules` (gitignored, never committed).
  */
-import { lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 
 export interface ShipProviderPluginOptions {

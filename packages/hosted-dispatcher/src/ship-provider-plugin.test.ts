@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, relative, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parsePluginManifest } from '@defrex/autobuild/plugin-sdk'
 import { shipProviderPlugin } from './ship-provider-plugin'
@@ -53,7 +53,7 @@ describe('ship-provider-plugin', () => {
     // (node builtins excepted) — the deployment's repo-root node_modules
     // carries no @defrex/autobuild and nothing else the closure needs.
     const bundle = await readFile(join(result.staging, 'dist', 'index.js'), 'utf8')
-    const imports = [...bundle.matchAll(/^import\s+[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1])
+    const imports = [...bundle.matchAll(/^import\s+[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]!)
     const external = imports.filter(
       (specifier) => !specifier.startsWith('node:') && !builtinModules.includes(specifier),
     )
@@ -80,7 +80,7 @@ describe('ship-provider-plugin', () => {
       // Six ups to the repository root: the same depth class as the trace's
       // existing node_modules/.bun/** entries, and the root the compiled
       // distributionRoot() resolves.
-      expect(entry.split('/node_modules')[0].split('../').length - 1).toBe(6)
+      expect(entry.split('/node_modules')[0]!.split('../').length - 1).toBe(6)
       const resolvedEntry = resolve(join(tracePath, '..'), entry)
       expect(resolvedEntry.startsWith(result.staging)).toBe(true)
       expect(stagedPaths.has(resolvedEntry.slice(result.staging.length + 1))).toBe(true)

@@ -976,7 +976,7 @@ describe('npm publication', () => {
     const publishable = new Set(
       manifests
         .filter((manifest) => manifest.manifest.private !== true)
-        .map((manifest) => manifest.manifest.name),
+        .map((manifest) => manifest.manifest.name as string),
     )
     expect(new Set(names).size).toBe(names.length)
     expect(new Set(names)).toEqual(publishable)

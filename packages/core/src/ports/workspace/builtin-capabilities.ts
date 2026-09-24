@@ -18,7 +18,7 @@
  * clause; the construction-site one does not).
  */
 import { join, resolve } from 'node:path'
-import { type VercelSandboxConfig, type WorkspaceConfig } from '../../config/schema'
+import type { VercelSandboxConfig, WorkspaceConfig } from '../../config/schema'
 import type { WorkspaceProviderCapabilities } from './provider-capabilities'
 import type { CreateWorkspaceProviderOptions } from './create'
 import { GitWorktreeProvider } from './git-worktree'
