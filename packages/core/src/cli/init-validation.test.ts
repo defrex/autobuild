@@ -8,6 +8,7 @@ import { DISPATCHER } from '../events/envelope'
 import type { AgentRunner } from '../ports/types'
 import type { RuntimeRegistry } from '../ports/runner/runtime'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
+import { builtinWorkspaceProviderCapabilities } from '../ports/workspace/builtin-capabilities'
 import {
   validateVercelSandbox,
   type VercelSandboxFacade,
@@ -1484,5 +1485,74 @@ readyState = "ready"
     expect(code).toBe(1)
     expect(invoked).toBe(false)
     expect(errors.join('\n')).toContain('export it in the launcher environment')
+  })
+
+  test('a plugin-declared processEnvOnly variable present only in the dotenv-augmented env fails validation', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-process-env-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        processEnvOnly: [
+          {
+            name: 'ACME_SECRET',
+            message: 'ACME_SECRET must be exported in the launcher environment',
+          },
+        ],
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+
+    // The dotenv-augmented env carries the variable, the raw launcher map does
+    // not: the registry-aware check throws the declared message.
+    await expect(
+      validateInitReadiness({
+        targetRepo: repo,
+        env: { ACME_SECRET: 'only-in-env-file' },
+        processEnv: {},
+        exec: spawnExec,
+      }),
+    ).rejects.toThrow('ACME_SECRET must be exported in the launcher environment')
+
+    // Exported in the launcher map, the check passes and validation proceeds
+    // to the (expected) unsupported-provider failure instead.
+    await expect(
+      validateInitReadiness({
+        targetRepo: repo,
+        env: { ACME_SECRET: 'exported' },
+        processEnv: { ACME_SECRET: 'exported' },
+        exec: spawnExec,
+      }),
+    ).rejects.toThrow('workspace provider "acmebox" does not support init readiness validation')
+  })
+
+  test('the builtin processEnvOnly declaration message is byte-identical to the main.ts guard text', () => {
+    const message =
+      builtinWorkspaceProviderCapabilities('vercel-sandbox')?.processEnvOnly?.[0]?.message
+    expect(message).toBe(
+      'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to the Vercel SDK; export it in the launcher environment or configure VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
+    )
   })
 })
