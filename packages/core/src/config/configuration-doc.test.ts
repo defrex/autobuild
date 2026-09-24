@@ -301,6 +301,49 @@ function headingSection(markdown: string, level: number, heading: string): strin
   return lines.slice(start + 1, end).join('\n')
 }
 
+/**
+ * Every Markdown table in a section body, in document order. A table is a
+ * maximal run of lines starting with `|`; a fence line (or any non-`|` line)
+ * ends the run, and fenced code is never scanned, so a fenced TOML example
+ * inside a section cannot feed phantom rows into a per-table assertion. The
+ * fence toggle reuses the `headingSection` pattern.
+ */
+function sectionTables(section: string): string[] {
+  const lines = section.split('\n')
+  const tables: string[] = []
+  let fenced = false
+  let current: string[] = []
+  const flush = (): void => {
+    if (current.length > 0) {
+      tables.push(current.join('\n'))
+      current = []
+    }
+  }
+  for (const line of lines) {
+    if (line.startsWith('```')) {
+      fenced = !fenced
+      flush()
+      continue
+    }
+    if (fenced) continue
+    if (line.startsWith('|')) {
+      current.push(line)
+    } else {
+      flush()
+    }
+  }
+  flush()
+  return tables
+}
+
+/** The backtick-quoted field names of a table's first-column rows, in order. */
+function tableFields(table: string): string[] {
+  return table
+    .split('\n')
+    .map((line) => /^\| `([^`|]+)` \|/.exec(line)?.[1])
+    .filter((name): name is string => name !== undefined)
+}
+
 function paragraphContaining(markdown: string, text: string): string | undefined {
   return markdown.split(/\n\s*\n/).find((paragraph) => paragraph.includes(text))
 }
@@ -717,6 +760,46 @@ describe('docs/configuration.md — schema coverage', () => {
       )
     }
     expect(tableSection('commands')).toMatch(/^\| `<name>` \|/m)
+  })
+
+  test('keeps the orchestrator row sets exact per table, in doc and guide', () => {
+    // AUT-588: the section-level assertion above spans both tables of the
+    // orchestrator section — the `[orchestrator]` field table and the
+    // `[orchestrator.sandbox]` fields table — so a row lost from one table
+    // but still present in the other satisfies it. That is exactly how the
+    // `sandbox` pointer row drifted into the subtable's table unnoticed.
+    // This guard asserts each table's exact field-name row set, per surface:
+    // moving, dropping, or inventing a row in either table of either surface
+    // fails, and the two doc sources are machine-checked to agree on which
+    // table carries which row. Set equality at the field-name level (not
+    // full row text) keeps column-vocabulary drift between the doc and the
+    // guide from causing false failures.
+    const orchestratorRows = [
+      'enabled',
+      'model',
+      'invocationBudgetSeconds',
+      'approvals',
+      'wake',
+      'sandbox',
+    ]
+    const sandboxRows = ['idleMinutes', 'environmentVariables']
+    const surfaces = [
+      ['docs/configuration.md', tableSection('orchestrator')],
+      ['skills/guide/SKILL.md', headingSection(guide, 3, '`[orchestrator]`')],
+    ] as const
+
+    for (const [location, section] of surfaces) {
+      expect(section, `${location} [orchestrator] section is missing`).toBeDefined()
+      const [orchestratorTable, sandboxTable] = sectionTables(section ?? '')
+      expect(
+        [...tableFields(orchestratorTable ?? '')].sort(),
+        `${location}: the [orchestrator] field table's row set drifted from [${orchestratorRows.join(', ')}]`,
+      ).toEqual([...orchestratorRows].sort())
+      expect(
+        [...tableFields(sandboxTable ?? '')].sort(),
+        `${location}: the [orchestrator.sandbox] fields table's row set drifted from [${sandboxRows.join(', ')}]`,
+      ).toEqual([...sandboxRows].sort())
+    }
   })
 
   test('keeps the hot/restart contract exhaustive and documented', () => {
