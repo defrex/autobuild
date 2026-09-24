@@ -14,7 +14,7 @@ import type {
 } from '../ports/workspace/provider-capabilities'
 
 /** Version of the in-process plugin contract exposed by `@defrex/autobuild/plugin-sdk`. */
-export const PLUGIN_API_VERSION = '1.6.0' as const
+export const PLUGIN_API_VERSION = '1.7.0' as const
 
 /** Context supplied when a registered adapter or contract fixture is selected. */
 export interface PluginFactoryContext<Config = Record<string, unknown>> {

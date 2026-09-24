@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import manifest from './index'
-import { parsePluginManifest } from '@defrex/autobuild/plugin-sdk'
+import {
+  parsePluginManifest,
+  type WorkspaceProviderPluginFactoryContext,
+} from '@defrex/autobuild/plugin-sdk'
 
 describe('@defrex/autobuild-vercel-sandbox', () => {
   test('default export is a parseable plugin manifest registering vercel-sandbox', () => {
@@ -16,9 +19,22 @@ describe('@defrex/autobuild-vercel-sandbox', () => {
 
   test('the guarded factory names AUT-505 when reached', () => {
     const registration = manifest.workspaceProviders?.['vercel-sandbox'] as {
-      factory: () => unknown
+      factory: (context: WorkspaceProviderPluginFactoryContext) => unknown
     }
-    expect(() => registration.factory()).toThrow('AUT-505')
+    // Invoked with the FULL extended context (AUT-560): the plugin package
+    // compiles against, and its factory accepts, the seam-carrying context
+    // the host passes to workspace-provider factories.
+    const context: WorkspaceProviderPluginFactoryContext = {
+      config: {},
+      env: {},
+      repoRoot: '/repo',
+      storeRef: 'https://store.example.test',
+      storeToken: 'scoped-token',
+      runtimeReferences: [],
+      origin: async () => 'https://github.com/acme/app.git',
+      remoteBranchHead: async () => undefined,
+    }
+    expect(() => registration.factory(context)).toThrow('AUT-505')
   })
 
   test('every @defrex/autobuild specifier in src/ is exactly the plugin-sdk entry', async () => {
