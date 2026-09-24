@@ -10,8 +10,16 @@ import {
   type TicketSource,
 } from '@defrex/autobuild/plugin-sdk'
 import { createOperatorServer } from './operator-server'
-import { createOrchestratorTurnRunner } from '@defrex/autobuild/operator'
-import { buildRegistry, randomIds } from '@defrex/autobuild/operator'
+import {
+  buildRegistry,
+  createOrchestratorTurnRunner,
+  orchestratorConfig,
+  randomIds,
+  type Config,
+  type OperatorSandboxService,
+} from '@defrex/autobuild/operator'
+import { createHostedOperatorSandboxService } from '@defrex/autobuild/operator-sandbox-host'
+import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   createTicketServer,
   HOSTED_TICKET_OPERATIONS,
@@ -79,6 +87,86 @@ function notFound(req: Request, pathname: string): Response {
 }
 
 const ticketOperations = new Set<string>(HOSTED_TICKET_OPERATIONS)
+
+/** The deployment's public origin, from `BETTER_AUTH_URL` — the sandbox
+ * backend's `storeRef` (the deployment's own HTTPS face, which the sandbox
+ * provider requires and the guest never receives). Absence or invalidity
+ * leaves the sandbox backend unavailable for the whole deployment; every
+ * other behavior is unchanged. */
+export function hostedPublicOrigin(env: HostedStoreEnv): string | undefined {
+  const raw = env.BETTER_AUTH_URL?.trim()
+  if (raw === undefined || raw === '') return undefined
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    return url.origin
+  } catch {
+    return undefined
+  }
+}
+
+interface HostedSandboxDeps {
+  store: BuildStore
+  clock: Clock
+  /** The enclosing HostedStoreConfig's signing secret — the store and
+   * operator servers' own — never a member of the repository's effective
+   * config (which carries no secret). */
+  secret: string
+  env: HostedStoreEnv
+  /** The deployment's public origin (the provider's storeRef). */
+  origin: string
+  report: (error: unknown) => Promise<void> | void
+}
+
+/** Mint the sandbox provider's repo-scoped, short-lived store token locally
+ * (least privilege); the sandbox guest never receives it — the guest
+ * environment is always built from an empty record plus the configured
+ * forwarded names. The token exists only to satisfy the provider's
+ * construction authority precondition. */
+function sandboxStoreToken(deps: HostedSandboxDeps, repo: string): string {
+  return mintToken(deps.secret, {
+    resource: { kind: 'repo', id: repo },
+    session: 'hosted-operator-sandbox',
+    exp: deps.clock().getTime() + 3_600_000,
+  })
+}
+
+/** Merge the request's OIDC token into the composition env under
+ * `VERCEL_OIDC_TOKEN` with the dispatcher's exact precedence rule: an
+ * explicit environment token always wins. A deployment using the durable
+ * `VERCEL_TOKEN` triple needs no header at all. */
+function sandboxCompositionEnv(
+  deps: HostedSandboxDeps,
+  credentials?: { oidcToken?: string },
+): HostedStoreEnv {
+  return {
+    ...deps.env,
+    ...(credentials?.oidcToken && !deps.env.VERCEL_OIDC_TOKEN
+      ? { VERCEL_OIDC_TOKEN: credentials.oidcToken }
+      : {}),
+  }
+}
+
+/** Compose the hosted operator-sandbox backend for one enabled repository
+ * from the deposited effective config plus the deployment's seams. Throws
+ * on every construction failure; the callers contain it and degrade to
+ * serving without the sandbox tools. */
+async function hostedSandboxBackend(
+  deps: HostedSandboxDeps,
+  repo: string,
+  config: Config,
+  credentials?: { oidcToken?: string },
+): Promise<OperatorSandboxService> {
+  return createHostedOperatorSandboxService({
+    store: deps.store,
+    repo,
+    config,
+    env: sandboxCompositionEnv(deps, credentials),
+    storeRef: deps.origin,
+    storeToken: sandboxStoreToken(deps, repo),
+    clock: deps.clock,
+  })
+}
 const storeResourceRoutes = new Set([
   'GET events',
   'POST events',
@@ -333,6 +421,24 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
         const shared = options.clock === undefined ? {} : { clock: options.clock }
         const clock = options.clock ?? systemClock
+        // The hosted operator-sandbox backend (AUT-584): composed per runner
+        // from the deposited effective config plus the deployment's seams.
+        // The public origin gates the whole backend — absent or invalid
+        // BETTER_AUTH_URL leaves every binding sandbox-free, unchanged from
+        // today's filtered behavior.
+        const sandboxOrigin = hostedPublicOrigin(env)
+        const sandboxDeps: HostedSandboxDeps | undefined =
+          sandboxOrigin === undefined
+            ? undefined
+            : {
+                store,
+                clock,
+                secret: config.secret,
+                env,
+                origin: sandboxOrigin,
+                report: (error) =>
+                  report(error, new Request('ab://operator-sandbox-composition'), 'operator'),
+              }
         const storeServer = createStoreServer({
           store,
           secret: config.secret,
@@ -354,8 +460,28 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           // same ticket backend, repository-scoped — and its model resolves
           // through the deployment's gateway credential.
           orchestrator: {
-            createRunner: (orchestratorConfig, repo) =>
-              createOrchestratorTurnRunner({
+            createRunner: async (orchestratorConfig, repo, credentials) => {
+              // The sandbox backend degrades the sandbox tools only: a
+              // construction failure (credential-less env, unsupported
+              // provider or forge, forbidden forwarded env name) is reported
+              // and the registry builds without `sandbox` — the exact
+              // pre-AUT-584 behavior plus a diagnostic. The orchestrator
+              // itself is never affected.
+              let sandbox: OperatorSandboxService | undefined
+              if (sandboxDeps !== undefined) {
+                try {
+                  sandbox = await hostedSandboxBackend(
+                    sandboxDeps,
+                    repo,
+                    orchestratorConfig,
+                    credentials,
+                  )
+                } catch (error) {
+                  sandbox = undefined
+                  await sandboxDeps.report(error)
+                }
+              }
+              return createOrchestratorTurnRunner({
                 store,
                 registry: buildRegistry({
                   store,
@@ -365,13 +491,15 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                     statesFor: async (context, source) =>
                       (await openTicketBackend()).statesFor(context, source),
                   },
+                  ...(sandbox !== undefined ? { sandbox } : {}),
                   allowedRepo: repo,
                 }),
                 repo,
                 config: orchestratorConfig,
                 clock,
                 ids: randomIds(),
-              }),
+              })
+            },
             scheduleBackground:
               options.scheduleBackground ??
               ((fn) => {
@@ -384,6 +512,28 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
               }),
           },
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'operator'),
+          ...(sandboxDeps !== undefined
+            ? {
+                sandboxFor: async (repo, credentials) => {
+                  let resolved: Config | null
+                  try {
+                    resolved = await orchestratorConfig(store, repo)
+                  } catch {
+                    // A broken effective config fails the archive route
+                    // elsewhere; the release degrades to the dispatcher's
+                    // idle settlement.
+                    return undefined
+                  }
+                  if (resolved === null) return undefined
+                  try {
+                    return await hostedSandboxBackend(sandboxDeps, repo, resolved, credentials)
+                  } catch (error) {
+                    await sandboxDeps.report(error)
+                    return undefined
+                  }
+                },
+              }
+            : {}),
           ...shared,
         })
         return (req: Request) =>

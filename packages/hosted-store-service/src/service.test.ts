@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { parseConfig } from '@defrex/autobuild/testing'
 import { OperatorApiClient } from './operator-api'
 import {
   AUTOBUILD_VERSION,
@@ -10,7 +11,7 @@ import {
   mintToken,
 } from '@defrex/autobuild/remote-store'
 import { HOSTED_ARTIFACT_MAX_BYTES } from './config'
-import { createHostedStoreService } from './service'
+import { createHostedStoreService, hostedPublicOrigin } from './service'
 
 const env = {
   AB_STORE_SECRET: 'test-signing-secret',
@@ -404,5 +405,195 @@ describe('hosted store service', () => {
     )
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ kind: 'validation' })
+  })
+})
+
+describe('hostedPublicOrigin (AUT-584)', () => {
+  test('derives the deployment origin from BETTER_AUTH_URL; absence or invalidity is unavailable', () => {
+    expect(hostedPublicOrigin({ BETTER_AUTH_URL: 'https://hosted.example.com' })).toBe(
+      'https://hosted.example.com',
+    )
+    expect(hostedPublicOrigin({ BETTER_AUTH_URL: 'http://localhost:3000/app' })).toBe(
+      'http://localhost:3000',
+    )
+    expect(hostedPublicOrigin({})).toBeUndefined()
+    expect(hostedPublicOrigin({ BETTER_AUTH_URL: '   ' })).toBeUndefined()
+    expect(hostedPublicOrigin({ BETTER_AUTH_URL: 'not a url' })).toBeUndefined()
+    expect(hostedPublicOrigin({ BETTER_AUTH_URL: 'ftp://hosted.example.com' })).toBeUndefined()
+  })
+})
+
+describe('hosted operator-sandbox backend (AUT-584)', () => {
+  const SANDBOX_CONFIG = parseConfig(`
+[workspace]
+provider = "vercel-sandbox"
+[workspace.config]
+timeoutSeconds = 3600
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+[orchestrator]
+enabled = true
+model = "test/mock"
+`)
+
+  async function publishSandboxConfig(store: MemoryBuildStore): Promise<void> {
+    await store.ensureRepo('acme/repo')
+    const { verify, finalize, ...root } = SANDBOX_CONFIG
+    await store.putRepoArtifact('acme/repo', {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps, ...verify.stepConfigs },
+        finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+      }),
+    })
+  }
+
+  function sandboxService(
+    backing: MemoryBuildStore,
+    extraEnv: Record<string, string | undefined> = {},
+  ) {
+    const reports: unknown[][] = []
+    const service = createHostedStoreService({
+      env: { ...env, ...extraEnv },
+      clock,
+      openStore: async () => backing,
+      reportInternalError: (reported, context) => reports.push([reported, context]),
+    })
+    return { service, reports }
+  }
+
+  async function postMessage(
+    service: ReturnType<typeof createHostedStoreService>,
+    sid: string,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<Response> {
+    const token = mintToken(env.AB_STORE_SECRET, {
+      operator: { user: 'Hosted Operator' },
+      exp: now.getTime() + 60_000,
+    })
+    return service.fetch(
+      new Request(`http://hosted.test/operator/v1/repos/acme%2Frepo/sessions/${sid}/messages`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+          ...extraHeaders,
+        },
+        body: JSON.stringify({ text: 'hello' }),
+      }),
+    )
+  }
+
+  test('a message turn on a vercel-sandbox repository composes the backend from the request credential and starts the turn', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    await publishSandboxConfig(backing)
+    const { service, reports } = sandboxService(backing, {
+      BETTER_AUTH_URL: 'https://hosted.example.com',
+    })
+    const created = (await (
+      await service.fetch(
+        new Request('http://hosted.test/operator/v1/repos/acme%2Frepo/sessions', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
+              operator: { user: 'Hosted Operator' },
+              exp: now.getTime() + 60_000,
+            })}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ title: 'sandboxed' }),
+        }),
+      )
+    ).json()) as { id: string }
+
+    // The turn runner's sandbox backend composes from the request's OIDC
+    // header (construction-only: no SDK call happens at this depth), so the
+    // turn starts cleanly and no containment diagnostic is reported.
+    const posted = await postMessage(service, created.id, {
+      'x-vercel-oidc-token': 'request-oidc-token',
+    })
+    expect(posted.status).toBe(200)
+    const events = await backing.getSessionEvents(created.id)
+    expect(events.some((event) => event.type === 'turn.started')).toBe(true)
+    expect(reports).toEqual([])
+  })
+
+  test('without any Vercel credential the sandbox tools degrade, the diagnostic is reported, and the orchestrator still starts turns', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    await publishSandboxConfig(backing)
+    const { service, reports } = sandboxService(backing, {
+      BETTER_AUTH_URL: 'https://hosted.example.com',
+    })
+    const created = (await (
+      await service.fetch(
+        new Request('http://hosted.test/operator/v1/repos/acme%2Frepo/sessions', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
+              operator: { user: 'Hosted Operator' },
+              exp: now.getTime() + 60_000,
+            })}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ title: 'uncredentialed' }),
+        }),
+      )
+    ).json()) as { id: string }
+
+    const posted = await postMessage(service, created.id)
+    expect(posted.status).toBe(200)
+    // The orchestrator is unaffected: the turn starts (its registry merely
+    // carries no sandbox backend), and the composition failure surfaces as
+    // the contained diagnostic — the vercelSdkCredentials message.
+    const events = await backing.getSessionEvents(created.id)
+    expect(events.some((event) => event.type === 'turn.started')).toBe(true)
+    expect(reports).toHaveLength(1)
+    expect(String(reports[0]![0])).toContain(
+      'vercel-sandbox requires VERCEL_OIDC_TOKEN or VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
+    )
+    expect(reports[0]![1]).toMatchObject({ backend: 'operator' })
+  })
+
+  test('an absent BETTER_AUTH_URL leaves the deployment sandbox-free without degrading anything else', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    await publishSandboxConfig(backing)
+    const { service, reports } = sandboxService(backing)
+    const created = (await (
+      await service.fetch(
+        new Request('http://hosted.test/operator/v1/repos/acme%2Frepo/sessions', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
+              operator: { user: 'Hosted Operator' },
+              exp: now.getTime() + 60_000,
+            })}`,
+            [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ title: 'no-origin' }),
+        }),
+      )
+    ).json()) as { id: string }
+    const posted = await postMessage(service, created.id, {
+      'x-vercel-oidc-token': 'request-oidc-token',
+    })
+    expect(posted.status).toBe(200)
+    const events = await backing.getSessionEvents(created.id)
+    expect(events.some((event) => event.type === 'turn.started')).toBe(true)
+    // No origin → no composition attempt → no diagnostic.
+    expect(reports).toEqual([])
   })
 })
