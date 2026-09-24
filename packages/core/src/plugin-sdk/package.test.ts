@@ -394,5 +394,53 @@ describe('plugin SDK package surface', () => {
         join(consumer, 'node_modules', '@defrex', 'autobuild', 'bin', 'ab.ts'),
       ).exists(),
     ).toBe(true)
+
+    // Negative control, in the consumed-manifest shape a non-stripped packed
+    // manifest would impose (probed against the pinned bun 1.4.0): a tiny
+    // synthetic dependency package ships a patches/better-auth@1.4.18.patch
+    // file (content irrelevant — the failure precedes patch application) and
+    // declares patchedDependencies for it, and is installed into a consumer
+    // whose dependency set also contains better-auth@1.4.18. bun panics on
+    // that shape before patch application — the trigger is the patched
+    // package's presence in the consumer tree, not the patch file's absence
+    // (it panics even with the file present at the consumer root), and the
+    // panic output does not name the patch — so assert only the non-zero
+    // exit: a future bun that converts the panic into a graceful error still
+    // fails here, and if packedManifestOmittedFields ever loses
+    // 'patchedDependencies' the successful install above fails with exactly
+    // this shape.
+    const syntheticPackage = join(destination, 'patched-dependency-fixture')
+    await mkdir(join(syntheticPackage, 'patches'), { recursive: true })
+    await writeFile(
+      join(syntheticPackage, 'package.json'),
+      JSON.stringify({
+        name: 'ab-packed-patch-negative-control',
+        version: '1.0.0',
+        patchedDependencies: {
+          'better-auth@1.4.18': 'patches/better-auth@1.4.18.patch',
+        },
+      }),
+    )
+    await writeFile(join(syntheticPackage, 'patches', 'better-auth@1.4.18.patch'), 'irrelevant')
+    const negativeConsumer = join(destination, 'negative-control-consumer')
+    await mkdir(negativeConsumer)
+    await writeFile(
+      join(negativeConsumer, 'package.json'),
+      JSON.stringify({
+        name: 'packed-patch-negative-control-consumer',
+        private: true,
+        type: 'module',
+        dependencies: {
+          'ab-packed-patch-negative-control': `file:${syntheticPackage}`,
+          'better-auth': '1.4.18',
+        },
+      }),
+    )
+    const failing = await installPackedDistribution([], negativeConsumer)
+    if (failing.exitCode === 0) {
+      throw new Error(
+        `the consumed-manifest negative control installed successfully — the patchedDependencies strip no longer guards the failure it exists for:\n${failing.stdout}${failing.stderr}`,
+      )
+    }
   }, 600_000)
 })
