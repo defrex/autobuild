@@ -102,6 +102,24 @@ the deploy loudly when the package, its entrypoint, or the trace file is
 missing. The npm published package remains the real `src` — only the
 deployment stages the bundle.
 
+What the staged directory does afterwards depends on the build environment.
+Inside a Vercel deployment build (which always sets `VERCEL`, including a
+local `vercel build` run) the staged directory stays: the deployment never
+runs `bun install` again and the function bundle's runtime resolution needs
+it — a deployment building outside Vercel must set `VERCEL=1` in its build
+environment to keep the staged bundle. A plain local `bun run deploy:build`
+(no `VERCEL` environment) removes the staged directory afterwards and
+restores the workspace symlink, so a local run leaves the checkout exactly
+as `bun install` had it and local test runs keep resolving the workspace
+source (the capability parity test's reference equality holds). On checkouts
+of older versions the staged directory stayed behind and survived `bun
+install` — it reports "no changes" because the staged package satisfies the
+manifest — so later local runs resolved the plugin to the self-contained
+bundle and the parity test failed on its reference-equality assertion; the
+recovery is `rm -rf node_modules/@defrex/autobuild-vercel-sandbox && bun
+install`, or simply re-run `deploy:build` locally on a version with this
+fix, which restores the symlink itself.
+
 At runtime the kernel takes, in order: `AB_DISTRIBUTION_ARCHIVE` (an explicit
 archive path), the single archive under `.autobuild-dist/` of the
 distribution root or working directory, a source checkout packed on the spot,
