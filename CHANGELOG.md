@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
+- [#563](https://github.com/defrex/autobuild/pull/563) — Reject capabilities.requiredEnv groups that carry neither dispatchMessage nor validationMessage
 - [#562](https://github.com/defrex/autobuild/pull/562) — Give describeEnvironment providers a defined config argument
 - [#561](https://github.com/defrex/autobuild/pull/561) — Extend the plugin workspace-provider factory context (AUT-560)
 - [#560](https://github.com/defrex/autobuild/pull/560) — Harden the distribution-refresh tests (AUT-557)
