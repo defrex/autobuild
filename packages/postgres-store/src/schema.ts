@@ -468,7 +468,10 @@ export const SCHEMA_V6_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V
 /** The frozen v7 DDL, kept verbatim so a deployed v7 marker's checksum can be
  * recognized and upgraded in place (see migratePostgres). v7 is the shape the
  * hosted service ran immediately before the repository-journal state-read
- * index (v8, AUT-489). */
+ * index (v8, AUT-489). Frozen pre-trimmed (the V1–V6 pattern): a deployed
+ * marker's checksum is taken over the trimmed DDL, so an untrimmed constant
+ * would hash surrounding whitespace no deployed database ever carried and the
+ * promotion branch would never match. */
 export const SCHEMA_V7_DDL = `
 CREATE TABLE IF NOT EXISTS ab_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -557,7 +560,7 @@ CREATE TABLE IF NOT EXISTS stream_chunks (
 -- The build-digest scan index (AUT-487): type-leading, so the digest query's
 -- cost grows with the observation/terminal events themselves, not with total
 -- history. Created idempotently so pre-v7 databases gain it on migrate.
-CREATE INDEX IF NOT EXISTS events_type_build_seq ON events (type, build, seq);`
+CREATE INDEX IF NOT EXISTS events_type_build_seq ON events (type, build, seq);`.trim()
 export const SCHEMA_V7_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V7_DDL).digest('hex')
 
 export const SCHEMA_DDL = `
