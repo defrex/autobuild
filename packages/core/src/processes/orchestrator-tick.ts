@@ -17,15 +17,16 @@
  *
  * The wake cursor advances only through the recorded trigger (the reducer
  * takes `max`), so a crash between scan and start cannot skip or duplicate a
- * wake; other builds' matching events re-trigger on later ticks. One turn
- * per session per tick, never concurrent.
+ * wake; other builds' — and the journal's — matching events re-trigger on
+ * later ticks. One turn per session per tick, never concurrent.
  */
 import { ORCHESTRATOR_MIN_TURN_SECONDS, type Config } from '../config/schema'
 import { compileEventGlobs } from '../events/globs'
+import type { RepositoryEvent } from '../events/repository'
 import type { TicketSource } from '../ports/types'
 import { buildRegistry, type OperatorToolRegistry } from '../operator/registry'
 import { ticketBackendFromSource } from '../operator/ticket-source-backend'
-import { reduceSession } from '../store/session-reducer'
+import { reduceSession, type SessionTurnTrigger } from '../store/session-reducer'
 import { reduceBuild } from '../kernel/reducer'
 import type { AbEvent } from '../events/catalog'
 import type { BuildStore, Clock } from '../store/types'
@@ -34,6 +35,7 @@ import type { LanguageModel } from 'ai'
 import {
   createOrchestratorTurnRunner,
   type OrchestratorTurnRunner,
+  type WakeTurnInput,
 } from '../orchestrator/turn-runner'
 
 /** Minutes an open, unsuspended turn's stream may stay silent before the
@@ -199,14 +201,21 @@ export async function runOrchestratorTickStep(
     if (state.wakeGlobs.length === 0) continue
     let filters: RegExp[]
     try {
-      filters = compileEventGlobs(state.wakeGlobs, { usage: '[orchestrator].wake' })
+      filters = compileEventGlobs(state.wakeGlobs, {
+        repository: true,
+        usage: '[orchestrator].wake',
+      })
     } catch {
       continue // unmatchable settings wake nothing
     }
 
-    // Scan every build's events after this session's per-build wake cursor;
-    // select the single newest matching event across all scanned builds.
-    let newest: { build: string; event: AbEvent } | undefined
+    // Scan every build's events after this session's per-build wake cursor,
+    // then the repository journal after its own cursor; select the single
+    // newest matching event across all scanned sources.
+    let newest:
+      | { build: string; event: AbEvent }
+      | { journal: true; event: RepositoryEvent }
+      | undefined
     for (const build of builds) {
       const cursor = state.wakeCursors[build.slug] ?? 0
       const buildEvents = await store.getEvents(build.slug)
@@ -222,6 +231,23 @@ export async function runOrchestratorTickStep(
         }
       }
     }
+    // The journal's seq space is independent of every build's; a `seq`
+    // tie-break across sources compares numbers from different spaces —
+    // deterministic, and only matters when two sources' newest matches share
+    // a millisecond timestamp.
+    const journalCursor = state.journalWakeCursor
+    const journalEvents = await store.getRepoEvents(repo, journalCursor)
+    for (const event of journalEvents) {
+      if (event.seq <= journalCursor) continue
+      if (!filters.some((regex) => regex.test(event.type))) continue
+      if (
+        newest === undefined ||
+        event.ts > newest.event.ts ||
+        (event.ts === newest.event.ts && event.seq > newest.event.seq)
+      ) {
+        newest = { journal: true, event }
+      }
+    }
     if (newest === undefined) continue
 
     // Same drawdown for wake turns: one turn per session per tick, bounded
@@ -230,26 +256,33 @@ export async function runOrchestratorTickStep(
     const remaining = remainingNow() - ORCHESTRATOR_MIN_TURN_SECONDS
     if (remaining < ORCHESTRATOR_MIN_TURN_SECONDS) break
 
-    const buildEvents = await store.getEvents(newest.build)
-    const start = await runner.startTurn(
-      record.id,
-      {
-        kind: 'wake',
-        build: newest.build,
-        seq: newest.event.seq,
-        type: newest.event.type,
-      },
-      {
-        event: {
-          seq: newest.event.seq,
-          ts: newest.event.ts,
-          type: newest.event.type,
-          payload: newest.event.payload,
-        },
-        buildState: reduceBuild(buildEvents) as unknown as Record<string, unknown>,
-      },
-      { remainingBudgetSeconds: remaining },
-    )
+    // A journal wake delivers the frozen event record only — the turn's
+    // operator registry already exposes bounded repository reads, so no
+    // reduced state is coupled in. A build wake delivers the build's reduced
+    // state as before.
+    const event = {
+      seq: newest.event.seq,
+      ts: newest.event.ts,
+      type: newest.event.type,
+      payload: newest.event.payload,
+    }
+    const trigger: SessionTurnTrigger =
+      'journal' in newest
+        ? { kind: 'wake', journal: true, seq: newest.event.seq, type: newest.event.type }
+        : { kind: 'wake', build: newest.build, seq: newest.event.seq, type: newest.event.type }
+    const wake: WakeTurnInput =
+      'journal' in newest
+        ? { event }
+        : {
+            event,
+            buildState: reduceBuild(await store.getEvents(newest.build)) as unknown as Record<
+              string,
+              unknown
+            >,
+          }
+    const start = await runner.startTurn(record.id, trigger, wake, {
+      remainingBudgetSeconds: remaining,
+    })
     if (start.started) {
       report.woken += 1
       // The cursor advances only through the recorded trigger (the reducer
