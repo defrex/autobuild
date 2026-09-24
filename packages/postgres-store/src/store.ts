@@ -77,6 +77,7 @@ import {
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
+import { attemptExec, isPlanChangeError, PlanInvalidations, type Exec, type Row } from './retry'
 
 // The held-read poll cadence for event waits — a re-export of the canonical
 // core constant (AUT-388), not a second definition. See core
@@ -84,8 +85,29 @@ import { assertSchema } from './schema'
 // rationale for why the bound is nominal rather than hard.
 export { EVENT_WAIT_POLL_MS }
 
-type Row = Record<string, unknown>
-type Tx = SQL
+// ── Cached-plan invalidation retry (AUT-396) ─────────────────────────
+// After a migration adds a column, pooled connections hold cached plans for
+// statements returning `*` from that table, and the next execution on each
+// stale plan fails with SQLSTATE 0A000 ("cached plan must not change result
+// type") — and keeps failing, because Bun reuses named prepared statements
+// keyed by query text and never rebuilds a rejected plan. Every store read
+// and write path therefore executes through the `run`/`tx` runners below,
+// which pin one pooled connection and retry the whole operation exactly once
+// on a plan-change error. The retry re-prepares every statement the body
+// executes under freshly minted marked variants — a migration can have
+// poisoned any `*`-returning plan the body touches, not only the statement
+// that failed first — and the variants are memoized per statement text:
+// after the first failure, later executions skip the poisoned plans
+// entirely, so a migration costs one failed execution per connection per
+// statement and a bounded number of extra prepared statements — not one per
+// operation. Every
+// `SELECT *` (and `RETURNING *` — none exist today) on the
+// migration-extendable tables — `streams`, `sessions`, `builds`, and every
+// other store table — is kept under that same-connection retry rather than
+// replaced by explicit column lists, which would cover only the tables named
+// today and drift with the schema. See `./retry` for the Bun/PostgreSQL
+// mechanics.
+
 interface PreparedArtifact {
   kind: string
   blobRef: string
@@ -118,6 +140,68 @@ export class PostgresBuildStore implements BuildStore {
     this.blobs = options.blobs
     this.clock = options.clock ?? systemClock
     this.maxRevisions = options.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
+  }
+
+  /** Memoized poisoned-statement markers, unique to this store instance (see
+   * `./retry` for why the memo and the per-instance namespace exist). */
+  private readonly plans = new PlanInvalidations()
+
+  /** Run a non-transactional operation on one pinned pooled connection,
+   * retrying it exactly once — same connection, statements freshly prepared —
+   * when a cached plan fails to revalidate (AUT-396). A run body must not
+   * call a public store method: reserving inside a reservation yields a
+   * brand-new connection instead of the pinned one. */
+  private async run<T>(body: (q: Exec) => Promise<T>): Promise<T> {
+    const conn = await this.sql.reserve()
+    try {
+      const attempt = attemptExec(conn, this.plans)
+      try {
+        return await body(attempt.exec)
+      } catch (error) {
+        if (!isPlanChangeError(error) || attempt.inFlight === null) throw error
+        // The failing statement's plan was invalidated once more: memoize a
+        // fresh marked variant for its text. The retry then re-prepares
+        // *every* statement the body executes — a migration can have
+        // poisoned any `*`-returning plan the body touches, not only the
+        // one that failed first, and a memoized marker minted before the
+        // migration is itself stale — so a body reading two
+        // migration-extended tables recovers in the single retry.
+        const failing = attempt.inFlight
+        this.plans.invalidate(failing)
+        return await body(attemptExec(conn, this.plans, true).exec)
+      }
+    } finally {
+      conn.release()
+    }
+  }
+
+  /** Run a transactional operation on one pinned pooled connection, retrying
+   * the whole body exactly once on a plan-change error: the failed attempt
+   * rolls back, and the body re-runs in a fresh transaction on the same
+   * connection with freshly prepared statements (AUT-396). */
+  private async tx<T>(body: (q: Exec) => Promise<T>): Promise<T> {
+    const conn = await this.sql.reserve()
+    try {
+      // Attribution lives outside `begin`: the transaction executor only
+      // exists inside the callback, so each attempt builds its own exec and
+      // reports the failing statement's text back here on rejection.
+      let failing: string | null = null
+      try {
+        return await conn.begin((t) => {
+          const attempt = attemptExec(t, this.plans)
+          return body(attempt.exec).catch((error) => {
+            failing = attempt.inFlight
+            throw error
+          })
+        })
+      } catch (error) {
+        if (!isPlanChangeError(error) || failing === null) throw error
+        this.plans.invalidate(failing)
+        return await conn.begin((t) => body(attemptExec(t, this.plans, true).exec))
+      }
+    } finally {
+      conn.release()
+    }
   }
 
   scopeBuild(slug: string): BuildScopedStore {
@@ -160,15 +244,15 @@ export class PostgresBuildStore implements BuildStore {
     }
   }
 
-  private async lockBuild(tx: Tx, slug: string): Promise<Row> {
-    const rows: Row[] = await tx`SELECT * FROM builds WHERE slug = ${slug} FOR UPDATE`
+  private async lockBuild(q: Exec, slug: string): Promise<Row> {
+    const rows: Row[] = await q`SELECT * FROM builds WHERE slug = ${slug} FOR UPDATE`
     const row = rows[0]
     if (!row) throw new Error(`unknown build "${slug}"`)
     return row
   }
 
-  private async lockRepo(tx: Tx, repo: string): Promise<Row> {
-    const rows: Row[] = await tx`SELECT * FROM repo_streams WHERE repo = ${repo} FOR UPDATE`
+  private async lockRepo(q: Exec, repo: string): Promise<Row> {
+    const rows: Row[] = await q`SELECT * FROM repo_streams WHERE repo = ${repo} FOR UPDATE`
     const row = rows[0]
     if (!row) throw new Error(`unknown repo "${repo}"`)
     return row
@@ -176,25 +260,29 @@ export class PostgresBuildStore implements BuildStore {
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
     const ts = this.now()
-    return this.sql.begin(async (tx) => {
-      const inserted: Row[] = await tx`INSERT INTO builds
+    return this.tx(async (q) => {
+      const inserted: Row[] = await q`INSERT INTO builds
         (slug, repo, ticket, branch, repo_origin, created_at, updated_at)
         VALUES (${input.slug}, ${input.repo}, ${input.ticket ?? null}, ${input.branch ?? null}, ${input.repoOrigin ?? null}, ${ts}, ${ts})
         ON CONFLICT (slug) DO NOTHING RETURNING slug`
-      const row = await this.lockBuild(tx, input.slug)
+      const row = await this.lockBuild(q, input.slug)
       if (!inserted[0]) throw new Error(`build "${input.slug}" already exists`)
       return this.record(row)
     })
   }
 
   async getBuild(slug: string): Promise<BuildRecord | null> {
-    const rows: Row[] = await this.sql`SELECT * FROM builds WHERE slug = ${slug}`
-    return rows[0] ? this.record(rows[0]) : null
+    return this.run(async (q) => {
+      const rows: Row[] = await q`SELECT * FROM builds WHERE slug = ${slug}`
+      return rows[0] ? this.record(rows[0]) : null
+    })
   }
 
   async listBuilds(): Promise<BuildRecord[]> {
-    const rows: Row[] = await this.sql`SELECT * FROM builds ORDER BY created_at, slug`
-    return rows.map((row) => this.record(row))
+    return this.run(async (q) => {
+      const rows: Row[] = await q`SELECT * FROM builds ORDER BY created_at, slug`
+      return rows.map((row) => this.record(row))
+    })
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
@@ -204,14 +292,16 @@ export class PostgresBuildStore implements BuildStore {
     // types are fetched. The `events_type_build_seq` index (schema.ts) makes
     // the join's per-build probes type-leading, so the cost grows with the
     // actual signal, not with total history.
-    const rows: Row[] = await this.sql.unsafe(
-      `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type
+    const rows: Row[] = await this.run((q) =>
+      q.unsafe(
+        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type
        FROM builds b
        LEFT JOIN events e
          ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map((_, i) => `$${i + 2}`).join(', ')})
        WHERE b.repo = $1
        ORDER BY b.slug, e.seq`,
-      [repo, ...DIGEST_EVENT_TYPES],
+        [repo, ...DIGEST_EVENT_TYPES],
+      ),
     )
     const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq' | 'ts'>[]>()
     for (const row of rows) {
@@ -234,27 +324,25 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   private async appendLocked(
-    tx: Tx,
+    q: Exec,
     slug: string,
     event: EventWrite,
     alreadyLocked = false,
   ): Promise<EventEnvelope> {
-    if (!alreadyLocked) await this.lockBuild(tx, slug)
+    if (!alreadyLocked) await this.lockBuild(q, slug)
     const tails: Row[] =
-      await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE build = ${slug}`
+      await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE build = ${slug}`
     const seq = num(tails[0]?.seq) + 1
     const ts = this.now()
-    await tx`INSERT INTO events (build, seq, ts, actor, type, payload)
+    await q`INSERT INTO events (build, seq, ts, actor, type, payload)
       VALUES (${slug}, ${seq}, ${ts}, ${event.actor}, ${event.type}, ${event.payload})`
-    await tx`UPDATE builds SET updated_at = ${ts} WHERE slug = ${slug}`
+    await q`UPDATE builds SET updated_at = ${ts} WHERE slug = ${slug}`
     return { build: slug, seq, ts, actor: event.actor, type: event.type, payload: event.payload }
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const validated = validateEventWrite(event)
-    return (await this.sql.begin((tx) =>
-      this.appendLocked(tx, slug, validated),
-    )) as EventEnvelope<T>
+    return (await this.tx((q) => this.appendLocked(q, slug, validated))) as EventEnvelope<T>
   }
 
   async appendIfCurrent<T extends EventType>(
@@ -264,12 +352,12 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<EventEnvelope<T> | null> {
     validateExpectedSeq(expectedSeq)
     const validated = validateEventWrite(event)
-    return this.sql.begin(async (tx) => {
-      await this.lockBuild(tx, slug)
+    return this.tx(async (q) => {
+      await this.lockBuild(q, slug)
       const tails: Row[] =
-        await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE build = ${slug}`
+        await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE build = ${slug}`
       if (num(tails[0]?.seq) !== expectedSeq) return null
-      return (await this.appendLocked(tx, slug, validated, true)) as EventEnvelope<T>
+      return (await this.appendLocked(q, slug, validated, true)) as EventEnvelope<T>
     })
   }
 
@@ -282,7 +370,7 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   private async depositBuildLocked(
-    tx: Tx,
+    q: Exec,
     slug: string,
     artifact: PreparedArtifact,
     lockedKinds: Map<string, number>,
@@ -290,16 +378,16 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<ArtifactMeta> {
     let revision = lockedKinds.get(artifact.kind)
     if (revision === undefined) {
-      const tails: Row[] = await tx`SELECT COALESCE(MAX(revision), -1) AS revision
+      const tails: Row[] = await q`SELECT COALESCE(MAX(revision), -1) AS revision
         FROM artifacts WHERE build = ${slug} AND kind = ${artifact.kind}`
       revision = num(tails[0]?.revision) + 1
     }
     lockedKinds.set(artifact.kind, revision + 1)
     const createdAt = this.now()
-    await tx`INSERT INTO artifacts (build, kind, revision, blob_ref, metadata, created_at)
+    await q`INSERT INTO artifacts (build, kind, revision, blob_ref, metadata, created_at)
       VALUES (${slug}, ${artifact.kind}, ${revision}, ${artifact.blobRef}, ${artifact.metadata}, ${createdAt})`
-    if (opts.prune) await this.pruneBuildLocked(tx, slug, artifact.kind)
-    await tx`UPDATE builds SET updated_at = ${createdAt} WHERE slug = ${slug}`
+    if (opts.prune) await this.pruneBuildLocked(q, slug, artifact.kind)
+    await q`UPDATE builds SET updated_at = ${createdAt} WHERE slug = ${slug}`
     return {
       build: slug,
       kind: artifact.kind,
@@ -315,31 +403,31 @@ export class PostgresBuildStore implements BuildStore {
    * retention-managed kinds. The pruned values are store-assigned nonnegative
    * integers (re-checked by `revisionsToPrune`), so the IN list expands
    * safely. Non-family kinds are never touched. */
-  private async pruneBuildLocked(tx: Tx, slug: string, kind: string): Promise<void> {
+  private async pruneBuildLocked(q: Exec, slug: string, kind: string): Promise<void> {
     if (!isRetentionManagedKind(kind)) return
     const rows: Row[] =
-      await tx`SELECT revision FROM artifacts WHERE build = ${slug} AND kind = ${kind}`
+      await q`SELECT revision FROM artifacts WHERE build = ${slug} AND kind = ${kind}`
     const pruned = revisionsToPrune(
       rows.map((row) => num(row.revision)),
       this.maxRevisions,
     )
     if (pruned.length === 0) return
-    await tx.unsafe(
+    await q.unsafe(
       `DELETE FROM artifacts WHERE build = $1 AND kind = $2 AND revision IN (${pruned.join(', ')})`,
       [slug, kind],
     )
   }
 
-  private async pruneRepoLocked(tx: Tx, repo: string, kind: string): Promise<void> {
+  private async pruneRepoLocked(q: Exec, repo: string, kind: string): Promise<void> {
     if (!isRetentionManagedKind(kind)) return
     const rows: Row[] =
-      await tx`SELECT revision FROM repo_artifacts WHERE repo = ${repo} AND kind = ${kind}`
+      await q`SELECT revision FROM repo_artifacts WHERE repo = ${repo} AND kind = ${kind}`
     const pruned = revisionsToPrune(
       rows.map((row) => num(row.revision)),
       this.maxRevisions,
     )
     if (pruned.length === 0) return
-    await tx.unsafe(
+    await q.unsafe(
       `DELETE FROM repo_artifacts WHERE repo = $1 AND kind = $2 AND revision IN (${pruned.join(', ')})`,
       [repo, kind],
     )
@@ -352,8 +440,8 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
     const prepared: PreparedArtifact[] = []
     for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
-    return this.sql.begin(async (tx) => {
-      await this.lockBuild(tx, slug)
+    return this.tx(async (q) => {
+      await this.lockBuild(q, slug)
       // Ordering invariant (AUT-322): the batch event is validated BEFORE
       // any retention prune runs. Deposits land unpruned, validation gates
       // the whole batch, and only then does one prune per distinct batch
@@ -366,14 +454,14 @@ export class PostgresBuildStore implements BuildStore {
       const deposited: ArtifactMeta[] = []
       for (const artifact of prepared) {
         deposited.push(
-          await this.depositBuildLocked(tx, slug, artifact, revisions, { prune: false }),
+          await this.depositBuildLocked(q, slug, artifact, revisions, { prune: false }),
         )
       }
       const validated = validateEventWrite(makeEvent(structuredClone(deposited)))
       for (const kind of new Set(deposited.map((meta) => meta.kind))) {
-        await this.pruneBuildLocked(tx, slug, kind)
+        await this.pruneBuildLocked(q, slug, kind)
       }
-      const event = (await this.appendLocked(tx, slug, validated, true)) as EventEnvelope<T>
+      const event = (await this.appendLocked(q, slug, validated, true)) as EventEnvelope<T>
       return { event, artifacts: deposited }
     })
   }
@@ -385,8 +473,11 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<AbEvent[]> {
     const read = async (): Promise<AbEvent[]> => {
       if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
-      const rows: Row[] = await this.sql`SELECT * FROM events WHERE build = ${slug}
-        AND seq > ${sinceSeq} ORDER BY seq`
+      const rows: Row[] = await this.run(
+        (q) =>
+          q`SELECT * FROM events WHERE build = ${slug}
+        AND seq > ${sinceSeq} ORDER BY seq`,
+      )
       return rows.map((row) => ({
         build: String(row.build),
         seq: num(row.seq),
@@ -409,9 +500,9 @@ export class PostgresBuildStore implements BuildStore {
 
   async putArtifact(slug: string, artifact: ArtifactInput): Promise<ArtifactMeta> {
     const prepared = await this.prepare(artifact)
-    return this.sql.begin(async (tx) => {
-      await this.lockBuild(tx, slug)
-      return this.depositBuildLocked(tx, slug, prepared, new Map())
+    return this.tx(async (q) => {
+      await this.lockBuild(q, slug)
+      return this.depositBuildLocked(q, slug, prepared, new Map())
     })
   }
 
@@ -428,12 +519,11 @@ export class PostgresBuildStore implements BuildStore {
 
   async getArtifact(slug: string, kind: string, rev?: number): Promise<Artifact | null> {
     if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
-    const rows: Row[] =
+    const rows: Row[] = await this.run((q) =>
       rev === undefined
-        ? await this
-            .sql`SELECT * FROM artifacts WHERE build = ${slug} AND kind = ${kind} ORDER BY revision DESC LIMIT 1`
-        : await this
-            .sql`SELECT * FROM artifacts WHERE build = ${slug} AND kind = ${kind} AND revision = ${rev}`
+        ? q`SELECT * FROM artifacts WHERE build = ${slug} AND kind = ${kind} ORDER BY revision DESC LIMIT 1`
+        : q`SELECT * FROM artifacts WHERE build = ${slug} AND kind = ${kind} AND revision = ${rev}`,
+    )
     const row = rows[0]
     if (!row) return null
     const content = await this.blobs.get(String(row.blob_ref))
@@ -442,11 +532,11 @@ export class PostgresBuildStore implements BuildStore {
 
   async listArtifacts(slug: string, kind?: string): Promise<ArtifactMeta[]> {
     if (!(await this.getBuild(slug))) throw new Error(`unknown build "${slug}"`)
-    const rows: Row[] =
+    const rows: Row[] = await this.run((q) =>
       kind === undefined
-        ? await this.sql`SELECT * FROM artifacts WHERE build = ${slug} ORDER BY kind, revision`
-        : await this
-            .sql`SELECT * FROM artifacts WHERE build = ${slug} AND kind = ${kind} ORDER BY kind, revision`
+        ? q`SELECT * FROM artifacts WHERE build = ${slug} ORDER BY kind, revision`
+        : q`SELECT * FROM artifacts WHERE build = ${slug} AND kind = ${kind} ORDER BY kind, revision`,
+    )
     return rows.map((row) => this.artifactMeta(row))
   }
 
@@ -456,8 +546,8 @@ export class PostgresBuildStore implements BuildStore {
     holder: string,
     ttlMs: number,
   ): Promise<boolean> {
-    return this.sql.begin(async (tx) => {
-      const row = table === 'builds' ? await this.lockBuild(tx, key) : await this.lockRepo(tx, key)
+    return this.tx(async (q) => {
+      const row = table === 'builds' ? await this.lockBuild(q, key) : await this.lockRepo(q, key)
       const now = this.clock().getTime()
       const held =
         row.lease_holder &&
@@ -468,9 +558,9 @@ export class PostgresBuildStore implements BuildStore {
       const expires = new Date(now + ttlMs).toISOString()
       const nowIso = new Date(now).toISOString()
       if (table === 'builds')
-        await tx`UPDATE builds SET lease_holder=${holder}, lease_expires_at=${expires}, lease_ttl_ms=${ttlMs}, updated_at=${nowIso} WHERE slug=${key}`
+        await q`UPDATE builds SET lease_holder=${holder}, lease_expires_at=${expires}, lease_ttl_ms=${ttlMs}, updated_at=${nowIso} WHERE slug=${key}`
       else
-        await tx`UPDATE repo_streams SET lease_holder=${holder}, lease_expires_at=${expires}, lease_ttl_ms=${ttlMs}, updated_at=${nowIso} WHERE repo=${key}`
+        await q`UPDATE repo_streams SET lease_holder=${holder}, lease_expires_at=${expires}, lease_ttl_ms=${ttlMs}, updated_at=${nowIso} WHERE repo=${key}`
       return true
     })
   }
@@ -487,8 +577,8 @@ export class PostgresBuildStore implements BuildStore {
     key: string,
     holder: string,
   ): Promise<boolean> {
-    return this.sql.begin(async (tx) => {
-      const row = table === 'builds' ? await this.lockBuild(tx, key) : await this.lockRepo(tx, key)
+    return this.tx(async (q) => {
+      const row = table === 'builds' ? await this.lockBuild(q, key) : await this.lockRepo(q, key)
       const now = this.clock().getTime()
       if (
         row.lease_holder !== holder ||
@@ -499,9 +589,9 @@ export class PostgresBuildStore implements BuildStore {
       const expires = new Date(now + num(row.lease_ttl_ms)).toISOString()
       const nowIso = new Date(now).toISOString()
       if (table === 'builds')
-        await tx`UPDATE builds SET lease_expires_at=${expires}, heartbeat_at=${nowIso}, updated_at=${nowIso} WHERE slug=${key}`
+        await q`UPDATE builds SET lease_expires_at=${expires}, heartbeat_at=${nowIso}, updated_at=${nowIso} WHERE slug=${key}`
       else
-        await tx`UPDATE repo_streams SET lease_expires_at=${expires}, heartbeat_at=${nowIso}, updated_at=${nowIso} WHERE repo=${key}`
+        await q`UPDATE repo_streams SET lease_expires_at=${expires}, heartbeat_at=${nowIso}, updated_at=${nowIso} WHERE repo=${key}`
       return true
     })
   }
@@ -518,14 +608,14 @@ export class PostgresBuildStore implements BuildStore {
     key: string,
     holder: string,
   ): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      const row = table === 'builds' ? await this.lockBuild(tx, key) : await this.lockRepo(tx, key)
+    await this.tx(async (q) => {
+      const row = table === 'builds' ? await this.lockBuild(q, key) : await this.lockRepo(q, key)
       if (row.lease_holder !== holder) return
       const now = this.now()
       if (table === 'builds')
-        await tx`UPDATE builds SET lease_holder=NULL, lease_expires_at=NULL, lease_ttl_ms=NULL, updated_at=${now} WHERE slug=${key}`
+        await q`UPDATE builds SET lease_holder=NULL, lease_expires_at=NULL, lease_ttl_ms=NULL, updated_at=${now} WHERE slug=${key}`
       else
-        await tx`UPDATE repo_streams SET lease_holder=NULL, lease_expires_at=NULL, lease_ttl_ms=NULL, updated_at=${now} WHERE repo=${key}`
+        await q`UPDATE repo_streams SET lease_holder=NULL, lease_expires_at=NULL, lease_ttl_ms=NULL, updated_at=${now} WHERE repo=${key}`
     })
   }
 
@@ -538,8 +628,8 @@ export class PostgresBuildStore implements BuildStore {
 
   // ── Operator sessions (SPEC §7.1.1 — a third resource kind) ─────────
 
-  private async lockSession(tx: Tx, id: string): Promise<Row> {
-    const rows: Row[] = await tx`SELECT * FROM sessions WHERE id = ${id} FOR UPDATE`
+  private async lockSession(q: Exec, id: string): Promise<Row> {
+    const rows: Row[] = await q`SELECT * FROM sessions WHERE id = ${id} FOR UPDATE`
     const row = rows[0]
     if (!row) throw new Error(`unknown session "${id}"`)
     return row
@@ -568,46 +658,50 @@ export class PostgresBuildStore implements BuildStore {
       type: 'session.created',
       payload: input.title !== undefined ? { title: input.title } : {},
     })
-    return this.sql.begin(async (tx) => {
+    return this.tx(async (q) => {
       // Store-assigned monotonic creation sequence (the listSessions
       // same-timestamp tiebreak): the sequence is concurrency-safe and never
       // repeats, so ties order by assignment. Sessions are never deleted, so
       // the counter is never reused.
-      await tx`INSERT INTO sessions (id, repo, operator, title, creation_seq, created_at, updated_at)
+      await q`INSERT INTO sessions (id, repo, operator, title, creation_seq, created_at, updated_at)
         VALUES (${id}, ${input.repo}, ${operator}, ${input.title ?? null}, nextval('sessions_creation_seq'), ${ts}, ${ts})`
-      await tx`INSERT INTO session_events (session, seq, ts, actor, type, payload)
+      await q`INSERT INTO session_events (session, seq, ts, actor, type, payload)
         VALUES (${id}, 1, ${ts}, ${validated.actor}, ${validated.type}, ${validated.payload})`
-      return this.sessionRecord(await this.lockSession(tx, id))
+      return this.sessionRecord(await this.lockSession(q, id))
     })
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
-    const rows: Row[] = await this.sql`SELECT * FROM sessions WHERE id = ${id}`
-    return rows[0] ? this.sessionRecord(rows[0]) : null
+    return this.run(async (q) => {
+      const rows: Row[] = await q`SELECT * FROM sessions WHERE id = ${id}`
+      return rows[0] ? this.sessionRecord(rows[0]) : null
+    })
   }
 
   async listSessions(repo: string): Promise<SessionRecord[]> {
     // Pinned tiebreak (store/types.ts): createdAt ascending, then the
     // store-assigned monotonic creation sequence — never the random id.
-    const rows: Row[] = await this
-      .sql`SELECT * FROM sessions WHERE repo = ${repo} ORDER BY created_at, creation_seq`
-    return rows.map((row) => this.sessionRecord(row))
+    return this.run(async (q) => {
+      const rows: Row[] =
+        await q`SELECT * FROM sessions WHERE repo = ${repo} ORDER BY created_at, creation_seq`
+      return rows.map((row) => this.sessionRecord(row))
+    })
   }
 
   private async appendSessionLocked(
-    tx: Tx,
+    q: Exec,
     id: string,
     event: SessionEventWrite,
     alreadyLocked = false,
   ): Promise<SessionEventEnvelope> {
-    if (!alreadyLocked) await this.lockSession(tx, id)
+    if (!alreadyLocked) await this.lockSession(q, id)
     const tails: Row[] =
-      await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM session_events WHERE session = ${id}`
+      await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM session_events WHERE session = ${id}`
     const seq = num(tails[0]?.seq) + 1
     const ts = this.now()
-    await tx`INSERT INTO session_events (session, seq, ts, actor, type, payload)
+    await q`INSERT INTO session_events (session, seq, ts, actor, type, payload)
       VALUES (${id}, ${seq}, ${ts}, ${event.actor}, ${event.type}, ${event.payload})`
-    await tx`UPDATE sessions SET updated_at = ${ts} WHERE id = ${id}`
+    await q`UPDATE sessions SET updated_at = ${ts} WHERE id = ${id}`
     return { session: id, seq, ts, actor: event.actor, type: event.type, payload: event.payload }
   }
 
@@ -616,8 +710,8 @@ export class PostgresBuildStore implements BuildStore {
     event: SessionEventWrite<T>,
   ): Promise<SessionEventEnvelope<T>> {
     const validated = validateSessionEventWrite(event)
-    return (await this.sql.begin((tx) =>
-      this.appendSessionLocked(tx, id, validated),
+    return (await this.tx((q) =>
+      this.appendSessionLocked(q, id, validated),
     )) as SessionEventEnvelope<T>
   }
 
@@ -628,8 +722,10 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<SessionEvent[]> {
     const read = async (): Promise<SessionEvent[]> => {
       if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
-      const rows: Row[] = await this
-        .sql`SELECT * FROM session_events WHERE session = ${id} AND seq > ${sinceSeq} ORDER BY seq`
+      const rows: Row[] = await this.run(
+        (q) =>
+          q`SELECT * FROM session_events WHERE session = ${id} AND seq > ${sinceSeq} ORDER BY seq`,
+      )
       return rows.map((row) => ({
         session: String(row.session),
         seq: num(row.seq),
@@ -652,7 +748,7 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   private async depositSessionLocked(
-    tx: Tx,
+    q: Exec,
     id: string,
     artifact: PreparedArtifact,
     revisions: Map<string, number>,
@@ -660,14 +756,14 @@ export class PostgresBuildStore implements BuildStore {
     let revision = revisions.get(artifact.kind)
     if (revision === undefined) {
       const tails: Row[] =
-        await tx`SELECT COALESCE(MAX(revision), -1) AS revision FROM session_artifacts WHERE session=${id} AND kind=${artifact.kind}`
+        await q`SELECT COALESCE(MAX(revision), -1) AS revision FROM session_artifacts WHERE session=${id} AND kind=${artifact.kind}`
       revision = num(tails[0]?.revision) + 1
     }
     revisions.set(artifact.kind, revision + 1)
     const createdAt = this.now()
-    await tx`INSERT INTO session_artifacts (session, kind, revision, blob_ref, metadata, created_at)
+    await q`INSERT INTO session_artifacts (session, kind, revision, blob_ref, metadata, created_at)
       VALUES (${id}, ${artifact.kind}, ${revision}, ${artifact.blobRef}, ${artifact.metadata}, ${createdAt})`
-    await tx`UPDATE sessions SET updated_at = ${createdAt} WHERE id = ${id}`
+    await q`UPDATE sessions SET updated_at = ${createdAt} WHERE id = ${id}`
     return {
       session: id,
       kind: artifact.kind,
@@ -689,16 +785,16 @@ export class PostgresBuildStore implements BuildStore {
     // locked transaction, the batch event is validated before any commit of
     // the caller-visible state, and an invalid event throws, rolling back
     // every deposit (D6). Session artifacts are not retention-managed.
-    return this.sql.begin(async (tx) => {
-      await this.lockSession(tx, id)
+    return this.tx(async (q) => {
+      await this.lockSession(q, id)
       const revisions = new Map<string, number>()
       const deposited: SessionArtifactMeta[] = []
       for (const artifact of prepared) {
-        deposited.push(await this.depositSessionLocked(tx, id, artifact, revisions))
+        deposited.push(await this.depositSessionLocked(q, id, artifact, revisions))
       }
       const validated = validateSessionEventWrite(makeEvent(structuredClone(deposited)))
       const event = (await this.appendSessionLocked(
-        tx,
+        q,
         id,
         validated,
         true,
@@ -709,9 +805,9 @@ export class PostgresBuildStore implements BuildStore {
 
   async putSessionArtifact(id: string, artifact: ArtifactInput): Promise<SessionArtifactMeta> {
     const prepared = await this.prepare(artifact)
-    return this.sql.begin(async (tx) => {
-      await this.lockSession(tx, id)
-      return this.depositSessionLocked(tx, id, prepared, new Map())
+    return this.tx(async (q) => {
+      await this.lockSession(q, id)
+      return this.depositSessionLocked(q, id, prepared, new Map())
     })
   }
 
@@ -732,12 +828,11 @@ export class PostgresBuildStore implements BuildStore {
     rev?: number,
   ): Promise<SessionArtifact | null> {
     if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
-    const rows: Row[] =
+    const rows: Row[] = await this.run((q) =>
       rev === undefined
-        ? await this
-            .sql`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} ORDER BY revision DESC LIMIT 1`
-        : await this
-            .sql`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} AND revision = ${rev}`
+        ? q`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} ORDER BY revision DESC LIMIT 1`
+        : q`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} AND revision = ${rev}`,
+    )
     const row = rows[0]
     if (!row) return null
     const content = await this.blobs.get(String(row.blob_ref))
@@ -746,43 +841,44 @@ export class PostgresBuildStore implements BuildStore {
 
   async listSessionArtifacts(id: string, kind?: string): Promise<SessionArtifactMeta[]> {
     if (!(await this.getSession(id))) throw new Error(`unknown session "${id}"`)
-    const rows: Row[] =
+    const rows: Row[] = await this.run((q) =>
       kind === undefined
-        ? await this
-            .sql`SELECT * FROM session_artifacts WHERE session = ${id} ORDER BY kind, revision`
-        : await this
-            .sql`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} ORDER BY kind, revision`
+        ? q`SELECT * FROM session_artifacts WHERE session = ${id} ORDER BY kind, revision`
+        : q`SELECT * FROM session_artifacts WHERE session = ${id} AND kind = ${kind} ORDER BY kind, revision`,
+    )
     return rows.map((row) => this.sessionArtifactMeta(row))
   }
 
   async ensureRepo(repo: string): Promise<RepositoryRecord> {
     if (!repo) throw new Error('repo is required')
     const ts = this.now()
-    return this.sql.begin(async (tx) => {
-      await tx`INSERT INTO repo_streams (repo, created_at, updated_at)
+    return this.tx(async (q) => {
+      await q`INSERT INTO repo_streams (repo, created_at, updated_at)
         VALUES (${repo}, ${ts}, ${ts}) ON CONFLICT (repo) DO NOTHING`
-      return this.repoRecord(await this.lockRepo(tx, repo))
+      return this.repoRecord(await this.lockRepo(q, repo))
     })
   }
 
   async getRepo(repo: string): Promise<RepositoryRecord | null> {
-    const rows: Row[] = await this.sql`SELECT * FROM repo_streams WHERE repo=${repo}`
-    return rows[0] ? this.repoRecord(rows[0]) : null
+    return this.run(async (q) => {
+      const rows: Row[] = await q`SELECT * FROM repo_streams WHERE repo=${repo}`
+      return rows[0] ? this.repoRecord(rows[0]) : null
+    })
   }
 
   private async appendRepoLocked(
-    tx: Tx,
+    q: Exec,
     repo: string,
     event: RepositoryEventWrite,
     alreadyLocked = false,
   ): Promise<RepositoryEventEnvelope> {
-    if (!alreadyLocked) await this.lockRepo(tx, repo)
+    if (!alreadyLocked) await this.lockRepo(q, repo)
     const tails: Row[] =
-      await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`
+      await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`
     const seq = num(tails[0]?.seq) + 1
     const ts = this.now()
-    await tx`INSERT INTO repo_events (repo, seq, ts, actor, type, payload) VALUES (${repo},${seq},${ts},${event.actor},${event.type},${event.payload})`
-    await tx`UPDATE repo_streams SET updated_at=${ts} WHERE repo=${repo}`
+    await q`INSERT INTO repo_events (repo, seq, ts, actor, type, payload) VALUES (${repo},${seq},${ts},${event.actor},${event.type},${event.payload})`
+    await q`UPDATE repo_streams SET updated_at=${ts} WHERE repo=${repo}`
     return { repo, seq, ts, actor: event.actor, type: event.type, payload: event.payload }
   }
 
@@ -791,13 +887,13 @@ export class PostgresBuildStore implements BuildStore {
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T>> {
     const validated = validateRepositoryEventWrite(event)
-    return (await this.sql.begin((tx) =>
-      this.appendRepoLocked(tx, repo, validated),
+    return (await this.tx((q) =>
+      this.appendRepoLocked(q, repo, validated),
     )) as RepositoryEventEnvelope<T>
   }
 
   private async depositRepoLocked(
-    tx: Tx,
+    q: Exec,
     repo: string,
     artifact: PreparedArtifact,
     revisions: Map<string, number>,
@@ -806,14 +902,14 @@ export class PostgresBuildStore implements BuildStore {
     let revision = revisions.get(artifact.kind)
     if (revision === undefined) {
       const tails: Row[] =
-        await tx`SELECT COALESCE(MAX(revision), -1) AS revision FROM repo_artifacts WHERE repo=${repo} AND kind=${artifact.kind}`
+        await q`SELECT COALESCE(MAX(revision), -1) AS revision FROM repo_artifacts WHERE repo=${repo} AND kind=${artifact.kind}`
       revision = num(tails[0]?.revision) + 1
     }
     revisions.set(artifact.kind, revision + 1)
     const createdAt = this.now()
-    await tx`INSERT INTO repo_artifacts (repo,kind,revision,blob_ref,metadata,created_at) VALUES (${repo},${artifact.kind},${revision},${artifact.blobRef},${artifact.metadata},${createdAt})`
-    if (opts.prune) await this.pruneRepoLocked(tx, repo, artifact.kind)
-    await tx`UPDATE repo_streams SET updated_at=${createdAt} WHERE repo=${repo}`
+    await q`INSERT INTO repo_artifacts (repo,kind,revision,blob_ref,metadata,created_at) VALUES (${repo},${artifact.kind},${revision},${artifact.blobRef},${artifact.metadata},${createdAt})`
+    if (opts.prune) await this.pruneRepoLocked(q, repo, artifact.kind)
+    await q`UPDATE repo_streams SET updated_at=${createdAt} WHERE repo=${repo}`
     return {
       repo,
       kind: artifact.kind,
@@ -831,8 +927,8 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<{ event: RepositoryEventEnvelope<T>; artifacts: RepositoryArtifactMeta[] }> {
     const prepared: PreparedArtifact[] = []
     for (const artifact of artifacts) prepared.push(await this.prepare(artifact))
-    return this.sql.begin(async (tx) => {
-      await this.lockRepo(tx, repo)
+    return this.tx(async (q) => {
+      await this.lockRepo(q, repo)
       // Ordering invariant (AUT-322): same shape as `appendWithArtifacts` —
       // deposit unpruned, validate the batch event, then prune once per
       // distinct batch kind, all inside this locked transaction. Validation
@@ -840,15 +936,13 @@ export class PostgresBuildStore implements BuildStore {
       const revisions = new Map<string, number>()
       const deposited: RepositoryArtifactMeta[] = []
       for (const artifact of prepared)
-        deposited.push(
-          await this.depositRepoLocked(tx, repo, artifact, revisions, { prune: false }),
-        )
+        deposited.push(await this.depositRepoLocked(q, repo, artifact, revisions, { prune: false }))
       const validated = validateRepositoryEventWrite(makeEvent(structuredClone(deposited)))
       for (const kind of new Set(deposited.map((meta) => meta.kind))) {
-        await this.pruneRepoLocked(tx, repo, kind)
+        await this.pruneRepoLocked(q, repo, kind)
       }
       const event = (await this.appendRepoLocked(
-        tx,
+        q,
         repo,
         validated,
         true,
@@ -864,8 +958,9 @@ export class PostgresBuildStore implements BuildStore {
   ): Promise<RepositoryEvent[]> {
     const read = async (): Promise<RepositoryEvent[]> => {
       if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
-      const rows: Row[] = await this
-        .sql`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${sinceSeq} ORDER BY seq`
+      const rows: Row[] = await this.run(
+        (q) => q`SELECT * FROM repo_events WHERE repo=${repo} AND seq>${sinceSeq} ORDER BY seq`,
+      )
       return rows.map((row) => ({
         repo: String(row.repo),
         seq: num(row.seq),
@@ -891,35 +986,37 @@ export class PostgresBuildStore implements BuildStore {
     // whole PK range, exactly the cost being removed), then one select of
     // durable types plus the tail from that anchor.
     //
-    // The probe below is an aggregate: MAX() always returns exactly one row —
-    // NULL when the journal has no run-started fact — so the empty-journal
-    // signal is that NULL, tested explicitly here via `no_anchor`, never row
-    // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
-    // (in either dialect the comparison is never true, so the durable-only
-    // outcome would then survive only by accident), and the no-anchor case
-    // must not degenerate into `seq >= 0`, which would select the whole
-    // journal. The `anchor === undefined` branch below is the durable-only
-    // path.
-    const probe = (
-      await this
-        .sql`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
-    )[0]
-    const anchor = probe?.no_anchor ? undefined : num(probe?.seq)
-    const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
-    // `repo` is $1; the anchored select also spends $2 on the anchor, so the
-    // type list's placeholders start at the right offset per branch.
-    const placeholders = (start: number) =>
-      durableList.map((_, index) => `$${index + start}`).join(', ')
-    const rows: Row[] =
-      anchor === undefined
-        ? await this.sql.unsafe(
-            `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
-            [repo, ...durableList],
-          )
-        : await this.sql.unsafe(
-            `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
-            [repo, anchor, ...durableList],
-          )
+    const { rows } = await this.run(async (q) => {
+      // The probe below is an aggregate: MAX() always returns exactly one row —
+      // NULL when the journal has no run-started fact — so the empty-journal
+      // signal is that NULL, tested explicitly here via `no_anchor`, never row
+      // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
+      // (in either dialect the comparison is never true, so the durable-only
+      // outcome would then survive only by accident), and the no-anchor case
+      // must not degenerate into `seq >= 0`, which would select the whole
+      // journal. The `anchor === undefined` branch below is the durable-only
+      // path.
+      const probe = (
+        await q`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
+      )[0]
+      const anchor = probe?.no_anchor ? undefined : num(probe?.seq)
+      const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
+      // `repo` is $1; the anchored select also spends $2 on the anchor, so the
+      // type list's placeholders start at the right offset per branch.
+      const placeholders = (start: number) =>
+        durableList.map((_, index) => `$${index + start}`).join(', ')
+      const rows: Row[] =
+        anchor === undefined
+          ? await q.unsafe(
+              `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
+              [repo, ...durableList],
+            )
+          : await q.unsafe(
+              `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
+              [repo, anchor, ...durableList],
+            )
+      return { probe, rows }
+    })
     return rows.map((row) => ({
       repo: String(row.repo),
       seq: num(row.seq),
@@ -932,9 +1029,9 @@ export class PostgresBuildStore implements BuildStore {
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {
     const prepared = await this.prepare(artifact)
-    return this.sql.begin(async (tx) => {
-      await this.lockRepo(tx, repo)
-      return this.depositRepoLocked(tx, repo, prepared, new Map())
+    return this.tx(async (q) => {
+      await this.lockRepo(q, repo)
+      return this.depositRepoLocked(q, repo, prepared, new Map())
     })
   }
 
@@ -955,12 +1052,11 @@ export class PostgresBuildStore implements BuildStore {
     rev?: number,
   ): Promise<RepositoryArtifact | null> {
     if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
-    const rows: Row[] =
+    const rows: Row[] = await this.run((q) =>
       rev === undefined
-        ? await this
-            .sql`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} ORDER BY revision DESC LIMIT 1`
-        : await this
-            .sql`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} AND revision=${rev}`
+        ? q`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} ORDER BY revision DESC LIMIT 1`
+        : q`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} AND revision=${rev}`,
+    )
     const row = rows[0]
     if (!row) return null
     const content = await this.blobs.get(String(row.blob_ref))
@@ -969,11 +1065,11 @@ export class PostgresBuildStore implements BuildStore {
 
   async listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]> {
     if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
-    const rows: Row[] =
+    const rows: Row[] = await this.run((q) =>
       kind === undefined
-        ? await this.sql`SELECT * FROM repo_artifacts WHERE repo=${repo} ORDER BY kind,revision`
-        : await this
-            .sql`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} ORDER BY kind,revision`
+        ? q`SELECT * FROM repo_artifacts WHERE repo=${repo} ORDER BY kind,revision`
+        : q`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} ORDER BY kind,revision`,
+    )
     return rows.map((row) => this.repoArtifactMeta(row))
   }
 
@@ -983,8 +1079,8 @@ export class PostgresBuildStore implements BuildStore {
 
   // ── Streams (SPEC §7.6 — the third primitive) ───────────────────────────
 
-  private async lockStream(tx: Tx, streamId: string): Promise<Row> {
-    const rows: Row[] = await tx`SELECT * FROM streams WHERE id = ${streamId} FOR UPDATE`
+  private async lockStream(q: Exec, streamId: string): Promise<Row> {
+    const rows: Row[] = await q`SELECT * FROM streams WHERE id = ${streamId} FOR UPDATE`
     const row = rows[0]
     if (!row) throw new Error(`unknown stream "${streamId}"`)
     return row
@@ -1030,10 +1126,10 @@ export class PostgresBuildStore implements BuildStore {
    * create's locked transaction: keep every closed stream's chunks except
    * the most recently closed one in this scope (closedAt, then id).
    * Records, finalized artifacts, and open streams are never touched. */
-  private async pruneStreamChunksLocked(tx: Tx, scope: StreamScope): Promise<void> {
+  private async pruneStreamChunksLocked(q: Exec, scope: StreamScope): Promise<void> {
     const owner =
       scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
-    const rows: Row[] = await tx`
+    const rows: Row[] = await q`
       SELECT id FROM streams
       WHERE status = 'closed' AND scope_kind = ${scope.kind}
         AND (
@@ -1043,7 +1139,7 @@ export class PostgresBuildStore implements BuildStore {
         )
       ORDER BY closed_at DESC, id DESC OFFSET 1`
     for (const row of rows) {
-      await tx`DELETE FROM stream_chunks WHERE stream = ${String(row.id)}`
+      await q`DELETE FROM stream_chunks WHERE stream = ${String(row.id)}`
     }
   }
 
@@ -1051,22 +1147,22 @@ export class PostgresBuildStore implements BuildStore {
     if (!label) throw new Error('stream label is required')
     const id = `st_${crypto.randomUUID()}`
     const ts = this.now()
-    return this.sql.begin(async (tx) => {
-      if (scope.kind === 'build') await this.lockBuild(tx, scope.build)
-      else if (scope.kind === 'repo') await this.lockRepo(tx, scope.repo)
-      else await this.lockSession(tx, scope.session)
-      await this.pruneStreamChunksLocked(tx, scope)
+    return this.tx(async (q) => {
+      if (scope.kind === 'build') await this.lockBuild(q, scope.build)
+      else if (scope.kind === 'repo') await this.lockRepo(q, scope.repo)
+      else await this.lockSession(q, scope.session)
+      await this.pruneStreamChunksLocked(q, scope)
       // Store-assigned monotonic creation sequence (the listStreams
       // same-timestamp tiebreak): the sequence is concurrency-safe and never
       // repeats, so ties order by assignment. Streams are never deleted
       // (retention prunes stream_chunks only), so the counter is never reused.
-      await tx`INSERT INTO streams
+      await q`INSERT INTO streams
         (id, scope_kind, build, repo, session, label, format, status, creation_seq, created_at)
         VALUES (${id}, ${scope.kind}, ${scope.kind === 'build' ? scope.build : null},
           ${scope.kind === 'repo' ? scope.repo : null},
           ${scope.kind === 'session' ? scope.session : null},
           ${label}, ${STREAM_FORMAT}, 'open', nextval('streams_creation_seq'), ${ts})`
-      return this.streamRecord(await this.lockStream(tx, id))
+      return this.streamRecord(await this.lockStream(q, id))
     })
   }
 
@@ -1074,18 +1170,18 @@ export class PostgresBuildStore implements BuildStore {
     validateStreamParts(parts)
     const bytes = serializedBatchSize(parts)
     if (bytes > STREAM_BATCH_MAX_BYTES) throw new StreamBatchTooLargeError(bytes)
-    return this.sql.begin(async (tx) => {
-      const row = await this.lockStream(tx, streamId)
+    return this.tx(async (q) => {
+      const row = await this.lockStream(q, streamId)
       if (String(row.status) === 'closed') throw new StreamClosedError(streamId)
       const tails: Row[] =
-        await tx`SELECT COALESCE(MAX(seq), 0) AS seq FROM stream_chunks WHERE stream = ${streamId}`
+        await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM stream_chunks WHERE stream = ${streamId}`
       const chunk: StreamChunk = {
         stream: streamId,
         seq: num(tails[0]?.seq) + 1,
         ts: this.now(),
         parts: structuredClone(parts),
       }
-      await tx`INSERT INTO stream_chunks (stream, seq, ts, parts)
+      await q`INSERT INTO stream_chunks (stream, seq, ts, parts)
         VALUES (${streamId}, ${chunk.seq}, ${chunk.ts}, ${JSON.stringify(chunk.parts)})`
       return chunk
     })
@@ -1096,11 +1192,16 @@ export class PostgresBuildStore implements BuildStore {
     opts?: { since?: number; waitSeconds?: number; signal?: AbortSignal },
   ): Promise<StreamRead> {
     const read = async (): Promise<StreamRead> => {
-      const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
-      const row = rows[0]
-      if (!row) throw new Error(`unknown stream "${streamId}"`)
-      const chunks: Row[] = await this.sql`SELECT * FROM stream_chunks
-        WHERE stream = ${streamId} AND seq > ${opts?.since ?? 0} ORDER BY seq`
+      // Record and chunks are one coherent read: both statements run on the
+      // same pinned connection, and the retry re-executes the pair together.
+      const { row, chunks } = await this.run(async (q) => {
+        const rows: Row[] = await q`SELECT * FROM streams WHERE id = ${streamId}`
+        const row = rows[0]
+        if (!row) throw new Error(`unknown stream "${streamId}"`)
+        const chunks: Row[] = await q`SELECT * FROM stream_chunks
+          WHERE stream = ${streamId} AND seq > ${opts?.since ?? 0} ORDER BY seq`
+        return { row, chunks }
+      })
       const record = this.streamRecord(row)
       return {
         chunks: chunks.map((chunk) => ({
@@ -1118,16 +1219,20 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
-    // Prepare phase — lock-free read of record and chunks, assembly, and the
-    // blob write all happen before the transaction (D6 shape: content-
-    // addressed orphan blobs are harmless; a deposit failure leaves the
-    // stream open and unwritten).
-    const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
-    const row = rows[0]
-    if (!row) throw new Error(`unknown stream "${streamId}"`)
+    // Prepare phase — lock-free read of record and chunks (one coherent read
+    // on a pinned connection, retried together), assembly, and the blob write
+    // all happen before the transaction (D6 shape: content-addressed orphan
+    // blobs are harmless; a deposit failure leaves the stream open and
+    // unwritten).
+    const { row, chunkRows } = await this.run(async (q) => {
+      const rows: Row[] = await q`SELECT * FROM streams WHERE id = ${streamId}`
+      const row = rows[0]
+      if (!row) throw new Error(`unknown stream "${streamId}"`)
+      const chunkRows: Row[] = await q`SELECT * FROM stream_chunks
+        WHERE stream = ${streamId} ORDER BY seq`
+      return { row, chunkRows }
+    })
     if (String(row.status) === 'closed') return this.streamRecord(row)
-    const chunkRows: Row[] = await this.sql`SELECT * FROM stream_chunks
-      WHERE stream = ${streamId} ORDER BY seq`
     const { document, droppedPartCount } = await assembleUIMessageDocument(
       chunkRows.flatMap((chunk) => json<StreamPart[]>(chunk.parts)),
     )
@@ -1146,8 +1251,8 @@ export class PostgresBuildStore implements BuildStore {
     // Commit phase — one locked transaction: the artifact deposit and the
     // close land together. A close that raced us through the prepare phase
     // wins; ours re-reads and returns its record.
-    return this.sql.begin(async (tx) => {
-      const fresh = await this.lockStream(tx, streamId)
+    return this.tx(async (q) => {
+      const fresh = await this.lockStream(q, streamId)
       if (String(fresh.status) === 'closed') return this.streamRecord(fresh)
       // Commit-time verification (AUT-348): the prepare-phase chunk snapshot
       // can go stale — an append from another connection may commit after the
@@ -1156,7 +1261,7 @@ export class PostgresBuildStore implements BuildStore {
       // blob so every acknowledged append is included in the finalized
       // artifact. An append that commits before the lock is taken lands here;
       // one that waits on the lock fails the closed check above instead.
-      const lockedChunks: Row[] = await tx`SELECT * FROM stream_chunks
+      const lockedChunks: Row[] = await q`SELECT * FROM stream_chunks
         WHERE stream = ${streamId} ORDER BY seq`
       let closeInput = input
       let closeRef = blobRef
@@ -1179,7 +1284,7 @@ export class PostgresBuildStore implements BuildStore {
       const meta =
         scope.kind === 'build'
           ? await this.depositBuildLocked(
-              tx,
+              q,
               scope.build,
               {
                 kind: closeInput.kind,
@@ -1190,7 +1295,7 @@ export class PostgresBuildStore implements BuildStore {
             )
           : scope.kind === 'repo'
             ? await this.depositRepoLocked(
-                tx,
+                q,
                 scope.repo,
                 {
                   kind: closeInput.kind,
@@ -1200,7 +1305,7 @@ export class PostgresBuildStore implements BuildStore {
                 new Map(),
               )
             : await this.depositSessionLocked(
-                tx,
+                q,
                 scope.session,
                 {
                   kind: closeInput.kind,
@@ -1209,18 +1314,20 @@ export class PostgresBuildStore implements BuildStore {
                 },
                 new Map(),
               )
-      await tx`UPDATE streams
+      await q`UPDATE streams
         SET status = 'closed', outcome = ${outcome}, closed_at = ${meta.createdAt},
           artifact_kind = ${meta.kind}, artifact_revision = ${meta.revision},
           artifact_blob_ref = ${meta.blobRef}
         WHERE id = ${streamId}`
-      return this.streamRecord(await this.lockStream(tx, streamId))
+      return this.streamRecord(await this.lockStream(q, streamId))
     })
   }
 
   async getStream(streamId: string): Promise<StreamRecord | null> {
-    const rows: Row[] = await this.sql`SELECT * FROM streams WHERE id = ${streamId}`
-    return rows[0] ? this.streamRecord(rows[0]) : null
+    return this.run(async (q) => {
+      const rows: Row[] = await q`SELECT * FROM streams WHERE id = ${streamId}`
+      return rows[0] ? this.streamRecord(rows[0]) : null
+    })
   }
 
   async listStreams(scope: StreamScope): Promise<StreamRecord[]> {
@@ -1228,16 +1335,18 @@ export class PostgresBuildStore implements BuildStore {
       scope.kind === 'build' ? scope.build : scope.kind === 'repo' ? scope.repo : scope.session
     // Pinned tiebreak (store/types.ts): createdAt ascending, then the
     // store-assigned monotonic creation sequence — never the random id.
-    const rows: Row[] = await this.sql`
-      SELECT * FROM streams
-      WHERE scope_kind = ${scope.kind}
-        AND (
-          (scope_kind = 'build' AND build = ${scope.kind === 'build' ? owner : null})
-          OR (scope_kind = 'repo' AND repo = ${scope.kind === 'repo' ? owner : null})
-          OR (scope_kind = 'session' AND session = ${scope.kind === 'session' ? owner : null})
-        )
-      ORDER BY created_at, creation_seq`
-    return rows.map((row) => this.streamRecord(row))
+    return this.run(async (q) => {
+      const rows: Row[] = await q`
+        SELECT * FROM streams
+        WHERE scope_kind = ${scope.kind}
+          AND (
+            (scope_kind = 'build' AND build = ${scope.kind === 'build' ? owner : null})
+            OR (scope_kind = 'repo' AND repo = ${scope.kind === 'repo' ? owner : null})
+            OR (scope_kind = 'session' AND session = ${scope.kind === 'session' ? owner : null})
+          )
+        ORDER BY created_at, creation_seq`
+      return rows.map((row) => this.streamRecord(row))
+    })
   }
 
   async close(): Promise<void> {
