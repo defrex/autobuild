@@ -3,7 +3,7 @@ import { composeBuildConfig } from '../config/live'
 import { parseConfig } from '../config/load'
 import type { Config } from '../config/schema'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
-import { detail as projectDetail } from '../cli/status'
+import { detail as projectDetail, statusFilter, summarize, type BuildSummary } from '../cli/status'
 import { reduceBuild } from '../kernel/reducer'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
@@ -13,7 +13,7 @@ import {
 } from '../processes/build-execution-state'
 import { scanUnclaimedObservations } from '../processes/harvest'
 import { MemoryBuildStore } from '../store/memory'
-import type { Artifact, BuildStore, Clock } from '../store/types'
+import type { Artifact, BuildDigest, BuildStore, Clock } from '../store/types'
 import {
   buildDashboardFromProjected,
   projectBuild,
@@ -28,6 +28,7 @@ import {
   getRepositoryStatus,
   listOperatorBuilds,
   OperatorQueryError,
+  type BuildListScope,
   type OperatorDashboardSnapshot,
 } from './query'
 
@@ -147,23 +148,151 @@ describe('operator query wiring', () => {
     ).toEqual(['done', 'active', 'queued'])
   })
 
-  test('empty repository status and Harvest status are read-only defaults', async () => {
+  // AUT-488: the active and queued listings gate per-build history reads on
+  // one batch digest read, so their store cost stays flat as finished builds
+  // accumulate. The old algorithm is computed inline in each test so the
+  // output equivalence is pinned against the pre-change behavior, not against
+  // a re-derivation of the new gate.
+  async function seedFinished(
+    store: MemoryBuildStore,
+    slug: string,
+    kind: 'done' | 'aborted',
+  ): Promise<void> {
+    await createBuild(store, slug, 'active')
+    await store.append(
+      slug,
+      kind === 'done'
+        ? { actor: DISPATCHER, type: 'build.completed', payload: { outcome: 'merged' } }
+        : { actor: KERNEL, type: 'build.aborted', payload: {} },
+    )
+  }
+
+  /** The pre-change listing algorithm, computed against the raw store. */
+  async function legacyList(
+    store: MemoryBuildStore,
+    scope: BuildListScope,
+  ): Promise<BuildSummary[]> {
+    const statuses = new Set(statusFilter(scope === 'all', scope === 'queued'))
+    const output: BuildSummary[] = []
+    for (const record of await store.listBuilds()) {
+      if (record.repo !== REPO) continue
+      const projected = summarize(record, await store.getEvents(record.slug), now)
+      if (statuses.has(projected.status)) output.push(projected)
+    }
+    return output.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  }
+
+  test('active and queued listings pay one digest read and skip finished histories', async () => {
+    for (const finishedCount of [3, 8]) {
+      const store = new MemoryBuildStore({ clock })
+      now = new Date('2026-09-02T00:00:01.000Z')
+      await createBuild(store, 'queued-1', 'queued')
+      await createBuild(store, 'active-1', 'active')
+      await createBuild(store, 'active-2', 'active')
+      const finishedSlugs: string[] = []
+      for (let i = 0; i < finishedCount; i++) {
+        const slug = `finished-${i}`
+        finishedSlugs.push(slug)
+        // Alternate done and aborted so both terminal kinds are skipped.
+        await seedFinished(store, slug, i % 2 === 0 ? 'done' : 'aborted')
+      }
+      for (const scope of ['active', 'queued'] as const) {
+        const counting = countingStore(store)
+        const summaries = await listOperatorBuilds({
+          store: counting.store,
+          repo: REPO,
+          scope,
+          now,
+        })
+        // The bound: exactly one digest read, and one history read per
+        // non-terminal record — identical at both finished-build counts.
+        expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+        expect(counting.counts.get('getEvents')).toBe(3)
+        for (const slug of finishedSlugs) expect(counting.eventSlugs).not.toContain(slug)
+        expect(summaries).toEqual(await legacyList(store, scope))
+      }
+    }
+  })
+
+  test('the all scope reads every history and never fetches digests', async () => {
     const store = new MemoryBuildStore({ clock })
-    expect(await getRepositoryStatus(store, REPO)).toEqual({
+    now = new Date('2026-09-02T00:00:01.000Z')
+    await createBuild(store, 'queued-1', 'queued')
+    await createBuild(store, 'active-1', 'active')
+    await seedFinished(store, 'done-1', 'done')
+    await seedFinished(store, 'aborted-1', 'aborted')
+    const counting = countingStore(store)
+    const summaries = await listOperatorBuilds({
+      store: counting.store,
+      repo: REPO,
+      scope: 'all',
+      now,
+    })
+    expect(counting.counts.get('getRepoBuildDigests')).toBeUndefined()
+    expect(counting.counts.get('getEvents')).toBe(4)
+    expect(summaries).toEqual(await legacyList(store, 'all'))
+  })
+
+  test('a build created between the record read and the digest read does not abort the listing', async () => {
+    // The concurrent-create shape for finding f_3cb67aba: the digest map
+    // holds one more build than the record list the listing already read.
+    // Records are read first, so the extra entry is harmless — the listing
+    // must succeed with the correct output, not throw.
+    class ConcurrentCreateStore extends MemoryBuildStore {
+      override async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+        const digests = await super.getRepoBuildDigests(repo)
+        digests.set('concurrent', { slug: 'concurrent', observations: [] })
+        return digests
+      }
+    }
+    const store = new ConcurrentCreateStore({ clock })
+    now = new Date('2026-09-02T00:00:01.000Z')
+    await createBuild(store, 'active-1', 'active')
+    await seedFinished(store, 'done-1', 'done')
+    const summaries = await listOperatorBuilds({ store, repo: REPO, scope: 'active', now })
+    expect(summaries.map((b) => b.slug)).toEqual(['active-1'])
+  })
+
+  test('a missing digest entry for a filtered record fails loudly as an adapter bug', async () => {
+    class IncompleteDigestStore extends MemoryBuildStore {
+      override async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+        const digests = await super.getRepoBuildDigests(repo)
+        digests.delete('active-1')
+        return digests
+      }
+    }
+    const store = new IncompleteDigestStore({ clock })
+    now = new Date('2026-09-02T00:00:01.000Z')
+    await createBuild(store, 'active-1', 'active')
+    await expect(listOperatorBuilds({ store, repo: REPO, scope: 'active', now })).rejects.toThrow(
+      'getRepoBuildDigests is missing an entry for build "active-1"',
+    )
+  })
+
+  test('empty repository status and Harvest status are read-only defaults', async () => {
+    const raw = new MemoryBuildStore({ clock })
+    const counting = countingStore(raw)
+    expect(await getRepositoryStatus(counting.store, REPO)).toEqual({
       repo: REPO,
       intake: true,
       paused: false,
       defaultAutoMerge: false,
       sandboxes: [],
     })
-    expect(await getHarvestStatus(store, REPO)).toMatchObject({
+    expect(await getHarvestStatus(counting.store, REPO)).toMatchObject({
       repo: REPO,
       status: 'idle',
       paused: false,
       runs: [],
       observations: 0,
     })
-    expect(await store.getRepo(REPO)).toBeNull()
+    // The missing-record journal read must stay write-free (the shared
+    // AUT-524 helper's contract): no repository record is materialized and
+    // no mutating store method is touched by either status read.
+    for (const method of MUTATING_STORE_METHODS) {
+      expect(counting.counts.get(method) ?? 0).toBe(0)
+    }
+    expect(await raw.getRepo(REPO)).toBeNull()
   })
 
   test('Harvest status projects gate and concrete run state', async () => {

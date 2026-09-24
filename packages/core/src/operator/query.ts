@@ -19,7 +19,8 @@ import {
 } from '../cli/dashboard/model'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
-import { unclaimedObservationCount } from '../processes/harvest'
+import { readRepoEventsIfRecorded, unclaimedObservationCount } from '../processes/harvest'
+import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore, Clock } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
@@ -34,12 +35,6 @@ export class OperatorQueryError extends Error {
   }
 }
 
-async function repoEvents(store: BuildStore, repo: string) {
-  // Bounded read (AUT-489): every consumer below reduces durable types or
-  // latest-run facts only, so the subset is replay-equivalent here.
-  return (await store.getRepo(repo)) === null ? [] : store.getRepoStateEvents(repo)
-}
-
 export async function listOperatorBuilds(opts: {
   store: BuildStore
   repo: string
@@ -47,9 +42,40 @@ export async function listOperatorBuilds(opts: {
   now: Date
 }): Promise<BuildSummary[]> {
   const statuses = new Set(statusFilter(opts.scope === 'all', opts.scope === 'queued'))
+  // Records are read and held before the digest read: builds are never
+  // deleted, so every record iterated below is guaranteed an entry in the
+  // digest map fetched after it — a build created between the two reads
+  // appears only in the digest map, which is harmless — and the completeness
+  // check can only ever catch a genuine adapter bug, never a concurrent
+  // dispatch. The reverse order would let a concurrent creation abort the
+  // whole listing (AUT-488 finding f_3cb67aba).
+  const records = await opts.store.listBuilds()
+  // One digest read gates the per-build history reads (AUT-488): the active
+  // and queued scopes never show a terminal build, so a build whose digest
+  // already carries a terminal fact skips its `getEvents` round trip and the
+  // listing's store cost stays flat as finished builds accumulate. The `--all`
+  // scope includes terminal statuses, so it takes no digest read and skips
+  // nothing — byte-for-byte the old loop.
+  const digests = opts.scope === 'all' ? undefined : await opts.store.getRepoBuildDigests(opts.repo)
   const output: BuildSummary[] = []
-  for (const record of await opts.store.listBuilds()) {
+  for (const record of records) {
     if (record.repo !== opts.repo) continue
+    if (digests !== undefined) {
+      // Completeness is contractual (one entry per repo build); a missing
+      // entry is an adapter bug and must fail loudly rather than silently
+      // drop the build from the listing.
+      const digest = digests.get(record.slug)
+      if (digest === undefined) {
+        throw new Error(`getRepoBuildDigests is missing an entry for build "${record.slug}"`)
+      }
+      // The digest's `terminal` follows `reduceBuild`'s terminal rule exactly
+      // (in-order overwrite of `build.completed`/`build.aborted`, never
+      // cleared — pinned against `reduceBuild` in store/digest.test.ts), so
+      // `terminal !== undefined` is exactly reduced status `done`/`aborted`,
+      // which the active and queued status sets never include. Skipping the
+      // history read therefore cannot change the emitted summaries.
+      if (digest.terminal !== undefined) continue
+    }
     const projected = summarize(record, await opts.store.getEvents(record.slug), opts.now)
     if (statuses.has(projected.status)) output.push(projected)
   }
@@ -70,10 +96,10 @@ export async function effectiveConfig(
   repo: string,
 ): Promise<{
   config: Config
-  repositoryEvents: Awaited<ReturnType<typeof repoEvents>>
+  repositoryEvents: RepositoryEvent[]
   status: ReturnType<typeof reduceDispatchStatus>
 }> {
-  const repositoryEvents = await repoEvents(store, repo)
+  const repositoryEvents = await readRepoEventsIfRecorded(store, repo)
   let latestRun: string | undefined
   for (const event of repositoryEvents) {
     if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
@@ -210,14 +236,14 @@ export async function getRepositoryStatus(
   store: BuildStore,
   repo: string,
 ): Promise<RepositoryStatus> {
-  return projectRepositoryStatus(repo, await repoEvents(store, repo))
+  return projectRepositoryStatus(repo, await readRepoEventsIfRecorded(store, repo))
 }
 
 export async function getHarvestStatus(
   store: BuildStore,
   repo: string,
 ): Promise<HarvestStatusView> {
-  return projectHarvestStatus(repo, await repoEvents(store, repo))
+  return projectHarvestStatus(repo, await readRepoEventsIfRecorded(store, repo))
 }
 
 export interface OperatorDashboardSnapshot {

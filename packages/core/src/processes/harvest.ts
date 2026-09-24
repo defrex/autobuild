@@ -247,27 +247,37 @@ export function unclaimedObservationCount(input: {
   return count
 }
 
+/** The shared missing-record journal read (AUT-524): a repository whose
+ * journal record does not yet exist has an empty journal by definition, so
+ * the probe answers `[]` instead of letting `getRepoStateEvents` reject. The
+ * read writes nothing — a display path must not `ensureRepo` — while
+ * `scanUnclaimedObservations` keeps its materializing `ensureRepo` for its
+ * remaining callers.
+ *
+ * The journal read is bounded (AUT-489): both consumers — the terminal
+ * dashboards' observation-pressure sample and the operator query
+ * (operator/query.ts) — reduce durable event types plus the latest-run tail
+ * only, so the subset is replay-equivalent to a full journal replay. */
+export async function readRepoEventsIfRecorded(
+  store: BuildStore,
+  repo: string,
+): Promise<RepositoryEvent[]> {
+  return (await store.getRepo(repo)) === null ? [] : store.getRepoStateEvents(repo)
+}
+
 /** The terminal dashboards' observation-pressure sample (AUT-487): build
  * digests plus the repository journal, reduced to the unclaimed-observation
  * count. Store traffic is flat in the finished-build count — one journal read
- * plus one repo-scoped digest read, plus the journal-record probe below.
- *
- * Missing-record treatment (AUT-524): a repository whose journal record does
- * not yet exist has an empty journal by definition, so the probe answers
- * `[]` instead of letting `getRepoEvents` reject and silently retain a stale
- * count. The sample writes nothing — a display path must not `ensureRepo` —
- * mirroring the operator query's missing-record treatment
- * (operator/query.ts). `scanUnclaimedObservations` keeps its materializing
- * `ensureRepo` for its remaining callers. */
+ * plus one repo-scoped digest read, plus the journal-record probe inside
+ * `readRepoEventsIfRecorded`. Its missing-record treatment (AUT-524) is the
+ * shared helper's, above. */
 export async function sampleUnclaimedObservationCount(
   store: BuildStore,
   repo: string,
 ): Promise<number> {
   const [digests, harvestEvents] = await Promise.all([
     store.getRepoBuildDigests(repo),
-    // Bounded read (AUT-489): unclaimedObservationCount reduces durable
-    // harvest types only, so the subset is replay-equivalent.
-    (async () => ((await store.getRepo(repo)) === null ? [] : store.getRepoStateEvents(repo)))(),
+    readRepoEventsIfRecorded(store, repo),
   ])
   return unclaimedObservationCount({ digests, harvestEvents })
 }
