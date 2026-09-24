@@ -606,7 +606,12 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * paths — fresh provisioning and the registered-worktree early return —
    * so sandboxes provisioned before the write landed are healed the next
    * time they are ensured. Errors propagate: a failed exclusion write
-   * aborts provisioning, mirroring fail-closed behavior. */
+   * aborts provisioning, mirroring fail-closed behavior. A successful
+   * `rev-parse --git-path` with empty stdout is a degenerate input — feeding
+   * it to `resolve` would target the workspace directory itself — so it fails
+   * loudly with the same `SandboxOperationError` shape the fake workspace
+   * uses for the same case, keeping the two workspace-port implementations
+   * aligned. */
   private async excludeProvisioningMarker(workspacePath: string): Promise<void> {
     const markerName = '.autobuild-sandbox-provisioned'
     const exclude = await this.gitOrThrow(workspacePath, [
@@ -614,6 +619,12 @@ export class GitWorktreeProvider implements WorkspaceProvider {
       '--git-path',
       'info/exclude',
     ])
+    if (exclude.stdout.trim() === '') {
+      throw new SandboxOperationError(
+        'provision',
+        `operator sandbox could not resolve info/exclude: exit ${exclude.exitCode} with empty git-path output`,
+      )
+    }
     const excludePath = resolve(workspacePath, exclude.stdout.trim())
     await mkdir(excludePath.slice(0, excludePath.lastIndexOf(sep)), { recursive: true })
     const existing = await fsReadFile(excludePath, 'utf8').then(
