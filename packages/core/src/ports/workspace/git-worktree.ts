@@ -609,9 +609,9 @@ export class GitWorktreeProvider implements WorkspaceProvider {
    * aborts provisioning, mirroring fail-closed behavior. A successful
    * `rev-parse --git-path` with empty stdout is a degenerate input — feeding
    * it to `resolve` would target the workspace directory itself — so it fails
-   * loudly with the same `SandboxOperationError` shape the fake workspace
-   * uses for the same case, keeping the two workspace-port implementations
-   * aligned. */
+   * loudly with the same `SandboxOperationError` — and the identical
+   * failure string — the fake workspace uses for the same case, keeping
+   * the two workspace-port implementations aligned. */
   private async excludeProvisioningMarker(workspacePath: string): Promise<void> {
     const markerName = '.autobuild-sandbox-provisioned'
     const exclude = await this.gitOrThrow(workspacePath, [
@@ -622,7 +622,7 @@ export class GitWorktreeProvider implements WorkspaceProvider {
     if (exclude.stdout.trim() === '') {
       throw new SandboxOperationError(
         'provision',
-        `operator sandbox could not resolve info/exclude: exit ${exclude.exitCode} with empty git-path output`,
+        `operator sandbox could not resolve info/exclude: ${exclude.stderr.trim() || `exit ${exclude.exitCode}`}`,
       )
     }
     const excludePath = resolve(workspacePath, exclude.stdout.trim())
