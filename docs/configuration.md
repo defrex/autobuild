@@ -1343,6 +1343,25 @@ environmentVariables = ["MY_TOOL_CONFIG"]
 Set `MY_TOOL_CONFIG` in the host environment of the `ab mcp` process; a missing
 value fails the tool call that needs it, named as a typed `environment` error.
 
+In the hosted deployment the `sandbox.*` tools are served to orchestrator
+turns from two bindings, both composing the backend from the repository's
+deposited effective config: the store service's message-turn runner (and its
+same-invocation approval resumes), and the origin-mode dispatcher tick's wake
+and resume runner, which reuses the dispatcher's wired workspace provider and
+forge. Both use the builtin workspace provider and the builtin `github` forge
+from that config — a plugin-provider or forgeless config degrades that
+binding's sandbox tools only, with a reported diagnostic. The store-service
+path authenticates the Sandbox SDK with the request's `x-vercel-oidc-token`
+header (or an explicit `VERCEL_OIDC_TOKEN`, which takes precedence, or the
+durable `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID` triple, which
+needs no header); the tick path inherits the dispatcher's already-forwarded
+token. Every serving path derives the same deterministic environment name per
+(repository origin, operator), so an operator's environment is one
+environment per repository no matter which binding drove it, and the guest
+still receives no credential. Serving stays gated exactly as locally: the
+effective `[orchestrator].enabled`, the registry's closed-table filtering,
+and the `approvals` suspension list in the turn loop.
+
 ## Complete example
 
 The following deliberately exercises every fixed table and both verify/finalize

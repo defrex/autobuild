@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#552](https://github.com/defrex/autobuild/pull/552) — Serve sandbox.* tools from a hosted operator-sandbox backend
 - [#550](https://github.com/defrex/autobuild/pull/550) — Wake durable sessions from repository-journal attention events
 - [#549](https://github.com/defrex/autobuild/pull/549) — Pin the AUT-342 orchestrator wiring hop (HostedStoreServiceOptions)
 - [#548](https://github.com/defrex/autobuild/pull/548) — Define origin mode's plugin candidate-root semantics
