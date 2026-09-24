@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#552](https://github.com/defrex/autobuild/pull/552) — Serve sandbox.* tools from a hosted operator-sandbox backend
 - [#551](https://github.com/defrex/autobuild/pull/551) — Make publish's unresolvable-commit refusal reachable via --quiet
 - [#549](https://github.com/defrex/autobuild/pull/549) — Pin the AUT-342 orchestrator wiring hop (HostedStoreServiceOptions)
 - [#548](https://github.com/defrex/autobuild/pull/548) — Define origin mode's plugin candidate-root semantics

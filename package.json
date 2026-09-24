@@ -81,6 +81,11 @@
       "types": "./packages/core/src/operator/index.ts",
       "import": "./packages/core/src/operator/index.ts",
       "default": "./packages/core/src/operator/index.ts"
+    },
+    "./operator-sandbox-host": {
+      "types": "./packages/core/src/operator/sandbox-host.ts",
+      "import": "./packages/core/src/operator/sandbox-host.ts",
+      "default": "./packages/core/src/operator/sandbox-host.ts"
     }
   },
   "files": [

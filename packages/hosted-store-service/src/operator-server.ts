@@ -68,6 +68,14 @@ import { orchestratorConfig } from '@defrex/autobuild/operator'
 import type { Config } from '@defrex/autobuild/operator'
 import { orchestratorWakeGlobs, type OrchestratorTurnRunner } from '@defrex/autobuild/operator'
 
+/** The request-scoped Vercel SDK credential the routes thread into the
+ * sandbox backend composition (AUT-584): the same shape the hosted
+ * dispatcher threads. A Vercel Function carries its OIDC token on the
+ * request's `x-vercel-oidc-token` header, never in `process.env`. */
+export interface OperatorRequestCredentials {
+  oidcToken?: string
+}
+
 /** The embedded orchestrator's hosted wiring (AUT-342): a per-request turn
  * runner factory over the deployment's in-process registry, and the
  * background scheduler that lets a turn outlive the HTTP response. When the
@@ -75,8 +83,15 @@ import { orchestratorWakeGlobs, type OrchestratorTurnRunner } from '@defrex/auto
  * exactly as it did before this feature. */
 export interface OperatorOrchestratorOptions {
   /** Build the turn runner for one repository under one resolved effective
-   * config. Called only for enabled repositories on the start/resume paths. */
-  createRunner(config: Config, repo: string): OrchestratorTurnRunner
+   * config. Called only for enabled repositories on the start/resume paths.
+   * The third parameter carries the request's Vercel OIDC token when the
+   * request carried one (AUT-584); the runner's sandbox backend captures it
+   * at creation for the background loop. May be async. */
+  createRunner(
+    config: Config,
+    repo: string,
+    credentials?: OperatorRequestCredentials,
+  ): OrchestratorTurnRunner | Promise<OrchestratorTurnRunner>
   /** Schedule the turn loop to continue after the HTTP response resolves
    * (Next's `after()` in the machine route's request context). Default: a
    * fire-and-forget detached promise reporting failures through
@@ -92,9 +107,19 @@ export interface OperatorServerOptions {
   ticketBackend?: OperatorTicketBackend
   /** Operator-sandbox backend (AUT-340): archiving an operator's last open
    * session for a repository releases their sandbox environment. The hosted
-   * service does not pass one — the hosted sandbox backend is the later
-   * hosted-transport ticket. */
+   * service does not pass one directly — it supplies `sandboxFor` (below).
+   * When both are present `sandboxFor` wins. */
   sandbox?: OperatorSandboxService
+  /** Per-request sandbox-backend resolution (AUT-584): the deployment's own
+   * composition closure (the service owns the env, secret, and public origin
+   * it needs). Resolved per archive request with the request's credentials;
+   * `undefined` (disabled, unresolvable, or contained construction failure)
+   * degrades only — no release, and the archive still succeeds. When set,
+   * this wins over the static `sandbox` option. */
+  sandboxFor?: (
+    repo: string,
+    credentials?: OperatorRequestCredentials,
+  ) => Promise<OperatorSandboxService | undefined>
   /** The embedded orchestrator (AUT-342). Absent → inert. */
   orchestrator?: OperatorOrchestratorOptions
   /** Observes unexpected backing-store failures without exposing them over HTTP. */
@@ -124,6 +149,13 @@ export const REGISTRY_ERROR_STATUS: Record<string, number> = {
 
 function json(status: number, value: unknown): Response {
   return Response.json(value, { status })
+}
+
+/** The request's Vercel OIDC token, when the invocation carried one (a Vercel
+ * Function receives it as a header, never as process state). Blank is absent. */
+function requestCredentials(req: Request): OperatorRequestCredentials | undefined {
+  const oidcToken = req.headers.get('x-vercel-oidc-token')?.trim()
+  return oidcToken ? { oidcToken } : undefined
 }
 function failure(status: number, kind: string, error: string, extra: object = {}): Response {
   return json(status, { kind, error, ...extra })
@@ -207,12 +239,13 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     repo: string,
     sid: string,
     messageSeq: number,
+    credentials?: OperatorRequestCredentials,
   ): Promise<{ turn: string; stream: string } | undefined> {
     const config = await resolveOrchestratorConfig(repo)
     if (config === null || opts.orchestrator === undefined) return undefined
     const state = reduceSession(await opts.store.getSessionEvents(sid))
     if (state.status !== 'idle') return undefined
-    const runner = opts.orchestrator.createRunner(config, repo)
+    const runner = await opts.orchestrator.createRunner(config, repo, credentials)
     const start = await runner.startTurn(sid, { kind: 'message', messageSeq })
     if (!start.started || start.outcome === undefined) return undefined
     const outcome = start.outcome
@@ -229,13 +262,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     sid: string,
     turn: string,
     answer: { decision: 'approve' | 'deny'; toolCallId: string },
+    credentials?: OperatorRequestCredentials,
   ): Promise<void> {
     const config = await resolveOrchestratorConfig(repo)
     if (config === null || opts.orchestrator === undefined) return
     const state = reduceSession(await opts.store.getSessionEvents(sid))
     if (state.status !== 'suspended' || state.suspendedCause !== 'approval') return
     if (state.openTurn === undefined || state.openTurn.turn !== turn) return
-    const runner = opts.orchestrator.createRunner(config, repo)
+    const runner = await opts.orchestrator.createRunner(config, repo, credentials)
     const resumed = await runner.resumeTurn(sid, {
       approval: { decision: answer.decision, toolCallId: answer.toolCallId },
     })
@@ -486,7 +520,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         // background work. A message posted while a turn is open is durable
         // and enters the conversation at the next resume/turn — no second
         // turn (concurrent turns are out of scope).
-        const turn = await startTurnForMessage(repo, sid, messageSeq)
+        const turn = await startTurnForMessage(repo, sid, messageSeq, requestCredentials(req))
         return json(200, turn === undefined ? { ok: true } : { ok: true, ...turn })
       }
       if (req.method === 'PUT' && rest.length === 3 && rest[2] === 'wake') {
@@ -507,11 +541,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         )
         // Same-invocation resume of the answered approval; the dispatcher
         // tick is the fallback when this invocation dies.
-        await resumeAnsweredApproval(repo, sid, request.turn, request)
+        await resumeAnsweredApproval(repo, sid, request.turn, request, requestCredentials(req))
         return json(200, { ok: true })
       }
       if (req.method === 'POST' && rest.length === 3 && rest[2] === 'archive') {
-        await archiveOperatorSession(opts.store, repo, sid, user, opts.sandbox)
+        const sandbox = opts.sandboxFor
+          ? await opts.sandboxFor(repo, requestCredentials(req))
+          : opts.sandbox
+        await archiveOperatorSession(opts.store, repo, sid, user, sandbox)
         return json(200, { ok: true })
       }
       if (

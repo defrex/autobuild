@@ -9,11 +9,12 @@ import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
 import { parseConfig } from '../config/load'
 import { agentActor, humanActor, DISPATCHER } from '../events/envelope'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import type { OperatorToolName } from '../operator/annotations'
 import { MemoryBuildStore } from '../store/memory'
 import type { Clock } from '../store/types'
 import { sequentialIds } from '../ids'
 import { reduceSession } from '../store/session-reducer'
-import { runOrchestratorTickStep } from './orchestrator-tick'
+import { runOrchestratorTickStep, orchestratorTickRegistry } from './orchestrator-tick'
 
 const REPO = 'https://github.com/acme/widgets'
 
@@ -549,5 +550,113 @@ describe('orchestrator tick step', () => {
       expect(state.status).toBe('suspended')
       expect(state.suspendedCause).toBe('budget')
     }
+  })
+})
+
+describe('orchestrator tick — sandbox backend (AUT-584)', () => {
+  /** A minimal OperatorSandboxService double: every method is callable, and
+   * exec records its calls so a registry dispatch can be proven to reach it. */
+  function fakeSandbox() {
+    const execCalls: Array<{ identity: string; input: { repo: string; command: string } }> = []
+    const sandbox = {
+      canPublish: true,
+      exec: async (identity: string, input: { repo: string; command: string }) => {
+        execCalls.push({ identity, input })
+        return { exitCode: 0, stdout: 'ok', stderr: '' }
+      },
+      start: async () => ({ commandId: 'cmd-1' }),
+      wait: async () => ({ state: 'exited' as const, exitCode: 0, stdout: '', stderr: '' }),
+      readFile: async () => new TextEncoder().encode(''),
+      writeFile: async () => undefined,
+      reset: async () => undefined,
+      publish: async () => ({
+        branch: 'ab/orch-x',
+        sha: 'sha',
+        pr: { number: 1, url: 'https://github.com/acme/widgets/pull/1', headSha: 'sha' },
+      }),
+      release: async () => undefined,
+    }
+    return { sandbox: sandbox as never, execCalls }
+  }
+
+  const SEVEN: OperatorToolName[] = [
+    'sandbox.exec',
+    'sandbox.publish',
+    'sandbox.read_file',
+    'sandbox.reset',
+    'sandbox.start',
+    'sandbox.wait',
+    'sandbox.write_file',
+  ]
+
+  test('with a sandbox backend the tick registry advertises every sandbox tool and dispatch reaches it', async () => {
+    const { sandbox, execCalls } = fakeSandbox()
+    const options = {
+      ...tickOptions(new MemoryBuildStore({ clock: manualClock() }), manualClock(), textModel()),
+      sandbox,
+    }
+    const registry = orchestratorTickRegistry(options)
+    expect(
+      registry.entries
+        .map((entry) => entry.name)
+        .filter((name) => name.startsWith('sandbox.'))
+        .sort(),
+    ).toEqual(SEVEN)
+
+    // Dispatch, not just advertisement: a sandbox.exec-shaped call through
+    // the registry reaches the fake with the attributed identity.
+    const result = (await registry.call(
+      'sandbox.exec',
+      { repo: REPO, command: 'echo hi' },
+      {
+        identity: 'op',
+      },
+    )) as { exitCode: number; stdout: string; stderr: string }
+    expect(result).toEqual({ exitCode: 0, stdout: 'ok', stderr: '' })
+    expect(execCalls).toEqual([{ identity: 'op', input: { repo: REPO, command: 'echo hi' } }])
+  })
+
+  test('a wake turn offers the sandbox tools in its tool set when a backend is supplied', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    const sessionId = await seedSession(store, clock, { wake: ['escalation.raised'] })
+    await seedBuild(store, 'b1', { escalate: true })
+    const { sandbox } = fakeSandbox()
+    const model = sequenceModel([
+      toolCallStep('c1', 'sandbox.exec', JSON.stringify({ command: 'echo hi' })),
+      textStep('Ran it.'),
+    ])
+    const report = await runOrchestratorTickStep({ ...tickOptions(store, clock, model), sandbox })
+    expect(report.woken).toBe(1)
+    // The model-facing tool set (the registry's advertised surface) carries
+    // every sandbox tool.
+    const sentTools = (model.doStreamCalls[0]!.tools ?? []) as Array<{ name: string }>
+    expect(
+      sentTools
+        .map((tool) => tool.name)
+        .filter((n) => n.startsWith('sandbox.'))
+        .sort(),
+    ).toEqual(SEVEN)
+    // The executed call reached the backend with the session's repository.
+    const state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.status).toBe('idle')
+    const stream = state.turns[0]!.stream
+    const parts = (await store.readStream(stream)).chunks.flatMap((c) => c.parts)
+    const output = parts.find(
+      (part) => part.type === 'tool-output-available' && part.toolCallId === 'c1',
+    ) as { output: { exitCode: number; stdout: string; stderr: string } } | undefined
+    expect(output?.output).toEqual({ exitCode: 0, stdout: 'ok', stderr: '' })
+  })
+
+  test('without a backend the tick registry filters every sandbox tool (the compatibility case)', async () => {
+    const registry = orchestratorTickRegistry(
+      tickOptions(new MemoryBuildStore({ clock: manualClock() }), manualClock(), textModel()),
+    )
+    expect(
+      registry.entries.map((entry) => entry.name).filter((name) => name.startsWith('sandbox.')),
+    ).toEqual([])
+    await expect(
+      registry.call('sandbox.exec', { repo: REPO, command: 'echo hi' }, { identity: 'op' }),
+    ).rejects.toThrow('unknown tool "sandbox.exec"')
   })
 })
