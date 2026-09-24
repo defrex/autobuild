@@ -24,9 +24,10 @@
  *
  * Staging targets `<repoRoot>/node_modules/@defrex/autobuild-vercel-sandbox/`
  * and every staged file is appended to the dispatch route's
- * `route.js.nft.json` computed relative to the trace file's directory — six
- * ups to the repository root, the same depth class as the trace's existing
- * `node_modules/.bun/**` entries. It fails loudly when the package, bundle
+ * `route.js.nft.json` computed relative to the trace file's directory —
+ * seven `'..'` components up to the repository root (what `path.relative()`
+ * yields from `…/.next/server/app/api/dispatch`), the same depth class as
+ * the trace's existing `node_modules/.bun/**` entries. It fails loudly when the package, bundle
  * input, or trace is missing, so a deployment can never silently ship
  * without the plugin. Idempotent ACROSS PROCESSES: the bundle input is
  * located through the workspace tree, never through `node_modules`, so a
