@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { WorkspaceHandle } from '../types'
 import { describeWorkspaceProviderContract } from './contract'
-import { GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
+import { GitError, GitWorktreeProvider, spawnExec, type Exec } from './git-worktree'
 import { SANDBOX_FORBIDDEN_ENV, SandboxOperationError } from './operator-sandbox'
 
 /** Identity/signing pinned per-invocation so tests ignore user git config. */
@@ -498,6 +498,54 @@ describe('GitWorktreeProvider', () => {
     })
     const restarted = new GitWorktreeProvider({ root })
     await restarted.release(live)
+    expect(existsSync(live.path)).toBe(false)
+  })
+
+  test('release fails typed when rev-parse --git-common-dir succeeds with empty stdout', async () => {
+    // discoverRepo guards the same degenerate-input shape as
+    // excludeProvisioningMarker: a successful rev-parse with empty stdout
+    // would feed '' into resolve(path, …) and target the worktree directory
+    // itself, misdirecting the subsequent worktree remove. The chosen posture
+    // is failing loudly (GitError, matching shaFrom's empty-SHA guard) rather
+    // than the release-is-a-no-op null return. Unreachable for real git
+    // output — pinned at the exec seam, the same injection point the suite
+    // uses for error shapes git cannot produce.
+    const live = await provider.provision({
+      repo,
+      baseBranch: 'main',
+      branch: 'ab/empty-common-dir',
+    })
+    const registrationsBefore = await registrationCount(repo, live.path)
+
+    let intercepted = false
+    const emptyCommonDir: Exec = async (cmd, opts) => {
+      if (cmd[0] === 'git' && cmd.at(-2) === 'rev-parse' && cmd.at(-1) === '--git-common-dir') {
+        intercepted = true
+        return { stdout: '', stderr: '', exitCode: 0 }
+      }
+      return spawnExec(cmd, opts)
+    }
+    const restarted = new GitWorktreeProvider({ root, exec: emptyCommonDir })
+    const error = await restarted.release(live).catch((e: unknown) => e)
+
+    expect(intercepted).toBe(true)
+    expect(error).toBeInstanceOf(GitError)
+    // Exact pin: shaFrom's guard uses the same synthesized stderr tail. A
+    // future edit to either message must move both implementations together
+    // and update this pin.
+    expect((error as Error).message).toBe(
+      `git -C ${resolve(live.path)} rev-parse --git-common-dir exited 1: git returned no common directory`,
+    )
+
+    // The guard fired before any side effect: the worktree is still on disk
+    // and still registered, and the throw did not fall through to a
+    // worktree remove against the worktree directory itself.
+    expect(existsSync(live.path)).toBe(true)
+    expect(await registrationCount(repo, live.path)).toBe(registrationsBefore)
+
+    // Non-empty discovery is unchanged: a healthy provider still discovers
+    // the owning repo and releases the same handle successfully.
+    await provider.release(live)
     expect(existsSync(live.path)).toBe(false)
   })
 
