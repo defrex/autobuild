@@ -1,4 +1,5 @@
 import { webAuth } from '@defrex/autobuild-hosted-store-service/web/auth'
+import { clientNameProblem } from '@defrex/autobuild-hosted-store-service/web/client-name-policy'
 
 /** How the consent page asks for a client's registered display name. */
 export type ClientNameLookup = (clientId: string) => Promise<string | null>
@@ -16,8 +17,10 @@ export interface AuthContextLike {
 }
 
 /** Resolve the registered display name for an OAuth client id, or null when
- * no usable name exists. Maps a missing record, a blank name, and any adapter
- * error to null so the consent page can fall back to the raw client_id and
+ * no usable name exists. Maps a missing record, a blank name, a name that
+ * violates the client-name policy (defense in depth for rows registered
+ * before the registration hook existed — AUT-399), and any adapter error to
+ * null so the consent page can fall back to the raw client_id and
  * never error the consent flow. The `auth` default is lazily evaluated, so
  * importing this module never opens a pg Pool. */
 export async function registeredClientName(
@@ -31,7 +34,7 @@ export async function registeredClientName(
       where: [{ field: 'clientId', value: clientId }],
     })
     const name = client?.name?.trim()
-    return name ? name : null
+    return name && !clientNameProblem(name) ? name : null
   } catch {
     return null
   }

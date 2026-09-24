@@ -522,6 +522,28 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
     expect(response.status).toBe(403)
   })
 
+  test('a violating client_name is rejected at the real DCR route (AUT-399)', async () => {
+    // The hook lives in createWebAuth's plugin list, but this proves the
+    // real /api/auth/mcp/register route — the one the SDK and discovery
+    // document drive — surfaces the policy as a 400 with the RFC 7591
+    // error shape the endpoint itself uses for other metadata problems.
+    const response = await app(
+      new Request(`${ORIGIN}/api/auth/mcp/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          client_name: 'acme\u0000console',
+          redirect_uris: [REDIRECT_URI],
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          token_endpoint_auth_method: 'none',
+        }),
+      }),
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: 'invalid_client_metadata' })
+  })
+
   test('DCR persists the authenticationScheme the plugin writes', async () => {
     // The pinned 1.4.18 MCP plugin's DCR writes `authenticationScheme` but
     // its declared oauthApplication schema omits it; the file-local plugin

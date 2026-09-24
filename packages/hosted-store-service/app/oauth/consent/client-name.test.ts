@@ -46,6 +46,12 @@ describe('registeredClientName — lookup contract', () => {
     expect(lookups[0]).toEqual(expectedLookup('client-other-456'))
   })
 
+  test('returns the registered name for a conforming unicode/emoji name', async () => {
+    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: 'Ünïcodé 🤖' }))
+    expect(await registeredClientName('client-123', auth)).toBe('Ünïcodé 🤖')
+    expect(lookups[0]).toEqual(expectedLookup('client-123'))
+  })
+
   test('maps a missing client record to null', async () => {
     const { auth, lookups } = capturingAuth(() => Promise.resolve(null))
     expect(await registeredClientName('client-123', auth)).toBeNull()
@@ -63,6 +69,23 @@ describe('registeredClientName — lookup contract', () => {
   test('maps an adapter rejection to null, without throwing', async () => {
     const { auth } = capturingAuth(() => Promise.reject(new Error('database down')))
     expect(await registeredClientName('client-123', auth)).toBeNull()
+  })
+
+  test('returns null for a stored name violating the client-name policy (AUT-399)', async () => {
+    // Defense in depth: rows registered before the registration hook existed
+    // must not render on the consent page either — they take the same
+    // unnamed fallback to the raw client_id as a missing name.
+    const cases = [
+      'acme\u0000console', // control character
+      'ac\u202Eme', // bidi override
+      'ac\u200Bme', // zero-width space
+      'a'.repeat(65), // over the 64-character cap
+    ]
+    for (const name of cases) {
+      const { auth, lookups } = capturingAuth(() => Promise.resolve({ name }))
+      expect(await registeredClientName('client-123', auth)).toBeNull()
+      expect(lookups[0]).toEqual(expectedLookup('client-123'))
+    }
   })
 
   test('maps a context-resolution rejection to null, without throwing', async () => {
