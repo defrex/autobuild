@@ -27,33 +27,46 @@
  * output wire-safe.
  */
 import { tool, type ToolSet } from 'ai'
-import type { z } from 'zod'
+import { z } from 'zod'
 import { RegistryError, type OperatorToolRegistry } from '../operator/registry'
 import type { Via } from '../events/envelope'
 import type { ApprovalDecision } from './approvals'
 
+/** The model-facing stand-in for a stripped `repo` on schemas Zod 4 refuses
+ * to `.omit()` — an object carrying refinements (`.refine` locks the shape).
+ * `safeExtend` preserves the refinements while replacing the field with an
+ * optional `never`: absent is fine, any supplied value fails validation, so
+ * the model still cannot point a tool anywhere but the session's
+ * repository. (Checked against the installed zod; `.omit` and `.extend`
+ * both throw on refined objects.) */
+const unsatisfiableRepo = z.optional(z.never())
+
 /** Strip `repo` from a tool's model-facing schema: plain `ZodObject` entries
- * omit the field; union entries (the `extendUnion` shape) omit it per
- * option. Returns undefined only for a schema the entry table never uses. */
+ * omit the field; union entries (the `extendUnion` shape) strip each option
+ * and rebuild the union — Zod 4 unions expose no `withOptions`, so the
+ * original union must never be handed through unchanged (its members still
+ * require `repo`, which the model cannot know). Refined objects neutralize
+ * the field instead of omitting it. Returns undefined only for a schema the
+ * entry table never uses. */
 function stripRepoField(schema: z.ZodType): z.ZodType | undefined {
-  const object = schema as unknown as { omit?: (mask: Record<string, boolean>) => unknown }
+  const options = (schema as unknown as { options?: readonly z.ZodType[] }).options
+  if (Array.isArray(options) && options.length > 0) {
+    const stripped = options.map((option) => stripRepoField(option) ?? option)
+    return z.union(stripped)
+  }
+  const object = schema as unknown as {
+    omit?: (mask: Record<string, boolean>) => unknown
+    safeExtend?: (patch: Record<string, z.ZodType>) => unknown
+  }
   if (typeof object.omit === 'function') {
     try {
       return object.omit({ repo: true }) as z.ZodType
     } catch {
-      // Not an omit-able object — fall through to the union shape.
-    }
-  }
-  const options = (schema as unknown as { options?: readonly z.ZodType[] }).options
-  if (Array.isArray(options) && options.length > 0) {
-    const stripped = options.map((option) => stripRepoField(option) ?? option)
-    const union = (
-      schema as unknown as {
-        withOptions?: (options: readonly z.ZodType[]) => z.ZodType
+      // A refined object: neutralize `repo` instead of omitting it.
+      if (typeof object.safeExtend === 'function') {
+        return object.safeExtend({ repo: unsatisfiableRepo }) as z.ZodType
       }
-    ).withOptions
-    if (typeof union === 'function') return union(stripped)
-    return schema
+    }
   }
   return undefined
 }
