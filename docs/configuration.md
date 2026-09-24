@@ -273,6 +273,35 @@ earlier configured plugins are reserved, and declaration order never permits
 shadowing. A collision between distinct plugin declarations continues to name
 the conflicting adapter and both owners.
 
+Two transitional downgrade paths announce themselves instead of failing
+startup (AUT-517). First, while the builtin hosts the `vercel-sandbox`
+implementation, a configured plugin that re-registers that workspace-provider
+name — `@defrex/autobuild-vercel-sandbox` is exactly such a plugin — is
+skipped with a one-line notice and the builtin keeps serving the provider:
+
+```text
+plugin "autobuild-vercel-sandbox" declares only builtin workspace-provider registration(s) "vercel-sandbox"; skipping it — the builtin keeps serving the provider
+```
+
+The skip applies only when the manifest declares at least one registration,
+only workspace-provider registrations, and every declared name collides with
+a builtin registration; any other collision still throws. The rule keys on
+builtin ownership, so it retires itself when the builtin is removed and a
+second plugin registering the name collides and fails startup as always.
+`ab plugin list` and `ab plugin doctor` show skipped modules as `SKIP` lines
+and exit 0. Second, guest processes (build and harvest children,
+`ab init`'s guest readiness probe, and scoped phase CLI commands) tolerate a
+configured bare package specifier they cannot resolve — guests never
+construct workspace providers, so a provider plugin they need not load is
+skipped with a notice instead of failing the process:
+
+```text
+plugin module "@defrex/autobuild-vercel-sandbox" could not be resolved from repository "…" or installation "…"; guests never construct workspace providers, so the provider plugin is skipped here
+```
+
+Repository-path specifiers and every post-resolution failure (evaluation,
+manifest, collision) stay fail-closed everywhere, including guests.
+
 Plugin authors import the stable surface from `@defrex/autobuild/plugin-sdk`, normally
 with `import type`, and can develop against Autobuild as a dev/peer dependency
 without adding a runtime Autobuild dependency to the plugin. That entry point

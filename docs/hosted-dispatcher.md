@@ -54,7 +54,7 @@ the function bundle. The script lives in the hosted store service package
 project directory and the deployment build's working directory:
 
 ```json
-{ "scripts": { "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts" } }
+{ "scripts": { "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts && bun ../../packages/hosted-dispatcher/src/ship-provider-plugin.ts" } }
 ```
 
 `pack-distribution` (the `ab-hosted-dispatcher` bin) writes
@@ -78,6 +78,26 @@ version and which no import traces once the Next.js project directory sits
 below the repository root. A deployment using this
 pipeline cannot ship without the archive; deployments that skip both packing
 and the trace step still fail at runtime.
+
+A second post-build trace step ships the provider plugin package (AUT-517):
+`bun ../../packages/hosted-dispatcher/src/ship-provider-plugin.ts` resolves
+`@defrex/autobuild-vercel-sandbox` from the repository-root installation,
+bundles its entrypoint with `bun build --target=bun --format=esm` into a
+single self-contained module (the plugin-sdk closure inlines — the
+deployment's repository-root `node_modules` carries no `@defrex/autobuild`
+either — while node builtins stay external), stages it into
+`<repoRoot>/node_modules/@defrex/autobuild-vercel-sandbox/` (replacing the
+workspace symlink a local `bun install` leaves there; the deployment never
+runs `bun install` again), and appends the staged files to the dispatch
+route's trace at the same repository-root depth as the existing
+`node_modules/.bun/**` entries. A bare plugin specifier resolves only
+through a `node_modules/` path, and the compiled dispatcher's
+`distributionRoot()` is the repository root, so only this staging makes
+`plugins = ["@defrex/autobuild-vercel-sandbox"]` loadable inside the
+deployed function. The step is idempotent and fails the deploy loudly when
+the package, its entrypoint, or the trace file is missing. The npm
+published package remains the real `src` — only the deployment stages the
+bundle.
 
 At runtime the kernel takes, in order: `AB_DISTRIBUTION_ARCHIVE` (an explicit
 archive path), the single archive under `.autobuild-dist/` of the
