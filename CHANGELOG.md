@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#498](https://github.com/defrex/autobuild/pull/498) — Update operator-api docs to remote store protocol 3 (AUT-535)
 - [#497](https://github.com/defrex/autobuild/pull/497) — Remove dead childDone deferred from AUT-524 frontend pressure test
 - [#496](https://github.com/defrex/autobuild/pull/496) — Make the harvest-launch pressure gate's evaluation cost flat
 - [#495](https://github.com/defrex/autobuild/pull/495) — Declare the SQLite digest index in local/schema.ts
