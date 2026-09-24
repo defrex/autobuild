@@ -65,4 +65,30 @@ describe('clientNameProblem', () => {
   test('the rejected boundary names name the offending code point', () => {
     expect(clientNameProblem('ac\u202Eme')).toContain('U+202E')
   })
+
+  test('the first forbidden code point in iteration order is the one reported', () => {
+    // The control character at index 1 precedes the bidi character at index 3;
+    // the message must name the earlier one, not the later match.
+    expect(clientNameProblem('a\u0000b\u202E')).toContain('U+0000')
+  })
+
+  test('a name of exactly 64 code points passes even when they are astral', () => {
+    // 32 emoji + 32 ASCII letters = 64 code points (96 UTF-16 code units).
+    // Pins that the counted unit is the code point from the pass side.
+    expect(clientNameProblem('🤖'.repeat(32) + 'a'.repeat(32))).toBeNull()
+  })
+
+  test('a name of 65 code points fails even when they are astral', () => {
+    // '🤖'.repeat(65) is 65 code points but 130 UTF-16 code units — over the
+    // cap by code points, so the message must still fire.
+    const problem = clientNameProblem('🤖'.repeat(65))
+    expect(problem).toContain('at most 64')
+  })
+
+  test('an over-cap name with a forbidden character gets the cap message, not the forbidden one', () => {
+    // 65 code points whose last character is also forbidden: the cap compare
+    // precedes the forbidden scan, so the cap message wins.
+    const problem = clientNameProblem(`${'a'.repeat(64)}🤖\u202E`)
+    expect(problem).toContain('at most 64')
+  })
 })
