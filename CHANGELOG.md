@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#549](https://github.com/defrex/autobuild/pull/549) — Pin the AUT-342 orchestrator wiring hop (HostedStoreServiceOptions)
 - [#545](https://github.com/defrex/autobuild/pull/545) — Guard discoverRepo against empty rev-parse --git-common-dir stdout
 - [#544](https://github.com/defrex/autobuild/pull/544) — Stamp the guest distribution marker with the archive digest (AUT-600)
 - [#542](https://github.com/defrex/autobuild/pull/542) — Match excludeProvisioningMarker's empty-stdout error to the fake twin
