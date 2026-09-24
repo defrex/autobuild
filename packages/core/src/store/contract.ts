@@ -14,6 +14,8 @@ import { describe, expect, test } from 'bun:test'
 import { EventValidationError, type EventWrite } from '../events/catalog'
 import { agentActor, DISPATCHER, humanActor, KERNEL, type Via } from '../events/envelope'
 import { reduceBuild } from '../kernel/reducer'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
+import { projectRepositoryStateEvents } from './repo-state-events'
 import type { RepositoryEventWrite } from '../events/repository'
 import type { SessionEventWrite } from '../events/sessions'
 import { manualClock } from '../testing/fixed'
@@ -738,6 +740,147 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(await store.claimRepoLease('acme/a', 'two', 1000)).toBe(false)
           await store.releaseRepoLease('acme/a', 'one')
           expect(await store.claimRepoLease('acme/a', 'two', 1000)).toBe(true)
+        })
+      })
+    })
+
+    describe('getRepoStateEvents (bounded journal read, AUT-489)', () => {
+      /** One no-op hosted dispatcher invocation: the ~4 facts an invocation
+       * appends whether or not it did anything. */
+      function noopInvocation(run: string): RepositoryEventWrite[] {
+        return [
+          {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 1,
+              effectiveConfig: { kind: 'effective-config', rev: 0 },
+              roleWarnings: [],
+            },
+          },
+          { actor: DISPATCHER, type: 'dispatcher.tick-started', payload: { run } },
+          {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run,
+              queued: 0,
+              counters: noopTickCounters(),
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          },
+          {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-stopped',
+            payload: { run, outcome: 'normal' },
+          },
+        ]
+      }
+
+      function noopTickCounters() {
+        return {
+          merged: 0,
+          closed: 0,
+          conflicted: 0,
+          abandoned: 0,
+          discarded: 0,
+          janitorFailed: 0,
+          recovered: 0,
+          dispatchFailed: 0,
+          resumed: 0,
+          swept: 0,
+          dispatched: 0,
+          authored: 0,
+          bounced: 0,
+          claimRaces: 0,
+          invalidTickets: 0,
+          dependencyBlocked: 0,
+          harvestStarted: 0,
+          harvestResumed: 0,
+          harvestCompleted: 0,
+          harvestEscalated: 0,
+          harvestFailed: 0,
+        }
+      }
+
+      test('unknown repo rejects like getRepoEvents', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await expect(store.getRepoStateEvents('acme/never-seen')).rejects.toThrow(/unknown repo/)
+        })
+      })
+
+      test('an empty journal answers []', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/empty')
+          expect(await store.getRepoStateEvents('acme/empty')).toEqual([])
+        })
+      })
+
+      test('a seeded journal answers exactly the oracle over the full replay', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/state')
+          for (const write of [
+            ...noopInvocation('r1'),
+            { actor: humanActor('op'), type: 'dispatcher.intake-set', payload: { enabled: false } },
+            { actor: KERNEL, type: 'harvest.started', payload: harvestStartedWrite('h1').payload },
+            {
+              actor: humanActor('op'),
+              type: 'orchestrator.sandbox.provisioned',
+              payload: { operator: 'op', environmentId: 'env', provider: 'p', workspacePath: '/w' },
+            },
+            ...noopInvocation('r2'),
+            {
+              actor: humanActor('op'),
+              type: 'dispatcher.operator-reported',
+              payload: { run: 'r2', level: 'warning', message: 'm' },
+            },
+          ] as RepositoryEventWrite[]) {
+            await store.appendRepo('acme/state', write)
+          }
+          const subset = await store.getRepoStateEvents('acme/state')
+          const full = await store.getRepoEvents('acme/state')
+          expect(subset).toEqual(projectRepositoryStateEvents(full))
+          // The oracle is also the reducer-equivalence guarantee: latest-run
+          // facts survive (criterion 3 — a failed/warning invocation stays
+          // visible), and durable facts from before the anchor survive.
+          expect(subset.map((event) => event.type)).toContain('dispatcher.operator-reported')
+          expect(subset.map((event) => event.type)).toContain('harvest.started')
+          expect(subset.filter((event) => event.type === 'dispatcher.run-started')).toHaveLength(1)
+        })
+      })
+
+      test('the subset is bounded by the invocation count, not by journal length', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/bounded')
+          for (let index = 0; index < 25; index += 1) {
+            for (const write of noopInvocation(`r_${index}`)) {
+              await store.appendRepo('acme/bounded', write)
+            }
+          }
+          const subset = await store.getRepoStateEvents('acme/bounded')
+          // Exactly the latest invocation's four facts: nothing durable was
+          // ever written, so the durable part of the subset is empty.
+          expect(subset).toHaveLength(4)
+        })
+      })
+
+      test('settings written after the latest anchor are present', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/settings-tail')
+          for (const write of noopInvocation('r1')) {
+            await store.appendRepo('acme/settings-tail', write)
+          }
+          await store.appendRepo('acme/settings-tail', {
+            actor: humanActor('op'),
+            type: 'dispatcher.pause-set',
+            payload: { enabled: true },
+          })
+          const subset = await store.getRepoStateEvents('acme/settings-tail')
+          expect(subset.map((event) => event.type)).toContain('dispatcher.pause-set')
+          expect(reduceDispatchSettings(subset).paused).toBe(true)
         })
       })
     })
@@ -1623,6 +1766,9 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await expect(scoped.getRepoEvents('acme/rate-limiter')).rejects.toThrow(
             /build-scoped store/,
           )
+          await expect(scoped.getRepoStateEvents('acme/rate-limiter')).rejects.toThrow(
+            /build-scoped store/,
+          )
           await expect(scoped.getRepoBuildDigests('acme/rate-limiter')).rejects.toThrow(
             /build-scoped store/,
           )
@@ -2470,6 +2616,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
               () => scoped.ensureRepo('acme/a'),
               () => scoped.appendRepo('acme/a', harvestStartedWrite()),
               () => scoped.getRepoEvents('acme/a'),
+              () => scoped.getRepoStateEvents('acme/a'),
               () => scoped.getRepoBuildDigests('acme/a'),
               () => scoped.createStream({ kind: 'build', build: 'scope-build' }, 'x'),
               () => scoped.createStream({ kind: 'repo', repo: 'acme/a' }, 'x'),

@@ -180,6 +180,9 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     getRepoEvents(repo: string, _sinceSeq?: number): Promise<RepositoryEvent[]> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoEvents', repo))
     },
+    getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+      return Promise.reject(new BuildScopeError(scope, 'getRepoStateEvents', repo))
+    },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoBuildDigests', repo))
     },

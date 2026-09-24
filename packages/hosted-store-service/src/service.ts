@@ -78,6 +78,12 @@ const storeResourceRoutes = new Set([
   // server before the repo-existence gate, so an unknown repo is still
   // classified here and answers 200 from build records.
   'GET build-digests',
+  // The bounded repository-journal read (AUT-489); unlike build-digests this
+  // route is served inside the repo-existence gate, exactly like `GET
+  // events`. Without this classification `hostedBackend` answers the generic
+  // 404 before createStoreServer runs, and after the reader cutover every
+  // dispatcher tick's unguarded journal read would reject over HTTP.
+  'GET state-events',
   'POST lease/claim',
   'POST lease/heartbeat',
   'POST lease/release',
