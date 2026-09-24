@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#562](https://github.com/defrex/autobuild/pull/562) — Give describeEnvironment providers a defined config argument
 - [#559](https://github.com/defrex/autobuild/pull/559) — Retry PostgresTicketSource on cached-plan invalidation (AUT-559)
 - [#557](https://github.com/defrex/autobuild/pull/557) — Restore workspace plugin symlink after a local deploy:build
 - [#556](https://github.com/defrex/autobuild/pull/556) — Correct trace-depth labels from 'six ups' to seven '..' components
