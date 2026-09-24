@@ -244,10 +244,15 @@ export async function runGuestReadinessProbe(opts: {
   return { checks }
 }
 
-function hostPreflight(config: Config, env: Record<string, string | undefined>): void {
-  // Pre-registry site: the builtin capability table drives the provider's
-  // declared forge and environment requirements (AUT-516).
-  const caps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
+/** Forge and required-environment checks driven by one provider's capability
+ * declarations. Shared by the pre-registry builtin preflight and the
+ * registry-aware check after plugin load so a plugin provider's declarations
+ * are honoured at the same seam. */
+function declaredForgeEnvChecks(
+  caps: WorkspaceProviderCapabilities | undefined,
+  config: Config,
+  env: Record<string, string | undefined>,
+): void {
   if (caps?.supportedForges !== undefined && !caps.supportedForges.includes(config.forge)) {
     throw new Error(
       caps.forgeValidationMessage ??
@@ -261,6 +266,14 @@ function hostPreflight(config: Config, env: Record<string, string | undefined>):
     )
     if (!satisfied) throw new Error(group.validationMessage)
   }
+}
+
+function hostPreflight(config: Config, env: Record<string, string | undefined>): void {
+  // Pre-registry site: the builtin capability table drives the provider's
+  // declared forge and environment requirements (AUT-516). Plugin providers
+  // are checked registry-aware after plugin load in validateInitReadiness.
+  const caps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
+  declaredForgeEnvChecks(caps, config, env)
   // Stays exactly where today's remote-provider branch put it: only a
   // provider with remote readiness preflights its ticket-source credential
   // here, because remote provisioning acquires tickets before allocating
@@ -298,11 +311,11 @@ export async function validateInitReadiness(opts: {
   // Pre-registry parse and redaction come from the builtin capability table;
   // after plugin load the registration's own declarations take over (AUT-516).
   const builtinCaps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
-  const providerConfig =
+  let providerConfig =
     builtinCaps?.configSchema !== undefined
       ? builtinCaps.configSchema.parse(config.workspace.config)
       : undefined
-  const redact = createReadinessRedactor(
+  let redact = createReadinessRedactor(
     opts.env,
     providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
   )
@@ -314,6 +327,19 @@ export async function validateInitReadiness(opts: {
     const hostPlugins = await loadPlugins(config.plugins, repo, { packageRoot: repo })
     caps =
       hostPlugins.workspaceProviders.get(config.workspace.provider)?.capabilities ?? builtinCaps
+    // Registry-aware declaration checks. The pre-registry preflight above could
+    // only consult the builtin table, so a plugin provider's declared forge and
+    // required-environment validations are honoured here (f_9d68b3e5); for the
+    // builtins the registration carries the same declarations, so the check is
+    // a no-op repeat after the preflight already passed.
+    declaredForgeEnvChecks(caps, config, opts.env)
+    // The registration's own configSchema and guestEnvNames take over from the
+    // builtin table, so a plugin provider's readiness context carries its
+    // parsed config and its declared names are redacted (f_55ba7591).
+    if (caps?.configSchema !== undefined)
+      providerConfig = caps.configSchema.parse(config.workspace.config)
+    if (providerConfig !== undefined && caps?.guestEnvNames !== undefined)
+      redact = createReadinessRedactor(opts.env, caps.guestEnvNames(providerConfig))
     // Registry-aware process-env-only check: a declared name present in the
     // dotenv-augmented `env` but absent from the raw launcher map fails here,
     // so plugin-declared requirements and non-CLI callers are covered too

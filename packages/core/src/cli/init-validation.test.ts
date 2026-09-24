@@ -1555,4 +1555,187 @@ readyState = "ready"
       'VERCEL_OIDC_TOKEN loaded only from the target .env is unavailable to the Vercel SDK; export it in the launcher environment or configure VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID',
     )
   })
+
+  test('a plugin-declared supportedForges and requiredEnv validationMessage fail validation', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-forge-env-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        supportedForges: ['gitlab'],
+        forgeValidationMessage: 'acmebox requires the GitLab forge',
+        requiredEnv: [
+          {
+            alternatives: [['ACME_TOKEN']],
+            validationMessage: 'ACME_TOKEN must be set for acmebox',
+          },
+        ],
+      },
+    },
+  },
+}\n`,
+    )
+    const toml = (forge: string) => `baseBranch = "main"
+forge = "${forge}"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`
+    await writeFile(join(repo, 'autobuild.toml'), toml('github'))
+
+    // The declared forge list is honoured: the unsupported forge fails with
+    // the declared message, not silently.
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow('acmebox requires the GitLab forge')
+
+    // With the declared forge satisfied, the declared required-environment
+    // group's validationMessage fires when the variable is absent.
+    await writeFile(join(repo, 'autobuild.toml'), toml('gitlab'))
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow('ACME_TOKEN must be set for acmebox')
+
+    // Both declarations satisfied, validation proceeds past the preflight to
+    // the (expected) missing-readiness failure instead.
+    await expect(
+      validateInitReadiness({
+        targetRepo: repo,
+        env: { ACME_TOKEN: 'present' },
+        exec: spawnExec,
+      }),
+    ).rejects.toThrow('workspace provider "acmebox" does not support init readiness validation')
+  })
+
+  test('a plugin-declared configSchema and guestEnvNames reach the readiness context (f_55ba7591)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-readiness-ctx-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        configSchema: {
+          parse: (value) => {
+            if (
+              typeof value !== 'object' ||
+              value === null ||
+              typeof value.guestName !== 'string'
+            ) {
+              throw new Error('guestName must be a string')
+            }
+            return { guestName: value.guestName }
+          },
+        },
+        guestEnvNames: () => ['ACME_VAR'],
+        validateReadiness: async (ctx) => ({
+          provider: 'acmebox',
+          context: 'remote',
+          exitCode: 0,
+          checks: [
+            {
+              name: 'context',
+              status: 'pass',
+              detail:
+                'config=' + JSON.stringify(ctx.providerConfig) + ' env=' + ctx.env.ACME_VAR,
+            },
+          ],
+        }),
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[workspace.config]
+guestName = "acme-guest"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+
+    // ACME_VAR deliberately avoids the TOKEN/KEY/SECRET naming heuristic: the
+    // detail is only redacted when the declared guestEnvNames is honoured.
+    const report = await validateInitReadiness({
+      targetRepo: repo,
+      env: { ACME_VAR: 'sekret-value-123' },
+      exec: spawnExec,
+    })
+    expect(report.provider).toBe('acmebox')
+    const detail = report.checks[0]?.detail ?? ''
+    // The readiness context carried the provider config parsed with the
+    // plugin's declared configSchema (not undefined).
+    expect(detail).toContain('guestName')
+    // And the declared guest env name redacted the secret value.
+    expect(detail).toContain('[REDACTED]')
+    expect(detail).not.toContain('sekret-value-123')
+  })
+
+  test('a plugin-declared configSchema that rejects the config fails validation', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'ab-plugin-bad-config-'))
+    roots.push(repo)
+    await writeFile(
+      join(repo, 'acme-plugin.ts'),
+      `export default {
+  name: 'acme',
+  apiVersion: '^1.6.0',
+  workspaceProviders: {
+    acmebox: {
+      factory: () => ({}),
+      capabilities: {
+        configSchema: {
+          parse: () => {
+            throw new Error('guestName must be a string')
+          },
+        },
+      },
+    },
+  },
+}\n`,
+    )
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      `baseBranch = "main"
+plugins = ["./acme-plugin.ts"]
+[workspace]
+provider = "acmebox"
+[workspace.config]
+guestName = 7
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "file"
+readyState = "ready"
+`,
+    )
+    await expect(
+      validateInitReadiness({ targetRepo: repo, env: {}, exec: spawnExec }),
+    ).rejects.toThrow('guestName must be a string')
+  })
 })
