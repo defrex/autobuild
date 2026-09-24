@@ -21,7 +21,7 @@ const PACKAGE_NAME = '@defrex/autobuild-vercel-sandbox'
  * bundles inline the genuine plugin-sdk closure), plus a Next project
  * directory holding a trace file. Mirrors the deployed layout:
  * `<root>/packages/hosted-store-service/.next/server/app/api/dispatch/
- * route.js.nft.json`, staged files six directory levels below the root. The
+ * route.js.nft.json`, staged files seven directory levels below the root. The
  * source member is found through the workspace tree, never node_modules
  * (finding f_5b9ade16) — so no node_modules link is needed here. */
 async function fixture(traceFiles?: string[]): Promise<{ root: string; project: string }> {
@@ -77,7 +77,7 @@ describe('ship-provider-plugin', () => {
     expect(stagedManifest.exports?.['.']).toBe('./dist/index.js')
 
     // Trace entries are relative to the trace file's directory and reach the
-    // repository root in exactly six ups — the same depth class as the
+    // repository root in seven '..' components — the same depth class as the
     // trace's existing node_modules/.bun/** entries, and the root the
     // compiled distributionRoot() resolves.
     const tracePath = join(project, TRACE_DIRECTORY, 'route.js.nft.json')
@@ -86,10 +86,11 @@ describe('ship-provider-plugin', () => {
     expect(result.traceEntries).toHaveLength(2)
     for (const entry of result.traceEntries) {
       expect(files).toContain(entry)
-      // Six ups to the repository root: the same depth class as the trace's
-      // existing node_modules/.bun/** entries, and the root the compiled
-      // distributionRoot() resolves.
-      expect(entry.split('/node_modules')[0]!.split('../').length - 1).toBe(6)
+      // Seven '..' components — what path.relative() yields from the trace
+      // file's directory (…/.next/server/app/api/dispatch) to the repo root:
+      // the same depth class as the trace's existing node_modules/.bun/**
+      // entries, and the root the compiled distributionRoot() resolves.
+      expect(entry.split('/').filter((segment) => segment === '..')).toHaveLength(7)
       const resolvedEntry = resolve(join(tracePath, '..'), entry)
       expect(resolvedEntry.startsWith(result.staging)).toBe(true)
       expect(stagedPaths.has(resolvedEntry.slice(result.staging.length + 1))).toBe(true)
