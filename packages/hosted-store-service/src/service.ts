@@ -82,6 +82,9 @@ const ticketOperations = new Set<string>(HOSTED_TICKET_OPERATIONS)
 const storeResourceRoutes = new Set([
   'GET events',
   'POST events',
+  // The session-events compare-and-append (AUT-342): the same resource route
+  // shape the build stream's conditional append uses.
+  'POST events/conditional',
   'POST deposits',
   'GET artifacts',
   'POST artifacts',
