@@ -13,6 +13,9 @@ import type { EventEnvelope, EventWrite } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { RepositoryEvent } from '../events/repository'
 import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
+import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
+import type { LanguageModel } from 'ai'
+import { reduceSession } from '../store/session-reducer'
 import { sequentialIds } from '../ids'
 import { pendingAutoMerge, recordAutoMergeDeferralObservation } from '../kernel/auto-merge'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
@@ -124,6 +127,11 @@ function harness(
     /** Store identity override — an origin URL for the identity-split
      * tests; defaults to the origin-less path fixture. */
     repo?: string
+    /** Explicit normalized origin (origin mode) — the orchestrator step's
+     * construction gate reads this field (AUT-342). */
+    repoOrigin?: string
+    /** The orchestrator turn runner's injected model. */
+    orchestratorModel?: LanguageModel
     /** Trusted publication settlement seam (AUT-328 release guard). */
     settlePublication?: (slug: string) => Promise<void>
   } = {},
@@ -172,6 +180,8 @@ function harness(
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
     repo: opts.repo ?? REPO,
+    ...(opts.repoOrigin !== undefined ? { repoOrigin: opts.repoOrigin } : {}),
+    ...(opts.orchestratorModel !== undefined ? { orchestratorModel: opts.orchestratorModel } : {}),
     ...(opts.checkout !== undefined ? { checkout: opts.checkout } : {}),
     exec,
     launchRunner: async (slug) => {
@@ -6572,5 +6582,157 @@ describe('the dispatcher tick reads a bounded journal (AUT-489)', () => {
     // The bound does not depend on the invocation history length.
     expect(measured[0]).toBe(measured[1])
     expect(measured[0]).toBeGreaterThan(0)
+  })
+})
+
+describe('dispatcher — orchestrator step gates (AUT-342)', () => {
+  test('a local dispatch never constructs the step: enabled = true is a full no-op', async () => {
+    const modelCalls: number[] = []
+    const model = new MockLanguageModelV3({
+      doStream: async () => {
+        modelCalls.push(1)
+        throw new Error('the orchestrator step must never run locally')
+      },
+    })
+    const h = harness({
+      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+    })
+    // A session that WOULD be woken, and a build carrying a matching event,
+    // if the gate leaked into local dispatch.
+    await h.store.ensureRepo(REPO)
+    const session = await h.store.createSession({ repo: REPO, operator: 'op' })
+    await h.store.appendSessionEvent(session.id, {
+      actor: humanActor('op'),
+      type: 'session.wake-set',
+      payload: { globs: ['escalation.raised'] },
+    })
+    await h.store.createBuild({ slug: 'b1', repo: REPO, branch: 'ab/b1' })
+    await h.store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-1', title: 'T' },
+        repo: REPO,
+        baseBranch: 'main',
+      },
+    })
+    await h.store.append('b1', {
+      actor: agentActor('implement', 'session-x'),
+      type: 'escalation.raised',
+      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
+    })
+
+    await h.dispatcher.tick()
+    expect(modelCalls).toHaveLength(0)
+    expect(reduceSession(await h.store.getSessionEvents(session.id)).turns).toHaveLength(0)
+  })
+
+  test('origin mode with the orchestrator disabled is a no-op', async () => {
+    const modelCalls: number[] = []
+    const model = new MockLanguageModelV3({
+      doStream: async () => {
+        modelCalls.push(1)
+        throw new Error('the orchestrator step must never run when disabled')
+      },
+    })
+    // Origin mode (repoOrigin set), orchestrator table absent → disabled.
+    const h = harness({ repoOrigin: 'https://github.com/acme/widgets' })
+    await h.store.ensureRepo(REPO)
+    const session = await h.store.createSession({ repo: REPO, operator: 'op' })
+    await h.store.appendSessionEvent(session.id, {
+      actor: humanActor('op'),
+      type: 'session.wake-set',
+      payload: { globs: ['escalation.raised'] },
+    })
+    await h.store.createBuild({ slug: 'b1', repo: REPO, branch: 'ab/b1' })
+    await h.store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-1', title: 'T' },
+        repo: REPO,
+        baseBranch: 'main',
+      },
+    })
+    await h.store.append('b1', {
+      actor: agentActor('implement', 'session-x'),
+      type: 'escalation.raised',
+      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
+    })
+
+    await h.dispatcher.tick()
+    expect(modelCalls).toHaveLength(0)
+    expect(reduceSession(await h.store.getSessionEvents(session.id)).turns).toHaveLength(0)
+  })
+
+  test('origin mode with the orchestrator enabled wakes an idle session from an attention event', async () => {
+    const chunks = [
+      [
+        { type: 'stream-start', warnings: [] },
+        { type: 'response-metadata', id: 't', modelId: 'mock', timestamp: new Date(0) },
+        { type: 'text-start', id: 't' },
+        { type: 'text-delta', id: 't', delta: 'On it.' },
+        { type: 'text-end', id: 't' },
+        {
+          type: 'finish',
+          finishReason: { unified: 'stop', raw: 'stop' },
+          usage: {
+            inputTokens: {
+              total: 10,
+              noCache: undefined,
+              cacheRead: undefined,
+              cacheWrite: undefined,
+            },
+            outputTokens: { total: 5, text: undefined, reasoning: undefined, toolCall: undefined },
+            totalTokens: 15,
+          },
+        },
+      ],
+    ]
+    let call = 0
+    const model = new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: chunks[Math.min(call++, chunks.length - 1)]! as never,
+          initialDelayInMs: 0,
+        }),
+      }),
+    })
+    const h = harness({
+      repoOrigin: 'https://github.com/acme/widgets',
+      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+      orchestratorModel: model,
+    })
+    await h.store.ensureRepo(REPO)
+    const session = await h.store.createSession({ repo: REPO, operator: 'op' })
+    await h.store.appendSessionEvent(session.id, {
+      actor: humanActor('op'),
+      type: 'session.wake-set',
+      payload: { globs: ['escalation.raised'] },
+    })
+    await h.store.createBuild({ slug: 'b1', repo: REPO, branch: 'ab/b1' })
+    await h.store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: {
+        ticket: { source: 'fake', id: 'T-1', title: 'T' },
+        repo: REPO,
+        baseBranch: 'main',
+      },
+    })
+    await h.store.append('b1', {
+      actor: agentActor('implement', 'session-x'),
+      type: 'escalation.raised',
+      payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Why?' },
+    })
+
+    await h.dispatcher.tick()
+    const state = reduceSession(await h.store.getSessionEvents(session.id))
+    expect(state.turns).toHaveLength(1)
+    expect(state.turns[0]).toMatchObject({
+      state: 'completed',
+      trigger: { kind: 'wake', build: 'b1' },
+    })
+    expect(state.wakeCursors).toEqual({ b1: 2 })
   })
 })
