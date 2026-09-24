@@ -108,9 +108,11 @@ command references are errors. The open maps are `[commands]`, `[roles]`,
 `[workspace.config]`, `[workspace.config.runtimeProvisioning]`,
 `[verify.<step>]`, and `[finalize.<step>]`. Autobuild
 validates repository-defined command, role, and step entries.
-`[workspace.config]` is plugin-owned and passed through unchanged for plugin
-providers; the builtin `git-worktree` provider requires it to be empty, while
-`vercel-sandbox` interprets it as a closed, typed table.
+`[workspace.config]` is plugin-owned and passed through unchanged at parse
+time; the builtin `git-worktree` provider requires it to be empty, while a
+plugin provider's declared config schema — the Vercel Sandbox plugin declares
+a closed, typed table — validates it after plugins load, before any workspace
+is provisioned.
 Every other known table is closed to unknown keys.
 
 There are three validation layers:
@@ -273,27 +275,12 @@ earlier configured plugins are reserved, and declaration order never permits
 shadowing. A collision between distinct plugin declarations continues to name
 the conflicting adapter and both owners.
 
-Two transitional downgrade paths announce themselves instead of failing
-startup (AUT-517). First, while the builtin hosts the `vercel-sandbox`
-implementation, a configured plugin that re-registers that workspace-provider
-name — `@defrex/autobuild-vercel-sandbox` is exactly such a plugin — is
-skipped with a one-line notice and the builtin keeps serving the provider:
-
-```text
-plugin "autobuild-vercel-sandbox" declares only builtin workspace-provider registration(s) "vercel-sandbox"; skipping it — the builtin keeps serving the provider
-```
-
-The skip applies only when the manifest declares at least one registration,
-only workspace-provider registrations, and every declared name collides with
-a builtin registration; any other collision still throws. The rule keys on
-builtin ownership, so it retires itself when the builtin is removed and a
-second plugin registering the name collides and fails startup as always.
-`ab plugin list` and `ab plugin doctor` show skipped modules as `SKIP` lines
-and exit 0. Second, guest processes (build and harvest children,
-`ab init`'s guest readiness probe, and scoped phase CLI commands) tolerate a
-configured bare package specifier they cannot resolve — guests never
-construct workspace providers, so a provider plugin they need not load is
-skipped with a notice instead of failing the process:
+One tolerance path announces itself instead of failing startup. Guest
+processes (build and harvest children, `ab init`'s guest readiness probe, and
+scoped phase CLI commands) tolerate a configured bare package specifier they
+cannot resolve — guests never construct workspace providers, so a provider
+plugin they need not load is skipped with a notice instead of failing the
+process:
 
 ```text
 plugin module "@defrex/autobuild-vercel-sandbox" could not be resolved from repository "…" or installation "…"; guests never construct workspace providers, so the provider plugin is skipped here
@@ -479,6 +466,14 @@ before claims and list every available builtin and plugin provider.
 
 ### Vercel Sandbox
 
+The provider ships as a plugin package, not a builtin. The complete opt-in is
+two steps: install the plugin next to the CLI with
+`bun add -g @defrex/autobuild-vercel-sandbox`, then declare it in
+`autobuild.toml` by adding `plugins = ["@defrex/autobuild-vercel-sandbox"]`
+among the root scalars (before the first table). A configuration that
+selects `vercel-sandbox` without the plugin installed and declared fails
+before any workspace is provisioned.
+
 Remote execution is explicit and requires the hosted HTTPS BuildStore plus its
 scoped token, an HTTPS `github.com/owner/repository` origin, `forge = "github"`,
 and Vercel authentication. Use either `VERCEL_OIDC_TOKEN`, or all of
@@ -489,6 +484,8 @@ because publication injects the credential through Vercel's network transform.
 
 <!-- config-fragment:workspace-vercel -->
 ```toml
+plugins = ["@defrex/autobuild-vercel-sandbox"]
+
 [workspace]
 provider = "vercel-sandbox"
 
@@ -549,7 +546,7 @@ Runtime names are not a built-in enum. Plugin registrations work with the same
 map, for example `[workspace.config.runtimeProvisioning.opencode]` with a pinned
 plugin-owned install command and its executable/version preflight.
 
-The built-in adapter supports only Vercel's
+The provider supports only Vercel's
 `vercel/sandbox/universal` managed image, selected by its bare/default name, a
 tag, or a digest. Other managed images and arbitrary VCR images are rejected at
 configuration load because their package tools, libc/CPU, and filesystem

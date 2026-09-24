@@ -4,7 +4,7 @@ import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadConfig } from '../packages/core/src/config/load'
 import { effectiveRuntimeReferences } from '../packages/core/src/config/roles'
-import { vercelSandboxConfigSchema } from '../packages/core/src/config/schema'
+import { vercelSandboxConfigSchema } from '@defrex/autobuild-vercel-sandbox'
 
 const REPO_ROOT = join(import.meta.dir, '..')
 const ROLE_KEYS = ['default', 'implement', 'plan-review', 'code-review']
@@ -13,6 +13,7 @@ test('repository dispatches every agent route through provisioned Pi in Vercel S
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
   expect(config.workspace.provider).toBe('vercel-sandbox')
+  expect(config.plugins).toEqual(['@defrex/autobuild-vercel-sandbox'])
   const workspace = vercelSandboxConfigSchema.parse(config.workspace.config)
   expect(workspace).toMatchObject({
     image: 'vercel/sandbox/universal:latest',

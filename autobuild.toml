@@ -6,6 +6,8 @@
 # Root scalars, which TOML requires before the first table.
 baseBranch = "main"
 capacity = 5             # concurrent builds
+# Explicit opt-in to the Vercel Sandbox provider plugin (AUT-505).
+plugins = ["@defrex/autobuild-vercel-sandbox"]
 
 # Builds execute remotely while the dispatcher and hosted Store remain outside
 # the guest. Only the model credential crosses this boundary.
