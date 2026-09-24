@@ -75,6 +75,7 @@ describe('attemptExec', () => {
   const recordingConn = () => {
     const calls: Call[] = []
     const unsafeCalls: { text: string; params?: unknown[] }[] = []
+    const arrayCalls: { values: unknown[]; type: unknown }[] = []
     const conn = ((strings: TemplateStringsArray, ...values: unknown[]) => {
       calls.push({ strings, values })
       return Promise.resolve([])
@@ -83,7 +84,11 @@ describe('attemptExec', () => {
       unsafeCalls.push({ text, params })
       return Promise.resolve([])
     }
-    return { conn, calls, unsafeCalls }
+    ;(conn as { array: unknown }).array = (values: unknown[], type?: unknown) => {
+      arrayCalls.push({ values, type })
+      return { values, arrayType: type }
+    }
+    return { conn, calls, unsafeCalls, arrayCalls }
   }
 
   test('unpoisoned texts forward the template array untouched', async () => {
@@ -119,6 +124,24 @@ describe('attemptExec', () => {
     expect(strings?.[strings.length - 1]).toBe(strings?.raw?.[strings.length - 1])
     expect(strings?.[0]).toBe('SELECT * FROM builds WHERE slug = ')
     expect(calls[1]?.values).toEqual(['x'])
+  })
+
+  test('exec.array forwards to the target and passes the built parameter through untouched', async () => {
+    const { conn, calls, arrayCalls } = recordingConn()
+    const { exec } = attemptExec(conn, new PlanInvalidations())
+
+    const built = exec.array(['a', 'b'], 'text')
+    expect(arrayCalls).toEqual([{ values: ['a', 'b'], type: 'text' }])
+
+    // The built parameter flows into the tagged template as an ordinary
+    // value — the `array` path adds no marking of its own (it builds a
+    // parameter, not a statement), so the template's raw parts go through
+    // untouched.
+    const { exec: exec2 } = attemptExec(conn, new PlanInvalidations())
+    await exec2`SELECT * FROM ab_tickets WHERE labels @> ${built}`
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.values).toEqual([built])
+    expect(calls[0]?.strings?.raw?.[0]).toBe('SELECT * FROM ab_tickets WHERE labels @> ')
   })
 
   test('unsafe text gains the marker only once poisoned; params pass through', async () => {
