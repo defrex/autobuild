@@ -15,6 +15,7 @@ import {
   evidenceText,
   renderWebFrame,
   WEB_FRAME_SPECS,
+  withFinalizedHarvestSession,
   type WebFixtureModels,
 } from './web-dashboard-capture'
 
@@ -117,7 +118,11 @@ function models(): WebFixtureModels {
       }),
     ],
   }
-  return { happy, mixed }
+  // The same shared helper `harnessModels()` applies: the harvest evidence
+  // (`synthesize r1`) is required on the harvest frames, and the evidence
+  // test below runs over every spec against THIS local fixture, so losing
+  // the session here fails `bun test` rather than shipping an unrendered frame.
+  return { happy: withFinalizedHarvestSession(happy), mixed }
 }
 
 test('every web frame renders its required evidence and none of the forbidden', async () => {

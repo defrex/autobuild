@@ -5,6 +5,7 @@ export {
   repositoryActionAvailability,
 } from '../cli/dashboard/actions'
 export type { DashboardActionAvailability, DashboardBuildControl } from '../cli/dashboard/actions'
+export type { HarvestSessionStatusView } from '../cli/harvest'
 export type {
   DashboardBuild,
   DashboardHarvest,

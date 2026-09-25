@@ -22,7 +22,7 @@ import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { readRepoEventsIfRecorded, unclaimedObservationCount } from '../processes/harvest'
 import type { RepositoryEvent } from '../events/repository'
-import type { BuildStore, Clock } from '../store/types'
+import type { BuildStore, Clock, StreamRecord } from '../store/types'
 
 export type BuildListScope = 'active' | 'queued' | 'all'
 
@@ -308,6 +308,18 @@ export async function getOperatorDashboard(opts: {
   // The pure core writes nothing — a snapshot performs no store writes and
   // never creates or locks the repository record.
   const observationCount = unclaimedObservationCount({ digests, harvestEvents: repositoryEvents })
+  // One best-effort repo-scoped stream read carries the harvest row's session
+  // streams (with their finalized-artifact ids) onto the snapshot the web app
+  // renders. Degrade-gracefully, mirroring `abHarvestStatus`: a store that
+  // cannot list streams keeps the payload-derived pairing instead of failing
+  // the whole snapshot. Purely additive to the store contract's traffic —
+  // `listStreams({ kind: 'repo', repo })` is one indexed read.
+  let streams: StreamRecord[] | undefined
+  try {
+    streams = await opts.store.listStreams({ kind: 'repo', repo: opts.repo })
+  } catch {
+    streams = undefined
+  }
   const warningLines = [
     ...status.roleWarnings,
     ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
@@ -327,6 +339,7 @@ export async function getOperatorDashboard(opts: {
       ...(warningLines.length > 0 ? { warningLines } : {}),
     },
     repositoryEvents,
+    streams,
   )
   return {
     generatedAt: opts.clock().toISOString(),

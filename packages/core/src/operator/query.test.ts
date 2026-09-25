@@ -874,13 +874,16 @@ command = "postgres"
 
     // Read bounds: one journal read, one listing, ONE digest read for the
     // whole repo, full history reads only for row-rendering builds (each
-    // slug exactly once), and pinned-config reads only for the same builds
-    // (ACs 2–4, AUT-487).
+    // slug exactly once), pinned-config reads only for the same builds
+    // (ACs 2–4, AUT-487), and exactly ONE repo-scoped stream read carrying
+    // the harvest row's session enrichment — a second accidental read cannot
+    // hide in the suite.
     expect(counting.counts.get('listBuilds')).toBe(1)
     expect(counting.counts.get('getRepo')).toBe(1)
     expect(counting.counts.get('getRepoStateEvents')).toBe(1)
     expect(counting.counts.get('getRepoArtifact')).toBe(1)
     expect(counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(counting.counts.get('listStreams')).toBe(1)
     expect(counting.eventSlugs).toHaveLength(rowBuilds.length)
     expect([...counting.eventSlugs].sort()).toEqual(rowBuilds)
     expect(counting.counts.get('getArtifact')).toBe(rowBuilds.length)
@@ -916,13 +919,16 @@ command = "postgres"
     expect(large.snapshot.model.observations).toEqual(small.snapshot.model.observations)
 
     // Per-method call counts are identical across the two finished-build
-    // counts, including the single digest read.
+    // counts, including the single digest read and the single repo-scoped
+    // stream read (the harvest-row enrichment stays one indexed read).
     const methods = new Set([...small.counting.counts.keys(), ...large.counting.counts.keys()])
     for (const method of methods) {
       expect(large.counting.counts.get(method) ?? 0).toBe(small.counting.counts.get(method) ?? 0)
     }
     expect(small.counting.counts.get('getRepoBuildDigests')).toBe(1)
     expect(large.counting.counts.get('getRepoBuildDigests')).toBe(1)
+    expect(small.counting.counts.get('listStreams')).toBe(1)
+    expect(large.counting.counts.get('listStreams')).toBe(1)
     // Finished builds never have their history read.
     expect(small.counting.eventSlugs).not.toContain('finished-1')
     expect(large.counting.eventSlugs).not.toContain('finished-4')
@@ -992,6 +998,62 @@ command = "postgres"
     // The boundary guard: the pinned artifact was read exactly once.
     expect(counting.counts.get('getArtifact')).toBe(1)
     expect(counting.artifactSlugs).toEqual(['aborted'])
+  })
+
+  test('the snapshot enriches the harvest row with the repo-scoped session streams', async () => {
+    // The WEB enrichment path the byte-identical differential fixture does
+    // not cover: `seedDashboardStore` seeds no `harvest.session.*` events and
+    // no repo-scoped streams, so that test would stay green with the
+    // enrichment dropped. Here the closed repo-scoped stream labeled
+    // `session:<id>` plus the matching session facts must reach
+    // `model.harvest.sessions` through `getOperatorDashboard`'s listStreams
+    // read and `buildDashboardFromProjected`'s forwarding.
+    const store = await seedDashboardStore()
+    const stream = await store.createStream({ kind: 'repo', repo: REPO }, 'session:hs_1')
+    await store.closeStream(stream.id, 'completed')
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.session.started',
+      payload: {
+        run: 'harvest-1',
+        session: 'hs_1',
+        role: 'harvest',
+        runner: 'pi',
+        step: 'synthesize',
+        round: 1,
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.session.ended',
+      payload: {
+        run: 'harvest-1',
+        session: 'hs_1',
+        transcript: { kind: 'transcript:harvest', rev: 0 },
+        usage: { inputTokens: 2, outputTokens: 1, turns: 1 },
+      },
+    })
+
+    const snapshot = await getOperatorDashboard({ store, repo: REPO, clock })
+    expect(snapshot.model.harvest?.sessions).toEqual([
+      {
+        session: 'hs_1',
+        role: 'harvest',
+        step: 'synthesize',
+        round: 1,
+        stream: stream.id,
+        streamStatus: 'closed',
+        status: 'ended',
+      },
+    ])
+
+    // Scope: a build-scoped record with the SAME label must not enrich — the
+    // pairing filters records to the repo scope before matching labels.
+    await store.createBuild({ slug: 'scope-twin', repo: REPO })
+    const twin = await store.createStream({ kind: 'build', build: 'scope-twin' }, 'session:hs_1')
+    await store.closeStream(twin.id, 'completed')
+    const scoped = await getOperatorDashboard({ store, repo: REPO, clock })
+    expect(scoped.model.harvest?.sessions?.[0]?.stream).toBe(stream.id)
   })
 
   test('a snapshot for a repository the store has never seen answers as today and writes nothing', async () => {

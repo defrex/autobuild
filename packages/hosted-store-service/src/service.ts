@@ -231,6 +231,12 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     if (req.method === 'POST' && rest.length === 2 && rest[0] === 'tools' && rest[1]) {
       return 'operator'
     }
+    // Repository-artifact reads (repo-scoped finalized session streams among
+    // them): the same shape as the builds branch's artifacts route, keyed by
+    // the path repository instead of a build slug.
+    if (req.method === 'GET' && rest.length === 2 && rest[0] === 'artifacts' && rest[1]) {
+      return 'operator'
+    }
     // Operator sessions: collection list/create and the addressed family.
     if (rest[0] === 'sessions') {
       if ((req.method === 'GET' || req.method === 'POST') && rest.length === 1) return 'operator'

@@ -205,4 +205,47 @@ describe('web operator gateway', () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
     expect(JSON.stringify([...response.headers])).not.toContain('canary')
   })
+
+  test('delegates the repo-artifact suffix and its bytes pass through unmodified', async () => {
+    let delegated: Request | undefined
+    const bytes = Uint8Array.from([9, 0, 128])
+    const gateway = createWebGateway({
+      env,
+      getSession: session,
+      delegate: async (request) => {
+        delegated = request
+        return new Response(bytes, {
+          headers: {
+            'content-type': 'application/octet-stream',
+            'content-disposition': 'attachment; filename="repo-stream%3Ast_1-0"',
+          },
+        })
+      },
+    })
+    const response = await gateway.fetch(
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/artifacts/stream%3Ast_fixture',
+      ),
+    )
+    expect(response.status).toBe(200)
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
+    expect(response.headers.get('content-disposition')).toBe(
+      'attachment; filename="repo-stream%3Ast_1-0"',
+    )
+    expect(new URL(delegated!.url).pathname).toBe(
+      '/operator/v1/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/artifacts/stream%3Ast_fixture',
+    )
+    // The delegation is GET-only: a write verb on the same suffix stays 404.
+    const write = await gateway.fetch(
+      new Request(
+        'https://operator.example/api/web/repos/https%3A%2F%2Fgithub.com%2Fowner%2Frepo/artifacts/stream%3Ast_fixture',
+        {
+          method: 'POST',
+          headers: { origin: 'https://operator.example', 'content-type': 'application/json' },
+          body: '{}',
+        },
+      ),
+    )
+    expect(write.status).toBe(404)
+  })
 })

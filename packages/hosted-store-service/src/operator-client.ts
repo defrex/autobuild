@@ -278,6 +278,40 @@ export class OperatorApiClient {
       body: JSON.stringify({ action: 'run', run }),
     })
   }
+  /** The repository-scoped twin of `downloadArtifact`: raw bytes of a
+   * repo-scoped artifact by kind at the URL's repository. Finalized harvest
+   * session streams are `stream:<id>` (encode the kind as one segment — the
+   * `:` is legal raw but encoded here). Same failure parse and headers as the
+   * build-scoped form; unknown repo, unknown kind, and an unfinalized stream
+   * all answer `404 not-found`. */
+  async downloadRepoArtifact(
+    repo: string,
+    kind: string,
+    rev?: number,
+  ): Promise<DownloadedArtifact> {
+    const suffix = `artifacts/${encodeURIComponent(kind)}${rev === undefined ? '' : `?rev=${rev}`}`
+    const headers = new Headers({
+      [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+      [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      authorization: `Bearer ${this.options.token}`,
+    })
+    const response = await this.fetchFn(`${this.base}${this.repoPath(repo, suffix)}`, { headers })
+    if (!response.ok) {
+      const parsed = operatorErrorSchema.parse(await response.json())
+      const error = new OperatorApiError(response.status, parsed.kind, parsed.code, parsed.progress)
+      error.message = parsed.error
+      throw error
+    }
+    return {
+      content: new Uint8Array(await response.arrayBuffer()),
+      kind: response.headers.get('x-autobuild-artifact-kind') ?? kind,
+      revision: Number(response.headers.get('x-autobuild-artifact-revision')),
+      blobRef: response.headers.get('x-autobuild-artifact-blob-ref') ?? '',
+      ...(response.headers.get('content-disposition') !== null
+        ? { disposition: response.headers.get('content-disposition')! }
+        : {}),
+    }
+  }
   async downloadArtifact(
     repo: string,
     slug: string,

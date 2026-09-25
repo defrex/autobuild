@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { parseConfig } from '@defrex/autobuild/testing'
-import { OperatorApiClient } from './operator-api'
+import { OperatorApiClient, OperatorApiError } from './operator-api'
 import { reduceSession } from './session-reducer'
 import {
   AUTOBUILD_VERSION,
@@ -222,6 +222,34 @@ describe('hosted store service', () => {
       user: 'Hosted Operator',
       via: { kind: 'mcp', client: 'claude' },
     })
+  })
+
+  test('routes the repo-artifact GET to the operator server (unclassified would 404)', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => backing,
+    })
+    const client = operatorClientFor(service)
+
+    // An unclassified route would answer the generic 404 without opening
+    // persistence — the exact trap the tools-POST test above pins. The
+    // classified route reaches the operator server and its repo gate.
+    const error = await client
+      .downloadRepoArtifact('acme/repo', 'stream:st_missing')
+      .catch((caught) => caught)
+    expect(error).toBeInstanceOf(OperatorApiError)
+    expect(error).toMatchObject({ status: 404, kind: 'not-found' })
+    expect((error as Error).message).toBe('unknown repo "acme/repo"')
+
+    // With the repository present, the classified suffix serves the bytes
+    // end-to-end through the hosted seam.
+    await backing.ensureRepo('acme/repo')
+    await backing.putRepoArtifact('acme/repo', { kind: 'notes/report', content: 'zero' })
+    const artifact = await client.downloadRepoArtifact('acme/repo', 'notes/report')
+    expect(artifact).toMatchObject({ kind: 'notes/report', revision: 0 })
+    expect(new TextDecoder().decode(artifact.content)).toBe('zero')
   })
 
   test('redacts operator backing failures and reports them with operator context', async () => {

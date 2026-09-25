@@ -559,4 +559,202 @@ describe('dashboard harvest row', () => {
       status: 'running',
     })
   })
+
+  describe('session-stream enrichment through the terminal wrapper', () => {
+    /** Seed one harvest run bracket plus one synthesize session whose
+     * `harvest.session.ended` carries the fixture usage. */
+    async function seedRun(store: MemoryBuildStore): Promise<void> {
+      await store.ensureRepo('/repo')
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'h_streamed',
+          observations: [{ build: 'a', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.session.started',
+        payload: {
+          run: 'h_streamed',
+          session: 'hs_1',
+          role: 'harvest',
+          runner: 'pi',
+          step: 'synthesize',
+          round: 1,
+          stream: 'st_payload',
+        },
+      })
+      await store.appendRepo('/repo', {
+        actor: KERNEL,
+        type: 'harvest.session.ended',
+        payload: {
+          run: 'h_streamed',
+          session: 'hs_1',
+          transcript: { kind: 'transcript:harvest', rev: 0 },
+          usage: { inputTokens: 1, outputTokens: 1, turns: 1 },
+        },
+      })
+    }
+
+    test('repo-scoped stream records attach authoritative stream ids and closed status', async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      const record = await store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_1')
+      await store.closeStream(record.id, 'completed')
+
+      const projected = projectHarvest(
+        await store.getRepoEvents('/repo'),
+        await store.listStreams({ kind: 'repo', repo: '/repo' }),
+      )
+      expect(projected?.sessions).toEqual([
+        {
+          session: 'hs_1',
+          role: 'harvest',
+          step: 'synthesize',
+          round: 1,
+          stream: record.id,
+          streamStatus: 'closed',
+          status: 'ended',
+        },
+      ])
+    })
+
+    test('an open record attaches its stream id with open status', async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      await store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_1')
+
+      const projected = projectHarvest(
+        await store.getRepoEvents('/repo'),
+        await store.listStreams({ kind: 'repo', repo: '/repo' }),
+      )
+      const [session] = projected?.sessions ?? []
+      expect(session).toMatchObject({ session: 'hs_1', streamStatus: 'open', status: 'ended' })
+    })
+
+    test('a label-mismatched record does not enrich: the payload pairing survives', async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      const stranger = await store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_other')
+      await store.closeStream(stranger.id, 'completed')
+
+      const projected = projectHarvest(
+        await store.getRepoEvents('/repo'),
+        await store.listStreams({ kind: 'repo', repo: '/repo' }),
+      )
+      // Without a matching record the pairing degrades to the payload: the
+      // event's own stream id reads closed once its bracket ended.
+      expect(projected?.sessions).toEqual([
+        {
+          session: 'hs_1',
+          role: 'harvest',
+          step: 'synthesize',
+          round: 1,
+          stream: 'st_payload',
+          streamStatus: 'closed',
+          status: 'ended',
+        },
+      ])
+    })
+
+    test('build-scoped records never enrich the repo-scoped pairing', async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      await store.createBuild({ slug: 'other-build', repo: '/repo' })
+      const buildStream = await store.createStream(
+        { kind: 'build', build: 'other-build' },
+        'session:hs_1',
+      )
+      await store.closeStream(buildStream.id, 'completed')
+
+      const projected = projectHarvest(
+        await store.getRepoEvents('/repo'),
+        await store.listStreams({ kind: 'repo', repo: '/repo' }).then((records) =>
+          // The caller passes only what listStreams returned for the repo
+          // scope; the build-scoped record here models a scope-filter failure
+          // by appending it by hand.
+          [
+            ...records,
+            {
+              ...buildStream,
+            },
+          ],
+        ),
+      )
+      expect(projected?.sessions).toEqual([
+        {
+          session: 'hs_1',
+          role: 'harvest',
+          step: 'synthesize',
+          round: 1,
+          stream: 'st_payload',
+          streamStatus: 'closed',
+          status: 'ended',
+        },
+      ])
+    })
+
+    test('absent enrichment degrades to the payload-derived pairing', async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      const projected = projectHarvest(await store.getRepoEvents('/repo'))
+      expect(projected?.sessions).toEqual([
+        {
+          session: 'hs_1',
+          role: 'harvest',
+          step: 'synthesize',
+          round: 1,
+          stream: 'st_payload',
+          streamStatus: 'closed',
+          status: 'ended',
+        },
+      ])
+    })
+
+    test("failed enrichment degrades identically (a throwing listStreams is the caller's catch)", async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      // The wrapper itself never touches the store: the caller passes
+      // whatever it resolved, so a failed read arrives as `undefined`.
+      const projected = projectHarvest(await store.getRepoEvents('/repo'), undefined)
+      expect(projected?.sessions).toHaveLength(1)
+      expect(projected?.sessions?.[0]).toMatchObject({ session: 'hs_1' })
+    })
+
+    test('the terminal renderer renders nothing new from the sessions field', async () => {
+      const store = new MemoryBuildStore()
+      await seedRun(store)
+      const record = await store.createStream({ kind: 'repo', repo: '/repo' }, 'session:hs_1')
+      await store.closeStream(record.id, 'completed')
+      const streams = await store.listStreams({ kind: 'repo', repo: '/repo' })
+      const without = projectHarvest(await store.getRepoEvents('/repo'))!
+      const withSessions = projectHarvest(await store.getRepoEvents('/repo'), streams)!
+
+      const render = (harvest: typeof without): string =>
+        stripAnsi(
+          renderDashboard(
+            {
+              repo: '/repo',
+              queued: 1,
+              active: { current: 0, limit: 1 },
+              observations: { current: 0, limit: 5 },
+              drained: false,
+              repositoryPaused: false,
+              defaultAutoMerge: false,
+              harvestPaused: false,
+              builds: [],
+              harvest,
+            },
+            { color: false, width: 100, height: 20, now: Date.now() },
+          ).join('\n'),
+        )
+      // The additive field is display-silent in the terminal.
+      expect(render(withSessions)).toBe(render(without))
+      expect(render(withSessions)).not.toContain('st_payload')
+      expect(render(withSessions)).not.toContain(record.id)
+    })
+  })
 })

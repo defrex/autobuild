@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#574](https://github.com/defrex/autobuild/pull/574) — Expose repo-scoped stream artifacts over the operator API
 - [#572](https://github.com/defrex/autobuild/pull/572) — Route remaining journal reads through readRepoEventsIfRecorded
 - Route the remaining hand-rolled missing-record journal reads through readRepoEventsIfRecorded (AUT-543)
 - [#571](https://github.com/defrex/autobuild/pull/571) — Close declared-side blind spots in the schema-parity test (AUT-544)
