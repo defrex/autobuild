@@ -316,6 +316,236 @@ describe('operator HTTP API', () => {
       'build "demo" is not active (status: done); build controls require running, paused, or blocked',
     )
   })
+
+  describe('repository artifacts (repo-scoped finalized session streams)', () => {
+    /** Seed one repo-scoped stream lifecycle: an open stream by default, a
+     * closed one (with its close-deposited `stream:<id>` artifact) once
+     * closed. `outcome` picks the close outcome — finalization, not outcome,
+     * is the download gate. */
+    async function storeWithRepoStream(
+      options: { close?: boolean; outcome?: 'completed' | 'aborted'; label?: string } = {},
+    ): Promise<MemoryBuildStore> {
+      const store = new MemoryBuildStore({ clock })
+      await store.ensureRepo(repo)
+      const stream = await store.createStream(
+        { kind: 'repo', repo },
+        options.label ?? 'harvest run',
+      )
+      await store.appendStreamParts(stream.id, [{ type: 'start', messageId: 'hm' }])
+      await store.appendStreamParts(stream.id, [
+        { type: 'text-start', id: 't' },
+        { type: 'text-delta', id: 't', delta: 'scanning' },
+        { type: 'text-end', id: 't' },
+      ])
+      if (options.close ?? true) {
+        await store.closeStream(stream.id, options.outcome ?? 'completed')
+      }
+      return store
+    }
+
+    function repoArtifactRequest(
+      store: MemoryBuildStore,
+      kind: string,
+      options: { repo?: string; rev?: string } = {},
+    ): Promise<Response> {
+      const targetRepo = options.repo ?? repo
+      const query = options.rev === undefined ? '' : `?rev=${encodeURIComponent(options.rev)}`
+      return createOperatorServer({ store, secret, clock }).fetch(
+        new Request(
+          `http://operator.test/operator/v1/repos/${encodeURIComponent(targetRepo)}/artifacts/${encodeURIComponent(kind)}${query}`,
+          {
+            headers: {
+              authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+              [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+              [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            },
+          },
+        ),
+      )
+    }
+
+    test('an omitted revision selects the latest and round-trips binary bytes', async () => {
+      const store = await storeWithRepoStream()
+      const stream = (await store.listStreams({ kind: 'repo', repo }))[0]!
+      const response = await repoArtifactRequest(store, `stream:${stream.id}`)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('application/octet-stream')
+      expect(response.headers.get('x-autobuild-artifact-kind')).toBe(`stream:${stream.id}`)
+      expect(response.headers.get('x-autobuild-artifact-revision')).toBe('0')
+      expect(response.headers.get('content-disposition')).toBe(
+        `attachment; filename="${encodeURIComponent(repo)}-${encodeURIComponent(`stream:${stream.id}`)}-0"`,
+      )
+      // The finalized UIMessage[] document the close deposited.
+      expect(JSON.parse(await response.text())).toEqual([
+        {
+          id: 'hm',
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'scanning', state: 'done' }],
+        },
+      ])
+    })
+
+    test('an explicit revision zero retrieves that revision', async () => {
+      const store = await storeWithRepoStream()
+      await store.putRepoArtifact(repo, { kind: 'stream:st_extra', content: 'other' })
+      const stream = (await store.listStreams({ kind: 'repo', repo }))[0]!
+      const response = await repoArtifactRequest(store, `stream:${stream.id}`, { rev: '0' })
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-autobuild-artifact-revision')).toBe('0')
+      expect(JSON.parse(await response.text())).toEqual([
+        {
+          id: 'hm',
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'scanning', state: 'done' }],
+        },
+      ])
+    })
+
+    test('raw non-UTF8 bytes survive the round trip', async () => {
+      const store = new MemoryBuildStore({ clock })
+      await store.ensureRepo(repo)
+      await store.putRepoArtifact(repo, {
+        kind: 'notes/report',
+        content: new Uint8Array([0, 1, 255]),
+      })
+      const response = await repoArtifactRequest(store, 'notes/report')
+
+      expect(response.status).toBe(200)
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([0, 1, 255]))
+    })
+
+    test('an unknown repo answers the store gate 404, never a redacted 500', async () => {
+      const store = await storeWithRepoStream()
+      // Both shipped adapters' getRepoArtifact THROW on an unknown repo; the
+      // route's getRepo gate must convert that into the deliberate 404.
+      const response = await repoArtifactRequest(store, 'stream:st_x', {
+        repo: '/acme/never-seen',
+      })
+
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({
+        kind: 'not-found',
+        error: `unknown repo "/acme/never-seen"`,
+      })
+    })
+
+    test('an unknown kind answers 404 not-found', async () => {
+      const store = await storeWithRepoStream()
+      const response = await repoArtifactRequest(store, 'stream:st_never')
+
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({ kind: 'not-found' })
+    })
+
+    test('an open (unfinalized) stream answers 404 not-found', async () => {
+      const store = await storeWithRepoStream({ close: false })
+      const stream = (await store.listStreams({ kind: 'repo', repo }))[0]!
+      const response = await repoArtifactRequest(store, `stream:${stream.id}`)
+
+      expect(stream.status).toBe('open')
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({
+        kind: 'not-found',
+        error: `artifact stream:${stream.id} not found`,
+      })
+    })
+
+    test('a closed stream with an aborted outcome stays downloadable', async () => {
+      // Finalization, not outcome, is the gate: the store deposits the
+      // artifact at close regardless of the outcome the session ended with.
+      const store = await storeWithRepoStream({ outcome: 'aborted' })
+      const stream = (await store.listStreams({ kind: 'repo', repo }))[0]!
+      const response = await repoArtifactRequest(store, `stream:${stream.id}`)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('x-autobuild-artifact-revision')).toBe('0')
+    })
+
+    test.each([
+      ['empty', ''],
+      ['whitespace', ' '],
+      ['hexadecimal', '0x1'],
+      ['exponent', '1e0'],
+      ['fractional', '1.0'],
+      ['infinite', 'Infinity'],
+      ['NaN', 'NaN'],
+      ['signed', '+1'],
+      ['negative', '-1'],
+      ['trailing characters', '1junk'],
+      ['above the safe-integer range', '9007199254740992'],
+    ] as const)('rejects a supplied %s repository-artifact revision', async (_label, rev) => {
+      const response = await repoArtifactRequest(await storeWithRepoStream(), 'stream:st_x', {
+        rev,
+      })
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ kind: 'validation' })
+    })
+
+    test('a non-operator token is refused with 403', async () => {
+      const store = await storeWithRepoStream()
+      const server = createOperatorServer({ store, secret, clock })
+      const response = await server.fetch(
+        new Request(
+          `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/artifacts/stream%3Ast_x`,
+          {
+            headers: {
+              authorization: `Bearer ${mintToken(secret, { build: '*', session: '*', exp: now.getTime() + 60_000 })}`,
+              [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+              [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            },
+          },
+        ),
+      )
+
+      expect(response.status).toBe(403)
+      expect(await response.json()).toMatchObject({ kind: 'auth' })
+    })
+
+    test("cross-repository kinds are structurally impossible: the second repo's kind 404s against the first repo's path", async () => {
+      const other = 'acme/other'
+      const store = await storeWithRepoStream()
+      await store.ensureRepo(other)
+      const otherStream = await store.createStream({ kind: 'repo', repo: other }, 'other run')
+      await store.closeStream(otherStream.id, 'completed')
+
+      // The kind is keyed by the path repo: the other repo's stream id, asked
+      // against the first repository, is simply an unknown kind there.
+      const response = await repoArtifactRequest(store, `stream:${otherStream.id}`)
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({ kind: 'not-found' })
+
+      // And the same kind against its own repo answers 200.
+      const own = await repoArtifactRequest(store, `stream:${otherStream.id}`, { repo: other })
+      expect(own.status).toBe(200)
+    })
+
+    test('the typed client downloads the repo artifact and reports its metadata', async () => {
+      const store = await storeWithRepoStream()
+      const stream = (await store.listStreams({ kind: 'repo', repo }))[0]!
+      const client = new OperatorApiClient({
+        url: 'http://operator.test',
+        token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+        fetchFn: fetchFor(createOperatorServer({ store, secret, clock })),
+      })
+      const artifact = await client.downloadRepoArtifact(repo, `stream:${stream.id}`, 0)
+
+      expect(artifact).toMatchObject({
+        kind: `stream:${stream.id}`,
+        revision: 0,
+        disposition: `attachment; filename="${encodeURIComponent(repo)}-${encodeURIComponent(`stream:${stream.id}`)}-0"`,
+      })
+      expect(JSON.parse(new TextDecoder().decode(artifact.content))).toEqual([
+        {
+          id: 'hm',
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'scanning', state: 'done' }],
+        },
+      ])
+    })
+  })
 })
 
 describe('operator session routes', () => {

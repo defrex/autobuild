@@ -421,6 +421,57 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       }
     }
 
+    if (
+      req.method === 'GET' &&
+      rest.length === 2 &&
+      rest[0] === 'artifacts' &&
+      rest[1] &&
+      rest[1].trim() !== ''
+    ) {
+      const kind = rest[1]
+      // `?rev` parses inline with the builds branch's exact checks (the same
+      // regex, the same safe-integer guard, the same HttpError text) rather
+      // than the core helper `parseArtifactRevision`: that helper throws
+      // `RouteRefusalError`, which this server's outer catch chain does not
+      // map (only `HttpError` and the named domain errors are), so routing the
+      // grammar through it would redact every malformed rev to a 500 `internal`
+      // and break the build-artifact route's error contract. The two inline
+      // parsers sit side by side, each pinned by its own test matrix.
+      const rawRev = url.searchParams.get('rev')
+      let rev: number | undefined
+      if (rawRev !== null) {
+        if (!/^[0-9]+$/.test(rawRev)) {
+          throw new HttpError(400, 'validation', 'rev must be a nonnegative integer')
+        }
+        rev = Number(rawRev)
+        if (!Number.isSafeInteger(rev)) {
+          throw new HttpError(400, 'validation', 'rev must be a nonnegative integer')
+        }
+      }
+      // Repo gate FIRST: both shipped adapters' `getRepoArtifact` throw on an
+      // unknown repo, and an uncaught throw would surface as a redacted 500.
+      // Same text as the store server's own repo gate, so both faces agree.
+      if ((await opts.store.getRepo(repo)) === null)
+        throw new HttpError(404, 'not-found', `unknown repo "${repo}"`)
+      const artifact = await opts.store.getRepoArtifact(repo, kind, rev)
+      if (artifact === null)
+        throw new HttpError(
+          404,
+          'not-found',
+          `artifact ${kind}${rev === undefined ? '' : `@${rev}`} not found`,
+        )
+      return new Response(Uint8Array.from(artifact.content), {
+        status: 200,
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-disposition': `attachment; filename="${encodeURIComponent(repo)}-${encodeURIComponent(kind)}-${artifact.meta.revision}"`,
+          'x-autobuild-artifact-kind': artifact.meta.kind,
+          'x-autobuild-artifact-revision': String(artifact.meta.revision),
+          'x-autobuild-artifact-blob-ref': artifact.meta.blobRef,
+        },
+      })
+    }
+
     if (req.method === 'GET' && rest.length === 1 && rest[0] === 'builds') {
       const parsed = buildListScopeSchema.safeParse(url.searchParams.get('scope') ?? 'active')
       if (!parsed.success)
