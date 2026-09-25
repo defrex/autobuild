@@ -837,7 +837,15 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           onStop: (): void => {
             stop = true
           },
-          drain: 'snapshot',
+          // Quiesce, not the runner's one-shot snapshot: a stream the
+          // discovery task registers while drain is awaiting must have its
+          // first held read awaited before the final cursor is encoded, or a
+          // mid-discovery registration's emission lands after the cursor and
+          // the next run replays it (the gap widened from a scheduling race
+          // to a deterministic miss when discovery's digest read added one
+          // await before the per-build reads — AUT-545). The snapshot
+          // semantics the runner documents remain covered by its own tests.
+          drain: 'quiesce',
         })
         runner = remoteRunner
 

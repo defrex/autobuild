@@ -901,6 +901,177 @@ describe('watch ambient scope', () => {
   })
 })
 
+// ── Discovery's digest-bounded terminal filter (AUT-545) ────────────────────
+
+describe('watch discovery bounds terminal-build reads with the AUT-487 digest (AUT-545)', () => {
+  /** A counting proxy over getEvents (immediate reads) and the digest batch
+   * read — the watch mirror of the wait's, per the established parity. */
+  function countingStore(store: MemoryBuildStore): {
+    store: BuildStore
+    eventsBySlug: () => Map<string, number>
+    digestReads: () => number
+  } {
+    const eventsBySlug = new Map<string, number>()
+    let digests = 0
+    const fake: BuildStore = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'getEvents') {
+          return async (slug: string, sinceSeq?: number) => {
+            if (sinceSeq === undefined) {
+              eventsBySlug.set(slug, (eventsBySlug.get(slug) ?? 0) + 1)
+            }
+            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+          }
+        }
+        if (prop === 'getRepoBuildDigests') {
+          return async (repo: string) => {
+            digests += 1
+            return (target as MemoryBuildStore).getRepoBuildDigests(repo)
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    return { store: fake, eventsBySlug: () => eventsBySlug, digestReads: () => digests }
+  }
+
+  /** Seed one terminal build over a digest-contract lifecycle shape. */
+  async function seedTerminalBuild(
+    store: MemoryBuildStore,
+    slug: string,
+    shape: ('merged' | 'aborted')[],
+  ): Promise<void> {
+    await store.createBuild({ slug, repo: REPO })
+    await store.append(slug, {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    for (const outcome of shape) {
+      await store.append(slug, {
+        actor: outcome === 'aborted' ? KERNEL : DISPATCHER,
+        type: outcome === 'aborted' ? 'build.aborted' : 'build.completed',
+        payload: outcome === 'aborted' ? {} : { outcome },
+      })
+    }
+  }
+
+  test('terminal builds are filtered by the digest and never re-read across ticks', async () => {
+    const store = makeStore()
+    // Twenty terminal builds over the digest contract's lifecycle shapes,
+    // plus one live build whose escalation the watch delivers.
+    const terminalShapes: ('merged' | 'aborted')[][] = [
+      ['merged'],
+      ['aborted'],
+      ['merged', 'aborted'],
+      ['aborted', 'merged'],
+    ]
+    let n = 0
+    for (const shape of terminalShapes) {
+      for (let copy = 0; copy < 5; copy += 1) {
+        await seedTerminalBuild(store, `t${n}`, shape)
+        n += 1
+      }
+    }
+    await seedRunningBuild(store, 'live')
+    const counted = countingStore(store)
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => counted.store,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 1) await appendEscalation(store, 'live')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '4' })
+    // One digest batch read per discovery pass — the initial scan plus every
+    // tick — never one full-log read per candidate build.
+    expect(counted.digestReads()).toBeGreaterThanOrEqual(1)
+    const reads = counted.eventsBySlug()
+    for (let i = 0; i < 20; i += 1) expect(reads.get(`t${i}`) ?? 0).toBe(0)
+    // The live build was read once (registration in the initial scan), and
+    // its escalation was delivered through the ordinary delta polls.
+    expect(reads.get('live')).toBe(1)
+    const records = h.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { build: string; event: { type: string } })
+    expect(records.map((record) => record.build)).toEqual(['live'])
+    expect(records[0]!.event.type).toBe('escalation.raised')
+    expect(h.err).toEqual([])
+  })
+
+  test('a legacy repoOrigin record absent from the digest map still joins', async () => {
+    const store = makeStore()
+    // The digest map keys on `record.repo`; this record is in `mine` only via
+    // the normalized `repoOrigin` fallback arm, so discovery falls back to
+    // the reduceBuild re-check — and must still register the nonterminal
+    // record. A terminal variant must still be skipped.
+    await store.createBuild({ slug: 'legacy', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store.append('legacy', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    const counted = countingStore(store)
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => counted.store,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 1) await appendEscalation(store, 'legacy')
+      },
+    })
+    await abWatch({ ...h.base, timeout: '2' })
+    expect(counted.eventsBySlug().get('legacy')).toBe(1)
+    const records = h.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { build: string; event: { type: string } })
+    expect(records.map((record) => record.build)).toEqual(['legacy'])
+
+    const store2 = makeStore()
+    await store2.createBuild({ slug: 'legacy-done', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store2.append('legacy-done', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    const counted2 = countingStore(store2)
+    const h2 = harness(store2, { openStore: () => counted2.store })
+    await abWatch({ ...h2.base, timeout: '2' })
+    // The fallback re-checks a record the digest map cannot answer on every
+    // discovery pass (the digest keys on `record.repo`), reads it, sees the
+    // terminal reduction, and skips — so it is never registered, never
+    // delivered, and never re-read per tick beyond the filter itself.
+    expect(counted2.eventsBySlug().get('legacy-done') ?? 0).toBeGreaterThanOrEqual(1)
+    expect(h2.out.slice(0, -1)).toEqual([])
+  })
+
+  test('a named slug still tracks through trackBuild (full read, deliberate)', async () => {
+    // Named slugs bypass the discovery filter by design; the digest does not
+    // retire a NAMED build's full log (registration + --since replay need it).
+    const store = makeStore()
+    await seedRunningBuild(store, 'named')
+    const counted = countingStore(store)
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => counted.store,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 1) await appendEscalation(store, 'named')
+      },
+    })
+    await abWatch({ ...h.base, slugs: ['named'], timeout: '2' })
+    expect(counted.eventsBySlug().get('named')).toBe(1)
+    // Named watches never enter discovery: no digest read at all.
+    expect(counted.digestReads()).toBe(0)
+    const records = h.out
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { event: { type: string } })
+    expect(records.map((record) => record.event.type)).toEqual(['escalation.raised'])
+  })
+})
+
 describe('watch read-failure resilience', () => {
   test('a mid-watch discovery failure is reported once, retried, and loses no event', async () => {
     const store = makeStore()
