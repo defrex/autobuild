@@ -1291,7 +1291,7 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     const h2 = harness(store2)
     expect(await abWait({ ...h2.base, timeout: '2' })).toBe(3)
     expect(h2.out).toHaveLength(1)
-    expect(Object.keys(JSON.parse(h2.out[0]) as object)).toEqual(['cursor'])
+    expect(Object.keys(JSON.parse(h2.out[0]!) as object)).toEqual(['cursor'])
   })
 
   test('a named terminal build still tracks through trackBuild (full read, deliberate)', async () => {

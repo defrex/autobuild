@@ -27,7 +27,7 @@ import {
   type EventWrite,
 } from '../../events/catalog'
 import { DISPATCHER, KERNEL, agentActor, humanActor, type Actor } from '../../events/envelope'
-import type { RepositoryEvent, RepositoryEventWrite } from '../../events/repository'
+import type { RepositoryEvent } from '../../events/repository'
 import type { eventPayloadSchemas, EventType } from '../../events/payloads'
 import { autoMergeDeferralRef } from '../../kernel/auto-merge'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
@@ -106,9 +106,7 @@ function defaultRepoActor(type: RepositoryEvent['type']): Actor {
 async function appendTestRepoEvents(
   store: MemoryBuildStore,
   repo: string,
-  events: Array<
-    Partial<RepositoryEventWrite> & { type: RepositoryEvent['type']; payload: unknown }
-  >,
+  events: Array<{ actor?: Actor; type: RepositoryEvent['type']; payload: unknown }>,
 ): Promise<void> {
   await store.ensureRepo(repo)
   for (const event of events) {
