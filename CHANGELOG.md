@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Route the remaining hand-rolled missing-record journal reads through readRepoEventsIfRecorded (AUT-543)
 - [#570](https://github.com/defrex/autobuild/pull/570) — Keep Postgres migration tests bounded as schema versions accumulate
 - [#569](https://github.com/defrex/autobuild/pull/569) — State what the schema pin enforces and catch checksum-only re-pins
 - [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
