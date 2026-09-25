@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#574](https://github.com/defrex/autobuild/pull/574) — Expose repo-scoped stream artifacts over the operator API
 - [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
 - [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
 - [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
