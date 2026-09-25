@@ -46,6 +46,7 @@ import { verifyPhase } from '../../ontology'
 import type { BuildRecord, StreamRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
+import { projectHarvestSessions, type HarvestSessionStatusView } from '../harvest'
 import type { TranscriptPresentation } from './transcript'
 import type { UIMessage } from 'ai'
 import type { StreamOutcome, StreamPart } from '../../store/streams/types'
@@ -133,6 +134,12 @@ export interface DashboardHarvest {
   /** Display-only action currently safe for `p`. Absent for running rows,
    * acknowledged pauses, and while a resume request awaits the kernel. */
   action?: HarvestRunAction
+  /** The run's harvest sessions paired with their live-view streams (SPEC §9),
+   * reusing the CLI status rows' shared pairing vocabulary. Present only when
+   * a caller supplied repo-scoped stream records to pair against; the terminal
+   * renderer renders nothing new from it, the web app renders one download
+   * link per finalized session stream. */
+  sessions?: HarvestSessionStatusView[]
 }
 
 export interface DashboardBuild {
@@ -996,10 +1003,13 @@ function selectDashboardHarvestRun(
 
 /** Project one deterministic concrete run. The oldest unresolved failed,
  * exhausted, or escalated attention outranks merely open work; completed and
- * acknowledged terminal history never hides an older actionable run. */
+ * acknowledged terminal history never hides an older actionable run.
+ * `streams` is the optional authoritative stream enrichment, threaded
+ * unchanged into the shared session pairing. */
 function projectHarvestRun(
   events: RepositoryEvent[],
   state: HarvestState,
+  streams?: readonly StreamRecord[],
 ): DashboardHarvest | undefined {
   const run = selectDashboardHarvestRun(events, state)
   if (run === undefined || run.status === 'completed') return undefined
@@ -1112,6 +1122,7 @@ function projectHarvestRun(
         : run.status === 'escalated'
           ? 'acknowledge'
           : undefined
+  const sessions = projectHarvestSessions(events, streams)?.get(run.run) ?? []
   return {
     kind: 'harvest',
     run: run.run,
@@ -1121,6 +1132,7 @@ function projectHarvestRun(
     steps,
     observations: run.observations.length,
     rounds,
+    ...(sessions.length > 0 ? { sessions } : {}),
     ...(detail !== undefined ? { detail } : {}),
     ...(action !== undefined ? { action } : {}),
   }
@@ -1131,17 +1143,26 @@ interface RepositoryHarvestProjection {
   harvest?: DashboardHarvest
 }
 
-function projectRepositoryHarvest(events: RepositoryEvent[]): RepositoryHarvestProjection {
+function projectRepositoryHarvest(
+  events: RepositoryEvent[],
+  streams?: readonly StreamRecord[],
+): RepositoryHarvestProjection {
   const state = reduceHarvest(events)
-  const harvest = projectHarvestRun(events, state)
+  const harvest = projectHarvestRun(events, state, streams)
   return {
     harvestPaused: state.paused,
     ...(harvest !== undefined ? { harvest } : {}),
   }
 }
 
-export function projectHarvest(events: RepositoryEvent[]): DashboardHarvest | undefined {
-  return projectRepositoryHarvest(events).harvest
+/** The projection tests' and control surface's terminal wrapper. `streams` is
+ * the optional authoritative enrichment (the same records `ab harvest status`
+ * reads), so callers without it keep the payload-derived pairing. */
+export function projectHarvest(
+  events: RepositoryEvent[],
+  streams?: readonly StreamRecord[],
+): DashboardHarvest | undefined {
+  return projectRepositoryHarvest(events, streams).harvest
 }
 
 interface DashboardFrameHeader {
@@ -1170,9 +1191,10 @@ export function buildDashboardFromProjected(
   projectedBuilds: readonly DashboardBuild[],
   header: DashboardHeader,
   repositoryEvents: RepositoryEvent[] = [],
+  streams?: readonly StreamRecord[],
 ): DashboardModel {
   const builds = [...projectedBuilds].sort((a, b) => a.slug.localeCompare(b.slug))
-  const harvestProjection = projectRepositoryHarvest(repositoryEvents)
+  const harvestProjection = projectRepositoryHarvest(repositoryEvents, streams)
   const settings = reduceDispatchSettings(repositoryEvents)
   return {
     repo: header.repo,

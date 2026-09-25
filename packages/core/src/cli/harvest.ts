@@ -513,8 +513,12 @@ function projectRecovery(run: HarvestRunState | undefined): HarvestRecoveryStatu
  * membership is decided store-side by `listStreams({ kind: 'repo', repo })`,
  * scoped by the same resolved identity the caller passes, and the `scope.kind`
  * check below is only a defensive kind filter over records the store already
- * scoped. Store scoping semantics are out of scope here. */
-function projectHarvestSessions(
+ * scoped. Store scoping semantics are out of scope here.
+ *
+ * Exported as the shared session-pairing vocabulary: the CLI's status rows and
+ * the dashboard's harvest-row projection (`projectHarvestRun`) both consume
+ * it, so the two surfaces cannot drift. */
+export function projectHarvestSessions(
   events: RepositoryEvent[],
   streams?: readonly StreamRecord[],
 ): Map<string, HarvestSessionStatusView[]> {
