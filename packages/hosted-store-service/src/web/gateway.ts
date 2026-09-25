@@ -33,6 +33,7 @@ function operatorSuffix(method: string, parts: string[]): boolean {
       (method === 'POST' && parts.length === 3 && parts[2] === 'toggle')
     )
   }
+  if (method === 'GET' && parts.length === 2 && parts[0] === 'artifacts' && parts[1]) return true
   if (parts[0] !== 'builds' || !parts[1]) return false
   if (method === 'GET' && parts.length === 2) return true
   if (method === 'GET' && parts.length === 4 && parts[2] === 'artifacts' && parts[3]) return true
