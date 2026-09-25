@@ -41,6 +41,30 @@ export function sameSelection(a: Selection | undefined, b: Selection | undefined
   return a.kind === 'harvest' || (b.kind === 'build' && a.slug === b.slug)
 }
 
+/** The Harvest row's download links: one anchor per finalized session stream.
+ * Open streams and sessions without streams render nothing — a link to bytes
+ * that do not exist would be a lie. The global `a` treatment (cyan, 1px
+ * underline) is the PR-link family's vocabulary, and the route's
+ * `content-disposition: attachment` makes the click a download without
+ * navigation. No state, no pending wire — a plain anchor. */
+export function finalizedHarvestStreamLinks(
+  harvest: DashboardHarvest,
+  repo: string,
+): { key: string; label: string; aria: string; href: string }[] {
+  return (harvest.sessions ?? [])
+    .filter((session) => session.stream !== undefined && session.streamStatus === 'closed')
+    .map((session) => {
+      const stream = session.stream as string
+      const label = `${session.step} r${session.round}`
+      return {
+        key: session.session,
+        label,
+        aria: `Download ${session.step} r${session.round} stream ${stream}`,
+        href: `/api/web/repos/${encodeURIComponent(repo)}/artifacts/${encodeURIComponent(`stream:${stream}`)}`,
+      }
+    })
+}
+
 export function canPreviewPointer(pointerType: string, fineHover: boolean): boolean {
   return pointerType === 'mouse' && fineHover
 }
@@ -232,6 +256,7 @@ export function BuildsView(props: BuildsViewProps) {
         {model.harvest && (
           <HarvestRow
             harvest={model.harvest}
+            repo={repo}
             now={now}
             hasTicketColumn={widths.ticket > 0}
             selected={selection?.kind === 'harvest'}
@@ -373,6 +398,7 @@ export function DispatcherControls({
 
 function HarvestRow({
   harvest,
+  repo,
   now,
   hasTicketColumn,
   selected,
@@ -384,6 +410,7 @@ function HarvestRow({
   onRowHarvest,
 }: {
   harvest: DashboardHarvest
+  repo: string
   now: number
   hasTicketColumn: boolean
   selected: boolean
@@ -442,6 +469,11 @@ function HarvestRow({
           <span className="slack">
             {harvest.rounds} {harvest.rounds === 1 ? 'round' : 'rounds'}
           </span>
+          {finalizedHarvestStreamLinks(harvest, repo).map((link) => (
+            <a className="stream" key={link.key} aria-label={link.aria} href={link.href}>
+              {link.label}
+            </a>
+          ))}
         </span>
         <span className="status" data-status={harvest.status}>
           <Flash value={harvest.status}>{harvest.status.toUpperCase()}</Flash>
