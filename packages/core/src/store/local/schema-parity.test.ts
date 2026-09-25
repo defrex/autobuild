@@ -61,6 +61,10 @@ interface DeclaredColumn {
   notNull: boolean
   /** Column-level `primaryKey()` or a composite `primaryKey()` member. */
   pk: boolean
+  /** True only for a column-level `.primaryKey()` — the only PK shape under
+   * which SQLite reports `notnull = 0` (see the waiver comment on
+   * `columnMismatches`). */
+  columnLevelPk: boolean
 }
 
 interface DdlColumn {
@@ -90,6 +94,7 @@ function declaredColumns(table: SQLiteTable): DeclaredColumn[] {
     type: c.getSQLType().toUpperCase(),
     notNull: c.notNull,
     pk: c.primary === true || composite.has(c.name),
+    columnLevelPk: c.primary === true,
   }))
 }
 
@@ -158,12 +163,14 @@ function ddlIndexes(db: Database, tableName: string): IndexSpec[] {
 // ------------------------------------------------------------------ comparison
 
 /**
- * SQLite quirk the not-null rule waives: in a rowid table, a column-level
+ * SQLite quirk the not-null rule waives: in a rowid table, a *column-level*
  * `PRIMARY KEY` reports `notnull = 0` even though the primary key of course
  * forbids NULL and drizzle declares such columns `notNull`. Composite
- * table-level PK columns report `notnull = 1` as usual. A declared PK column
- * with `ddl.notnull = 0` is therefore not a divergence — and the PK-sequence
- * check below pins that the waived column really is the PK.
+ * table-level PK columns report `notnull = 1` as usual, so the waiver covers
+ * *only* column-level PKs (`columnLevelPk`, i.e. the drizzle `.primaryKey()`
+ * column builder — the declaration shape under which the quirk occurs): a
+ * composite-PK member whose DDL omits `NOT NULL` really does accept NULLs in
+ * SQLite and is a divergence, flagged like any other nullability drift.
  *
  * Deliberately not compared: `dflt_value`/defaults (neither side declares
  * any), CHECK constraints, and FK shape — the DDL carries behavior drizzle
@@ -188,8 +195,10 @@ function columnMismatches(declared: DeclaredColumn[], ddl: DdlColumn[]): string[
     if (d.notnull === 1 && !c.notNull) {
       mismatches.push(`column ${c.name}: ddl NOT NULL but declared nullable`)
     }
-    if (d.notnull === 0 && c.notNull && !c.pk) {
-      mismatches.push(`column ${c.name}: declared NOT NULL but ddl nullable (and not a PK)`)
+    if (d.notnull === 0 && c.notNull && !c.columnLevelPk) {
+      mismatches.push(
+        `column ${c.name}: declared NOT NULL but ddl nullable (and not a column-level PK)`,
+      )
     }
   }
 
@@ -284,6 +293,25 @@ describe('schema/DDL parity (real tree)', () => {
     }
   })
 
+  test('the not-null waiver applies to column-level PKs only (events.build is a composite member)', () => {
+    const eventsCols = declaredColumns(events)
+    expect(eventsCols.find((c) => c.name === 'build')).toEqual({
+      name: 'build',
+      type: 'TEXT',
+      notNull: true,
+      pk: true,
+      columnLevelPk: false,
+    })
+    const buildsCols = declaredColumns(builds)
+    expect(buildsCols.find((c) => c.name === 'slug')).toEqual({
+      name: 'slug',
+      type: 'TEXT',
+      notNull: true,
+      pk: true,
+      columnLevelPk: true,
+    })
+  })
+
   test('declared indexes match the bootstrap DDL exactly (columns, unique, partial)', () => {
     const db = memoryDb(BOOTSTRAP_DDL)
     try {
@@ -366,6 +394,32 @@ describe('schema/DDL parity (real tree)', () => {
           ],
     ).toEqual([])
   })
+
+  // Column-level-unique tripwire. A column-level drizzle `.unique()` surfaces
+  // as `column.isUnique` on the built column (drizzle's `uniqueName` defaults
+  // to `uniqueKeyName(table, [name])`) but appears in neither
+  // `getTableConfig().indexes` nor `uniqueConstraints` — so the compared
+  // surface above cannot see it, and a declared-only column-level unique with
+  // no matching DDL would pass both index parity and the declared-side
+  // tripwire. This test sees the declaration itself (`column.isUnique`); it
+  // does NOT see constraint names or DDL-side constraints (the origin-'u'
+  // autoindex tripwire above covers the DDL side). Empty today: no real-tree
+  // column carries `.unique()`.
+  test('no column-level unique() is declared on any column (tripwire)', () => {
+    const offenders: string[] = []
+    for (const [tableName, table] of Object.entries(tables)) {
+      const uniques = getTableConfig(table).columns.filter((c) => c.isUnique === true)
+      if (uniques.length > 0)
+        offenders.push(`${tableName}(${uniques.map((c) => c.name).join(',')})`)
+    }
+    expect(
+      offenders.length === 0
+        ? []
+        : [
+            `column-level unique() declaration(s) ${offenders} found — extend the parity surface or re-pin (see the column-unique tripwire comment)`,
+          ],
+    ).toEqual([])
+  })
 })
 
 // ------------------------------------------------------- negative fixtures
@@ -399,9 +453,38 @@ const fixtureTables = {
   },
   pkQuirk: {
     // Column-level PK: drizzle says notNull, SQLite reports notnull=0 — the
-    // quirk the waiver exists for; must NOT be flagged.
+    // quirk the waiver exists for (column-level PKs only); must NOT be
+    // flagged.
     table: sqliteTable('fx_pkq', { id: text('id').primaryKey(), a: text('a') }),
     ddl: 'CREATE TABLE fx_pkq (id TEXT PRIMARY KEY, a TEXT)',
+  },
+  compositePkNotNullDropped: {
+    // A composite-PK member with NOT NULL dropped from the DDL (a stand-in
+    // for `events.build`): composite members are NOT covered by the waiver —
+    // SQLite really accepts NULLs here — so this must be flagged.
+    table: sqliteTable(
+      'fx_cpk',
+      { build: text('build').notNull(), seq: text('seq').notNull() },
+      (t) => [primaryKey({ columns: [t.build, t.seq] })],
+    ),
+    ddl: 'CREATE TABLE fx_cpk (build TEXT, seq TEXT NOT NULL, PRIMARY KEY (build, seq))',
+  },
+  compositePkWellFormed: {
+    // The control for the fixture above: the same composite PK with NOT NULL
+    // kept on both members raises no mismatch.
+    table: sqliteTable(
+      'fx_cpk2',
+      { build: text('build').notNull(), seq: text('seq').notNull() },
+      (t) => [primaryKey({ columns: [t.build, t.seq] })],
+    ),
+    ddl: 'CREATE TABLE fx_cpk2 (build TEXT NOT NULL, seq TEXT NOT NULL, PRIMARY KEY (build, seq))',
+  },
+  columnUniqueDeclared: {
+    // A column-level drizzle `.unique()`: it appears in neither
+    // `getTableConfig().indexes` nor `uniqueConstraints`, so the compared
+    // surface cannot see it — detected only by the `isUnique` tripwire.
+    table: sqliteTable('fx_cu', { a: text('a').unique() }),
+    ddl: 'CREATE TABLE fx_cu (a TEXT)',
   },
   declaredUnique: {
     table: sqliteTable('fx_uniq', { a: text('a'), b: text('b') }, (t) => [
@@ -583,6 +666,50 @@ describe('schema/DDL parity (divergence fixtures)', () => {
       expect(columnMismatches(declaredColumns(f.table), ddlColumns(db, 'fx_ucon2'))).toEqual([])
       expect(indexMismatches(declaredIndexes(f.table), ddlIndexes(db, 'fx_ucon2'))).toEqual([])
       expect(getTableConfig(f.table).uniqueConstraints.length > 0).toBe(true)
+    } finally {
+      db.close()
+    }
+  })
+
+  test('NOT NULL dropped from a composite-PK member is flagged (not waived)', () => {
+    const f = fixtureTables.compositePkNotNullDropped
+    const db = memoryDb([f.ddl])
+    try {
+      expect(columnMismatches(declaredColumns(f.table), ddlColumns(db, 'fx_cpk'))).toEqual([
+        'column build: declared NOT NULL but ddl nullable (and not a column-level PK)',
+      ])
+    } finally {
+      db.close()
+    }
+  })
+
+  test('control: a composite PK with NOT NULL on both members raises no mismatch', () => {
+    const f = fixtureTables.compositePkWellFormed
+    const db = memoryDb([f.ddl])
+    try {
+      expect(columnMismatches(declaredColumns(f.table), ddlColumns(db, 'fx_cpk2'))).toEqual([])
+      expect(primaryKeyMismatches(f.table, ddlColumns(db, 'fx_cpk2'))).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
+  test('a column-level unique() is invisible to the compared surface and caught by isUnique', () => {
+    const f = fixtureTables.columnUniqueDeclared
+    const db = memoryDb([f.ddl])
+    try {
+      // The compared surface genuinely does not see the constraint — this is
+      // the gap the tripwire covers.
+      expect(columnMismatches(declaredColumns(f.table), ddlColumns(db, 'fx_cu'))).toEqual([])
+      expect(indexMismatches(declaredIndexes(f.table), ddlIndexes(db, 'fx_cu'))).toEqual([])
+      // The detection mechanism fires on the built column...
+      const column = getTableConfig(f.table).columns[0]
+      if (!column) throw new Error('fixture table has no columns')
+      expect(column.isUnique).toBe(true)
+      // ...and this is the column-level shape, distinct from table-level
+      // `unique()` (the uniqueConstraintDeclared fixture), which lands in
+      // `uniqueConstraints` instead.
+      expect(getTableConfig(f.table).uniqueConstraints.length).toBe(0)
     } finally {
       db.close()
     }

@@ -3,6 +3,12 @@
 ## Unreleased
 
 - [#574](https://github.com/defrex/autobuild/pull/574) — Expose repo-scoped stream artifacts over the operator API
+- [#572](https://github.com/defrex/autobuild/pull/572) — Route remaining journal reads through readRepoEventsIfRecorded
+- Route the remaining hand-rolled missing-record journal reads through readRepoEventsIfRecorded (AUT-543)
+- [#571](https://github.com/defrex/autobuild/pull/571) — Close declared-side blind spots in the schema-parity test (AUT-544)
+- [#570](https://github.com/defrex/autobuild/pull/570) — Keep Postgres migration tests bounded as schema versions accumulate
+- [#569](https://github.com/defrex/autobuild/pull/569) — State what the schema pin enforces and catch checksum-only re-pins
+- [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
 - [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
 - [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
 - [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
