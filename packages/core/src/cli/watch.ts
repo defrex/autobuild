@@ -564,6 +564,12 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         if (streams.has(slug)) return true
         const record = await store.getBuild(slug)
         if (record === null) return false
+        // AUT-545: this full-log read is deliberate, accepted growth — the
+        // retained prefix is consumed at full replay depth by every later
+        // reduction (approvals, findings, answered escalations, PR facts,
+        // observations), so bounding it would need reducer-partition store
+        // machinery out of AUT-545's scope. Required for `--since` replay and
+        // the baselined stream prefix. Mirrors cli/wait.ts trackBuild.
         const events = await store.getEvents(slug)
         const stream: BuildStream = {
           kind: 'build',
@@ -603,8 +609,24 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
        * the throw stay tracked, so the retry neither duplicates nor skips.
        */
       const discoverBuilds = async (): Promise<void> => {
+        // AUT-545: the terminal filter is the AUT-487 digest, not a full-log read —
+        // one flat batch read replaces a full getEvents per candidate build, per
+        // discovery pass; `terminal` is reduceBuild's exact terminal rule
+        // (store/digest's reduceBuildDigest, pinned by contract). The per-build
+        // full read below remains deliberate for builds the digest cannot retire:
+        // its retained prefix is consumed at full replay depth by every later
+        // reduction (approvals, findings, answered escalations, PR facts,
+        // observations), so bounding it would need reducer-partition store
+        // machinery out of AUT-545's scope. The reduceBuild re-check stays: it is
+        // the legacy-record fallback (a record whose `repo` predates origin
+        // normalization is in `mine` via `repoOrigin` but absent from the digest
+        // map, which keys on `record.repo`) and it keeps this filter unable to
+        // diverge from reduceBuild. Mirrors cli/wait.ts discoverBuilds.
+        const digests = await store.getRepoBuildDigests(repo)
         for (const record of (await store.listBuilds()).filter(mine)) {
           if (streams.has(record.slug)) continue
+          const digest = digests.get(record.slug)
+          if (digest !== undefined && digest.terminal !== undefined) continue
           const events = await store.getEvents(record.slug)
           const status = reduceBuild(events).status
           if (!NONTERMINAL_STATUSES.includes(status)) continue
@@ -815,7 +837,15 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           onStop: (): void => {
             stop = true
           },
-          drain: 'snapshot',
+          // Quiesce, not the runner's one-shot snapshot: a stream the
+          // discovery task registers while drain is awaiting must have its
+          // first held read awaited before the final cursor is encoded, or a
+          // mid-discovery registration's emission lands after the cursor and
+          // the next run replays it (the gap widened from a scheduling race
+          // to a deterministic miss when discovery's digest read added one
+          // await before the per-build reads — AUT-545). The snapshot
+          // semantics the runner documents remain covered by its own tests.
+          drain: 'quiesce',
         })
         runner = remoteRunner
 

@@ -1131,7 +1131,10 @@ interface RepositoryHarvestProjection {
   harvest?: DashboardHarvest
 }
 
-function projectRepositoryHarvest(events: RepositoryEvent[]): RepositoryHarvestProjection {
+/** The repository-journal half of a legacy dashboard frame (AUT-545): the
+ * harvest projection and the pause flag exactly as `buildDashboardFromProjected`
+ * derives them, exposed for tests that pin the bounded read's equivalence. */
+export function projectRepositoryHarvest(events: RepositoryEvent[]): RepositoryHarvestProjection {
   const state = reduceHarvest(events)
   const harvest = projectHarvestRun(events, state)
   return {

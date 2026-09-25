@@ -124,6 +124,7 @@ import {
 import { HarvestRunner, type HarvestRunnerResult } from '../processes/harvest-runner'
 import {
   sampleUnclaimedObservationCount,
+  readRepoEventsIfRecorded,
   evaluateHarvestPressureFromStore,
 } from '../processes/harvest'
 import { classifyHarvestOutcome } from '../processes/harvest-execution-state'
@@ -217,8 +218,9 @@ function definedEnv(env: Record<string, string | undefined>): Record<string, str
  * the process-local display cache then polls dashboard-visible streams with
  * `getEvents(lastSeq)`, retaining abort cleanup until final completion and reusing unchanged
  * reductions/timing projections. Repository controls and Harvest are still
- * read fresh. The identical-frame check in `live.ts` makes an unchanged paint
- * cost zero terminal writes. */
+ * read fresh through the bounded journal read (AUT-489 subset; AUT-545). The
+ * identical-frame check in `live.ts` makes an unchanged paint cost zero
+ * terminal writes. */
 const DASHBOARD_POLL_MS = 500
 
 /** Dashboard repaint (not re-read) cadence in watch mode. A running step's
@@ -3079,9 +3081,14 @@ class DispatchLoop {
       configSnapshot.config,
       configSnapshot.revision,
     )
-    const repoRecord = await this.wiring.store.getRepo(this.repoIdentity)
-    const repositoryEvents =
-      repoRecord === null ? [] : await this.wiring.store.getRepoEvents(this.repoIdentity)
+    // Bounded read (AUT-489, AUT-545): every repository consumer of this frame —
+    // projectRepositoryHarvest (reduceHarvest plus the harvest-only raw scans in
+    // projectHarvestRun/escalationAttentionDismissed) and reduceDispatchSettings —
+    // reduces durable types only, so the AUT-489 subset is replay-equivalent with
+    // no anchor dependence (anchor analysis recorded; the frontend seed needed one
+    // only because reduceDispatchStatus folds here too — it does not here).
+    // Missing journal record stays a read-only empty journal (AUT-524).
+    const repositoryEvents = await readRepoEventsIfRecorded(this.wiring.store, this.repoIdentity)
 
     // Action-triggered and timer refreshes share the cache but may finish their
     // repository reads out of order. Never let an older build snapshot replace
