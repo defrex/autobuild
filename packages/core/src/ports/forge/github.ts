@@ -470,6 +470,16 @@ function restMergeState(raw: string): MergeStateStatus {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** Bounded UNKNOWN re-query schedule: 7 re-queries, ~30 s of nondecreasing
+ * backoff capped at 6 s steps. Sized after AUT-392 — the prior
+ * two-re-query/2 s budget (`[500, 1500]`) was exhausted by a live occurrence
+ * (build `give-repo-scoped`, PR #352) while GitHub was still computing
+ * mergeability after required checks completed. Single-occurrence evidence,
+ * so this is a deliberate sizing bet, not a measured latency distribution;
+ * the unchanged pendingAutoMerge tick backstop remains behind it for waits a
+ * single tick cannot absorb. */
+export const MERGEABILITY_RETRY_DELAYS_MS = [1000, 2000, 4000, 5000, 6000, 6000, 6000]
+
 /** Hard cap on the janitor poll's per-PR ETag cache. One small entry per PR
  * ever polled in a dispatcher process lifetime makes hitting this in practice
  * implausible; the cap is hygiene, not a load-bearing bound. */
@@ -514,7 +524,8 @@ export class GitHubForge implements Forge {
       env?: Readonly<Record<string, string | undefined>>
       /** Bounded waits between mergeability re-queries when GitHub reports
        * `mergeable_state: 'unknown'` (mergeability still being computed).
-       * Two retries default; tests inject `[0, 0]` so no test sleeps. */
+       * Defaults to `MERGEABILITY_RETRY_DELAYS_MS` (7 re-queries, ~30 s);
+       * tests inject `[0, 0]` or all-zero schedules so no test sleeps. */
       mergeabilityRetryDelaysMs?: number[]
     } = {},
   ) {
@@ -535,7 +546,7 @@ export class GitHubForge implements Forge {
       this.explicitRepository = this.env.AB_REPOSITORY
     }
     this.repoRoot = opts.repoRoot
-    this.mergeabilityRetryDelaysMs = opts.mergeabilityRetryDelaysMs ?? [500, 1500]
+    this.mergeabilityRetryDelaysMs = opts.mergeabilityRetryDelaysMs ?? MERGEABILITY_RETRY_DELAYS_MS
     this.prAttachments = new GitHubPrAttachmentHosting({ transport: this.transport })
   }
 
