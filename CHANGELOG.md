@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#573](https://github.com/defrex/autobuild/pull/573) — Bound or consciously accept the remaining unbounded journal reads
 - [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
 - [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
 - [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
