@@ -254,10 +254,12 @@ export function unclaimedObservationCount(input: {
  * `scanUnclaimedObservations` keeps its materializing `ensureRepo` for its
  * remaining callers.
  *
- * The journal read is bounded (AUT-489): both consumers — the terminal
- * dashboards' observation-pressure sample and the operator query
- * (operator/query.ts) — reduce durable event types plus the latest-run tail
- * only, so the subset is replay-equivalent to a full journal replay. */
+ * The journal read is bounded (AUT-489): every consumer — the terminal
+ * dashboards' observation-pressure sample, the operator query
+ * (operator/query.ts), the dispatcher's repository-wide controls and ready
+ * scans, and the operator sandbox service's journal reads — reduces durable
+ * event types plus the latest-run tail only, so the subset is
+ * replay-equivalent to a full journal replay. */
 export async function readRepoEventsIfRecorded(
   store: BuildStore,
   repo: string,
