@@ -25,6 +25,7 @@ import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type {
   DashboardModel,
+  HarvestSessionStatusView,
   TranscriptPresentation,
 } from '@defrex/autobuild/operator-presentation'
 import { autoMergeConsentReason } from '../../core/src/cli/dashboard/model'
@@ -123,13 +124,13 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     id: 'builds-harvest-wide',
     width: 1440,
     height: 1000,
-    requires: ['Harvest', 'RESUME', 'harvest'],
+    requires: ['Harvest', 'RESUME', 'harvest', 'synthesize r1'],
   },
   {
     id: 'builds-harvest-narrow',
     width: 390,
     height: 1700,
-    requires: ['Harvest', 'RESUME', 'harvest'],
+    requires: ['Harvest', 'RESUME', 'harvest', 'synthesize r1'],
   },
   {
     id: 'builds-multirepo-wide',
@@ -423,6 +424,38 @@ function actionableHarvestModel(model: DashboardModel): DashboardModel {
       status: model.harvest.action ? model.harvest.status : 'failed',
       action: model.harvest.action ?? 'resume',
       detail: 'Harvest run stopped and is ready to resume.',
+    },
+  }
+}
+
+/** One ended harvest session carrying a closed stream, the shape the shared
+ * projection attaches for a finalized session (`HarvestSessionStatusView`).
+ * A view-level fixture: no store is ever consulted for it. */
+export const FIXTURE_FINALIZED_HARVEST_SESSION: HarvestSessionStatusView = {
+  session: 'hs_1',
+  role: 'harvest',
+  step: 'synthesize',
+  round: 1,
+  stream: 'st_fixture',
+  streamStatus: 'closed',
+  status: 'ended',
+}
+
+/** The model with the happy Harvest augmented by the finalized session. The
+ * ONE shared helper behind both the capture's `harnessModels()` and the unit
+ * test's local `models()` fixture: the `every web frame renders its required
+ * evidence` test runs `checkEvidence` over every `WEB_FRAME_SPECS` entry
+ * against that local fixture, so a `synthesize r1` require added without
+ * augmenting it is a guaranteed red `bun test`. One helper keeps the capture
+ * fixture and the test fixture in lockstep — either side losing the session
+ * fails the evidence test. */
+export function withFinalizedHarvestSession(model: DashboardModel): DashboardModel {
+  if (!model.harvest) throw new Error('web dashboard capture: the model has no Harvest run')
+  return {
+    ...model,
+    harvest: {
+      ...model.harvest,
+      sessions: [FIXTURE_FINALIZED_HARVEST_SESSION],
     },
   }
 }
@@ -865,13 +898,15 @@ function frameModel(
   return frame.model
 }
 
-/** Run the scripted dispatch harness once and keep only the projected models. */
+/** Run the scripted dispatch harness once and keep only the projected models.
+ * The happy model carries the finalized harvest-session fixture so the
+ * harvest frames render the stream link at both viewports. */
 export async function harnessModels(): Promise<WebFixtureModels> {
   const workspace = await mkdtemp(join(tmpdir(), 'ab-web-capture-'))
   try {
     const capture = await captureDashboardFrames({ workspacePath: workspace })
     return {
-      happy: frameModel(capture, 'headline-happy-wide'),
+      happy: withFinalizedHarvestSession(frameModel(capture, 'headline-happy-wide')),
       mixed: frameModel(capture, 'mixed-wide'),
     }
   } finally {
@@ -924,7 +959,7 @@ function report(frames: WebDashboardFrame[], chromium: string, outputDir: string
     '- [ ] Detail frames: the selected row carries the cyan `>` lane marker; every other row dims to gray except its STATUS word, yellow `(held)` annotation, and red lines, which remain full-color state information; detail unfolds beneath the row with no rule above it and one dim rule below, carrying Actions, Pipeline, Unresolved blockers (red text in a well), the answer composer, Sessions, and a Transcript whose Unicode sample (accents, curly quotes, em dash, CJK, emoji with variation selector, flag, ZWJ family) is legible and unsplit.',
     "- [ ] Answer frames: the open detail's Actions section shows a red `!` blocker line, a focused one-row optional-guidance field, then only `SUBMIT` and `CANCEL`; no `RESUME`, `ABORT`, auto-merge, or detail accessible names for that row. Empty submission is identified as retry; the narrow frame remains unclipped. The full answer composer stays further down the detail.",
     '- [ ] Abort frame (after leaving answer mode with CANCEL): the Actions section shows a red `! abort <slug>? Enter confirms, Esc cancels` line and `CONFIRM ABORT` / `CANCEL` ghost controls, with no answer field and no ordinary action words.',
-    '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake, auto merge, and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens.',
+    '- [ ] No Builds frame renders a footer or global button row. `pause all` and `resume all` are control-line ghost words, slack when unavailable; DESELECT never appears. Dispatcher intake, auto merge, and harvest toggles remain visible; an actionable Harvest run shows its bold RESUME or ACKNOWLEDGE word among the Harvest row tokens, and the finalized session stream renders its cyan `synthesize r1` download link word beside them.',
     '- [ ] Buttons: primary actions are transparent ink outlines at rest and secondary actions, including titles, auto-merge indicators, and detail action words, are borderless transparent words. Hover, active, disabled, and keyboard focus treatments are distinct; the focus frame shows the cyan title ring.',
     '- [ ] Sign-in frames: the masthead title, a bold `Sign in`, one line of copy, and an ink-outline `Continue with GitHub` primary button; the error variant adds a red `!` notice beneath the heading and nothing in the masthead.',
     '- [ ] Consent frames: they keep the sign-in masthead and `frame signin` classes; the named wide frame shows the bold registered client name with the raw client id beside it and the requested scopes, while the unnamed narrow frame falls back to the raw client id alone; both end in one ink-outline `Authorize client` primary button, and neither shows the missing-authorization-code notice.',

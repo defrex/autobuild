@@ -55,6 +55,9 @@ turn runner (a later ticket) is the only producer of turn facts.
 | `GET …/status` | Repository intake, pause, and default-auto-merge projection. |
 | `GET …/harvest/status` | Harvest gate, runs, steps, recovery, and attention projection. |
 | `GET …/builds/{slug}/artifacts/{kind}?rev=N` | Raw bytes (`application/octet-stream`) plus content-disposition and `X-Autobuild-Artifact-*` metadata headers. Omit `rev` for latest. |
+| `GET …/artifacts/{kind}?rev=N` | The same response for a **repository-scoped** artifact by kind, keyed by the path repository. Finalized harvest-session streams are kind `stream:<id>` — the document the stream's close deposited (§7.6). Omit `rev` for latest; the `rev` grammar is the build route's. Unknown repo, unknown kind, and an unfinalized (open) stream are all deliberately `404 not-found` — the store deposits a stream's artifact only at close, so an open stream and an unknown kind are indistinguishable here, and no stream record is consulted. Encode the kind as one path segment (`stream%3Ast_x`). |
+| `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria,triageState,readyState}`. The two lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. |
+| `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
 | `GET …/tickets?state=S&label=L` | `{states,tickets,diagnostics,criteria,triageState,readyState}`. The two lifecycle names come from effective repository configuration (including provider fallback). With no `state`, `criteria.state` is `triageState`; repeated `label` parameters narrow that state with AND filters. An explicit `state` selects that exact backend workflow state. |
 | `GET …/tickets/{id}` | `{ticket,blockers,build}`. Blockers include native `exists`/`resolved` status; `build` prefers an active matching repository build, otherwise the most recently updated one. |
 
@@ -169,7 +172,9 @@ The same deployment serves the web dashboard through `/api/web/repos/{repo}/…`
 That route is not a second public bearer-token API: it requires a current
 Better Auth HTTP-only cookie, rechecks the deployment email and repository
 allowlists, rejects cross-origin JSON controls, and delegates only the dashboard,
-build, settings, and harvest operator suffixes listed above. It replaces caller-supplied authorization/version
+build, settings, and harvest operator suffixes listed above — including the
+repository-artifact reads (`GET …/artifacts/{kind}?rev=N`), which the web
+app's Harvest row links to for finalized session streams. It replaces caller-supplied authorization/version
 headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
