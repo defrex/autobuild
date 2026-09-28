@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { GitHubForge, parseRepoCoordinates, rulesetsHaveMergeGate } from './github'
+import {
+  GitHubForge,
+  MERGEABILITY_RETRY_DELAYS_MS,
+  parseRepoCoordinates,
+  rulesetsHaveMergeGate,
+} from './github'
 import {
   GitHubApiError,
   type GitHubRequest,
@@ -54,13 +59,17 @@ function makeTransport(responses: (Scripted | GitHubResponse)[] = []) {
 }
 
 /** A forge whose coordinates resolve from the explicit option (origin mode
- * never touches git). Retry delays are zero so no test sleeps. */
-function makeForge(responses: (Scripted | GitHubResponse)[] = []) {
+ * never touches git). Retry delays are zero so no test sleeps; pass a longer
+ * all-zero schedule to exercise the extended UNKNOWN re-query budget. */
+function makeForge(
+  responses: (Scripted | GitHubResponse)[] = [],
+  retryDelaysMs: number[] = [0, 0],
+) {
   const { transport, calls } = makeTransport(responses)
   const forge = new GitHubForge({
     transport,
     repository: 'acme/app',
-    mergeabilityRetryDelaysMs: [0, 0],
+    mergeabilityRetryDelaysMs: retryDelaysMs,
   })
   return { forge, calls }
 }
@@ -851,6 +860,114 @@ describe('GitHubForge.setAutoMerge', () => {
     ])
     expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
     expect(calls.some((call) => call.path === 'graphql')).toBe(false)
+  })
+
+  test('the default re-query schedule is the extended 7-step ~30 s budget', () => {
+    // AUT-392: the schedule exists as a named constant so retuning it is a
+    // deliberate diff. More entries than the pre-AUT-392 two-step budget,
+    // every wait positive (real backoff, no hot-loop), nondecreasing, and
+    // exactly the documented ~30 s total.
+    expect(MERGEABILITY_RETRY_DELAYS_MS.length).toBeGreaterThan(2)
+    for (const delay of MERGEABILITY_RETRY_DELAYS_MS) expect(delay).toBeGreaterThan(0)
+    expect([...MERGEABILITY_RETRY_DELAYS_MS].sort((a, b) => a - b)).toEqual([
+      ...MERGEABILITY_RETRY_DELAYS_MS,
+    ])
+    expect(MERGEABILITY_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0)).toBe(30000)
+  })
+
+  test('extended-budget exhaustion defers with the transient-flavored reason after 7 re-queries', async () => {
+    // The AUT-392 sizing: seven re-queries (plus the initial read = eight PR
+    // reads) all still UNKNOWN, an ungated PR, so the bounded budget exhausts
+    // and the deferral keeps the AUT-329 transient wording, now naming the
+    // larger retry count. The gate probe still runs exactly once, after
+    // settling — the re-query loop never duplicates it.
+    const { forge, calls } = makeForge(
+      [
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        branchWith(fullProtection),
+        ruleset([]),
+      ],
+      [0, 0, 0, 0, 0, 0, 0],
+    )
+    const result = await forge.setAutoMerge('/ws/build-1', 42, true)
+    expect(result).toMatchObject({
+      kind: 'deferred',
+      reason: { code: 'mergeability-uncomputed' },
+    })
+    if (result.kind !== 'deferred') return
+    expect(result.reason?.detail).toContain('still being computed')
+    expect(result.reason?.detail).toContain('7 re-queries')
+    expect(result.reason?.detail).toContain('over 0 ms')
+    expect(result.reason?.detail).toContain('PR #42')
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/pulls/42')).toHaveLength(8)
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/branches/main')).toHaveLength(
+      1,
+    )
+  })
+
+  test('gated UNKNOWN resolving at the last extended slot applies consent inside the same tick', async () => {
+    // Mergeability stays UNKNOWN through every re-query but the final one:
+    // the eighth read is clean, so the gate applies native auto-merge in the
+    // same tick instead of deferring. Eight inspection reads plus the
+    // post-mutation native confirmation read.
+    const { forge, calls } = makeForge(
+      [
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('clean'),
+        branchWith({
+          ...fullProtection,
+          required_status_checks: { checks: [{ context: 'ci' }], contexts: [] },
+        }),
+        ruleset([]),
+        repositoryAutoMerge(true),
+        graphqlApplied('enablePullRequestAutoMerge'),
+        nativeState(true),
+      ],
+      [0, 0, 0, 0, 0, 0, 0],
+    )
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({ kind: 'applied' })
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/pulls/42')).toHaveLength(9)
+  })
+
+  test('ungated UNKNOWN resolving at the last extended slot becomes a direct candidate', async () => {
+    // The ungated companion: the same late resolution routes to the direct
+    // squash candidate instead of the mergeability-uncomputed deferral.
+    const { forge, calls } = makeForge(
+      [
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('unknown'),
+        prView('clean'),
+        branchWith(fullProtection),
+        ruleset([]),
+      ],
+      [0, 0, 0, 0, 0, 0, 0],
+    )
+    expect(await forge.setAutoMerge('/ws/build-1', 42, true)).toEqual({
+      kind: 'ungated',
+      headSha: 'head-42',
+    })
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/pulls/42')).toHaveLength(8)
+    expect(paths(calls).filter((path) => path === 'GET repos/acme/app/branches/main')).toHaveLength(
+      1,
+    )
   })
 
   test('has_hooks is never treated as ungated and delegates to native auto-merge', async () => {
