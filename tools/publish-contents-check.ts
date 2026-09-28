@@ -218,8 +218,8 @@ const DISPATCHER_RULING =
   "'files' allowlist in packages/hosted-dispatcher/package.json and this check together."
 
 const ROOT_RULING =
-  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
-  'skills, templates, patches, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
+  'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513, extended by AUT-552): the @defrex/autobuild npm tarball ships bin, packages/core/src, ' +
+  'skills, templates, LICENSE, README.md, SPEC.md, and docs — except every *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx file under ' +
   'packages/core/src (the !packages/core/src/**/*.test.ts, !packages/core/src/**/*.test.tsx, !packages/core/src/**/*.spec.ts, and ' +
   '!packages/core/src/**/*.spec.tsx negations; the within-segment * covers the *.live.test.* suites too): test files are dev-only surface and do ' +
   'not publish. The denial covers the TypeScript test spellings only: *.test.js, *.spec.js, *.test.jsx, and *.spec.jsx are deliberately out of ' +
@@ -240,7 +240,7 @@ const ROOT_RULING =
   'each ships with no packed importer and no exports/bin target, and its sole consumers are the pack-denied *.test.ts and *.live.test.ts ' +
   'files — for frame-image.ts and markdown.ts also the unpacked repo tooling tools/dashboard-capture.ts, tools/docs-asset-check.ts, and ' +
   'tools/skill-docs-asset-check.ts, which read the working tree by relative path — so dropping them from the tarball changes nothing for ' +
-  'any consumer; no packed source imports any of them. Warning: ' +
+  "any consumer; no packed source imports any of them. By AUT-552 the repo's patches/ directory is excluded from the tarball — the workspace install reads the patch from the repo tree, not from the tarball, and the packed manifest strips patchedDependencies (packedManifestOmittedFields in packages/core/src/ports/workspace/distribution-archive.ts), so the packed artifact never consumes the patch file and shipping it was dead weight. Warning: " +
   "publish-imports-check does not scan the provider's own packed files, so excluding fixed.ts would pass " +
   'every check while breaking the packed ./plugin-sdk export. If the ruling changes, update the ' +
   "'files' allowlist in package.json and this check together."

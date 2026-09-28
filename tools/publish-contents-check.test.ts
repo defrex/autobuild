@@ -136,7 +136,6 @@ const rootFixtureManifest = {
     '!packages/core/src/markdown.ts',
     'skills',
     'templates',
-    'patches',
     'LICENSE',
     'README.md',
     'SPEC.md',
@@ -517,7 +516,6 @@ describe('deriveRuledPackages', () => {
       'packages/core/src',
       'skills',
       'templates',
-      'patches',
       'LICENSE',
       'README.md',
       'SPEC.md',
@@ -566,7 +564,7 @@ describe('deriveRuledPackages', () => {
     ])
   })
 
-  test('the root ruling is pinned to AUT-490 extended by AUT-503, AUT-508, AUT-506, and AUT-513', () => {
+  test('the root ruling is pinned to AUT-490 extended by AUT-503, AUT-508, AUT-506, AUT-513, and AUT-552', () => {
     expect(hostedRuling.ruling).toContain('Ruling (AUT-463')
     expect(postgresRuling.ruling).toContain('Ruling (AUT-473')
     expect(dispatcherRuling.ruling).toContain('Ruling (AUT-490, extended by AUT-502)')
@@ -575,7 +573,7 @@ describe('deriveRuledPackages', () => {
     expect(postgresRuling.ruling).toContain('AUT-490')
     expect(dispatcherRuling.ruling).toContain('AUT-490')
     expect(rootRuling.ruling).toContain(
-      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513)',
+      'Ruling (AUT-490, extended by AUT-503, extended by AUT-508, extended by AUT-506, extended by AUT-513, extended by AUT-552)',
     )
     expect(rootRuling.ruling).toContain('@defrex/autobuild')
     expect(rootRuling.ruling).toContain('*.test.tsx')
@@ -645,7 +643,7 @@ describe('deriveRuledPackages', () => {
 
 /** The root tarball's full shipped-surface enumeration, as ROOT_RULING renders it. */
 const ROOT_SHIPPED_SURFACE_ENUMERATION =
-  'bin, packages/core/src, skills, templates, patches, LICENSE, README.md, SPEC.md, and docs'
+  'bin, packages/core/src, skills, templates, LICENSE, README.md, SPEC.md, and docs'
 
 /** The sub-package tarballs' shipped-surface enumeration, as their rulings render it. */
 const SUB_PACKAGE_SHIPPED_SURFACE_ENUMERATION = 'package.json, README.md, and src/**'
@@ -757,7 +755,6 @@ const rootConformPaths = [
   'docs/README.md',
   'skills/spec/SKILL.md',
   'templates/autobuild.toml',
-  'patches/better-auth@1.4.18.patch',
 ]
 
 describe('evaluatePackedPaths', () => {
@@ -809,6 +806,15 @@ describe('evaluatePackedPaths', () => {
       { kind: 'extra', path: 'packages/core/src/cli/foo.spec.tsx' },
       { kind: 'extra', path: 'packages/core/src/foo.test.tsx' },
     ])
+  })
+
+  test('the patch file the AUT-552 drop excluded is an extra under the derived root ruling, named by path', () => {
+    expect(evaluatePackedPaths(rootConformPaths, rootRuling)).toEqual([])
+    const violations = evaluatePackedPaths(
+      [...rootConformPaths, 'patches/better-auth@1.4.18.patch'],
+      rootRuling,
+    )
+    expect(violations).toEqual([{ kind: 'extra', path: 'patches/better-auth@1.4.18.patch' }])
   })
 
   test('every packed test file is an extra under the AUT-490 sub-package rulings, named by path', () => {
@@ -1090,7 +1096,7 @@ describe('runPublishContentsCheck', () => {
     expect(exitCode).toBe(0)
     const stdout = captured.stdout.join('')
     expect(stdout).toContain(
-      '@defrex/autobuild pack contents match the ruling: package.json, README.md, and 11 allowlisted file(s).',
+      '@defrex/autobuild pack contents match the ruling: package.json, README.md, and 10 allowlisted file(s).',
     )
     expect(stdout).toContain(
       '@defrex/autobuild-hosted-dispatcher pack contents match the ruling: package.json, README.md, and 5 allowlisted file(s).',
@@ -1151,7 +1157,7 @@ describe('runPublishContentsCheck', () => {
     expect(stdout).toContain('scratch.ts')
     expect(stdout).toContain(
       'only package.json, README.md, bin/**, packages/core/src/**, skills/**, templates/**, ' +
-        'patches/**, LICENSE, SPEC.md, and docs/** are allowed by the ruling',
+        'LICENSE, SPEC.md, and docs/** are allowed by the ruling',
     )
     expect(stdout).not.toContain('LICENSE/**')
   })
@@ -1457,13 +1463,16 @@ describe('the real sub-package manifests', () => {
 })
 
 describe('the real root manifest', () => {
-  // Pinned byte-for-byte (AUT-490 + AUT-503 + AUT-508 + AUT-506 + AUT-513): the root tarball ships packages/core/src
+  // Pinned byte-for-byte (AUT-490 + AUT-503 + AUT-508 + AUT-506 + AUT-513 + AUT-552): the root tarball ships packages/core/src
   // except its *.test.ts, *.test.tsx, *.spec.ts, and *.spec.tsx files (AUT-490's negation,
   // broadened to the four spellings by AUT-508), the AUT-503 per-file negations of the
   // test-only src/testing helpers, the AUT-506 per-file negation of the test-only
   // src/cli/testkit.ts helper, and the AUT-513 per-file negations of the four remaining
   // dead-weight files, whose load-bearing siblings (fixed.ts, index.ts, harness.ts) keep shipping.
-  const ROOT_AUT_513_FILES = [
+  // By AUT-552 the once-allowlisted patches/ directory is dropped from the files set: the
+  // workspace install reads the patch from the repo tree, and the packed manifest strips
+  // patchedDependencies, so the patch file was dead weight in every packed artifact.
+  const ROOT_AUT_552_FILES = [
     'bin',
     'packages/core/src',
     '!packages/core/src/**/*.test.ts',
@@ -1479,17 +1488,16 @@ describe('the real root manifest', () => {
     '!packages/core/src/markdown.ts',
     'skills',
     'templates',
-    'patches',
     'LICENSE',
     'README.md',
     'SPEC.md',
     'docs',
   ]
 
-  test("the root package.json's files allowlist carries the AUT-490 negations broadened by AUT-508 plus the AUT-503, AUT-506, and AUT-513 per-file negations exactly", () => {
+  test("the root package.json's files allowlist carries the AUT-490 negations broadened by AUT-508 plus the AUT-503, AUT-506, and AUT-513 per-file negations exactly, with patches/ dropped by AUT-552", () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
       files?: unknown
     }
-    expect(manifest.files).toEqual(ROOT_AUT_513_FILES)
+    expect(manifest.files).toEqual(ROOT_AUT_552_FILES)
   })
 })

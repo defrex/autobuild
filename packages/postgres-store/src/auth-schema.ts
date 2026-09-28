@@ -154,13 +154,28 @@ export async function assertAuthSchema(sql: SQL): Promise<void> {
     throw error
   }
   const marker = rows[0]
-  if (
-    !marker ||
-    Number(marker.version) !== AUTH_SCHEMA_VERSION ||
-    marker.checksum !== AUTH_SCHEMA_CHECKSUM
-  ) {
+  if (!marker) {
+    throw new Error('PostgreSQL auth schema marker is missing; run the migration from this release')
+  }
+  if (Number(marker.version) !== AUTH_SCHEMA_VERSION) {
     throw new Error(
-      'PostgreSQL auth schema marker is incompatible; run the migration from this release',
+      `PostgreSQL auth schema marker is incompatible: version ${marker.version} does not match ` +
+        `required version ${AUTH_SCHEMA_VERSION}; run the migration from this release`,
+    )
+  }
+  if (marker.checksum !== AUTH_SCHEMA_CHECKSUM) {
+    // The targeted diagnostic for a version-matched, checksum-mismatched
+    // marker (AUT-548): the shape a checksum-only re-pin leaves deployed
+    // databases in, and also the shape of a database built by a different
+    // build of the same version, which a marker alone cannot distinguish.
+    throw new Error(
+      `PostgreSQL auth schema marker is incompatible: its version matches ` +
+        `${AUTH_SCHEMA_VERSION}, but its checksum does not match this build's DDL — the current ` +
+        `DDL was likely edited in place without bumping the version, or the database was built ` +
+        `by a different build of this same version. Never edit deployed DDL; follow the ` +
+        `four-step rule (freeze the previous DDL, add an upgrade branch in migratePostgres, ` +
+        `bump the version, re-pin in schema-guard.test.ts) and redeploy; run the migration ` +
+        `from this release`,
     )
   }
   const columns: { table_name: string; column_name: string }[] = await sql`

@@ -852,6 +852,23 @@ export function schemaError(detail: string): Error {
   return new Error(`PostgreSQL BuildStore schema ${detail}; run: ${MIGRATE_COMMAND}`)
 }
 
+/** The targeted cause text for a marker whose version matches the required
+ * version but whose checksum does not: exactly the shape a checksum-only
+ * re-pin leaves deployed databases in (AUT-548) — and also the shape of a
+ * database built by a different build of the same version, which a marker
+ * alone cannot distinguish, so both causes are named. The guard's failure
+ * output teaches the four-step rule pre-ship; this diagnostic catches the
+ * checksum-only shortcut after the fact. */
+function checksumMismatchCause(version: number): string {
+  return (
+    `its version matches ${version}, but its checksum does not match this build's DDL — the ` +
+    `current DDL was likely edited in place without bumping the version, or the database was ` +
+    `built by a different build of this same version. Never edit deployed DDL; follow the ` +
+    `four-step rule (freeze the previous DDL, add an upgrade branch in migratePostgres, bump ` +
+    `the version, re-pin in schema-guard.test.ts) and redeploy`
+  )
+}
+
 interface CatalogColumn {
   table_name: string
   column_name: string
@@ -974,7 +991,9 @@ export async function assertSchema(sql: SQL): Promise<void> {
   if (Number(marker.version) !== SCHEMA_VERSION) {
     throw schemaError(`version ${marker.version} does not match required version ${SCHEMA_VERSION}`)
   }
-  if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('checksum is mismatched')
+  if (marker.checksum !== SCHEMA_CHECKSUM) {
+    throw schemaError(`checksum is mismatched: ${checksumMismatchCause(SCHEMA_VERSION)}`)
+  }
   await assertCatalogShape(sql)
 }
 
@@ -991,11 +1010,16 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
   }
   const marker = rows[0]
   if (!marker) throw schemaError('ticket marker is missing')
-  if (
-    Number(marker.version) !== TICKET_SCHEMA_VERSION ||
-    marker.checksum !== TICKET_SCHEMA_CHECKSUM
-  ) {
-    throw schemaError('ticket marker is incompatible')
+  if (Number(marker.version) !== TICKET_SCHEMA_VERSION) {
+    throw schemaError(
+      `ticket marker is incompatible: version ${marker.version} does not match required version ` +
+        `${TICKET_SCHEMA_VERSION}`,
+    )
+  }
+  if (marker.checksum !== TICKET_SCHEMA_CHECKSUM) {
+    throw schemaError(
+      `ticket marker is incompatible: ${checksumMismatchCause(TICKET_SCHEMA_VERSION)}`,
+    )
   }
   const expected: Record<string, Array<[string, string, boolean]>> = {
     ab_ticket_schema_migrations: [
@@ -1130,7 +1154,9 @@ export async function migratePostgres(url: string): Promise<void> {
         )
         const version = Number(marker.version)
         if (version === SCHEMA_VERSION) {
-          if (marker.checksum !== SCHEMA_CHECKSUM) throw schemaError('marker is incompatible')
+          if (marker.checksum !== SCHEMA_CHECKSUM) {
+            throw schemaError(`marker is incompatible: ${checksumMismatchCause(SCHEMA_VERSION)}`)
+          }
         } else if (version === 1 && marker.checksum === SCHEMA_V1_CHECKSUM) {
           // v1 → v8: the idempotent full DDL above already applied the deltas
           // (the stream tables and the session tables); v1 databases never had
@@ -1270,11 +1296,16 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`SELECT version, checksum FROM ab_ticket_schema_migrations WHERE singleton = true FOR UPDATE`
       const ticketMarker = ticketRows[0]
       if (ticketMarker) {
-        if (
-          Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION ||
-          ticketMarker.checksum !== TICKET_SCHEMA_CHECKSUM
-        ) {
-          throw schemaError('ticket marker is incompatible')
+        if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
+          throw schemaError(
+            `ticket marker is incompatible: version ${ticketMarker.version} does not match ` +
+              `required version ${TICKET_SCHEMA_VERSION}`,
+          )
+        }
+        if (ticketMarker.checksum !== TICKET_SCHEMA_CHECKSUM) {
+          throw schemaError(
+            `ticket marker is incompatible: ${checksumMismatchCause(TICKET_SCHEMA_VERSION)}`,
+          )
         }
       } else {
         await tx`INSERT INTO ab_ticket_schema_migrations
@@ -1301,7 +1332,9 @@ export async function migratePostgres(url: string): Promise<void> {
         const authVersion = Number(authMarker.version)
         if (authVersion === AUTH_SCHEMA_VERSION) {
           if (authMarker.checksum !== AUTH_SCHEMA_CHECKSUM) {
-            throw schemaError('auth marker is incompatible')
+            throw schemaError(
+              `auth marker is incompatible: ${checksumMismatchCause(AUTH_SCHEMA_VERSION)}`,
+            )
           }
         } else if (authVersion === 1 && authMarker.checksum === AUTH_SCHEMA_V1_CHECKSUM) {
           // v1 → v3: the idempotent full DDL above already created the four

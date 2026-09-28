@@ -5,7 +5,13 @@ import type { WorkspaceProvider } from '../types'
 import { FakeWorkspaceProvider } from './fake'
 import { GitWorktreeProvider } from './git-worktree'
 import { createPluginRegistry } from '../../plugins/registry'
+import type {
+  PluginFactoryContext,
+  WorkspaceProviderPluginFactoryContext,
+} from '../../plugins/manifest'
 import { parseConfig } from '../../config/load'
+import type { RuntimeReferenceGroup } from '../../config/roles'
+import type { VercelSandboxConfig } from '../../config/schema'
 import {
   createWorkspaceProvider,
   createWorkspaceRuntime,
@@ -13,6 +19,12 @@ import {
 } from './create'
 import type { BuildExecution } from './build-execution'
 import { LocalBuildExecution } from './local-build-execution'
+import {
+  VercelSandboxProvider,
+  type VercelSandboxFacade,
+  type VercelSandboxProviderOptions,
+} from './vercel-sandbox'
+import { VERCEL_SANDBOX_CAPABILITIES } from './vercel-capabilities'
 
 const baseOpts = () => ({
   registry: createPluginRegistry(),
@@ -321,6 +333,223 @@ readyState = "ready"
         baseOpts(),
       ),
     ).rejects.toThrow('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
+  })
+
+  // ── AUT-560: the workspace-provider factory context carries the host-derived seams ──
+
+  test('plugin workspace-provider factories receive the host-derived seams', async () => {
+    const opts = baseOpts()
+    const selected = new FakeWorkspaceProvider({ mode: 'logical' })
+    const contexts: WorkspaceProviderPluginFactoryContext[] = []
+    const origin = async () => 'https://github.com/acme/app.git'
+    const remoteBranchHead = async () => undefined
+    const runtimeReferences: RuntimeReferenceGroup[] = [
+      {
+        runtime: 'node',
+        references: ['role author'],
+        models: [],
+        usesRuntimeDefaultModel: false,
+      },
+    ]
+    opts.registry.register({
+      name: 'seams',
+      apiVersion: '^1.7.0',
+      workspaceProviders: {
+        podman: (context) => {
+          contexts.push(context)
+          return selected
+        },
+      },
+    })
+
+    await createWorkspaceProvider(
+      { provider: 'podman', config: {} },
+      {
+        ...opts,
+        storeRef: 'https://store.example.test',
+        storeToken: 'scoped-token',
+        runtimeReferences,
+        origin,
+        remoteBranchHead,
+      },
+    )
+
+    expect(contexts).toHaveLength(1)
+    const context = contexts[0]!
+    expect(context.storeRef).toBe('https://store.example.test')
+    expect(context.storeToken).toBe('scoped-token')
+    // Seams are compared by captured reference, not toEqual: deep equality on
+    // functions is brittle, and identity proves the host passes its own seam
+    // through uncloned.
+    expect(context.runtimeReferences).toBe(runtimeReferences)
+    expect(context.origin).toBe(origin)
+    expect(context.remoteBranchHead).toBe(remoteBranchHead)
+  })
+
+  test('a call site that supplies no seams constructs exactly the shared context', async () => {
+    const opts = baseOpts()
+    const contexts: WorkspaceProviderPluginFactoryContext[] = []
+    opts.registry.register({
+      name: 'seams',
+      apiVersion: '^1.7.0',
+      workspaceProviders: {
+        podman: (context) => {
+          contexts.push(context)
+          return new FakeWorkspaceProvider({ mode: 'logical' })
+        },
+      },
+    })
+    await createWorkspaceProvider({ provider: 'podman', config: {} }, opts)
+    const context = contexts[0]!
+    for (const key of [
+      'storeRef',
+      'storeToken',
+      'runtimeReferences',
+      'origin',
+      'remoteBranchHead',
+    ]) {
+      expect(Object.hasOwn(context, key)).toBe(false)
+    }
+  })
+
+  test('a storeRequirements declaration guarantees both store seams reach the factory', async () => {
+    // Pairs with the refusal test above: with the seams supplied the refusal
+    // check passes and the factory runs, receiving both values as strings —
+    // the documented guarantee a store-requiring provider relies on.
+    const opts = baseOpts()
+    const contexts: WorkspaceProviderPluginFactoryContext[] = []
+    opts.registry.register({
+      name: 'containers',
+      apiVersion: '^1.7.0',
+      workspaceProviders: {
+        podman: {
+          factory: (context) => {
+            contexts.push(context)
+            return new FakeWorkspaceProvider({ mode: 'logical' })
+          },
+          capabilities: {
+            storeRequirements: {
+              constructionMessage: 'podman requires an HTTPS store and token',
+              storeRefMessage: 'podman requires an HTTPS AB_STORE',
+              storeTokenMessage: 'podman requires nonempty AB_TOKEN',
+            },
+          },
+        },
+      },
+    })
+    await createWorkspaceProvider(
+      { provider: 'podman', config: {} },
+      { ...opts, storeRef: 'https://store.example.test', storeToken: 'scoped-token' },
+    )
+    expect(contexts).toHaveLength(1)
+    expect(contexts[0]!.storeRef).toBe('https://store.example.test')
+    expect(contexts[0]!.storeToken).toBe('scoped-token')
+  })
+
+  test('a plugin factory constructs the real VercelSandboxProvider from the context seams', async () => {
+    // The AUT-560 demonstration: the exact wiring the moved-in implementation
+    // will use after AUT-505 — a plugin factory building the provider from the
+    // context's seams. The constructor validates eagerly (an https:// storeRef,
+    // a nonempty token, and — without a supplied facade — a Vercel SDK facade
+    // built from env, which throws without Vercel credentials), so the test
+    // supplies a stub facade with the four methods, the same recipe the
+    // construction tests in vercel-sandbox.test.ts use.
+    const facade: VercelSandboxFacade = {
+      get: async () => null,
+      create: async () => {
+        throw new Error('not reached by this test')
+      },
+      listSnapshots: async () => [],
+      deleteSnapshot: async () => {},
+    }
+    const origin = async () => 'https://github.com/acme/app.git'
+    const remoteBranchHead = async () => undefined
+    // Deliberately EMPTY, not the populated fixture: the vercel capabilities
+    // declare requireRuntimeProvisioning, and construction enforces it
+    // whenever opts.runtimeReferences is defined — a populated fixture would
+    // throw the provisioning message before the factory ever ran. An empty
+    // array passes enforcement while the seam still arrives as a value.
+    const runtimeReferences: RuntimeReferenceGroup[] = []
+    const opts = baseOpts()
+    opts.registry.register({
+      name: 'vercel-sandbox-plugin',
+      apiVersion: '^1.7.0',
+      workspaceProviders: {
+        'vercel-sandbox-copy': {
+          factory: (ctx) => {
+            // The capability type declares `configSchema?: z.ZodType`, which
+            // under zod 4 parses to `unknown` — narrow it, then assert the
+            // shape the shared schema is known to produce.
+            const schema = VERCEL_SANDBOX_CAPABILITIES.configSchema
+            if (schema === undefined) {
+              throw new Error('vercel-sandbox capabilities lost their config schema')
+            }
+            const parsed = schema.safeParse(ctx.config)
+            if (!parsed.success) throw new Error(parsed.error.message)
+            return new VercelSandboxProvider({
+              config: parsed.data as VercelSandboxConfig,
+              env: ctx.env,
+              storeRef: ctx.storeRef!,
+              storeToken: ctx.storeToken!,
+              repo: resolve(ctx.repoRoot),
+              runtimeReferences: ctx.runtimeReferences ?? [],
+              origin: ctx.origin,
+              remoteBranchHead: ctx.remoteBranchHead,
+              facade,
+            })
+          },
+          capabilities: VERCEL_SANDBOX_CAPABILITIES,
+        },
+      },
+    })
+
+    const provider = await createWorkspaceProvider(
+      { provider: 'vercel-sandbox-copy', config: { timeoutSeconds: 600 } },
+      {
+        ...opts,
+        storeRef: 'https://store.example.test',
+        storeToken: 'scoped-token',
+        runtimeReferences,
+        origin,
+        remoteBranchHead,
+      },
+    )
+    expect(provider.name).toBe('vercel-sandbox')
+    const options = (provider as unknown as { options: VercelSandboxProviderOptions }).options
+    expect(options.storeRef).toBe('https://store.example.test')
+    expect(options.storeToken).toBe('scoped-token')
+    expect(options.repo).toBe(resolve('./repo'))
+    expect(options.runtimeReferences).toBe(runtimeReferences)
+    expect(options.origin).toBe(origin)
+    expect(options.remoteBranchHead).toBe(remoteBranchHead)
+    expect(options.facade).toBe(facade)
+    expect((options.config as VercelSandboxConfig).timeoutSeconds).toBe(600)
+  })
+
+  test('a factory annotated with the base plugin context stays assignable to the workspace-provider port', async () => {
+    // The bivariance claim, exercised in-repo: a legacy factory that
+    // annotates its parameter as the plain PluginFactoryContext — aware of
+    // none of the new seams — still typechecks and runs when the host passes
+    // the extended context.
+    const opts = baseOpts()
+    const selected = new FakeWorkspaceProvider({ mode: 'logical' })
+    const calls: PluginFactoryContext<Record<string, unknown>>[] = []
+    opts.registry.register({
+      name: 'legacy-typed',
+      apiVersion: '^1.0.0',
+      workspaceProviders: {
+        podman: (context: PluginFactoryContext<Record<string, unknown>>) => {
+          calls.push(context)
+          return selected
+        },
+      },
+    })
+    await createWorkspaceProvider(
+      { provider: 'podman', config: {} },
+      { ...opts, storeRef: 'https://store.example.test', storeToken: 'scoped-token' },
+    )
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.repoRoot).toBe(resolve('./repo'))
   })
 
   test('the vercel-sandbox builtin enforces requireRuntimeProvisioning at construction', async () => {

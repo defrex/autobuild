@@ -74,10 +74,11 @@ import {
 import {
   DIGEST_EVENT_TYPES,
   REPOSITORY_STATE_EVENT_TYPES,
+  readRepoStateEventsWithAnchorRecheck,
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
-import { attemptExec, isPlanChangeError, PlanInvalidations, type Exec, type Row } from './retry'
+import { PlanRetryRunner, type Exec, type Row } from './retry'
 
 // The held-read poll cadence for event waits — a re-export of the canonical
 // core constant (AUT-388), not a second definition. See core
@@ -142,66 +143,27 @@ export class PostgresBuildStore implements BuildStore {
     this.maxRevisions = options.retention?.maxRevisions ?? DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS
   }
 
-  /** Memoized poisoned-statement markers, unique to this store instance (see
+  /** The shared plan-retry mechanics (`./retry`): one runner per pool owner,
+   * so its memoized markers are namespaced to this store instance (see
    * `./retry` for why the memo and the per-instance namespace exist). */
-  private readonly plans = new PlanInvalidations()
+  private readonly retry = new PlanRetryRunner()
 
   /** Run a non-transactional operation on one pinned pooled connection,
    * retrying it exactly once — same connection, statements freshly prepared —
    * when a cached plan fails to revalidate (AUT-396). A run body must not
    * call a public store method: reserving inside a reservation yields a
-   * brand-new connection instead of the pinned one. */
+   * brand-new connection instead of the pinned one — and must execute its
+   * statements sequentially, for failure attribution. See `./retry`. */
   private async run<T>(body: (q: Exec) => Promise<T>): Promise<T> {
-    const conn = await this.sql.reserve()
-    try {
-      const attempt = attemptExec(conn, this.plans)
-      try {
-        return await body(attempt.exec)
-      } catch (error) {
-        if (!isPlanChangeError(error) || attempt.inFlight === null) throw error
-        // The failing statement's plan was invalidated once more: memoize a
-        // fresh marked variant for its text. The retry then re-prepares
-        // *every* statement the body executes — a migration can have
-        // poisoned any `*`-returning plan the body touches, not only the
-        // one that failed first, and a memoized marker minted before the
-        // migration is itself stale — so a body reading two
-        // migration-extended tables recovers in the single retry.
-        const failing = attempt.inFlight
-        this.plans.invalidate(failing)
-        return await body(attemptExec(conn, this.plans, true).exec)
-      }
-    } finally {
-      conn.release()
-    }
+    return this.retry.run(this.sql, body)
   }
 
   /** Run a transactional operation on one pinned pooled connection, retrying
    * the whole body exactly once on a plan-change error: the failed attempt
    * rolls back, and the body re-runs in a fresh transaction on the same
-   * connection with freshly prepared statements (AUT-396). */
+   * connection with freshly prepared statements (AUT-396). See `./retry`. */
   private async tx<T>(body: (q: Exec) => Promise<T>): Promise<T> {
-    const conn = await this.sql.reserve()
-    try {
-      // Attribution lives outside `begin`: the transaction executor only
-      // exists inside the callback, so each attempt builds its own exec and
-      // reports the failing statement's text back here on rejection.
-      let failing: string | null = null
-      try {
-        return await conn.begin((t) => {
-          const attempt = attemptExec(t, this.plans)
-          return body(attempt.exec).catch((error) => {
-            failing = attempt.inFlight
-            throw error
-          })
-        })
-      } catch (error) {
-        if (!isPlanChangeError(error) || failing === null) throw error
-        this.plans.invalidate(failing)
-        return await conn.begin((t) => body(attemptExec(t, this.plans, true).exec))
-      }
-    } finally {
-      conn.release()
-    }
+    return this.retry.tx(this.sql, body)
   }
 
   scopeBuild(slug: string): BuildScopedStore {
@@ -1005,45 +967,65 @@ export class PostgresBuildStore implements BuildStore {
     // whole PK range, exactly the cost being removed), then one select of
     // durable types plus the tail from that anchor.
     //
-    const { rows } = await this.run(async (q) => {
-      // The probe below is an aggregate: MAX() always returns exactly one row —
-      // NULL when the journal has no run-started fact — so the empty-journal
-      // signal is that NULL, tested explicitly here via `no_anchor`, never row
-      // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
-      // (in either dialect the comparison is never true, so the durable-only
-      // outcome would then survive only by accident), and the no-anchor case
-      // must not degenerate into `seq >= 0`, which would select the whole
-      // journal. The `anchor === undefined` branch below is the durable-only
-      // path.
-      const probe = (
-        await q`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`
-      )[0]
-      const anchor = probe?.no_anchor ? undefined : num(probe?.seq)
-      const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
-      // `repo` is $1; the anchored select also spends $2 on the anchor, so the
-      // type list's placeholders start at the right offset per branch.
-      const placeholders = (start: number) =>
-        durableList.map((_, index) => `$${index + start}`).join(', ')
-      const rows: Row[] =
-        anchor === undefined
-          ? await q.unsafe(
-              `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
-              [repo, ...durableList],
-            )
-          : await q.unsafe(
-              `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
-              [repo, anchor, ...durableList],
-            )
-      return { probe, rows }
-    })
-    return rows.map((row) => ({
-      repo: String(row.repo),
-      seq: num(row.seq),
-      ts: iso(row.ts),
-      actor: json(row.actor),
-      type: String(row.type),
-      payload: json(row.payload),
-    })) as RepositoryEvent[]
+    // `this.run` is deliberately non-transactional (a pinned pooled
+    // connection, no BEGIN), so the probe and the select each get their own
+    // READ COMMITTED snapshot — a concurrent append of the journal's first
+    // `dispatcher.run-started` between them would be invisible to the probe,
+    // absent from the durable-only selection, yet present in the journal by
+    // the time this method returns (AUT-551). The shared helper below closes
+    // that window with a one-shot anchor re-check on the durable-only
+    // outcome: a durable-only result is returned only when the journal was
+    // anchor-free as of the final probe. When the probe *does* find an
+    // anchor, the anchored select's `seq >= anchor` arm is
+    // monotone-inclusive, so any later run-started is picked up by that same
+    // select; an append after the final re-probe is an ordinary post-read
+    // concurrent append, not this race.
+    const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
+    // `repo` is $1; the anchored select also spends $2 on the anchor, so the
+    // type list's placeholders start at the right offset per branch.
+    const placeholders = (start: number) =>
+      durableList.map((_, index) => `$${index + start}`).join(', ')
+    return readRepoStateEventsWithAnchorRecheck(
+      async () => {
+        // The probe below is an aggregate: MAX() always returns exactly one row —
+        // NULL when the journal has no run-started fact — so the empty-journal
+        // signal is that NULL, tested explicitly here via `no_anchor`, never row
+        // absence. The NULL/undefined anchor must never be bound into `seq >= $2`
+        // (in either dialect the comparison is never true, so the durable-only
+        // outcome would then survive only by accident), and the no-anchor case
+        // must not degenerate into `seq >= 0`, which would select the whole
+        // journal. The `anchor === undefined` branch below is the durable-only
+        // path.
+        const probe = (
+          await this.run(
+            (q) =>
+              q`SELECT MAX(seq) AS seq, MAX(seq) IS NULL AS no_anchor FROM repo_events WHERE repo=${repo} AND type='dispatcher.run-started'`,
+          )
+        )[0]
+        return probe?.no_anchor ? undefined : num(probe?.seq)
+      },
+      async (anchor) => {
+        const rows: Row[] = await this.run((q) =>
+          anchor === undefined
+            ? q.unsafe(
+                `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
+                [repo, ...durableList],
+              )
+            : q.unsafe(
+                `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
+                [repo, anchor, ...durableList],
+              ),
+        )
+        return rows.map((row) => ({
+          repo: String(row.repo),
+          seq: num(row.seq),
+          ts: iso(row.ts),
+          actor: json(row.actor),
+          type: String(row.type),
+          payload: json(row.payload),
+        })) as RepositoryEvent[]
+      },
+    )
   }
 
   async putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta> {

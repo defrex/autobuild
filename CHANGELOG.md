@@ -3,6 +3,23 @@
 ## Unreleased
 
 - [#576](https://github.com/defrex/autobuild/pull/576) — Add missing-code and route-wrapper consent frames to the capture
+- [#575](https://github.com/defrex/autobuild/pull/575) — Lengthen the UNKNOWN mergeability re-query budget (AUT-392)
+- [#572](https://github.com/defrex/autobuild/pull/572) — Route remaining journal reads through readRepoEventsIfRecorded
+- Route the remaining hand-rolled missing-record journal reads through readRepoEventsIfRecorded (AUT-543)
+- [#571](https://github.com/defrex/autobuild/pull/571) — Close declared-side blind spots in the schema-parity test (AUT-544)
+- [#570](https://github.com/defrex/autobuild/pull/570) — Keep Postgres migration tests bounded as schema versions accumulate
+- [#569](https://github.com/defrex/autobuild/pull/569) — State what the schema pin enforces and catch checksum-only re-pins
+- [#568](https://github.com/defrex/autobuild/pull/568) — Pin operator()'s Better Auth client-name lookup contract (AUT-549)
+- [#567](https://github.com/defrex/autobuild/pull/567) — Pin the record-before-digest read order in the between-reads test
+- [#566](https://github.com/defrex/autobuild/pull/566) — Close getRepoStateEvents anchor/selection race (AUT-551)
+- [#565](https://github.com/defrex/autobuild/pull/565) — Drop the dead patches/ directory from the packed distribution
+- [#564](https://github.com/defrex/autobuild/pull/564) — Widen the packed-set guard to optional and peer dependencies
+- [#563](https://github.com/defrex/autobuild/pull/563) — Reject capabilities.requiredEnv groups that carry neither dispatchMessage nor validationMessage
+- [#562](https://github.com/defrex/autobuild/pull/562) — Give describeEnvironment providers a defined config argument
+- [#561](https://github.com/defrex/autobuild/pull/561) — Extend the plugin workspace-provider factory context (AUT-560)
+- [#560](https://github.com/defrex/autobuild/pull/560) — Harden the distribution-refresh tests (AUT-557)
+- [#559](https://github.com/defrex/autobuild/pull/559) — Retry PostgresTicketSource on cached-plan invalidation (AUT-559)
+- [#558](https://github.com/defrex/autobuild/pull/558) — Make the git-worktree readiness call site strict via a guest option
 - [#557](https://github.com/defrex/autobuild/pull/557) — Restore workspace plugin symlink after a local deploy:build
 - [#556](https://github.com/defrex/autobuild/pull/556) — Correct trace-depth labels from 'six ups' to seven '..' components
 - [#555](https://github.com/defrex/autobuild/pull/555) — Deny test files from the vercel-sandbox packed tarball (AUT-564)

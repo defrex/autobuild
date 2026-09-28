@@ -1,5 +1,5 @@
 import { CryptoHasher } from 'bun'
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
 
 import {
   AUTH_SCHEMA_CHECKSUM,
@@ -74,11 +74,18 @@ interface GuardedFamily {
 }
 
 /** The committed pin. Literal values, deliberately not derived from the DDL:
- * a pin computed from the DDL would silently bless any edit. A checksum-only
- * pin would let an author edit the DDL, update the pin, and still forget the
- * version bump — the deployed shape that caused the 2026-09-16 outage — so
- * the version rides alongside the checksum and "bump the version and update
- * the pin" is one atomic committed pair. */
+ * a pin computed from the DDL would silently bless any edit. The pin is a
+ * tripwire, not an enforced coupling: it fails any DDL or version edit that
+ * leaves the pin untouched (the naive path, with the four-step rule in the
+ * failure output), but it cannot mechanically force the version bump. An
+ * author who edits the DDL and re-pins only the checksum — leaving the pinned
+ * version and the exported version constants unchanged — passes this suite,
+ * because the pin is the only committed record of the released checksum and
+ * it is editable in the same commit as the DDL; deployed databases then carry
+ * the pre-edit checksum and fail the next migration. That residual gap is
+ * documented, not closed: no committed-state cross-check can distinguish a
+ * deliberate checksum-only re-pin from a legitimate bump (see the README's
+ * four-step paragraph). */
 const PINNED: Record<'build' | 'ticket' | 'auth', { version: number; checksum: string }> = {
   build: {
     version: 8,
@@ -139,7 +146,9 @@ function guardMessage(family: GuardedFamily): string {
     `${family.marker} DDL or version no longer matches the committed pin. The current DDL ` +
     `is immutable once a database has deployed it: ${steps}. Expected version ` +
     `${family.pin.version} with checksum ${family.pin.checksum}; found version ${family.version} with ` +
-    `checksum ${family.checksum}.`
+    `checksum ${family.checksum}. Bumping the version is not optional: updating only the pin's ` +
+    `checksum silences this test while every deployed database still carries the pre-edit ` +
+    `checksum, and the next migration then fails "marker is incompatible".`
   )
 }
 
@@ -150,6 +159,49 @@ for (const family of FAMILIES) {
     }
   })
 }
+
+test('the guard failure message names the four-step rule and the checksum-only re-pin trap', () => {
+  // The guard tests throw plain `Error`s whose text *is* the instruction, so
+  // the wording is the deliverable; this meta-test pins it against silent
+  // rewording. Both failure branches are exercised: a version-bearing family
+  // (freeze-and-branch steps) and a v1 family (bump-and-pin steps).
+  const bumped: GuardedFamily = {
+    marker: 'PostgreSQL BuildStore schema',
+    ddlPrefix: 'SCHEMA',
+    version: 9,
+    checksum: 'found-checksum',
+    pin: { version: 8, checksum: 'pinned-checksum' },
+    frozen: FROZEN.build,
+  }
+  const first: GuardedFamily = {
+    ...bumped,
+    marker: 'PostgreSQL ticket schema',
+    ddlPrefix: 'TICKET_SCHEMA',
+    version: 1,
+    pin: { version: 1, checksum: 'pinned-checksum' },
+  }
+  for (const family of [bumped, first]) {
+    const message = guardMessage(family)
+    // The four-step rule, in both branches' phrasing.
+    expect(message).toContain('no longer matches the committed pin')
+    expect(message).toContain('is immutable once a database has deployed it')
+    expect(message).toContain(
+      `Expected version ${family.pin.version} with checksum pinned-checksum; found version ` +
+        `${family.version} with checksum found-checksum`,
+    )
+    if (family.version > 1) {
+      expect(message).toContain('freeze the DDL the pin currently records')
+      expect(message).toContain('add its upgrade branch in migratePostgres')
+    }
+    expect(message).toContain('bump the schema version')
+    expect(message).toContain('update the pinned version and checksum in schema-guard.test.ts')
+    // The checksum-only re-pin trap: the failure output must teach that a
+    // partial compliance (re-pin without bump) re-arms the pin over an edited
+    // DDL and pushes the failure onto deployed databases.
+    expect(message).toContain("updating only the pin's checksum silences this test")
+    expect(message).toContain('the next migration then fails "marker is incompatible"')
+  }
+})
 
 test('frozen DDL families are contiguous from v1 to the current version minus one', () => {
   for (const family of FAMILIES) {

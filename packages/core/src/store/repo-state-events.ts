@@ -80,6 +80,46 @@ export const REPOSITORY_RUN_SCOPED_EVENT_TYPES: readonly RepositoryEventType[] =
 
 const STATE_TYPES = new Set<string>(REPOSITORY_STATE_EVENT_TYPES)
 
+/**
+ * The race-closed read shape every SQL adapter delegates `getRepoStateEvents`
+ * to (AUT-551). Both adapters issue the anchor probe and the selection as two
+ * separate statements, so a concurrent append of the journal's first
+ * `dispatcher.run-started` between them is invisible to the probe, absent
+ * from the durable-only selection, yet present in the journal by the time the
+ * method returns — a stateless reader can transiently throw
+ * `effective-config-unavailable` where a moment-later full replay would
+ * succeed.
+ *
+ * The fix is a **one-shot anchor re-check on the durable-only outcome**:
+ * after a selection that took the durable-only branch (the probe saw no
+ * anchor), re-probe the anchor once; if an anchor now exists, re-run the
+ * anchored selection against it. The invariant this achieves: a durable-only
+ * result is returned only when the journal was anchor-free as of the final
+ * probe — so a run-started appended between the original probe and the
+ * selection can never be missed while present. When the first probe *did*
+ * find an anchor, no re-check is needed: the anchored select's
+ * `seq >= anchor` arm is monotone-inclusive, so any later run-started (higher
+ * seq) is picked up by that same select. A run-started appended after the
+ * final re-probe is an ordinary post-read concurrent append — outside this
+ * read's snapshot, exactly as if it had landed after the method returned —
+ * and is not this race; that bound is why the re-check is one-shot and never
+ * a loop.
+ *
+ * Non-concurrent behavior is byte-identical: the same two statements run in
+ * the same order; only the durable-only outcome may trigger one extra
+ * probe+select pair.
+ */
+export async function readRepoStateEventsWithAnchorRecheck(
+  probeAnchor: () => Promise<number | undefined>,
+  select: (anchor: number | undefined) => Promise<RepositoryEvent[]>,
+): Promise<RepositoryEvent[]> {
+  const anchor = await probeAnchor()
+  const events = await select(anchor)
+  if (anchor !== undefined) return events
+  const rechecked = await probeAnchor()
+  return rechecked === undefined ? events : select(rechecked)
+}
+
 /** The normative subset derivation every adapter implements and the contract
  * tests use as the oracle: durable types across the whole journal, plus —
  * only when the journal has one — every event from the latest

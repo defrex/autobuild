@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import { MemoryBlobStore, sampleBuildInput, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
 import type { StreamPart } from '@defrex/autobuild/store-adapter'
-import { migratePostgres } from './schema'
+import { assertTicketSchema, migratePostgres } from './schema'
 import { PostgresBuildStore } from './store'
+import { PostgresTicketDatabase } from './tickets'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -261,6 +262,115 @@ if (testUrl) {
         expect((error as Error).message).toBe('unknown build "no-such-build"')
       } finally {
         await store.close()
+        await database.cleanup()
+      }
+    })
+
+    // AUT-559: PostgresTicketSource executes its own SQL on the same pool and
+    // gets the same treatment. The source runs over a single-connection pool
+    // the test owns (the direct constructor — `openPostgresTicketDatabase`
+    // creates its own default pool), so "the same connection" is
+    // deterministic here too.
+    test('PostgresTicketSource reads recover after ADD COLUMN poisons the ab_tickets plans', async () => {
+      const database = await isolatedDatabase()
+      const sql = new SQL(database.url, { max: 1 })
+      await assertTicketSchema(sql)
+      const tickets = new PostgresTicketDatabase(sql, {
+        triage: 'Triage',
+        ready: 'Ready',
+        doing: 'Doing',
+        done: 'Done',
+      })
+      const source = tickets.source({ teamKey: 'ENG' })
+      try {
+        const created = await source.create({ title: 'plan probe', body: 'probe body' })
+        const id = created.ref.id
+        // Warm the `SELECT * FROM ab_tickets` read plan and the listReady
+        // plan (the `labels @> ${sql.array(…)}` statement) on the source's
+        // connection.
+        const warmed = await source.get(id)
+        expect(warmed).toEqual(created)
+        const listed = await source.listReady({})
+        expect(listed.tickets.map((t) => t.ref.id)).toEqual([id])
+
+        await addColumn(database.url, 'ab_tickets', 'ticket_probe')
+
+        // The warmed plans now fail 0A000 on every execution (Bun never
+        // rebuilds them); only the runner's marker retry recovers, so
+        // success here is the proof the retry ran and re-prepared the
+        // statements — including the `array`-built listReady query on the
+        // reserved connection.
+        expect(await source.get(id)).toEqual(warmed)
+        expect((await source.listReady({})).tickets.map((t) => t.ref.id)).toEqual([id])
+
+        // A second migration poisons the fresh plans too; they recover again.
+        await addColumn(database.url, 'ab_tickets', 'ticket_probe_2')
+        expect(await source.get(id)).toEqual(warmed)
+
+        // Healing is memoized, not per-operation: later executions skip the
+        // poisoned plans entirely — no further failed round trips and no
+        // further prepared statements (the unbounded-leak failure mode).
+        const markedCount = async (): Promise<number> => {
+          const prepared: { statement: unknown }[] =
+            await sql`SELECT statement FROM pg_prepared_statements`
+          return prepared
+            .map((row) => String(row.statement))
+            .filter((text) => text.includes('ab-plan-retry')).length
+        }
+        const healed = await markedCount()
+        for (let i = 0; i < 25; i++) expect(await source.get(id)).toEqual(warmed)
+        expect(await markedCount()).toBe(healed)
+      } finally {
+        await tickets.close()
+        await database.cleanup()
+      }
+    })
+
+    test('PostgresTicketSource transaction bodies re-run whole after ADD COLUMN poisons their plans', async () => {
+      const database = await isolatedDatabase()
+      const sql = new SQL(database.url, { max: 1 })
+      await assertTicketSchema(sql)
+      const tickets = new PostgresTicketDatabase(sql, {
+        triage: 'Triage',
+        ready: 'Ready',
+        doing: 'Doing',
+        done: 'Done',
+      })
+      const source = tickets.source({ teamKey: 'ENG' })
+      try {
+        // The first create warms the transactional `INSERT … RETURNING *`
+        // plan (its result type changes with the added column).
+        const first = await source.create({ title: 'tx probe', body: 'probe body' })
+        const id = first.ref.id
+        // Warm the `SELECT * FROM ab_tickets … FOR UPDATE` lock-read plan —
+        // distinct text from the plain-read plan the get test warms. Both
+        // comment and update require the row under lock before writing, so
+        // invoking them before the migration prepares that text.
+        await source.comment(id, 'before migration')
+        await source.update(id, { title: 'warmed' })
+
+        await addColumn(database.url, 'ab_tickets', 'ticket_probe_tx')
+
+        // Each assertion can only pass via the tx retry: a body still on a
+        // bare `this.sql.begin` would fail 0A000 on its poisoned lock read
+        // (comment, update) or its poisoned `RETURNING *` insert (create),
+        // and the suite would catch it.
+        await source.comment(id, 'after migration')
+        await source.update(id, { title: 'after migration' })
+        const second = await source.create({ title: 'tx probe 2', body: 'probe body 2' })
+        expect(second.ref.id).not.toBe(id)
+
+        expect((await source.get(id))?.title).toBe('after migration')
+        expect((await source.get(second.ref.id))?.title).toBe('tx probe 2')
+
+        // claim runs through the same single-statement runner as the read
+        // above. Note: `UPDATE … RETURNING id`'s result type is
+        // column-independent, so an ADD COLUMN can never make it fail 0A000 —
+        // claim's retry is covered by construction (same runner the read
+        // test proves) and is not distinguishable in this simulation.
+        expect(await source.claim(id)).toBe(true)
+      } finally {
+        await tickets.close()
         await database.cleanup()
       }
     })

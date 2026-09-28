@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { memoryAdapter } from 'better-auth/adapters/memory'
 import { verifyToken } from '@defrex/autobuild/remote-store'
 import { TOOLS, type ToolEntry } from '@defrex/autobuild/operator'
 import { z } from 'zod'
-import type { WebAuth } from './auth'
+import { createWebAuth, type WebAuth } from './auth'
 import { MCP_MAX_WAIT_SECONDS, createMcpEndpoint } from './mcp'
 
 const env = {
@@ -69,6 +70,58 @@ function fakeAuth(
       },
     }),
   } as unknown as WebAuth
+}
+
+/** The token clientId the capturing variant's session carries — distinct
+ * from `fakeAuth`'s 'registered-client' so no assertion can pass by copying a
+ * constant from the happy path of another test. */
+const CANARY_CLIENT_ID = 'contract-canary-client'
+
+/** The exact query shape operator() is contract-bound to issue against
+ * better-auth's adapter: resolving the MCP client name looks the token's
+ * registration up with
+ * `findOne({ model: 'oauthApplication', where: [{ field: 'clientId', value }] })`
+ * and reads `name` off the row (AUT-398 pinned the identical shape for the
+ * consent-page helper). Asserting this shape exactly means a model rename, a
+ * field rename, or a where-shape drift in operator() fails the suite instead
+ * of silently degrading every client to its raw client_id. */
+const expectedLookup = (clientId: string) => ({
+  model: 'oauthApplication',
+  where: [{ field: 'clientId', value: clientId }],
+})
+
+type CapturedLookup = ReturnType<typeof expectedLookup>
+
+/** The contract-pinning counterpart of fakeAuth: its adapter.findOne records
+ * each query argument it is called with into `lookups` and answers with the
+ * programmed response, so tests assert the lookup itself rather than only the
+ * mapped-out name (fakeAuth's findOne ignores its argument and returns a
+ * canned row — exactly the unasserted pattern AUT-549 implicates). */
+function capturingAuth(
+  respond: (lookup: CapturedLookup) => Promise<{ name?: unknown } | null>,
+  overrides: { session?: unknown; user?: unknown } = {},
+): { auth: WebAuth; lookups: CapturedLookup[] } {
+  const lookups: CapturedLookup[] = []
+  const auth = {
+    api: {
+      getMcpSession: async () =>
+        overrides.session === undefined
+          ? { ...TOKEN_ROW, clientId: CANARY_CLIENT_ID }
+          : overrides.session,
+    },
+    $context: Promise.resolve({
+      internalAdapter: {
+        findUserById: async () => (overrides.user === undefined ? USER : overrides.user),
+      },
+      adapter: {
+        findOne: async (query: CapturedLookup) => {
+          lookups.push(query)
+          return respond(query)
+        },
+      },
+    }),
+  } as unknown as WebAuth
+  return { auth, lookups }
 }
 
 function endpoint(
@@ -459,5 +512,216 @@ describe('hosted MCP endpoint tool binding', () => {
         new Date('2029-01-01T00:00:01Z'),
       ),
     ).toMatchObject({ via: { kind: 'mcp', client: 'registered-client' } })
+  })
+})
+
+/** A POST tools/call whose Authorization header the endpoint resolves (the
+ * transport is stateless — each POST is independent, so no initialize is
+ * needed to make operator() run and issue exactly one adapter lookup). */
+function toolsCallRequest(token: string): Request {
+  return new Request('https://operator.example/mcp', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: {
+        name: 'builds.list',
+        arguments: { repo: 'https://github.com/owner/repo', scope: 'all' },
+      },
+    }),
+  })
+}
+
+/** A delegate that captures the request the operator API client handed it,
+ * so the minted operator token (where via.client durably lands) can be
+ * verified. */
+function capturingDelegate(): {
+  delegate: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  delegated: () => Request
+} {
+  let captured: Request | undefined
+  return {
+    delegate: async (input, init) => {
+      captured = new Request(input, init)
+      return Response.json({})
+    },
+    delegated: () => captured!,
+  }
+}
+
+/** Drive one tools/call through the endpoint and return the delegated
+ * request carrying the minted operator token. */
+async function throughEndpoint(auth: WebAuth, token = 'any'): Promise<Request> {
+  const cap = capturingDelegate()
+  const endpoint_ = endpoint(auth, { delegate: cap.delegate })
+  const response = await endpoint_.fetch(toolsCallRequest(token))
+  // A non-200 means operator() refused before minting — fail loudly here so
+  // the via assertions below report the real problem (e.g. a 401 from a
+  // mangled real-adapter seed row) instead of an undefined delegated request.
+  expect(response.status).toBe(200)
+  return cap.delegated()
+}
+
+const mintedBearer = (delegated: Request) =>
+  delegated.headers.get('authorization')!.replace(/^Bearer /, '')
+
+const VERIFIED_AT = new Date('2029-01-01T00:00:01Z')
+
+describe('operator() — oauthApplication lookup contract (AUT-549)', () => {
+  test('issues the exact oauthApplication/clientId lookup for the token row', async () => {
+    const { auth, lookups } = capturingAuth(() =>
+      Promise.resolve({ name: 'Contract Canary Console' }),
+    )
+    await throughEndpoint(auth)
+    expect(lookups.length).toBe(1)
+    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
+  })
+
+  test('a registered name flows through to the minted token’s via marker', async () => {
+    const { auth } = capturingAuth(() => Promise.resolve({ name: 'Contract Canary Console' }))
+    const delegated = await throughEndpoint(auth)
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: 'Contract Canary Console' },
+    })
+  })
+
+  test('looks up the clientId it was actually handed, not a constant', async () => {
+    const otherSession = {
+      ...TOKEN_ROW,
+      id: 't2',
+      accessToken: 'other-mcp-access-token',
+      clientId: 'another-canary-client',
+    }
+    const { auth, lookups } = capturingAuth(() => Promise.resolve(null), { session: otherSession })
+    await throughEndpoint(auth)
+    expect(lookups.length).toBe(1)
+    expect(lookups[0]).toEqual(expectedLookup('another-canary-client'))
+  })
+
+  test('an empty-string registered name falls back to the raw clientId, with the lookup still issued', async () => {
+    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: '' }))
+    const delegated = await throughEndpoint(auth)
+    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: CANARY_CLIENT_ID },
+    })
+  })
+
+  test('a missing oauthApplication row falls back to the raw clientId', async () => {
+    const { auth, lookups } = capturingAuth(() => Promise.resolve(null))
+    const delegated = await throughEndpoint(auth)
+    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: CANARY_CLIENT_ID },
+    })
+  })
+
+  test('a non-string name is not rendered and falls back to the raw clientId', async () => {
+    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: 42 }))
+    const delegated = await throughEndpoint(auth)
+    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: CANARY_CLIENT_ID },
+    })
+  })
+
+  test('a whitespace-only name renders verbatim — operator() does not trim', async () => {
+    // Pins the actual behavior: operator()’s guard is
+    // `typeof name === 'string' && name !== ''` with no .trim(), a deliberate
+    // divergence from the AUT-398 consent-page helper (which reads
+    // `client?.name?.trim()`). If a future ticket adds trimming here, this
+    // assertion changes with it, consciously.
+    const { auth, lookups } = capturingAuth(() => Promise.resolve({ name: '   ' }))
+    const delegated = await throughEndpoint(auth)
+    expect(lookups[0]).toEqual(expectedLookup(CANARY_CLIENT_ID))
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: '   ' },
+    })
+  })
+})
+
+// Drives operator() through a real better-auth instance — the actual adapter
+// factory and the memory adapter's findOne query path (field resolution
+// included) — rather than a hand-written fake. Same pattern as
+// app/oauth/consent/client-name.test.ts; the instance goes through the
+// `auth` option createMcpEndpoint already injects, so no production seam is
+// refactored in.
+describe('operator() — through a real better-auth adapter', () => {
+  const REAL_ACCESS_TOKEN = 'real-adapter-access-token'
+  const REAL_CLIENT_ID = 'real-adapter-client-id'
+  // A second registration/token pair under the same instance: the
+  // empty-string-name fallback case, without mutating the first case's rows.
+  const BLANK_ACCESS_TOKEN = 'real-adapter-blank-access-token'
+  const BLANK_CLIENT_ID = 'real-adapter-blank-client-id'
+
+  const db: Record<string, Record<string, unknown>[]> = {
+    user: [
+      {
+        id: 'u1',
+        email: 'ada@example.com',
+        name: 'Ada',
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    session: [],
+    account: [],
+    verification: [],
+    jwks: [],
+    oauthApplication: [
+      {
+        id: 'app-1',
+        clientId: REAL_CLIENT_ID,
+        name: 'Real Adapter Console',
+        redirectUrls: 'https://app.example/callback',
+        type: 'web',
+        disabled: false,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      },
+      {
+        id: 'app-2',
+        clientId: BLANK_CLIENT_ID,
+        name: '',
+        redirectUrls: 'https://app.example/callback',
+        type: 'web',
+        disabled: false,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      },
+    ],
+    oauthAccessToken: [
+      { ...TOKEN_ROW, accessToken: REAL_ACCESS_TOKEN, clientId: REAL_CLIENT_ID },
+      {
+        ...TOKEN_ROW,
+        id: 't2',
+        accessToken: BLANK_ACCESS_TOKEN,
+        clientId: BLANK_CLIENT_ID,
+      },
+    ],
+    oauthConsent: [],
+  }
+
+  const realAuth = createWebAuth(env, { database: memoryAdapter(db) })
+
+  test('resolves the registered name through the real adapter query path', async () => {
+    const delegated = await throughEndpoint(realAuth, REAL_ACCESS_TOKEN)
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: 'Real Adapter Console' },
+    })
+  })
+
+  test('an empty-string registered name falls back to the raw clientId through the same instance', async () => {
+    const delegated = await throughEndpoint(realAuth, BLANK_ACCESS_TOKEN)
+    expect(verifyToken(env.AB_STORE_SECRET, mintedBearer(delegated), VERIFIED_AT)).toMatchObject({
+      via: { kind: 'mcp', client: BLANK_CLIENT_ID },
+    })
   })
 })

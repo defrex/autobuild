@@ -42,7 +42,10 @@ import {
 import { createBuildScopedStore } from '../build-scope'
 import { createSessionScopedStore } from '../session-handle'
 import { DIGEST_EVENT_TYPES, reduceBuildDigest } from '../digest'
-import { REPOSITORY_STATE_EVENT_TYPES } from '../repo-state-events'
+import {
+  REPOSITORY_STATE_EVENT_TYPES,
+  readRepoStateEventsWithAnchorRecheck,
+} from '../repo-state-events'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -1003,45 +1006,64 @@ export class SqliteBuildStore implements BuildStore {
     // from that anchor. No new index: local journals are small and the
     // existing (repo, seq) PK index keeps the anchor scan acceptable.
     //
-    // This probe is a LIMIT 1 select, not an aggregate: it returns zero or
-    // one rows, so row absence is the deliberate empty-journal signal — no
-    // MAX() NULL semantics involved (contrast the Postgres adapter's
-    // MAX(seq) probe, which always returns one row and must test the NULL
-    // explicitly). The `anchor === undefined` branch in the select below is
-    // the explicit durable-only path; a null anchor must never reach the
-    // gte(repoEvents.seq, anchor) arm (in either dialect the comparison is
-    // never true, so the durable-only outcome would then survive only by
-    // accident), and the no-anchor case must not degenerate into
-    // gte(repoEvents.seq, 0), which would select the whole journal.
-    const anchorRows = this.db
-      .select({ seq: repoEvents.seq })
-      .from(repoEvents)
-      .where(and(eq(repoEvents.repo, repo), eq(repoEvents.type, 'dispatcher.run-started')))
-      .orderBy(desc(repoEvents.seq))
-      .limit(1)
-      .all()
-    const anchor = anchorRows[0]?.seq
-    const durable = inArray(repoEvents.type, [...REPOSITORY_STATE_EVENT_TYPES])
-    const rows = this.db
-      .select()
-      .from(repoEvents)
-      .where(
-        anchor === undefined
-          ? and(eq(repoEvents.repo, repo), durable)
-          : and(eq(repoEvents.repo, repo), or(gte(repoEvents.seq, anchor), durable)),
-      )
-      .orderBy(asc(repoEvents.seq))
-      .all()
-    return rows.map(
-      (row) =>
-        ({
-          repo: row.repo,
-          seq: row.seq,
-          ts: row.ts,
-          actor: row.actor,
-          type: row.type,
-          payload: row.payload,
-        }) as RepositoryEvent,
+    // The two drizzle reads are synchronous, so there is no in-process await
+    // point between them — but a concurrent writer from another process can
+    // still land between the two statements in real time (AUT-551): a
+    // first-ever `dispatcher.run-started` appended between them would be
+    // invisible to the probe, absent from the durable-only selection, yet
+    // present in the journal by the time this method returns. The shared
+    // helper below closes that window with a one-shot anchor re-check on the
+    // durable-only outcome: a durable-only result is returned only when the
+    // journal was anchor-free as of the final probe. When the probe *does*
+    // find an anchor, the anchored select's `gte(seq, anchor)` arm is
+    // monotone-inclusive, so any later run-started is picked up by that same
+    // select; an append after the final re-probe is an ordinary post-read
+    // concurrent append, not this race.
+    return readRepoStateEventsWithAnchorRecheck(
+      async () => {
+        // This probe is a LIMIT 1 select, not an aggregate: it returns zero or
+        // one rows, so row absence is the deliberate empty-journal signal — no
+        // MAX() NULL semantics involved (contrast the Postgres adapter's
+        // MAX(seq) probe, which always returns one row and must test the NULL
+        // explicitly). The `anchor === undefined` branch in the select below is
+        // the explicit durable-only path; a null anchor must never reach the
+        // gte(repoEvents.seq, anchor) arm (in either dialect the comparison is
+        // never true, so the durable-only outcome would then survive only by
+        // accident), and the no-anchor case must not degenerate into
+        // gte(repoEvents.seq, 0), which would select the whole journal.
+        const anchorRows = this.db
+          .select({ seq: repoEvents.seq })
+          .from(repoEvents)
+          .where(and(eq(repoEvents.repo, repo), eq(repoEvents.type, 'dispatcher.run-started')))
+          .orderBy(desc(repoEvents.seq))
+          .limit(1)
+          .all()
+        return anchorRows[0]?.seq
+      },
+      async (anchor) => {
+        const durable = inArray(repoEvents.type, [...REPOSITORY_STATE_EVENT_TYPES])
+        const rows = this.db
+          .select()
+          .from(repoEvents)
+          .where(
+            anchor === undefined
+              ? and(eq(repoEvents.repo, repo), durable)
+              : and(eq(repoEvents.repo, repo), or(gte(repoEvents.seq, anchor), durable)),
+          )
+          .orderBy(asc(repoEvents.seq))
+          .all()
+        return rows.map(
+          (row) =>
+            ({
+              repo: row.repo,
+              seq: row.seq,
+              ts: row.ts,
+              actor: row.actor,
+              type: row.type,
+              payload: row.payload,
+            }) as RepositoryEvent,
+        )
+      },
     )
   }
 

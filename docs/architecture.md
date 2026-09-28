@@ -523,8 +523,10 @@ intervals. The same polling path samples the header's current count from build
 digests plus the repository journal — one journal read plus one repo-scoped
 digest read, plus a journal-record probe — paired with the effective config's
 `policy.harvestThreshold`. A journal record that does not yet exist reads as an
-empty journal: both the sample and the operator query read through the same
-shared missing-record journal read (the AUT-524 helper in
+empty journal: the sample, the operator query, the dispatcher's
+repository-wide journal reads (controls, settlement stages, and ready
+scans), and the operator sandbox service's journal reads all go through
+the same shared missing-record journal read (the AUT-524 helper in
 `packages/core/src/processes/harvest.ts`), which writes nothing (no
 `ensureRepo` from a display path). That sample
 is process-local presentation state: a failed refresh preserves the last

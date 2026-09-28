@@ -104,7 +104,6 @@
     "!packages/core/src/markdown.ts",
     "skills",
     "templates",
-    "patches",
     "LICENSE",
     "README.md",
     "SPEC.md",

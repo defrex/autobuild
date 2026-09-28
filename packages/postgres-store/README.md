@@ -51,11 +51,22 @@ checksum-mismatched schema fails; schema creation is never implicit.
 The current DDL of every marker — build store, ticket, and auth — is immutable
 once a database has deployed it: deployed databases carry that exact DDL's
 checksum, and editing the DDL in place leaves them all incompatible. Every
-schema change is therefore a new version: freeze the previous DDL verbatim with
-its checksum, add an upgrade branch for it in `migratePostgres`, bump the
-schema version, and update the committed pin in `schema-guard.test.ts`, which
-fails the unit suite the moment any current DDL or version is edited without
-following all four steps.
+schema change is therefore a new version — the four-step rule: freeze the
+previous DDL verbatim with its checksum, add an upgrade branch for it in
+`migratePostgres`, bump the schema version, and update the committed pin in
+`schema-guard.test.ts`. An edit to any current DDL or version without the
+matching pin update fails the unit suite with a message that names those four
+steps.
+
+The pin is a tripwire, not an enforced coupling, and it cannot mechanically
+force the version bump: the pin is the only committed record of the released
+checksum, and an author who edits the current DDL and re-pins only the pin's
+checksum — leaving the pinned version and the exported version constants
+unchanged — passes the unit suite. Deployed databases then still carry the
+pre-edit checksum of a version whose DDL has changed, and the next
+`openPostgresBuildStore` or `migratePostgres` fails with a diagnostic naming
+that cause. Follow all four steps on every schema change; the migration
+diagnostic exists to catch the shortcut after the fact.
 
 ## Public entry points
 

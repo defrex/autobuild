@@ -23,21 +23,30 @@ import {
   VERCEL_SANDBOX_CAPABILITIES,
   type AutobuildPluginManifest,
   type WorkspaceProviderPluginDescriptor,
+  type WorkspaceProviderPluginFactory,
 } from '@defrex/autobuild/plugin-sdk'
 
+// Typed against the extended workspace-provider factory context (AUT-560):
+// when the host invokes a workspace-provider factory it passes the
+// host-derived seams (`storeRef`, `storeToken`, `runtimeReferences`,
+// `origin`, `remoteBranchHead`) beside the shared `{ config, env, repoRoot }`.
+// The guard below stays until AUT-505 moves the implementation into this
+// package; the moved-in factory will consume exactly those seams.
+const vercelSandboxFactory: WorkspaceProviderPluginFactory = () => {
+  throw new Error(
+    'the vercel-sandbox implementation is builtin-hosted in this distribution; ' +
+      "plugin construction arrives with the builtin's removal (AUT-505)",
+  )
+}
+
 const vercelSandboxRegistration: WorkspaceProviderPluginDescriptor = {
-  factory() {
-    throw new Error(
-      'the vercel-sandbox implementation is builtin-hosted in this distribution; ' +
-        "plugin construction arrives with the builtin's removal (AUT-505)",
-    )
-  },
+  factory: vercelSandboxFactory,
   capabilities: VERCEL_SANDBOX_CAPABILITIES,
 }
 
 const manifest: AutobuildPluginManifest = {
   name: 'autobuild-vercel-sandbox',
-  apiVersion: '^1.6.0',
+  apiVersion: '^1.7.0',
   workspaceProviders: {
     'vercel-sandbox': vercelSandboxRegistration,
   },

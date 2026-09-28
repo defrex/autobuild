@@ -6131,6 +6131,33 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
   })
 })
 
+describe('dispatcher — missing-record journal reads (AUT-543)', () => {
+  /** The settlement stages' journal reads must answer `[]` — not reject — on a
+   * repository whose record does not yet exist: both stages route through the
+   * shared missing-record helper (AUT-524), and a regression back to a raw
+   * `getRepoStateEvents` (which rejects on an unknown repo) would abort the
+   * tick. Pinned against the ensured-record case: both outcomes must be the
+   * empty settlement a fresh store legitimately has. */
+  test('a fresh store without a repository record settles nothing and reports cleanly', async () => {
+    const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
+    // No `ensureRepo` anywhere — the store has neither a repository row nor a
+    // journal, exactly the missing-record shape.
+    expect(await h.store.getRepo(REPO)).toBeNull()
+    h.clock.advance(31 * 60 * 1000) // past the idle threshold, nothing to settle
+    const report = await h.dispatcher.tick()
+    expect(report.settled).toBe(0)
+    expect(report.sandboxIdleStops).toBe(0)
+    expect(report.sandboxSettleFailures).toBe(0)
+    expect(report.janitorFailed).toBe(0)
+    expect(report.janitorDiagnostics).toEqual([])
+    // And the ensured-record twin answers identically.
+    await h.store.ensureRepo(REPO)
+    const ensured = await h.dispatcher.tick()
+    expect(ensured.sandboxIdleStops).toBe(0)
+    expect(ensured.janitorFailed).toBe(0)
+  })
+})
+
 describe('the durable auto-merge default fans out onto current builds', () => {
   /** The toggling operator's durable fact, exactly as a dashboard keypress
    * (or `ab dispatch --auto-merge`) writes it. */

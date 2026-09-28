@@ -82,6 +82,7 @@ export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
 import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
 import { openHarvestExecutions } from './harvest-execution-state'
+import { readRepoEventsIfRecorded } from './harvest'
 import type { RepositoryEvent } from '../events/repository'
 import { sandboxStates } from './sandbox-state'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
@@ -697,7 +698,7 @@ export class Dispatcher {
     // likewise samples before calling `tick`); the auto-merge default fact is
     // the durable driver of this tick's fan-out below. Neither control
     // pretends to a serialization the store does not offer.
-    const repoEvents = await this.repositoryEvents()
+    const repoEvents = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
     const paused = reduceDispatchSettings(repoEvents).paused
     const autoMergeDefault = latestAutoMergeDefault(repoEvents)
     // The claim-time seed cites the newest fact whose enabled state matches
@@ -838,14 +839,6 @@ export class Dispatcher {
     }
   }
 
-  private async repositoryEvents() {
-    if ((await this.deps.store.getRepo(this.deps.repo)) === null) return []
-    // Bounded read (AUT-489): every consumer of this helper reduces durable
-    // types (settings, harvest state, sandbox state) or facts of the current
-    // run, all covered by the subset's latest-run-started tail.
-    return this.deps.store.getRepoStateEvents(this.deps.repo)
-  }
-
   /** Apply the newest durable `dispatcher.auto-merge-default-set` fact to every
    * current non-terminal build of this repository: on — request consent; off —
    * cancel it. Attribution is the toggling human's own actor, exactly as if
@@ -977,9 +970,12 @@ export class Dispatcher {
     const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
     let events: RepositoryEvent[]
     try {
-      events = await this.repositoryEvents()
+      events = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
     } catch {
-      // A repository with no journal yet has nothing to settle.
+      // The read itself failed (a transient store error — a missing record
+      // answers `[]` inside the helper, so it never reaches this arm):
+      // skipping this settlement stage for this tick while the rest of the
+      // tick proceeds, and the next tick retries what remains.
       return
     }
     for (const execution of openHarvestExecutions(events)) {
@@ -1073,9 +1069,12 @@ export class Dispatcher {
     const providerName = this.deps.workspaces.name
     let events: RepositoryEvent[]
     try {
-      events = await this.repositoryEvents()
+      events = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
     } catch {
-      // A repository with no journal yet has nothing to settle.
+      // The read itself failed (a transient store error — a missing record
+      // answers `[]` inside the helper, so it never reaches this arm):
+      // skipping this settlement stage for this tick while the rest of the
+      // tick proceeds, and the next tick retries what remains.
       return
     }
     const idleMs = config.orchestrator.sandbox.idleMinutes * 60_000
@@ -2762,9 +2761,9 @@ export class Dispatcher {
     // standing queue-depth report and must stay honest exactly when the
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
-    const journalBeforeReady = await this.repositoryEvents()
+    const journalBeforeReady = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
     const listing = await tickets.listReady(readyCriteria(config))
-    const journalAfterReady = await this.repositoryEvents()
+    const journalAfterReady = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
     const creationHolds = new Map(
       harvestCreationsDuringReadyScan(journalBeforeReady, journalAfterReady).map((creation) => [
         creation.creationKey.toLowerCase(),
