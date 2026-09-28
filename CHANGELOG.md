@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#576](https://github.com/defrex/autobuild/pull/576) — Add missing-code and route-wrapper consent frames to the capture
 - [#575](https://github.com/defrex/autobuild/pull/575) — Lengthen the UNKNOWN mergeability re-query budget (AUT-392)
 - [#573](https://github.com/defrex/autobuild/pull/573) — Bound or consciously accept the remaining unbounded journal reads
 - [#572](https://github.com/defrex/autobuild/pull/572) — Route remaining journal reads through readRepoEventsIfRecorded

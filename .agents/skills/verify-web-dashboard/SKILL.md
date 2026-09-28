@@ -70,6 +70,8 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:signin-error-narrow:png .ab/web-dashboard-frames/signin-error-narrow.png --attach
    ab artifact put web-dashboard-frame:consent-named-wide:png .ab/web-dashboard-frames/consent-named-wide.png --attach
    ab artifact put web-dashboard-frame:consent-unnamed-narrow:png .ab/web-dashboard-frames/consent-unnamed-narrow.png --attach
+   ab artifact put web-dashboard-frame:consent-missing-code-wide:png .ab/web-dashboard-frames/consent-missing-code-wide.png --attach
+   ab artifact put web-dashboard-frame:consent-route-narrow:png .ab/web-dashboard-frames/consent-route-narrow.png --attach
    ab verdict pass --notes .ab/web-dashboard-frames/verify-report.md
    ```
 
