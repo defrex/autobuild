@@ -17,14 +17,20 @@ import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
 import { parseConfig } from '../../config/load'
 import {
+  REPOSITORY_RUN_SCOPED_EVENT_TYPES,
+  projectRepositoryStateEvents,
+} from '../../store/repo-state-events'
+import {
   validateEventWrite,
   allowedActorKinds,
   type AbEvent,
   type EventWrite,
 } from '../../events/catalog'
-import { KERNEL, humanActor, type Actor } from '../../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor, type Actor } from '../../events/envelope'
+import type { RepositoryEvent } from '../../events/repository'
 import type { eventPayloadSchemas, EventType } from '../../events/payloads'
 import { autoMergeDeferralRef } from '../../kernel/auto-merge'
+import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { decideNext } from '../../kernel/engine'
 import { reduceBuild } from '../../kernel/reducer'
 import type { Config } from '../../config/schema'
@@ -38,11 +44,81 @@ import {
   buildDashboardFromProjected,
   dashboardBuildControl,
   projectBuild,
+  projectRepositoryHarvest,
   type DashboardBuild,
   type PipelineStep,
 } from './model'
 
 const BUILD = 'auth-rate-limit'
+
+/** A zeroed tick-counters payload, the shape every dispatcher tick fact carries. */
+function tickCounters(): Record<string, number> {
+  return {
+    merged: 0,
+    closed: 0,
+    conflicted: 0,
+    abandoned: 0,
+    discarded: 0,
+    janitorFailed: 0,
+    recovered: 0,
+    dispatchFailed: 0,
+    resumed: 0,
+    swept: 0,
+    dispatched: 0,
+    authored: 0,
+    bounced: 0,
+    claimRaces: 0,
+    invalidTickets: 0,
+    dependencyBlocked: 0,
+    harvestStarted: 0,
+    harvestResumed: 0,
+    harvestCompleted: 0,
+    harvestEscalated: 0,
+    harvestFailed: 0,
+  }
+}
+
+/** The catalog's allowed author per repository event type — the default actor
+ * `appendTestRepoEvents` applies when a table entry omits one. */
+function defaultRepoActor(type: RepositoryEvent['type']): Actor {
+  if (
+    type === 'dispatcher.operator-reported' ||
+    type === 'dispatcher.intake-set' ||
+    type === 'dispatcher.pause-set' ||
+    type === 'dispatcher.auto-merge-default-set' ||
+    type === 'harvest.pause-requested' ||
+    type === 'harvest.resume-requested'
+  ) {
+    return humanActor('op')
+  }
+  if (type === 'harvest.proposals.submitted' || type === 'harvest.review.verdict') {
+    return agentActor('harvest', 's1')
+  }
+  if (type.startsWith('dispatcher.')) return DISPATCHER
+  if (type.startsWith('orchestrator.sandbox.')) return humanActor('op')
+  return KERNEL
+}
+
+/** Journal one validated repository event — the test-side mirror of
+ * `store.appendRepo` that keeps the event tables in the AUT-545 equivalence
+ * tests below terse: each entry names its type and payload, and the catalog's
+ * allowed actor for that type is applied unless the entry overrides it. */
+async function appendTestRepoEvents(
+  store: MemoryBuildStore,
+  repo: string,
+  events: Array<{ actor?: Actor; type: RepositoryEvent['type']; payload: unknown }>,
+): Promise<void> {
+  await store.ensureRepo(repo)
+  for (const event of events) {
+    const { type, payload } = event
+    const actor = event.actor ?? defaultRepoActor(type)
+    await store.appendRepo(repo, {
+      actor,
+      type,
+      payload,
+    } as Parameters<MemoryBuildStore['appendRepo']>[1])
+  }
+}
 
 /** Default policy: maxVerifyAttempts 3, maxReviewRounds 6. `[finalize].steps`
  * defaults to `[]` — the DEFAULT config path, and the one the merge row's
@@ -2033,5 +2109,214 @@ describe('durations: accumulation and scope', () => {
     // finalize.completed is the last event, and merge-ready starts there.
     expect(timing?.accumulatedMs).toBe(0)
     expect(timing?.runningSince).toBe(tsMsOf(log, reduceBuild(log).lastSeq))
+  })
+})
+
+describe("the legacy frame's bounded repository read is replay-equivalent (AUT-545)", () => {
+  // renderOnce() (cli/dispatch.ts) reads the AUT-489 bounded subset instead of
+  // the full journal. Its only journal consumers are projectRepositoryHarvest
+  // (reduceHarvest + the harvest-only raw scans in projectHarvestRun and
+  // escalationAttentionDismissed) and reduceDispatchSettings — every one of
+  // them durable-type-only, so the equivalence must hold with NO anchor
+  // dependence (stronger than the frontend seed, which folds
+  // reduceDispatchStatus and therefore needs the latest-run tail). These tests
+  // are that claim, over mixed journals that bury the durable signal in
+  // run-scoped noise — anchored and anchor-less — and over the raw-scan edges:
+  // the post-terminal attention pairing and the failed-run `detail` string.
+
+  /** Run-scoped dispatcher noise: the growing part of a hosted journal, and
+   * the part the bounded subset drops here. */
+  const runNoise = (run: string): Array<{ type: RepositoryEvent['type']; payload: unknown }> => [
+    {
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        pid: 1,
+        effectiveConfig: { kind: 'dispatcher-config', rev: 1 },
+        roleWarnings: [],
+      },
+    },
+    { type: 'dispatcher.tick-started', payload: { run } },
+    {
+      type: 'dispatcher.tick-completed',
+      payload: {
+        run,
+        queued: 0,
+        counters: tickCounters(),
+        janitorDiagnostics: [],
+        ticketDiagnostics: [],
+        dependencyDiagnostics: [],
+      },
+    },
+    {
+      type: 'dispatcher.operator-reported',
+      payload: { run, level: 'info', message: 'tick: idle' },
+    },
+    { type: 'dispatcher.run-stopped', payload: { run, outcome: 'normal', exitCode: 0 } },
+  ]
+
+  /** A run the kernel escalated mid-flight: terminal, and its escalation is
+   * exactly what the attention scan pairs post-terminal facts against. */
+  const escalatedLifecycle: Array<{ type: RepositoryEvent['type']; payload: unknown }> = [
+    {
+      type: 'harvest.started',
+      payload: {
+        run: 'r1',
+        observations: [{ build: 'b1', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 0 },
+      },
+    },
+    { type: 'harvest.step.started', payload: { run: 'r1', step: 'synthesize', round: 1 } },
+    {
+      type: 'harvest.step.completed',
+      payload: { run: 'r1', step: 'synthesize', outcome: 'approve', round: 1 },
+    },
+    {
+      type: 'harvest.proposals.submitted',
+      payload: { run: 'r1', round: 1, artifact: { kind: 'harvest-proposals', rev: 1 } },
+    },
+    {
+      type: 'harvest.review.verdict',
+      payload: {
+        run: 'r1',
+        round: 1,
+        verdict: 'revise',
+        findings: [],
+        artifact: { kind: 'harvest-review', rev: 1 },
+      },
+    },
+    { type: 'harvest.step.started', payload: { run: 'r1', step: 'review', round: 1 } },
+    {
+      type: 'harvest.escalated',
+      payload: {
+        run: 'r1',
+        source: 'stall',
+        reason: 'no progress for 3 rounds',
+        round: 1,
+        observations: [{ build: 'b1', seq: 1 }],
+      },
+    },
+  ]
+
+  /** A failed run whose automatic recovery was requested, acknowledged by the
+   * kernel resume, and then failed again non-retriably — the terminal shape
+   * whose `detail` string the frame renders from a reverse scan over
+   * `harvest.failed`, with the acknowledged recovery count in it. */
+  const failedLifecycle: Array<{ type: RepositoryEvent['type']; payload: unknown }> = [
+    {
+      type: 'harvest.started',
+      payload: {
+        run: 'r2',
+        observations: [{ build: 'b2', seq: 1 }],
+        scan: { kind: 'harvest-scan', rev: 2 },
+      },
+    },
+    {
+      type: 'harvest.failed',
+      payload: {
+        run: 'r2',
+        step: 'synthesize',
+        round: 1,
+        attempt: 1,
+        error: 'provider unavailable',
+        willRetry: false,
+      },
+    },
+    { type: 'harvest.recovery-requested', payload: { run: 'r2', attempt: 1, limit: 2 } },
+    { type: 'harvest.resumed', payload: {} },
+    {
+      type: 'harvest.failed',
+      payload: {
+        run: 'r2',
+        step: 'review',
+        round: 2,
+        attempt: 2,
+        error: 'sandbox vanished',
+        willRetry: false,
+      },
+    },
+  ]
+
+  /** The durable controls the settings reducer folds, ordered so latest-wins
+   * is not the first value. */
+  const settingLifecycle: Array<{ type: RepositoryEvent['type']; payload: unknown }> = [
+    { type: 'dispatcher.intake-set', payload: { enabled: false } },
+    { type: 'dispatcher.pause-set', payload: { enabled: true } },
+    { type: 'dispatcher.auto-merge-default-set', payload: { enabled: true } },
+    { type: 'dispatcher.pause-set', payload: { enabled: false } },
+  ]
+
+  for (const anchored of [true, false]) {
+    test(`the bounded subset replays identically for the frame's consumers (${anchored ? 'anchored' : 'anchor-less'} mixed journal)`, async () => {
+      const repo = anchored ? '/repos/anchored' : '/repos/anchor-less'
+      const store = new MemoryBuildStore()
+      await appendTestRepoEvents(store, repo, [
+        ...runNoise('legacy-run-1'),
+        ...escalatedLifecycle,
+        // Post-terminal pairing input for r1's escalation: a human pause
+        // invalidates a pending resume; a resume followed by the kernel ack
+        // dismisses the attention. All three types are in the raw scan.
+        { type: 'harvest.resume-requested', payload: {} },
+        { type: 'harvest.resumed', payload: {} },
+        ...settingLifecycle,
+        ...runNoise('legacy-run-2'),
+        ...failedLifecycle,
+        ...(anchored ? runNoise('legacy-run-3') : []),
+      ])
+      const full = await store.getRepoEvents(repo)
+      const subset = projectRepositoryStateEvents(full)
+      if (anchored) {
+        // The subset really is a subset — noise before the last anchor is
+        // gone — so the equality below is not vacuous.
+        expect(subset.length).toBeLessThan(full.length)
+      } else {
+        // The anchor-less journal's subset is the durable types only — every
+        // run-scoped fact (run-started, tick-*, operator-reported,
+        // run-stopped) was dropped, so the anchor really plays no part.
+        const dropped = full.filter((event) => !subset.includes(event))
+        expect(dropped.length).toBeGreaterThan(0)
+        expect(
+          dropped.every((event) => REPOSITORY_RUN_SCOPED_EVENT_TYPES.includes(event.type)),
+        ).toBe(true)
+      }
+
+      // The two frame consumers, over the full journal (the oracle) and over
+      // the bounded subset (what renderOnce now reads): identical.
+      expect(projectRepositoryHarvest(subset)).toEqual(projectRepositoryHarvest(full))
+      expect(reduceDispatchSettings(subset)).toEqual(reduceDispatchSettings(full))
+
+      // The raw-scan edges named in the anchor analysis, directly: the frame
+      // renders r2 (failed on its second, non-retriable boundary — r1's
+      // attention was dismissed by the post-terminal pairing above), and its
+      // `detail` string comes from the reverse `harvest.failed` find plus the
+      // acknowledged recovery count.
+      const projection = projectRepositoryHarvest(subset)
+      expect(projection.harvest).toBeDefined()
+      expect(projection.harvest?.run).toBe('r2')
+      expect(projection.harvest?.status).toBe('failed')
+      expect(projection.harvest?.detail).toContain('stopped at review r2')
+      expect(projection.harvest?.detail).toContain('automatic recovery 1/2')
+      expect(projection.harvest?.detail).toContain('sandbox vanished')
+      await store.close()
+    })
+  }
+
+  test('the equivalent full-journal replay is the same shape (sanity)', async () => {
+    // A guard on the harness above: a full replay of the mixed journal is the
+    // reference — if the reference projection were undefined, the equality in
+    // the tests above would be true for nothing.
+    const repo = '/repos/sanity'
+    const store = new MemoryBuildStore()
+    await appendTestRepoEvents(store, repo, [
+      ...escalatedLifecycle,
+      { type: 'harvest.resume-requested', payload: {} },
+      { type: 'harvest.resumed', payload: {} },
+      ...failedLifecycle,
+    ])
+    const projection = projectRepositoryHarvest(await store.getRepoEvents(repo))
+    expect(projection.harvestPaused).toBe(false)
+    expect(projection.harvest?.run).toBe('r2')
+    expect(projection.harvest?.status).toBe('failed')
+    await store.close()
   })
 })

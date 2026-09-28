@@ -1117,6 +1117,205 @@ describe('wait resilience and read-only discipline', () => {
   })
 })
 
+// ── Discovery's digest-bounded terminal filter (AUT-545) ────────────────────
+
+describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AUT-545)', () => {
+  /** A counting proxy: per-slug immediate `getEvents` call counts plus the
+   * digest batch reads. Held (opts-bearing) reads are the remote poll path
+   * and are not part of this ticket's filter. */
+  function countingStore(
+    store: MemoryBuildStore,
+    opts: { failDigests?: () => boolean } = {},
+  ): { store: BuildStore; eventsBySlug: () => Map<string, number>; digestReads: () => number } {
+    const eventsBySlug = new Map<string, number>()
+    let digests = 0
+    const fake: BuildStore = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'getEvents') {
+          return async (slug: string, sinceSeq?: number) => {
+            if (sinceSeq === undefined) {
+              eventsBySlug.set(slug, (eventsBySlug.get(slug) ?? 0) + 1)
+            }
+            return (target as MemoryBuildStore).getEvents(slug, sinceSeq)
+          }
+        }
+        if (prop === 'getRepoBuildDigests') {
+          return async (repo: string) => {
+            if (opts.failDigests?.() === true) throw new Error('digest read failed')
+            digests += 1
+            return (target as MemoryBuildStore).getRepoBuildDigests(repo)
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value
+      },
+    })
+    return { store: fake, eventsBySlug: () => eventsBySlug, digestReads: () => digests }
+  }
+
+  test('terminal builds are filtered by the digest and never re-read across ticks', async () => {
+    const store = makeStore()
+    // Twenty terminal builds over the lifecycle shapes the digest contract
+    // pins (done, aborted, done-after-abort, aborted-after-done), plus one
+    // running build the wait can actually satisfy on.
+    const terminalShapes: ('merged' | 'aborted')[][] = [
+      ['merged'],
+      ['aborted'],
+      ['merged', 'aborted'],
+      ['aborted', 'merged'],
+    ]
+    let n = 0
+    for (const shape of terminalShapes) {
+      for (let copy = 0; copy < 5; copy += 1) {
+        const slug = `t${n}`
+        n += 1
+        await store.createBuild({ slug, repo: REPO })
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'runner.attached',
+          payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+        })
+        for (const outcome of shape) await appendCompletion(store, slug, outcome)
+      }
+    }
+    await seedRunningBuild(store, 'live')
+    await appendEscalation(store, 'live')
+
+    const { store: fake, eventsBySlug, digestReads } = countingStore(store)
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 3) await appendEscalation(store, 'live')
+      },
+    })
+    expect(await abWait({ ...h.base, timeout: '5' })).toBe(0)
+    // One digest batch read per discovery pass — the initial scan plus every
+    // tick — never one full-log read per candidate build.
+    expect(digestReads()).toBeGreaterThanOrEqual(1)
+    const reads = eventsBySlug()
+    // Every terminal slug skipped the full-log read entirely, on every pass.
+    for (let i = 0; i < 20; i += 1) expect(reads.get(`t${i}`) ?? 0).toBe(0)
+    // The running build was read once (registration in the initial scan).
+    expect(reads.get('live')).toBe(1)
+    // The wait still fires identically on the live build.
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'live',
+      event: { type: 'escalation.raised' },
+      condition: 'blocked',
+    })
+    expect(h.err).toEqual([])
+  })
+
+  test('a digest read failure inherits the discovery failure-streak policy', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'live')
+    await appendEscalation(store, 'live')
+    let fail = true
+    const { store: fake, eventsBySlug } = countingStore(store, { failDigests: () => fail })
+    const h = harness(store, { openStore: () => fake })
+    // The initial scan's discovery failure is fatal (nothing started yet).
+    await expect(abWait({ ...h.base, timeout: '2' })).rejects.toThrow('could not list builds')
+    // Nothing was read per-build: the batch read itself is the failure point.
+    expect(eventsBySlug().size).toBe(0)
+    fail = false
+  })
+
+  test('a mid-wait digest failure is reported once and retried next pass', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'live')
+    let failNext = false
+    const { store: fake, digestReads } = countingStore(store, {
+      failDigests: () => {
+        if (failNext) {
+          failNext = false
+          return true
+        }
+        return false
+      },
+    })
+    // The initial scan succeeds; tick 2's discovery pass then fails once, is
+    // reported once on the streak, and is retried on the next tick — which
+    // succeeds and, on the tick after the appended escalation, fires.
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 2) failNext = true
+        if (ticks === 4) await appendEscalation(store, 'live')
+      },
+    })
+    expect(await abWait({ ...h.base, timeout: '6' })).toBe(0)
+    expect(digestReads()).toBeGreaterThanOrEqual(4)
+    expect(h.err).toEqual([
+      expect.stringContaining('ab wait: a store read failed (digest read failed)'),
+    ])
+    expect(records(h.out)).toHaveLength(1)
+    expect(records(h.out)[0]).toMatchObject({ build: 'live', condition: 'blocked' })
+  })
+
+  test('a legacy repoOrigin record absent from the digest map still discovers and still skips when terminal', async () => {
+    const store = makeStore()
+    // In `mine` only via the repoOrigin fallback arm: the digest map (keyed
+    // on `record.repo`) has no entry for it, so discovery falls back to the
+    // reduceBuild re-check — for a nonterminal record it registers, for a
+    // terminal one it skips.
+    await store.createBuild({ slug: 'legacy-live', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store.append('legacy-live', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    await appendEscalation(store, 'legacy-live')
+    const { store: fake, eventsBySlug } = countingStore(store)
+    const h = harness(store, { openStore: () => fake })
+    expect(await abWait({ ...h.base, timeout: '2' })).toBe(0)
+    // The fallback read the legacy record, registered it, and fired on it.
+    expect(eventsBySlug().get('legacy-live')).toBe(1)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'legacy-live',
+      event: { type: 'escalation.raised' },
+      condition: 'blocked',
+    })
+
+    // The terminal variant: the same fallback path reads it once, sees the
+    // reduceBuild terminal status, and skips — the wait keeps waiting and
+    // times out with exit 3 (a bare cursor record in --json), having never
+    // treated it as discoverable work.
+    const store2 = makeStore()
+    await store2.createBuild({ slug: 'legacy-done', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await appendCompletion(store2, 'legacy-done')
+    const h2 = harness(store2)
+    expect(await abWait({ ...h2.base, timeout: '2' })).toBe(3)
+    expect(h2.out).toHaveLength(1)
+    expect(Object.keys(JSON.parse(h2.out[0]!) as object)).toEqual(['cursor'])
+  })
+
+  test('a named terminal build still tracks through trackBuild (full read, deliberate)', async () => {
+    // Named slugs bypass the discovery filter by design: trackBuild must read
+    // the full log for the registration state check and --since replay. The
+    // digest does not retire a NAMED build.
+    const store = makeStore()
+    await seedRunningBuild(store, 'named-done')
+    await appendCompletion(store, 'named-done')
+    const { store: fake, eventsBySlug, digestReads } = countingStore(store)
+    const h = harness(store, { openStore: () => fake, forValues: ['blocked'] })
+    // exit 2: named terminal, no condition held.
+    expect(await abWait({ ...h.base, slugs: ['named-done'], timeout: '2' })).toBe(2)
+    expect(eventsBySlug().get('named-done')).toBe(1)
+    // No digest read at all: named waits never enter discovery.
+    expect(digestReads()).toBe(0)
+    expect(records(h.out)[0]).toMatchObject({
+      build: 'named-done',
+      event: { type: 'build.completed' },
+      condition: null,
+    })
+  })
+})
+
 // ── Remote bounded-wait cadence (AUT-368) ─────────────────────────────────
 
 describe('wait remote bounded-wait cadence (AUT-368)', () => {

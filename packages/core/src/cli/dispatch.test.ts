@@ -26,7 +26,7 @@ import {
   stripAnsi,
   type DashboardRenderer,
 } from './dashboard/render'
-import type { DashboardModel } from './dashboard/model'
+import { projectHarvest, type DashboardModel } from './dashboard/model'
 import { paintableRows } from './dashboard/live'
 import type { TerminalInput, TerminalInputEvent, TerminalInputHooks, TerminalOut } from './terminal'
 import { createTerminalModeController } from './terminal-restore'
@@ -9302,6 +9302,311 @@ describe('abDispatch interactive keyboard controls', () => {
       })
       expect(fx.tickets.claims).toEqual(['T-intake-off', 'T-fresh'])
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
+
+/**
+ * The legacy dashboard's bounded repository read (AUT-545). The in-process
+ * DispatchLoop's per-frame journal read must be the AUT-489 bounded subset —
+ * never a from-zero full-journal read — in steady state, in --once, and over a
+ * journal with no record yet; and the frame it renders must be indistinguishable
+ * from the full-journal projection for the frame's consumers.
+ */
+describe('abDispatch legacy dashboard reads the bounded journal subset (AUT-545)', () => {
+  /** A counting proxy over the fixture store: records every repository-journal
+   * read by shape. `getRepo` is the helper's missing-record probe, so a read
+   * path through `readRepoEventsIfRecorded` shows up as exactly one `getRepo`
+   * plus one `getRepoStateEvents` per frame; a full per-frame read would show
+   * up as `getRepoEvents` calls with from-zero reads (all repo events). */
+  function countingStore(store: MemoryBuildStore): {
+    store: BuildStore
+    fullFromZeroReads: () => number
+    stateReads: () => number
+    repoProbes: () => number
+  } {
+    let fullFromZero = 0
+    let state = 0
+    let probes = 0
+    const proxied = new Proxy(store, {
+      get(target, property) {
+        if (property === 'getRepoEvents') {
+          return async (repo: string, sinceSeq = 0) => {
+            if (sinceSeq === 0) fullFromZero += 1
+            return target.getRepoEvents(repo, sinceSeq)
+          }
+        }
+        if (property === 'getRepoStateEvents') {
+          return async (repo: string) => {
+            state += 1
+            return target.getRepoStateEvents(repo)
+          }
+        }
+        if (property === 'getRepo') {
+          return async (repo: string) => {
+            probes += 1
+            return target.getRepo(repo)
+          }
+        }
+        const value = Reflect.get(target, property, target) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as BuildStore
+    return {
+      store: proxied,
+      fullFromZeroReads: () => fullFromZero,
+      stateReads: () => state,
+      repoProbes: () => probes,
+    }
+  }
+
+  /** Wrap the fixture's wire so abDispatch reads the counting proxy. */
+  function wired(fx: Fixture, counted: BuildStore): DispatchOpts['wire'] {
+    return ((config, opts, state, plugins) => ({
+      ...(
+        fx.wire as unknown as (
+          c: typeof config,
+          o: typeof opts,
+          s: typeof state,
+          p: typeof plugins,
+        ) => DispatchWiring
+      )(config, opts, state, plugins),
+      store: counted,
+    })) as DispatchOpts['wire']
+  }
+
+  test('watch-mode steady-state frames never re-read the full journal', async () => {
+    const fx = await makeFixture(readyTicket('T-bounded'), happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput()
+    const counted = countingStore(fx.store)
+    let run: Promise<void> | undefined
+    try {
+      run = abDispatch({
+        targetRepo: fx.checkout,
+        env: { USER: 'bounded-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 20,
+        wire: wired(fx, counted.store),
+        terminal: term,
+        input,
+      })
+      // A live dashboard frame proves renderOnce ran at least once; the sleep
+      // then lets several more 20 ms ticks pass, each with its own frame.
+      await waitFor(() => latestDashboardFrame(term).includes('Autobuild'))
+      const framesAfterFirst = term.frames.length
+      await waitFor(() => term.frames.length >= framesAfterFirst + 10, 5_000)
+
+      // Every repository read the frames issued was bounded: no from-zero
+      // full-journal read at all. The helper's probe + subset pair is what
+      // the frames DID issue (at least one per frame).
+      expect(counted.fullFromZeroReads()).toBe(0)
+      expect(counted.stateReads()).toBeGreaterThanOrEqual(1)
+      expect(counted.repoProbes()).toBeGreaterThanOrEqual(1)
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('--once renders its snapshot through the bounded read too', async () => {
+    const fx = await makeFixture(readyTicket('T-once-bounded'), happyHandlers())
+    const term = fakeTerminal()
+    const counted = countingStore(fx.store)
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        once: true,
+        wire: wired(fx, counted.store),
+        terminal: term,
+      })
+      // The snapshot frame painted from the bounded subset; the full journal
+      // was never read from zero.
+      expect(latestDashboardFrame(term)).toContain('Autobuild')
+      expect(counted.fullFromZeroReads()).toBe(0)
+      expect(counted.stateReads()).toBeGreaterThanOrEqual(1)
+      expect(fx.err).toEqual([])
+    } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('a repository with no journal record renders the empty frame and creates none (AUT-524)', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput()
+    const counted = countingStore(fx.store)
+    let run: Promise<void> | undefined
+    try {
+      run = abDispatch({
+        targetRepo: fx.checkout,
+        env: { USER: 'empty-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 20,
+        wire: wired(fx, counted.store),
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('Autobuild'))
+      // The frame painted before any journal record existed — the read path's
+      // missing-record treatment is the helper's read-only empty journal. The
+      // dispatcher's own lease/tick machinery may create the record later in
+      // the tick, so the assertion is about the FRAME, not the store's final
+      // state: the frame painted without a record and the reads that produced
+      // it were probe + bounded subset, never a full journal read.
+      expect(counted.fullFromZeroReads()).toBe(0)
+      expect(counted.repoProbes()).toBeGreaterThanOrEqual(1)
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
+      await fx.cleanup()
+    }
+  }, 30_000)
+
+  test('frame equivalence: harvest and settings fields match the full-journal projection', async () => {
+    const fx = await makeFixture(readyTicket('T-equiv'), happyHandlers())
+    const term = fakeTerminal()
+    const input = fakeInput()
+    const repo = fx.origin
+    let run: Promise<void> | undefined
+    try {
+      // Seed the journal with durable facts the frame renders — an escalated
+      // harvest run plus settings — burying them under run-scoped noise.
+      await fx.store.ensureRepo(repo)
+      await fx.store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'noise-run',
+          pid: 1,
+          effectiveConfig: { kind: 'dispatcher-config', rev: 1 },
+          roleWarnings: [],
+        },
+      })
+      await fx.store.appendRepo(repo, {
+        actor: humanActor('op'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+      await fx.store.appendRepo(repo, {
+        actor: humanActor('op'),
+        type: 'dispatcher.auto-merge-default-set',
+        payload: { enabled: true },
+      })
+      await fx.store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run: 'equiv-run',
+          observations: [{ build: 'observed-build', seq: 1 }],
+          scan: { kind: 'harvest-scan', rev: 0 },
+        },
+      })
+      await fx.store.appendRepo(repo, {
+        actor: KERNEL,
+        type: 'harvest.escalated',
+        payload: {
+          run: 'equiv-run',
+          source: 'stall',
+          reason: 'no progress for 3 rounds',
+          round: 1,
+          observations: [{ build: 'observed-build', seq: 1 }],
+        },
+      })
+      await fx.store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: 'noise-run' },
+      })
+      await fx.store.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-completed',
+        payload: {
+          run: 'noise-run',
+          queued: 0,
+          counters: {
+            merged: 0,
+            closed: 0,
+            conflicted: 0,
+            abandoned: 0,
+            discarded: 0,
+            janitorFailed: 0,
+            recovered: 0,
+            dispatchFailed: 0,
+            resumed: 0,
+            swept: 0,
+            dispatched: 0,
+            authored: 0,
+            bounced: 0,
+            claimRaces: 0,
+            invalidTickets: 0,
+            dependencyBlocked: 0,
+            harvestStarted: 0,
+            harvestResumed: 0,
+            harvestCompleted: 0,
+            harvestEscalated: 0,
+            harvestFailed: 0,
+          },
+          janitorDiagnostics: [],
+          ticketDiagnostics: [],
+          dependencyDiagnostics: [],
+        },
+      })
+      const full = await fx.store.getRepoEvents(repo)
+      const expectedHarvest = projectHarvest(full)
+      const expectedSettings = reduceDispatchSettings(full)
+
+      run = abDispatch({
+        targetRepo: fx.checkout,
+        env: { USER: 'equiv-op' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        intervalMs: 20,
+        wire: wired(fx, countingStore(fx.store).store),
+        terminal: term,
+        input,
+      })
+      await waitFor(() => latestDashboardFrame(term).includes('Autobuild'))
+
+      // The painted frame itself: the harvest row and the settings chrome the
+      // bounded read produced must equal what the full journal projects.
+      const frame = latestDashboardFrame(term)
+      expect(frame).toContain('Harvest')
+      expect(frame).toContain('ESCALATED')
+      expect(frame).toContain('no progress for 3 rounds')
+      expect(frame).toContain('intake OFF')
+      expect(frame).toContain('auto merge ON')
+      expect(expectedHarvest?.run).toBe('equiv-run')
+      expect(expectedSettings).toEqual({ intake: false, paused: false, defaultAutoMerge: true })
+
+      input.press('interrupt')
+      await run
+      run = undefined
+      expect(fx.err).toEqual([])
+    } finally {
+      input.press('interrupt')
+      await run?.catch(() => {})
       await fx.cleanup()
     }
   }, 30_000)
