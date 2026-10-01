@@ -302,6 +302,12 @@ a.dim {
   width: 24px;
   height: 24px;
   background: #55b8b8;
+  transition: left 200ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .knob {
+    transition: none;
+  }
 }
 .seams {
   display: flex;
