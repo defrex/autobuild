@@ -25,7 +25,7 @@ test-postgres = "./scripts/postgres-live.sh ensure-running && AB_POSTGRES_TEST_U
 # optional steps in its opening `verifySteps` front matter; a plan without that
 # metadata runs all of them.
 [verify]
-steps = ["lint", "types", "unit", "postgres", "dashboard", "web-dashboard"]
+steps = ["lint", "types", "unit", "postgres", "dashboard", "web-dashboard", "website"]
 
 [verify.lint]
 kind = "check"           # deterministic command + pass/fail, never an agent
@@ -60,6 +60,14 @@ paths = ["packages/core/src/cli/dashboard/**", "packages/core/src/cli/dispatch.t
 kind = "agent"
 skill = "verify-web-dashboard"
 paths = ["packages/hosted-store-service/app/**", "packages/web-dashboard-capture/src/**", ".agents/skills/verify-web-dashboard/SKILL.md", "DESIGN.md"]
+
+# The marketing site gets the same treatment: the repository-local skill
+# renders it at desktop and phone widths, judges the frames against the
+# reference screenshots in design/website/, and attaches them on a pass.
+[verify.website]
+kind = "agent"
+skill = "verify-website"
+paths = ["packages/website/**", "design/website/**"]
 
 # Ordered post-verification steps, all failure-tolerant: a failure files an
 # observation and never fails an otherwise green build.
