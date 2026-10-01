@@ -1920,7 +1920,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           expect(limits.maxBytes).toBeLessThanOrEqual(25 * 1024 * 1024)
           const tooBig = fileAsset('big.bin', new Uint8Array(limits.maxBytes + 1))
           await expect(store.putTicketAsset(REPO, 'T-1', tooBig)).rejects.toThrow(
-            /ticket asset exceeds the .*limit/,
+            /ticket asset exceeds .*\d+-byte.*limit/,
           )
           expect(await store.listTicketAssets(REPO, 'T-1', { revisions: true })).toEqual([])
           expect(await store.getTicketAsset(REPO, 'T-1', 'design', 'big.bin')).toBeNull()
