@@ -6,7 +6,7 @@ Autobuild looks like the terminal it runs in: one monospace face on a black grou
 
 Engineer to engineer: direct, confident, plain. Short declarative sentences. No superlatives, no exclamation points, no emoji.
 
-- The name is one word, **Autobuild**, capitalized as a proper noun. Never "Auto Build" or "auto-build". The CLI is `ab`, always in code.
+- The name is one word, **Autobuild**, capitalized as a proper noun. Never split into two words or hyphenated. The CLI is `ab`, always in code.
 - Headlines are claims in sentence case: "One ticket, one fixed pipeline", "Every seam is an adapter", "One log. Everything else is derived."
 - Eyebrows are lowercase locators with a middle dot: `autobuild · the map`, `autobuild · state`.
 - The tagline is "Tickets in, PRs out. No babysitting required."
