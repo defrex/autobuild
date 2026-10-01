@@ -13,7 +13,9 @@
       "!.agents/skills/impeccable",
       "!.claude/skills/impeccable",
       "!.impeccable",
-      "!packages/hosted-store-service/.impeccable"
+      "!packages/hosted-store-service/.impeccable",
+      // Design exports are reference material, not source.
+      "!design/website/reference.html"
     ]
   },
   "formatter": {
