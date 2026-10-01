@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { FileTicketSource } from '../ports/tickets/file'
 import type { Ticket } from '../ports/types'
 import { MemoryBuildStore } from '../store/memory'
 import {
@@ -402,5 +403,40 @@ describe('ab ticket show with assets', () => {
         openStore: () => broken,
       }),
     ).rejects.toThrow('store down')
+  })
+})
+
+describe('the file ticket source', () => {
+  test('the note lands in the ticket file below the body, which is left byte-exact', async () => {
+    const dir = join(tmp, 'tickets')
+    await mkdir(join(dir, 'ready'), { recursive: true })
+    const original = ['+++', 'id = "file-1"', 'title = "On disk"', '+++', '', 'the spec', ''].join(
+      '\n',
+    )
+    await writeFile(join(dir, 'ready', 'file-1.md'), original)
+    const fileSource = new FileTicketSource({ dir })
+    await writeFile(join(tmp, 'mock.txt'), 'x')
+    const run = abTicket(['attach', 'file-1', 'design', join(tmp, 'mock.txt')], {
+      targetRepo: tmp,
+      env: {},
+      exec: async (cmd: string[]) =>
+        cmd.includes('remote')
+          ? { stdout: '', stderr: '', exitCode: 1 }
+          : {
+              stdout: `${join(tmp, '.git')}\n${join(tmp, '.git')}\n${tmp}\n`,
+              stderr: '',
+              exitCode: 0,
+            },
+      stdout: () => {},
+      stderr: () => {},
+      sourceFactory: () => fileSource,
+      openStore: () => store,
+    })
+    await run
+    const written = await readFile(join(dir, 'ready', 'file-1.md'), 'utf8')
+    expect(written.startsWith(original)).toBe(true)
+    expect(written).toContain('Ticket asset attached: `design/mock.txt`')
+    expect(written).toContain('ab ticket asset get file-1 design mock.txt <dest>')
+    expect((await fileSource.get('file-1'))?.body).toContain('the spec')
   })
 })
