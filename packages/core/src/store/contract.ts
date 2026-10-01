@@ -323,6 +323,65 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('createBuild appends an initial build.created as seq 1, atomically with the record', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const created = buildCreatedWrite()
+          await store.createBuild({ ...sampleBuildInput('with-created'), created })
+          const events = await store.getEvents('with-created')
+          expect(events.map((event) => [event.seq, event.type])).toEqual([[1, 'build.created']])
+          expect(events[0]?.payload).toEqual(created.payload)
+          expect(events[0]?.actor).toEqual(created.actor)
+          // The next append continues the stream.
+          const next = await store.append('with-created', {
+            actor: DISPATCHER,
+            type: 'build.created',
+            payload: created.payload,
+          })
+          expect(next.seq).toBe(2)
+        })
+      })
+
+      test('createBuild rejects an invalid or non-build.created initial event and creates nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await expect(
+            store.createBuild({
+              ...sampleBuildInput('bad-created'),
+              created: { actor: DISPATCHER, type: 'build.created', payload: { nope: 1 } } as never,
+            }),
+          ).rejects.toThrow()
+          await expect(
+            store.createBuild({
+              ...sampleBuildInput('wrong-type'),
+              created: { actor: DISPATCHER, type: 'build.completed', payload: {} } as never,
+            }),
+          ).rejects.toThrow()
+          expect(await store.getBuild('bad-created')).toBeNull()
+          expect(await store.getBuild('wrong-type')).toBeNull()
+          // The slug is still free, so a valid create succeeds.
+          await store.createBuild({
+            ...sampleBuildInput('bad-created'),
+            created: buildCreatedWrite(),
+          })
+          expect((await store.getEvents('bad-created')).length).toBe(1)
+        })
+      })
+
+      test('a duplicate slug with an initial event leaves the first build untouched', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild({
+            ...sampleBuildInput('dupe-created'),
+            created: buildCreatedWrite(),
+          })
+          await expect(
+            store.createBuild({
+              ...sampleBuildInput('dupe-created'),
+              created: buildCreatedWrite(),
+            }),
+          ).rejects.toThrow()
+          expect((await store.getEvents('dupe-created')).length).toBe(1)
+        })
+      })
+
       test('getBuild returns null for an unknown slug', async () => {
         await withStore(factory, undefined, async (store) => {
           expect(await store.getBuild('never-created')).toBeNull()
@@ -1981,6 +2040,116 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
             /build-scoped store/,
           )
           await expect(scoped.ticketAssetLimits(REPO)).rejects.toThrow(/build-scoped store/)
+        })
+      })
+    })
+
+    describe('pinned ticket assets (SPEC §6.3)', () => {
+      const REPO = 'https://github.com/acme/rate-limiter'
+      const enc = (text: string) => new TextEncoder().encode(text)
+      const file = (name: string, text: string, kind = 'design') => ({
+        kind,
+        name,
+        layout: 'file' as const,
+        entries: [{ type: 'file' as const, path: name, content: enc(text) }],
+      })
+      const pinOf = (meta: { kind: string; name: string; revision: number; size: number }) => ({
+        kind: meta.kind,
+        name: meta.name,
+        revision: meta.revision,
+        layout: 'file' as const,
+        size: meta.size,
+        fileCount: 1,
+        dirCount: 0,
+      })
+      const text = (asset: { entries: { type: string; content?: Uint8Array }[] } | null) =>
+        asset === null ? null : new TextDecoder().decode(asset.entries[0]?.content)
+
+      async function pinnedBuild(
+        store: BuildStore,
+        slug: string,
+        assets: ReturnType<typeof pinOf>[],
+      ): Promise<void> {
+        const created = buildCreatedWrite()
+        await store.createBuild({
+          ...sampleBuildInput(slug),
+          created: { ...created, payload: { ...created.payload, repo: REPO, assets } },
+        })
+      }
+
+      test('reads the pinned revision after the ticket replaces and then removes the asset', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const v0 = await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'one'))
+          await pinnedBuild(store, 'pin-a', [pinOf(v0)])
+          await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'two'))
+          expect(text(await store.getPinnedTicketAsset('pin-a', 'design', 'a.txt'))).toBe('one')
+          await store.removeTicketAsset(REPO, 'TICK-1', 'design', 'a.txt')
+          expect(await store.getTicketAsset(REPO, 'TICK-1', 'design', 'a.txt')).toBeNull()
+          const pinned = await store.getPinnedTicketAsset('pin-a', 'design', 'a.txt')
+          expect(text(pinned)).toBe('one')
+          expect(pinned?.meta.revision).toBe(0)
+        })
+      })
+
+      test('answers null for what the build never pinned, and for an unpinned revision', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const v0 = await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'one'))
+          await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'two'))
+          await store.putTicketAsset(REPO, 'TICK-1', file('late.txt', 'late'))
+          await pinnedBuild(store, 'pin-b', [pinOf(v0)])
+          expect(await store.getPinnedTicketAsset('pin-b', 'design', 'late.txt')).toBeNull()
+          expect(await store.getPinnedTicketAsset('pin-b', 'other-kind', 'a.txt')).toBeNull()
+          expect(await store.getPinnedTicketAsset('pin-b', 'design', 'a.txt', 1)).toBeNull()
+          expect(text(await store.getPinnedTicketAsset('pin-b', 'design', 'a.txt', 0))).toBe('one')
+        })
+      })
+
+      test('a build with no pin and an unknown build', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'one'))
+          await store.createBuild({ ...sampleBuildInput('pin-none'), created: buildCreatedWrite() })
+          expect(await store.getPinnedTicketAsset('pin-none', 'design', 'a.txt')).toBeNull()
+          await expect(store.getPinnedTicketAsset('never', 'design', 'a.txt')).rejects.toThrow()
+        })
+      })
+
+      test('a spec.revised re-pin moves the latest pinned revision; earlier pins stay readable by rev', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const v0 = await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'one'))
+          await pinnedBuild(store, 'pin-c', [pinOf(v0)])
+          const v1 = await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'two'))
+          await store.append('pin-c', {
+            actor: KERNEL,
+            type: 'spec.revised',
+            payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 1, assets: [pinOf(v1)] },
+          })
+          expect(text(await store.getPinnedTicketAsset('pin-c', 'design', 'a.txt'))).toBe('two')
+          expect(text(await store.getPinnedTicketAsset('pin-c', 'design', 'a.txt', 0))).toBe('one')
+          // Re-pinning to nothing leaves no latest pin; revisions pinned earlier stay readable.
+          await store.append('pin-c', {
+            actor: KERNEL,
+            type: 'spec.revised',
+            payload: { artifact: { kind: 'spec', rev: 2 }, escalation: 1, assets: [] },
+          })
+          expect(await store.getPinnedTicketAsset('pin-c', 'design', 'a.txt')).toBeNull()
+          expect(text(await store.getPinnedTicketAsset('pin-c', 'design', 'a.txt', 1))).toBe('two')
+        })
+      })
+
+      test('a build-scoped handle reads only its own pins', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const v0 = await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'one'))
+          await pinnedBuild(store, 'pin-own', [pinOf(v0)])
+          await pinnedBuild(store, 'pin-other', [pinOf(v0)])
+          const scoped = store.scopeBuild('pin-own')
+          expect(text(await scoped.getPinnedTicketAsset('pin-own', 'design', 'a.txt'))).toBe('one')
+          await expect(scoped.getPinnedTicketAsset('pin-other', 'design', 'a.txt')).rejects.toThrow(
+            /build-scoped store/,
+          )
+          // The other ticket-asset reads stay rejected.
+          await expect(scoped.getTicketAsset(REPO, 'TICK-1', 'design', 'a.txt')).rejects.toThrow(
+            /build-scoped store/,
+          )
         })
       })
     })

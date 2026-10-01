@@ -1840,3 +1840,157 @@ describe('abBuildControl — sessionless repository/store shell', () => {
     expect((await eventTypes(store)).at(-1)).toBe('build.abort-requested')
   })
 })
+
+describe('revise-spec re-pins ticket assets (SPEC §6.3)', () => {
+  const ticket = { source: 'fake', id: 'T-42' }
+  const enc = (text: string) => new TextEncoder().encode(text)
+  const file = (name: string, text: string) => ({
+    kind: 'mock',
+    name,
+    layout: 'file' as const,
+    entries: [{ type: 'file' as const, path: name, content: enc(text) }],
+  })
+  const pin = (name: string, revision: number, size: number) => ({
+    kind: 'mock',
+    name,
+    revision,
+    layout: 'file' as const,
+    size,
+    fileCount: 1,
+    dirCount: 0,
+  })
+
+  /** A build that froze `a.png` rev 0 at its claim. */
+  async function pinnedStore(): Promise<MemoryBuildStore> {
+    const store = await makeStore({ ticket })
+    await store.putTicketAsset(REPO, ticket.id, file('a.png', 'one'))
+    await store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: REPO, baseBranch: 'main', assets: [pin('a.png', 0, 3)] },
+    })
+    await seedSpec(store)
+    return store
+  }
+
+  const fromTicket: BuildControlAction = {
+    kind: 'answer',
+    resolve: { kind: 'revise-spec', body: { kind: 'ticket' } },
+  }
+  const supplied: BuildControlAction = {
+    kind: 'answer',
+    resolve: {
+      kind: 'revise-spec',
+      body: { kind: 'supplied', origin: 'spec.md', read: async () => CONFORMING_SPEC },
+    },
+  }
+  const run = (store: MemoryBuildStore, action: BuildControlAction) =>
+    controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action,
+      readTicketBody: async () => CONFORMING_SPEC,
+    })
+
+  test('from the ticket re-pins the current assets on the answer and on spec.revised', async () => {
+    const store = await pinnedStore()
+    await store.putTicketAsset(REPO, ticket.id, file('a.png', 'two!'))
+    await store.putTicketAsset(REPO, ticket.id, file('b.png', 'b'))
+    await raise(store, 'esc-1')
+
+    await run(store, fromTicket)
+
+    const events = await store.getEvents(SLUG)
+    const expected = [pin('a.png', 1, 4), pin('b.png', 0, 1)]
+    expect(events.find((e) => e.type === 'escalation.answered')?.payload).toMatchObject({
+      assets: expected,
+    })
+    expect(events.find((e) => e.type === 'spec.revised')?.payload).toMatchObject({
+      assets: expected,
+    })
+    expect(reduceBuild(events).pinnedAssets).toEqual(expected)
+    await store.close()
+  })
+
+  test('from the ticket re-pins to an empty set when every asset was removed', async () => {
+    const store = await pinnedStore()
+    await store.removeTicketAsset(REPO, ticket.id, 'mock', 'a.png')
+    await raise(store, 'esc-1')
+
+    await run(store, fromTicket)
+
+    const events = await store.getEvents(SLUG)
+    expect(events.find((e) => e.type === 'spec.revised')?.payload).toMatchObject({ assets: [] })
+    expect(reduceBuild(events).pinnedAssets).toEqual([])
+    await store.close()
+  })
+
+  test('a supplied body leaves the pinned assets unchanged', async () => {
+    const store = await pinnedStore()
+    await store.putTicketAsset(REPO, ticket.id, file('a.png', 'two!'))
+    await raise(store, 'esc-1')
+
+    await run(store, supplied)
+
+    const events = await store.getEvents(SLUG)
+    expect(events.find((e) => e.type === 'spec.revised')?.payload).not.toHaveProperty('assets')
+    expect(events.find((e) => e.type === 'escalation.answered')?.payload).not.toHaveProperty(
+      'assets',
+    )
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 0, 3)])
+    await store.close()
+  })
+
+  test('a retry after a crash publishes the originally authorized set, not the edited ticket', async () => {
+    const store = await pinnedStore()
+    await store.putTicketAsset(REPO, ticket.id, file('a.png', 'two!'))
+    await raise(store, 'esc-1')
+    const append = store.append.bind(store) as (slug: string, event: EventWrite) => Promise<unknown>
+    let crash = true
+    ;(store as unknown as { append: typeof append }).append = async (slug, event) => {
+      if (crash && event.type === 'spec.revised') throw new Error('crash before spec.revised')
+      return append(slug, event)
+    }
+    await expect(run(store, fromTicket)).rejects.toThrow('crash before spec.revised')
+    expect((await store.getEvents(SLUG)).some((e) => e.type === 'spec.revised')).toBe(false)
+
+    // The ticket changes again before the operator retries.
+    crash = false
+    await store.putTicketAsset(REPO, ticket.id, file('a.png', 'three'))
+    await store.putTicketAsset(REPO, ticket.id, file('c.png', 'c'))
+    await run(store, fromTicket)
+
+    const events = await store.getEvents(SLUG)
+    expect(events.find((e) => e.type === 'spec.revised')?.payload).toMatchObject({
+      assets: [pin('a.png', 1, 4)],
+    })
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 1, 4)])
+    await store.close()
+  })
+
+  test('a legacy authorization without assets leaves the pins unchanged on retry', async () => {
+    const store = await pinnedStore()
+    await raise(store, 'esc-1')
+    const meta = await store.putArtifact(SLUG, { kind: 'spec', content: CONFORMING_SPEC })
+    await store.append(SLUG, {
+      actor: { kind: 'human', user: 'aron' },
+      type: 'escalation.answered',
+      payload: {
+        id: 'esc-1',
+        answer: 'revise',
+        resolution: 'revise-spec',
+        artifact: { kind: 'spec', rev: meta.revision },
+      },
+    })
+    await store.putTicketAsset(REPO, ticket.id, file('a.png', 'two!'))
+
+    await run(store, fromTicket)
+
+    const events = await store.getEvents(SLUG)
+    expect(events.find((e) => e.type === 'spec.revised')?.payload).not.toHaveProperty('assets')
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 0, 3)])
+    await store.close()
+  })
+})

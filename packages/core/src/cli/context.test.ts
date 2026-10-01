@@ -943,3 +943,192 @@ describe('buildContext — spec and plan are pinned to event-anchored revs (§6.
     expect(await abFile('plan.md')).toBe('# Plan v1\n')
   })
 })
+
+describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
+  const REPO = 'acme/app'
+  const TICKET = 'ENG-42'
+  const enc = (text: string) => new TextEncoder().encode(text)
+  const fileAsset = (name: string, text: string) => ({
+    kind: 'mock',
+    name,
+    layout: 'file' as const,
+    entries: [{ type: 'file' as const, path: name, content: enc(text) }],
+  })
+  const treeAsset = (name: string, text: string) => ({
+    kind: 'ref',
+    name,
+    layout: 'tree' as const,
+    entries: [
+      { type: 'dir' as const, path: 'empty' },
+      { type: 'dir' as const, path: 'img' },
+      { type: 'file' as const, path: 'index.html', content: enc(text) },
+      { type: 'file' as const, path: 'img/logo.svg', content: enc('<svg/>') },
+    ],
+  })
+  const pinOf = (meta: Awaited<ReturnType<typeof store.putTicketAsset>>) => ({
+    kind: meta.kind,
+    name: meta.name,
+    revision: meta.revision,
+    layout: meta.layout,
+    size: meta.size,
+    fileCount: meta.entries.filter((e) => e.type === 'file').length,
+    dirCount: meta.entries.filter((e) => e.type === 'dir').length,
+  })
+
+  async function freeze(): Promise<void> {
+    await store.close()
+    // Assets exist before the claim; the build then pins what the ticket had.
+    const staging = await seedStore()
+    const shot = await staging.putTicketAsset(REPO, TICKET, fileAsset('home.png', 'v0 bytes'))
+    const site = await staging.putTicketAsset(REPO, TICKET, treeAsset('site', '<h1>v0</h1>'))
+    await staging.close()
+    store = await seedStore({ assets: [pinOf(shot), pinOf(site)] })
+    await store.putTicketAsset(REPO, TICKET, fileAsset('home.png', 'v0 bytes'))
+    await store.putTicketAsset(REPO, TICKET, treeAsset('site', '<h1>v0</h1>'))
+  }
+
+  const TOML = [
+    '[tickets]',
+    'source = "file"',
+    'readyState = "ready"',
+    '',
+    '[verify]',
+    'steps = ["e2e"]',
+    '',
+    '[verify.e2e]',
+    'kind = "agent"',
+    'skill = "ab-verify-e2e"',
+    '',
+  ].join('\n')
+
+  test('every phase writes the pinned assets and lists them in the manifest', async () => {
+    await freeze()
+    await writeFile(join(workspace, 'autobuild.toml'), TOML)
+    await seedPlanApproved()
+    await seedImplementRound(1, 'sha-head-1')
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'sha-base-2' },
+    })
+
+    for (const phase of [
+      'plan',
+      'plan-review',
+      'implement',
+      'code-review',
+      'verify:e2e',
+      'finalize',
+      'reconcile',
+    ] as const) {
+      const manifest = await buildContext({
+        store,
+        env: makeEnv({ phase, round: 1 }),
+        workspacePath: workspace,
+      })
+      expect(manifest.assets).toEqual([
+        {
+          kind: 'mock',
+          name: 'home.png',
+          revision: 0,
+          layout: 'file',
+          size: 8,
+          path: '.ab/assets/mock/home.png',
+        },
+        {
+          kind: 'ref',
+          name: 'site',
+          revision: 0,
+          layout: 'tree',
+          size: 17,
+          path: '.ab/assets/ref/site',
+        },
+      ])
+      expect(await abFile('assets/mock/home.png/home.png')).toBe('v0 bytes')
+      expect(await abFile('assets/ref/site/index.html')).toBe('<h1>v0</h1>')
+      expect(await abFile('assets/ref/site/img/logo.svg')).toBe('<svg/>')
+      expect(existsSync(join(workspace, '.ab/assets/ref/site/empty'))).toBe(true)
+      const written = JSON.parse(await abFile('context.json'))
+      expect(written.assets).toEqual(manifest.assets)
+    }
+  })
+
+  test('attaching, replacing, or removing after the claim changes nothing', async () => {
+    await freeze()
+    await store.putTicketAsset(REPO, TICKET, fileAsset('home.png', 'REPLACED'))
+    await store.putTicketAsset(REPO, TICKET, fileAsset('new.png', 'new'))
+    await store.removeTicketAsset(REPO, TICKET, 'ref', 'site')
+
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+
+    expect(manifest.assets?.map((a) => `${a.kind}/${a.name}@${a.revision}`)).toEqual([
+      'mock/home.png@0',
+      'ref/site@0',
+    ])
+    expect(await abFile('assets/mock/home.png/home.png')).toBe('v0 bytes')
+    expect(await abFile('assets/ref/site/index.html')).toBe('<h1>v0</h1>')
+    expect(existsSync(join(workspace, '.ab/assets/mock/new.png'))).toBe(false)
+  })
+
+  test('a spec re-pin changes what later phases see', async () => {
+    await freeze()
+    const replaced = await store.putTicketAsset(REPO, TICKET, fileAsset('home.png', 'REPLACED'))
+    await store.append(BUILD, {
+      actor: agent('plan'),
+      type: 'escalation.raised',
+      payload: { id: 'e_1', phase: 'plan', source: 'agent', question: 'q' },
+    })
+    await store.putArtifact(BUILD, { kind: 'spec', content: '# Spec v1\n' })
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 4, assets: [pinOf(replaced)] },
+    })
+
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+
+    expect(manifest.assets?.map((a) => `${a.kind}/${a.name}@${a.revision}`)).toEqual([
+      'mock/home.png@1',
+    ])
+    expect(await abFile('assets/mock/home.png/home.png')).toBe('REPLACED')
+    expect(existsSync(join(workspace, '.ab/assets/ref'))).toBe(false)
+  })
+
+  test('a build with no pinned assets has no assets key and no directory', async () => {
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect('assets' in manifest).toBe(false)
+    expect(existsSync(join(workspace, '.ab/assets'))).toBe(false)
+  })
+
+  test('a pin the store cannot produce fails clearly', async () => {
+    await store.close()
+    store = await seedStore({
+      assets: [
+        {
+          kind: 'mock',
+          name: 'gone',
+          revision: 0,
+          layout: 'file',
+          size: 1,
+          fileCount: 1,
+          dirCount: 0,
+        },
+      ],
+    })
+    await expect(
+      buildContext({ store, env: makeEnv({ phase: 'plan', round: 1 }), workspacePath: workspace }),
+    ).rejects.toThrow(/pinned ticket asset mock\/gone revision 0 is missing/)
+  })
+})

@@ -290,7 +290,7 @@ it to exist. An unknown build returns `404 not-found`.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
-| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string}`; `slug`, `repo`, and a supplied `branch` are nonempty | `201` + `BuildRecord`; duplicate slug is `409 conflict` |
+| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write}`; `slug`, `repo`, and a supplied `branch` are nonempty. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + `BuildRecord`; duplicate slug is `409 conflict` |
 | `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`; list order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
@@ -439,6 +439,17 @@ does not apply. `{repo}` and `{id}` are percent-encoded path segments. Token
 authorization follows the one-matching-repo column of the matrix (a repo token
 for its own repository, or admin); build and session tokens receive `403 auth`.
 The family is additive, so `REMOTE_STORE_PROTOCOL_VERSION` did not change.
+
+A build also reads the assets it froze at its claim through its own build-scoped
+routes, which a build token may use (no ticket-asset authority needed). The
+server reduces the build's events to find the pinned revision, then returns that
+exact revision, so a later replace or removal never changes the answer and a
+finished build still answers:
+
+| BuildStore operation | HTTP route | Request | Success |
+|---|---|---|---|
+| `getPinnedTicketAsset` (manifest) | `GET /builds/{slug}/ticket-assets?kind=&name=[&rev=]` | required `kind` and `name`; optional `rev` | `200` + `TicketAssetMeta` for the latest pinned revision (or the named pinned `rev`), or `200 null` when the build never pinned it |
+| `getPinnedTicketAsset` (one file) | `GET /builds/{slug}/ticket-assets/file?kind=&name=&rev=&path=` | required `kind`, `name`, `path`; optional `rev` | `200` + `{"contentBase64": string}`, or `200 null` when not pinned; `404` when the revision has no such file |
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|

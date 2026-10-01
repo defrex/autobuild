@@ -254,7 +254,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       '(or at the last spec revision from the ticket), also after the build has',
       'finished. --rev <n> names an earlier pinned revision.',
       '',
-      'These commands are read-only and require no session identity for operator use.',
+      'This command is read-only and requires no session identity for operator use.',
       'Inside a phase, a complete ambient tuple permits only the ambient build;',
       'foreign builds and malformed or partial identity are rejected.',
     ]),

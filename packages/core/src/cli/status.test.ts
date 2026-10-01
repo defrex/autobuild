@@ -11,7 +11,7 @@
  * never occurs in production.
  */
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseConfig } from '../config/load'
@@ -29,6 +29,7 @@ import { PhaseSessionError } from '../store/phase-session'
 import type { BuildDigest, BuildRecord, BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
 import {
+  abBuildAssetGet,
   abBuildStatus,
   abBuilds,
   currentRepo,
@@ -2474,5 +2475,94 @@ describe('detail: session stream status (SPEC §9)', () => {
       streamStatus: 'open',
     })
     await store.close()
+  })
+})
+
+describe('abBuildAssetGet', () => {
+  const enc = (text: string) => new TextEncoder().encode(text)
+  const asset = (text: string) => ({
+    kind: 'mock',
+    name: 'a.txt',
+    layout: 'file' as const,
+    entries: [{ type: 'file' as const, path: 'a.txt', content: enc(text) }],
+  })
+
+  async function finishedBuild(): Promise<MemoryBuildStore> {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await store.putTicketAsset(REPO, 'ENG-1', asset('pinned'))
+    await store.createBuild({
+      slug: 'b1',
+      repo: REPO,
+      ticket: { source: 'linear', id: 'ENG-1', title: 'A ticket' },
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'linear', id: 'ENG-1' },
+          repo: REPO,
+          baseBranch: 'main',
+          assets: [
+            {
+              kind: 'mock',
+              name: 'a.txt',
+              revision: 0,
+              layout: 'file',
+              size: 6,
+              fileCount: 1,
+              dirCount: 0,
+            },
+          ],
+        },
+      },
+    })
+    await store.append('b1', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    return store
+  }
+
+  test('downloads the pinned bytes by build and name after the build finished and the ticket moved on', async () => {
+    const store = await finishedBuild()
+    await store.putTicketAsset(REPO, 'ENG-1', asset('replaced'))
+    await store.removeTicketAsset(REPO, 'ENG-1', 'mock', 'a.txt')
+    const dir = await mkdtemp(join(tmpdir(), 'ab-build-asset-'))
+    try {
+      const out: string[] = []
+      await abBuildAssetGet({
+        targetRepo: '/anywhere',
+        env: {},
+        exec: fakeExec,
+        stdout: (line) => out.push(line),
+        openStore: () => store,
+        slug: 'b1',
+        kind: 'mock',
+        name: 'a.txt',
+        dest: join(dir, 'out.txt'),
+      })
+      expect(await readFile(join(dir, 'out.txt'), 'utf8')).toBe('pinned')
+      expect(out.join('\n')).toContain('b1 mock/a.txt revision 0')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('names a build that never pinned the asset, and an unknown build', async () => {
+    const store = await finishedBuild()
+    const run = (slug: string, name: string) =>
+      abBuildAssetGet({
+        targetRepo: '/anywhere',
+        env: {},
+        exec: fakeExec,
+        stdout: () => {},
+        openStore: () => store,
+        slug,
+        kind: 'mock',
+        name,
+        dest: '/tmp/never-written',
+      })
+    await expect(run('b1', 'nope')).rejects.toThrow('pinned no ticket asset mock/nope')
+    await expect(run('missing', 'a.txt')).rejects.toThrow('no build "missing"')
   })
 })
