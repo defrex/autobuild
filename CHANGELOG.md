@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#582](https://github.com/defrex/autobuild/pull/582) — Teach the skills to export designs into ticket assets at grooming
 - [#581](https://github.com/defrex/autobuild/pull/581) — Freeze ticket assets into the build at claim
 - [#580](https://github.com/defrex/autobuild/pull/580) — Glide the seam knob and select Codex in the fully remote state
 - [#579](https://github.com/defrex/autobuild/pull/579) — Add a website visual verify step with a headless capture and repo-local skill

@@ -20,6 +20,10 @@ write product code in this phase.
    reviewer's findings) or `.ab/guidance.json` (a human operator's answer to
    the escalation that blocked this build). A round never carries both, and a
    round may carry neither.
+   When the manifest lists `assets`, they are the build's pinned ticket assets
+   under `.ab/assets/<kind>/<name>/`; read them with the spec. A `design` asset
+   is a contract on observable visual and reference outcomes, not on implementation — the plan must satisfy it, while how stays yours. The spec cites
+   assets by kind and name.
 2. Read the spec, then the codebase. The spec says what and why; you decide
    how. Explore enough of the code to name real files and real seams. When an
    approach touches a third-party service, ground it in the provider's own

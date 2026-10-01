@@ -28,7 +28,11 @@ goes nowhere.
      fake or mock are not contract evidence because they can repeat the
      author's assumption.
    - **Spec conformance** — every acceptance criterion met; nothing beyond
-     the spec's scope smuggled in.
+     the spec's scope smuggled in. A pinned `design` asset (listed under
+     `assets` in `.ab/context.json`, files under `.ab/assets/<kind>/<name>/`)
+     is a contract on observable visual and reference outcomes, not on implementation: judge the rendered output against it wherever the code lets you
+     check, and treat a divergence as a finding. A gap in the asset is not a
+     reason to invent requirements.
    - **Tests** — do the new tests exercise the seams this change created or
      moved? Would they fail if the change were wrong?
    - **Fit** — matches the codebase's idioms; no needless indirection.
