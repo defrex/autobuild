@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#581](https://github.com/defrex/autobuild/pull/581) — Freeze ticket assets into the build at claim
 - [#579](https://github.com/defrex/autobuild/pull/579) — Add a website visual verify step with a headless capture and repo-local skill
 - [#578](https://github.com/defrex/autobuild/pull/578) — Add ticket assets: files and folders attached to a ticket, stored in the BuildStore
 - [#577](https://github.com/defrex/autobuild/pull/577) — Add the one-page Autobuild marketing site as a private static package
