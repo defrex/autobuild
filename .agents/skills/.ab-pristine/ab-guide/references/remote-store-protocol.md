@@ -431,7 +431,7 @@ wait of section 3.
 
 ### Ticket assets
 
-A ticket asset (SPEC §7.1.3) is a named, versioned bundle of files attached to
+A ticket asset is a named, versioned bundle of files attached to
 a ticket, keyed by `(repo, ticketId, kind, name)`. These routes live under the
 repository but, unlike the journal routes, **do not require a repository
 record**: assets can precede any journal row, so the repository-existence gate

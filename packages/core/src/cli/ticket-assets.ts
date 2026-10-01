@@ -183,6 +183,24 @@ function guardedTarget(root: string, path: string): string {
   return target
 }
 
+/** Refuse to write through a symlink: every existing component of `target`
+ * below `root`, and `target` itself, must not be one. Containment is checked
+ * against the real filesystem, since mkdir and writeFile follow links. */
+async function assertNoSymlinks(root: string, target: string): Promise<void> {
+  const rel = target === root ? '' : target.slice(root.length + 1)
+  let current = root
+  const parts = rel === '' ? [] : rel.split(sep)
+  for (const part of ['', ...parts]) {
+    if (part !== '') current = join(current, part)
+    if (current === root) continue
+    const info = await lstat(current).catch(() => null)
+    if (info === null) return
+    if (info.isSymbolicLink()) {
+      throw new Error(`${current}: refusing to write through a symbolic link in the destination`)
+    }
+  }
+}
+
 /**
  * Write a downloaded asset to `dest`. A `file` asset becomes the file `dest`
  * (or `dest/<filename>` when `dest` is an existing directory); a `tree` asset
@@ -200,17 +218,28 @@ export async function writeAssetTo(asset: TicketAsset, dest: string): Promise<st
       .then((info) => info.isDirectory())
       .catch(() => false)
     const target = isDir ? guardedTarget(root, file.path) : root
+    if (isDir) await assertNoSymlinks(root, target)
+    else {
+      const existing = await lstat(target).catch(() => null)
+      if (existing?.isSymbolicLink()) {
+        throw new Error(`${target}: refusing to write through a symbolic link`)
+      }
+    }
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, file.content)
     return target
   }
   await mkdir(root, { recursive: true })
   for (const entry of asset.entries) {
-    if (entry.type === 'dir') await mkdir(guardedTarget(root, entry.path), { recursive: true })
+    if (entry.type !== 'dir') continue
+    const target = guardedTarget(root, entry.path)
+    await assertNoSymlinks(root, target)
+    await mkdir(target, { recursive: true })
   }
   for (const entry of asset.entries) {
     if (entry.type !== 'file') continue
     const target = guardedTarget(root, entry.path)
+    await assertNoSymlinks(root, target)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, entry.content)
   }

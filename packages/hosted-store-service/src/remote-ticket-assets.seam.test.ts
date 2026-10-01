@@ -331,3 +331,48 @@ describe('ticket asset downloads under a deployment ceiling', () => {
     }
   })
 })
+
+describe('ticket asset mutation responses under a deployment ceiling', () => {
+  test('an upload that fits but whose returned manifest does not is refused before anything is stored', async () => {
+    const ceiling = 350_000
+    const { server, backing } = harness({ maxTicketAssetRequestBytes: ceiling })
+    try {
+      const store = new RemoteBuildStore({ url: server.url })
+      const entries: TicketAssetEntryInput[] = Array.from({ length: 1000 }, (_, index) => ({
+        type: 'file' as const,
+        path: `${String(index).padStart(127, 'd')}/${String(index).padStart(128, 'f')}`,
+        content: new Uint8Array(0),
+      }))
+      const error = await store
+        .putTicketAsset(REPO, 'T-1', { kind: 'design', name: 'wide', layout: 'tree', entries })
+        .catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(TicketAssetValidationError)
+      expect(await backing.listTicketAssets(REPO, 'T-1', { revisions: true })).toEqual([])
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('removal whose response cannot fit fails without writing the tombstone', async () => {
+    const { server, backing } = harness({ maxTicketAssetRequestBytes: 2048 })
+    try {
+      const entries: TicketAssetEntryInput[] = Array.from({ length: 200 }, (_, index) => ({
+        type: 'dir' as const,
+        path: String(index).padStart(100, 'd'),
+      }))
+      await backing.putTicketAsset(REPO, 'T-1', {
+        kind: 'design',
+        name: 'dirs',
+        layout: 'tree',
+        entries,
+      })
+      const store = new RemoteBuildStore({ url: server.url })
+      await expect(store.removeTicketAsset(REPO, 'T-1', 'design', 'dirs')).rejects.toBeInstanceOf(
+        TicketAssetValidationError,
+      )
+      expect(await backing.listTicketAssets(REPO, 'T-1')).toHaveLength(1)
+    } finally {
+      await server.stop()
+    }
+  })
+})

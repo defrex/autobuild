@@ -219,18 +219,21 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    * could not carry (the platform would otherwise reject it first, opaquely). */
   function assetJson(status: number, body: unknown, describe: string): Response {
     const text = JSON.stringify(body)
-    const max = opts.maxTicketAssetRequestBytes
-    if (max !== undefined) {
-      const bytes = utf8.encode(text).length
-      if (bytes > max) {
-        throw new RequestError(
-          413,
-          'validation',
-          `ticket asset ${describe} is ${bytes} bytes encoded, over this deployment's ${max}-byte response ceiling; it can only be fetched from a store with a higher ceiling`,
-        )
-      }
-    }
+    checkAssetResponse(text, describe)
     return new Response(text, { status, headers: { 'content-type': 'application/json' } })
+  }
+
+  function checkAssetResponse(text: string, describe: string): void {
+    const max = opts.maxTicketAssetRequestBytes
+    if (max === undefined) return
+    const bytes = utf8.encode(text).length
+    if (bytes > max) {
+      throw new RequestError(
+        413,
+        'validation',
+        `ticket asset ${describe} is ${bytes} bytes encoded, over this deployment's ${max}-byte response ceiling; it can only be fetched from a store with a higher ceiling`,
+      )
+    }
   }
 
   async function readAssetBody(req: Request): Promise<z.infer<typeof putTicketAssetBodySchema>> {
@@ -282,6 +285,27 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         })
         const input = { kind: body.kind, name: body.name, layout: body.layout, entries }
         validateTicketAssetInput(input, assetLimits)
+        // The response carries the manifest: size it (worst case revision and
+        // timestamp, real sizes, 64-hex content addresses) BEFORE committing,
+        // so an unreturnable response never follows a stored revision.
+        checkAssetResponse(
+          JSON.stringify({
+            repo,
+            ticketId,
+            kind: body.kind,
+            name: body.name,
+            revision: 999_999_999,
+            layout: body.layout,
+            size: entries.reduce((sum, e) => sum + (e.type === 'file' ? e.content.length : 0), 0),
+            entries: entries.map((e) =>
+              e.type === 'dir'
+                ? { type: 'dir', path: e.path }
+                : { type: 'file', path: e.path, size: e.content.length, blobRef: '0'.repeat(64) },
+            ),
+            createdAt: '2026-01-01T00:00:00.000Z',
+          }),
+          `${label(body.kind, body.name)} manifest`,
+        )
         const meta = await store.putTicketAsset(repo, ticketId, input)
         return assetJson(201, meta, `${label(body.kind, body.name)} manifest`)
       }
@@ -322,6 +346,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'POST remove': {
         const body = await readBody(req, removeTicketAssetBodySchema)
+        // The response is the removed manifest: check it fits before the
+        // tombstone is written, so a refused response leaves nothing mutated.
+        const live = await store.getTicketAsset(repo, ticketId, body.kind, body.name)
+        if (live !== null) {
+          checkAssetResponse(JSON.stringify(live.meta), `${label(body.kind, body.name)} manifest`)
+        }
         return json(200, await store.removeTicketAsset(repo, ticketId, body.kind, body.name))
       }
       default:

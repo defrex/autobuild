@@ -154,6 +154,43 @@ describe('writeAssetTo', () => {
     } as TicketAsset
     await expect(writeAssetTo(absolute, join(tmp, 'out'))).rejects.toThrow()
   })
+
+  const treeWith = (path: string): TicketAsset => ({
+    meta: {
+      repo: 'r',
+      ticketId: 'T',
+      kind: 'k',
+      name: 'n',
+      revision: 0,
+      layout: 'tree',
+      size: 1,
+      createdAt: 'now',
+      entries: [],
+    },
+    entries: [{ type: 'file', path, content: new Uint8Array([1]) }],
+  })
+
+  test('refuses to write through an existing directory symlink or a final-file symlink', async () => {
+    const out = join(tmp, 'out')
+    const outside = join(tmp, 'outside')
+    await mkdir(out)
+    await mkdir(outside)
+    await symlink(outside, join(out, 'nested'))
+    await expect(writeAssetTo(treeWith('nested/a.txt'), out)).rejects.toThrow(/symbolic link/)
+    await writeFile(join(outside, 'victim.txt'), 'keep')
+    await symlink(join(outside, 'victim.txt'), join(out, 'f.txt'))
+    await expect(writeAssetTo(treeWith('f.txt'), out)).rejects.toThrow(/symbolic link/)
+    expect(await readFile(join(outside, 'victim.txt'), 'utf8')).toBe('keep')
+    expect(await readdir(outside)).toEqual(['victim.txt'])
+
+    const fileAsset: TicketAsset = {
+      ...treeWith('f.txt'),
+      meta: { ...treeWith('f.txt').meta, layout: 'file' },
+    }
+    await expect(writeAssetTo(fileAsset, join(out, 'f.txt'))).rejects.toThrow(/symbolic link/)
+    await expect(writeAssetTo(fileAsset, out)).rejects.toThrow(/symbolic link/)
+    expect(await readFile(join(outside, 'victim.txt'), 'utf8')).toBe('keep')
+  })
 })
 
 describe('ab ticket attach', () => {
