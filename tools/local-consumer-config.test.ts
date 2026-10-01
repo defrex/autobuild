@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
 import { constants } from 'node:fs'
-import { access } from 'node:fs/promises'
+import { access, readFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadConfig } from '../packages/core/src/config/load'
 import { effectiveRuntimeReferences } from '../packages/core/src/config/roles'
+import { evaluateVerifyApplicability } from '../packages/core/src/kernel/verify-applicability'
 
 const REPO_ROOT = join(import.meta.dir, '..')
 
@@ -58,6 +59,7 @@ test('local rollout preserves this repository pipeline and Linear integration', 
     'postgres',
     'dashboard',
     'web-dashboard',
+    'website',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({ kind: 'check', command: 'lint', always: true })
   expect(config.verify.stepConfigs.postgres).toEqual({
@@ -75,6 +77,11 @@ test('local rollout preserves this repository pipeline and Linear integration', 
     skill: 'verify-web-dashboard',
     paths: expect.arrayContaining(['packages/hosted-store-service/app/**']),
   })
+  expect(config.verify.stepConfigs.website).toEqual({
+    kind: 'agent',
+    skill: 'verify-website',
+    paths: ['packages/website/**', 'design/website/**'],
+  })
   expect(config.finalize.steps).toEqual(['changelog'])
   expect(config.finalize.stepConfigs.changelog).toEqual({
     kind: 'agent',
@@ -89,4 +96,30 @@ test('local rollout preserves this repository pipeline and Linear integration', 
     triageState: 'Backlog',
     proposalState: 'Backlog',
   })
+})
+
+test('the website step applies only to the site source and its design reference', async () => {
+  const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
+  const step = config.verify.stepConfigs.website
+  if (!step || !('paths' in step) || !step.paths) throw new Error('website step has no paths')
+  const rule = { kind: 'paths' as const, step: 'website', paths: step.paths }
+  for (const path of ['packages/website/src/page.ts', 'design/website/reference.html']) {
+    expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(true)
+  }
+  for (const path of [
+    'tools/website-capture.ts',
+    '.agents/skills/verify-website/SKILL.md',
+    'autobuild.toml',
+  ]) {
+    expect(evaluateVerifyApplicability(rule, [path]).applies).toBe(false)
+  }
+})
+
+test('verify-website is an unprefixed repo-local skill with a Claude symlink', async () => {
+  const link = join(REPO_ROOT, '.claude/skills/verify-website')
+  expect(await realpath(link)).toBe(
+    await realpath(join(REPO_ROOT, '.agents/skills/verify-website')),
+  )
+  const skill = await readFile(join(link, 'SKILL.md'), 'utf8')
+  expect(skill).toMatch(/^name: verify-website$/m)
 })
