@@ -1028,3 +1028,47 @@ describe('workspace.provisioned remote marker', () => {
     expect(() => provisionedWrite({ ...provisioned, remote: 'yes' })).toThrow(/remote/)
   })
 })
+
+describe('pinned ticket assets (SPEC §6.3)', () => {
+  const pin = {
+    kind: 'mock',
+    name: 'home.png',
+    revision: 2,
+    layout: 'file',
+    size: 10,
+    fileCount: 1,
+    dirCount: 0,
+  }
+  const created = { ticket: { source: 'linear', id: 'T-1' }, repo: 'r', baseBranch: 'main' }
+
+  test('build.created, spec.revised, and escalation.answered accept an optional assets list', () => {
+    expect(eventPayloadSchemas['build.created'].safeParse(created).success).toBe(true)
+    expect(
+      eventPayloadSchemas['build.created'].safeParse({ ...created, assets: [pin] }).success,
+    ).toBe(true)
+    expect(
+      eventPayloadSchemas['spec.revised'].safeParse({
+        artifact: { kind: 'spec', rev: 1 },
+        escalation: 3,
+        assets: [],
+      }).success,
+    ).toBe(true)
+    expect(
+      eventPayloadSchemas['escalation.answered'].safeParse({
+        id: 'e_1',
+        answer: 'a',
+        resolution: 'revise-spec',
+        assets: [pin],
+      }).success,
+    ).toBe(true)
+  })
+
+  test('a pinned asset is strict and its revision is a nonnegative integer', () => {
+    const parse = (assets: unknown) =>
+      eventPayloadSchemas['build.created'].safeParse({ ...created, assets }).success
+    expect(parse([{ ...pin, extra: 1 }])).toBe(false)
+    expect(parse([{ ...pin, revision: -1 }])).toBe(false)
+    expect(parse([{ ...pin, layout: 'zip' }])).toBe(false)
+    expect(parse([{ ...pin, name: '' }])).toBe(false)
+  })
+})

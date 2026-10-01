@@ -218,7 +218,8 @@ Small, independently runnable, crash-safe:
   repo, so re-running `ab dispatch` resumes durable work rather than only
   looking for new tickets. Every ordinary tick also completes queued dispatch
   records whose pre-run sequence was interrupted: it reconstructs a missing
-  `build.created` from the immutable record, executes only missing workspace,
+  `build.created` from the immutable record (only records an older dispatcher
+  left with an empty stream: new claims write it atomically with the record), executes only missing workspace,
   spec, and ticket-notification boundaries, and records each failed attempt as
   `dispatch.failed`. `build.created` retains any claim-time auto-merge
   attribution and the sampled default fact's seq until the human-authored
@@ -386,6 +387,27 @@ approvals-of-something-else. A phase discovering the spec itself is wrong
 raises an `escalation`; a human uses `ab answer --revise-spec` (or
 `--revise-spec-from-ticket`), the spec gets rev N+1, and the build restarts
 from `plan` (cheap — downstream was invalidated anyway).
+
+**Ticket assets are frozen with the spec.** Claiming a ticket pins the
+ticket's current assets (§7.1.3) into the build the same way the spec becomes
+revision 0: `build.created.assets` lists exactly which `(kind, name, revision)`
+the build sees, omitted when the ticket has none. The set is sampled
+immediately after the claim succeeds and before spec authoring, and it is
+written atomically with the build record (`createBuild` takes the initial
+`build.created` event), so an edit made while a spec is being authored, or a
+crash between the two writes, can never change or lose the pin; interrupted
+dispatch recovery re-reads it from the log. Attaching, replacing, or removing
+an asset afterwards leaves the running build alone, because a build reads its
+assets by pinned revision, never "latest". `ab ticket attach` and `asset rm`
+warn when the ticket has an active build. Revising the spec **from the ticket**
+(`ab answer --revise-spec-from-ticket`) re-pins the ticket's then-current
+assets together with its body, as `spec.revised.assets` (present, possibly
+empty, means "re-pin to this set"); the set is sampled once, when the body is
+read, and recorded on the `escalation.answered` authorization too, so a retry
+after a crash publishes the originally authorized set. Revising from a supplied
+body file leaves the pinned assets unchanged. The one case this cannot cover is
+a record an older dispatcher created with an empty stream: recovery can only
+sample the ticket's current assets for it.
 
 ## 7. The build store
 
@@ -623,7 +645,14 @@ build and session handles reject all of them. Before execution, a runner obtains
 an interface-enforced handle scoped to exactly its build. Own-build records,
 stream, artifacts, lease, and subscription remain available; another build,
 collection/admin operations, nested foreign scope, and every repository-journal
-operation reject. This guard applies identically to every adapter; remote tokens
+operation reject. The one ticket-asset read a build handle keeps is
+`getPinnedTicketAsset(slug, kind, name, rev?)`: the asset as that build froze it
+(the latest pinned revision, or any revision the build ever pinned), found by
+reducing the build's own events and then reading that exact revision. It needs
+no lease, so it answers for a finished build, and remote build tokens reach it
+through `GET /builds/:slug/ticket-assets`. `createBuild` optionally takes the
+build's initial `build.created` event and appends it as seq 1 in the same atomic
+step as the record on every adapter. This guard applies identically to every adapter; remote tokens
 carry the same authority over the wire as defense in depth rather than creating
 it. Two implementations of one contract (`packages/core/src/store/contract.ts` is the shared
 conformance suite):
@@ -946,11 +975,19 @@ A phase-scoped hydration into the gitignored scratch dir:
   findings.json     # current feedback, when round > 1
   history/          # prior-round artifacts where the phase needs them
   verify/           # failure reports routed back to implement
+  assets/           # the ticket assets the build froze (§6.3), every phase:
+                    #   assets/<kind>/<name>/…, folders keep their trees
 ```
 
 The manifest tells the agent its contract — `required` deposits and
 `allowedTerminals` — so skills are self-checking against the same data the
-CLI validates with. Per-phase inputs and terminals:
+CLI validates with. When the build pinned ticket assets, every phase also gets
+them under `.ab/assets/<kind>/<name>/` and the manifest lists each as
+`assets: [{kind, name, revision, layout, size, path}]`; a `file` asset is the
+single file inside its directory. A build with no assets gets no `assets` key
+and no directory. `ab build asset get <slug> <kind> <name> <dest>` downloads a
+pinned asset by build, also after the build has finished. Per-phase inputs and
+terminals:
 
 | Phase | Materialized inputs | Terminal |
 |---|---|---|
@@ -1395,6 +1432,10 @@ escalation after an exhausted failed verify report feeds `implement`, where its
 guidance outranks
 the pending report.
 
+Answering with `--revise-spec-from-ticket` also re-pins the build's ticket assets
+(§6.3): the sampled set rides on the answer and on `spec.revised`. A supplied
+body file changes the spec only.
+
 Only an operator answering an open `review-round-limit` policy escalation may
 set `escalation.answered.reviewRoundCeiling`. The same event both clears the
 human gate and replaces the cap; no standalone or pre-emptive form exists. A
@@ -1795,9 +1836,9 @@ with illustrative members:
 
 | Family | Examples |
 |---|---|
-| Build lifecycle | `build.created`, `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
-| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`) |
-| Spec | `spec.imported`, `spec.authored`, `spec.revised` |
+| Build lifecycle | `build.created` (carrying `assets`, the claim-time pin, §6.3), `workspace.provisioned`, `workspace.released`, `execution.started`, `execution.ended`, `infrastructure.failed`, `infrastructure.cleanup-attempted`, `dispatch.comment-posted`, `dispatch.failed`, `runner.attached`, `runner.setup-failed`, `abort.remote-branch-deleted`, `abort.local-branch-deleted`, `abort.ticket-returned`, `build.completed` |
+| Operator commands [D2] | `build.pause-requested` → `build.paused`; `build.discard-requested`; `build.auto-merge-requested`; `escalation.answered` (optionally carrying a validated `reviewRoundCeiling`, or the `assets` sampled with a revise-from-ticket authorization) |
+| Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
 | Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |

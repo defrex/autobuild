@@ -20,6 +20,7 @@ export {
   DEFAULT_TICKET_ASSET_LIMITS,
   effectiveTicketAssetLimits,
   loadTicketAsset,
+  resolvePinnedAsset,
   storeTicketAssetBlobs,
   summarizeTicketAsset,
   TICKET_ASSET_MAX_BYTES,
@@ -38,6 +39,7 @@ export type {
   TicketAssetMeta,
   TicketAssetSummary,
 } from './ticket-assets'
+export { validateCreatedEvent } from './new-build'
 export { createBuildScopedStore } from './build-scope'
 export { createSessionScopedStore } from './session-handle'
 export { DIGEST_EVENT_TYPES, reduceBuildDigest } from './digest'

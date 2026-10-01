@@ -206,6 +206,14 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     ): Promise<TicketAsset | null> {
       return Promise.reject(new SessionScopeError(scope, 'getTicketAsset', repo))
     },
+    getPinnedTicketAsset(
+      slug: string,
+      _kind: string,
+      _name: string,
+      _rev?: number,
+    ): Promise<TicketAsset | null> {
+      return Promise.reject(new SessionScopeError(scope, 'getPinnedTicketAsset', slug))
+    },
     listTicketAssets(
       repo: string,
       _ticketId: string,

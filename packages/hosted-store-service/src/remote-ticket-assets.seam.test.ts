@@ -376,3 +376,95 @@ describe('ticket asset mutation responses under a deployment ceiling', () => {
     }
   })
 })
+
+describe('pinned ticket asset routes (SPEC §6.3)', () => {
+  const pin = {
+    kind: 'design',
+    name: 'a',
+    revision: 0,
+    layout: 'file' as const,
+    size: 3,
+    fileCount: 1,
+    dirCount: 0,
+  }
+
+  async function pinnedBuild(backing: MemoryBuildStore, slug: string): Promise<void> {
+    await backing.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('one')))
+    await backing.createBuild({
+      slug,
+      repo: REPO,
+      ticket: { source: 'linear', id: 'T-1' },
+      created: {
+        actor: { kind: 'dispatcher' },
+        type: 'build.created',
+        payload: {
+          ticket: { source: 'linear', id: 'T-1' },
+          repo: REPO,
+          baseBranch: 'main',
+          assets: [pin],
+        },
+      },
+    })
+  }
+
+  test("a build token reads its own build's pinned asset, even after the ticket replaced it", async () => {
+    const secret = 's3cret'
+    const { backing, server } = harness({ secret })
+    try {
+      await pinnedBuild(backing, 'pinned-build')
+      await backing.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('replaced')))
+      const buildToken = mintToken(secret, { build: 'pinned-build', session: '*', exp: FAR })
+      const store = new RemoteBuildStore({ url: server.url, token: buildToken })
+
+      const asset = await store.getPinnedTicketAsset('pinned-build', 'design', 'a')
+      expect(asset?.meta.revision).toBe(0)
+      expect(asset?.entries).toEqual([{ type: 'file', path: 'a', content: enc('one') }])
+      // The ticket-asset routes themselves stay closed to the build token.
+      await expect(store.listTicketAssets(REPO, 'T-1')).rejects.toBeInstanceOf(AuthError)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("another build's token is refused (403) and an unpinned name is null", async () => {
+    const secret = 's3cret'
+    const { backing, server } = harness({ secret })
+    try {
+      await pinnedBuild(backing, 'pinned-build')
+      const other = new RemoteBuildStore({
+        url: server.url,
+        token: mintToken(secret, { build: 'other-build', session: '*', exp: FAR }),
+      })
+      await expect(
+        other.getPinnedTicketAsset('pinned-build', 'design', 'a'),
+      ).rejects.toBeInstanceOf(AuthError)
+
+      const own = new RemoteBuildStore({
+        url: server.url,
+        token: mintToken(secret, { build: 'pinned-build', session: '*', exp: FAR }),
+      })
+      expect(await own.getPinnedTicketAsset('pinned-build', 'design', 'unpinned')).toBeNull()
+      expect(await own.getPinnedTicketAsset('pinned-build', 'design', 'a', 7)).toBeNull()
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test('a finished build still serves its pinned asset', async () => {
+    const { backing, server } = harness()
+    try {
+      await pinnedBuild(backing, 'done-build')
+      await backing.append('done-build', {
+        actor: { kind: 'dispatcher' },
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+      await backing.removeTicketAsset(REPO, 'T-1', 'design', 'a')
+      const store = new RemoteBuildStore({ url: server.url })
+      const asset = await store.getPinnedTicketAsset('done-build', 'design', 'a')
+      expect(asset?.entries).toEqual([{ type: 'file', path: 'a', content: enc('one') }])
+    } finally {
+      await server.stop()
+    }
+  })
+})

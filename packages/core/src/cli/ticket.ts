@@ -20,6 +20,7 @@ import {
   updateTicket,
 } from '../ports/tickets/operations'
 import type { Ticket, TicketSource, TicketUpdate } from '../ports/types'
+import { reduceBuild } from '../kernel/reducer'
 import type { BuildStore } from '../store/types'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import type { TicketAssetSummary } from '../store/ticket-assets'
@@ -110,6 +111,8 @@ export interface TicketAttachOpts extends TicketCommandOpts {
   /** Defaults to the path's basename. */
   name?: string
   json?: boolean
+  /** Warning sink (active-build notice); stdout stays the command's result. */
+  stderr?: (line: string) => void
 }
 
 export interface TicketAssetGetOpts extends TicketCommandOpts {
@@ -126,6 +129,8 @@ export interface TicketAssetRmOpts extends TicketCommandOpts {
   kind: string
   name: string
   json?: boolean
+  /** Warning sink (active-build notice); stdout stays the command's result. */
+  stderr?: (line: string) => void
 }
 
 export interface TicketMoveOpts extends TicketCommandOpts {
@@ -392,6 +397,35 @@ function withTicketStore<T>(
   )
 }
 
+/** Slugs of this repo's non-terminal builds for the ticket. A build freezes its
+ * ticket assets at the claim (SPEC §6.3), so a change to them does not reach
+ * it. The notice is advisory: a failed lookup yields none and never blocks. */
+async function activeBuildsFor(store: BuildStore, repo: string, id: string): Promise<string[]> {
+  try {
+    const active: string[] = []
+    for (const record of await store.listBuilds()) {
+      if (record.repo !== repo || record.ticket?.id !== id) continue
+      const { status } = reduceBuild(await store.getEvents(record.slug))
+      if (status !== 'done' && status !== 'aborted') active.push(record.slug)
+    }
+    return active
+  } catch {
+    return []
+  }
+}
+
+function warnActiveBuilds(
+  opts: { stderr?: (line: string) => void; id: string },
+  slugs: string[],
+): void {
+  for (const slug of slugs) {
+    opts.stderr?.(
+      `warning: build ${slug} is active for ticket ${opts.id}; it keeps the assets it froze at ` +
+        `the claim unless its spec is revised from the ticket (ab answer ${slug} --revise-spec-from-ticket)`,
+    )
+  }
+}
+
 /** `ab ticket attach <id> <kind> <path>` — store a file or folder as a ticket
  * asset, then leave a note on the ticket in its source. Order matters: the
  * source is asked first, so an unknown id stores nothing; the note follows the
@@ -407,9 +441,10 @@ export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
     const live = await store.listTicketAssets(repo, opts.id)
     const replacing = live.some((asset) => asset.kind === opts.kind && asset.name === name)
     const meta = await store.putTicketAsset(repo, opts.id, input)
-    return { meta, replacing }
+    return { meta, replacing, active: await activeBuildsFor(store, repo, opts.id) }
   })
   const { meta } = stored
+  warnActiveBuilds(opts, stored.active)
   try {
     await source.comment(opts.id, ticketAssetNote(stored.replacing ? 'replaced' : 'attached', meta))
   } catch (error) {
@@ -456,12 +491,14 @@ export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> 
  * (earlier revisions stay retrievable) and note the removal on the ticket. */
 export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'asset rm')
-  const removed = await withTicketStore(opts, ({ store, repo }) =>
-    store.removeTicketAsset(repo, opts.id, opts.kind, opts.name),
-  )
+  const { removed, active } = await withTicketStore(opts, async ({ store, repo }) => ({
+    removed: await store.removeTicketAsset(repo, opts.id, opts.kind, opts.name),
+    active: await activeBuildsFor(store, repo, opts.id),
+  }))
   if (removed === null) {
     throw new Error(`ticket ${opts.id} has no current asset ${opts.kind}/${opts.name} to remove`)
   }
+  warnActiveBuilds(opts, active)
   try {
     await source.comment(opts.id, ticketAssetNote('removed', removed))
   } catch (error) {

@@ -370,6 +370,15 @@ export function scopeLocalStoreToPhaseSession(
       own('getTicketAsset', 'repo', repo)
       return store.getTicketAsset(repo, ticketId, kind, name, rev)
     },
+    async getPinnedTicketAsset(
+      slug: string,
+      kind: string,
+      name: string,
+      rev?: number,
+    ): Promise<TicketAsset | null> {
+      own('getPinnedTicketAsset', 'build', slug)
+      return store.getPinnedTicketAsset(slug, kind, name, rev)
+    },
     async listTicketAssets(
       repo: string,
       ticketId: string,

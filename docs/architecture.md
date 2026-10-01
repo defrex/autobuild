@@ -648,6 +648,11 @@ holds the types, the limits, and the one validator every adapter calls;
 writer, and the note builder; `ab ticket attach`, `asset get`, and `asset rm`
 live in `packages/core/src/cli/ticket.ts`. The only thing a ticket source sees is
 a note through `comment()`, so no source or plugin protocol changed.
+A claim freezes the ticket's current assets into the build (SPEC §6.3):
+`build.created.assets` (and, when a spec is revised from the ticket,
+`spec.revised.assets`) record the pinned revisions, `state.pinnedAssets` in the
+reducer projects them, `getPinnedTicketAsset` reads them back by pinned revision,
+and `ab context` writes them under `.ab/assets/`.
 
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance

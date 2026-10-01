@@ -6935,3 +6935,115 @@ describe('dispatcher — origin-mode sandbox backend (AUT-584)', () => {
     expect(parsed.success).toBe(true)
   })
 })
+
+describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
+  const enc = (text: string) => new TextEncoder().encode(text)
+  const file = (name: string, text: string) => ({
+    kind: 'mock',
+    name,
+    layout: 'file' as const,
+    entries: [{ type: 'file' as const, path: name, content: enc(text) }],
+  })
+  const pin = (name: string, revision: number, size: number) => ({
+    kind: 'mock',
+    name,
+    revision,
+    layout: 'file' as const,
+    size,
+    fileCount: 1,
+    dirCount: 0,
+  })
+
+  test('claiming pins the exact current revisions in build.created', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    await h.store.putTicketAsset(REPO, 'T-1', file('a.png', 'one'))
+    await h.store.putTicketAsset(REPO, 'T-1', file('a.png', 'three'))
+    await h.store.putTicketAsset(REPO, 'T-1', file('b.png', 'bb'))
+    await h.store.removeTicketAsset(REPO, 'T-1', 'mock', 'b.png')
+    await h.store.putTicketAsset(REPO, 'T-2', file('other.png', 'x'))
+
+    await h.dispatcher.tick()
+
+    const events = await h.store.getEvents('add-rate-limiting')
+    const created = events.find((event) => event.type === 'build.created')
+    expect(created?.payload.assets).toEqual([pin('a.png', 1, 5)])
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 1, 5)])
+  })
+
+  test('edits made while a spec is being authored are not pinned', async () => {
+    let store: BuildStore | undefined
+    const h = harness({
+      tickets: [readyTicket('T-1', { body: 'thin but groomed' })],
+      authorSpec: async () => {
+        await store!.putTicketAsset(REPO, 'T-1', file('a.png', 'replaced during authoring'))
+        await store!.putTicketAsset(REPO, 'T-1', file('late.png', 'late'))
+        return CONFORMING_BODY
+      },
+    })
+    store = h.store
+    await h.store.putTicketAsset(REPO, 'T-1', file('a.png', 'one'))
+
+    await h.dispatcher.tick()
+
+    const created = (await h.store.getEvents('add-rate-limiting')).find(
+      (event) => event.type === 'build.created',
+    )
+    expect(created?.payload.assets).toEqual([pin('a.png', 0, 3)])
+    const pinned = await h.store.getPinnedTicketAsset('add-rate-limiting', 'mock', 'a.png')
+    const first = pinned?.entries[0]
+    expect(first?.type === 'file' ? new TextDecoder().decode(first.content) : null).toBe('one')
+  })
+
+  test('a ticket with no assets gets exactly the build.created it always had', async () => {
+    const h = harness({ tickets: [readyTicket('T-1')] })
+    await h.dispatcher.tick()
+    const created = (await h.store.getEvents('add-rate-limiting')).find(
+      (event) => event.type === 'build.created',
+    )
+    expect(created?.payload).toEqual({
+      ticket: expect.objectContaining({ id: 'T-1' }),
+      repo: REPO,
+      baseBranch: 'main',
+    })
+  })
+
+  test('recovery after the record exists keeps the original pin', async () => {
+    let launches = 0
+    const h = harness({
+      tickets: [readyTicket('T-1')],
+      onLaunch: () => {
+        launches += 1
+        if (launches === 1) throw new Error('runner scheduler offline')
+      },
+    })
+    await h.store.putTicketAsset(REPO, 'T-1', file('a.png', 'one'))
+    await h.dispatcher.tick()
+    expect(launches).toBe(1)
+
+    await h.store.putTicketAsset(REPO, 'T-1', file('a.png', 'two'))
+    await h.store.putTicketAsset(REPO, 'T-1', file('new.png', 'n'))
+    await h.dispatcher.tick({ acceptNewWork: false })
+
+    const events = await h.store.getEvents('add-rate-limiting')
+    expect(events.filter((event) => event.type === 'build.created')).toHaveLength(1)
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 0, 3)])
+  })
+
+  test('a legacy record with an empty stream is reconstructed with the current assets', async () => {
+    const h = harness({ tickets: [readyTicket('T-recover')] })
+    const ticket = (await h.tickets.get('T-recover'))!
+    await h.tickets.claim(ticket.ref.id)
+    await h.store.createBuild({
+      slug: 'legacy-empty',
+      repo: REPO,
+      ticket: ticket.ref,
+      branch: 'ab/legacy-empty',
+    })
+    await h.store.putTicketAsset(REPO, 'T-recover', file('a.png', 'one'))
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+
+    const events = await h.store.getEvents('legacy-empty')
+    expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 0, 3)])
+  })
+})

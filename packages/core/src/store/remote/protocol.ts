@@ -40,6 +40,18 @@ export const errorBodySchema = z.object({
 })
 export type ErrorBody = z.infer<typeof errorBodySchema>
 
+/**
+ * Deliberately loose: the ontology is enforced by `validateEventWrite` in
+ * the *backing store* (§8), so its precise EventValidationError message —
+ * the agent feedback D6 exists for — survives the wire instead of being
+ * shadowed by a duplicate wire-schema error.
+ */
+export const eventWriteWireSchema = z.object({
+  actor: z.unknown(),
+  type: z.string().min(1),
+  payload: z.unknown(),
+})
+
 // ── Builds ───────────────────────────────────────────────────────────────────
 
 export const newBuildBodySchema = z.object({
@@ -51,6 +63,9 @@ export const newBuildBodySchema = z.object({
   repoOrigin: z.string().optional(),
   ticket: ticketRefSchema.optional(),
   branch: z.string().min(1).optional(),
+  // Additive optional initial `build.created` event, appended atomically with
+  // the record. Loose like every event wire schema: the backing store validates.
+  created: eventWriteWireSchema.optional(),
 })
 
 export const buildRecordWireSchema = z.object({
@@ -67,18 +82,6 @@ export const buildRecordWireSchema = z.object({
 export const buildRecordListSchema = z.array(buildRecordWireSchema)
 
 // ── Events ───────────────────────────────────────────────────────────────────
-
-/**
- * Deliberately loose: the ontology is enforced by `validateEventWrite` in
- * the *backing store* (§8), so its precise EventValidationError message —
- * the agent feedback D6 exists for — survives the wire instead of being
- * shadowed by a duplicate wire-schema error.
- */
-export const eventWriteWireSchema = z.object({
-  actor: z.unknown(),
-  type: z.string().min(1),
-  payload: z.unknown(),
-})
 
 export const eventEnvelopeWireSchema = z.object({
   build: z.string(),

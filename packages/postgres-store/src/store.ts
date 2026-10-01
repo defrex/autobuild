@@ -9,6 +9,8 @@ import {
   pollingSubscribe,
   systemClock,
   toBytes,
+  resolvePinnedAsset,
+  validateCreatedEvent,
   validateEventWrite,
   validateExpectedSeq,
   validateRepositoryEventWrite,
@@ -234,6 +236,7 @@ export class PostgresBuildStore implements BuildStore {
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
+    const created = validateCreatedEvent(input)
     const ts = this.now()
     return this.tx(async (q) => {
       const inserted: Row[] = await q`INSERT INTO builds
@@ -242,7 +245,9 @@ export class PostgresBuildStore implements BuildStore {
         ON CONFLICT (slug) DO NOTHING RETURNING slug`
       const row = await this.lockBuild(q, input.slug)
       if (!inserted[0]) throw new Error(`build "${input.slug}" already exists`)
-      return this.record(row)
+      if (created === undefined) return this.record(row)
+      await this.appendLocked(q, input.slug, created, true)
+      return this.record(await this.lockBuild(q, input.slug))
     })
   }
 
@@ -1150,6 +1155,15 @@ export class PostgresBuildStore implements BuildStore {
     const row = rows[0]
     if (!row || row.removed === true) return null
     return loadTicketAsset(this.blobs, this.ticketAssetMeta(row))
+  }
+
+  async getPinnedTicketAsset(
+    slug: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    return resolvePinnedAsset(this, slug, kind, name, rev)
   }
 
   async listTicketAssets(

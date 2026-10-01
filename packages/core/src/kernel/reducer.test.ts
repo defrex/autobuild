@@ -1802,3 +1802,67 @@ describe('reduceBuild: workspace.provisioned remote marker stays inert', () => {
     expect(state.verify).toEqual({ maxAttemptSeen: 0, results: [], cycleSince: 0 })
   })
 })
+
+describe('pinnedAssets (SPEC §6.3)', () => {
+  const pin = (name: string, revision: number) => ({
+    kind: 'mock',
+    name,
+    revision,
+    layout: 'file' as const,
+    size: 3,
+    fileCount: 1,
+    dirCount: 0,
+  })
+  const created = (assets?: ReturnType<typeof pin>[]) =>
+    ev('build.created', {
+      ticket: { source: 'linear', id: 'ENG-42' },
+      repo: 'defrex/app',
+      baseBranch: 'main',
+      ...(assets !== undefined ? { assets } : {}),
+    })
+  const revise = (assets?: ReturnType<typeof pin>[]) => [
+    ev('escalation.raised', {
+      id: 'e_1',
+      phase: 'plan-review',
+      source: 'agent',
+      question: 'q',
+    }),
+    ev('escalation.answered', {
+      id: 'e_1',
+      answer: 'a',
+      resolution: 'revise-spec',
+      artifact: { kind: 'spec', rev: 1 },
+      ...(assets !== undefined ? { assets } : {}),
+    }),
+    ev('spec.revised', {
+      artifact: { kind: 'spec', rev: 1 },
+      escalation: 2,
+      ...(assets !== undefined ? { assets } : {}),
+    }),
+  ]
+
+  test('is empty for a build without a pin (historical logs)', () => {
+    expect(reduceBuild(toLog([created()])).pinnedAssets).toEqual([])
+  })
+
+  test('comes from build.created', () => {
+    expect(reduceBuild(toLog([created([pin('a', 0)])])).pinnedAssets).toEqual([pin('a', 0)])
+  })
+
+  test('a spec.revised carrying assets replaces the set, including with none', () => {
+    const replaced = reduceBuild(toLog([created([pin('a', 0)]), ...revise([pin('a', 2)])]))
+    expect(replaced.pinnedAssets).toEqual([pin('a', 2)])
+    const emptied = reduceBuild(toLog([created([pin('a', 0)]), ...revise([])]))
+    expect(emptied.pinnedAssets).toEqual([])
+  })
+
+  test('a spec.revised without assets (supplied body) leaves the set unchanged', () => {
+    const state = reduceBuild(toLog([created([pin('a', 0)]), ...revise()]))
+    expect(state.pinnedAssets).toEqual([pin('a', 0)])
+  })
+
+  test('answeredEscalations carry the assets sampled with the authorization', () => {
+    const state = reduceBuild(toLog([created(), ...revise([pin('b', 1)])]))
+    expect(state.answeredEscalations[0]?.assets).toEqual([pin('b', 1)])
+  })
+})

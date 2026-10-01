@@ -192,6 +192,20 @@ const finalizeStepCompletedPayloadSchema = z.discriminatedUnion('ok', [
   }),
 ])
 
+/** One ticket asset revision a build froze (SPEC §6.3): the identity and
+ * shape of what `listTicketAssets` returned at the pinning moment. */
+export const pinnedAssetSchema = z.strictObject({
+  kind: z.string().min(1),
+  name: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  layout: z.enum(['file', 'tree']),
+  size: z.number().int().nonnegative(),
+  fileCount: z.number().int().nonnegative(),
+  dirCount: z.number().int().nonnegative(),
+})
+
+export type PinnedAsset = z.infer<typeof pinnedAssetSchema>
+
 /** Shared by `plan-review.verdict` and `code-review.verdict` (symmetric by design). */
 const reviewVerdictPayload = z.strictObject({
   round,
@@ -222,6 +236,9 @@ export const eventPayloadSchemas = {
         imageHost: prImageHostSchema.optional(),
       })
       .optional(),
+    /** Ticket assets frozen at claim time. Omitted when the ticket had none
+     * and in historical logs. */
+    assets: z.array(pinnedAssetSchema).optional(),
   }),
   'build.completed': z.strictObject({ outcome: buildOutcomeSchema }),
   'runner.attached': z.strictObject({
@@ -409,6 +426,9 @@ export const eventPayloadSchemas = {
     artifact: artifactRefSchema,
     /** seq of the `escalation.raised` event that forced the revision. */
     escalation: z.number().int().positive(),
+    /** Present (possibly empty) when the revision re-pins the build to the
+     * ticket's then-current assets; absent leaves the pinned set unchanged. */
+    assets: z.array(pinnedAssetSchema).optional(),
   }),
 
   // ── Sessions (every agent run is bracketed by these) ──────────────────────
@@ -579,6 +599,9 @@ export const eventPayloadSchemas = {
     resolution: escalationResolutionSchema,
     /** Exact replacement spec authorized by a `revise-spec` answer. */
     artifact: artifactRefSchema.optional(),
+    /** The ticket's assets sampled with a revise-from-ticket authorization, so a
+     * retry re-pins the set that was authorized. Absent otherwise. */
+    assets: z.array(pinnedAssetSchema).optional(),
     /** Absolute per-loop/current-spec review budget selected by the operator. */
     reviewRoundCeiling: z.number().int().positive().optional(),
   }),

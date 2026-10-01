@@ -52,6 +52,9 @@ export interface ContextInputs {
    * loop routing (loopOfPhase → 'other') relies on this input existing.
    */
   answeredGuidance?: boolean
+  /** The ticket assets the build froze at claim (SPEC §6.3), written under
+   * `.ab/assets/`. Every phase receives them. */
+  assets?: boolean
 }
 
 export interface PhaseSpec {
@@ -91,6 +94,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
       spec: true,
       priorOwnArtifacts: true,
       findings: 'current',
+      assets: true,
     },
   },
   'plan-review': {
@@ -102,7 +106,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminalEvent: 'plan-review.verdict',
     requiredArtifact: 'plan-review',
     verdictVocabulary: ['approve', 'revise', 'escalate'],
-    inputs: { spec: true, plan: 'latest', findings: 'all-rounds' },
+    inputs: { spec: true, plan: 'latest', findings: 'all-rounds', assets: true },
   },
   implement: {
     name: 'implement',
@@ -120,6 +124,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
       findings: 'current',
       verifyReports: true,
       priorOwnArtifacts: true,
+      assets: true,
     },
   },
   'code-review': {
@@ -137,6 +142,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
       commitRange: true,
       findings: 'all-rounds',
       implementNotes: true,
+      assets: true,
     },
   },
   verify: {
@@ -147,7 +153,13 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
     terminal: 'verdict',
     terminalEvent: 'verify.completed',
     verdictVocabulary: ['pass', 'fail', 'skip'],
-    inputs: { spec: true, stepConfig: true, commitRange: true, currentFeedback: true },
+    inputs: {
+      spec: true,
+      stepConfig: true,
+      commitRange: true,
+      currentFeedback: true,
+      assets: true,
+    },
   },
   finalize: {
     name: 'finalize',
@@ -164,6 +176,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
       verifyReports: true,
       prTemplate: true,
       answeredGuidance: true,
+      assets: true,
     },
   },
   reconcile: {
@@ -181,6 +194,7 @@ export const PHASE_SPECS: Record<CorePhase | 'verify', PhaseSpec> = {
       implementNotes: true,
       conflict: true,
       answeredGuidance: true,
+      assets: true,
     },
   },
 }

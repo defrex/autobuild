@@ -8,7 +8,11 @@
  * and the one validator every adapter calls before any write.
  */
 
-import { contentHash, type BlobStore } from './types'
+import type { AbEvent } from '../events/catalog'
+import type { PinnedAsset } from '../events/payloads'
+import { contentHash, type BlobStore, type BuildStore } from './types'
+
+export type { PinnedAsset }
 
 /** Total file bytes per revision (25 MiB). */
 export const TICKET_ASSET_MAX_BYTES = 25 * 1024 * 1024
@@ -349,4 +353,73 @@ export async function loadTicketAsset(
     )
   }
   return { meta: structuredClone(meta), entries }
+}
+
+/** What a build pins of one asset revision: the summary minus the ticket
+ * coordinates and timestamp, which the build record already carries. */
+export function pinnedAssetOf(summary: TicketAssetSummary): PinnedAsset {
+  return {
+    kind: summary.kind,
+    name: summary.name,
+    revision: summary.revision,
+    layout: summary.layout,
+    size: summary.size,
+    fileCount: summary.fileCount,
+    dirCount: summary.dirCount,
+  }
+}
+
+/** The set of ticket assets to freeze for a claim or a spec re-pin: every
+ * current (live) asset of the ticket, in `listTicketAssets` order. */
+export async function samplePinnedAssets(
+  store: Pick<BuildStore, 'listTicketAssets'>,
+  repo: string,
+  ticketId: string,
+): Promise<PinnedAsset[]> {
+  return (await store.listTicketAssets(repo, ticketId)).map(pinnedAssetOf)
+}
+
+/** Latest-pinned revision of `kind/name` as the build's events record it, or
+ * (with `rev`) the revision when any pin in the log named it. */
+export function findPinnedRevision(
+  events: AbEvent[],
+  kind: string,
+  name: string,
+  rev?: number,
+): number | undefined {
+  let latest: number | undefined
+  for (const event of events) {
+    if (event.type !== 'build.created' && event.type !== 'spec.revised') continue
+    const assets = event.payload.assets
+    if (assets === undefined) continue
+    if (rev !== undefined) {
+      if (assets.some((a) => a.kind === kind && a.name === name && a.revision === rev)) return rev
+      continue
+    }
+    // Each pin event replaces the set, so the newest event that carries a set
+    // decides; absent from that set means unpinned.
+    latest = assets.find((a) => a.kind === kind && a.name === name)?.revision
+  }
+  return latest
+}
+
+/** `BuildStore.getPinnedTicketAsset` for any adapter: read the build's own
+ * events to find the pinned revision, then fetch exactly that revision from the
+ * ticket's assets. Earlier revisions stay retrievable after a replace or a
+ * removal (SPEC §7.1), so the bytes can never drift, and no lease or liveness is
+ * needed, so a finished build still answers. Null when the build never pinned
+ * `kind/name` (or the revision). Rejects an unknown build. */
+export async function resolvePinnedAsset(
+  store: Pick<BuildStore, 'getBuild' | 'getEvents' | 'getTicketAsset'>,
+  slug: string,
+  kind: string,
+  name: string,
+  rev?: number,
+): Promise<TicketAsset | null> {
+  const record = await store.getBuild(slug)
+  if (record === null) throw new Error(`unknown build "${slug}"`)
+  if (record.ticket === undefined) return null
+  const revision = findPinnedRevision(await store.getEvents(slug), kind, name, rev)
+  if (revision === undefined) return null
+  return store.getTicketAsset(record.repo, record.ticket.id, kind, name, revision)
 }

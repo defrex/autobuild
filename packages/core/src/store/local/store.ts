@@ -40,6 +40,7 @@ import {
   type SessionEventWrite,
 } from '../../events/sessions'
 import { createBuildScopedStore } from '../build-scope'
+import { validateCreatedEvent } from '../new-build'
 import { createSessionScopedStore } from '../session-handle'
 import { DIGEST_EVENT_TYPES, reduceBuildDigest } from '../digest'
 import {
@@ -101,6 +102,7 @@ import {
   DEFAULT_TICKET_ASSET_LIMITS,
   loadTicketAsset,
   storeTicketAssetBlobs,
+  resolvePinnedAsset,
   summarizeTicketAsset,
   validateTicketAssetInput,
   type TicketAsset,
@@ -446,6 +448,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
+    const created = validateCreatedEvent(input)
     const ts = this.now()
     return this.writeTx(() => {
       if (this.buildRow(input.slug)) {
@@ -463,6 +466,7 @@ export class SqliteBuildStore implements BuildStore {
           updatedAt: ts,
         })
         .run()
+      if (created !== undefined) this.appendInTx(input.slug, created)
       return this.toRecord(this.requireBuild(input.slug))
     })
   }
@@ -1232,6 +1236,15 @@ export class SqliteBuildStore implements BuildStore {
             .get()
     if (!row || row.removed) return null
     return loadTicketAsset(this.blobs, this.toTicketAssetMeta(row))
+  }
+
+  async getPinnedTicketAsset(
+    slug: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    return resolvePinnedAsset(this, slug, kind, name, rev)
   }
 
   async listTicketAssets(

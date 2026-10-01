@@ -309,6 +309,68 @@ describe('ab ticket attach', () => {
   })
 })
 
+describe('active-build warning (SPEC §6.3)', () => {
+  const warning = (slug: string) =>
+    `warning: build ${slug} is active for ticket AUT-1; it keeps the assets it froze at the claim ` +
+    `unless its spec is revised from the ticket (ab answer ${slug} --revise-spec-from-ticket)`
+
+  async function build(slug: string, ticketId: string, finish = false): Promise<void> {
+    await store.createBuild({ slug, repo: tmp, ticket: { source: 'fake', id: ticketId } })
+    await store.append(slug, {
+      actor: { kind: 'kernel' },
+      type: 'runner.attached',
+      payload: { instance: 'i', host: 'h', resumedFromSeq: 0 },
+    })
+    if (finish) {
+      await store.append(slug, {
+        actor: { kind: 'dispatcher' },
+        type: 'build.completed',
+        payload: { outcome: 'merged' },
+      })
+    }
+  }
+
+  test('attach warns on stderr for an active build of the ticket, and still attaches', async () => {
+    await build('live', 'AUT-1')
+    await build('finished', 'AUT-1', true)
+    await build('elsewhere', 'AUT-2')
+    const file = join(tmp, 'a.txt')
+    await writeFile(file, 'one')
+
+    const run = cli(['ticket', 'attach', 'AUT-1', 'design', file])
+    expect(await run.code).toBe(0)
+
+    expect(run.err).toEqual([warning('live')])
+    expect(run.out.join('\n')).toContain('design/a.txt revision 0')
+    expect((await store.listTicketAssets(tmp, 'AUT-1')).length).toBe(1)
+  })
+
+  test('--json keeps stdout a single JSON document', async () => {
+    await build('live', 'AUT-1')
+    const file = join(tmp, 'a.txt')
+    await writeFile(file, 'one')
+
+    const run = cli(['ticket', 'attach', 'AUT-1', 'design', file, '--json'])
+    await run.code
+
+    expect(JSON.parse(run.out.join('\n')).name).toBe('a.txt')
+    expect(run.err).toEqual([warning('live')])
+  })
+
+  test('no warning without an active build, and asset rm warns too', async () => {
+    const file = join(tmp, 'a.txt')
+    await writeFile(file, 'one')
+    const quiet = cli(['ticket', 'attach', 'AUT-1', 'design', file])
+    await quiet.code
+    expect(quiet.err).toEqual([])
+
+    await build('live', 'AUT-1')
+    const rm = cli(['ticket', 'asset', 'rm', 'AUT-1', 'design', 'a.txt'])
+    await rm.code
+    expect(rm.err).toEqual([warning('live')])
+  })
+})
+
 describe('ab ticket asset get', () => {
   test('round-trips a file, exact bytes, creating parents and honoring an existing directory dest', async () => {
     const bytes = Uint8Array.from([0, 1, 2, 255, 254])

@@ -10,7 +10,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
 import { DISPATCHER } from '../events/envelope'
-import type { EventType } from '../events/payloads'
+import type { EventType, PinnedAsset } from '../events/payloads'
 import type { PrImageHostTarget } from '../ontology'
 import { sequentialIds } from '../ids'
 import { FakeForge } from '../ports/forge/fake'
@@ -37,10 +37,15 @@ export function makeEnv(overrides: Partial<CliEnv> = {}): CliEnv {
 
 /** Build + `build.created` + spec@0 (`spec.imported`) — every phase's floor. */
 export async function seedStore(
-  opts: { imageHost?: PrImageHostTarget } = {},
+  opts: { imageHost?: PrImageHostTarget; assets?: PinnedAsset[] } = {},
 ): Promise<MemoryBuildStore> {
   const store = new MemoryBuildStore({ clock: steppingClock() })
-  await store.createBuild({ slug: BUILD, repo: 'acme/app', branch: BRANCH })
+  await store.createBuild({
+    slug: BUILD,
+    repo: 'acme/app',
+    branch: BRANCH,
+    ticket: { source: 'linear', id: 'ENG-42' },
+  })
   await store.append(BUILD, {
     actor: DISPATCHER,
     type: 'build.created',
@@ -54,6 +59,7 @@ export async function seedStore(
       repo: 'acme/app',
       baseBranch: 'main',
       ...(opts.imageHost !== undefined ? { pr: { imageHost: opts.imageHost } } : {}),
+      ...(opts.assets !== undefined ? { assets: opts.assets } : {}),
     },
   })
   await store.putArtifact(BUILD, {

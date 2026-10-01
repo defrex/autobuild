@@ -703,6 +703,49 @@ export class RemoteBuildStore implements BuildStore {
     return { meta, entries }
   }
 
+  async getPinnedTicketAsset(
+    slug: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    const params = new URLSearchParams({ kind, name })
+    if (rev !== undefined) params.set('rev', String(rev))
+    const meta = await this.requestJson(
+      'GET',
+      `${this.buildPath(slug)}/ticket-assets?${params}`,
+      ticketAssetManifestResponseSchema,
+    )
+    if (meta === null) return null
+    // One request per file, pinned to the manifest's revision, so no response
+    // carries more than a single file.
+    const entries: TicketAssetContentEntry[] = []
+    for (const entry of meta.entries) {
+      if (entry.type === 'dir') {
+        entries.push({ type: 'dir', path: entry.path })
+        continue
+      }
+      const fileParams = new URLSearchParams({
+        kind,
+        name,
+        rev: String(meta.revision),
+        path: entry.path,
+      })
+      const file = await this.requestJson(
+        'GET',
+        `${this.buildPath(slug)}/ticket-assets/file?${fileParams}`,
+        ticketAssetFileResponseSchema,
+      )
+      if (file === null) {
+        throw new Error(
+          `ticket asset ${kind}/${name} revision ${meta.revision} vanished mid-download`,
+        )
+      }
+      entries.push({ type: 'file', path: entry.path, content: decodeBase64(file.contentBase64) })
+    }
+    return { meta, entries }
+  }
+
   async listTicketAssets(
     repo: string,
     ticketId: string,

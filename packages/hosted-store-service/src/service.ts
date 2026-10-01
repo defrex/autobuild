@@ -346,6 +346,10 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
 
   const route = `${req.method} ${segments.slice(2).join('/')}`
   if (root === 'builds' && route === 'POST events/conditional') return 'store'
+  // A build's frozen ticket assets (SPEC §6.3): manifest and one file.
+  if (root === 'builds' && (route === 'GET ticket-assets' || route === 'GET ticket-assets/file')) {
+    return 'store'
+  }
   return storeResourceRoutes.has(route) ? 'store' : undefined
 }
 
