@@ -11,7 +11,8 @@ function fakeSelectorRoot() {
     setAttribute: (name: string, value: string) => {
       attrs[name] = value
     },
-    querySelector: () => null,
+    knob: { style: { left: '' } },
+    querySelector: (selector: string) => (selector === '.knob' ? root.knob : null),
     querySelectorAll: () => [],
   }
   return root
@@ -24,5 +25,11 @@ describe('applyState', () => {
     expect(root.attrs['data-lean']).toBe('remote')
     applyState(root as unknown as ParentNode, setAll(initialState(), 'local'))
     expect(root.attrs['data-lean']).toBe('local')
+  })
+
+  test('writes the knob position inline, which the stylesheet transition animates', () => {
+    const root = fakeSelectorRoot()
+    applyState(root as unknown as ParentNode, setAll(initialState(), 'remote'))
+    expect(root.knob.style.left).toBe('calc(100% - 24px)')
   })
 })

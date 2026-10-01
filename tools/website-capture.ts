@@ -45,6 +45,10 @@ export interface Probe {
   stylesheetLoaded: boolean
   lean: string | null
   status: string | null
+  /** True once the knob has no running animation or transition. */
+  knobSettled: boolean
+  /** The adapter id pressed in the runtime row. */
+  runtime: string | null
   chips: ChipProbe[]
 }
 
@@ -73,11 +77,22 @@ export function chromiumBinary(
   return undefined
 }
 
+/** Longer than the knob's 200ms glide, so the remote frame is probed after it should have settled. */
+const KNOB_SETTLE_MS = 350
+
 function probeScript(remote: boolean): string {
   return `<script>
 addEventListener('DOMContentLoaded', () => setTimeout(() => {
   ${remote ? `document.querySelector('[data-set="remote"]')?.click()` : ''}
   setTimeout(() => {
+    const knob = document.querySelector('.knob')
+    // Chromium's virtual-time budget freezes the animation clock, so the glide never advances on
+    // its own; finish it so the shot shows the settled knob, then check it sits at the rail's end.
+    knob?.getAnimations().forEach((a) => a.finish())
+    const rail = knob?.parentElement
+    const knobSettled =
+      knob !== null && knob !== undefined && knob.getAnimations().length === 0 &&
+      (${remote ? 'true' : 'false'} ? knob.offsetLeft + knob.offsetWidth === rail.clientWidth : knob.offsetLeft === 0)
     const root = document.documentElement
     const sheet = [...document.styleSheets].find((s) => (s.href || '').endsWith('/site.css'))
     const selector = document.querySelector('.seam-selector')
@@ -88,6 +103,8 @@ addEventListener('DOMContentLoaded', () => setTimeout(() => {
       stylesheetLoaded: Boolean(sheet && sheet.cssRules.length > 0),
       lean: selector ? selector.getAttribute('data-lean') : null,
       status: document.querySelector('[data-status]')?.textContent ?? null,
+      knobSettled,
+      runtime: document.querySelector('.chip[data-seam="runtime"][aria-pressed="true"]')?.dataset.adapter ?? null,
       chips: [...document.querySelectorAll('.chip')].map((c) => ({
         seam: c.dataset.seam,
         adapter: c.dataset.adapter,
@@ -98,7 +115,7 @@ addEventListener('DOMContentLoaded', () => setTimeout(() => {
     meta.name = 'capture-probe'
     meta.content = JSON.stringify(probe)
     document.head.append(meta)
-  }, 50)
+  }, ${remote ? KNOB_SETTLE_MS : 50})
 }, 50))
 </script>`
 }
@@ -123,7 +140,7 @@ export function wrapperPage(frame: WebsiteFrame, height: number): string {
 document.getElementById('page').addEventListener('load', () => setTimeout(() => {
   const probe = document.getElementById('page').contentDocument.querySelector('meta[name="capture-probe"]')
   if (probe) document.head.append(probe.cloneNode())
-}, 400))
+}, 900))
 </script></body></html>`
 }
 
@@ -147,6 +164,8 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
   if (frame.remote) {
     if (probe.lean !== 'remote') problems.push(`seam selector data-lean is ${probe.lean}`)
     if (probe.status !== 'fully remote') problems.push(`status reads "${probe.status}"`)
+    if (!probe.knobSettled) problems.push('knob still animating')
+    if (probe.runtime !== 'codex') problems.push(`runtime is ${probe.runtime}, expected codex`)
     const sides = new Map<string, string | undefined>()
     for (const seam of SEAMS) for (const a of seam.adapters) sides.set(a.id, a.side)
     for (const chip of probe.chips) {
