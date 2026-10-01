@@ -136,8 +136,10 @@ ab ticket attach <id> design <path> [--name <name>]
 ```
 
 The ticket must exist first. For a new ticket, create it in a non-ready
-staging state, attach, check with `ab ticket show <id>`, and move it to ready
-last, so a build cannot claim it before its assets exist. Attaching the same
+staging state, attach, and check with `ab ticket show <id>`. Then place it
+where the human asked: if the intended destination is ready, move it there
+last, so a build cannot claim it before its assets exist; otherwise leave it
+in its destination (or the configured create state) and do not promote it. Attaching the same
 kind and name again makes a new revision. Assets are frozen into a build when
 it claims the ticket; attaching afterward does not reach a build already
 running.
