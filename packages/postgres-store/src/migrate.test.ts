@@ -26,6 +26,8 @@ import {
   SCHEMA_V6_DDL,
   SCHEMA_V7_CHECKSUM,
   SCHEMA_V7_DDL,
+  SCHEMA_V8_CHECKSUM,
+  SCHEMA_V8_DDL,
   SCHEMA_VERSION,
   migratePostgres,
 } from './schema'
@@ -77,6 +79,7 @@ describe('frozen PostgreSQL schema DDL constants', () => {
     ['SCHEMA_V5_DDL', SCHEMA_V5_DDL],
     ['SCHEMA_V6_DDL', SCHEMA_V6_DDL],
     ['SCHEMA_V7_DDL', SCHEMA_V7_DDL],
+    ['SCHEMA_V8_DDL', SCHEMA_V8_DDL],
     ['SCHEMA_DDL', SCHEMA_DDL],
   ] as const) {
     test(`${name} is pre-trimmed`, () => {
@@ -262,6 +265,48 @@ if (testUrl) {
         try {
           const subset = await store.getRepoStateEvents('acme/v7')
           expect(subset.map((event) => event.seq)).toEqual([1, 2, 3])
+        } finally {
+          await store.close()
+        }
+
+        // The upgrade is idempotent.
+        await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test('upgrades a genuine v8 database in place: the ticket_assets table, preserving prior rows', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        await sql.unsafe(SCHEMA_V8_DDL)
+        // The genuine v8 marker is version 8 literally (see the v7 test).
+        await sql`INSERT INTO ab_schema_migrations VALUES
+          (true, 8, ${SCHEMA_V8_CHECKSUM}, ${new Date().toISOString()})`
+        await sql`INSERT INTO repo_streams (repo, created_at, updated_at)
+          VALUES ('acme/v8', ${CONTRACT_T0}, ${CONTRACT_T0})`
+        expect(((await sql`SELECT to_regclass('ticket_assets') AS t`) as Row[])[0]?.t).toBeNull()
+
+        await migratePostgres(harness.url)
+
+        const marker = await sql`SELECT version, checksum FROM ab_schema_migrations`
+        expect(Number(marker[0]?.version)).toBe(SCHEMA_VERSION)
+        expect(marker[0]?.checksum).toBe(SCHEMA_CHECKSUM)
+        expect(
+          ((await sql`SELECT repo FROM repo_streams`) as Row[]).map((row) => row.repo),
+        ).toEqual(['acme/v8'])
+
+        const store = await openPostgresBuildStore(harness.url, new MemoryBlobStore())
+        try {
+          const meta = await store.putTicketAsset('acme/v8', 'T-1', {
+            kind: 'design',
+            name: 'a',
+            layout: 'file',
+            entries: [{ type: 'file', path: 'a', content: new Uint8Array([1]) }],
+          })
+          expect(meta.revision).toBe(0)
         } finally {
           await store.close()
         }

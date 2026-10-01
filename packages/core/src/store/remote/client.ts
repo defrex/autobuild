@@ -32,6 +32,17 @@ import type {
   SessionEventType,
   SessionEventWrite,
 } from '../../events/sessions'
+import {
+  DEFAULT_TICKET_ASSET_LIMITS,
+  TicketAssetValidationError,
+  validateTicketAssetInput,
+  type TicketAsset,
+  type TicketAssetContentEntry,
+  type TicketAssetInput,
+  type TicketAssetLimits,
+  type TicketAssetMeta,
+  type TicketAssetSummary,
+} from '../ticket-assets'
 import { createBuildScopedStore } from '../build-scope'
 import { createSessionScopedStore } from '../session-handle'
 import { pollingSubscribe } from '../subscribe'
@@ -99,6 +110,12 @@ import {
   sessionRecordWireSchema,
   streamChunkWireSchema,
   streamReadWireSchema,
+  ticketAssetFileResponseSchema,
+  ticketAssetLimitsWireSchema,
+  ticketAssetManifestResponseSchema,
+  ticketAssetMetaWireSchema,
+  ticketAssetSummaryListSchema,
+  removeTicketAssetResponseSchema,
   streamRecordListSchema,
   streamRecordWireSchema,
 } from './protocol'
@@ -190,7 +207,11 @@ export class RemoteBuildStore implements BuildStore {
     return this.fetchFn(`${this.base}${path}`, {
       method,
       headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      // A string body is already serialized JSON (the ticket-asset put sizes
+      // its exact bytes before sending).
+      ...(body !== undefined
+        ? { body: typeof body === 'string' ? body : JSON.stringify(body) }
+        : {}),
       ...(signal !== undefined ? { signal } : {}),
     })
   }
@@ -208,6 +229,12 @@ export class RemoteBuildStore implements BuildStore {
     }
     // D6: validation feedback crosses the wire as the same error type with
     // the server's message intact.
+    if (
+      (response.status === 422 || response.status === 413) &&
+      message.startsWith('ticket asset')
+    ) {
+      return new TicketAssetValidationError(message)
+    }
     if (response.status === 422) return new EventValidationError(message)
     // Typed stream rejections rehydrate by the server's message shape: the
     // ceiling names its bytes, the closed-append names its stream (a 409 is
@@ -557,6 +584,149 @@ export class RemoteBuildStore implements BuildStore {
       'GET',
       `${this.repoPath(repo)}/artifact-list${query}`,
       repositoryArtifactMetaListSchema,
+    )
+  }
+
+  /** The limits this store handle enforces locally, fetched once per repo
+   * and cached. A server that predates the route (404) gets the defaults. */
+  private readonly assetLimits = new Map<
+    string,
+    Promise<TicketAssetLimits & { maxRequestBytes?: number }>
+  >()
+
+  private assetLimitsFor(repo: string): Promise<TicketAssetLimits & { maxRequestBytes?: number }> {
+    let cached = this.assetLimits.get(repo)
+    if (cached === undefined) {
+      cached = (async () => {
+        const response = await this.raw('GET', `${this.repoPath(repo)}/ticket-asset-limits`)
+        if (response.status === 404) return { ...DEFAULT_TICKET_ASSET_LIMITS }
+        if (!response.ok) throw await this.toError(response)
+        return ticketAssetLimitsWireSchema.parse(await response.json())
+      })()
+      cached.catch(() => this.assetLimits.delete(repo))
+      this.assetLimits.set(repo, cached)
+    }
+    return cached
+  }
+
+  async ticketAssetLimits(repo: string): Promise<TicketAssetLimits> {
+    const { maxBytes, maxEntries } = await this.assetLimitsFor(repo)
+    return { maxBytes, maxEntries }
+  }
+
+  private assetPath(repo: string, ticketId: string): string {
+    return `${this.repoPath(repo)}/tickets/${encodeURIComponent(ticketId)}/assets`
+  }
+
+  async putTicketAsset(
+    repo: string,
+    ticketId: string,
+    asset: TicketAssetInput,
+  ): Promise<TicketAssetMeta> {
+    const limits = await this.assetLimitsFor(repo)
+    try {
+      validateTicketAssetInput(asset, limits)
+    } catch (error) {
+      if (
+        error instanceof TicketAssetValidationError &&
+        limits.maxRequestBytes !== undefined &&
+        /^ticket asset exceeds the \d+-byte/.test(error.message)
+      ) {
+        throw new TicketAssetValidationError(
+          `ticket asset exceeds this store's ${limits.maxBytes}-byte limit (deployment request ceiling ${limits.maxRequestBytes} bytes)`,
+        )
+      }
+      throw error
+    }
+    const text = JSON.stringify({
+      kind: asset.kind,
+      name: asset.name,
+      layout: asset.layout,
+      entries: asset.entries.map((entry) =>
+        entry.type === 'dir'
+          ? { type: 'dir', path: entry.path }
+          : { type: 'file', path: entry.path, contentBase64: encodeBase64(entry.content) },
+      ),
+    })
+    if (limits.maxRequestBytes !== undefined) {
+      const bytes = new TextEncoder().encode(text).length
+      if (bytes > limits.maxRequestBytes) {
+        throw new TicketAssetValidationError(
+          `ticket asset exceeds this store's ${limits.maxBytes}-byte limit (deployment request ceiling ${limits.maxRequestBytes} bytes): the encoded request is ${bytes} bytes`,
+        )
+      }
+    }
+    return this.requestJson('POST', this.assetPath(repo, ticketId), ticketAssetMetaWireSchema, text)
+  }
+
+  async getTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    const params = new URLSearchParams({ kind, name })
+    if (rev !== undefined) params.set('rev', String(rev))
+    const meta = await this.requestJson(
+      'GET',
+      `${this.assetPath(repo, ticketId)}?${params}`,
+      ticketAssetManifestResponseSchema,
+    )
+    if (meta === null) return null
+    // One request per file, pinned to the manifest's revision, so no response
+    // carries more than a single file.
+    const entries: TicketAssetContentEntry[] = []
+    for (const entry of meta.entries) {
+      if (entry.type === 'dir') {
+        entries.push({ type: 'dir', path: entry.path })
+        continue
+      }
+      const fileParams = new URLSearchParams({
+        kind,
+        name,
+        rev: String(meta.revision),
+        path: entry.path,
+      })
+      const file = await this.requestJson(
+        'GET',
+        `${this.assetPath(repo, ticketId)}/file?${fileParams}`,
+        ticketAssetFileResponseSchema,
+      )
+      if (file === null) {
+        throw new Error(
+          `ticket asset ${kind}/${name} revision ${meta.revision} vanished mid-download`,
+        )
+      }
+      entries.push({ type: 'file', path: entry.path, content: decodeBase64(file.contentBase64) })
+    }
+    return { meta, entries }
+  }
+
+  async listTicketAssets(
+    repo: string,
+    ticketId: string,
+    opts?: { revisions?: boolean },
+  ): Promise<TicketAssetSummary[]> {
+    const query = opts?.revisions ? '?revisions=1' : ''
+    return this.requestJson(
+      'GET',
+      `${this.assetPath(repo, ticketId)}/list${query}`,
+      ticketAssetSummaryListSchema,
+    )
+  }
+
+  async removeTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+  ): Promise<TicketAssetMeta | null> {
+    return this.requestJson(
+      'POST',
+      `${this.assetPath(repo, ticketId)}/remove`,
+      removeTicketAssetResponseSchema,
+      { kind, name },
     )
   }
 

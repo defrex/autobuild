@@ -856,7 +856,8 @@ describe('abTicketShow', () => {
       stdout: (line) => out.push(line),
       sourceFactory: () => new FakeTicketSource([ticket]),
     })
-    expect(JSON.parse(out.join('\n'))).toEqual(ticket)
+    // The complete Ticket plus the ticket's current assets.
+    expect(JSON.parse(out.join('\n'))).toEqual({ ...ticket, assets: [] })
 
     await expect(
       abTicketShow({
@@ -1087,7 +1088,7 @@ describe('runCli — ticket routing', () => {
     expect(first.ref.id).toBe('file-1')
     expect(out).toHaveLength(1)
     expect(await runCli(['ticket', 'show', 'file-1', '--json'], deps)).toBe(0)
-    expect(JSON.parse(out.at(-1)!)).toEqual(first)
+    expect(JSON.parse(out.at(-1)!)).toEqual({ ...first, assets: [] })
 
     expect(
       await runCli(['ticket', 'create', 'Second blocker', '--body', bodyFile, '--json'], deps),
@@ -1103,7 +1104,7 @@ describe('runCli — ticket routing', () => {
     const updated = JSON.parse(out.at(-1)!) as Ticket
     expect(updated.title).toBe('Updated target')
     expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
-    expect(JSON.parse(out.at(-1)!)).toEqual(updated)
+    expect(JSON.parse(out.at(-1)!)).toEqual({ ...updated, assets: [] })
 
     expect(
       await runCli(['ticket', 'block', 'file-3', 'file-2,file-1,file-2', '--json'], deps),
@@ -1111,14 +1112,14 @@ describe('runCli — ticket routing', () => {
     const blocked = JSON.parse(out.at(-1)!) as Ticket
     expect(blocked.blockedBy).toEqual(['file-2', 'file-1'])
     expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
-    expect(JSON.parse(out.at(-1)!)).toEqual(blocked)
+    expect(JSON.parse(out.at(-1)!)).toEqual({ ...blocked, assets: [] })
 
     expect(await runCli(['ticket', 'unblock', 'file-3', 'file-1,file-2', '--json'], deps)).toBe(0)
     const unblocked = JSON.parse(out.at(-1)!) as Ticket
     expect(unblocked.blockedBy).toBeUndefined()
 
     expect(await runCli(['ticket', 'show', 'file-3', '--json'], deps)).toBe(0)
-    expect(JSON.parse(out.at(-1)!)).toEqual(unblocked)
+    expect(JSON.parse(out.at(-1)!)).toEqual({ ...unblocked, assets: [] })
     for (const line of out) expect(() => JSON.parse(line)).not.toThrow()
   })
 

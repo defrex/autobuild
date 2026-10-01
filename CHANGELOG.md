@@ -3,6 +3,7 @@
 ## Unreleased
 
 - [#579](https://github.com/defrex/autobuild/pull/579) — Add a website visual verify step with a headless capture and repo-local skill
+- [#578](https://github.com/defrex/autobuild/pull/578) — Add ticket assets: files and folders attached to a ticket, stored in the BuildStore
 - [#577](https://github.com/defrex/autobuild/pull/577) — Add the one-page Autobuild marketing site as a private static package
 - [#576](https://github.com/defrex/autobuild/pull/576) — Add missing-code and route-wrapper consent frames to the capture
 - [#575](https://github.com/defrex/autobuild/pull/575) — Lengthen the UNKNOWN mergeability re-query budget (AUT-392)

@@ -35,6 +35,7 @@ import {
 import { createStoreServer } from './remote-store-server'
 import {
   HOSTED_ARTIFACT_MAX_BYTES,
+  HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
   HOSTED_EVENT_WAIT_MAX_SECONDS,
   parseHostedStoreEnv,
   type HostedStoreEnv,
@@ -87,6 +88,8 @@ function notFound(req: Request, pathname: string): Response {
 }
 
 const ticketOperations = new Set<string>(HOSTED_TICKET_OPERATIONS)
+/** `METHOD <path under …/tickets/{id}/assets>`: put, manifest, one file, list, remove. */
+const ticketAssetRoutes = new Set(['POST ', 'GET ', 'GET file', 'GET list', 'POST remove'])
 
 /** The deployment's public origin, from `BETTER_AUTH_URL` — the sandbox
  * backend's `storeRef` (the deployment's own HTTPS face, which the sandbox
@@ -331,6 +334,16 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     return undefined
   }
 
+  // Ticket assets (SPEC §7.1): the effective-limits route and the per-ticket
+  // asset family under a repository.
+  if (root === 'repos' && segments[2] === 'ticket-asset-limits' && segments.length === 3) {
+    return req.method === 'GET' ? 'store' : undefined
+  }
+  if (root === 'repos' && segments[2] === 'tickets' && segments[4] === 'assets') {
+    const assetRoute = `${req.method} ${segments.slice(5).join('/')}`
+    return ticketAssetRoutes.has(assetRoute) ? 'store' : undefined
+  }
+
   const route = `${req.method} ${segments.slice(2).join('/')}`
   if (root === 'builds' && route === 'POST events/conditional') return 'store'
   return storeResourceRoutes.has(route) ? 'store' : undefined
@@ -443,6 +456,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           store,
           secret: config.secret,
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          maxTicketAssetRequestBytes: HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
           maxEventWaitSeconds: HOSTED_EVENT_WAIT_MAX_SECONDS,
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
           ...shared,

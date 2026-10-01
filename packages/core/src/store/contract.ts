@@ -1749,6 +1749,242 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    describe('ticket assets (SPEC §7.1)', () => {
+      const REPO = 'https://github.com/acme/rate-limiter'
+      const enc = (text: string) => new TextEncoder().encode(text)
+      const fileAsset = (name: string, content: Uint8Array, kind = 'design') => ({
+        kind,
+        name,
+        layout: 'file' as const,
+        entries: [{ type: 'file' as const, path: name, content }],
+      })
+      const treeAsset = (
+        name: string,
+        entries: { type: 'file'; path: string; content: Uint8Array }[] | never[] = [],
+        extra: { type: 'dir'; path: string }[] = [],
+        kind = 'design',
+      ) => ({
+        kind,
+        name,
+        layout: 'tree' as const,
+        entries: [...entries, ...extra],
+      })
+
+      test('stores a single file and returns its exact bytes, binary and zero-byte included', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const binary = Uint8Array.from([0, 255, 1, 254, 128, 0])
+          const meta = await store.putTicketAsset(REPO, 'T-1', fileAsset('shot.png', binary))
+          expect(meta).toMatchObject({
+            repo: REPO,
+            ticketId: 'T-1',
+            kind: 'design',
+            name: 'shot.png',
+            revision: 0,
+            layout: 'file',
+            size: 6,
+          })
+          expect(meta.entries).toEqual([
+            { type: 'file', path: 'shot.png', size: 6, blobRef: contentHash(binary) },
+          ])
+          const got = await store.getTicketAsset(REPO, 'T-1', 'design', 'shot.png')
+          expect(got?.meta).toEqual(meta)
+          expect(got?.entries).toEqual([{ type: 'file', path: 'shot.png', content: binary }])
+
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('empty.bin', new Uint8Array(0)))
+          const empty = await store.getTicketAsset(REPO, 'T-1', 'design', 'empty.bin')
+          expect(empty?.entries).toEqual([
+            { type: 'file', path: 'empty.bin', content: new Uint8Array(0) },
+          ])
+          expect(empty?.meta.size).toBe(0)
+        })
+      })
+
+      test('stores trees: nested files, an empty tree, and nested empty directories', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.putTicketAsset(
+            REPO,
+            'T-1',
+            treeAsset(
+              'site',
+              [
+                { type: 'file', path: 'index.html', content: enc('<h1>hi</h1>') },
+                { type: 'file', path: 'img/a.png', content: Uint8Array.from([1, 2, 3]) },
+              ],
+              [{ type: 'dir', path: 'img/empty' }],
+            ),
+          )
+          await store.putTicketAsset(REPO, 'T-1', treeAsset('hollow'))
+          const site = await store.getTicketAsset(REPO, 'T-1', 'design', 'site')
+          expect(site?.meta.layout).toBe('tree')
+          expect(site?.meta.size).toBe(14)
+          expect(site?.meta.entries.map((e) => `${e.type}:${e.path}`)).toEqual([
+            'file:index.html',
+            'file:img/a.png',
+            'dir:img/empty',
+          ])
+          expect(site?.entries).toEqual([
+            { type: 'file', path: 'index.html', content: enc('<h1>hi</h1>') },
+            { type: 'file', path: 'img/a.png', content: Uint8Array.from([1, 2, 3]) },
+            { type: 'dir', path: 'img/empty' },
+          ])
+          const hollow = await store.getTicketAsset(REPO, 'T-1', 'design', 'hollow')
+          expect(hollow?.meta).toMatchObject({ layout: 'tree', size: 0, entries: [] })
+          expect(hollow?.entries).toEqual([])
+
+          const list = await store.listTicketAssets(REPO, 'T-1')
+          expect(list.map((a) => [a.name, a.fileCount, a.dirCount, a.size])).toEqual([
+            ['hollow', 0, 0, 0],
+            ['site', 2, 1, 14],
+          ])
+          expect(list.every((a) => !('entries' in a))).toBe(true)
+        })
+      })
+
+      test('re-attaching the same kind and name creates a new revision; old ones stay', async () => {
+        await withStore(factory, undefined, async (store) => {
+          expect(
+            (await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('one')))).revision,
+          ).toBe(0)
+          expect(
+            (await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('two!')))).revision,
+          ).toBe(1)
+          const latest = await store.getTicketAsset(REPO, 'T-1', 'design', 'a')
+          expect(latest?.meta.revision).toBe(1)
+          expect(latest?.entries[0]).toMatchObject({ content: enc('two!') })
+          const first = await store.getTicketAsset(REPO, 'T-1', 'design', 'a', 0)
+          expect(first?.entries[0]).toMatchObject({ content: enc('one') })
+          expect(await store.getTicketAsset(REPO, 'T-1', 'design', 'a', 2)).toBeNull()
+
+          const current = await store.listTicketAssets(REPO, 'T-1')
+          expect(current.map((a) => [a.name, a.revision, a.size])).toEqual([['a', 1, 4]])
+          const all = await store.listTicketAssets(REPO, 'T-1', { revisions: true })
+          expect(all.map((a) => a.revision)).toEqual([0, 1])
+        })
+      })
+
+      test('lists are isolated by repo, ticket id, kind and name', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('x')))
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('y'), 'ref'))
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('b', enc('z')))
+          await store.putTicketAsset(REPO, 'T-2', fileAsset('a', enc('other')))
+          await store.putTicketAsset('/other/repo', 'T-1', fileAsset('a', enc('other')))
+          expect(
+            (await store.listTicketAssets(REPO, 'T-1')).map((a) => `${a.kind}/${a.name}`),
+          ).toEqual(['design/a', 'design/b', 'ref/a'])
+          expect((await store.listTicketAssets(REPO, 'T-2')).map((a) => a.name)).toEqual(['a'])
+          expect(await store.listTicketAssets(REPO, 'T-3')).toEqual([])
+          expect(await store.getTicketAsset(REPO, 'T-1', 'ref', 'b')).toBeNull()
+          expect(await store.getTicketAsset('/other/repo', 'T-2', 'design', 'a')).toBeNull()
+          // Revision counters are per (repo, ticket, kind, name).
+          expect((await store.putTicketAsset(REPO, 'T-2', fileAsset('b', enc('1')))).revision).toBe(
+            0,
+          )
+        })
+      })
+
+      test('removal hides the asset but earlier revisions stay readable by explicit rev', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('one')))
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('two')))
+          const removed = await store.removeTicketAsset(REPO, 'T-1', 'design', 'a')
+          expect(removed).toMatchObject({ kind: 'design', name: 'a', revision: 1 })
+          expect(await store.getTicketAsset(REPO, 'T-1', 'design', 'a')).toBeNull()
+          expect(await store.listTicketAssets(REPO, 'T-1')).toEqual([])
+          const pinned = await store.getTicketAsset(REPO, 'T-1', 'design', 'a', 0)
+          expect(pinned?.entries[0]).toMatchObject({ content: enc('one') })
+          const pinnedLatest = await store.getTicketAsset(REPO, 'T-1', 'design', 'a', 1)
+          expect(pinnedLatest?.entries[0]).toMatchObject({ content: enc('two') })
+          // Tombstones are not revisions to list.
+          expect(
+            (await store.listTicketAssets(REPO, 'T-1', { revisions: true })).map((a) => a.revision),
+          ).toEqual([0, 1])
+          // Removing again, or removing an unknown asset, is a null no-op.
+          expect(await store.removeTicketAsset(REPO, 'T-1', 'design', 'a')).toBeNull()
+          expect(await store.removeTicketAsset(REPO, 'T-1', 'design', 'ghost')).toBeNull()
+
+          // Re-attaching takes the next revision; the tombstone consumed 2.
+          const again = await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('three')))
+          expect(again.revision).toBe(3)
+          expect((await store.listTicketAssets(REPO, 'T-1')).map((a) => a.revision)).toEqual([3])
+          expect((await store.getTicketAsset(REPO, 'T-1', 'design', 'a'))?.meta.revision).toBe(3)
+          expect(await store.getTicketAsset(REPO, 'T-1', 'design', 'a', 2)).toBeNull()
+        })
+      })
+
+      test('advertises limits and refuses an over-limit put, naming the limit, storing nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const limits = await store.ticketAssetLimits(REPO)
+          expect(limits.maxEntries).toBe(1000)
+          expect(limits.maxBytes).toBeGreaterThan(0)
+          expect(limits.maxBytes).toBeLessThanOrEqual(25 * 1024 * 1024)
+          const tooBig = fileAsset('big.bin', new Uint8Array(limits.maxBytes + 1))
+          await expect(store.putTicketAsset(REPO, 'T-1', tooBig)).rejects.toThrow(
+            /ticket asset exceeds .*\d+-byte.*limit/,
+          )
+          expect(await store.listTicketAssets(REPO, 'T-1', { revisions: true })).toEqual([])
+          expect(await store.getTicketAsset(REPO, 'T-1', 'design', 'big.bin')).toBeNull()
+        })
+      })
+
+      test('rejects invalid names, paths and structures, storing nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const f = (path: string) => ({ type: 'file' as const, path, content: enc('x') })
+          const bad = [
+            { ...fileAsset('a', enc('x')), name: 'has space' },
+            { ...fileAsset('a', enc('x')), kind: '' },
+            treeAsset('t', [f('../escape')]),
+            treeAsset('t', [f('/abs')]),
+            treeAsset('t', [f('a//b')]),
+            treeAsset('t', [f('a'), f('a')]),
+            treeAsset('t', [f('a'), f('a/b')]),
+            treeAsset('t', [f('a')], [{ type: 'dir', path: 'a' }]),
+            { ...fileAsset('a', enc('x')), entries: [] },
+            {
+              kind: 'design',
+              name: 'a',
+              layout: 'file' as const,
+              entries: [f('a'), { type: 'dir' as const, path: 'd' }],
+            },
+          ]
+          for (const asset of bad) {
+            await expect(store.putTicketAsset(REPO, 'T-1', asset)).rejects.toThrow()
+          }
+          expect(await store.listTicketAssets(REPO, 'T-1', { revisions: true })).toEqual([])
+        })
+      })
+
+      test('a failed put does not consume a revision', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('ok')))
+          await expect(
+            store.putTicketAsset(REPO, 'T-1', { ...fileAsset('a', enc('x')), name: 'a b' }),
+          ).rejects.toThrow()
+          expect(
+            (await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('ok2')))).revision,
+          ).toBe(1)
+        })
+      })
+
+      test('scoped handles reject ticket-asset operations', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.createBuild(sampleBuildInput('ta-scope'))
+          const scoped = store.scopeBuild('ta-scope')
+          await expect(
+            scoped.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('x'))),
+          ).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.getTicketAsset(REPO, 'T-1', 'design', 'a')).rejects.toThrow(
+            /build-scoped store/,
+          )
+          await expect(scoped.listTicketAssets(REPO, 'T-1')).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.removeTicketAsset(REPO, 'T-1', 'design', 'a')).rejects.toThrow(
+            /build-scoped store/,
+          )
+          await expect(scoped.ticketAssetLimits(REPO)).rejects.toThrow(/build-scoped store/)
+        })
+      })
+    })
+
     describe('build-scoped handles', () => {
       test('permit own-build stream, artifact, lease, and subscription operations', async () => {
         await withStore(factory, undefined, async (store) => {

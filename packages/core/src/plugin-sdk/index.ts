@@ -201,3 +201,24 @@ export type {
   StreamStatus,
 } from '../store/streams/types'
 export { contentHash, systemClock, toBytes, validateExpectedSeq } from '../store/types'
+export {
+  DEFAULT_TICKET_ASSET_LIMITS,
+  effectiveTicketAssetLimits,
+  summarizeTicketAsset,
+  TICKET_ASSET_MAX_BYTES,
+  TICKET_ASSET_MAX_ENTRIES,
+  TicketAssetValidationError,
+  validateTicketAssetInput,
+  validateTicketAssetStructure,
+} from '../store/ticket-assets'
+export type {
+  TicketAsset,
+  TicketAssetContentEntry,
+  TicketAssetEntry,
+  TicketAssetEntryInput,
+  TicketAssetInput,
+  TicketAssetLayout,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
+} from '../store/ticket-assets'

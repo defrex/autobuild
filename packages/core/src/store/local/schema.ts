@@ -12,6 +12,7 @@
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 import type { Actor } from '../../events/envelope'
 import type { TicketRef } from '../../ontology'
+import type { TicketAssetEntry } from '../ticket-assets'
 import type { StreamPart } from '../streams/types'
 
 export const builds = sqliteTable('builds', {
@@ -81,6 +82,27 @@ export const repoArtifacts = sqliteTable(
     createdAt: text('created_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.repo, t.kind, t.revision] })],
+)
+
+/** Ticket assets (SPEC §7.1): one row per revision, manifest as JSON, file
+ * bytes in the BlobStore. A removal is a tombstone row (`removed`, empty
+ * manifest) taking the next revision. No FK to `repo_streams`: assets can
+ * precede any repo-journal row. */
+export const ticketAssets = sqliteTable(
+  'ticket_assets',
+  {
+    repo: text('repo').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    kind: text('kind').notNull(),
+    name: text('name').notNull(),
+    revision: integer('revision').notNull(),
+    layout: text('layout').notNull().$type<'file' | 'tree'>(),
+    manifest: text('manifest', { mode: 'json' }).notNull().$type<TicketAssetEntry[]>(),
+    size: integer('size').notNull(),
+    removed: integer('removed').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.repo, t.ticketId, t.kind, t.name, t.revision] })],
 )
 
 /** Operator sessions (SPEC §7.1.1): hosted-only durable orchestrator
