@@ -2,6 +2,11 @@ import { parsePostgresStoreEnv, type PostgresStoreConfig } from '@defrex/autobui
 
 export type HostedStoreEnv = Record<string, string | undefined>
 export const HOSTED_ARTIFACT_MAX_BYTES = 1024 * 1024
+/** The largest ticket-asset request or response body the hosted deployment
+ * carries: under Vercel's 4.5 MB function payload cap
+ * (https://vercel.com/docs/functions/limitations). The effective per-asset
+ * limit it implies is about 2.8 MiB after base64 and JSON overhead. */
+export const HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES = 4 * 1024 * 1024
 
 /**
  * Ceiling for a held event read (`wait` on the build/repo event routes), in

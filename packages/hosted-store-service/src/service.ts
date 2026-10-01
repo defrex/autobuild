@@ -35,6 +35,7 @@ import {
 import { createStoreServer } from './remote-store-server'
 import {
   HOSTED_ARTIFACT_MAX_BYTES,
+  HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
   HOSTED_EVENT_WAIT_MAX_SECONDS,
   parseHostedStoreEnv,
   type HostedStoreEnv,
@@ -443,6 +444,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           store,
           secret: config.secret,
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
+          maxTicketAssetRequestBytes: HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
           maxEventWaitSeconds: HOSTED_EVENT_WAIT_MAX_SECONDS,
           onInternalError: (error, req) => reportProtocolFailure(error, req, 'store'),
           ...shared,

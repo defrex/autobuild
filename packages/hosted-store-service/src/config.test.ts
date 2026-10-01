@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { HOSTED_ARTIFACT_MAX_BYTES, parseHostedStoreEnv } from './config'
+import {
+  HOSTED_ARTIFACT_MAX_BYTES,
+  HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
+  parseHostedStoreEnv,
+} from './config'
 
 const valid = {
   AB_STORE_SECRET: 'secret',
@@ -24,6 +28,7 @@ describe('hosted store configuration', () => {
       done: 'Done',
     })
     expect(HOSTED_ARTIFACT_MAX_BYTES).toBe(1024 * 1024)
+    expect(HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES).toBe(4 * 1024 * 1024)
   })
 
   test('requires service-only Linear credentials and distinct configured states', () => {
