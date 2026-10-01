@@ -65,6 +65,13 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   claims tickets that pass the `[tickets]` ready
   gate, chooses a short immutable slug from the final conforming spec, and
   starts builds up to the top-level `capacity` bound.
+- **Ticket assets** — files or folders attached to a ticket (see
+  [Ticket assets](#ticket-assets)) are frozen into the build at claim and
+  appear under `.ab/assets/` in every phase, as inputs alongside the spec.
+  A `design` asset is part of the contract: `plan`, `plan-review`, `implement`,
+  `code-review`, and agent verify steps judge against it, as a contract on
+  observable visual and reference outcomes, not on implementation. Other kinds
+  are reference material.
 - **`spec`** — the ticket's spec becomes the build's contract. The `ab-spec`
   skill is the human-interactive surface for producing it, and it runs *before*
   a build exists.
@@ -412,6 +419,12 @@ verifySteps = ["types", "e2e"]
 Names must already exist in `[verify].steps` with matching tables; duplicates,
 blanks, unknown names, malformed metadata, and omission of an `always = true`
 step make the planner's `ab done` fail before `plan.completed` is appended.
+
+An agent verify step is handed the build's pinned ticket assets under
+`.ab/assets/` (listed in `.ab/context.json`) as well as the spec. A verify skill
+should treat a `design` asset as part of the contract, a contract on observable
+visual and reference outcomes, not on implementation, and judge the result
+against it.
 
 An agent verify step selects `[roles.<step>]` by its **logical step name** —
 the name in `[verify].steps`, not the skill it runs. An agent finalize
@@ -1089,6 +1102,37 @@ Human-readable output is the default and must not be parsed for ids. Every
 subcommand accepts `--json`, which emits one bare JSON value and no prose: a
 `Ticket[]` for `list`, and the complete resulting `Ticket` for `create`,
 `update`, `block`, `unblock`, `show`, or `move`.
+
+### Ticket assets
+
+A ticket asset is a file or folder attached to a ticket and stored in the
+BuildStore, never in the ticket source: a design export, reference screenshots,
+a sample payload. Each has a kind and a name.
+
+- `ab ticket attach <id> <kind> <path> [--name <name>] [--json]` stores `<path>`
+  (default name: its basename). Attaching the same kind and name again makes a
+  new revision; earlier ones stay retrievable. Over the store's size limit
+  (25 MiB by default, lower on a hosted deployment) it is refused. Attach and
+  remove leave a note on the ticket naming the asset.
+- `ab ticket show <id>` lists the current assets; with `--json` the ticket
+  gains an `assets` array.
+- `ab ticket asset get <id> <kind> <name> <dest> [--rev <n>]` downloads the
+  exact bytes of the latest (or given) revision; `ab ticket asset rm <id> <kind>
+  <name>` drops it from the current assets.
+- **Frozen at claim.** A claim pins the current revisions into the build. A
+  later attach or remove leaves a running build alone; a human answer with
+  `--revise-spec-from-ticket` pins again. `ab build asset get <slug> <kind>
+  <name> <dest> [--rev <n>]` downloads what the build froze, also after it ends.
+- **Where phases find them.** `ab context` writes each pinned asset to
+  `.ab/assets/<kind>/<name>/` (a file asset is the single file inside that
+  directory) and lists them under `assets` in `.ab/context.json` with kind,
+  name, revision, layout, size, and path. The key is absent when the build has
+  none.
+
+By convention the `design` kind is a visual or reference contract, exported to
+static files when the ticket is groomed, so no build converts a link. The spec
+cites it by kind and name. See [the lifecycle](#the-lifecycle) for how phases
+judge against it.
 
 ## Retrieving build artifacts
 

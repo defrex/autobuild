@@ -37,7 +37,9 @@ in order, but as a conversation, not a form:
 3. **Out of scope.** Ask what adjacent work is explicitly excluded. Propose
    candidates — the tempting expansions you noticed while reading the code.
 4. **Evidence.** Link what exists: the error rates, the user reports, the
-   prior discussion.
+   prior discussion. Designs and other reference material are attached as
+   ticket assets and cited by kind and name — see
+   [Designs and reference material](#designs-and-reference-material).
 
 Draft the spec in full, show it, iterate until the user accepts. Then create
 the ticket with the spec as its body using `ab ticket create`. Honor a
@@ -102,6 +104,9 @@ spec to a file, then sync only the body:
 ab ticket update <ticket> --body spec.md
 ```
 
+If the human points at a design or other reference material while fleshing out,
+follow [Designs and reference material](#designs-and-reference-material).
+
 Omitted metadata is preserved, including title, labels, assignee, state, and
 provider-specific fields. If grooming changes dependencies, use the same
 configured-source surface rather than a provider API or MCP call:
@@ -114,10 +119,46 @@ ab ticket unblock <ticket> <blocker-id>
 The first id is the ticket being amended. Both relationship operations are
 idempotent; adding validates the blocker exists and rejects a self-block.
 
+## Designs and reference material
+
+When the user points at a design, mock, prototype, screenshot set, sample
+payload, or other reference material, export it during this conversation, so
+no build worker ever has to convert a link. Use whatever tools this session
+has (a browser, a connector, a screenshot tool, fetch, a CLI) and do not tie
+the result to any one design tool. Produce portable static files in one
+folder: a static reference page (`index.html`, with its assets inline or
+alongside) plus screenshots of the key states and widths.
+
+Attach the folder (or a single file) to the ticket as a `design` asset:
+
+```
+ab ticket attach <id> design <path> [--name <name>]
+```
+
+The ticket must exist first. For a new ticket, create it in a non-ready
+staging state, attach, check with `ab ticket show <id>`, and move it to ready
+last, so a build cannot claim it before its assets exist. Attaching the same
+kind and name again makes a new revision. Assets are frozen into a build when
+it claims the ticket; attaching afterward does not reach a build already
+running.
+
+Cite the asset in the spec's Evidence by kind and name (``design `home-page` ``),
+never by external link. The spec still states the underlying need; the asset is
+the visual contract.
+
+If this session cannot export the design (no tool for it, an auth wall, or
+files over the store's size limit), keep the external link in Evidence and say
+plainly, in the spec and to the human, that builds cannot read it, so the
+planner does not treat it as a contract.
+
 ## Rules
 
-- The spec says **what and why, never how** — if the user hands you a
-  design, capture the underlying need and park the design in evidence as
+- The spec says **what and why, never how.** An exported, attached `design`
+  asset is a contract on observable visual and reference outcomes — layout,
+  content, states, copy, look — that plan, review, and verify judge against;
+  it is not a contract on implementation, and component structure, libraries,
+  and file layout stay the planner's. A technical design or proposed approach
+  the user hands you, and any link you could not export, goes in Evidence as
   "proposed approach", clearly non-binding on the planner.
 - Don't gold-plate: a spec is buildable when a planner could start, not when
   every question is answered. Thin-but-groomed is a valid state — dispatch

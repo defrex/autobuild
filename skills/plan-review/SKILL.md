@@ -17,7 +17,11 @@ verdict travels the typed channel; nothing you print matters to the pipeline.
    lists finding ids a human explicitly dismissed.
 2. Judge the plan on exactly these axes:
    - **Spec conformance** — does executing this plan satisfy every
-     acceptance criterion? Does anything in it exceed the spec's scope?
+     acceptance criterion? Does anything in it exceed the spec's scope? A
+     pinned `design` asset (listed under `assets` in `.ab/context.json`, files
+     under `.ab/assets/<kind>/<name>/`) is a contract on observable visual and reference outcomes, not on implementation: open it and flag a plan that
+     contradicts or ignores it, as you would an unmet criterion. A gap in the
+     asset is not a reason to invent requirements.
    - **Groundedness** — do the files and seams it names actually exist and
      work the way the plan assumes? Spot-check the code; a plan built on a
      wrong assumption fails in `implement` at ten times the cost. For every

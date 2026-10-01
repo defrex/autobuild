@@ -21,6 +21,9 @@ You never push — the push is plumbing that happens when you finish.
    operator's answer to the escalation that blocked this build). The manifest's
    `feedback` field names which one this round is, and is absent when the round
    carries none.
+   When the manifest lists `assets`, they are the build's pinned ticket assets
+   under `.ab/assets/<kind>/<name>/`; read them with the spec. A `design` asset
+   is a contract on observable visual and reference outcomes, not on implementation — what you build must satisfy it, while how stays yours.
 2. Execute the plan. Commit in coherent increments with real messages —
    the commit history is part of the paper trail.
 3. Run the repo's checks yourself before finishing (the config's typecheck /
