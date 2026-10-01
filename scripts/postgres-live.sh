@@ -31,10 +31,13 @@ cmd_install() {
 }
 
 cmd_ensure_running() {
-  detect_version
+  # A cluster that already answers is enough, whatever installed it: local
+  # builds run against the host's own PostgreSQL, which need not follow the
+  # Debian /usr/lib/postgresql layout the start path below relies on.
   if pg_isready -q -h 127.0.0.1 -p 5432; then
     exit 0
   fi
+  detect_version
   sudo pg_ctlcluster "$VERSION" main start
   if ! pg_isready -h 127.0.0.1 -p 5432; then
     echo 'postgres-live failure: cluster did not become ready after start' >&2

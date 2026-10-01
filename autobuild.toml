@@ -7,47 +7,10 @@
 baseBranch = "main"
 capacity = 5             # concurrent builds
 
-# Builds execute remotely while the dispatcher and hosted Store remain outside
-# the guest. Only the model credential crosses this boundary.
-[workspace]
-provider = "vercel-sandbox"
-
-[workspace.config]
-image = "vercel/sandbox/universal:latest"
-vcpus = 4
-# One execution spans every phase up to a park point, and a single agent turn may
-# use the full policy session budget (3600 s), so the guest lifetime must cover
-# several turns. At 2700 s implement sessions were cut off mid-turn (2026-09-10).
-timeoutSeconds = 14400
-operationTimeoutMs = 30000
-environmentVariables = ["AI_GATEWAY_API_KEY"]
-# The universal image is Ubuntu, where the apt `chromium` package is a snap
-# stub that installs no browser; Google's own .deb provides a real binary.
-provisioning = [
-  { name = "system-install", command = """export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
-apt-get install -y -qq /tmp/google-chrome.deb fonts-noto-cjk fonts-noto-color-emoji fontconfig""" },
-  { name = "browser-smoke", command = "CHROMIUM_BIN=/usr/bin/google-chrome-stable BUN_BIN=/opt/autobuild-runtime/node_modules/.bin/bun ./scripts/browser-smoke.sh" },
-  { name = "postgres", command = "./scripts/postgres-live.sh install" },
-  # Finalize steps (and any in-guest git usage) need an attributable identity;
-  # without this, fresh sandboxes fail `git commit` with 'Committer identity
-  # unknown'. System scope so it applies to every user, incl. unprivileged
-  # agent sessions, and survives a workspace re-clone (which wipes
-  # .git/config). Kept last: ordering within provisioning is irrelevant to
-  # readiness (any step failure deletes the sandbox) and appending keeps the
-  # contract-test index assertions stable.
-  { name = "git-identity", command = "git config --system user.name 'autobuild[bot]' && git config --system user.email 'autobuild[bot]@users.noreply.github.com'" },
-]
-
-# A fresh Pi install only knows its bundled model catalog; newer gateway
-# models (DeepSeek V4.1 Flash among them) arrive through the pi.dev catalog
-# refresh that interactive Pi runs in the background. The preflight refreshes
-# explicitly so the runner's model probe sees the current gateway catalog on
-# first provision and on every sandbox reuse (proven 2026-09-16).
-[workspace.config.runtimeProvisioning.pi]
-install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.4"
-preflight = "test \"$(pi --version)\" = \"0.84.4\" && pi update --models"
+# Builds run locally: each build gets a Git worktree under .autobuild/worktrees
+# (the default `git-worktree` provider, so no [workspace] table) and its agents
+# run on the maintainer's local Claude Code and Codex CLIs, which bill against
+# their subscriptions rather than an API key.
 
 # Named commands the kernel may run. `setup` runs after workspace provision and
 # after a sandbox rehydrate; the rest are referenced by name from check steps.
@@ -110,58 +73,48 @@ skill = "ab-finalize-changelog"
 # Runtime, model, and args per phase role. `default` is the inheritance base
 # and is never dispatched as a phase; every other role overrides each field
 # independently, and a declared args list replaces rather than unions.
-# Remote builds are API-billed, so the primaries are the cheaper capable coding
-# models; the Opus alternate is a last-resort fallback, never a primary.
+# Producers run on Claude Sonnet and reviewers on GPT, so a reviewer never
+# shares the implementer's blind spots. Each role falls back to the other
+# provider's model when its own is overloaded or out of quota.
 [roles.default]
-runtime = "pi"
-model = "vercel-ai-gateway/zai/glm-5.3-flash"
-# Failure-triggered fallbacks stay on Pi and preserve the repository's provider
-# preference order. Disposable guests authenticate only through AI Gateway.
-alternates = [
-  { model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash" },
-  { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
-]
+runtime = "claude"
+model = "claude-sonnet-5-5"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
+
+[roles.plan]
+runtime = "claude"
+model = "claude-sonnet-5-5"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 
 [roles.implement]
-runtime = "pi"
-model = "vercel-ai-gateway/zai/glm-5.3-flash"
-alternates = [
-  { model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash" },
-  { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
-]
+runtime = "claude"
+model = "claude-sonnet-5-5"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 
 [roles.plan-review]
-runtime = "pi"
-model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash"
-alternates = [
-  { model = "vercel-ai-gateway/zai/glm-5.3-flash" },
-  { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
-]
+runtime = "codex"
+model = "gpt-6.1-sol"
+alternates = [{ runtime = "claude", model = "claude-sonnet-5-5" }]
 
 [roles.code-review]
-runtime = "pi"
-model = "vercel-ai-gateway/deepseek/deepseek-v4.1-flash"
-alternates = [
-  { model = "vercel-ai-gateway/zai/glm-5.3-flash" },
-  { model = "vercel-ai-gateway/anthropic/claude-opus-5" },
-]
+runtime = "codex"
+model = "gpt-6.1-sol"
+alternates = [{ runtime = "claude", model = "claude-sonnet-5-5" }]
 
 [policy]
 stallRounds = 3          # a finding surviving N review rounds escalates
-# Cheaper gateway models need more wall-clock per implement turn; the default
-# 3600 s expired mid-turn on a large ticket (2026-09-10) and discarded the work.
+# Large implement turns outrun the default 3600 s budget; one expired mid-turn
+# on a large ticket (2026-09-10) and discarded the work.
 sessionBudgetSeconds = 10800
 maxVerifyAttempts = 3
 maxReconcileAttempts = 3
 maxReviewRounds = 6
 harvestThreshold = 5     # queued observations that trigger a harvest on back-pressure
 
-# Ticket source and lifecycle states. Tickets are served by the hosted Autobuild
-# service (AB_STORE / AB_TOKEN in the dispatcher's environment); the service
-# holds LINEAR_API_KEY and forwards to the Linear team below. Nothing secret
-# lives here.
+# Ticket source and lifecycle states. The dispatcher talks to Linear directly
+# with LINEAR_API_KEY from its environment (.env); nothing secret lives here.
 [tickets]
-source = "hosted"
+source = "linear"
 teamKey = "AUT"                 # Linear team key ("Auto-build")
 readyState = "Todo"             # sole ready gate here; team AUT has no "Ready" state. Case-sensitive.
 readyLabels = []                # additional label gate ([] = none)

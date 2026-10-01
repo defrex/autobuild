@@ -2,19 +2,16 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseConfig } from './load'
 
 /**
  * Deterministic no-identity repro for the finalize-commit failure
  * (obs_cebe11ed / o_62444329): the changelog finalize step staged a correct
  * entry but `git commit` failed with 'Committer identity unknown' because the
- * guest workspace had no git identity. Two layers fix it and must carry the
- * identical bot identity:
- *
- * 1. a `git-identity` provisioning step in the repo-root `autobuild.toml`
- *    writing the identity to the guest's system git config, and
- * 2. a defensive both-keys fallback in the `ab-finalize-changelog` skill
- *    writing it repo-locally when resolution is missing or partial.
+ * guest workspace had no git identity. The fix is a defensive both-keys
+ * fallback in the `ab-finalize-changelog` skill that writes a bot identity
+ * repo-locally when resolution is missing or partial. (Remote sandboxes also
+ * provisioned the same identity system-wide; this repository now builds in
+ * local worktrees, which inherit the maintainer's own identity.)
  *
  * The child environments below are constructed from scratch — never inherited
  * — because git's real identity overrides are GIT_AUTHOR_NAME,
@@ -24,26 +21,16 @@ import { parseConfig } from './load'
  */
 
 const REPO_ROOT = join(import.meta.dir, '../../../..')
-const TOML_PATH = join(REPO_ROOT, 'autobuild.toml')
 const SKILL_PATH = join(REPO_ROOT, '.agents/skills/ab-finalize-changelog/SKILL.md')
-const PROVISIONING_COMMAND_IDENTITY =
-  /git config --system user\.name '([^']+)' && git config --system user\.email '([^']+)'/
 
-/** Provisioning step name and the bot identity both layers must agree on. */
+/** The bot identity the skill's fallback writes. */
 async function provisionedIdentity(): Promise<{ name: string; email: string }> {
-  const config = parseConfig(await Bun.file(TOML_PATH).text(), TOML_PATH)
-  const vercel = config.workspace.config as {
-    provisioning?: { name: string; command: string }[]
-  }
-  const step = vercel.provisioning?.find(({ name }) => name === 'git-identity')
-  expect(step).toBeDefined()
-  expect(step?.command).toContain('git config --system')
-  const match =
-    /git config --system user\.name '([^']+)' && git config --system user\.email '([^']+)'/.exec(
-      step?.command ?? '',
-    )
-  expect(match).not.toBeNull()
-  return { name: match?.[1] ?? '', email: match?.[2] ?? '' }
+  const skill = await Bun.file(SKILL_PATH).text()
+  const name = /git config user\.name '([^']+)'/.exec(skill)
+  const email = /git config user\.email '([^']+)'/.exec(skill)
+  expect(name).not.toBeNull()
+  expect(email).not.toBeNull()
+  return { name: name?.[1] ?? '', email: email?.[1] ?? '' }
 }
 
 type ScratchEnv = Record<string, string>
@@ -89,24 +76,11 @@ afterAll(async () => {
 })
 
 describe('git identity for finalize commits', () => {
-  test('autobuild.toml provisions a git-identity step with a bot identity', async () => {
-    const config = parseConfig(await Bun.file(TOML_PATH).text(), TOML_PATH)
-    const vercel = config.workspace.config as {
-      provisioning?: { name: string; command: string }[]
-    }
-    const step = vercel.provisioning?.at(-1)
-    expect(step?.name).toBe('git-identity')
-    expect(step?.command).toContain('git config --system')
-    const match = PROVISIONING_COMMAND_IDENTITY.exec(step?.command ?? '')
-    expect(match?.[1]).toBe('autobuild[bot]')
-    expect(match?.[2]).toBe('autobuild[bot]@users.noreply.github.com')
-  })
-
-  test('the skill fallback uses the exact same identity as provisioning', async () => {
-    const identity = await provisionedIdentity()
-    const skill = await Bun.file(SKILL_PATH).text()
-    expect(skill).toContain(`git config user.name '${identity.name}'`)
-    expect(skill).toContain(`git config user.email '${identity.email}'`)
+  test('the skill fallback writes the bot identity', async () => {
+    expect(await provisionedIdentity()).toEqual({
+      name: 'autobuild[bot]',
+      email: 'autobuild[bot]@users.noreply.github.com',
+    })
   })
 
   test('a from-scratch environment without identity fails git commit', async () => {

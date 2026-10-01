@@ -7,7 +7,7 @@
  * drift into a shape the shipped loader rejects.
  */
 import { describe, expect, test } from 'bun:test'
-import { stringify } from 'smol-toml'
+import { parse as parseToml, stringify } from 'smol-toml'
 import { type Dirent, readdirSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
@@ -43,15 +43,39 @@ const SETUP_DOC_PATH = join(ROOT, 'docs', 'setup.md')
 const GUIDE_PATH = join(ROOT, 'skills', 'guide', 'SKILL.md')
 const GUIDE_SETUP_PATH = join(ROOT, 'skills', 'guide', 'references', 'setup.md')
 const README_PATH = join(ROOT, 'README.md')
-const AUTOBUILD_PATH = join(ROOT, 'autobuild.toml')
-const [doc, guide, readme, setupDoc, guideSetup, autobuildToml] = await Promise.all([
+const [doc, guide, readme, setupDoc, guideSetup] = await Promise.all([
   readFile(DOC_PATH, 'utf8'),
   readFile(GUIDE_PATH, 'utf8'),
   readFile(README_PATH, 'utf8'),
   readFile(SETUP_DOC_PATH, 'utf8'),
   readFile(GUIDE_SETUP_PATH, 'utf8'),
-  readFile(AUTOBUILD_PATH, 'utf8'),
 ])
+
+/**
+ * The delivered Pi provisioning: the `[workspace.config.runtimeProvisioning.pi]`
+ * block of docs/configuration.md's Vercel Sandbox example, the canonical
+ * product surface every other copy is pinned against. Parsed rather than
+ * matched so the expected lines are derived, never restated.
+ */
+function deliveredPiProvisioning(): RuntimeProvisioningEntry {
+  const section = headingSection(doc, 3, 'Vercel Sandbox') ?? ''
+  const fence = [...section.matchAll(/```toml\n([\s\S]*?)```/g)]
+    .map((match) => match[1]!)
+    .find((body) => body.includes('[workspace.config.runtimeProvisioning.pi]'))
+  if (fence === undefined) {
+    throw new Error(
+      'docs/configuration.md Vercel Sandbox has no [workspace.config.runtimeProvisioning.pi] example',
+    )
+  }
+  const parsed = parseToml(fence) as {
+    workspace?: { config?: { runtimeProvisioning?: Record<string, RuntimeProvisioningEntry> } }
+  }
+  const pi = parsed.workspace?.config?.runtimeProvisioning?.pi
+  if (pi === undefined) {
+    throw new Error('docs/configuration.md runtimeProvisioning.pi example did not parse')
+  }
+  return pi
+}
 
 /**
  * Render a value as a TOML basic-string assignment, matching the doc fence
@@ -118,15 +142,15 @@ function versionFromInstallCommand(command: string): string {
  * AUT-471: repository-wide scan for `@earendil-works/pi-coding-agent@<version>`
  * pins. The two-surface cross-check below guards only the setup.md copies;
  * this scan extends the same contract to every file pinning the literal in an
- * install or preflight line, with autobuild.toml's
- * `[workspace.config.runtimeProvisioning.pi]` block as the single source of
+ * install or preflight line, with docs/configuration.md's
+ * `[workspace.config.runtimeProvisioning.pi]` example as the single source of
  * truth. Both patterns are pinned byte shapes:
  *
  * - the install pattern requires the `npm install …` line context, keeping
  *   prose quotes and changelog history out;
  * - the preflight pattern is anchored to a `preflight =` TOML assignment and
  *   matches exactly the escaped-quote (`\\"`) byte form shared by
- *   autobuild.toml and every doc copy — never a raw-quote template in test
+ *   every doc copy — never a raw-quote template in test
  *   source.
  *
  * If a future site adopts a different quoting style, the completeness floor in
@@ -161,13 +185,12 @@ const PI_PIN_WALK_SKIP_FILES = new Set([
 ])
 
 /**
- * The nine enumerated pinning sites (plan-time grep, AUT-471). The scan test's
+ * The eight enumerated pinning sites (plan-time grep, AUT-471). The scan test's
  * completeness floor requires an install-line and a preflight-line match at
  * the expected version in each of them, so the floor doubles as the
  * machine-checked form of the grep-at-implementation-time requirement.
  */
 const PI_PIN_SURFACES = [
-  'autobuild.toml',
   'docs/configuration.md',
   'docs/setup.md',
   'skills/guide/SKILL.md',
@@ -203,7 +226,7 @@ function scanPiInstallPins(files: ReadonlyMap<string, string>, expectedVersion: 
           installPinned.add(path)
         } else {
           divergences.push(
-            `${path}:${lineNumber} install line pins @earendil-works/pi-coding-agent@${found}, expected ${expectedVersion} (autobuild.toml runtimeProvisioning.pi)`,
+            `${path}:${lineNumber} install line pins @earendil-works/pi-coding-agent@${found}, expected ${expectedVersion} (docs/configuration.md runtimeProvisioning.pi)`,
           )
         }
       }
@@ -214,7 +237,7 @@ function scanPiInstallPins(files: ReadonlyMap<string, string>, expectedVersion: 
           preflightPinned.add(path)
         } else {
           divergences.push(
-            `${path}:${lineNumber} preflight pins ${found}, expected ${expectedVersion} (autobuild.toml runtimeProvisioning.pi)`,
+            `${path}:${lineNumber} preflight pins ${found}, expected ${expectedVersion} (docs/configuration.md runtimeProvisioning.pi)`,
           )
         }
       }
@@ -487,16 +510,12 @@ describe('Vercel runtime provisioning documentation', () => {
     // The delivered runtimeProvisioning preflight refreshes the model catalog
     // (`&& pi update --models`); a bare exact-version preflight copied from
     // these surfaces would silently lose that refresh. Both expected lines are
-    // derived from autobuild.toml's [workspace.config.runtimeProvisioning.pi]
-    // block — the delivered configuration — so any change to the shipped
+    // derived from docs/configuration.md's [workspace.config.runtimeProvisioning.pi]
+    // example — the delivered configuration — so any change to the shipped
     // install or preflight command without a matching doc update fails here,
     // in either direction. The helper re-escapes into TOML basic-string form,
     // reproducing the raw `\"` escape bytes the doc fences use.
-    const config = parseConfig(autobuildToml)
-    const pi = vercelSandboxConfigSchema.parse(config.workspace.config).runtimeProvisioning.pi
-    if (pi === undefined) {
-      throw new Error('autobuild.toml has no [workspace.config.runtimeProvisioning.pi] block')
-    }
+    const pi = deliveredPiProvisioning()
 
     const surfaces = [
       ['docs/configuration.md Vercel Sandbox', headingSection(doc, 3, 'Vercel Sandbox')],
@@ -530,23 +549,16 @@ describe('Vercel runtime provisioning documentation', () => {
     ).toBe(guideSetup)
   })
 
-  test("cross-checks the doc Pi version against autobuild.toml's runtimeProvisioning install line", () => {
+  test('cross-checks the setup Pi version against the delivered runtimeProvisioning install line', () => {
     // AUT-455's pin derives each surface's version from its own install line,
-    // so a bump that updates every doc copy but stales autobuild.toml (or the
-    // reverse) passes everywhere. This test is the cross-check: the raw-text
-    // doc install lines are pinned against the parsed repository config, and
-    // the config's own preflight is pinned against its install line so every
-    // version literal in the doc examples matches autobuild.toml.
+    // so a bump that updates the setup copies but stales the delivered example
+    // (or the reverse) passes everywhere. This test is the cross-check: the
+    // raw-text setup install lines are pinned against the parsed delivered
+    // example, and its own preflight is pinned against its install line so
+    // every version literal in the doc examples agrees.
     // This loop covers only the two setup.md copies; the sibling walk test
     // below is the complete guard across every pinning site (AUT-471).
-    const parsed = parseConfig(autobuildToml, AUTOBUILD_PATH)
-    const config = parsed.workspace.config as {
-      runtimeProvisioning?: Record<string, RuntimeProvisioningEntry>
-    }
-    const pi = config.runtimeProvisioning?.pi
-    if (pi === undefined) {
-      throw new Error('autobuild.toml is missing [workspace.config.runtimeProvisioning.pi]')
-    }
+    const pi = deliveredPiProvisioning()
     const version = versionFromInstallCommand(pi.install)
     for (const [location, surface] of [
       ['docs/setup.md', setupDoc],
@@ -554,15 +566,16 @@ describe('Vercel runtime provisioning documentation', () => {
     ] as const) {
       expect(
         versionFromDocInstallLine(surface, location),
-        `${location} install-line version drifted from autobuild.toml's runtimeProvisioning.pi install line`,
+        `${location} install-line version drifted from the delivered runtimeProvisioning.pi install line`,
       ).toBe(version)
     }
     // The parsed preflight carries real `"` characters (the TOML `\\"` escape
     // bytes are unescaped by parsing), so match plain quotes around the
     // interpolated version — never the raw-file `\\"` form.
-    expect(pi.preflight, 'autobuild.toml preflight drifted from its own install line').toContain(
-      `= "${version}"`,
-    )
+    expect(
+      pi.preflight,
+      'docs/configuration.md preflight drifted from its own install line',
+    ).toContain(`= "${version}"`)
   })
 
   test('cross-checks every repository file pinning the install or preflight literal', () => {
@@ -572,19 +585,12 @@ describe('Vercel runtime provisioning documentation', () => {
     // pristine copies of the guide skill — and the spec requires coverage for
     // any additional site a grep finds at implementation time, forever. Rather
     // than an enumeration that can itself go stale, this walk scans the whole
-    // repository and asserts every install/preflight pin equals autobuild.toml's
+    // repository and asserts every install/preflight pin equals the delivered
     // runtimeProvisioning.pi version, failing once with every diverging
     // file:line. The completeness floor at the end requires install and
     // preflight matches in every enumerated site, so regex rot or a changed
     // line shape fails loudly instead of silently covering nothing.
-    const parsed = parseConfig(autobuildToml, AUTOBUILD_PATH)
-    const config = parsed.workspace.config as {
-      runtimeProvisioning?: Record<string, RuntimeProvisioningEntry>
-    }
-    const pi = config.runtimeProvisioning?.pi
-    if (pi === undefined) {
-      throw new Error('autobuild.toml is missing [workspace.config.runtimeProvisioning.pi]')
-    }
+    const pi = deliveredPiProvisioning()
     const version = versionFromInstallCommand(pi.install)
 
     // The host file sits on the walk's skip list; if it moves or renames, the
@@ -600,7 +606,7 @@ describe('Vercel runtime provisioning documentation', () => {
     const scan = scanPiInstallPins(walkRepositoryFiles(ROOT), version)
     expect(
       scan.divergences,
-      `Pi version pins diverged from autobuild.toml's runtimeProvisioning.pi (${version}):\n${scan.divergences.join('\n')}`,
+      `Pi version pins diverged from the delivered runtimeProvisioning.pi (${version}):\n${scan.divergences.join('\n')}`,
     ).toEqual([])
 
     const uncovered = PI_PIN_SURFACES.filter(
@@ -656,7 +662,7 @@ describe('Pi install-pin scan — synthetic fixtures', () => {
   const EXPECTED = '0.84.4'
   const installLine = (version: string): string =>
     `install = "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@${version}"`
-  // Byte form taken verbatim from autobuild.toml's preflight line: a TOML
+  // Byte form taken verbatim from the delivered preflight line: a TOML
   // basic string whose quotes are raw backslash-quote escapes in the file.
   const preflightLine = (version: string): string =>
     `preflight = "test \\"$(pi --version)\\" = \\"${version}\\" && pi update --models"`
@@ -670,7 +676,7 @@ describe('Pi install-pin scan — synthetic fixtures', () => {
       EXPECTED,
     )
     expect(scan.divergences).toEqual([
-      'docs/setup.md:3 install line pins @earendil-works/pi-coding-agent@0.83.0, expected 0.84.4 (autobuild.toml runtimeProvisioning.pi)',
+      'docs/setup.md:3 install line pins @earendil-works/pi-coding-agent@0.83.0, expected 0.84.4 (docs/configuration.md runtimeProvisioning.pi)',
     ])
     expect(scan.installPinned).toEqual(new Set(['docs/setup.md']))
   })
@@ -681,7 +687,7 @@ describe('Pi install-pin scan — synthetic fixtures', () => {
       EXPECTED,
     )
     expect(scan.divergences).toEqual([
-      'docs/setup.md:2 preflight pins 0.83.0, expected 0.84.4 (autobuild.toml runtimeProvisioning.pi)',
+      'docs/setup.md:2 preflight pins 0.83.0, expected 0.84.4 (docs/configuration.md runtimeProvisioning.pi)',
     ])
     expect(scan.preflightPinned).toEqual(new Set())
   })
