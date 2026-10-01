@@ -45,7 +45,7 @@ import { observe } from './observe'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
 import { renderPrSummary } from './pr-summary'
-import { abBuilds, abBuildStatus } from './status'
+import { abBuildAssetGet, abBuilds, abBuildStatus } from './status'
 import { abRepositoryStatus } from './repository-status'
 import { abWatch, WATCH_USAGE } from './watch'
 import { abWait, WAIT_USAGE } from './wait'
@@ -791,9 +791,44 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'build': {
-      const usage = 'usage: ab build status <slug> [--events <n>] [--json] [--store <ref>] (§8.2)'
+      const usage =
+        'usage: ab build status <slug> [--events <n>] [--json] [--store <ref>] (§8.2)\n' +
+        '       ab build asset get <slug> <kind> <name> <dest> [--rev <n>] [--json] [--store <ref>] (§8.8)'
       const [sub, ...more] = rest
-      // Only `status` today; the subcommand shape keeps room for `ab build <verb>`.
+      if (sub === 'asset') {
+        const [action, ...assetArgs] = more
+        if (action !== 'get') throw new Error(usage)
+        const assetParsed = parseArgs(
+          assetArgs,
+          { rev: 'value', json: 'boolean', store: 'value' },
+          usage,
+        )
+        const [slug, kind, name, dest, ...extra] = assetParsed.positionals
+        if (!slug || !kind || !name || !dest || extra.length > 0) throw new Error(usage)
+        const rawRev = stringFlag(assetParsed, 'rev')
+        if (rawRev !== undefined && !/^\d+$/.test(rawRev)) {
+          throw new Error(`--rev must be a nonnegative integer, got "${rawRev}" — ${usage}`)
+        }
+        const assetStore = stringFlag(assetParsed, 'store')
+        if (deps.exec === undefined) {
+          throw new Error("'ab build' needs an exec seam — this is a wiring bug in the ab binary")
+        }
+        await abBuildAssetGet({
+          targetRepo: deps.workspacePath,
+          env: deps.processEnv ?? {},
+          exec: deps.exec,
+          stdout,
+          slug,
+          kind,
+          name,
+          dest,
+          json: assetParsed.flags.has('json'),
+          ...(rawRev !== undefined ? { rev: Number(rawRev) } : {}),
+          ...(assetStore !== undefined ? { storeRef: assetStore } : {}),
+          ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
+        })
+        return 0
+      }
       if (sub !== 'status') {
         throw new Error(usage)
       }

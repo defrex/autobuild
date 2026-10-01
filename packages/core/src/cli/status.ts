@@ -67,6 +67,7 @@ import type { BuildRecord, BuildStore, StreamRecord, StreamScope } from '../stor
 import { buildProgress, isDiverged, type BuildProgress } from './build-progress'
 import { normalizeGitRemoteUrl } from '../kernel/origin'
 import { buildInRepository, resolveMainRepo } from './repo-state'
+import { writeAssetTo } from './ticket-assets'
 import { withAmbientReadStore, type StoreOpener } from './store-opening'
 
 /** Backward-compatible name for callers/tests; repository resolution is shared. */
@@ -889,6 +890,40 @@ async function projectBuildDecision(
   }
 }
 
+type AmbientReadContext = Parameters<Parameters<typeof withAmbientReadStore>[1]>[0]
+
+/** The build record, after the repository gate every single-build read shares
+ * (see `abBuildStatus`). */
+async function requireReadableBuild(
+  opts: AbBuildStatusOpts,
+  context: AmbientReadContext,
+): Promise<BuildRecord> {
+  const record = await context.store.getBuild(opts.slug)
+  if (record === null) {
+    throw new Error(
+      `no build "${opts.slug}" in this store — run 'ab builds --all' to list ` +
+        "this repo's builds, or pass --store <ref> if it lives in another store",
+    )
+  }
+  // Own-session authority: slug equality bounds the read to the session's
+  // own build, and an explicit --store must name the session's own store for
+  // the bypass to apply. Every other combination falls through to the
+  // ordinary repository gate, unchanged — which now keys on the checkout's
+  // normalized origin identity (`context.checkout` is the physical path;
+  // `buildInRepository` derives the identity from it).
+  const ownSession =
+    context.ambient !== undefined &&
+    'build' in context.ambient &&
+    context.ambient.build === opts.slug &&
+    (opts.storeRef === undefined || opts.storeRef === context.ambient.store)
+  if (!(ownSession || (await buildInRepository(record, context.checkout, opts.exec)))) {
+    throw new Error(
+      `build "${opts.slug}" belongs to repository "${record.repo}", not "${context.repo}"`,
+    )
+  }
+  return record
+}
+
 /** `ab build status <slug>` — one build in detail. Read-only.
  *
  * Repository authority mirrors the other ambient reads: an operator invocation
@@ -908,29 +943,7 @@ async function projectBuildDecision(
 export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
   const now = (opts.now ?? (() => new Date()))()
   await withAmbientReadStore(opts, async (context) => {
-    const record = await context.store.getBuild(opts.slug)
-    if (record === null) {
-      throw new Error(
-        `no build "${opts.slug}" in this store — run 'ab builds --all' to list ` +
-          "this repo's builds, or pass --store <ref> if it lives in another store",
-      )
-    }
-    // Own-session authority: slug equality bounds the read to the session's
-    // own build, and an explicit --store must name the session's own store for
-    // the bypass to apply. Every other combination falls through to the
-    // ordinary repository gate, unchanged — which now keys on the checkout's
-    // normalized origin identity (`context.checkout` is the physical path;
-    // `buildInRepository` derives the identity from it).
-    const ownSession =
-      context.ambient !== undefined &&
-      'build' in context.ambient &&
-      context.ambient.build === opts.slug &&
-      (opts.storeRef === undefined || opts.storeRef === context.ambient.store)
-    if (!(ownSession || (await buildInRepository(record, context.checkout, opts.exec)))) {
-      throw new Error(
-        `build "${opts.slug}" belongs to repository "${record.repo}", not "${context.repo}"`,
-      )
-    }
+    const record = await requireReadableBuild(opts, context)
     const events = await context.store.getEvents(opts.slug)
     const decision = await projectBuildDecision(opts.slug, events, context.store)
     // Stream enrichment is presentation (SPEC §9): an unavailable read
@@ -965,5 +978,40 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
       return
     }
     for (const line of renderDetail(d, now)) opts.stdout(line)
+  })
+}
+
+export interface AbBuildAssetGetOpts extends AbBuildStatusOpts {
+  kind: string
+  name: string
+  dest: string
+  rev?: number
+}
+
+/** `ab build asset get <slug> <kind> <name> <dest>` — the exact bytes a build
+ * froze at its claim (SPEC §6.3), available after the build has finished. */
+export async function abBuildAssetGet(opts: AbBuildAssetGetOpts): Promise<void> {
+  await withAmbientReadStore(opts, async (context) => {
+    await requireReadableBuild(opts, context)
+    const asset = await context.store.getPinnedTicketAsset(
+      opts.slug,
+      opts.kind,
+      opts.name,
+      opts.rev,
+    )
+    if (asset === null) {
+      const revision = opts.rev === undefined ? '' : ` revision ${opts.rev}`
+      throw new Error(
+        `build "${opts.slug}" pinned no ticket asset ${opts.kind}/${opts.name}${revision}`,
+      )
+    }
+    const written = await writeAssetTo(asset, opts.dest)
+    if (opts.json === true) {
+      opts.stdout(JSON.stringify({ ...asset.meta, path: written }, null, 2))
+      return
+    }
+    opts.stdout(
+      `build asset downloaded: ${opts.slug} ${opts.kind}/${opts.name} revision ${asset.meta.revision} → ${written}`,
+    )
   })
 }

@@ -44,6 +44,7 @@ import {
 } from '../ports/workspace/phase-scratch'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildStore } from '../store/types'
+import { writeAssetTo } from './ticket-assets'
 import type { CliEnv } from './env'
 
 export interface ContextDeps {
@@ -81,6 +82,16 @@ export interface ContextManifest {
   notesPath?: string
   /** relPath (under .ab/) → source artifact ref, or 'derived'. */
   materialized: Record<string, MaterializedEntry>
+  /** The ticket assets this build froze (SPEC §6.3), each written to `path`
+   * (relative to the workspace). Omitted when the build pinned none. */
+  assets?: {
+    kind: string
+    name: string
+    revision: number
+    layout: 'file' | 'tree'
+    size: number
+    path: string
+  }[]
   /** From the latest `implement.completed` (§8.3 code-review/verify inputs). */
   commitRange?: CommitRange
   /** Reconcile: `{baseSha}` freshly recorded by this attempt's phase start (§15.7). */
@@ -273,6 +284,41 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
         '',
       ]
       await writeDerived('ticket.md', lines.join('\n'))
+    }
+  }
+
+  if (inputs.assets === true && state.pinnedAssets.length > 0) {
+    // The pin, not the ticket's current state: the revisions `build.created`
+    // (or the latest re-pinning `spec.revised`) recorded, fetched by explicit
+    // revision so a later attach/replace/remove cannot change what a phase sees.
+    const root = locate('assets')
+    manifest.assets = []
+    for (const pinned of state.pinnedAssets) {
+      const asset = await store.getPinnedTicketAsset(
+        build,
+        pinned.kind,
+        pinned.name,
+        pinned.revision,
+      )
+      if (asset === null) {
+        throw new Error(
+          `pinned ticket asset ${pinned.kind}/${pinned.name} revision ${pinned.revision} is missing from the store`,
+        )
+      }
+      const relPath = `${root}/${pinned.kind}/${pinned.name}`
+      const target = join(abDir, relPath)
+      // A file asset lands inside its directory as `<filename>`; a tree asset
+      // keeps its relative tree, empty directories included.
+      await mkdir(target, { recursive: true })
+      await writeAssetTo(asset, target)
+      manifest.assets.push({
+        kind: pinned.kind,
+        name: pinned.name,
+        revision: pinned.revision,
+        layout: pinned.layout,
+        size: pinned.size,
+        path: `.ab/${relPath}`,
+      })
     }
   }
 
