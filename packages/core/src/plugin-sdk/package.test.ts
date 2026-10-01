@@ -418,6 +418,13 @@ describe('plugin SDK package surface', () => {
     // into a graceful error still fails here, and if
     // packedManifestOmittedFields ever loses 'patchedDependencies' the
     // successful install above fails with exactly this shape.
+    // Later bun releases (1.4.2 onward) install this shape cleanly, so the
+    // control only proves anything on the pinned packageManager version; the
+    // strip itself still matters to consumers on the engines.bun minimum.
+    const pinned = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+      packageManager: string
+    }
+    if (pinned.packageManager !== `bun@${Bun.version}`) return
     const syntheticPackage = join(destination, 'patched-dependency-fixture')
     await mkdir(join(syntheticPackage, 'patches'), { recursive: true })
     await writeFile(

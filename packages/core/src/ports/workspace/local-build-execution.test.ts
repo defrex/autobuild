@@ -72,7 +72,14 @@ await Bun.sleep(60_000)
       expect(firstPid).toBeNumber()
       expect(secondPid).toBeNumber()
       expect(firstPid).not.toBe(secondPid)
-      await Bun.sleep(50)
+      // A cold bun child on a loaded host can take well over 50 ms to reach
+      // its first statement; stop only after both have written their record.
+      await waitFor(
+        async () =>
+          (await Bun.file(records).exists()) &&
+          (await Bun.file(records).text()).trim().split('\n').length === 2,
+        10_000,
+      )
       expect(await alive(firstPid!)).toBe(true)
       expect(await alive(secondPid!)).toBe(true)
 
