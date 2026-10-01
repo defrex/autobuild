@@ -29,6 +29,12 @@ export async function copyText(
   }
 }
 
+/** The seam selector itself when `root` is it (querySelector only searches descendants), else its descendant. */
+function closestSelector(root: ParentNode): HTMLElement | null {
+  if ('matches' in root && (root as Element).matches('.seam-selector')) return root as HTMLElement
+  return root.querySelector<HTMLElement>('.seam-selector')
+}
+
 export function applyState(root: ParentNode, state: SeamState): void {
   const s = summary(state)
   for (const chip of root.querySelectorAll<HTMLButtonElement>('.chip')) {
@@ -37,7 +43,7 @@ export function applyState(root: ParentNode, state: SeamState): void {
       String(state[chip.dataset.seam ?? ''] === chip.dataset.adapter),
     )
   }
-  const selector = root.querySelector<HTMLElement>('.seam-selector')
+  const selector = closestSelector(root)
   selector?.setAttribute('data-lean', lean(s.knob))
   const knob = root.querySelector<HTMLElement>('.knob')
   if (knob) knob.style.left = knobLeft(s.knob)
