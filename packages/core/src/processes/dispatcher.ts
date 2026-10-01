@@ -42,7 +42,7 @@ import { runOrchestratorTickStep } from './orchestrator-tick'
 import { DISPATCHER, agentActor, humanActor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { AbEvent, EventWrite } from '../events/catalog'
-import type { EventPayload } from '../events/payloads'
+import type { EventPayload, PinnedAsset } from '../events/payloads'
 import type { IdSource } from '../ids'
 import {
   autoMergeApplicationType,
@@ -65,7 +65,7 @@ import {
 import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { createOperatorSandboxService, type OperatorSandboxService } from '../operator/sandbox'
-import type { ArtifactRef } from '../ontology'
+import type { ArtifactRef, TicketRef } from '../ontology'
 import { BUILD_EXECUTION_LEASE_TTL_MS } from '../ports/workspace/build-execution'
 import type {
   DependencyState,
@@ -76,6 +76,7 @@ import type {
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
+import { samplePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
@@ -1205,6 +1206,7 @@ export class Dispatcher {
       authoredSession?: string
       autoMergeUser?: string
       autoMergeDefaultSeq?: number
+      assets?: PinnedAsset[]
     },
   ): Promise<'kicked' | 'in-flight' | 'foreign-live'> {
     const slug = record.slug
@@ -1275,6 +1277,7 @@ export class Dispatcher {
             authoredSession?: string
             autoMergeUser?: string
             autoMergeDefaultSeq?: number
+            assets?: PinnedAsset[]
           }
         | undefined
       tail: 'dispatch' | 'launch'
@@ -2217,6 +2220,29 @@ export class Dispatcher {
 
   // ── b. Interrupted dispatch recovery ───────────────────────────────────────
 
+  /** The claim-time `build.created` payload. Assets are omitted when the ticket
+   * had none, so a no-asset build's log is exactly what it was before. */
+  private buildCreatedPayload(
+    ticket: TicketRef,
+    repo: string,
+    seed:
+      | { autoMergeUser?: string; autoMergeDefaultSeq?: number; assets?: PinnedAsset[] }
+      | undefined,
+  ): EventPayload<'build.created'> {
+    const { config } = this.deps
+    return {
+      ticket,
+      repo,
+      baseBranch: config.baseBranch,
+      ...(seed?.autoMergeUser !== undefined ? { autoMergeRequestedBy: seed.autoMergeUser } : {}),
+      ...(seed?.autoMergeDefaultSeq !== undefined
+        ? { autoMergeDefaultSeq: seed.autoMergeDefaultSeq }
+        : {}),
+      ...(config.pr !== undefined ? { pr: config.pr } : {}),
+      ...(seed?.assets !== undefined && seed.assets.length > 0 ? { assets: seed.assets } : {}),
+    }
+  }
+
   /** Every boundary before runner attachment is derived from durable facts.
    * Missing facts are the todo list; successful provider calls are followed
    * immediately by their facts, so an ordinary later tick can continue. */
@@ -2241,6 +2267,7 @@ export class Dispatcher {
       authoredSession?: string
       autoMergeUser?: string
       autoMergeDefaultSeq?: number
+      assets?: PinnedAsset[]
     },
   ): Promise<DispatchOutcome> {
     const { store, config } = this.deps
@@ -2253,21 +2280,16 @@ export class Dispatcher {
             'build record lacks the immutable ticket facts needed to reconstruct build.created',
           )
         }
+        // Legacy path: a record an older dispatcher left with an empty stream.
+        // New claims write `build.created` atomically with the record, so this
+        // can only sample the ticket's current assets (SPEC §6.3).
+        const assets =
+          seed?.assets ??
+          (await samplePinnedAssets(store, record.repo, record.ticket.id).catch(() => []))
         await store.appendIfCurrent(record.slug, 0, {
           actor: DISPATCHER,
           type: 'build.created',
-          payload: {
-            ticket: record.ticket,
-            repo: record.repo,
-            baseBranch: config.baseBranch,
-            ...(seed?.autoMergeUser !== undefined
-              ? { autoMergeRequestedBy: seed.autoMergeUser }
-              : {}),
-            ...(seed?.autoMergeDefaultSeq !== undefined
-              ? { autoMergeDefaultSeq: seed.autoMergeDefaultSeq }
-              : {}),
-            ...(config.pr !== undefined ? { pr: config.pr } : {}),
-          },
+          payload: this.buildCreatedPayload(record.ticket, record.repo, { ...seed, assets }),
         })
         events = await store.getEvents(record.slug)
         if (!events.some((event) => event.type === 'build.created')) {
@@ -2379,6 +2401,7 @@ export class Dispatcher {
       authoredSession?: string
       autoMergeUser?: string
       autoMergeDefaultSeq?: number
+      assets?: PinnedAsset[]
     },
     report?: TickReport,
     launched?: Set<string>,
@@ -2853,6 +2876,10 @@ export class Dispatcher {
         continue
       }
 
+      // Freeze the ticket's assets at the claim (SPEC §6.3): sampled before the
+      // spec-authoring interval so edits made during it are never pinned.
+      const assets = await samplePinnedAssets(store, this.deps.repo, ticket.ref.id)
+
       // Quality gate (§6.3): import a conforming ticket body as the spec;
       // author one for thin-but-groomed tickets; otherwise bounce.
       let body = ticket.body
@@ -2879,19 +2906,7 @@ export class Dispatcher {
       const slug = await this.uniqueSlug(baseSlug)
       const branch = `ab/${slug}`
       const repoOrigin = await this.resolveRepoOriginOnce()
-      const record = await store.createBuild({
-        slug,
-        repo: this.deps.repo,
-        ticket: ticket.ref,
-        branch,
-        ...(repoOrigin !== undefined ? { repoOrigin } : {}),
-      })
-      report.queued -= 1
-      capacity -= 1
-      const outcome = await this.attemptDispatchCompletion(record, launched, report, {
-        ticket,
-        body,
-        ...(authoredSession !== undefined ? { authoredSession } : {}),
+      const createdSeed = {
         ...(autoMergeUser !== undefined ? { autoMergeUser } : {}),
         // Claim-time provenance: the newest durable default fact that agrees
         // with the launch sample, recorded on `build.created` so the fan-out's
@@ -2899,6 +2914,29 @@ export class Dispatcher {
         // so a newer opposite fact (an interleaved toggle) stays strictly
         // ahead of it and reconciles this build on the next tick (f_b851c0e8).
         ...(autoMergeSeedFact !== undefined ? { autoMergeDefaultSeq: autoMergeSeedFact.seq } : {}),
+        assets,
+      }
+      // `build.created` rides with the record so the pinned assets and the
+      // record exist together or not at all.
+      const record = await store.createBuild({
+        slug,
+        repo: this.deps.repo,
+        ticket: ticket.ref,
+        branch,
+        ...(repoOrigin !== undefined ? { repoOrigin } : {}),
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: this.buildCreatedPayload(ticket.ref, this.deps.repo, createdSeed),
+        },
+      })
+      report.queued -= 1
+      capacity -= 1
+      const outcome = await this.attemptDispatchCompletion(record, launched, report, {
+        ticket,
+        body,
+        ...(authoredSession !== undefined ? { authoredSession } : {}),
+        ...createdSeed,
       })
       // Accepted dispatches: durable boundaries recorded. A deferred outcome
       // means the remote provisioning continuation owns the rest.

@@ -40,6 +40,7 @@ import {
   validateTicketAssetInput,
   type BuildStore,
   type Clock,
+  type NewBuildInput,
   type StreamOutcome,
   type StreamPart,
   type StreamRead,
@@ -494,7 +495,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if ((await store.getBuild(body.slug)) !== null) {
         return fail(409, 'conflict', `build "${body.slug}" already exists`)
       }
-      return json(201, await store.createBuild(body))
+      return json(201, await store.createBuild(body as NewBuildInput))
     }
     if (req.method === 'GET') {
       return json(200, await store.listBuilds())
@@ -767,6 +768,37 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       return streamRoute(req, url, { kind: 'build', build: slug }, segments.slice(1))
     }
     switch (`${req.method} ${rest}`) {
+      // The build's frozen ticket assets (SPEC §6.3): read through the build's
+      // own events, so a build-scoped token needs no ticket-asset authority.
+      case 'GET ticket-assets': {
+        const { kind, name } = assetIdentity(url)
+        const asset = await store.getPinnedTicketAsset(slug, kind, name, intParam(url, 'rev'))
+        return asset === null
+          ? json(200, null)
+          : assetJson(200, asset.meta, `${kind}/${name} manifest`)
+      }
+      case 'GET ticket-assets/file': {
+        const { kind, name } = assetIdentity(url)
+        const path = url.searchParams.get('path')
+        if (path === null || path === '') {
+          throw new RequestError(400, 'validation', 'query parameter "path" is required')
+        }
+        const asset = await store.getPinnedTicketAsset(slug, kind, name, intParam(url, 'rev'))
+        if (asset === null) return json(200, null)
+        const entry = asset.entries.find((candidate) => candidate.path === path)
+        if (entry === undefined || entry.type !== 'file') {
+          throw new RequestError(
+            404,
+            'not-found',
+            `ticket asset ${kind}/${name} has no file "${path}"`,
+          )
+        }
+        return assetJson(
+          200,
+          { contentBase64: encodeBase64(entry.content) },
+          `file "${path}" of ${kind}/${name} (${entry.content.byteLength} bytes)`,
+        )
+      }
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
         authorizeSession(scope, body.actor)

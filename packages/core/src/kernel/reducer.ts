@@ -9,7 +9,7 @@
  */
 import type { Actor } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
-import { normalizeVerifyCompletion, type EventPayload } from '../events/payloads'
+import { normalizeVerifyCompletion, type EventPayload, type PinnedAsset } from '../events/payloads'
 import type {
   ArtifactRef,
   BuildOutcome,
@@ -52,6 +52,8 @@ export interface AnsweredEscalation extends OpenEscalation {
   resolution: EscalationResolution
   /** Exact replacement spec revision authorized by a `revise-spec` answer. */
   artifact?: ArtifactRef
+  /** Ticket assets sampled with a revise-from-ticket authorization. */
+  assets?: PinnedAsset[]
   /** Absolute review budget accepted with a review-round-limit answer. */
   reviewRoundCeiling?: number
   /** seq of the `escalation.answered` event. */
@@ -199,6 +201,9 @@ export interface BuildState {
   lastEvent?: AbEvent
   /** 0 for an empty log; `runner.attached {resumedFromSeq}` cites this. */
   lastSeq: number
+  /** Ticket assets the build froze: set by `build.created`, replaced by a
+   * `spec.revised` that carries `assets` (§6.3). Empty for historical logs. */
+  pinnedAssets: PinnedAsset[]
   /** Latest spec artifact rev — `spec.imported`/`spec.authored` set it,
    * `spec.revised` bumps it (§6.3: rev N+1 restarts the build from plan). */
   specRev?: number
@@ -310,6 +315,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
   const autoMerge: AutoMergeProjection = { requested: false }
   let specRev: number | undefined
   let restartSince = 0
+  let pinnedAssets: PinnedAsset[] = []
   let finalizeCompletedSeq = 0
   const finalizeSteps: BuildState['finalizeSteps'] = []
   const plan: BuildState['plan'] = { round: 0, approved: false }
@@ -362,6 +368,8 @@ export function reduceBuild(events: AbEvent[]): BuildState {
       // Facts the projection does not need (workspace liveness is the
       // dispatcher's concern; finalize post-steps are failure-tolerant §5).
       case 'build.created':
+        pinnedAssets = event.payload.assets ?? []
+        break
       case 'workspace.provisioned':
       case 'workspace.released':
       case 'publication.requested':
@@ -495,6 +503,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
         break
       case 'spec.revised':
         specRev = event.payload.artifact.rev
+        if (event.payload.assets !== undefined) pinnedAssets = event.payload.assets
         // §6.3: rev N+1 restarts the build from plan. The restart boundary
         // invalidates every approval and result at or before it, so it is also
         // a verify cycle boundary. Finalize post-steps remain in full-log
@@ -689,6 +698,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
             answer: event.payload.answer,
             resolution: event.payload.resolution,
             ...(event.payload.artifact !== undefined ? { artifact: event.payload.artifact } : {}),
+            ...(event.payload.assets !== undefined ? { assets: event.payload.assets } : {}),
             ...(event.payload.reviewRoundCeiling !== undefined
               ? { reviewRoundCeiling: event.payload.reviewRoundCeiling }
               : {}),
@@ -753,6 +763,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     finalizeSteps,
     lastEvent,
     lastSeq: lastEvent?.seq ?? 0,
+    pinnedAssets,
     specRev,
     restartSince,
     plan,

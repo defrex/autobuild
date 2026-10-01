@@ -225,6 +225,15 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     ): Promise<TicketAsset | null> {
       return Promise.reject(new BuildScopeError(scope, 'getTicketAsset', repo))
     },
+    async getPinnedTicketAsset(
+      slug: string,
+      kind: string,
+      name: string,
+      rev?: number,
+    ): Promise<TicketAsset | null> {
+      own('getPinnedTicketAsset', slug)
+      return store.getPinnedTicketAsset(slug, kind, name, rev)
+    },
     listTicketAssets(
       repo: string,
       _ticketId: string,

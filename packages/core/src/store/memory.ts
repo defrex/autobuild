@@ -26,6 +26,7 @@ import {
 } from '../events/sessions'
 import { humanActor } from '../events/envelope'
 import { createBuildScopedStore } from './build-scope'
+import { validateCreatedEvent } from './new-build'
 import { createSessionScopedStore } from './session-handle'
 import { reduceBuildDigest } from './digest'
 import { projectRepositoryStateEvents } from './repo-state-events'
@@ -37,6 +38,7 @@ import {
 import {
   DEFAULT_TICKET_ASSET_LIMITS,
   loadTicketAsset,
+  resolvePinnedAsset,
   storeTicketAssetBlobs,
   summarizeTicketAsset,
   validateTicketAssetInput,
@@ -262,6 +264,7 @@ export class MemoryBuildStore implements BuildStore {
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
+    const created = validateCreatedEvent(input)
     if (this.builds.has(input.slug)) {
       throw new Error(`build "${input.slug}" already exists`)
     }
@@ -278,6 +281,18 @@ export class MemoryBuildStore implements BuildStore {
       },
       events: [],
       artifacts: new Map(),
+    }
+    if (created !== undefined) {
+      state.events.push(
+        structuredClone({
+          build: input.slug,
+          seq: 1,
+          ts,
+          actor: created.actor,
+          type: created.type,
+          payload: created.payload,
+        }) as AbEvent,
+      )
     }
     this.builds.set(input.slug, state)
     return this.snapshot(state)
@@ -759,6 +774,15 @@ export class MemoryBuildStore implements BuildStore {
       rev === undefined ? rows?.at(-1) : rows?.find((candidate) => candidate.meta.revision === rev)
     if (!row || row.removed) return null
     return loadTicketAsset(this.blobs, row.meta)
+  }
+
+  async getPinnedTicketAsset(
+    slug: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    return resolvePinnedAsset(this, slug, kind, name, rev)
   }
 
   async listTicketAssets(

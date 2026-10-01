@@ -7,6 +7,7 @@
  * normal runner and dispatcher consume them.
  */
 import type { AbEvent } from '../events/catalog'
+import type { PinnedAsset } from '../events/payloads'
 import { humanActor, KERNEL, type Via } from '../events/envelope'
 import {
   reduceBuild,
@@ -17,6 +18,7 @@ import {
 import type { ArtifactRef, BuildOutcome, BuildStatus, TicketRef } from '../ontology'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { specConformance } from '../spec-standard'
+import { samplePinnedAssets } from '../store/ticket-assets'
 import type { BuildStore } from '../store/types'
 import { withSessionlessStore, type StoreOpener } from './store-opening'
 
@@ -332,6 +334,9 @@ export type ReviseDecision =
   | {
       kind: 'complete'
       artifact: ArtifactRef
+      /** The assets sampled with the authorization; absent for a supplied body
+       * and for authorizations recorded before assets were pinned. */
+      assets?: PinnedAsset[]
       open: OpenEscalation[]
       escalationSeq: number
     }
@@ -367,7 +372,13 @@ export function decideRevise(
       }
     }
     const escalationSeq = Math.max(...[...open, ...pending].map((item) => item.seq))
-    return { kind: 'complete', artifact: authorized.artifact, open, escalationSeq }
+    return {
+      kind: 'complete',
+      artifact: authorized.artifact,
+      ...(authorized.assets !== undefined ? { assets: authorized.assets } : {}),
+      open,
+      escalationSeq,
+    }
   }
   if (open.length === 0) {
     const paused =
@@ -584,11 +595,16 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         if (initial.kind === 'refuse') throwRefusal(initial)
 
         let artifact: ArtifactRef
+        // From-ticket revisions re-pin the ticket's assets; a supplied body
+        // leaves the pinned set alone (`undefined`). Sampled once, with the
+        // body, and persisted on the answers so a retry reuses it.
+        let assets: PinnedAsset[] | undefined
         let authorizedEarlier = initial.kind === 'complete'
         if (initial.kind === 'complete') {
           // Completion rule: recorded authorization wins before the caller's
           // lazy body source is opened, regardless of remaining blockers.
           artifact = initial.artifact
+          assets = initial.assets
         } else {
           let body: string
           const source = opts.action.resolve.body
@@ -608,6 +624,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
               )
             }
             body = await opts.readTicketBody(record.ticket)
+            assets = await samplePinnedAssets(opts.store, record.repo, record.ticket.id)
           }
           const conformance = specConformance(body)
           if (!conformance.conforms) {
@@ -638,6 +655,7 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
         if (decision.kind === 'refuse') throwRefusal(decision)
         if (decision.kind === 'complete') {
           artifact = decision.artifact
+          assets = decision.assets
           authorizedEarlier = true
         }
         const answer = guidance === '' ? SPEC_REVISION_ANSWER : guidance
@@ -654,13 +672,18 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
               answer,
               resolution: 'revise-spec',
               artifact,
+              ...(assets !== undefined ? { assets } : {}),
             },
           })
         }
         await opts.store.append(opts.slug, {
           actor: KERNEL,
           type: 'spec.revised',
-          payload: { artifact, escalation: decision.escalationSeq },
+          payload: {
+            artifact,
+            escalation: decision.escalationSeq,
+            ...(assets !== undefined ? { assets } : {}),
+          },
         })
         if (alsoPaused) {
           await opts.store.append(opts.slug, {

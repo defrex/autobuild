@@ -72,6 +72,12 @@ export interface NewBuildInput {
   repoOrigin?: string
   ticket?: TicketRef
   branch?: string
+  /** The build's `build.created` fact, appended as seq 1 in the same atomic
+   * step as the record: both exist or neither does, so the claim-time facts it
+   * freezes (ticket assets, SPEC §6.3) can never be lost to a crash between
+   * the two writes. An invalid payload, or any other event type, rejects and
+   * creates nothing. */
+  created?: EventWrite<'build.created'>
 }
 
 export interface ArtifactMeta {
@@ -378,6 +384,17 @@ export interface BuildStore {
   getTicketAsset(
     repo: string,
     ticketId: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null>
+  /** The ticket asset `kind/name` exactly as build `slug` froze it (SPEC
+   * §6.3): the latest pinned revision, or with `rev` any revision the build
+   * ever pinned. Reads the build's own events, never the ticket's current
+   * state, so it is stable after a replace or removal and works for finished
+   * builds. Null when the build never pinned it. Rejects an unknown build. */
+  getPinnedTicketAsset(
+    slug: string,
     kind: string,
     name: string,
     rev?: number,
