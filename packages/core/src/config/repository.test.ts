@@ -23,6 +23,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     'postgres',
     'dashboard',
     'web-dashboard',
+    'website',
   ])
   expect(config.verify.stepConfigs.lint).toEqual({
     kind: 'check',

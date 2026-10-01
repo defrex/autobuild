@@ -113,6 +113,7 @@
     "dev:cli": "bun --hot --no-clear-screen bin/ab-dev.ts",
     "capture:dashboard": "bun tools/dashboard-capture.ts",
     "capture:web-dashboard": "bun packages/web-dashboard-capture/src/web-dashboard-capture.tsx",
+    "capture:website": "bun tools/website-capture.ts",
     "website:dev": "bun packages/website/src/dev.ts",
     "website:build": "bun packages/website/src/build.ts",
     "capture:readme-headline": "bun tools/readme-headline.ts",
