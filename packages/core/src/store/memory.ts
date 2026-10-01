@@ -34,6 +34,18 @@ import {
   isRetentionManagedKind,
   revisionsToPrune,
 } from './retention'
+import {
+  DEFAULT_TICKET_ASSET_LIMITS,
+  loadTicketAsset,
+  storeTicketAssetBlobs,
+  summarizeTicketAsset,
+  validateTicketAssetInput,
+  type TicketAsset,
+  type TicketAssetInput,
+  type TicketAssetLimits,
+  type TicketAssetMeta,
+  type TicketAssetSummary,
+} from './ticket-assets'
 import { pollingSubscribe } from './subscribe'
 import { StreamLocks } from './streams/lock'
 import { assembleUIMessageDocument } from './streams/assemble'
@@ -149,6 +161,9 @@ export class MemoryBuildStore implements BuildStore {
    * stream's close against its appends inside this process (AUT-348). */
   private readonly streamLocks = new StreamLocks()
   private readonly sessions = new Map<string, SessionState>()
+  /** `[repo, ticketId, kind, name]` → rows in revision order. A removal is a
+   * tombstone row (`removed`, empty manifest) taking the next revision. */
+  private readonly ticketAssets = new Map<string, { meta: TicketAssetMeta; removed: boolean }[]>()
   private readonly clock: Clock
   private readonly maxRevisions: number
   readonly blobs: BlobStore
@@ -701,6 +716,93 @@ export class MemoryBuildStore implements BuildStore {
         (a, b) => a.kind.localeCompare(b.kind) || a.revision - b.revision,
       ),
     )
+  }
+
+  async ticketAssetLimits(): Promise<TicketAssetLimits> {
+    return { ...DEFAULT_TICKET_ASSET_LIMITS }
+  }
+
+  async putTicketAsset(
+    repo: string,
+    ticketId: string,
+    asset: TicketAssetInput,
+  ): Promise<TicketAssetMeta> {
+    const size = validateTicketAssetInput(asset)
+    const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
+    const key = JSON.stringify([repo, ticketId, asset.kind, asset.name])
+    const rows = this.ticketAssets.get(key) ?? []
+    const meta: TicketAssetMeta = {
+      repo,
+      ticketId,
+      kind: asset.kind,
+      name: asset.name,
+      revision: MemoryBuildStore.nextRevision(rows.map((row) => row.meta)),
+      layout: asset.layout,
+      size,
+      entries,
+      createdAt: this.now(),
+    }
+    rows.push({ meta, removed: false })
+    this.ticketAssets.set(key, rows)
+    return structuredClone(meta)
+  }
+
+  async getTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    const rows = this.ticketAssets.get(JSON.stringify([repo, ticketId, kind, name]))
+    const row =
+      rev === undefined ? rows?.at(-1) : rows?.find((candidate) => candidate.meta.revision === rev)
+    if (!row || row.removed) return null
+    return loadTicketAsset(this.blobs, row.meta)
+  }
+
+  async listTicketAssets(
+    repo: string,
+    ticketId: string,
+    opts?: { revisions?: boolean },
+  ): Promise<TicketAssetSummary[]> {
+    const out: TicketAssetSummary[] = []
+    for (const rows of this.ticketAssets.values()) {
+      const first = rows[0]
+      if (!first || first.meta.repo !== repo || first.meta.ticketId !== ticketId) continue
+      if (opts?.revisions) {
+        for (const row of rows) if (!row.removed) out.push(summarizeTicketAsset(row.meta))
+      } else {
+        const latest = rows.at(-1)
+        if (latest && !latest.removed) out.push(summarizeTicketAsset(latest.meta))
+      }
+    }
+    return out.sort(
+      (a, b) =>
+        a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name) || a.revision - b.revision,
+    )
+  }
+
+  async removeTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+  ): Promise<TicketAssetMeta | null> {
+    const rows = this.ticketAssets.get(JSON.stringify([repo, ticketId, kind, name]))
+    const latest = rows?.at(-1)
+    if (!rows || !latest || latest.removed) return null
+    rows.push({
+      meta: {
+        ...latest.meta,
+        revision: latest.meta.revision + 1,
+        size: 0,
+        entries: [],
+        createdAt: this.now(),
+      },
+      removed: true,
+    })
+    return structuredClone(latest.meta)
   }
 
   async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {

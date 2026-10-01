@@ -27,6 +27,13 @@ import type {
   Unsubscribe,
 } from './types'
 import type {
+  TicketAsset,
+  TicketAssetInput,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
+} from './ticket-assets'
+import type {
   StreamChunk,
   StreamOutcome,
   StreamPart,
@@ -198,6 +205,40 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     listRepoArtifacts(repo: string, _kind?: string): Promise<RepositoryArtifactMeta[]> {
       return Promise.reject(new BuildScopeError(scope, 'listRepoArtifacts', repo))
+    },
+    ticketAssetLimits(): Promise<TicketAssetLimits> {
+      return Promise.reject(new BuildScopeError(scope, 'ticketAssetLimits'))
+    },
+    putTicketAsset(
+      repo: string,
+      _ticketId: string,
+      _asset: TicketAssetInput,
+    ): Promise<TicketAssetMeta> {
+      return Promise.reject(new BuildScopeError(scope, 'putTicketAsset', repo))
+    },
+    getTicketAsset(
+      repo: string,
+      _ticketId: string,
+      _kind: string,
+      _name: string,
+      _rev?: number,
+    ): Promise<TicketAsset | null> {
+      return Promise.reject(new BuildScopeError(scope, 'getTicketAsset', repo))
+    },
+    listTicketAssets(
+      repo: string,
+      _ticketId: string,
+      _opts?: { revisions?: boolean },
+    ): Promise<TicketAssetSummary[]> {
+      return Promise.reject(new BuildScopeError(scope, 'listTicketAssets', repo))
+    },
+    removeTicketAsset(
+      repo: string,
+      _ticketId: string,
+      _kind: string,
+      _name: string,
+    ): Promise<TicketAssetMeta | null> {
+      return Promise.reject(new BuildScopeError(scope, 'removeTicketAsset', repo))
     },
     claimRepoLease(repo: string, _holder: string, _ttlMs: number): Promise<boolean> {
       return Promise.reject(new BuildScopeError(scope, 'claimRepoLease', repo))

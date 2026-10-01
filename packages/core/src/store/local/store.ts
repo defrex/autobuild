@@ -97,6 +97,18 @@ import {
   type SubscribeOptions,
   type Unsubscribe,
 } from '../types'
+import {
+  DEFAULT_TICKET_ASSET_LIMITS,
+  loadTicketAsset,
+  storeTicketAssetBlobs,
+  summarizeTicketAsset,
+  validateTicketAssetInput,
+  type TicketAsset,
+  type TicketAssetInput,
+  type TicketAssetLimits,
+  type TicketAssetMeta,
+  type TicketAssetSummary,
+} from '../ticket-assets'
 import { DirBlobStore } from './blobs'
 import {
   artifacts,
@@ -108,6 +120,7 @@ import {
   sessionArtifacts,
   sessionEvents,
   sessions,
+  ticketAssets,
   streamChunks,
   streams,
 } from './schema'
@@ -181,6 +194,19 @@ export const BOOTSTRAP_DDL = [
     metadata TEXT NOT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY (repo, kind, revision)
+  )`,
+  `CREATE TABLE IF NOT EXISTS ticket_assets (
+    repo TEXT NOT NULL,
+    ticket_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    layout TEXT NOT NULL,
+    manifest TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    removed INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (repo, ticket_id, kind, name, revision)
   )`,
   `CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -258,6 +284,15 @@ export interface SqliteBuildStoreOptions {
   /** Artifact retention (store/retention.ts): how many newest revisions of
    * each retention-managed dispatcher kind survive. Default 200. */
   retention?: { maxRevisions?: number }
+}
+
+function ticketAssetKey(repo: string, ticketId: string, kind: string, name: string) {
+  return and(
+    eq(ticketAssets.repo, repo),
+    eq(ticketAssets.ticketId, ticketId),
+    eq(ticketAssets.kind, kind),
+    eq(ticketAssets.name, name),
+  )
 }
 
 export class SqliteBuildStore implements BuildStore {
@@ -1121,6 +1156,135 @@ export class SqliteBuildStore implements BuildStore {
       .orderBy(asc(repoArtifacts.kind), asc(repoArtifacts.revision))
       .all()
       .map((row) => this.toRepoMeta(row))
+  }
+
+  async ticketAssetLimits(): Promise<TicketAssetLimits> {
+    return { ...DEFAULT_TICKET_ASSET_LIMITS }
+  }
+
+  private toTicketAssetMeta(row: typeof ticketAssets.$inferSelect): TicketAssetMeta {
+    return {
+      repo: row.repo,
+      ticketId: row.ticketId,
+      kind: row.kind,
+      name: row.name,
+      revision: row.revision,
+      layout: row.layout,
+      size: row.size,
+      entries: row.manifest,
+      createdAt: row.createdAt,
+    }
+  }
+
+  async putTicketAsset(
+    repo: string,
+    ticketId: string,
+    asset: TicketAssetInput,
+  ): Promise<TicketAssetMeta> {
+    const size = validateTicketAssetInput(asset)
+    const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
+    return this.writeTx(() => {
+      const latest = this.db
+        .select({ revision: ticketAssets.revision })
+        .from(ticketAssets)
+        .where(ticketAssetKey(repo, ticketId, asset.kind, asset.name))
+        .orderBy(desc(ticketAssets.revision))
+        .limit(1)
+        .get()
+      const row: typeof ticketAssets.$inferInsert = {
+        repo,
+        ticketId,
+        kind: asset.kind,
+        name: asset.name,
+        revision: (latest?.revision ?? -1) + 1,
+        layout: asset.layout,
+        manifest: entries,
+        size,
+        removed: 0,
+        createdAt: this.clock().toISOString(),
+      }
+      this.db.insert(ticketAssets).values(row).run()
+      return this.toTicketAssetMeta(row as typeof ticketAssets.$inferSelect)
+    })
+  }
+
+  async getTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    const scoped = ticketAssetKey(repo, ticketId, kind, name)
+    const row =
+      rev === undefined
+        ? this.db
+            .select()
+            .from(ticketAssets)
+            .where(scoped)
+            .orderBy(desc(ticketAssets.revision))
+            .limit(1)
+            .get()
+        : this.db
+            .select()
+            .from(ticketAssets)
+            .where(and(scoped, eq(ticketAssets.revision, rev)))
+            .get()
+    if (!row || row.removed) return null
+    return loadTicketAsset(this.blobs, this.toTicketAssetMeta(row))
+  }
+
+  async listTicketAssets(
+    repo: string,
+    ticketId: string,
+    opts?: { revisions?: boolean },
+  ): Promise<TicketAssetSummary[]> {
+    const rows = this.db
+      .select()
+      .from(ticketAssets)
+      .where(and(eq(ticketAssets.repo, repo), eq(ticketAssets.ticketId, ticketId)))
+      .orderBy(asc(ticketAssets.kind), asc(ticketAssets.name), asc(ticketAssets.revision))
+      .all()
+    if (opts?.revisions) {
+      return rows
+        .filter((row) => !row.removed)
+        .map((row) => summarizeTicketAsset(this.toTicketAssetMeta(row)))
+    }
+    const latest = new Map<string, typeof ticketAssets.$inferSelect>()
+    for (const row of rows) latest.set(JSON.stringify([row.kind, row.name]), row)
+    return [...latest.values()]
+      .filter((row) => !row.removed)
+      .map((row) => summarizeTicketAsset(this.toTicketAssetMeta(row)))
+  }
+
+  async removeTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+  ): Promise<TicketAssetMeta | null> {
+    return this.writeTx(() => {
+      const latest = this.db
+        .select()
+        .from(ticketAssets)
+        .where(ticketAssetKey(repo, ticketId, kind, name))
+        .orderBy(desc(ticketAssets.revision))
+        .limit(1)
+        .get()
+      if (!latest || latest.removed) return null
+      this.db
+        .insert(ticketAssets)
+        .values({
+          ...latest,
+          revision: latest.revision + 1,
+          manifest: [],
+          size: 0,
+          removed: 1,
+          createdAt: this.clock().toISOString(),
+        })
+        .run()
+      return this.toTicketAssetMeta(latest)
+    })
   }
 
   async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {

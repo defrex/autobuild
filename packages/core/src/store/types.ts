@@ -27,6 +27,13 @@ import type {
 export type { SessionEventEnvelope }
 import type { TicketRef } from '../ontology'
 import type {
+  TicketAsset,
+  TicketAssetInput,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
+} from './ticket-assets'
+import type {
   StreamChunk,
   StreamOutcome,
   StreamPart,
@@ -355,6 +362,41 @@ export interface BuildStore {
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>
+  // ── Ticket assets (SPEC §7.1 — files attached to a ticket) ─────────────
+  // Keyed by (repo, ticketId, kind, name); revisions are 0-based. The store
+  // owns the bytes, the ticket source only ever gets a note (SPEC §13).
+  /** The effective ceilings this store accepts (a remote deployment may
+   * advertise lower ones than the defaults). */
+  ticketAssetLimits(): Promise<TicketAssetLimits>
+  /** Validate, then store a new revision. Over-limit or invalid input rejects
+   * with `TicketAssetValidationError` and stores nothing. */
+  putTicketAsset(repo: string, ticketId: string, asset: TicketAssetInput): Promise<TicketAssetMeta>
+  /** Latest live revision when `rev` is omitted; null when the asset is
+   * absent, removed (latest row is a tombstone), or `rev` is not a real
+   * revision. An explicit `rev` of an earlier revision keeps working after a
+   * removal, so a build that pinned it still retrieves it. */
+  getTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null>
+  /** Default: the latest live revision per (kind, name). `revisions: true`:
+   * every real revision (no tombstones). Summaries carry no manifest. */
+  listTicketAssets(
+    repo: string,
+    ticketId: string,
+    opts?: { revisions?: boolean },
+  ): Promise<TicketAssetSummary[]>
+  /** Tombstone the asset (the next revision number, empty manifest). Returns
+   * the removed revision's meta, or null when no live asset exists. */
+  removeTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+  ): Promise<TicketAssetMeta | null>
   claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean>
   heartbeatRepo(repo: string, holder: string): Promise<boolean>
   releaseRepoLease(repo: string, holder: string): Promise<void>

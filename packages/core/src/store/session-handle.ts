@@ -28,6 +28,13 @@ import type {
   Unsubscribe,
 } from './types'
 import type {
+  TicketAsset,
+  TicketAssetInput,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
+} from './ticket-assets'
+import type {
   StreamChunk,
   StreamOutcome,
   StreamPart,
@@ -179,6 +186,40 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     },
     listRepoArtifacts(repo: string, _kind?: string): Promise<RepositoryArtifactMeta[]> {
       return Promise.reject(new SessionScopeError(scope, 'listRepoArtifacts', repo))
+    },
+    ticketAssetLimits(): Promise<TicketAssetLimits> {
+      return Promise.reject(new SessionScopeError(scope, 'ticketAssetLimits'))
+    },
+    putTicketAsset(
+      repo: string,
+      _ticketId: string,
+      _asset: TicketAssetInput,
+    ): Promise<TicketAssetMeta> {
+      return Promise.reject(new SessionScopeError(scope, 'putTicketAsset', repo))
+    },
+    getTicketAsset(
+      repo: string,
+      _ticketId: string,
+      _kind: string,
+      _name: string,
+      _rev?: number,
+    ): Promise<TicketAsset | null> {
+      return Promise.reject(new SessionScopeError(scope, 'getTicketAsset', repo))
+    },
+    listTicketAssets(
+      repo: string,
+      _ticketId: string,
+      _opts?: { revisions?: boolean },
+    ): Promise<TicketAssetSummary[]> {
+      return Promise.reject(new SessionScopeError(scope, 'listTicketAssets', repo))
+    },
+    removeTicketAsset(
+      repo: string,
+      _ticketId: string,
+      _kind: string,
+      _name: string,
+    ): Promise<TicketAssetMeta | null> {
+      return Promise.reject(new SessionScopeError(scope, 'removeTicketAsset', repo))
     },
     claimRepoLease(repo: string, _holder: string, _ttlMs: number): Promise<boolean> {
       return Promise.reject(new SessionScopeError(scope, 'claimRepoLease', repo))

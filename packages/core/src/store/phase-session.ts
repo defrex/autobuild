@@ -37,6 +37,13 @@ import type {
   Unsubscribe,
 } from './types'
 import type {
+  TicketAsset,
+  TicketAssetInput,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
+} from './ticket-assets'
+import type {
   StreamChunk,
   StreamOutcome,
   StreamPart,
@@ -340,6 +347,44 @@ export function scopeLocalStoreToPhaseSession(
     async listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]> {
       own('listRepoArtifacts', 'repo', repo)
       return store.listRepoArtifacts(repo, kind)
+    },
+    async ticketAssetLimits(): Promise<TicketAssetLimits> {
+      return store.ticketAssetLimits()
+    },
+    async putTicketAsset(
+      repo: string,
+      ticketId: string,
+      asset: TicketAssetInput,
+    ): Promise<TicketAssetMeta> {
+      own('putTicketAsset', 'repo', repo)
+      return store.putTicketAsset(repo, ticketId, asset)
+    },
+    async getTicketAsset(
+      repo: string,
+      ticketId: string,
+      kind: string,
+      name: string,
+      rev?: number,
+    ): Promise<TicketAsset | null> {
+      own('getTicketAsset', 'repo', repo)
+      return store.getTicketAsset(repo, ticketId, kind, name, rev)
+    },
+    async listTicketAssets(
+      repo: string,
+      ticketId: string,
+      opts?: { revisions?: boolean },
+    ): Promise<TicketAssetSummary[]> {
+      own('listTicketAssets', 'repo', repo)
+      return store.listTicketAssets(repo, ticketId, opts)
+    },
+    async removeTicketAsset(
+      repo: string,
+      ticketId: string,
+      kind: string,
+      name: string,
+    ): Promise<TicketAssetMeta | null> {
+      own('removeTicketAsset', 'repo', repo)
+      return store.removeTicketAsset(repo, ticketId, kind, name)
     },
     async claimRepoLease(repo: string, holder: string, ttlMs: number): Promise<boolean> {
       own('claimRepoLease', 'repo', repo)

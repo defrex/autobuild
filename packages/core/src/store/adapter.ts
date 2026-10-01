@@ -16,6 +16,26 @@ export type {
   SessionEventType,
   SessionEventWrite,
 } from '../events/sessions'
+export {
+  DEFAULT_TICKET_ASSET_LIMITS,
+  effectiveTicketAssetLimits,
+  summarizeTicketAsset,
+  TICKET_ASSET_MAX_BYTES,
+  TICKET_ASSET_MAX_ENTRIES,
+  TicketAssetValidationError,
+  validateTicketAssetInput,
+} from './ticket-assets'
+export type {
+  TicketAsset,
+  TicketAssetContentEntry,
+  TicketAssetEntry,
+  TicketAssetEntryInput,
+  TicketAssetInput,
+  TicketAssetLayout,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
+} from './ticket-assets'
 export { createBuildScopedStore } from './build-scope'
 export { createSessionScopedStore } from './session-handle'
 export { DIGEST_EVENT_TYPES, reduceBuildDigest } from './digest'

@@ -37,6 +37,7 @@ import {
   sessions,
   streamChunks,
   streams,
+  ticketAssets,
 } from './schema'
 import { BOOTSTRAP_DDL } from './store'
 
@@ -47,6 +48,7 @@ const tables: Record<string, SQLiteTable> = {
   repo_streams: repoStreams,
   repo_events: repoEvents,
   repo_artifacts: repoArtifacts,
+  ticket_assets: ticketAssets,
   sessions,
   session_events: sessionEvents,
   session_artifacts: sessionArtifacts,
