@@ -619,7 +619,7 @@ installed `ab` binary remains the non-watching production entry.
 The seams are the contract. Five reusable contract families run the same
 behavioral assertions against every implementation:
 
-- `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`, including the streams block (§7.6) every adapter runs;
+- `packages/core/src/store/contract.ts` — `BuildStore` and `BlobStore`, including the streams block (§7.6) and the ticket-asset block (§7.1.3) every adapter runs;
 - `packages/core/src/ports/tickets/contract.ts` — `TicketSource`;
 - `packages/core/src/ports/workspace/contract.ts` — `WorkspaceProvider`;
 - `packages/core/src/ports/forge/contract.ts` — `Forge`, including idempotent PR close and
@@ -641,6 +641,14 @@ A normal `bun test` runs the memory/fake/local registrations, including a fake
 selected through the plugin ticket-source registry, the real filesystem and
 local-git adapters, the injected Claude and Codex CLI subprocess contracts,
 and the injected Pi CLI/RPC contract.
+Ticket assets (SPEC §7.1.3) are files attached to a ticket and kept in the
+BuildStore, never in the ticket source. `packages/core/src/store/ticket-assets.ts`
+holds the types, the limits, and the one validator every adapter calls;
+`packages/core/src/cli/ticket-assets.ts` holds the filesystem walk, the download
+writer, and the note builder; `ab ticket attach`, `asset get`, and `asset rm`
+live in `packages/core/src/cli/ticket.ts`. The only thing a ticket source sees is
+a note through `comment()`, so no source or plugin protocol changed.
+
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance
 through readiness, dependency, harvest, and completion paths. The Linear,

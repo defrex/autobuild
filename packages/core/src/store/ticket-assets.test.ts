@@ -60,7 +60,9 @@ describe('validateTicketAssetInput', () => {
   test('bounds path and segment length in UTF-8 bytes', () => {
     expect(() => validateTicketAssetInput(tree(file('é'.repeat(65))))).toThrow(/segment/)
     expect(() =>
-      validateTicketAssetInput(tree(file(`${'a'.repeat(100)}/`.repeat(3) + 'b'))),
+      validateTicketAssetInput(
+        tree(file(`${['a'.repeat(100), 'a'.repeat(100), 'a'.repeat(100), 'b'].join('/')}`)),
+      ),
     ).toThrow(/path exceeds/)
     expect(validateTicketAssetInput(tree(file('a'.repeat(128))))).toBe(1)
   })

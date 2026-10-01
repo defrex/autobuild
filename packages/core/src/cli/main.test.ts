@@ -88,8 +88,11 @@ describe('runCli — routing and exit codes', () => {
       'ab ticket block <id> <blocker-id[,blocker-id...]> [--json]',
       'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]',
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
-      'ab ticket show <id> [--json]',
+      'ab ticket show <id> [--store <ref>] [--json]',
       'ab ticket move <id> <state> [--json]',
+      'ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]',
+      'ab ticket asset get <id> <kind> <name> <dest> [--rev <n>] [--store <ref>] [--json]',
+      'ab ticket asset rm <id> <kind> <name> [--store <ref>] [--json]',
     ]) {
       expect(help).toContain(form)
     }

@@ -408,6 +408,8 @@ artifacts    build_id, kind, revision, blobRef, metadata
 repo_streams repo, created/updated, lease + heartbeat
 repo_events  repo, seq, timestamp, actor, type, payload (JSON) — append-only
 repo_artifacts repo, kind, revision, blobRef, metadata
+ticket_assets repo, ticket_id, kind, name, revision, layout, manifest (JSON), size,
+             removed, created — one row per revision
 ```
 
 #### 7.1.1 Operator sessions (the third resource kind)
@@ -565,6 +567,41 @@ session's repository before the registry re-validates. A message posted
 while a turn is open is durable and enters the conversation at the next
 resume or turn — no second turn, no concurrent turns, no subagents.
 
+#### 7.1.3 Ticket assets
+
+A **ticket asset** is a named, versioned bundle of files attached to a ticket —
+a design export, a reference screenshot, a sample payload — that shapes a change
+but belongs neither in the repository (where it goes stale once the change
+ships) nor in the ticket tool (which build agents cannot reach). It is keyed by
+`(repo, ticketId, kind, name)` and works identically whichever ticket source is
+configured. It is a fourth resource family beside builds, repository journals,
+and sessions, but a deliberately thin one: no event log, because nothing here
+needs reduction, and no retention pruning, because assets live as long as the
+ticket's other durable data and never expire on their own.
+
+Each put creates a new 0-based **revision**; earlier revisions stay retrievable.
+An asset is a `file` (exactly one file) or a `tree` (a folder: its root is
+implicit, so a tree with zero entries is a valid empty folder). The manifest is
+a list of entries — `file` entries with size and content address, and `dir`
+entries so empty directories survive. File bytes live in the `BlobStore`; the
+database holds only the manifest, the same rule as artifacts. **Removal is a
+tombstone**: a row taking the next revision number with an empty manifest. The
+latest row decides liveness, so the default read and list skip a removed asset,
+while an explicit earlier revision stays readable — a build that pinned revision
+N keeps retrieving it. Re-attaching after a removal takes the next revision, so
+revision numbers may skip the tombstone.
+
+Every adapter runs one shared validator before any write. `kind` and `name` are
+`[A-Za-z0-9._-]+` and at most 64 characters, so they are safe to print in a
+command line. Entry paths are relative, `/`-separated, with no empty, `.`, or
+`..` segment, at most 256 bytes each and 128 per segment, with no duplicates and
+no file as an ancestor of another entry. A revision holds at most 1000 entries
+(files plus directories) and **25 MiB** of file bytes; a larger put is refused
+with an error that names the limit, and nothing is stored. A remote deployment
+may advertise a lower effective limit (§7.2): a platform that rejects oversized
+request bodies before application code runs cannot rely on server-side
+validation alone, so the client enforces the advertised limit before uploading.
+
 ### 7.2 Interface and adapters
 
 Deliberately narrow: build runners need `append(event)`, `putArtifact`,
@@ -577,7 +614,12 @@ snapshot or side ledger. Sequence 0 names an empty stream, candidates receive
 ordinary event validation, unknown builds reject, and a comparison miss leaves
 the log and build timestamps untouched.
 The same contract has repository-scoped `ensureRepo`, event/artifact deposit
-and read methods, plus a repository lease. Before execution, a runner obtains
+and read methods, plus a repository lease. Ticket assets (§7.1) add
+`putTicketAsset`, `getTicketAsset` (latest live revision, or an explicit
+revision), `listTicketAssets` (summaries without manifests: the latest live
+revision per kind and name, or every real revision), `removeTicketAsset`, and
+`ticketAssetLimits(repo)`, the effective ceilings the store accepts. Scoped
+build and session handles reject all of them. Before execution, a runner obtains
 an interface-enforced handle scoped to exactly its build. Own-build records,
 stream, artifacts, lease, and subscription remain available; another build,
 collection/admin operations, nested foreign scope, and every repository-journal
@@ -1039,7 +1081,8 @@ implementer:  ab context   (findings.json now materialized) → …
 ### 8.8 Outer-loop namespace
 
 Human/pre-build ticket grooming uses one configured-source namespace
-(`ab ticket create|update|block|unblock|list|show|move`). These commands are
+(`ab ticket create|update|block|unblock|list|show|move`, plus the ticket-asset
+forms below). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
 mutation path. Every subcommand accepts `--json` and then writes exactly one
 bare value: `list` emits `Ticket[]`; every other form emits the complete
@@ -1055,6 +1098,27 @@ has already been claimed does not stop its active build. A repository that
 creates tickets directly in its ready state must therefore create a dependency
 chain in dependency order, carrying each predecessor id into the next create,
 before a later ticket can be claimed.
+
+**Ticket assets** (§7.1) attach files to a ticket without touching the ticket
+source's storage:
+
+- `ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]`
+  stores a file or a whole folder (its relative tree preserved) as an asset.
+  `--name` defaults to the path's basename. Attaching again under the same kind
+  and name creates a new revision. The CLI asks the source first, so an unknown
+  id stores nothing; it refuses symlinks and non-regular files, and refuses a
+  bundle over the store's limit from `stat` sizes before reading any bytes. The
+  store write precedes the note: if the note then fails, the error says the
+  asset was stored as revision N, and the write is not rolled back.
+- `ab ticket asset get <id> <kind> <name> <dest> [--rev <n>]` writes the exact
+  bytes of the latest (or a named) revision: a file asset to `<dest>` (or into
+  `<dest>` when it is an existing directory), a folder asset into the directory
+  `<dest>`, empty directories included. Stored paths are re-checked against
+  traversal on write.
+- `ab ticket asset rm <id> <kind> <name>` removes it from the ticket's current
+  assets; revisions a build has pinned stay retrievable.
+- `ab ticket show <id>` lists the current assets (kind/name, revision, size);
+  with `--json` the `Ticket` is extended with an `assets` array.
 
 Observation harvest uses a separate typed, repository-scoped namespace
 (`ab harvest context|submit|verdict|status`), mirroring the build session
@@ -1492,6 +1556,16 @@ build never reads the tracker again. Human-legibility projections (spec
 posted as a comment, final summary, status transitions) flow outward only.
 This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
+
+**Ticket assets follow the same rule.** The contents of a ticket asset (§7.1)
+live in the BuildStore and the ticket source never stores them. Attaching,
+replacing, or removing an asset instead leaves a note on the ticket through the
+existing `comment()` port — the outward projection every source, including the
+plugin surface, already supports. The note names the asset, its revision, file
+count, and size, and gives the `ab ticket asset get` command that fetches it, so
+a person reading the ticket in Linear, the hosted service, or a local file knows
+the asset exists. The note is a projection outward only; nothing reads it back,
+and no TicketSource port or plugin-protocol change is needed.
 
 **Claim lifecycle.** Claim acquires nonterminal work: it returns `true` and
 moves a claimable ticket to the source's claimed state. It returns `false` for

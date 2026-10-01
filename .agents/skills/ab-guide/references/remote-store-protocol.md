@@ -429,6 +429,109 @@ The build-stream query, artifact, ordering, timestamp, and validation rules
 apply symmetrically to repository journals, including the event-read bounded
 wait of section 3.
 
+### Ticket assets
+
+A ticket asset (SPEC §7.1.3) is a named, versioned bundle of files attached to
+a ticket, keyed by `(repo, ticketId, kind, name)`. These routes live under the
+repository but, unlike the journal routes, **do not require a repository
+record**: assets can precede any journal row, so the repository-existence gate
+does not apply. `{repo}` and `{id}` are percent-encoded path segments. Token
+authorization follows the one-matching-repo column of the matrix (a repo token
+for its own repository, or admin); build and session tokens receive `403 auth`.
+The family is additive, so `REMOTE_STORE_PROTOCOL_VERSION` did not change.
+
+| BuildStore operation | HTTP route | Request | Success |
+|---|---|---|---|
+| `ticketAssetLimits` | `GET /repos/{repo}/ticket-asset-limits` | none | `200` + `{maxBytes, maxEntries, maxRequestBytes?}` — the effective per-revision ceilings and, when the deployment has one, the largest request or response body it can carry. A server without this route answers `404`; clients treat that as the defaults |
+| `putTicketAsset` | `POST /repos/{repo}/tickets/{id}/assets` | `{kind, name, layout, entries}` | `201` + `TicketAssetMeta` (with its manifest) |
+| `getTicketAsset` (manifest) | `GET /repos/{repo}/tickets/{id}/assets?kind=&name=[&rev=]` | required `kind` and `name`; optional `rev` | `200` + `TicketAssetMeta` — **the manifest only, no bytes** — or `200 null` when the asset is absent or removed (latest) or the revision does not exist |
+| `getTicketAsset` (one file) | `GET /repos/{repo}/tickets/{id}/assets/file?kind=&name=&rev=&path=` | required `kind`, `name`, `path`; optional `rev` | `200` + `{"contentBase64": string}`, or `200 null` when the asset is absent; `404` when the revision has no such file |
+| `listTicketAssets` | `GET /repos/{repo}/tickets/{id}/assets/list[?revisions=1]` | optional `revisions=1` | `200` + `TicketAssetSummary[]` ordered by kind, name, revision: the latest live revision per kind and name, or with `revisions=1` every real revision (no tombstones). Summaries carry no manifest |
+| `removeTicketAsset` | `POST /repos/{repo}/tickets/{id}/assets/remove` | `{kind, name}` | `200` + the removed `TicketAssetMeta`, or `200 null` when no live asset exists |
+
+Wire types:
+
+```jsonc
+// put request: entries are files (content as base64) or explicit directories
+{ "kind": "design", "name": "home", "layout": "tree",   // layout: "file" | "tree"
+  "entries": [
+    { "type": "file", "path": "index.html", "contentBase64": "PGgxPg==" },
+    { "type": "dir",  "path": "img/empty" }
+  ] }
+
+// TicketAssetMeta: dir entries carry no size or blobRef
+{ "repo": "…", "ticketId": "AUT-1", "kind": "design", "name": "home",
+  "revision": 0, "layout": "tree", "size": 1234,         // size = total file bytes
+  "entries": [
+    { "type": "file", "path": "index.html", "size": 1234, "blobRef": "<sha256 hex>" },
+    { "type": "dir",  "path": "img/empty" }
+  ],
+  "createdAt": "2026-10-01T12:00:00.000Z" }
+
+// TicketAssetSummary (list): the same without entries
+{ "repo": "…", "ticketId": "AUT-1", "kind": "design", "name": "home",
+  "revision": 0, "layout": "tree", "size": 1234,
+  "fileCount": 1, "dirCount": 1, "createdAt": "…" }
+```
+
+Semantics every server must reproduce:
+
+- **Revisions** are 0-based per `(repo, ticketId, kind, name)`. Putting the same
+  kind and name again creates the next revision; earlier revisions stay readable
+  by explicit `rev`.
+- **Removal is a tombstone** that takes the next revision number with an empty
+  manifest. The latest row decides liveness: a read without `rev` and the
+  default list skip a removed asset, while an explicit earlier `rev` keeps
+  working (a build that pinned that revision still retrieves it). Re-attaching
+  takes the next revision, so numbers may skip the tombstone. `revisions=1`
+  lists real revisions only.
+- **Validation** (`422 validation`, nothing stored). `kind` and `name` match
+  `[A-Za-z0-9._-]+`, at most 64 characters. Paths are relative and
+  `/`-separated, with no empty, `.`, or `..` segment and no NUL, at most 256
+  UTF-8 bytes (128 per segment); paths are unique across files and directories
+  and no file is the ancestor of another entry. `layout: "file"` has exactly one
+  top-level `file` entry and no directory; `layout: "tree"` may hold any number
+  of entries, including zero (an empty folder; its root is implicit). A revision
+  holds at most 1000 entries (files plus directories) and **26214400 bytes (25
+  MiB)** of file bytes; the error names the limit, for example `ticket asset
+  exceeds the 26214400-byte (25 MiB) limit`.
+- File bytes are content-addressed (`blobRef` is the sha256 hex) in the same
+  blob store as artifacts; the database holds only the manifest.
+
+**Deployment ceilings.** A platform may reject oversized request or response
+bodies before any application code runs (Vercel's functions cap them at 4.5
+MB), so validating on the server alone cannot enforce a limit. A server that
+has such a ceiling advertises it as `maxRequestBytes` on the limits route
+together with the effective `maxBytes`, computed from it as follows. Paths and
+entry counts are bounded, so the worst-case wire overhead is a constant:
+`overhead = 1024 + 1000 × 320 = 321024` bytes, and
+`maxBytes = min(26214400, max(0, floor((maxRequestBytes − overhead) × 3 / 4)))`
+(base64 inflates content by 4/3); `maxEntries` stays 1000. The hosted service
+sets `maxRequestBytes` to 4 MiB, giving an effective per-asset limit of 2904960
+bytes (about 2.8 MiB). The formula is a safe lower bound, not the final
+authority:
+
+- The shipped **client** reads the limits once per store handle and, before any
+  upload, validates against `maxBytes` and `maxEntries` and then compares the
+  exact UTF-8 length of the serialized request with `maxRequestBytes`. A bundle
+  that does not fit is refused locally with `ticket asset exceeds this store's
+  N-byte limit (deployment request ceiling M bytes)` and **no upload request is
+  made**.
+- The **server** re-validates every put against its effective limits and checks
+  every ticket-asset body against `maxRequestBytes` itself, answering `413` (a
+  request) or `422` with a limit-naming message where the platform lets the
+  request through.
+- **Downloads never need a bundle-sized response**: the client reads the
+  manifest and then each file by its own request. The manifest, file, and list
+  routes check the exact serialized length of their response against
+  `maxRequestBytes` and fail with a `413 validation` error naming the asset (or
+  the file, its size, and the ceiling) rather than letting the platform reject
+  it. This matters for a revision stored under an older or higher ceiling:
+  its manifest and smaller files remain retrievable; a file that cannot fit can
+  only be fetched from a store with a higher ceiling. Chunked or ranged transfer
+  is not part of the protocol, so a deployment's effective per-asset limit is
+  its advertised `maxBytes`.
+
 ## 5. Operator-session operations
 
 Operator sessions are a third resource kind: durable orchestrator-conversation
@@ -713,12 +816,12 @@ resource access; an explicit resource whose id is `"*"` is not admin.
 
 ### Resource authorization matrix
 
-| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | `/repos/{repo}/build-digests` | `/repos/{repo}/state-events` | one matching session |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| admin (`build: "*"`) | yes | any | yes | any | yes | any | any | any |
-| build | no | exact id only | no | no | no | no | no | no |
-| repo | no | no | no | exact id only | yes | exact id only | exact id only | no |
-| session | no | no | no | no | no | no | no | exact id only |
+| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | `/repos/{repo}/build-digests` | `/repos/{repo}/state-events` | `/repos/{repo}/tickets/{id}/assets` and `/repos/{repo}/ticket-asset-limits` | one matching session |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| admin (`build: "*"`) | yes | any | yes | any | yes | any | any | any | any |
+| build | no | exact id only | no | no | no | no | no | no | no |
+| repo | no | no | no | exact id only | yes | exact id only | exact id only | exact repo only | no |
+| session | no | no | no | no | no | no | no | no | exact id only |
 
 A valid token used for the wrong resource receives `403 auth`. Resource scope
 gates all operations, including reads, artifact operations, and leases. A
@@ -831,8 +934,8 @@ The shipped server maps failures as follows:
 | `403` | `auth` | Valid token with the wrong resource scope or event-session attribution |
 | `404` | `not-found` | Unknown route, unsupported method, unknown build, unknown repository, unknown session, or an unknown or foreign-scoped stream |
 | `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, appending to a closed stream (`stream "…" is closed`), or a backing conflict reported as already existing |
-| `413` | `validation` | Decoded artifact or serialized stream batch exceeds the configured ceiling; the message names the ceiling |
-| `422` | `validation` | `EventValidationError` from build, repository, or session catalog validation; its message is preserved verbatim |
+| `413` | `validation` | Decoded artifact or serialized stream batch exceeds the configured ceiling; a ticket-asset request or response exceeds the deployment's request ceiling; the message names the ceiling |
+| `422` | `validation` | `EventValidationError` from build, repository, or session catalog validation, or a ticket-asset validation failure (including the 25 MiB limit); its message is preserved verbatim |
 | `500` | `internal` | Any other unexpected backing or server failure; the thrown error message is returned |
 
 Authentication runs before resource lookup, and session authorization runs
