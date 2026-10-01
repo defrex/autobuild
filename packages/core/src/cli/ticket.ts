@@ -20,9 +20,19 @@ import {
   updateTicket,
 } from '../ports/tickets/operations'
 import type { Ticket, TicketSource, TicketUpdate } from '../ports/types'
-import type { Exec } from '../ports/workspace/git-worktree'
+import type { BuildStore } from '../store/types'
+import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
+import type { TicketAssetSummary } from '../store/ticket-assets'
 import { parseArgs, stringFlag } from './args'
 import { resolveMainRepo, resolveRepoStatePaths } from './repo-state'
+import { withSessionlessStore, type StoreOpener } from './store-opening'
+import {
+  buildAssetInput,
+  formatAssetSize,
+  ticketAssetNote,
+  walkAssetPath,
+  writeAssetTo,
+} from './ticket-assets'
 
 export type TicketSourceFactory = (
   config: TicketsConfig,
@@ -41,6 +51,11 @@ export interface TicketCommandOpts {
   stdout: (line: string) => void
   /** Injectable for tests; defaults to the real adapter factory. */
   sourceFactory?: TicketSourceFactory
+  /** Store seam for the ticket-asset commands and `show`'s asset list. */
+  openStore?: StoreOpener
+  /** Explicit `--store` for the store-backed commands; precedence is applied
+   * by repo-state.ts. */
+  storeRef?: string
 }
 
 export interface TicketCreateOpts extends TicketCommandOpts {
@@ -88,6 +103,31 @@ export interface TicketShowOpts extends TicketCommandOpts {
   json?: boolean
 }
 
+export interface TicketAttachOpts extends TicketCommandOpts {
+  id: string
+  kind: string
+  path: string
+  /** Defaults to the path's basename. */
+  name?: string
+  json?: boolean
+}
+
+export interface TicketAssetGetOpts extends TicketCommandOpts {
+  id: string
+  kind: string
+  name: string
+  dest: string
+  rev?: number
+  json?: boolean
+}
+
+export interface TicketAssetRmOpts extends TicketCommandOpts {
+  id: string
+  kind: string
+  name: string
+  json?: boolean
+}
+
 export interface TicketMoveOpts extends TicketCommandOpts {
   id: string
   /** Source-local workflow state; validation belongs to the adapter. */
@@ -95,7 +135,17 @@ export interface TicketMoveOpts extends TicketCommandOpts {
   json?: boolean
 }
 
-type TicketCommandName = 'create' | 'update' | 'block' | 'unblock' | 'list' | 'show' | 'move'
+type TicketCommandName =
+  | 'create'
+  | 'update'
+  | 'block'
+  | 'unblock'
+  | 'list'
+  | 'show'
+  | 'move'
+  | 'attach'
+  | 'asset get'
+  | 'asset rm'
 
 export interface ResolvedTicketCommand {
   config: Config
@@ -173,7 +223,11 @@ function ticketSummary(ticket: Ticket): string {
   return fields.join(' ')
 }
 
-function ticketDetail(ticket: Ticket): string[] {
+function assetLine(asset: TicketAssetSummary): string {
+  return `    ${asset.kind}/${asset.name}  rev ${asset.revision}  ${formatAssetSize(asset.size)}`
+}
+
+function ticketDetail(ticket: Ticket, assets: TicketAssetSummary[] = []): string[] {
   const lines = [
     `ticket ${ticket.ref.source}:${ticket.ref.id}`,
     `  title:   ${ticket.title}`,
@@ -184,6 +238,7 @@ function ticketDetail(ticket: Ticket): string[] {
     lines.push(`  blocked by: ${ticket.blockedBy.join(', ')}`)
   }
   if (ticket.ref.url !== undefined) lines.push(`  url:     ${ticket.ref.url}`)
+  if (assets.length > 0) lines.push('  assets:', ...assets.map(assetLine))
   lines.push('  body:')
   return lines
 }
@@ -291,14 +346,135 @@ export async function abTicketList(opts: TicketListOpts): Promise<void> {
 export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'show')
   const ticket = await requireTicket(source, opts.id)
+  // An asset-listing failure fails the command rather than hiding the assets.
+  const assets = await withTicketStore(opts, ({ store, repo }) =>
+    store.listTicketAssets(repo, opts.id),
+  )
   if (opts.json === true) {
-    opts.stdout(JSON.stringify(ticket, null, 2))
+    opts.stdout(
+      JSON.stringify(
+        {
+          ...ticket,
+          assets: assets.map(({ kind, name, revision, size, layout, fileCount }) => ({
+            kind,
+            name,
+            revision,
+            size,
+            layout,
+            fileCount,
+          })),
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
-  for (const line of ticketDetail(ticket)) opts.stdout(line)
+  for (const line of ticketDetail(ticket, assets)) opts.stdout(line)
   // Keep the adapter-provided body untouched. It may itself be multiline and
   // may intentionally end (or not end) with a newline.
   opts.stdout(ticket.body)
+}
+
+function withTicketStore<T>(
+  opts: TicketCommandOpts,
+  use: (context: { store: BuildStore; repo: string }) => Promise<T>,
+): Promise<T> {
+  return withSessionlessStore(
+    {
+      targetRepo: opts.targetRepo,
+      env: opts.env,
+      exec: opts.exec ?? spawnExec,
+      ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
+      ...(opts.openStore !== undefined ? { openStore: opts.openStore } : {}),
+    },
+    use,
+  )
+}
+
+/** `ab ticket attach <id> <kind> <path>` — store a file or folder as a ticket
+ * asset, then leave a note on the ticket in its source. Order matters: the
+ * source is asked first, so an unknown id stores nothing; the note follows the
+ * store write, so it never points at nothing. */
+export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(opts, 'attach')
+  await requireTicket(source, opts.id)
+  const walk = await walkAssetPath(opts.path)
+  const name = opts.name ?? walk.basename
+  const stored = await withTicketStore(opts, async ({ store, repo }) => {
+    const limits = await store.ticketAssetLimits(repo)
+    const input = await buildAssetInput(walk, { kind: opts.kind, name }, limits)
+    const live = await store.listTicketAssets(repo, opts.id)
+    const replacing = live.some((asset) => asset.kind === opts.kind && asset.name === name)
+    const meta = await store.putTicketAsset(repo, opts.id, input)
+    return { meta, replacing }
+  })
+  const { meta } = stored
+  try {
+    await source.comment(opts.id, ticketAssetNote(stored.replacing ? 'replaced' : 'attached', meta))
+  } catch (error) {
+    throw new Error(
+      `ticket asset ${meta.kind}/${meta.name} was stored as revision ${meta.revision}, but the note on ` +
+        `${source.name}:${opts.id} failed: ${error instanceof Error ? error.message : String(error)} ` +
+        '(re-running attach stores another revision)',
+    )
+  }
+  if (opts.json === true) {
+    opts.stdout(JSON.stringify(meta, null, 2))
+    return
+  }
+  opts.stdout(
+    `ticket asset attached: ${source.name}:${opts.id} ${meta.kind}/${meta.name} revision ${meta.revision} ` +
+      `(${formatAssetSize(meta.size)})`,
+  )
+}
+
+/** `ab ticket asset get <id> <kind> <name> <dest>` — exact bytes at the
+ * latest or a named revision. */
+export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> {
+  const asset = await withTicketStore(opts, ({ store, repo }) =>
+    store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev),
+  )
+  if (asset === null) {
+    const revision = opts.rev === undefined ? '' : ` revision ${opts.rev}`
+    throw new Error(
+      `ticket ${opts.id} has no asset ${opts.kind}/${opts.name}${revision}` +
+        (opts.rev === undefined ? ' (it may have been removed — try --rev <n>)' : ''),
+    )
+  }
+  const written = await writeAssetTo(asset, opts.dest)
+  if (opts.json === true) {
+    opts.stdout(JSON.stringify({ ...asset.meta, path: written }, null, 2))
+    return
+  }
+  opts.stdout(
+    `ticket asset downloaded: ${opts.kind}/${opts.name} revision ${asset.meta.revision} → ${written}`,
+  )
+}
+
+/** `ab ticket asset rm <id> <kind> <name>` — remove from the current assets
+ * (earlier revisions stay retrievable) and note the removal on the ticket. */
+export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
+  const { source } = await resolveTicketCommand(opts, 'asset rm')
+  const removed = await withTicketStore(opts, ({ store, repo }) =>
+    store.removeTicketAsset(repo, opts.id, opts.kind, opts.name),
+  )
+  if (removed === null) {
+    throw new Error(`ticket ${opts.id} has no current asset ${opts.kind}/${opts.name} to remove`)
+  }
+  try {
+    await source.comment(opts.id, ticketAssetNote('removed', removed))
+  } catch (error) {
+    throw new Error(
+      `ticket asset ${opts.kind}/${opts.name} was removed, but the note on ${source.name}:${opts.id} ` +
+        `failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (opts.json === true) {
+    opts.stdout(JSON.stringify(removed, null, 2))
+    return
+  }
+  opts.stdout(`ticket asset removed: ${source.name}:${opts.id} ${opts.kind}/${opts.name}`)
 }
 
 /** `ab ticket move <id> <state>` — adapter-owned state validation and move. */
@@ -319,7 +495,13 @@ const UPDATE_USAGE =
 const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--json] (§8.8)'
 const UNBLOCK_USAGE = 'usage: ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json] (§8.8)'
 const LIST_USAGE = 'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
-const SHOW_USAGE = 'usage: ab ticket show <id> [--json] (§8.8)'
+const SHOW_USAGE = 'usage: ab ticket show <id> [--store <ref>] [--json] (§8.8)'
+const ATTACH_USAGE =
+  'usage: ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json] (§8.8)'
+const ASSET_GET_USAGE =
+  'usage: ab ticket asset get <id> <kind> <name> <dest> [--rev <n>] [--store <ref>] [--json] (§8.8)'
+const ASSET_RM_USAGE =
+  'usage: ab ticket asset rm <id> <kind> <name> [--store <ref>] [--json] (§8.8)'
 const MOVE_USAGE = 'usage: ab ticket move <id> <state> [--json] (§8.8)'
 export const TICKET_USAGE = [
   CREATE_USAGE,
@@ -329,6 +511,9 @@ export const TICKET_USAGE = [
   LIST_USAGE,
   SHOW_USAGE,
   MOVE_USAGE,
+  ATTACH_USAGE,
+  ASSET_GET_USAGE,
+  ASSET_RM_USAGE,
 ].join('\n')
 
 function commaList(value: string): string[] {
@@ -444,17 +629,95 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     }
 
     case 'show': {
-      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const parsed = parseArgs(args, { json: 'boolean', store: 'value' }, TICKET_USAGE)
       const [id, ...extra] = parsed.positionals
       if (id === undefined || id.trim() === '' || extra.length > 0) {
         throw new Error(TICKET_USAGE)
       }
+      const store = stringFlag(parsed, 'store')
       await abTicketShow({
         ...opts,
+        ...(store !== undefined ? { storeRef: store } : {}),
         id,
         json: parsed.flags.has('json'),
       })
       return
+    }
+
+    case 'attach': {
+      const parsed = parseArgs(
+        args,
+        { name: 'value', store: 'value', json: 'boolean' },
+        TICKET_USAGE,
+      )
+      const [id, kind, path, ...extra] = parsed.positionals
+      if (!id?.trim() || !kind?.trim() || !path?.trim() || extra.length > 0) {
+        throw new Error(TICKET_USAGE)
+      }
+      const name = stringFlag(parsed, 'name')
+      if (name !== undefined && name.trim() === '') throw new Error(TICKET_USAGE)
+      const store = stringFlag(parsed, 'store')
+      await abTicketAttach({
+        ...opts,
+        ...(store !== undefined ? { storeRef: store } : {}),
+        id,
+        kind,
+        path,
+        ...(name !== undefined ? { name } : {}),
+        json: parsed.flags.has('json'),
+      })
+      return
+    }
+
+    case 'asset': {
+      const [action, ...assetArgs] = args
+      if (action === 'get') {
+        const parsed = parseArgs(
+          assetArgs,
+          { rev: 'value', store: 'value', json: 'boolean' },
+          TICKET_USAGE,
+        )
+        const [id, kind, name, dest, ...extra] = parsed.positionals
+        if (!id?.trim() || !kind?.trim() || !name?.trim() || !dest?.trim() || extra.length > 0) {
+          throw new Error(TICKET_USAGE)
+        }
+        const rawRev = stringFlag(parsed, 'rev')
+        if (rawRev !== undefined && !/^\d+$/.test(rawRev)) {
+          throw new Error(
+            `--rev must be a nonnegative integer, got "${rawRev}" — ${ASSET_GET_USAGE}`,
+          )
+        }
+        const store = stringFlag(parsed, 'store')
+        await abTicketAssetGet({
+          ...opts,
+          ...(store !== undefined ? { storeRef: store } : {}),
+          id,
+          kind,
+          name,
+          dest,
+          ...(rawRev !== undefined ? { rev: Number(rawRev) } : {}),
+          json: parsed.flags.has('json'),
+        })
+        return
+      }
+      if (action === 'rm') {
+        const parsed = parseArgs(assetArgs, { store: 'value', json: 'boolean' }, TICKET_USAGE)
+        const [id, kind, name, ...extra] = parsed.positionals
+        if (!id?.trim() || !kind?.trim() || !name?.trim() || extra.length > 0) {
+          throw new Error(TICKET_USAGE)
+        }
+        const store = stringFlag(parsed, 'store')
+        await abTicketAssetRm({
+          ...opts,
+          ...(store !== undefined ? { storeRef: store } : {}),
+          id,
+          kind,
+          name,
+          json: parsed.flags.has('json'),
+        })
+        return
+      }
+      throw new Error(TICKET_USAGE)
     }
 
     case 'move': {
