@@ -82,7 +82,7 @@ The one image asset is `headline-wide.png`, a rendered `ab dispatch` frame with 
 
 ## Motion
 
-One motion in product UI: a state word flashes reverse video for 180ms when it changes. Marketing pages may animate a diagram stepping through state (cells filling, a `[>]` advancing) when the motion explains the system; nothing loops for decoration. Under `prefers-reduced-motion: reduce`, everything is still.
+One motion in product UI: a state word flashes reverse video for 180ms when it changes. Marketing pages may animate a diagram stepping through state (cells filling, a `[>]` advancing) when the motion explains the system; the seam selector's knob glides along its rail in 200ms when the selection changes; nothing loops for decoration. Under `prefers-reduced-motion: reduce`, everything is still.
 
 ## Don't
 

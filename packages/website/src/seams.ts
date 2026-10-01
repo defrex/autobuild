@@ -5,6 +5,8 @@ export interface Adapter {
   label: string
   /** Which side of the local/remote toggle the adapter sits on; absent when neutral. */
   side?: Side
+  /** For a seam with no two-sided toggle: the adapter that setAll selects for this side. */
+  sideDefault?: Side
 }
 
 export interface Seam {
@@ -52,8 +54,8 @@ export const SEAMS: Seam[] = [
     name: 'runtime',
     caption: 'who does the thinking',
     adapters: [
-      { id: 'claude-code', label: 'Claude Code' },
-      { id: 'codex', label: 'Codex' },
+      { id: 'claude-code', label: 'Claude Code', sideDefault: 'local' },
+      { id: 'codex', label: 'Codex', sideDefault: 'remote' },
       { id: 'pi', label: 'pi' },
     ],
     open: '+ plugin',
@@ -113,14 +115,20 @@ export function selectAdapter(state: SeamState, seamId: string, adapterId: strin
   return { ...state, [seamId]: adapterId }
 }
 
-/** Seams without a local and a remote side (runtime) keep their selection. */
+/**
+ * Two-sided seams move to `side`; a seam without both sides (runtime) selects its
+ * `sideDefault` adapter for that side, or keeps its selection when it has none.
+ */
 export function setAll(state: SeamState, side: Side): SeamState {
   const next = { ...state }
   for (const seam of SEAMS) {
     const target = adapterFor(seam, side)
     if (target && adapterFor(seam, side === 'local' ? 'remote' : 'local')) {
       next[seam.id] = target.id
+      continue
     }
+    const fallback = seam.adapters.find((a) => a.sideDefault === side)
+    if (fallback && !target) next[seam.id] = fallback.id
   }
   return next
 }

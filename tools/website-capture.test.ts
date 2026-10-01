@@ -23,6 +23,8 @@ const probe = (over: Partial<Probe> = {}): Probe => ({
   stylesheetLoaded: true,
   lean: null,
   status: null,
+  knobSettled: true,
+  runtime: null,
   chips: [],
   ...over,
 })
@@ -84,8 +86,9 @@ describe('website capture', () => {
     expect(probeProblems(desktop, probe({ stylesheetLoaded: false }))).toEqual([
       'site.css did not load',
     ])
-    expect(probeProblems(remote, probe({ lean: 'local', status: 'fully local' })).length).toBe(2)
+    expect(probeProblems(remote, probe({ lean: 'local', status: 'fully local' })).length).toBe(3)
     const ok = probe({
+      runtime: 'codex',
       lean: 'remote',
       status: 'fully remote',
       chips: [
@@ -96,6 +99,17 @@ describe('website capture', () => {
     expect(probeProblems(remote, ok)).toEqual([])
     ok.chips[0]!.pressed = 'false'
     expect(probeProblems(remote, ok)).toHaveLength(1)
+    ok.chips[0]!.pressed = 'true'
+    expect(probeProblems(remote, { ...ok, knobSettled: false })).toEqual(['knob still animating'])
+    expect(probeProblems(remote, { ...ok, runtime: 'claude-code' })).toEqual([
+      'runtime is claude-code, expected codex',
+    ])
+  })
+
+  test('the remote probe waits out the glide and checks the knob has settled', () => {
+    const script = injectProbe('<body></body>', { remote: true })
+    expect(script).toContain('getAnimations()')
+    expect(script).toContain('}, 350)')
   })
 
   test('renderReport pairs references and reports phone overflow', () => {

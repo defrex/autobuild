@@ -75,6 +75,21 @@ describe('static site', () => {
   })
 })
 
+describe('knob motion', () => {
+  test('the knob glides in 250ms or less and is still under reduced motion', async () => {
+    const { 'site.css': css, 'index.html': html } = await buildFiles()
+    const rule = css.match(/\.knob\s*{([^}]*)}/)?.[1] ?? ''
+    const ms = Number(rule.match(/transition:\s*left\s+(\d+)ms/)?.[1])
+    expect(ms).toBeGreaterThan(0)
+    expect(ms).toBeLessThanOrEqual(250)
+    const reduced =
+      css.match(/@media \(prefers-reduced-motion: reduce\)\s*{([\s\S]*?})\s*}/)?.[1] ?? ''
+    expect(reduced).toMatch(/\.knob\s*{[^}]*transition:\s*none/)
+    expect(html).toMatch(/class="knob" style="left: [^"]*"/)
+    expect(html).not.toMatch(/class="knob"[^>]*(animation|transition)/)
+  })
+})
+
 describe('copy control', () => {
   test('copies the install command', async () => {
     const written: string[] = []

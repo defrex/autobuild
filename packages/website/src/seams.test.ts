@@ -8,11 +8,41 @@ describe('seam model', () => {
     expect(summary(state)).toEqual({ remoteCount: 0, total: 6, knob: 0, label: 'fully local' })
   })
 
-  test('setAll remote is fully remote and leaves runtime alone', () => {
+  test('setAll remote is fully remote and selects Codex for runtime', () => {
     const state = setAll(initialState(), 'remote')
     expect(summary(state).label).toBe('fully remote')
-    expect(state.runtime).toBe(initialState().runtime)
+    expect(state.runtime).toBe('codex')
     expect(summary(state).knob).toBe(1)
+  })
+
+  test('setAll local selects Claude Code and round-trips to the initial state', () => {
+    const remote = setAll(initialState(), 'remote')
+    expect(setAll(remote, 'local').runtime).toBe('claude-code')
+    expect(setAll(remote, 'local')).toEqual(initialState())
+  })
+
+  test('the track swaps the runtime with the extremes', () => {
+    const remote = toggleTrack(initialState())
+    expect(remote.runtime).toBe('codex')
+    expect(toggleTrack(remote).runtime).toBe('claude-code')
+    expect(toggleTrack(selectAdapter(initialState(), 'forge', 'github')).runtime).toBe('codex')
+  })
+
+  test('single chips never change the runtime, even when they complete the remote set', () => {
+    let state = initialState()
+    for (const [seam, adapter] of [
+      ['tickets', 'linear'],
+      ['dispatcher', 'cron'],
+      ['workspace', 'vercel-sandbox'],
+      ['forge', 'github'],
+      ['store', 'postgres'],
+      ['operators', 'web-ui'],
+    ] as const)
+      state = selectAdapter(state, seam, adapter)
+    expect(summary(state).label).toBe('fully remote')
+    expect(state.runtime).toBe('claude-code')
+    expect(selectAdapter(state, 'runtime', 'pi').runtime).toBe('pi')
+    expect(selectAdapter(state, 'runtime', 'codex').runtime).toBe('codex')
   })
 
   test('mixed selections report N of M, excluding runtime', () => {
