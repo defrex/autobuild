@@ -138,6 +138,68 @@ export const repoDepositsResponseSchema = z.object({
   artifacts: repositoryArtifactMetaListSchema,
 })
 
+// ── Ticket assets (SPEC §7.1) ────────────────────────────────────────────────
+
+export const ticketAssetLayoutSchema = z.enum(['file', 'tree'])
+/** An entry on the put request: `{type:'file',path,contentBase64}` or `{type:'dir',path}`. */
+export const ticketAssetEntryWireInputSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('file'), path: z.string(), contentBase64: z.string() }),
+  z.object({ type: z.literal('dir'), path: z.string() }),
+])
+export const putTicketAssetBodySchema = z.object({
+  kind: z.string(),
+  name: z.string(),
+  layout: ticketAssetLayoutSchema,
+  entries: z.array(ticketAssetEntryWireInputSchema),
+})
+/** A manifest entry: `dir` entries carry no size or blobRef. */
+export const ticketAssetEntryWireSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('file'),
+    path: z.string(),
+    size: z.number().int().nonnegative(),
+    blobRef: z.string(),
+  }),
+  z.object({ type: z.literal('dir'), path: z.string() }),
+])
+export const ticketAssetMetaWireSchema = z.object({
+  repo: z.string(),
+  ticketId: z.string(),
+  kind: z.string(),
+  name: z.string(),
+  revision: z.number().int().nonnegative(),
+  layout: ticketAssetLayoutSchema,
+  size: z.number().int().nonnegative(),
+  entries: z.array(ticketAssetEntryWireSchema),
+  createdAt: z.string(),
+})
+export const ticketAssetSummaryWireSchema = z.object({
+  repo: z.string(),
+  ticketId: z.string(),
+  kind: z.string(),
+  name: z.string(),
+  revision: z.number().int().nonnegative(),
+  layout: ticketAssetLayoutSchema,
+  size: z.number().int().nonnegative(),
+  fileCount: z.number().int().nonnegative(),
+  dirCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+})
+export const ticketAssetSummaryListSchema = z.array(ticketAssetSummaryWireSchema)
+/** `GET …/assets` answers the manifest only (no bytes); null when absent or removed. */
+export const ticketAssetManifestResponseSchema = ticketAssetMetaWireSchema.nullable()
+/** `GET …/assets/file` answers one file's bytes; null when absent. */
+export const ticketAssetFileResponseSchema = z.object({ contentBase64: z.string() }).nullable()
+export const removeTicketAssetBodySchema = z.object({ kind: z.string(), name: z.string() })
+export const removeTicketAssetResponseSchema = ticketAssetMetaWireSchema.nullable()
+export const ticketAssetLimitsWireSchema = z.object({
+  maxBytes: z.number().int().nonnegative(),
+  maxEntries: z.number().int().positive(),
+  /** Largest request or response body the deployment can carry. Absent: no ceiling. */
+  maxRequestBytes: z.number().int().positive().optional(),
+})
+export type TicketAssetLimitsWire = z.infer<typeof ticketAssetLimitsWireSchema>
+
 // ── Operator sessions (SPEC §7.1.1) ─────────────────────────────────────────
 
 export const newSessionBodySchema = z.object({

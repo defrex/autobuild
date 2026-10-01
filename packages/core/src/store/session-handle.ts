@@ -187,8 +187,8 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     listRepoArtifacts(repo: string, _kind?: string): Promise<RepositoryArtifactMeta[]> {
       return Promise.reject(new SessionScopeError(scope, 'listRepoArtifacts', repo))
     },
-    ticketAssetLimits(): Promise<TicketAssetLimits> {
-      return Promise.reject(new SessionScopeError(scope, 'ticketAssetLimits'))
+    ticketAssetLimits(repo: string): Promise<TicketAssetLimits> {
+      return Promise.reject(new SessionScopeError(scope, 'ticketAssetLimits', repo))
     },
     putTicketAsset(
       repo: string,

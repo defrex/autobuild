@@ -206,8 +206,8 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     listRepoArtifacts(repo: string, _kind?: string): Promise<RepositoryArtifactMeta[]> {
       return Promise.reject(new BuildScopeError(scope, 'listRepoArtifacts', repo))
     },
-    ticketAssetLimits(): Promise<TicketAssetLimits> {
-      return Promise.reject(new BuildScopeError(scope, 'ticketAssetLimits'))
+    ticketAssetLimits(repo: string): Promise<TicketAssetLimits> {
+      return Promise.reject(new BuildScopeError(scope, 'ticketAssetLimits', repo))
     },
     putTicketAsset(
       repo: string,

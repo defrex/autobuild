@@ -718,7 +718,7 @@ export class MemoryBuildStore implements BuildStore {
     )
   }
 
-  async ticketAssetLimits(): Promise<TicketAssetLimits> {
+  async ticketAssetLimits(_repo: string): Promise<TicketAssetLimits> {
     return { ...DEFAULT_TICKET_ASSET_LIMITS }
   }
 

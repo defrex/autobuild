@@ -20,7 +20,7 @@
  * `appendWithArtifacts` callback — atomicity is the backing store's, not
  * re-implemented here.
  */
-import type { ZodType } from 'zod'
+import type { ZodType, z } from 'zod'
 import type { AbEvent, EventWrite } from '@defrex/autobuild/plugin-sdk'
 import {
   EventValidationError,
@@ -31,10 +31,13 @@ import {
   type Via,
 } from '@defrex/autobuild/remote-store'
 import {
+  effectiveTicketAssetLimits,
   MAX_STREAM_WAIT_SECONDS,
   StreamBatchTooLargeError,
   StreamClosedError,
   systemClock,
+  TicketAssetValidationError,
+  validateTicketAssetInput,
   type BuildStore,
   type Clock,
   type StreamOutcome,
@@ -58,6 +61,8 @@ import {
   newBuildBodySchema,
   newSessionBodySchema,
   putArtifactBodySchema,
+  putTicketAssetBodySchema,
+  removeTicketAssetBodySchema,
   substitutePlaceholderRefs,
   type ErrorBody,
   type ErrorKind,
@@ -80,6 +85,12 @@ export interface StoreServerOptions {
   clock?: Clock
   /** Maximum decoded size of each artifact. Unlimited when omitted. */
   maxArtifactBytes?: number
+  /** The largest request or response body, in bytes, this deployment can
+   * carry on the ticket-asset routes (a platform may reject larger bodies
+   * before application code runs). Unbounded when omitted. The server
+   * advertises the effective per-asset limits derived from it, and checks
+   * every ticket-asset body against it itself. */
+  maxTicketAssetRequestBytes?: number
   /** Ceiling for a held event read (`wait` on the two event routes), in
    * whole seconds. Larger requested values clamp to this, never reject;
    * the default is the stream-wait ceiling (30). Hosted deployments set a
@@ -199,6 +210,136 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         `remote store version mismatch: client Autobuild ${clientAutobuild ?? '(missing)'} protocol ${clientProtocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}`,
       )
     }
+  }
+
+  const assetLimits = effectiveTicketAssetLimits(opts.maxTicketAssetRequestBytes)
+  const utf8 = new TextEncoder()
+
+  /** Serialize one ticket-asset response, refusing a body the deployment
+   * could not carry (the platform would otherwise reject it first, opaquely). */
+  function assetJson(status: number, body: unknown, describe: string): Response {
+    const text = JSON.stringify(body)
+    const max = opts.maxTicketAssetRequestBytes
+    if (max !== undefined) {
+      const bytes = utf8.encode(text).length
+      if (bytes > max) {
+        throw new RequestError(
+          413,
+          'validation',
+          `ticket asset ${describe} is ${bytes} bytes encoded, over this deployment's ${max}-byte response ceiling; it can only be fetched from a store with a higher ceiling`,
+        )
+      }
+    }
+    return new Response(text, { status, headers: { 'content-type': 'application/json' } })
+  }
+
+  async function readAssetBody(req: Request): Promise<z.infer<typeof putTicketAssetBodySchema>> {
+    const text = await req.text()
+    const max = opts.maxTicketAssetRequestBytes
+    if (max !== undefined) {
+      const bytes = utf8.encode(text).length
+      if (bytes > max) {
+        throw new RequestError(
+          413,
+          'validation',
+          `ticket asset exceeds this store's ${assetLimits.maxBytes}-byte limit (deployment request ceiling ${max} bytes): request is ${bytes} bytes`,
+        )
+      }
+    }
+    let raw: unknown
+    try {
+      raw = JSON.parse(text)
+    } catch {
+      throw new RequestError(400, 'validation', 'request body is not valid JSON')
+    }
+    const parsed = putTicketAssetBodySchema.safeParse(raw)
+    if (!parsed.success) {
+      throw new RequestError(400, 'validation', `invalid request body: ${parsed.error.message}`)
+    }
+    return parsed.data
+  }
+
+  async function ticketAssetRoute(
+    req: Request,
+    url: URL,
+    repo: string,
+    ticketId: string,
+    rest: string,
+  ): Promise<Response> {
+    const label = (kind: string, name: string) => `${kind}/${name}`
+    switch (`${req.method} ${rest}`) {
+      case 'POST ': {
+        const body = await readAssetBody(req)
+        const entries = body.entries.map((entry) => {
+          if (entry.type === 'dir') return entry
+          let content: Uint8Array
+          try {
+            content = decodeBase64(entry.contentBase64)
+          } catch {
+            throw new RequestError(400, 'validation', 'ticket asset content is not valid base64')
+          }
+          return { type: 'file' as const, path: entry.path, content }
+        })
+        const input = { kind: body.kind, name: body.name, layout: body.layout, entries }
+        validateTicketAssetInput(input, assetLimits)
+        const meta = await store.putTicketAsset(repo, ticketId, input)
+        return assetJson(201, meta, `${label(body.kind, body.name)} manifest`)
+      }
+      case 'GET ': {
+        const { kind, name } = assetIdentity(url)
+        const asset = await store.getTicketAsset(repo, ticketId, kind, name, intParam(url, 'rev'))
+        return asset === null
+          ? json(200, null)
+          : assetJson(200, asset.meta, `${label(kind, name)} manifest`)
+      }
+      case 'GET file': {
+        const { kind, name } = assetIdentity(url)
+        const path = url.searchParams.get('path')
+        if (path === null || path === '') {
+          throw new RequestError(400, 'validation', 'query parameter "path" is required')
+        }
+        const asset = await store.getTicketAsset(repo, ticketId, kind, name, intParam(url, 'rev'))
+        if (asset === null) return json(200, null)
+        const entry = asset.entries.find((candidate) => candidate.path === path)
+        if (entry === undefined || entry.type !== 'file') {
+          throw new RequestError(
+            404,
+            'not-found',
+            `ticket asset ${label(kind, name)} has no file "${path}"`,
+          )
+        }
+        return assetJson(
+          200,
+          { contentBase64: encodeBase64(entry.content) },
+          `file "${path}" of ${label(kind, name)} (${entry.content.byteLength} bytes)`,
+        )
+      }
+      case 'GET list': {
+        const summaries = await store.listTicketAssets(repo, ticketId, {
+          revisions: url.searchParams.get('revisions') === '1',
+        })
+        return assetJson(200, summaries, `list for ticket "${ticketId}"`)
+      }
+      case 'POST remove': {
+        const body = await readBody(req, removeTicketAssetBodySchema)
+        return json(200, await store.removeTicketAsset(repo, ticketId, body.kind, body.name))
+      }
+      default:
+        return fail(
+          404,
+          'not-found',
+          `no route: ${req.method} /repos/:repo/tickets/:id/assets/${rest}`,
+        )
+    }
+  }
+
+  function assetIdentity(url: URL): { kind: string; name: string } {
+    const kind = url.searchParams.get('kind')
+    const name = url.searchParams.get('name')
+    if (!kind || !name) {
+      throw new RequestError(400, 'validation', 'query parameters "kind" and "name" are required')
+    }
+    return { kind, name }
   }
 
   function decodeArtifact(contentBase64: string): Uint8Array {
@@ -842,6 +983,21 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       if (segments.length === 3 && segments[2] === 'build-digests') {
         return buildDigestRoute(req, repo)
       }
+      // Ticket assets are keyed by repo and ticket, not by a journal row, so
+      // they sit before the repository-existence gate like the session family.
+      if (segments.length === 3 && segments[2] === 'ticket-asset-limits' && req.method === 'GET') {
+        const own = await store.ticketAssetLimits(repo)
+        return json(200, {
+          maxBytes: Math.min(assetLimits.maxBytes, own.maxBytes),
+          maxEntries: Math.min(assetLimits.maxEntries, own.maxEntries),
+          ...(opts.maxTicketAssetRequestBytes !== undefined
+            ? { maxRequestBytes: opts.maxTicketAssetRequestBytes }
+            : {}),
+        })
+      }
+      if (segments[2] === 'tickets' && segments.length >= 5 && segments[4] === 'assets') {
+        return ticketAssetRoute(req, url, repo, segments[3]!, segments.slice(5).join('/'))
+      }
       const record = await store.getRepo(repo)
       if (record === null) {
         return fail(404, 'not-found', `unknown repo "${repo}"`)
@@ -904,6 +1060,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
     // D6: validation feedback must survive the wire with its message intact.
     if (error instanceof EventValidationError) {
+      return fail(422, 'validation', error.message)
+    }
+    if (error instanceof TicketAssetValidationError) {
       return fail(422, 'validation', error.message)
     }
     if (error instanceof StreamBatchTooLargeError) {

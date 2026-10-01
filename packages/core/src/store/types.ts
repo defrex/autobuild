@@ -365,9 +365,9 @@ export interface BuildStore {
   // ── Ticket assets (SPEC §7.1 — files attached to a ticket) ─────────────
   // Keyed by (repo, ticketId, kind, name); revisions are 0-based. The store
   // owns the bytes, the ticket source only ever gets a note (SPEC §13).
-  /** The effective ceilings this store accepts (a remote deployment may
-   * advertise lower ones than the defaults). */
-  ticketAssetLimits(): Promise<TicketAssetLimits>
+  /** The effective ceilings this store accepts for `repo` (a remote
+   * deployment may advertise lower ones than the defaults). */
+  ticketAssetLimits(repo: string): Promise<TicketAssetLimits>
   /** Validate, then store a new revision. Over-limit or invalid input rejects
    * with `TicketAssetValidationError` and stores nothing. */
   putTicketAsset(repo: string, ticketId: string, asset: TicketAssetInput): Promise<TicketAssetMeta>

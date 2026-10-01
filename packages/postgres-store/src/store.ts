@@ -77,6 +77,19 @@ import {
   readRepoStateEventsWithAnchorRecheck,
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
+import {
+  DEFAULT_TICKET_ASSET_LIMITS,
+  loadTicketAsset,
+  storeTicketAssetBlobs,
+  summarizeTicketAsset,
+  validateTicketAssetInput,
+  type TicketAsset,
+  type TicketAssetEntry,
+  type TicketAssetInput,
+  type TicketAssetLimits,
+  type TicketAssetMeta,
+  type TicketAssetSummary,
+} from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 import { PlanRetryRunner, type Exec, type Row } from './retry'
 
@@ -1072,6 +1085,109 @@ export class PostgresBuildStore implements BuildStore {
         : q`SELECT * FROM repo_artifacts WHERE repo=${repo} AND kind=${kind} ORDER BY kind,revision`,
     )
     return rows.map((row) => this.repoArtifactMeta(row))
+  }
+
+  async ticketAssetLimits(_repo: string): Promise<TicketAssetLimits> {
+    return { ...DEFAULT_TICKET_ASSET_LIMITS }
+  }
+
+  private ticketAssetMeta(row: Row): TicketAssetMeta {
+    return {
+      repo: String(row.repo),
+      ticketId: String(row.ticket_id),
+      kind: String(row.kind),
+      name: String(row.name),
+      revision: num(row.revision),
+      layout: String(row.layout) as TicketAssetMeta['layout'],
+      size: num(row.size),
+      entries: json<TicketAssetEntry[]>(row.manifest),
+      createdAt: iso(row.created_at),
+    }
+  }
+
+  async putTicketAsset(
+    repo: string,
+    ticketId: string,
+    asset: TicketAssetInput,
+  ): Promise<TicketAssetMeta> {
+    const size = validateTicketAssetInput(asset)
+    const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
+    const manifest = JSON.stringify(entries)
+    return this.tx(async (q) => {
+      // Serialize revision assignment per (repo, ticket, kind, name).
+      await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, ticketId, asset.kind, asset.name])}, 0))`
+      const tails: Row[] =
+        await q`SELECT COALESCE(MAX(revision), -1) AS revision FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${asset.kind} AND name=${asset.name}`
+      const revision = num(tails[0]?.revision) + 1
+      const createdAt = this.now()
+      await q`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${repo},${ticketId},${asset.kind},${asset.name},${revision},${asset.layout},${manifest}::jsonb,${size},false,${createdAt})`
+      return {
+        repo,
+        ticketId,
+        kind: asset.kind,
+        name: asset.name,
+        revision,
+        layout: asset.layout,
+        size,
+        entries,
+        createdAt,
+      }
+    })
+  }
+
+  async getTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+    rev?: number,
+  ): Promise<TicketAsset | null> {
+    const rows: Row[] = await this.run((q) =>
+      rev === undefined
+        ? q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${kind} AND name=${name} ORDER BY revision DESC LIMIT 1`
+        : q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${kind} AND name=${name} AND revision=${rev}`,
+    )
+    const row = rows[0]
+    if (!row || row.removed === true) return null
+    return loadTicketAsset(this.blobs, this.ticketAssetMeta(row))
+  }
+
+  async listTicketAssets(
+    repo: string,
+    ticketId: string,
+    opts?: { revisions?: boolean },
+  ): Promise<TicketAssetSummary[]> {
+    const rows: Row[] = await this.run(
+      (q) =>
+        q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} ORDER BY kind, name, revision`,
+    )
+    if (opts?.revisions) {
+      return rows
+        .filter((row) => row.removed !== true)
+        .map((row) => summarizeTicketAsset(this.ticketAssetMeta(row)))
+    }
+    const latest = new Map<string, Row>()
+    for (const row of rows) latest.set(JSON.stringify([row.kind, row.name]), row)
+    return [...latest.values()]
+      .filter((row) => row.removed !== true)
+      .map((row) => summarizeTicketAsset(this.ticketAssetMeta(row)))
+  }
+
+  async removeTicketAsset(
+    repo: string,
+    ticketId: string,
+    kind: string,
+    name: string,
+  ): Promise<TicketAssetMeta | null> {
+    return this.tx(async (q) => {
+      await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, ticketId, kind, name])}, 0))`
+      const rows: Row[] =
+        await q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${kind} AND name=${name} ORDER BY revision DESC LIMIT 1`
+      const latest = rows[0]
+      if (!latest || latest.removed === true) return null
+      await q`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${repo},${ticketId},${kind},${name},${num(latest.revision) + 1},${String(latest.layout)},${'[]'}::jsonb,0,true,${this.now()})`
+      return this.ticketAssetMeta(latest)
+    })
   }
 
   subscribe(slug: string, opts: SubscribeOptions, onEvent: (event: AbEvent) => void): Unsubscribe {

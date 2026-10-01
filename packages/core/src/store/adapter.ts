@@ -19,6 +19,8 @@ export type {
 export {
   DEFAULT_TICKET_ASSET_LIMITS,
   effectiveTicketAssetLimits,
+  loadTicketAsset,
+  storeTicketAssetBlobs,
   summarizeTicketAsset,
   TICKET_ASSET_MAX_BYTES,
   TICKET_ASSET_MAX_ENTRIES,

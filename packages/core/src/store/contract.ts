@@ -1914,7 +1914,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
 
       test('advertises limits and refuses an over-limit put, naming the limit, storing nothing', async () => {
         await withStore(factory, undefined, async (store) => {
-          const limits = await store.ticketAssetLimits()
+          const limits = await store.ticketAssetLimits(REPO)
           expect(limits.maxEntries).toBe(1000)
           expect(limits.maxBytes).toBeGreaterThan(0)
           expect(limits.maxBytes).toBeLessThanOrEqual(25 * 1024 * 1024)
@@ -1980,7 +1980,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           await expect(scoped.removeTicketAsset(REPO, 'T-1', 'design', 'a')).rejects.toThrow(
             /build-scoped store/,
           )
-          await expect(scoped.ticketAssetLimits()).rejects.toThrow(/build-scoped store/)
+          await expect(scoped.ticketAssetLimits(REPO)).rejects.toThrow(/build-scoped store/)
         })
       })
     })

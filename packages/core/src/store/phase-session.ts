@@ -348,8 +348,9 @@ export function scopeLocalStoreToPhaseSession(
       own('listRepoArtifacts', 'repo', repo)
       return store.listRepoArtifacts(repo, kind)
     },
-    async ticketAssetLimits(): Promise<TicketAssetLimits> {
-      return store.ticketAssetLimits()
+    async ticketAssetLimits(repo: string): Promise<TicketAssetLimits> {
+      own('ticketAssetLimits', 'repo', repo)
+      return store.ticketAssetLimits(repo)
     },
     async putTicketAsset(
       repo: string,
