@@ -1,0 +1,106 @@
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { buildFiles, buildSite } from './build'
+import { copyText } from './client'
+import { INSTALL_COMMAND, REPO_URL, SETUP_URL } from './constants'
+
+const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', 'reference.html')
+
+/** Visible text, one token per text node, ignoring markup, styles, and attributes. */
+function textOf(html: string): string[] {
+  const body = html.slice(html.indexOf('<body'))
+  return body
+    .replace(/<(script|style)[\s\S]*?<\/\1>/g, '')
+    .replace(/<br\s*\/?>/g, ' ')
+    .replace(/<[^>]+>/g, '\n')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
+    .split('\n')
+    .map((t) => t.replace(/\s+/g, ' ').trim())
+    .filter((t) => t.length > 0)
+}
+
+const tmp: string[] = []
+afterAll(async () => {
+  for (const dir of tmp) await rm(dir, { recursive: true, force: true })
+})
+
+describe('static site', () => {
+  test('buildSite writes plain files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'website-'))
+    tmp.push(dir)
+    await buildSite(dir)
+    expect((await readdir(dir)).sort()).toEqual(['index.html', 'site.css', 'site.js'])
+  })
+
+  test('copy matches the design reference word for word', async () => {
+    const { 'index.html': html } = await buildFiles()
+    const reference = textOf(await readFile(REFERENCE, 'utf8'))
+    // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
+    const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
+    expect(words(textOf(html))).toEqual(words(reference))
+  })
+
+  test('structure: one h1, h2 per section, initial seam state, links', async () => {
+    const { 'index.html': html } = await buildFiles()
+    expect(html.match(/<h1[ >]/g)).toHaveLength(1)
+    expect(html.match(/<h2[ >]/g)).toHaveLength(html.match(/<section[ >]/g)!.length - 1)
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
+    expect(html.match(/aria-pressed="false"/g)).toHaveLength(10)
+    expect(html).toContain(`href="${SETUP_URL}"`)
+    expect(html).toContain(`href="${REPO_URL}"`)
+    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(3)
+    expect(html).toContain('fully local')
+  })
+
+  test('no resources beyond its own files and the webfont', async () => {
+    const { 'index.html': html, 'site.js': js } = await buildFiles()
+    const hosts = [...html.matchAll(/(?:src|href)="(https?:\/\/[^"]+)"/g)].map(
+      (m) => new URL((m[1] ?? '').replace(/&amp;/g, '&')).host,
+    )
+    expect(new Set(hosts)).toEqual(new Set(['fonts.googleapis.com', 'github.com']))
+    expect(js).not.toContain('fetch(')
+  })
+
+  test('styles keep to the flat grid', async () => {
+    const { 'site.css': css } = await buildFiles()
+    expect(css).not.toMatch(/box-shadow|gradient|text-shadow|italic/)
+    expect(css).not.toMatch(/border-radius\s*:\s*[^0;\s]/)
+    for (const m of css.matchAll(/font-weight\s*:\s*(\d+)/g))
+      expect(['400', '700']).toContain(m[1] as string)
+  })
+})
+
+describe('copy control', () => {
+  test('copies the install command', async () => {
+    const written: string[] = []
+    const clipboard = {
+      writeText: async (t: string) => {
+        written.push(t)
+      },
+    }
+    expect(await copyText(clipboard, INSTALL_COMMAND)).toBe(true)
+    expect(written).toEqual(['bun add -g @defrex/autobuild'])
+  })
+
+  test('a refused or missing clipboard does not throw', async () => {
+    expect(await copyText({ writeText: () => Promise.reject(new Error('denied')) }, 'x')).toBe(
+      false,
+    )
+    expect(
+      await copyText(
+        {
+          writeText: () => {
+            throw new Error('sync')
+          },
+        },
+        'x',
+      ),
+    ).toBe(false)
+    expect(await copyText(undefined, 'x')).toBe(false)
+  })
+})
