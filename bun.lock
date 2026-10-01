@@ -119,6 +119,10 @@
         "react-dom": "19.2.4",
       },
     },
+    "packages/website": {
+      "name": "@defrex/autobuild-website",
+      "version": "0.8.0",
+    },
   },
   "patchedDependencies": {
     "better-auth@1.4.18": "patches/better-auth@1.4.18.patch",
@@ -207,6 +211,8 @@
     "@defrex/autobuild-vercel-sandbox": ["@defrex/autobuild-vercel-sandbox@workspace:packages/vercel-sandbox"],
 
     "@defrex/autobuild-web-dashboard-capture": ["@defrex/autobuild-web-dashboard-capture@workspace:packages/web-dashboard-capture"],
+
+    "@defrex/autobuild-website": ["@defrex/autobuild-website@workspace:packages/website"],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 

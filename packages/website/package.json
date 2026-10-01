@@ -1,0 +1,14 @@
+{
+  "name": "@defrex/autobuild-website",
+  "version": "0.8.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "dev": "bun src/dev.ts",
+    "build": "bun src/build.ts"
+  }
+}
