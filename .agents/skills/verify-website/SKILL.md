@@ -19,18 +19,22 @@ inspect the diff and not to decide applicability again.
    file is absent, continue unchanged.
 2. Run `bun run capture:website`. It builds the site, serves it on loopback,
    and screenshots it with a local Chromium into `.ab/website-frames/`:
-   `desktop.png` (1440px), `phone.png` (390px), and `desktop-remote.png`
-   (1440px with the seam selector switched to fully remote), plus
+   `desktop.png` (1440px), `phone.png` (390px), `desktop-remote.png`
+   (1440px with the seam selector switched to fully remote), and
+   `phone-remote.png` (390px, fully remote), plus
    `verify-report.md`. It needs a Chromium-family binary (`CHROMIUM_BIN`, or
    `chromium` on PATH) and no network. Its own checks (stylesheet loaded, remote
    state took effect) fail the command; that is a failing verdict, not a retry.
 3. Open **every** `.ab/website-frames/*.png` with the image-capable file tool,
    and the paired reference named in the report: `design/website/reference-desktop.png`,
-   `reference-phone.png`, `reference-desktop-remote.png`.
+   `reference-phone.png`, `reference-desktop-remote.png`. `phone-remote.png` has
+   no reference of its own; judge it against `reference-phone.png` for layout and
+   spacing only, since the seam states differ.
    `design/website/README.md` says what each is.
 4. Compare each frame with its reference for copy, section order, colors, and
-   layout. Read the report's "Horizontal overflow at 390px" line: a sideways
-   scroll at 390px is a failure.
+   layout. Check the report's measured section, footer, and button gaps for every
+   frame, and read both "Horizontal overflow at 390px" lines (`phone` and
+   `phone-remote`): a sideways scroll at 390px is a failure.
 5. Append your per-frame observations and an explicit pass or fail to the
    report's **Website visual verdict** section. On a guidance-assisted retry,
    also record how the answered escalation affected your reading.
@@ -41,6 +45,7 @@ inspect the diff and not to decide applicability again.
    ab artifact put website-frame:desktop:png .ab/website-frames/desktop.png --attach
    ab artifact put website-frame:phone:png .ab/website-frames/phone.png --attach
    ab artifact put website-frame:desktop-remote:png .ab/website-frames/desktop-remote.png --attach
+   ab artifact put website-frame:phone-remote:png .ab/website-frames/phone-remote.png --attach
    ab verdict pass --notes .ab/website-frames/verify-report.md
    ```
 

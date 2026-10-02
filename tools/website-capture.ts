@@ -30,7 +30,18 @@ export const WEBSITE_FRAMES: readonly WebsiteFrame[] = [
     remote: true,
     reference: 'design/website/reference-desktop-remote.png',
   },
+  // The design ships no 390px remote shot: this frame is judged against the local phone
+  // reference for layout and spacing only, and its seam states differ by design.
+  { id: 'phone-remote', width: 390, remote: true, reference: 'design/website/reference-phone.png' },
 ]
+
+/** Pixels between consecutive sections, and from the last section to the footer. */
+export function expectedSectionGap(frame: WebsiteFrame): number {
+  return frame.width >= 720 ? 288 : 192
+}
+
+/** The closing section's terminal-to-button gap; in-section spacing is unchanged. */
+export const EXPECTED_CTA_GAP = 48
 
 export interface ChipProbe {
   seam: string
@@ -50,6 +61,12 @@ export interface Probe {
   /** The adapter id pressed in the runtime row. */
   runtime: string | null
   chips: ChipProbe[]
+  /** Gap between each pair of consecutive `main .section` elements, in whole pixels. */
+  sectionGaps: number[]
+  /** Last section's bottom to the footer's top. */
+  footerGap: number
+  /** Closing section's `.terminal` bottom to its `.actions` top. */
+  ctaGap: number
 }
 
 export function chromiumBinary(
@@ -96,7 +113,19 @@ addEventListener('DOMContentLoaded', () => setTimeout(() => {
     const root = document.documentElement
     const sheet = [...document.styleSheets].find((s) => (s.href || '').endsWith('/site.css'))
     const selector = document.querySelector('.seam-selector')
+    const sections = [...document.querySelectorAll('main .section')]
+    const rects = sections.map((s) => s.getBoundingClientRect())
+    const sectionGaps = rects.slice(1).map((r, i) => Math.round(r.top - rects[i].bottom))
+    const footer = document.querySelector('footer')
+    const footerGap = footer && rects.length ? Math.round(footer.getBoundingClientRect().top - rects[rects.length - 1].bottom) : -1
+    const closing = sections[sections.length - 1]
+    const terminal = closing?.querySelector('.terminal')
+    const actions = closing?.querySelector('.actions')
+    const ctaGap = terminal && actions ? Math.round(actions.getBoundingClientRect().top - terminal.getBoundingClientRect().bottom) : -1
     const probe = {
+      sectionGaps,
+      footerGap,
+      ctaGap,
       scrollWidth: root.scrollWidth,
       innerWidth: innerWidth,
       scrollHeight: root.scrollHeight,
@@ -178,6 +207,20 @@ export function probeProblems(frame: WebsiteFrame, probe: Probe): string[] {
       }
     }
   }
+  const expected = expectedSectionGap(frame)
+  if (probe.sectionGaps.length === 0) problems.push('no sections found to measure')
+  for (const gap of probe.sectionGaps) {
+    if (gap !== expected) problems.push(`section gap is ${gap}px, expected ${expected}px`)
+  }
+  if (probe.footerGap !== expected) {
+    problems.push(`footer gap is ${probe.footerGap}px, expected ${expected}px`)
+  }
+  if (probe.ctaGap !== EXPECTED_CTA_GAP) {
+    problems.push(`terminal-to-button gap is ${probe.ctaGap}px, expected ${EXPECTED_CTA_GAP}px`)
+  }
+  if (frame.width <= 390 && probe.scrollWidth > probe.innerWidth) {
+    problems.push(`page scrolls sideways (${probe.scrollWidth} > ${probe.innerWidth})`)
+  }
   return problems
 }
 
@@ -192,21 +235,23 @@ export function renderReport(
       }`,
       `  - reference: \`${frame.reference}\``,
       `  - measured: scrollWidth ${probe.scrollWidth}, innerWidth ${probe.innerWidth}, scrollHeight ${probe.scrollHeight}`,
+      `  - spacing: section gaps [${probe.sectionGaps.join(', ')}]px, footer gap ${probe.footerGap}px (expected ${expectedSectionGap(frame)}px), terminal-to-button gap ${probe.ctaGap}px`,
     )
   }
   lines.push('', '## Horizontal overflow at 390px', '')
-  const phone = results.find((r) => r.frame.id === 'phone')
-  if (phone) {
-    const over = phone.probe.scrollWidth > phone.probe.innerWidth
+  for (const { frame, probe } of results.filter((r) => r.frame.width <= 390)) {
+    const over = probe.scrollWidth > probe.innerWidth
     lines.push(
       over
-        ? `FAIL: the page scrolls sideways (scrollWidth ${phone.probe.scrollWidth} > innerWidth ${phone.probe.innerWidth}).`
-        : `PASS: no sideways scroll (scrollWidth ${phone.probe.scrollWidth} <= innerWidth ${phone.probe.innerWidth}).`,
+        ? `FAIL: \`${frame.id}\` scrolls sideways (scrollWidth ${probe.scrollWidth} > innerWidth ${probe.innerWidth}).`
+        : `PASS: \`${frame.id}\` has no sideways scroll (scrollWidth ${probe.scrollWidth} <= innerWidth ${probe.innerWidth}).`,
     )
   }
   lines.push(
     '',
     '## Notes',
+    '',
+    '`phone-remote` has no approved screenshot of its own: judge it against `reference-phone.png` for layout and spacing only; the seam states differ by design.',
     '',
     'The page links web fonts; offline, a fallback face renders. Typeface-only differences from the reference are not findings.',
     '',

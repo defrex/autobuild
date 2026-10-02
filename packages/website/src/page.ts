@@ -1,18 +1,16 @@
 import { dashboardRendition } from './dashboard'
 import { dispatcherDiagram, dispatcherLegend, intakeDiagram, pipelineDiagram } from './diagrams'
-import { INSTALL_COMMAND, REPO_URL, SETUP_URL } from './constants'
+import { INSTALL_COMMAND, REPO_URL } from './constants'
 import { seamSelector } from './seams-view'
 
 const FONT_URL =
   'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&amp;display=swap'
-const RULE = '─'.repeat(200)
 
 function intro(eyebrow: string, title: string, lead?: string, id?: string): string {
   const leadHtml = lead ? `<p class="lead">${lead}</p>` : ''
   return `<div class="intro"${id ? ` id="${id}"` : ''}><div class="titles"><div class="eyebrow">${eyebrow}</div><h2 class="headline">${title}</h2></div>${leadHtml}</div>`
 }
 
-const rule = `<div class="rule" aria-hidden="true">${RULE}</div>`
 const prompt = `<span class="dim">$ </span>`
 
 function cmd(promptHtml: string, command: string, note: string, color?: string): string {
@@ -22,7 +20,7 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
 
 const hero = `<section class="section"><div class="hero"><h1 class="display">Tickets in,<br>Product out.</h1><p class="lead">Autobuild runs coding agents through a fixed pipeline that plans, implements, reviews, and verifies every ticket before it merges.</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a></div></div>${dashboardRendition()}</section>`
 
-const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}<div class="figure"><div class="eyebrow">inside one build-runner</div>${pipelineDiagram()}</div></section>`
+const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}${pipelineDiagram()}</section>`
 
 const dispatcher = `<section class="section">${intro('autobuild · the map', 'A dispatcher spawns builds', 'The dispatcher claims ready tickets and starts a build-runner for each. Runners are isolated, all state is logged.')}${dispatcherDiagram()}${dispatcherLegend()}</section>`
 
@@ -32,7 +30,7 @@ const throughput = `<section class="section">${intro('autobuild · throughput', 
 
 const intake = `<section class="section">${intro('autobuild · intake', 'Let the queue fill itself', 'Once tickets are the interface, anything that can write a ticket can put work in front of you.')}${intakeDiagram()}</section>`
 
-const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div><div class="actions links"><a class="btn" href="${SETUP_URL}">Read the setup guide</a><a class="word plain" href="${REPO_URL}">View on GitHub</a></div></section>`
+const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div><div class="actions links"><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
 
 export function renderPage(): string {
   return `<!doctype html>
@@ -48,8 +46,8 @@ export function renderPage(): string {
 </head>
 <body>
 <header class="wrap"><div class="masthead"><b class="title">Autobuild</b><a class="dim" href="${REPO_URL}"><span class="hide-sm">github.com/defrex/autobuild</span><span class="show-sm">GitHub</span></a></div></header>
-<main class="wrap"><div class="sections">${hero}${pipeline}${dispatcher}${seams}${rule}${throughput}${intake}${rule}${start}</div></main>
-<footer class="wrap">${rule}<div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
+<main class="wrap"><div class="sections">${hero}${pipeline}${dispatcher}${seams}${throughput}${intake}${start}</div></main>
+<footer class="wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
 </body>
 </html>
 `
