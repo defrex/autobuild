@@ -109,8 +109,31 @@ function row(r: Row): string {
   return `<div class="dash-row"><span style="color: ${COLOR.live}">${r.lane ? '&gt;' : ''}</span>${dim(r.id)}<b>${r.slug}</b><span${r.pr ? ` style="color: ${COLOR.live}"` : ''}>${r.pr ?? ''}</span><b style="color: ${STATUS_COLOR[r.status]}; text-align: right">${r.status}</b><div class="dash-full dash-steps">${steps}</div>${message}</div>`
 }
 
-/** The terminal dashboard rendition, drawn from fixture data. */
+const DASHBOARD_DESCRIPTION = 'Terminal dashboard showing five example builds'
+
+const on = `<b style="color: ${COLOR.ok}">ON</b>`
+
+/** The step a row is on: its current step, or the first one still pending when queued. */
+function nowStep(r: Row): Step {
+  return r.steps.find((s) => s.state === 'current') ?? r.steps.find((s) => s.state === 'pending')!
+}
+
+/** One build on two lines: slug and status, then id, PR, and only the current step. */
+function phoneRow(r: Row): string {
+  const step = nowStep(r)
+  const pr = r.pr ? ` <span style="color: ${COLOR.live}">${r.pr}</span>` : ''
+  const message = r.message
+    ? `<div style="grid-column: 2 / -1; color: ${COLOR.alert}">${esc(r.message)}</div>`
+    : ''
+  return `<div style="display: grid; grid-template-columns: 2ch minmax(0, 1fr) auto; column-gap: 1ch"><span style="color: ${COLOR.live}">${r.lane ? '&gt;' : ''}</span><b>${r.slug}</b><b style="color: ${STATUS_COLOR[r.status]}; text-align: right">${r.status}</b><span style="grid-column: 2 / -1">${dim(r.id)}${pr} <span style="${STEP_STYLE[step.state]}">${esc(step.text)}</span></span>${message}</div>`
+}
+
+/** The portrait rendition: 14px text, each build on two lines; shown only below 720px. */
+function dashboardPhone(): string {
+  return `<div class="phone-only" role="img" aria-label="${DASHBOARD_DESCRIPTION}"><div style="background: ${COLOR.well}; padding: 16px 2ch; display: flex; flex-direction: column; gap: 16px; font-size: 14px; line-height: 20px"><div style="display: flex; justify-content: space-between; gap: 2ch"><b style="color: ${COLOR.title}">example/webapp</b><span>14:02:31</span></div><div style="display: flex; flex-wrap: wrap; column-gap: 2ch"><span>${dim('queue')} 1 ${dim('·')} ${dim('active')} 4/6</span><span>${dim('observations')} 7/20</span><span>intake ${on}  auto merge ${on}  harvest ${on}</span></div>${ROWS.map(phoneRow).join('')}</div></div>`
+}
+
+/** The terminal dashboard rendition, drawn from fixture data, in desktop and portrait forms. */
 export function dashboardRendition(): string {
-  const on = `<b style="color: ${COLOR.ok}">ON</b>`
-  return `<div class="scroll" tabindex="0" role="region" aria-label="Terminal dashboard showing five example builds"><div class="dash"><div class="dash-head"><b style="color: ${COLOR.title}">example/webapp</b>${dim('operator ▾')}</div><div class="dash-status"><span>${dim('queue')} 1 ${dim('·')} ${dim('active')} 4/6 ${dim('·')} ${dim('observations')} 7/20</span><span>intake ${on}  auto merge ${on}  harvest ${on}</span><span>14:02:31</span></div>${ROWS.map(row).join('')}</div></div>`
+  return `<div class="scroll desk-only" tabindex="0" role="region" aria-label="${DASHBOARD_DESCRIPTION}"><div class="dash"><div class="dash-head"><b style="color: ${COLOR.title}">example/webapp</b>${dim('operator ▾')}</div><div class="dash-status"><span>${dim('queue')} 1 ${dim('·')} ${dim('active')} 4/6 ${dim('·')} ${dim('observations')} 7/20</span><span>intake ${on}  auto merge ${on}  harvest ${on}</span><span>14:02:31</span></div>${ROWS.map(row).join('')}</div></div>${dashboardPhone()}`
 }

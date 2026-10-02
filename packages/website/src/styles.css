@@ -186,6 +186,10 @@ a.dim {
   overflow-x: auto;
 }
 
+.phone-only {
+  display: none;
+}
+
 .dash {
   min-width: 900px;
   display: flex;
@@ -358,6 +362,14 @@ a.dim {
 }
 
 @media (max-width: 719px) {
+  .desk-only {
+    display: none;
+  }
+
+  .phone-only {
+    display: block;
+  }
+
   .sections {
     gap: 192px;
     padding-block: 48px 192px;

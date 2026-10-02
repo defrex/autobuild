@@ -66,11 +66,12 @@ export interface NodeOptions extends Box {
   color?: string
   border?: string
   padding?: string
+  background?: string
 }
 
 export function node(n: NodeOptions): string {
   const border = n.border ? `; border: 2px solid ${n.border}` : ''
-  return `<div style="position: absolute; left: ${n.left}px; top: ${n.top}px; width: ${n.width}px; height: ${n.height}px; box-sizing: border-box; padding: ${n.padding ?? '8px 12px'}; display: flex; align-items: center; justify-content: center; text-align: center; background: ${COLOR.well}${border}; color: ${n.color ?? COLOR.ink}"><span>${n.html}</span></div>`
+  return `<div style="position: absolute; left: ${n.left}px; top: ${n.top}px; width: ${n.width}px; height: ${n.height}px; box-sizing: border-box; padding: ${n.padding ?? '8px 12px'}; display: flex; align-items: center; justify-content: center; text-align: center; background: ${n.background ?? COLOR.well}${border}; color: ${n.color ?? COLOR.ink}"><span>${n.html}</span></div>`
 }
 
 export const label = (text: string, color: string = COLOR.ink): string =>
@@ -94,11 +95,13 @@ export interface CaptionOptions {
   text: string
   color?: string
   bold?: boolean
-  align?: 'left' | 'right'
+  align?: 'left' | 'center' | 'right'
+  /** Inner HTML replacing `text`; already escaped. */
+  html?: string
 }
 
 export function caption(c: CaptionOptions): string {
-  return `<div style="position: absolute; left: ${c.left}px; top: ${c.top}px; width: ${c.width}px; font-size: 14px; line-height: 20px; text-align: ${c.align ?? 'left'}; color: ${c.color ?? COLOR.slack}; font-weight: ${c.bold ? 700 : 400}; white-space: nowrap">${esc(c.text)}</div>`
+  return `<div style="position: absolute; left: ${c.left}px; top: ${c.top}px; width: ${c.width}px; font-size: 14px; line-height: 20px; text-align: ${c.align ?? 'left'}; color: ${c.color ?? COLOR.slack}; font-weight: ${c.bold ? 700 : 400}; white-space: nowrap">${c.html ?? esc(c.text).replace(/\n/g, '<br>')}</div>`
 }
 
 /** One progress cell: done, current, or pending. */
@@ -110,7 +113,18 @@ export function cell(left: number, top: number, state: 'done' | 'live' | 'pendin
   return `<div style="position: absolute; left: ${left}px; top: ${top}px; width: 24px; height: 24px; box-sizing: border-box; ${fill}"></div>`
 }
 
-/** A fixed-size diagram that scrolls sideways inside its own container below 720px. */
+/** An empty filled or outlined box. */
+export function rect(box: Box, fill: string | null, border?: string): string {
+  const style = fill ? `background: ${fill}` : `border: 2px solid ${border}`
+  return `<div style="position: absolute; left: ${box.left}px; top: ${box.top}px; width: ${box.width}px; height: ${box.height}px; box-sizing: border-box; ${style}"></div>`
+}
+
+/** The desktop form of a figure: a fixed-size drawing that scrolls sideways inside its container; hidden below 720px. */
 export function diagram(width: number, height: number, description: string, body: string): string {
-  return `<div class="scroll" tabindex="0" role="region" aria-label="${esc(description)}"><div role="img" aria-label="${esc(description)}" style="position: relative; width: ${width}px; height: ${height}px">${body}</div></div>`
+  return `<div class="scroll desk-only" tabindex="0" role="region" aria-label="${esc(description)}"><div role="img" aria-label="${esc(description)}" style="position: relative; width: ${width}px; height: ${height}px">${body}</div></div>`
+}
+
+/** The portrait form of a figure: fits the page width; shown only below 720px. */
+export function phoneDiagram(height: number, description: string, body: string): string {
+  return `<div class="phone-only" role="img" aria-label="${esc(description)}"><div style="position: relative; width: 358px; max-width: 100%; height: ${height}px">${body}</div></div>`
 }

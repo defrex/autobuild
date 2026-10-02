@@ -156,6 +156,8 @@ describe('website capture', () => {
       }))
     const pass = renderReport(results(390))
     expect(pass).toContain('design/website/reference-phone.png')
+    expect(pass).toContain('design/website/reference-phone-remote.png')
+    expect(pass).not.toContain('no approved screenshot')
     expect(pass).toContain('PASS: `phone` has no sideways scroll')
     expect(pass).toContain('PASS: `phone-remote` has no sideways scroll')
     expect(pass).toContain('section gaps [288]px')
