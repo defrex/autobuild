@@ -218,15 +218,18 @@ function dispatcherPhone(): string {
   const cells = [0, 1, 2, 3, 4, 5, 6].map((i) =>
     cell(16 + i * 32, 280, i < 3 ? 'done' : i === 3 ? 'live' : 'pending'),
   )
+  // The runner card paints first so the connectors that cross it stay visible.
+  const backdrop = [
+    rect({ left: 16, top: 192, width: 326, height: 136 }, null, COLOR.dimLine),
+    rect({ left: 8, top: 200, width: 342, height: 136 }, null, COLOR.dimLine),
+    rect({ left: 0, top: 208, width: 358, height: 136 }, COLOR.well),
+  ]
   const parts = [
     caption({ left: 0, top: 0, width: 200, text: 'ready tickets' }),
     plainNode(0, 24, 110, 40, 'ticket'),
     plainNode(124, 24, 110, 40, 'ticket'),
     plainNode(248, 24, 110, 40, 'ticket'),
     plainNode(99, 104, 160, 56, 'dispatcher'),
-    rect({ left: 16, top: 192, width: 326, height: 136 }, null, COLOR.dimLine),
-    rect({ left: 8, top: 200, width: 342, height: 136 }, null, COLOR.dimLine),
-    rect({ left: 0, top: 208, width: 358, height: 136 }, COLOR.well),
     caption({
       left: 16,
       top: 222,
@@ -265,7 +268,7 @@ function dispatcherPhone(): string {
   return phoneDiagram(
     464,
     DISPATCHER_DESCRIPTION,
-    [...connectors.map(connector), ...parts].join(''),
+    [...backdrop, ...connectors.map(connector), ...parts].join(''),
   )
 }
 
