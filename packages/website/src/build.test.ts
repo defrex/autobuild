@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
 import { copyText } from './client'
-import { INSTALL_COMMAND, REPO_URL, SETUP_URL } from './constants'
+import { INSTALL_COMMAND, REPO_URL } from './constants'
 
 const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', 'reference.html')
 
@@ -51,10 +51,23 @@ describe('static site', () => {
     expect(html.match(/<h2[ >]/g)).toHaveLength(html.match(/<section[ >]/g)!.length - 1)
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
     expect(html.match(/aria-pressed="false"/g)).toHaveLength(10)
-    expect(html).toContain(`href="${SETUP_URL}"`)
     expect(html).toContain(`href="${REPO_URL}"`)
     expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(3)
     expect(html).toContain('fully local')
+  })
+
+  test('sections are separated by space alone and the page closes on GitHub', async () => {
+    const { 'index.html': html, 'site.css': css } = await buildFiles()
+    expect(html).not.toContain('class="rule"')
+    expect(html).not.toContain('inside one build-runner')
+    expect(html).not.toContain('setup.md')
+    const last = html.slice(html.lastIndexOf('<section'))
+    expect(last.match(/<a class="btn"/g)).toHaveLength(1)
+    expect(last).toContain(`<a class="btn" href="${REPO_URL}">View on GitHub</a>`)
+    expect(css).toContain('gap: 288px')
+    const phone = css.slice(css.indexOf('@media (max-width: 719px)'))
+    expect(phone).toContain('gap: 192px')
+    expect(phone).toContain('padding-block: 48px 192px')
   })
 
   test('no resources beyond its own files and the webfont', async () => {

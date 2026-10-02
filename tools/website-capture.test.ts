@@ -26,15 +26,21 @@ const probe = (over: Partial<Probe> = {}): Probe => ({
   knobSettled: true,
   runtime: null,
   chips: [],
+  sectionGaps: [192, 192],
+  footerGap: 192,
+  ctaGap: 48,
   ...over,
 })
 
 describe('website capture', () => {
-  test('frames are 1440, 390, and 1440 remote', () => {
+  const DESKTOP_GAPS = { sectionGaps: [288, 288], footerGap: 288 }
+
+  test('frames are 1440, 390, 1440 remote, and 390 remote', () => {
     expect(WEBSITE_FRAMES.map((f) => [f.id, f.width, f.remote])).toEqual([
       ['desktop', 1440, false],
       ['phone', 390, false],
       ['desktop-remote', 1440, true],
+      ['phone-remote', 390, true],
     ])
   })
 
@@ -82,12 +88,16 @@ describe('website capture', () => {
   test('probeProblems checks the stylesheet and the remote contract', () => {
     const desktop = WEBSITE_FRAMES[0]!
     const remote = WEBSITE_FRAMES[2]!
-    expect(probeProblems(desktop, probe())).toEqual([])
-    expect(probeProblems(desktop, probe({ stylesheetLoaded: false }))).toEqual([
+    expect(probeProblems(desktop, probe(DESKTOP_GAPS))).toEqual([])
+    expect(probeProblems(desktop, probe({ ...DESKTOP_GAPS, stylesheetLoaded: false }))).toEqual([
       'site.css did not load',
     ])
-    expect(probeProblems(remote, probe({ lean: 'local', status: 'fully local' })).length).toBe(3)
+    expect(
+      probeProblems(remote, probe({ ...DESKTOP_GAPS, lean: 'local', status: 'fully local' }))
+        .length,
+    ).toBe(3)
     const ok = probe({
+      ...DESKTOP_GAPS,
       runtime: 'codex',
       lean: 'remote',
       status: 'fully remote',
@@ -106,6 +116,30 @@ describe('website capture', () => {
     ])
   })
 
+  test('probeProblems holds section spacing to 288px desktop and 192px phone', () => {
+    const desktop = WEBSITE_FRAMES[0]!
+    const phone = WEBSITE_FRAMES[1]!
+    expect(probeProblems(phone, probe())).toEqual([])
+    expect(probeProblems(desktop, probe({ ...DESKTOP_GAPS, sectionGaps: [288, 96] }))).toEqual([
+      'section gap is 96px, expected 288px',
+    ])
+    expect(probeProblems(desktop, probe({ ...DESKTOP_GAPS, footerGap: 96 }))).toEqual([
+      'footer gap is 96px, expected 288px',
+    ])
+    expect(probeProblems(phone, probe({ footerGap: 288 }))).toEqual([
+      'footer gap is 288px, expected 192px',
+    ])
+    expect(probeProblems(desktop, probe({ ...DESKTOP_GAPS, sectionGaps: [] }))).toEqual([
+      'no sections found to measure',
+    ])
+    expect(probeProblems(desktop, probe({ ...DESKTOP_GAPS, ctaGap: 56 }))).toEqual([
+      'terminal-to-button gap is 56px, expected 48px',
+    ])
+    expect(probeProblems(phone, probe({ scrollWidth: 500 }))).toEqual([
+      'page scrolls sideways (500 > 390)',
+    ])
+  })
+
   test('the remote probe waits out the glide and checks the knob has settled', () => {
     const script = injectProbe('<body></body>', { remote: true })
     expect(script).toContain('getAnimations()')
@@ -116,14 +150,16 @@ describe('website capture', () => {
     const results = (scrollWidth: number) =>
       WEBSITE_FRAMES.map((frame) => ({
         frame,
-        probe: probe({ scrollWidth }),
+        probe: probe({ scrollWidth, sectionGaps: [frame.width >= 720 ? 288 : 192] }),
         height: 1000,
         capped: false,
       }))
     const pass = renderReport(results(390))
     expect(pass).toContain('design/website/reference-phone.png')
-    expect(pass).toContain('PASS: no sideways scroll')
-    expect(renderReport(results(500))).toContain('FAIL: the page scrolls sideways')
+    expect(pass).toContain('PASS: `phone` has no sideways scroll')
+    expect(pass).toContain('PASS: `phone-remote` has no sideways scroll')
+    expect(pass).toContain('section gaps [288]px')
+    expect(renderReport(results(500))).toContain('FAIL: `phone-remote` scrolls sideways')
   })
 
   test('output must live under .ab/', () => {
@@ -151,7 +187,7 @@ describe('website capture', () => {
 
   const chromium = chromiumBinary()
   test.skipIf(!chromium)(
-    'captures three real PNGs with the stylesheet loaded and the remote state applied',
+    'captures four real PNGs with the stylesheet loaded and the remote state applied',
     async () => {
       const dir = join(import.meta.dir, '..', '.ab', 'website-capture-test')
       await captureWebsite({ chromium, outputDir: dir })
@@ -161,7 +197,7 @@ describe('website capture', () => {
         expect((await stat(png)).size).toBeGreaterThan(0)
       }
       const report = await Bun.file(join(dir, 'verify-report.md')).text()
-      expect(report).toContain('PASS: no sideways scroll')
+      expect(report).toContain('PASS: `phone-remote` has no sideways scroll')
     },
     120_000,
   )

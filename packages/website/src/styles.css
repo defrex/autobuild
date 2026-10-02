@@ -67,19 +67,13 @@ a.dim {
 .sections {
   display: flex;
   flex-direction: column;
-  gap: 96px;
-  padding-block: 48px 96px;
+  gap: 288px;
+  padding-block: 48px 288px;
 }
 .section {
   display: flex;
   flex-direction: column;
   gap: 48px;
-}
-.rule {
-  color: #292929;
-  overflow: hidden;
-  white-space: nowrap;
-  user-select: none;
 }
 .foot {
   display: flex;
@@ -118,15 +112,6 @@ a.dim {
   line-height: 20px;
   color: #888888;
 }
-.figure > .eyebrow {
-  font-size: 14px;
-  line-height: 24px;
-}
-.figure {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 .headline {
   margin: 0;
   font-size: 40px;
@@ -152,7 +137,6 @@ a.dim {
   margin-top: 8px;
 }
 .actions.links {
-  gap: 3ch;
   margin-top: 0;
 }
 .install {
@@ -196,16 +180,6 @@ a.dim {
   color: #55b8b8;
   text-decoration: underline;
   text-underline-offset: 0.2em;
-}
-.word.plain {
-  display: inline-flex;
-  align-items: center;
-  color: #e6e6e6;
-  text-decoration: none;
-}
-.word.plain:hover {
-  color: #55b8b8;
-  text-decoration: underline;
 }
 
 .scroll {
@@ -384,6 +358,10 @@ a.dim {
 }
 
 @media (max-width: 719px) {
+  .sections {
+    gap: 192px;
+    padding-block: 48px 192px;
+  }
   .wrap {
     padding-inline: 16px;
   }

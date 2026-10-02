@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#583](https://github.com/defrex/autobuild/pull/583) — Space marketing-site sections 288px apart, drop the rules, close on GitHub alone
 - [#582](https://github.com/defrex/autobuild/pull/582) — Teach the skills to export designs into ticket assets at grooming
 - [#581](https://github.com/defrex/autobuild/pull/581) — Freeze ticket assets into the build at claim
 - [#580](https://github.com/defrex/autobuild/pull/580) — Glide the seam knob and select Codex in the fully remote state
