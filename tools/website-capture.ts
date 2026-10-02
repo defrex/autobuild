@@ -32,7 +32,12 @@ export const WEBSITE_FRAMES: readonly WebsiteFrame[] = [
   },
   // The design ships no 390px remote shot: this frame is judged against the local phone
   // reference for layout and spacing only, and its seam states differ by design.
-  { id: 'phone-remote', width: 390, remote: true, reference: 'design/website/reference-phone.png' },
+  {
+    id: 'phone-remote',
+    width: 390,
+    remote: true,
+    reference: 'design/website/reference-phone-remote.png',
+  },
 ]
 
 /** Pixels between consecutive sections, and from the last section to the footer. */
@@ -250,8 +255,6 @@ export function renderReport(
   lines.push(
     '',
     '## Notes',
-    '',
-    '`phone-remote` has no approved screenshot of its own: judge it against `reference-phone.png` for layout and spacing only; the seam states differ by design.',
     '',
     'The page links web fonts; offline, a fallback face renders. Typeface-only differences from the reference are not findings.',
     '',

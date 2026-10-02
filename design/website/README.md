@@ -7,8 +7,16 @@ Design canvas so builds can read it without access to claude.ai.
   initial fully-local state. It renders on its own in a browser. Its markup is
   a design export, not implementation guidance.
 - `reference-desktop.png` (1440px wide) and `reference-phone.png` (390px wide)
-  are screenshots of `reference.html`. `reference-desktop-remote.png` shows the
-  seam selector after switching every seam to remote, with Codex selected as the runtime.
+  are screenshots of `reference.html`. `reference-desktop-remote.png` and
+  `reference-phone-remote.png` show the seam selector after switching every seam
+  to remote, with Codex selected as the runtime.
+- Below 720px each of the four wide figures (dashboard demo, pipeline,
+  dispatcher, intake) is replaced by a portrait layout of the same content, so
+  nothing scrolls sideways; at desktop width nothing changes. The dashboard
+  takes two lines per build, the pipeline runs top to bottom, the dispatcher
+  shows one build-runner with stacked cards behind it above a full-width build
+  store, and the intake lays its four sources in a 2×2 grid with the PM agent
+  below.
 - Sections are 288px apart at desktop width and 192px apart below 720px, with
   the same space after the last section. No horizontal rules appear anywhere.
   The pipeline section has no "inside one build-runner" caption, and the page
@@ -17,5 +25,5 @@ Design canvas so builds can read it without access to claude.ai.
   is drawn in: palette, type scale, spacing, components, and diagram
   vocabulary.
 
-Source canvas: https://claude.ai/artifact/44JujTnC3hfGby38ukT71J (version 31)
+Source canvas: https://claude.ai/artifact/44JujTnC3hfGby38ukT71J (version 33)
 Design system: https://claude.ai/artifact/32vkyg5RhPFRmiMwEpinrT

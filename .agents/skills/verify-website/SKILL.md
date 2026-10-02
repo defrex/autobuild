@@ -27,9 +27,9 @@ inspect the diff and not to decide applicability again.
    state took effect) fail the command; that is a failing verdict, not a retry.
 3. Open **every** `.ab/website-frames/*.png` with the image-capable file tool,
    and the paired reference named in the report: `design/website/reference-desktop.png`,
-   `reference-phone.png`, `reference-desktop-remote.png`. `phone-remote.png` has
-   no reference of its own; judge it against `reference-phone.png` for layout and
-   spacing only, since the seam states differ.
+   `reference-phone.png`, `reference-desktop-remote.png`, `reference-phone-remote.png`.
+   Look closely at each of the four figures in the phone frames: portrait layouts,
+   nothing clipped or scrolling sideways.
    `design/website/README.md` says what each is.
 4. Compare each frame with its reference for copy, section order, colors, and
    layout. Check the report's measured section, footer, and button gaps for every
