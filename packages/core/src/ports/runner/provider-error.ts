@@ -77,9 +77,12 @@ export function classifyProviderError(
 /** Whether another declared target may be tried inside this phase attempt.
  * Legacy plugins have no cause: preserve their old safe split. */
 export function isAlternateEligible(failure: AgentTurnFailure): boolean {
-  return failure.cause === undefined
-    ? !failure.permanent
-    : failure.cause === 'availability' || failure.cause === 'exhaustion'
+  if (failure.cause === undefined) return !failure.permanent
+  return (
+    failure.cause === 'availability' ||
+    failure.cause === 'exhaustion' ||
+    (failure.cause === 'configuration' && failure.missingExecutable === true)
+  )
 }
 
 /** Final-failure retry behavior remains governed by the compatibility bit. */
@@ -90,6 +93,13 @@ export function mayRetryPhase(failure: AgentTurnFailure): boolean {
 /** Explicit local configuration failures bypass both alternates and phase retries. */
 export function configurationFailure(message: string): AgentTurnFailure {
   return { message, permanent: true, cause: 'configuration' }
+}
+
+/** The runtime's CLI executable is not installed. Still a permanent
+ * `configuration` failure (never retried), but a later declared target whose
+ * CLI is installed may serve the phase. */
+export function missingExecutableFailure(message: string): AgentTurnFailure {
+  return { message, permanent: true, cause: 'configuration', missingExecutable: true }
 }
 
 /** Explicit credential failures bypass both alternates and phase retries. */

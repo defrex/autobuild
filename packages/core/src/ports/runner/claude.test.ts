@@ -468,7 +468,7 @@ describe('ClaudeAgentRunner failures', () => {
       kind: 'failed',
       text: '',
       usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
-      failure: { permanent: true },
+      failure: { permanent: true, cause: 'configuration', missingExecutable: true },
     })
     if (turn.kind !== 'failed') throw new Error('unreachable')
     expect(turn.failure.message).toContain('Install Claude Code')

@@ -544,6 +544,21 @@ describe('PiAgentRunner.start', () => {
     expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5, turns: 1 })
   })
 
+  test('a missing pi executable is the one alternate-eligible configuration failure', async () => {
+    const runner = new PiAgentRunner({
+      createSessionFn: async () => {
+        throw new Error('pi runtime: executable "pi" was not found on PATH.')
+      },
+      createSessionId: () => 'pi-missing',
+    })
+    const { session, result } = await runner.start(startOpts())
+    expect(result).toMatchObject({
+      kind: 'failed',
+      failure: { permanent: true, cause: 'configuration', missingExecutable: true },
+    })
+    await runner.end(session)
+  })
+
   test('a local prerequisite launch failure returns an endable synthetic handle', async () => {
     const runner = new PiAgentRunner({
       createSessionFn: async () => {
@@ -559,6 +574,8 @@ describe('PiAgentRunner.start', () => {
       kind: 'failed',
       failure: { permanent: true, cause: 'configuration' },
     })
+    if (result.kind !== 'failed') throw new Error('unreachable')
+    expect(result.failure.missingExecutable).toBeUndefined()
     await expect(runner.continue(session, 'retry')).rejects.toThrow('failed to start')
     expect((await runner.end(session)).metadata.usage.turns).toBe(1)
   })

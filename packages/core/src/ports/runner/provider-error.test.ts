@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { classifyProviderError, isAlternateEligible } from './provider-error'
+import {
+  classifyProviderError,
+  configurationFailure,
+  credentialFailure,
+  isAlternateEligible,
+  mayRetryPhase,
+  missingExecutableFailure,
+} from './provider-error'
 
 const KIMI_QUOTA =
   '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Please try again after your quota refreshes."}}'
@@ -74,5 +81,14 @@ describe('classifyProviderError', () => {
   test('legacy plugin failures keep their permanent-bit alternate behavior', () => {
     expect(isAlternateEligible({ message: 'retry me', permanent: false })).toBe(true)
     expect(isAlternateEligible({ message: 'stop', permanent: true })).toBe(false)
+  })
+
+  test('only a missing executable is an alternate-eligible configuration failure', () => {
+    const missing = missingExecutableFailure('executable "codex" was not found')
+    expect(missing).toMatchObject({ permanent: true, cause: 'configuration' })
+    expect(isAlternateEligible(missing)).toBe(true)
+    expect(mayRetryPhase(missing)).toBe(false)
+    expect(isAlternateEligible(configurationFailure('requires Pi 0.81 or newer'))).toBe(false)
+    expect(isAlternateEligible(credentialFailure('not logged in'))).toBe(false)
   })
 })

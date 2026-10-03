@@ -1018,7 +1018,7 @@ Provider/runtime-declared turn failures are a separate `AgentRunner` result
 alternates, availability failures (overload, rate limit, 5xx, timeout,
 transport, and unclassified provider failure) and provider exhaustion (quota,
 usage limit, and billing) start the next target inside the same phase attempt.
-Authentication, permission, and local runtime-configuration failures do not.
+Authentication, permission, and local runtime-configuration failures do not, with one exception: a runtime whose CLI executable is not installed is skipped like any other eligible failure, so the phase runs on the first declared target whose CLI is present. An unsupported installed version is still a stopping configuration failure. If no target's CLI is installed, the chain ends in one non-retried `configuration` failure carrying the last target's missing-CLI message.
 Each failed target's transcript is deposited. Only a stopped or exhausted chain
 emits one `phase.failed` with the final provider message verbatim; that final
 failure controls retry policy. Provider exhaustion skips the retry budget and
@@ -1218,6 +1218,9 @@ distinction from `no-terminal`. `failure.message` preserves provider text and
 and local runtime configuration. `permanent` remains the retry-policy and
 legacy-plugin compatibility bit: exhaustion and credential/configuration
 failures are permanent, while availability uses existing bounded retry. A
+`configuration` failure flagged `missingExecutable` (the runtime's CLI is not
+installed) is the one configuration failure that is alternate-eligible; it is
+still permanent and never retried. A
 legacy plugin may omit `cause`; `permanent: false` remains alternate-eligible
 and `permanent: true` remains a stopping failure. A failed `start` still returns
 an endable session handle, guaranteeing transcript deposition.
@@ -1306,7 +1309,8 @@ deterministic fail-safe.
   runtime touches only the adapter registry, never the kernel. Mixing models
   across roles is intentional — a different reviewer catches more. The
   Within one agent-session attempt, eligible failures try the primary then each
-  alternate in order without spending another phase attempt. Each target has a
+  alternate in order without spending another phase attempt. A runtime whose CLI executable is not installed is skipped the same way;
+  credential, permission, and other configuration failures stop the chain. Each target has a
   fresh session bracket. A failed producer continuation may therefore continue
   on a different runtime only by rehydrating durable context, not by inheriting
   the failed conversation. Selection is non-sticky: every later phase, loop

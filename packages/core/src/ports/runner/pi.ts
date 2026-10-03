@@ -13,7 +13,12 @@ import {
   type Transcript,
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
-import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
+import {
+  classifyProviderError,
+  configurationFailure,
+  credentialFailure,
+  missingExecutableFailure,
+} from './provider-error'
 import { createPiRpcSession, PI_MODEL_ARG, PI_RPC_MODE_ARG } from './pi-rpc'
 import {
   abortPart,
@@ -586,11 +591,8 @@ export class PiAgentRunner implements AgentRunner, OneShotCompletion {
 
 function localPiFailure(error: unknown): AgentTurnFailure {
   const message = errorText(error)
-  if (
-    /executable "pi" was not found|requires Pi .* or newer|could not parse detected Pi version/.test(
-      message,
-    )
-  ) {
+  if (/executable "pi" was not found/.test(message)) return missingExecutableFailure(message)
+  if (/requires Pi .* or newer|could not parse detected Pi version/.test(message)) {
     return configurationFailure(message)
   }
   if (/not ready|authentication|logged in|credentials/i.test(message))

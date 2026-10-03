@@ -17,7 +17,11 @@ import {
   type Transcript,
 } from '../types'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
-import { classifyProviderError, configurationFailure, credentialFailure } from './provider-error'
+import {
+  classifyProviderError,
+  credentialFailure,
+  missingExecutableFailure,
+} from './provider-error'
 import {
   abortPart,
   errorPart,
@@ -694,7 +698,7 @@ function launchFailure(error: unknown): CodexTurn {
   return {
     text: '',
     usage: { inputTokens: 0, outputTokens: 0 },
-    failure: missing ? configurationFailure(message) : classifyProviderError(message),
+    failure: missing ? missingExecutableFailure(message) : classifyProviderError(message),
     cli: { stdout: '', stderr: errorText(error), exitCode: -1 },
     events: [],
     malformedLines: [],

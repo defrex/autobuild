@@ -373,7 +373,10 @@ describe('CodexAgentRunner protocol and failures', () => {
       createSessionId: () => 'local-missing',
     })
     const absent = await runner.start(startOpts())
-    expect(absent.result).toMatchObject({ kind: 'failed', failure: { permanent: true } })
+    expect(absent.result).toMatchObject({
+      kind: 'failed',
+      failure: { permanent: true, cause: 'configuration', missingExecutable: true },
+    })
     if (absent.result.kind === 'failed') {
       expect(absent.result.failure.message).toContain('codex runtime')
       expect(absent.result.failure.message).toContain('executable "codex"')
