@@ -49,12 +49,18 @@ export function failedTurnResult(
   permanent: boolean,
   text = '',
   cause?: AgentFailureCause,
+  missingExecutable?: true,
 ): AgentTurnResult {
   return {
     kind: 'failed',
     text,
     usage: { inputTokens: 0, outputTokens: 0, turns: 1 },
-    failure: { message, permanent, ...(cause !== undefined ? { cause } : {}) },
+    failure: {
+      message,
+      permanent,
+      ...(cause !== undefined ? { cause } : {}),
+      ...(missingExecutable === true ? { missingExecutable } : {}),
+    },
   }
 }
 

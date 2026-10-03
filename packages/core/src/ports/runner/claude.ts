@@ -38,7 +38,7 @@ import {
   toolInputPart,
   toolOutputPart,
 } from './stream-parts'
-import { classifyProviderError, configurationFailure } from './provider-error'
+import { classifyProviderError, missingExecutableFailure } from './provider-error'
 import { sessionEnv } from './session-env'
 import type { OneShotCompletion, OneShotCompletionInput, OneShotCompletionResult } from './one-shot'
 import type { RuntimeUsabilityInput, RuntimeUsabilityResult } from './runtime'
@@ -652,7 +652,7 @@ function launchFailure(error: unknown): ClaudeTurn {
   return {
     text: '',
     usage: { inputTokens: 0, outputTokens: 0 },
-    failure: missing ? configurationFailure(message) : classifyProviderError(message),
+    failure: missing ? missingExecutableFailure(message) : classifyProviderError(message),
     cli: {
       stdout: '',
       stderr: errorText(error),

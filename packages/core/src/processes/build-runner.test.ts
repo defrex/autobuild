@@ -3480,6 +3480,83 @@ alternates = [{ runtime = "pi", model = "kimi-finalize" }]
     expect(escalation?.payload.question).toContain('alternate quota exhausted')
   })
 
+  test('a missing primary CLI is skipped; the alternate completes with no phase.failed', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        const happyPlan = table.plan!
+        table.plan = (ctx) =>
+          ctx.opts.model === 'm-plan'
+            ? failedTurnResult('executable "codex" was not found', true, '', 'configuration', true)
+            : happyPlan(ctx)
+        return table
+      },
+    })
+
+    await h.br.run()
+    const events = await h.store.getEvents(SLUG)
+    expect(
+      events.filter((event) => event.type === 'phase.failed' && event.payload.phase === 'plan'),
+    ).toHaveLength(0)
+    const planStarts = ofType(events, 'session.started').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(planStarts.map((event) => event.payload.runner)).toEqual(['scripted', 'pi'])
+    const primary = [...h.runner.sessions.values()].find((j) => j.opts.model === 'm-plan')
+    expect(primary?.ended).toBe(true)
+  })
+
+  test('every target missing emits one non-retried configuration failure naming the last', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = (ctx) =>
+          failedTurnResult(
+            `executable "${ctx.opts.model === 'm-plan' ? 'codex' : 'pi'}" was not found`,
+            true,
+            '',
+            'configuration',
+            true,
+          )
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    const failures = ofType(events, 'phase.failed').filter(
+      (event) => event.payload.phase === 'plan',
+    )
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.payload).toMatchObject({
+      error: 'executable "pi" was not found',
+      willRetry: false,
+      providerAttempts: [
+        { index: 0, error: 'executable "codex" was not found', cause: 'configuration' },
+        { index: 1, error: 'executable "pi" was not found', cause: 'configuration' },
+      ],
+    })
+  })
+
+  test('a non-missing configuration failure bypasses a declared alternate', async () => {
+    const h = await makeHarness({
+      configToml: alternateConfig,
+      handlers: (store) => {
+        const table = happyHandlers(store)
+        table.plan = () => failedTurnResult('requires Pi 0.81 or newer', true, '', 'configuration')
+        return table
+      },
+    })
+
+    expect((await h.br.run()).status).toBe('blocked')
+    const events = await h.store.getEvents(SLUG)
+    expect(
+      ofType(events, 'session.started').filter((event) => event.payload.phase === 'plan'),
+    ).toHaveLength(1)
+  })
+
   test('credential rejection bypasses a declared alternate and parks immediately', async () => {
     const h = await makeHarness({
       configToml: alternateConfig,

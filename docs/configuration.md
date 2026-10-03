@@ -971,7 +971,7 @@ session starts, with a copyable table and all registered runtime names.
 | `args` | inherited; otherwise `[]` | optional array of nonempty strings; `[]` allowed | Ordered extra CLI argv tokens applied to every phase and tool-free one-shot invocation. A supplied list replaces, rather than unions with, the inherited list. |
 | `extensions` | no effect | deprecated optional array of nonempty strings | Compatibility-only field. Dispatch warns for each declaring role; migrate explicit runtime options to `args`. |
 | `sessionBudgetSeconds` | inherited; otherwise `[policy].sessionBudgetSeconds` | optional positive integer | Wall-clock budget for each build phase session routed through this logical role. One budget covers the primary and every alternate target. |
-| `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets. A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op. |
+| `alternates` | inherited; otherwise `[]` | optional ordered array of strict `{ runtime?, model?, args?, extensions? }` entries; `[]` allowed | Failure-triggered execution targets (provider failures and a runtime whose CLI is not installed). A role's list replaces the inherited list wholesale; each entry overlays that role's effective primary axes. `extensions` is accepted there only as the same deprecated no-op. |
 
 <!-- config-fragment:roles -->
 ```toml
@@ -1071,7 +1071,7 @@ useful; mixed models are not a configuration inconsistency.
 Each session attempt starts with its role's primary. Overload, rate limits, 5xx,
 timeout, transport, unknown provider failures, and quota/usage/billing
 exhaustion try alternates in declaration order inside that same phase attempt.
-Authentication, permission, and local runtime-configuration failures do not.
+Authentication, permission, and local runtime-configuration failures do not, with one exception: a runtime whose CLI executable is not installed is skipped like any other eligible failure, so the phase runs on the first declared target whose CLI is present. An unsupported installed version is still a stopping configuration failure. If no target's CLI is installed, the chain ends in one non-retried `configuration` failure carrying the last target's missing-CLI message. The remote provisioning preflight stays fail-closed: a missing runtime there is a provisioning defect.
 Each target gets a separate session and transcript; a continuation that moves
 to another target starts fresh from durable context and cannot inherit the
 failed provider's conversation. Selection is not sticky: the next phase, next

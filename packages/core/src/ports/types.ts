@@ -435,6 +435,10 @@ export interface AgentTurnFailure {
   /** Additive structured routing cause. Legacy plugin runners may omit it;
    * their existing permanent bit then supplies the conservative behavior. */
   cause?: AgentFailureCause
+  /** Set with cause 'configuration' when the runtime's CLI executable is not
+   * installed. This is the one configuration failure a configured alternate
+   * may serve; every other configuration failure still stops the chain. */
+  missingExecutable?: true
 }
 
 /** A turn that reached a provider/runtime-declared failure while retaining an

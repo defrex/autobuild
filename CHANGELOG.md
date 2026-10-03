@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#585](https://github.com/defrex/autobuild/pull/585) — Treat a missing runtime CLI as alternate-eligible
 - [#584](https://github.com/defrex/autobuild/pull/584) — Give the marketing site's wide figures a portrait layout on phones
 - [#583](https://github.com/defrex/autobuild/pull/583) — Space marketing-site sections 288px apart, drop the rules, close on GitHub alone
 - [#582](https://github.com/defrex/autobuild/pull/582) — Teach the skills to export designs into ticket assets at grooming
