@@ -597,6 +597,9 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
+      /** Builds discovery read in full and found terminal; never re-read. */
+      const retired = new Set<string>()
+
       /**
        * No-slug membership: every nonterminal build of this repository joins
        * the watch, baselined at its current maximum so no history replays. A
@@ -624,12 +627,17 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         // diverge from reduceBuild. Mirrors cli/wait.ts discoverBuilds.
         const digests = await store.getRepoBuildDigests(repo)
         for (const record of (await store.listBuilds()).filter(mine)) {
-          if (streams.has(record.slug)) continue
+          if (streams.has(record.slug) || retired.has(record.slug)) continue
           const digest = digests.get(record.slug)
           if (digest !== undefined && digest.terminal !== undefined) continue
           const events = await store.getEvents(record.slug)
           const status = reduceBuild(events).status
-          if (!NONTERMINAL_STATUSES.includes(status)) continue
+          if (!NONTERMINAL_STATUSES.includes(status)) {
+            // Terminal is permanent (reduceBuild never clears it): a legacy
+            // record the digest cannot retire is read once, not every pass.
+            retired.add(record.slug)
+            continue
+          }
           const stream: BuildStream = {
             kind: 'build',
             slug: record.slug,

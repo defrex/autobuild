@@ -1209,6 +1209,30 @@ describe('wait discovery bounds terminal-build reads with the AUT-487 digest (AU
     expect(h.err).toEqual([])
   })
 
+  test('a legacy terminal record the digest cannot retire is read once, not every pass', async () => {
+    const store = makeStore()
+    await store.createBuild({ slug: 'legacy-done', repo: '/old/checkouts/app', repoOrigin: REPO })
+    await store.append('legacy-done', {
+      actor: KERNEL,
+      type: 'runner.attached',
+      payload: { instance: 'i1', host: 'h1', resumedFromSeq: 0 },
+    })
+    await appendCompletion(store, 'legacy-done', 'merged')
+    await seedRunningBuild(store, 'live')
+    const { store: fake, eventsBySlug } = countingStore(store)
+    let ticks = 0
+    const h = harness(store, {
+      openStore: () => fake,
+      onTick: async () => {
+        ticks += 1
+        if (ticks === 4) await appendEscalation(store, 'live')
+      },
+    })
+    expect(await abWait({ ...h.base, timeout: '5' })).toBe(0)
+    expect(ticks).toBeGreaterThanOrEqual(4)
+    expect(eventsBySlug().get('legacy-done')).toBe(1)
+  })
+
   test('a digest read failure inherits the discovery failure-streak policy', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'live')

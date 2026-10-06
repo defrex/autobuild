@@ -1039,11 +1039,11 @@ describe('watch discovery bounds terminal-build reads with the AUT-487 digest (A
     const counted2 = countingStore(store2)
     const h2 = harness(store2, { openStore: () => counted2.store })
     await abWatch({ ...h2.base, timeout: '2' })
-    // The fallback re-checks a record the digest map cannot answer on every
-    // discovery pass (the digest keys on `record.repo`), reads it, sees the
-    // terminal reduction, and skips — so it is never registered, never
-    // delivered, and never re-read per tick beyond the filter itself.
-    expect(counted2.eventsBySlug().get('legacy-done') ?? 0).toBeGreaterThanOrEqual(1)
+    // The fallback reads a record the digest map cannot answer (the digest
+    // keys on `record.repo`) once, sees the terminal reduction, and retires
+    // it — never registered, never delivered, and not re-read on any later
+    // discovery pass, so an idle pass reads no event rows.
+    expect(counted2.eventsBySlug().get('legacy-done')).toBe(1)
     expect(h2.out.slice(0, -1)).toEqual([])
   })
 
