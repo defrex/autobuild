@@ -1,5 +1,6 @@
 import type { RepositoryEvent } from '../events/repository'
 import type { ArtifactRef } from '../ontology'
+import type { IncrementalReducer } from './incremental'
 
 export type DispatchHealth = 'starting' | 'running' | 'stopped' | 'failed'
 
@@ -138,4 +139,26 @@ export function reduceDispatchStatus(
     }
   }
   return state
+}
+
+/** Bump when `DispatchStatus`'s shape or fold semantics change (it is its own
+ * accumulator: `lastSeq` makes the fold skip already-seen events). */
+export const DISPATCH_STATUS_REDUCER_VERSION = 1
+
+/** The incremental form of `reduceDispatchStatus` for one run. The run is a
+ * parameter, so this is a factory. */
+export function dispatchStatusReducer(
+  run: string,
+): IncrementalReducer<DispatchStatus, RepositoryEvent, DispatchStatus> {
+  return {
+    version: DISPATCH_STATUS_REDUCER_VERSION,
+    initial: () => ({ run, health: 'starting', roleWarnings: [], diagnostics: [], lastSeq: 0 }),
+    advance: (acc, events) => reduceDispatchStatus(events, run, acc),
+    finish: (acc) => ({
+      ...acc,
+      roleWarnings: [...acc.roleWarnings],
+      diagnostics: [...acc.diagnostics],
+    }),
+    reduce: (events) => reduceDispatchStatus(events, run),
+  }
 }

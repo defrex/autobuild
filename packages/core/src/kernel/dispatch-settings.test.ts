@@ -6,8 +6,22 @@ import {
   DEFAULT_DISPATCH_AUTO_MERGE,
   DEFAULT_DISPATCH_INTAKE,
   DEFAULT_DISPATCH_PAUSED,
-  reduceDispatchSettings,
+  dispatchSettingsReducer,
+  reduceDispatchSettings as reduceDispatchSettingsWhole,
+  type DispatchSettings,
 } from './dispatch-settings'
+import { checkIncremental } from './incremental-contract'
+
+/** Every fixture log reduced here is also held to the incremental contract
+ * (every split point, JSON round trip), once per distinct log array. */
+const checkedLogs = new WeakSet<object>()
+function reduceDispatchSettings(events: RepositoryEvent[]): DispatchSettings {
+  if (!checkedLogs.has(events)) {
+    checkedLogs.add(events)
+    checkIncremental(dispatchSettingsReducer, events, { stepwise: false })
+  }
+  return reduceDispatchSettingsWhole(events)
+}
 
 const repo = 'acme/repo'
 const ts = '2026-07-20T00:00:00.000Z'

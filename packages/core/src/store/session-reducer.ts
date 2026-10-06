@@ -6,6 +6,7 @@
  * history; unknown facts cannot exist.
  */
 import type { SessionEvent } from '../events/sessions'
+import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 
 export type SessionStatus = 'idle' | 'running' | 'suspended' | 'awaiting-approval' | 'archived'
 export type SessionSuspensionCause = 'budget' | 'approval'
@@ -62,17 +63,28 @@ interface TurnEntry extends SessionTurn {
 const isTerminal = (state: SessionTurn['state']): boolean =>
   state === 'completed' || state === 'failed'
 
-/** Reduce a session's events into its derived state. `session.archived` is
- * terminal: every fact after it is ignored — the archived state is frozen. */
-export function reduceSession(events: SessionEvent[]): SessionState {
-  const turns: TurnEntry[] = []
-  let archived = false
-  let pendingApproval: SessionState['pendingApproval']
-  let wakeGlobs: string[] = []
-  const wakeCursors: Record<string, number> = {}
-  let journalWakeCursor = 0
+/** The carried accumulator: the reduced fields plus the per-turn suspension
+ * cause the public state drops. Once `archived`, the fold ignores every later
+ * event, so an advance after archive stays frozen. */
+export interface SessionAcc {
+  turns: TurnEntry[]
+  archived: boolean
+  pendingApproval: SessionState['pendingApproval']
+  wakeGlobs: string[]
+  wakeCursors: Record<string, number>
+  journalWakeCursor: number
+}
 
-  const open = (): TurnEntry | undefined => turns.findLast((turn) => !isTerminal(turn.state))
+/** Bump when `SessionAcc`'s shape or fold semantics change. */
+export const SESSION_REDUCER_VERSION = 1
+
+function foldSession(acc: SessionAcc, events: readonly SessionEvent[]): void {
+  const turns = acc.turns
+  let archived = acc.archived
+  let pendingApproval = acc.pendingApproval
+  let wakeGlobs = acc.wakeGlobs
+  const wakeCursors = acc.wakeCursors
+  let journalWakeCursor = acc.journalWakeCursor
 
   for (const event of events) {
     if (archived) break
@@ -166,7 +178,15 @@ export function reduceSession(events: SessionEvent[]): SessionState {
     }
   }
 
-  const openEntry = open()
+  acc.archived = archived
+  acc.pendingApproval = pendingApproval
+  acc.wakeGlobs = wakeGlobs
+  acc.journalWakeCursor = journalWakeCursor
+}
+
+function finishSession(acc: SessionAcc): SessionState {
+  const { turns, archived, pendingApproval, wakeGlobs, wakeCursors, journalWakeCursor } = acc
+  const openEntry = turns.findLast((turn) => !isTerminal(turn.state))
   // Status precedence: archived > awaiting-approval > suspended > running >
   // idle. An unanswered approval outranks its turn's suspension; the answer
   // that clears it hands status back to the turn.
@@ -201,4 +221,25 @@ export function reduceSession(events: SessionEvent[]): SessionState {
     journalWakeCursor,
     turns: turns.map(({ suspensionCause: _suspensionCause, ...turn }) => turn),
   }
+}
+
+export const sessionReducer: IncrementalReducer<SessionAcc, SessionEvent, SessionState> =
+  defineReducer({
+    version: SESSION_REDUCER_VERSION,
+    initial: (): SessionAcc => ({
+      turns: [],
+      archived: false,
+      pendingApproval: undefined,
+      wakeGlobs: [],
+      wakeCursors: {},
+      journalWakeCursor: 0,
+    }),
+    fold: foldSession,
+    finish: finishSession,
+  })
+
+/** Reduce a session's events into its derived state. `session.archived` is
+ * terminal: every fact after it is ignored — the archived state is frozen. */
+export function reduceSession(events: SessionEvent[]): SessionState {
+  return sessionReducer.reduce(events)
 }

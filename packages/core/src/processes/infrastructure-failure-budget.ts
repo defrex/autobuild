@@ -2,6 +2,7 @@ import type { AbEvent } from '../events/catalog'
 import { DISPATCHER } from '../events/envelope'
 import type { EventPayload } from '../events/payloads'
 import type { IdSource } from '../ids'
+import { defineReducer } from '../kernel/incremental'
 import type { BuildStore } from '../store/types'
 
 export type InfrastructureOperation = EventPayload<'infrastructure.failed'>['operation']
@@ -26,27 +27,39 @@ export interface InfrastructureFailureDependencies {
   ids: IdSource
 }
 
+export const INFRASTRUCTURE_FAILURE_RESET_REDUCER_VERSION = 1
+
 /** Infrastructure retries are re-armed only by a confirmed execution boundary
  * or a retry answer to this policy's own previously-raised exhaustion escalation. */
-export function infrastructureFailureResetSeq(events: readonly AbEvent[]): number {
-  const infrastructureEscalations = new Set<string>()
-  let resetSeq = 0
-  for (const event of events) {
-    if (
-      event.type === 'escalation.raised' &&
-      event.payload.policyCause === 'infrastructure-failure-limit'
-    ) {
-      infrastructureEscalations.add(event.payload.id)
-    } else if (
-      event.type === 'execution.ended' ||
-      (event.type === 'escalation.answered' &&
-        event.payload.resolution === 'retry' &&
-        infrastructureEscalations.has(event.payload.id))
-    ) {
-      resetSeq = event.seq
+export const infrastructureFailureResetReducer = defineReducer<
+  { escalations: string[]; resetSeq: number },
+  AbEvent,
+  number
+>({
+  version: INFRASTRUCTURE_FAILURE_RESET_REDUCER_VERSION,
+  initial: () => ({ escalations: [], resetSeq: 0 }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (
+        event.type === 'escalation.raised' &&
+        event.payload.policyCause === 'infrastructure-failure-limit'
+      ) {
+        if (!acc.escalations.includes(event.payload.id)) acc.escalations.push(event.payload.id)
+      } else if (
+        event.type === 'execution.ended' ||
+        (event.type === 'escalation.answered' &&
+          event.payload.resolution === 'retry' &&
+          acc.escalations.includes(event.payload.id))
+      ) {
+        acc.resetSeq = event.seq
+      }
     }
-  }
-  return resetSeq
+  },
+  finish: (acc) => acc.resetSeq,
+})
+
+export function infrastructureFailureResetSeq(events: readonly AbEvent[]): number {
+  return infrastructureFailureResetReducer.reduce(events)
 }
 
 export function normalizeInfrastructureError(error: unknown): string {

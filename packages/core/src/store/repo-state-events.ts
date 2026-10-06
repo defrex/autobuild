@@ -47,6 +47,7 @@
  * re-ordered, and a replay from the start is untouched.
  */
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
+import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import {
   dispatcherSettingEventPayloadSchemas,
   dispatcherStatusEventPayloadSchemas,
@@ -120,6 +121,40 @@ export async function readRepoStateEventsWithAnchorRecheck(
   return rechecked === undefined ? events : select(rechecked)
 }
 
+/** Carried state for the bounded read: the latest run-started seq (the last
+ * in array order, as the whole-array pass overwrites it) and every event seen,
+ * in array order. Nothing is pruned: a later run-started may carry a lower seq
+ * than an earlier one and restore events below the earlier anchor, so only
+ * `finish` can apply the filter exactly. Pruning below a monotone anchor is
+ * valid only for seq-ordered input and belongs with the cached-state
+ * follow-up. */
+export interface RepositoryStateEventsAcc {
+  anchor?: number
+  retained: RepositoryEvent[]
+}
+
+/** Bump when `RepositoryStateEventsAcc` or its fold changes. */
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 1
+
+const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
+  STATE_TYPES.has(event.type) || (anchor !== undefined && event.seq >= anchor)
+
+export const repositoryStateEventsReducer: IncrementalReducer<
+  RepositoryStateEventsAcc,
+  RepositoryEvent,
+  RepositoryEvent[]
+> = defineReducer<RepositoryStateEventsAcc, RepositoryEvent, RepositoryEvent[]>({
+  version: REPOSITORY_STATE_EVENTS_REDUCER_VERSION,
+  initial: () => ({ retained: [] }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === RUN_STARTED) acc.anchor = event.seq
+      acc.retained.push(event)
+    }
+  },
+  finish: (acc) => acc.retained.filter((event) => keeps(event, acc.anchor)),
+})
+
 /** The normative subset derivation every adapter implements and the contract
  * tests use as the oracle: durable types across the whole journal, plus —
  * only when the journal has one — every event from the latest
@@ -130,11 +165,5 @@ export async function readRepoStateEventsWithAnchorRecheck(
 export function projectRepositoryStateEvents(
   events: readonly RepositoryEvent[],
 ): RepositoryEvent[] {
-  let anchor: number | undefined
-  for (const event of events) {
-    if (event.type === RUN_STARTED) anchor = event.seq
-  }
-  return events.filter(
-    (event) => STATE_TYPES.has(event.type) || (anchor !== undefined && event.seq >= anchor),
-  )
+  return repositoryStateEventsReducer.reduce(events)
 }

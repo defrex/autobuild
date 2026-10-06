@@ -20,6 +20,8 @@ import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { CorePhase, Feedback, Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { decideNext, type Decision, type WaitReason } from './engine'
+import { checkIncremental } from './incremental-contract'
+import { logIndexReducer } from './log-index'
 
 const BUILD = 'auth-rate-limit'
 
@@ -90,7 +92,7 @@ function ev<T extends EventType>(
 /** seq assigned by index (starting at 1), ts from the stepping clock. */
 function toLog(writes: EventWrite[]): AbEvent[] {
   const clock = steppingClock()
-  return writes.map(
+  const log = writes.map(
     (write, index) =>
       ({
         build: BUILD,
@@ -101,6 +103,9 @@ function toLog(writes: EventWrite[]): AbEvent[] {
         payload: write.payload,
       }) as AbEvent,
   )
+  // Every engine fixture also holds the log index to the incremental contract.
+  checkIncremental(logIndexReducer, log, { stepwise: false })
+  return log
 }
 
 function decide(writes: EventWrite[]): Decision {

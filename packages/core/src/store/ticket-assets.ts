@@ -10,6 +10,7 @@
 
 import type { AbEvent } from '../events/catalog'
 import type { PinnedAsset } from '../events/payloads'
+import { defineReducer } from '../kernel/incremental'
 import { contentHash, type BlobStore, type BuildStore } from './types'
 
 export type { PinnedAsset }
@@ -379,19 +380,40 @@ export async function samplePinnedAssets(
   return (await store.listTicketAssets(repo, ticketId)).map(pinnedAssetOf)
 }
 
-/** Latest-pinned revision of `kind/name` as the build's events record it, or
- * (with `rev`) the revision when any pin in the log named it. */
-export function findPinnedRevision(
-  events: AbEvent[],
+export const PINNED_ASSETS_REDUCER_VERSION = 1
+
+/** The asset sets recorded by every `build.created`/`spec.revised` pin event
+ * that carries one, in array order. Each pin event replaces the set, so the
+ * newest decides the live pin; all of them answer "was this revision ever
+ * named". `pinnedRevision` is the query over the finished state. */
+export const pinnedAssetsReducer = defineReducer<
+  { pins: PinnedAsset[][] },
+  AbEvent,
+  { pins: PinnedAsset[][] }
+>({
+  version: PINNED_ASSETS_REDUCER_VERSION,
+  initial: () => ({ pins: [] }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type !== 'build.created' && event.type !== 'spec.revised') continue
+      const assets = event.payload.assets
+      if (assets === undefined) continue
+      acc.pins.push(assets)
+    }
+  },
+  finish: (acc) => ({ pins: acc.pins.slice() }),
+})
+
+/** Latest-pinned revision of `kind/name` over a reduced pin state, or (with
+ * `rev`) the revision when any pin named it. */
+export function pinnedRevision(
+  state: { pins: readonly (readonly PinnedAsset[])[] },
   kind: string,
   name: string,
   rev?: number,
 ): number | undefined {
   let latest: number | undefined
-  for (const event of events) {
-    if (event.type !== 'build.created' && event.type !== 'spec.revised') continue
-    const assets = event.payload.assets
-    if (assets === undefined) continue
+  for (const assets of state.pins) {
     if (rev !== undefined) {
       if (assets.some((a) => a.kind === kind && a.name === name && a.revision === rev)) return rev
       continue
@@ -401,6 +423,17 @@ export function findPinnedRevision(
     latest = assets.find((a) => a.kind === kind && a.name === name)?.revision
   }
   return latest
+}
+
+/** Latest-pinned revision of `kind/name` as the build's events record it, or
+ * (with `rev`) the revision when any pin in the log named it. */
+export function findPinnedRevision(
+  events: AbEvent[],
+  kind: string,
+  name: string,
+  rev?: number,
+): number | undefined {
+  return pinnedRevision(pinnedAssetsReducer.reduce(events), kind, name, rev)
 }
 
 /** `BuildStore.getPinnedTicketAsset` for any adapter: read the build's own

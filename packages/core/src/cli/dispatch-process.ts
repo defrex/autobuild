@@ -1,6 +1,6 @@
 import { distributionPath } from '../distribution'
 import { DISPATCHER } from '../events/envelope'
-import type { RepositoryEvent } from '../events/repository'
+import { hasOpenTick } from '../processes/tick-state'
 import type { BuildStore } from '../store/types'
 
 export const DISPATCH_CHILD_OPTIONS_ENV = 'AB_DISPATCH_CHILD_OPTIONS'
@@ -130,18 +130,6 @@ export interface DispatchChildSupervisorDeps {
     cwd: string
     env: Record<string, string>
   }) => DispatchSubprocess
-}
-
-function hasOpenTick(events: readonly RepositoryEvent[], run: string): boolean {
-  const boundary = events.findLast(
-    (event) =>
-      'run' in event.payload &&
-      event.payload.run === run &&
-      (event.type === 'dispatcher.tick-started' ||
-        event.type === 'dispatcher.tick-completed' ||
-        event.type === 'dispatcher.tick-failed'),
-  )
-  return boundary?.type === 'dispatcher.tick-started'
 }
 
 function defaultSpawn(input: {

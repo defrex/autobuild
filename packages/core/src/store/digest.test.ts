@@ -10,8 +10,14 @@ import type { AbEvent } from '../events/catalog'
 import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
 import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild } from '../kernel/reducer'
+import { checkIncremental } from '../kernel/incremental-contract'
 import { openExecution } from '../processes/execution-settlement'
-import { type DigestEventRow, reduceBuildDigest } from './digest'
+import {
+  buildDigestReducer,
+  type DigestEvent,
+  type DigestEventRow,
+  reduceBuildDigest as reduceBuildDigestWhole,
+} from './digest'
 
 /** Minimal digest-relevant envelopes — the derivation reads only type/seq/ts. */
 function event(
@@ -53,6 +59,17 @@ function fullLog(log: ReturnType<typeof event>[]): AbEvent[] {
       payload,
     } as AbEvent
   })
+}
+
+/** Every fixture log reduced here is also held to the incremental contract
+ * (every split point, JSON round trip), once per distinct log array. */
+const checkedLogs = new WeakSet<object>()
+function reduceBuildDigest(events: DigestEvent[]): ReturnType<typeof reduceBuildDigestWhole> {
+  if (!checkedLogs.has(events)) {
+    checkedLogs.add(events)
+    checkIncremental(buildDigestReducer, events, { stepwise: false })
+  }
+  return reduceBuildDigestWhole(events)
 }
 
 describe('reduceBuildDigest', () => {

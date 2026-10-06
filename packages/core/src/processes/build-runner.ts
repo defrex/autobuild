@@ -51,6 +51,7 @@ import { KERNEL, agentActor, type Actor } from '../events/envelope'
 import { isRemoteWorkspace } from '../events/workspace-remote'
 import type { IdSource } from '../ids'
 import { decideNext, type Decision } from '../kernel/engine'
+import { defineReducer } from '../kernel/incremental'
 import { PHASE_SPECS } from '../kernel/phases'
 import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { evaluateVerifyApplicability } from '../kernel/verify-applicability'
@@ -314,22 +315,155 @@ function providerAttemptSummary(attempts: readonly ProviderAttempt[] | undefined
   )
 }
 
+export interface PhaseFailureTally {
+  count: number
+  lastError?: string
+  lastWillRetry?: boolean
+  lastProviderAttempts?: readonly ProviderAttempt[]
+}
+
+export const PHASE_FAILURES_REDUCER_VERSION = 1
+
+/**
+ * phase.failed tally for one phase+round — D5's retry-guard input. A factory
+ * because phase and round are parameters of the projection.
+ *
+ * An answered escalation re-arms this budget only when its semantic class
+ * acknowledges phase-runner failures (§15.6-B). Runner-failure causes reset
+ * their matching round, the phase-level verify cause resets all rounds, and
+ * unrelated policy causes reset nothing. Cause-less historical and
+ * non-policy raises retain the legacy round-shaped behavior. Failures after
+ * an applicable answer count again, so a still-failing phase re-escalates on
+ * new evidence instead of deadlocking before its recovery session starts.
+ */
+export function phaseFailuresReducer(phase: Phase, round: number) {
+  return defineReducer<
+    {
+      /** id → the raise's reset semantics — answers are matched by id (§15.3). */
+      raised: Record<string, PhaseFailureResetEscalation>
+      count: number
+      lastError?: string
+      lastWillRetry?: boolean
+      lastProviderAttempts?: readonly ProviderAttempt[]
+    },
+    AbEvent,
+    PhaseFailureTally
+  >({
+    version: PHASE_FAILURES_REDUCER_VERSION,
+    initial: () => ({ raised: {}, count: 0 }),
+    fold(acc, events) {
+      for (const event of events) {
+        switch (event.type) {
+          case 'escalation.raised':
+            acc.raised[event.payload.id] = {
+              phase: event.payload.phase,
+              source: event.payload.source,
+              ...(event.payload.policyCause !== undefined
+                ? { policyCause: event.payload.policyCause }
+                : {}),
+              ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
+            }
+            break
+          case 'escalation.answered': {
+            const raise = acc.raised[event.payload.id]
+            if (raise !== undefined && resetsPhaseFailureBudget(raise, phase, round)) {
+              acc.count = 0
+              delete acc.lastError
+              delete acc.lastWillRetry
+              delete acc.lastProviderAttempts
+            }
+            break
+          }
+          case 'phase.failed':
+            if (event.payload.phase === phase && event.payload.round === round) {
+              acc.count += 1
+              acc.lastError = event.payload.error
+              acc.lastWillRetry = event.payload.willRetry
+              acc.lastProviderAttempts = event.payload.providerAttempts
+            }
+            break
+          default:
+            break
+        }
+      }
+    },
+    finish: (acc) => ({
+      count: acc.count,
+      ...(acc.lastError !== undefined ? { lastError: acc.lastError } : {}),
+      ...(acc.lastWillRetry !== undefined ? { lastWillRetry: acc.lastWillRetry } : {}),
+      ...(acc.lastProviderAttempts !== undefined
+        ? { lastProviderAttempts: acc.lastProviderAttempts }
+        : {}),
+    }),
+  })
+}
+
+export const SETUP_STREAK_REDUCER_VERSION = 1
+
+/** Consecutive durable setup failures since the latest successful attachment
+ * or explicit human answer. The accumulator keeps the boundary seq and the
+ * failure seqs, so it is exact for any array order. */
+export const setupStreakReducer = defineReducer<
+  { escalations: string[]; boundary: number; failures: number[] },
+  AbEvent,
+  number
+>({
+  version: SETUP_STREAK_REDUCER_VERSION,
+  initial: () => ({ escalations: [], boundary: 0, failures: [] }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'runner.attached') acc.boundary = event.seq
+      else if (
+        event.type === 'escalation.raised' &&
+        event.payload.phase === 'setup' &&
+        event.payload.source === 'policy'
+      ) {
+        if (!acc.escalations.includes(event.payload.id)) acc.escalations.push(event.payload.id)
+      } else if (
+        event.type === 'escalation.answered' &&
+        acc.escalations.includes(event.payload.id)
+      ) {
+        acc.boundary = event.seq
+      } else if (event.type === 'runner.setup-failed') {
+        acc.failures.push(event.seq)
+      }
+    }
+  },
+  finish: (acc) => acc.failures.filter((seq) => seq > acc.boundary).length,
+})
+
+export const PUBLISHED_BRANCH_HEAD_REDUCER_VERSION = 1
+
+/** Latest event-checkpointed branch head that kernel plumbing published;
+ * undefined while the build has none. */
+export const publishedBranchHeadReducer = defineReducer<
+  { head?: string },
+  AbEvent,
+  string | undefined
+>({
+  version: PUBLISHED_BRANCH_HEAD_REDUCER_VERSION,
+  initial: () => ({}),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'implement.completed') {
+        acc.head = event.payload.commits.head
+      } else if (event.type === 'reconcile.completed') {
+        acc.head = event.payload.mergeCommit
+      } else if (
+        event.type === 'finalize.step-completed' &&
+        event.payload.ok &&
+        event.payload.headSha !== undefined
+      ) {
+        acc.head = event.payload.headSha
+      }
+    }
+  },
+  finish: (acc) => acc.head,
+})
+
 /** Latest event-checkpointed branch head that kernel plumbing published. */
 export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
-  let head: string | undefined
-  for (const event of events) {
-    if (event.type === 'implement.completed') {
-      head = event.payload.commits.head
-    } else if (event.type === 'reconcile.completed') {
-      head = event.payload.mergeCommit
-    } else if (
-      event.type === 'finalize.step-completed' &&
-      event.payload.ok &&
-      event.payload.headSha !== undefined
-    ) {
-      head = event.payload.headSha
-    }
-  }
+  const head = publishedBranchHeadReducer.reduce(events)
   if (head === undefined) {
     throw new Error(
       'finalize publication requires a prior implement.completed, reconcile.completed, ' +
@@ -339,6 +473,37 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
   return head
 }
 
+export const VERIFY_DIFF_BASE_REDUCER_VERSION = 1
+
+/**
+ * The durable tree against which a conditional verifier evaluates the
+ * branch's current HEAD, or undefined until a `workspace.provisioned` exists.
+ * The accumulator keeps the first provisioned base and the latest promoted
+ * reconcile base separately, so the result is exact for any array order (a
+ * promotion that precedes the provisioned fact in the array still wins).
+ */
+export const verifyDiffBaseReducer = defineReducer<
+  { provisioned?: string; promoted?: string; pendingReconcileBase?: string },
+  AbEvent,
+  string | undefined
+>({
+  version: VERIFY_DIFF_BASE_REDUCER_VERSION,
+  initial: () => ({}),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'workspace.provisioned') {
+        if (acc.provisioned === undefined) acc.provisioned = event.payload.base.sha
+      } else if (event.type === 'reconcile.started') {
+        acc.pendingReconcileBase = event.payload.baseSha
+      } else if (event.type === 'reconcile.completed') {
+        if (acc.pendingReconcileBase !== undefined) acc.promoted = acc.pendingReconcileBase
+        delete acc.pendingReconcileBase
+      }
+    }
+  },
+  finish: (acc) => (acc.provisioned === undefined ? undefined : (acc.promoted ?? acc.provisioned)),
+})
+
 /**
  * Select the durable tree against which a conditional verifier evaluates the
  * branch's current HEAD. The initial branch-cut SHA is authoritative until a
@@ -346,24 +511,13 @@ export function selectPublishedBranchHead(events: readonly AbEvent[]): string {
  * refreshed base SHA. A dangling start is intentionally ignored.
  */
 export function selectVerifyDiffBase(events: readonly AbEvent[]): string {
-  const provisioned = events.find((event) => event.type === 'workspace.provisioned')
-  if (provisioned === undefined || provisioned.type !== 'workspace.provisioned') {
+  const base = verifyDiffBaseReducer.reduce(events)
+  if (base === undefined) {
     throw new Error(
       'conditional verify requires a workspace.provisioned base SHA, but this build has none',
     )
   }
-
-  let baseSha = provisioned.payload.base.sha
-  let pendingReconcileBase: string | undefined
-  for (const event of events) {
-    if (event.type === 'reconcile.started') {
-      pendingReconcileBase = event.payload.baseSha
-    } else if (event.type === 'reconcile.completed') {
-      if (pendingReconcileBase !== undefined) baseSha = pendingReconcileBase
-      pendingReconcileBase = undefined
-    }
-  }
-  return baseSha
+  return base
 }
 
 /** Parse `git diff --name-only -z`; malformed output fails closed. */
@@ -483,22 +637,7 @@ export class BuildRunner {
    * or explicit human answer. The answer re-arms the budget but deliberately
    * does not erase the current diagnostic while recovery is still running. */
   private setupStreak(events: readonly AbEvent[]): number {
-    const setupEscalations = new Set<string>()
-    let boundary = 0
-    for (const event of events) {
-      if (event.type === 'runner.attached') boundary = event.seq
-      else if (
-        event.type === 'escalation.raised' &&
-        event.payload.phase === 'setup' &&
-        event.payload.source === 'policy'
-      ) {
-        setupEscalations.add(event.payload.id)
-      } else if (event.type === 'escalation.answered' && setupEscalations.has(event.payload.id)) {
-        boundary = event.seq
-      }
-    }
-    return events.filter((event) => event.type === 'runner.setup-failed' && event.seq > boundary)
-      .length
+    return setupStreakReducer.reduce(events)
   }
 
   private setupQuestion(failure: EventPayload<'runner.setup-failed'>): string {
@@ -2452,52 +2591,7 @@ export class BuildRunner {
     lastWillRetry?: boolean
     lastProviderAttempts?: readonly ProviderAttempt[]
   } {
-    /** id → the raise's reset semantics — answers are matched by id (§15.3). */
-    const raised = new Map<string, PhaseFailureResetEscalation>()
-    let count = 0
-    let lastError: string | undefined
-    let lastWillRetry: boolean | undefined
-    let lastProviderAttempts: readonly ProviderAttempt[] | undefined
-    for (const event of events) {
-      switch (event.type) {
-        case 'escalation.raised':
-          raised.set(event.payload.id, {
-            phase: event.payload.phase,
-            source: event.payload.source,
-            ...(event.payload.policyCause !== undefined
-              ? { policyCause: event.payload.policyCause }
-              : {}),
-            ...(event.payload.round !== undefined ? { round: event.payload.round } : {}),
-          })
-          break
-        case 'escalation.answered': {
-          const raise = raised.get(event.payload.id)
-          if (raise !== undefined && resetsPhaseFailureBudget(raise, phase, round)) {
-            count = 0
-            lastError = undefined
-            lastWillRetry = undefined
-            lastProviderAttempts = undefined
-          }
-          break
-        }
-        case 'phase.failed':
-          if (event.payload.phase === phase && event.payload.round === round) {
-            count += 1
-            lastError = event.payload.error
-            lastWillRetry = event.payload.willRetry
-            lastProviderAttempts = event.payload.providerAttempts
-          }
-          break
-        default:
-          break
-      }
-    }
-    return {
-      count,
-      ...(lastError !== undefined ? { lastError } : {}),
-      ...(lastWillRetry !== undefined ? { lastWillRetry } : {}),
-      ...(lastProviderAttempts !== undefined ? { lastProviderAttempts } : {}),
-    }
+    return phaseFailuresReducer(phase, round).reduce(events)
   }
 
   private async failPhase(

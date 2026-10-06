@@ -26,6 +26,7 @@
  * precedent `bulk-control.ts` set for the pause/resume walk.
  */
 import type { RepositoryEvent } from '../events/repository'
+import { defineReducer } from './incremental'
 import { discardInFlight, type BuildState } from './reducer'
 
 /** One `dispatcher.auto-merge-default-set` fact, resolved. `actor` is the
@@ -49,16 +50,49 @@ export function latestAutoMergeDefault(
   events: RepositoryEvent[],
   enabled?: boolean,
 ): AutoMergeDefaultFact | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (
-      event?.type === 'dispatcher.auto-merge-default-set' &&
-      (enabled === undefined || event.payload.enabled === enabled)
-    ) {
-      return { enabled: event.payload.enabled, seq: event.seq, actor: event.actor }
+  return pickAutoMergeDefault(autoMergeDefaultReducer.reduce(events), enabled)
+}
+
+export const AUTO_MERGE_DEFAULT_REDUCER_VERSION = 1
+
+/** The newest `dispatcher.auto-merge-default-set` fact in array order, overall
+ * and per value — `latestAutoMergeDefault(events, enabled)` is a lookup in
+ * this state, exact for any array order. */
+export interface AutoMergeDefaultFacts {
+  latest?: AutoMergeDefaultFact
+  latestEnabled?: AutoMergeDefaultFact
+  latestDisabled?: AutoMergeDefaultFact
+}
+
+export const autoMergeDefaultReducer = defineReducer<
+  AutoMergeDefaultFacts,
+  RepositoryEvent,
+  AutoMergeDefaultFacts
+>({
+  version: AUTO_MERGE_DEFAULT_REDUCER_VERSION,
+  initial: () => ({}),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type !== 'dispatcher.auto-merge-default-set') continue
+      const fact: AutoMergeDefaultFact = {
+        enabled: event.payload.enabled,
+        seq: event.seq,
+        actor: event.actor,
+      }
+      acc.latest = fact
+      if (fact.enabled) acc.latestEnabled = fact
+      else acc.latestDisabled = fact
     }
-  }
-  return undefined
+  },
+  finish: (acc) => ({ ...acc }),
+})
+
+export function pickAutoMergeDefault(
+  facts: AutoMergeDefaultFacts,
+  enabled?: boolean,
+): AutoMergeDefaultFact | undefined {
+  if (enabled === undefined) return facts.latest
+  return enabled ? facts.latestEnabled : facts.latestDisabled
 }
 
 /**

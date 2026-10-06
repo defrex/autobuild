@@ -2,6 +2,7 @@ import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
 import { KERNEL } from '../events/envelope'
 import { autoMergeDeferralClasses, type AutoMergeDeferralReason } from '../ports/types'
 import type { BuildStore } from '../store/types'
+import { defineReducer } from './incremental'
 import type { BuildState } from './reducer'
 
 /** The complete GitHub `mergeStateStatus` enum. Keeping this list closed is a
@@ -133,36 +134,104 @@ export function currentDeferralObservation(
   events: AbEvent[],
   prNumber: number,
   commandSeq: number,
-): Extract<AbEvent, { type: 'observation.recorded' }> | undefined {
+): DeferralObservation | undefined {
+  return deferralObservationFrom(
+    currentDeferralObservationReducer.reduce(events),
+    prNumber,
+    commandSeq,
+  )
+}
+
+type DeferralObservation = Extract<AbEvent, { type: 'observation.recorded' }>
+
+const DEFERRAL_REF_PREFIX = 'auto-merge-gate:pr:'
+
+/** One array-order ledger entry. Only the facts the currency predicate reads
+ * are kept, with every maximal run of other events collapsed to a barrier
+ * carrying the run's max seq: the head scan stops at the first event (of ANY
+ * type) with `seq >= observation.seq`, so an unrelated event must still be able
+ * to end it. */
+type DeferralLedgerEntry =
+  | { t: 'barrier'; seq: number }
+  | { t: 'observation'; event: DeferralObservation }
+  | { t: 'finalized'; seq: number; headSha: string }
+  | { t: 'terminal'; seq: number }
+  | { t: 'reconciled'; seq: number }
+
+export const CURRENT_DEFERRAL_OBSERVATION_REDUCER_VERSION = 1
+
+export interface DeferralLedger {
+  entries: DeferralLedgerEntry[]
+}
+
+export const currentDeferralObservationReducer = defineReducer<
+  DeferralLedger,
+  AbEvent,
+  DeferralLedger
+>({
+  version: CURRENT_DEFERRAL_OBSERVATION_REDUCER_VERSION,
+  initial: () => ({ entries: [] }),
+  fold(acc, events) {
+    for (const event of events) {
+      let entry: DeferralLedgerEntry | undefined
+      if (
+        event.type === 'observation.recorded' &&
+        event.payload.refs?.some((ref) => ref.startsWith(DEFERRAL_REF_PREFIX)) === true
+      ) {
+        entry = { t: 'observation', event }
+      } else if (event.type === 'finalize.completed') {
+        entry = { t: 'finalized', seq: event.seq, headSha: event.payload.pr.headSha }
+      } else if (event.type === 'pr.merged' || event.type === 'pr.closed') {
+        entry = { t: 'terminal', seq: event.seq }
+      } else if (event.type === 'reconcile.completed') {
+        entry = { t: 'reconciled', seq: event.seq }
+      }
+      if (entry !== undefined) {
+        acc.entries.push(entry)
+        continue
+      }
+      const last = acc.entries.at(-1)
+      if (last?.t === 'barrier') last.seq = Math.max(last.seq, event.seq)
+      else acc.entries.push({ t: 'barrier', seq: event.seq })
+    }
+  },
+  finish: (acc) => ({ entries: acc.entries.slice() }),
+})
+
+function deferralEntrySeq(entry: DeferralLedgerEntry): number {
+  return entry.t === 'observation' ? entry.event.seq : entry.seq
+}
+
+/** The current deferral observation for a PR/command over a reduced ledger. */
+export function deferralObservationFrom(
+  ledger: DeferralLedger,
+  prNumber: number,
+  commandSeq: number,
+): DeferralObservation | undefined {
   const marker = autoMergeDeferralRef(prNumber, commandSeq)
-  let observation: Extract<AbEvent, { type: 'observation.recorded' }> | undefined
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (
-      event !== undefined &&
-      event.type === 'observation.recorded' &&
-      event.payload.refs?.includes(marker) === true
-    ) {
-      observation = event
+  const { entries } = ledger
+  let observation: DeferralObservation | undefined
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (entry?.t === 'observation' && entry.event.payload.refs?.includes(marker) === true) {
+      observation = entry.event
       break
     }
   }
   if (observation === undefined) return undefined
 
   let headAtObservation: string | undefined
-  for (const event of events) {
-    if (event.seq >= observation.seq) break
-    if (event.type === 'finalize.completed') headAtObservation = event.payload.pr.headSha
+  for (const entry of entries) {
+    if (deferralEntrySeq(entry) >= observation.seq) break
+    if (entry.t === 'finalized') headAtObservation = entry.headSha
   }
 
-  for (const event of events) {
-    if (event.seq <= observation.seq) continue
-    if (event.type === 'pr.merged' || event.type === 'pr.closed') return undefined
-    if (event.type === 'reconcile.completed') return undefined
-    if (event.type === 'finalize.completed') {
-      if (headAtObservation === undefined) headAtObservation = event.payload.pr.headSha
-      else if (event.payload.pr.headSha !== headAtObservation) return undefined
-    }
+  for (const entry of entries) {
+    if (entry.t === 'observation' || entry.t === 'barrier') continue
+    if (entry.seq <= observation.seq) continue
+    if (entry.t === 'terminal' || entry.t === 'reconciled') return undefined
+    if (headAtObservation === undefined) headAtObservation = entry.headSha
+    else if (entry.headSha !== headAtObservation) return undefined
   }
   return observation
 }

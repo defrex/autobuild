@@ -2,7 +2,24 @@
  * (AUT-340): pure functions over the repository journal. */
 import { describe, expect, test } from 'bun:test'
 import { humanActor } from '../events/envelope'
-import { sandboxStates } from './sandbox-state'
+import type { RepositoryEvent } from '../events/repository'
+import { checkIncremental } from '../kernel/incremental-contract'
+import {
+  sandboxStates as sandboxStatesWhole,
+  sandboxStatesReducer,
+  type SandboxEnvironmentSnapshot,
+} from './sandbox-state'
+
+/** Every fixture log reduced here is also held to the incremental contract
+ * (every split point, JSON round trip), once per distinct log array. */
+const checkedLogs = new WeakSet<object>()
+function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnvironmentSnapshot[] {
+  if (!checkedLogs.has(events)) {
+    checkedLogs.add(events)
+    checkIncremental(sandboxStatesReducer, events, { stepwise: false })
+  }
+  return sandboxStatesWhole(events)
+}
 
 const repo = 'acme/widgets'
 let seq = 0

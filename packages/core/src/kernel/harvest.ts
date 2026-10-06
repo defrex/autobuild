@@ -15,6 +15,7 @@ import {
   type HarvestTrigger,
   type OccurrenceKey,
 } from '../harvest/schema'
+import { defineReducer, type IncrementalReducer } from './incremental'
 
 export interface HarvestStepOccurrence {
   step: HarvestStep
@@ -184,21 +185,35 @@ function requireRun(
   return state
 }
 
-/** Total for valid journals; malformed cross-event references throw loudly so
- * storage corruption cannot masquerade as an idle harvester. */
-export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState {
-  const runs = new Map<string, HarvestRunState>()
-  const order: HarvestRunState[] = []
-  const claimed = new Map<string, { occurrence: OccurrenceKey; run: string }>()
-  const ledger: HarvestLedgerEntry[] = []
-  const pending: Record<HarvestPendingCommand['command'], HarvestPendingCommand[]> = {
-    pause: [],
-    resume: [],
-  }
-  let paused = false
-  let pausedSeq: number | undefined
-  let pausedAt: string | undefined
-  let lastSeq = 0
+/** The carried accumulator for `reduceHarvest`: `runs` in start order, and
+ * `claimed` as `Map`-insertion-ordered entries keyed by occurrence id. The
+ * public `latest` aliases the last run and is rebuilt by `finish`. */
+export interface HarvestAcc {
+  runs: HarvestRunState[]
+  claimed: Array<{ key: string; occurrence: OccurrenceKey; run: string }>
+  ledger: HarvestLedgerEntry[]
+  pending: Record<HarvestPendingCommand['command'], HarvestPendingCommand[]>
+  paused: boolean
+  pausedSeq?: number
+  pausedAt?: string
+  lastSeq: number
+}
+
+/** Bump when `HarvestAcc`'s shape or fold semantics change. */
+export const HARVEST_REDUCER_VERSION = 1
+
+function foldHarvest(acc: HarvestAcc, events: readonly RepositoryEvent[]): void {
+  const order = acc.runs
+  const runs = new Map(order.map((run) => [run.run, run]))
+  const claimed = new Map(
+    acc.claimed.map((entry) => [entry.key, { occurrence: entry.occurrence, run: entry.run }]),
+  )
+  const ledger = acc.ledger
+  const pending = acc.pending
+  let paused = acc.paused
+  let pausedSeq = acc.pausedSeq
+  let pausedAt = acc.pausedAt
+  let lastSeq = acc.lastSeq
 
   for (const event of events) {
     lastSeq = Math.max(lastSeq, event.seq)
@@ -638,9 +653,17 @@ export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState 
         break
     }
   }
+  acc.claimed = [...claimed].map(([key, { occurrence, run }]) => ({ key, occurrence, run }))
+  acc.paused = paused
+  acc.pausedSeq = pausedSeq
+  acc.pausedAt = pausedAt
+  acc.lastSeq = lastSeq
+}
 
+function finishHarvest(acc: HarvestAcc): HarvestState {
+  const { runs: order, paused, pausedSeq, pausedAt, pending } = acc
   const state: HarvestState = {
-    lastSeq,
+    lastSeq: acc.lastSeq,
     runs: order,
     paused,
     ...(pausedSeq !== undefined ? { pausedSeq } : {}),
@@ -648,12 +671,33 @@ export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState 
     pendingCommands: [...pending.pause, ...pending.resume].sort(
       (left, right) => left.seq - right.seq,
     ),
-    claimed: [...claimed.values()].map(({ occurrence }) => occurrence),
-    ledger,
+    claimed: acc.claimed.map(({ occurrence }) => occurrence),
+    ledger: acc.ledger,
   }
   const latest = order.at(-1)
   if (latest !== undefined) state.latest = latest
   return state
+}
+
+export const harvestReducer: IncrementalReducer<HarvestAcc, RepositoryEvent, HarvestState> =
+  defineReducer({
+    version: HARVEST_REDUCER_VERSION,
+    initial: (): HarvestAcc => ({
+      runs: [],
+      claimed: [],
+      ledger: [],
+      pending: { pause: [], resume: [] },
+      paused: false,
+      lastSeq: 0,
+    }),
+    fold: foldHarvest,
+    finish: finishHarvest,
+  })
+
+/** Total for valid journals; malformed cross-event references throw loudly so
+ * storage corruption cannot masquerade as an idle harvester. */
+export function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState {
+  return harvestReducer.reduce(events)
 }
 
 export function claimedOccurrenceKeys(state: HarvestState): Set<string> {

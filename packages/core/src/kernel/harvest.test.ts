@@ -5,14 +5,29 @@ import {
   claimedOccurrenceKeys,
   decideHarvestControl,
   harvestCreationsDuringReadyScan,
+  type HarvestState,
   inFlightHarvestCreations,
   openHarvestRun,
   parkedHarvestRuns,
-  reduceHarvest,
+  reduceHarvest as reduceHarvestWhole,
+  harvestReducer,
   unresolvedHarvestAttentionRuns,
 } from './harvest'
+import { checkIncremental } from './incremental-contract'
+import type { RepositoryEvent } from '../events/repository'
 import { MemoryBuildStore } from '../store/memory'
 import { steppingClock } from '../testing/fixed'
+
+/** Every fixture log reduced here is also held to the incremental contract
+ * (every split point, JSON round trip), once per distinct log array. */
+const checkedLogs = new WeakSet<object>()
+function reduceHarvest(events: readonly RepositoryEvent[]): HarvestState {
+  if (!checkedLogs.has(events)) {
+    checkedLogs.add(events)
+    checkIncremental(harvestReducer, events, { stepwise: false })
+  }
+  return reduceHarvestWhole(events)
+}
 
 describe('Harvest in-flight ticket creations', () => {
   async function startedStore(run = 'h_create') {

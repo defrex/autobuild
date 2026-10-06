@@ -24,6 +24,7 @@ import type {
   VerifyOutcome,
 } from '../ontology'
 import { verifyPhase } from '../ontology'
+import { defineReducer, type IncrementalReducer } from './incremental'
 
 /** An `escalation.raised` without a matching `escalation.answered` — the
  * definition of `blocked` (§15.5). Matched by id, so answers may arrive in
@@ -299,49 +300,133 @@ export function discardInFlight(state: Pick<BuildState, 'discardRequest'>): bool
   return state.discardRequest !== undefined
 }
 
-export function reduceBuild(events: AbEvent[]): BuildState {
-  let attached = false
-  let pausedFlag = false
-  let terminal: 'done' | 'aborted' | undefined
-  let outcome: BuildOutcome | undefined
-  let round = 0
-  let currentPhase: PhaseContext | undefined
-  let lastCompletedPhase: PhaseContext | undefined
-  const openEscalations = new Map<string, OpenEscalation>()
-  const answeredEscalations: AnsweredEscalation[] = []
-  const reviewRoundCeilings: BuildState['reviewRoundCeilings'] = {}
-  let pr: BuildState['pr']
-  let prState: PrLifecycle | undefined
-  const autoMerge: AutoMergeProjection = { requested: false }
-  let specRev: number | undefined
-  let restartSince = 0
-  let pinnedAssets: PinnedAsset[] = []
-  let finalizeCompletedSeq = 0
-  const finalizeSteps: BuildState['finalizeSteps'] = []
-  const plan: BuildState['plan'] = { round: 0, approved: false }
-  const implement: BuildState['implement'] = { round: 0 }
-  let codeReviewApproved = false
-  let codeReviewApproval: BuildState['codeReviewApproval']
-  const planReviewFindings: Finding[][] = []
-  const codeReviewFindings: Finding[][] = []
-  const verify: BuildState['verify'] = { maxAttemptSeen: 0, results: [], cycleSince: 0 }
-  let reconcileAttempts = 0
-  const observations: ObservationRecord[] = []
-  const setupFailures: BuildState['setupFailures'] = []
-  let setupFailure: BuildState['setupFailure']
-  const dispatchFailures: BuildState['dispatchFailures'] = []
-  const executions: BuildState['executions'] = []
-  const infrastructureFailures: BuildState['infrastructureFailures'] = []
-  let infrastructureFailure: BuildState['infrastructureFailure']
-  const cleanupAttempts: BuildState['cleanupAttempts'] = []
-  let discardRequest: BuildState['discardRequest']
-  const pending: Record<PendingCommand['command'], PendingCommand[]> = {
-    pause: [],
-    resume: [],
-    abort: [],
+/** The reducer's carried accumulator: everything `reduceBuild` folds, before
+ * the final status derivation. Plain JSON-shaped data (the escalation and
+ * session maps are insertion-ordered entry arrays) so it survives a round
+ * trip through `JSON.stringify` — the foundation for incremental advancement
+ * and cached state. */
+export interface BuildAcc {
+  attached: boolean
+  pausedFlag: boolean
+  terminal?: 'done' | 'aborted'
+  outcome?: BuildOutcome
+  round: number
+  currentPhase?: PhaseContext
+  lastCompletedPhase?: PhaseContext
+  openEscalations: OpenEscalation[]
+  answeredEscalations: AnsweredEscalation[]
+  reviewRoundCeilings: BuildState['reviewRoundCeilings']
+  pr: BuildState['pr']
+  prState?: PrLifecycle
+  autoMerge: AutoMergeProjection
+  specRev?: number
+  restartSince: number
+  pinnedAssets: PinnedAsset[]
+  finalizeCompletedSeq: number
+  finalizeSteps: BuildState['finalizeSteps']
+  plan: BuildState['plan']
+  implement: BuildState['implement']
+  codeReviewApproved: boolean
+  codeReviewApproval: BuildState['codeReviewApproval']
+  planReviewFindings: Finding[][]
+  codeReviewFindings: Finding[][]
+  verify: BuildState['verify']
+  reconcileAttempts: number
+  observations: ObservationRecord[]
+  setupFailures: BuildState['setupFailures']
+  setupFailure: BuildState['setupFailure']
+  dispatchFailures: BuildState['dispatchFailures']
+  executions: BuildState['executions']
+  infrastructureFailures: BuildState['infrastructureFailures']
+  infrastructureFailure: BuildState['infrastructureFailure']
+  cleanupAttempts: BuildState['cleanupAttempts']
+  discardRequest: BuildState['discardRequest']
+  pending: Record<PendingCommand['command'], PendingCommand[]>
+  openSessions: OpenSession[]
+  failures: Record<string, number>
+  lastEvent?: AbEvent
+}
+
+/** Bump when `BuildAcc`'s shape or the fold's semantics change. */
+export const BUILD_REDUCER_VERSION = 1
+
+function initialBuildAcc(): BuildAcc {
+  return {
+    attached: false,
+    pausedFlag: false,
+    round: 0,
+    openEscalations: [],
+    answeredEscalations: [],
+    reviewRoundCeilings: {},
+    pr: undefined,
+    autoMerge: { requested: false },
+    restartSince: 0,
+    pinnedAssets: [],
+    finalizeCompletedSeq: 0,
+    finalizeSteps: [],
+    plan: { round: 0, approved: false },
+    implement: { round: 0 },
+    codeReviewApproved: false,
+    codeReviewApproval: undefined,
+    planReviewFindings: [],
+    codeReviewFindings: [],
+    verify: { maxAttemptSeen: 0, results: [], cycleSince: 0 },
+    reconcileAttempts: 0,
+    observations: [],
+    setupFailures: [],
+    setupFailure: undefined,
+    dispatchFailures: [],
+    executions: [],
+    infrastructureFailures: [],
+    infrastructureFailure: undefined,
+    cleanupAttempts: [],
+    discardRequest: undefined,
+    pending: { pause: [], resume: [], abort: [] },
+    openSessions: [],
+    failures: {},
   }
-  const openSessions = new Map<string, OpenSession>()
-  const failures: Record<string, number> = {}
+}
+
+/** Fold `events` into `acc` in place. */
+function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
+  let attached = acc.attached
+  let pausedFlag = acc.pausedFlag
+  let terminal = acc.terminal
+  let outcome = acc.outcome
+  let round = acc.round
+  let currentPhase = acc.currentPhase
+  let lastCompletedPhase = acc.lastCompletedPhase
+  const openEscalations = new Map(acc.openEscalations.map((e) => [e.id, e]))
+  const answeredEscalations = acc.answeredEscalations
+  const reviewRoundCeilings = acc.reviewRoundCeilings
+  let pr = acc.pr
+  let prState = acc.prState
+  const autoMerge = acc.autoMerge
+  let specRev = acc.specRev
+  let restartSince = acc.restartSince
+  let pinnedAssets = acc.pinnedAssets
+  let finalizeCompletedSeq = acc.finalizeCompletedSeq
+  const finalizeSteps = acc.finalizeSteps
+  const plan = acc.plan
+  const implement = acc.implement
+  let codeReviewApproved = acc.codeReviewApproved
+  let codeReviewApproval = acc.codeReviewApproval
+  const planReviewFindings = acc.planReviewFindings
+  const codeReviewFindings = acc.codeReviewFindings
+  const verify = acc.verify
+  let reconcileAttempts = acc.reconcileAttempts
+  const observations = acc.observations
+  const setupFailures = acc.setupFailures
+  let setupFailure = acc.setupFailure
+  const dispatchFailures = acc.dispatchFailures
+  const executions = acc.executions
+  const infrastructureFailures = acc.infrastructureFailures
+  let infrastructureFailure = acc.infrastructureFailure
+  const cleanupAttempts = acc.cleanupAttempts
+  let discardRequest = acc.discardRequest
+  const pending = acc.pending
+  const openSessions = new Map(acc.openSessions.map((s) => [s.session, s]))
+  const failures = acc.failures
 
   const start = (ctx: PhaseContext): void => {
     currentPhase = ctx
@@ -362,7 +447,7 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     per[r - 1] = findings
   }
 
-  let lastEvent: AbEvent | undefined
+  let lastEvent = acc.lastEvent
   for (const event of events) {
     switch (event.type) {
       // Facts the projection does not need (workspace liveness is the
@@ -737,55 +822,112 @@ export function reduceBuild(events: AbEvent[]): BuildState {
     lastEvent = event
   }
 
+  acc.attached = attached
+  acc.pausedFlag = pausedFlag
+  acc.terminal = terminal
+  acc.outcome = outcome
+  acc.round = round
+  acc.currentPhase = currentPhase
+  acc.lastCompletedPhase = lastCompletedPhase
+  acc.openEscalations = [...openEscalations.values()]
+  acc.pr = pr
+  acc.prState = prState
+  acc.specRev = specRev
+  acc.restartSince = restartSince
+  acc.pinnedAssets = pinnedAssets
+  acc.finalizeCompletedSeq = finalizeCompletedSeq
+  acc.codeReviewApproved = codeReviewApproved
+  acc.codeReviewApproval = codeReviewApproval
+  acc.reconcileAttempts = reconcileAttempts
+  acc.setupFailure = setupFailure
+  acc.infrastructureFailure = infrastructureFailure
+  acc.discardRequest = discardRequest
+  acc.openSessions = [...openSessions.values()]
+  acc.lastEvent = lastEvent
+}
+
+function finishBuild(acc: BuildAcc): BuildState {
+  const {
+    terminal,
+    pausedFlag,
+    attached,
+    currentPhase,
+    lastCompletedPhase,
+    lastEvent,
+    discardRequest,
+    pending,
+  } = acc
+
   // §15.5 precedence: aborted/done (terminal, latest wins) > paused >
   // blocked > running > queued. See BuildState.status for the paused+blocked
   // overlap rule.
   const status: BuildStatus =
     terminal ??
-    (pausedFlag ? 'paused' : openEscalations.size > 0 ? 'blocked' : attached ? 'running' : 'queued')
+    (pausedFlag
+      ? 'paused'
+      : acc.openEscalations.length > 0
+        ? 'blocked'
+        : attached
+          ? 'running'
+          : 'queued')
 
   const active = currentPhase ?? lastCompletedPhase
 
   return {
     status,
-    outcome,
+    outcome: acc.outcome,
     phase: active?.phase,
-    round,
+    round: acc.round,
     currentPhase,
     lastCompletedPhase,
-    openEscalations: [...openEscalations.values()],
-    answeredEscalations,
-    reviewRoundCeilings,
-    pr,
-    prState,
-    autoMerge,
-    finalizeCompletedSeq,
-    finalizeSteps,
+    openEscalations: [...acc.openEscalations],
+    answeredEscalations: acc.answeredEscalations,
+    reviewRoundCeilings: acc.reviewRoundCeilings,
+    pr: acc.pr,
+    prState: acc.prState,
+    autoMerge: acc.autoMerge,
+    finalizeCompletedSeq: acc.finalizeCompletedSeq,
+    finalizeSteps: acc.finalizeSteps,
     lastEvent,
     lastSeq: lastEvent?.seq ?? 0,
-    pinnedAssets,
-    specRev,
-    restartSince,
-    plan,
-    implement,
-    codeReviewApproved,
-    codeReviewApproval,
-    reviewFindings: { planReview: planReviewFindings, codeReview: codeReviewFindings },
-    verify,
-    reconcileAttempts,
-    observations,
-    setupFailures,
-    setupFailure,
-    dispatchFailures,
-    executions,
-    infrastructureFailures,
-    infrastructureFailure,
-    cleanupAttempts,
+    pinnedAssets: acc.pinnedAssets,
+    specRev: acc.specRev,
+    restartSince: acc.restartSince,
+    plan: acc.plan,
+    implement: acc.implement,
+    codeReviewApproved: acc.codeReviewApproved,
+    codeReviewApproval: acc.codeReviewApproval,
+    reviewFindings: { planReview: acc.planReviewFindings, codeReview: acc.codeReviewFindings },
+    verify: acc.verify,
+    reconcileAttempts: acc.reconcileAttempts,
+    observations: acc.observations,
+    setupFailures: acc.setupFailures,
+    setupFailure: acc.setupFailure,
+    dispatchFailures: acc.dispatchFailures,
+    executions: acc.executions,
+    infrastructureFailures: acc.infrastructureFailures,
+    infrastructureFailure: acc.infrastructureFailure,
+    cleanupAttempts: acc.cleanupAttempts,
     ...(terminal === undefined && discardRequest !== undefined ? { discardRequest } : {}),
     pendingCommands: [...pending.pause, ...pending.resume, ...pending.abort].sort(
       (a, b) => a.seq - b.seq,
     ),
-    sessions: { open: [...openSessions.values()] },
-    failures,
+    sessions: { open: [...acc.openSessions] },
+    failures: acc.failures,
   }
+}
+
+/** The incremental form of `reduceBuild`: advance a carried accumulator with
+ * only the events newer than it, then derive the state. */
+export const buildReducer: IncrementalReducer<BuildAcc, AbEvent, BuildState> = defineReducer({
+  version: BUILD_REDUCER_VERSION,
+  initial: initialBuildAcc,
+  fold: foldBuild,
+  finish: finishBuild,
+})
+
+export function reduceBuild(events: AbEvent[]): BuildState {
+  const acc = initialBuildAcc()
+  foldBuild(acc, events)
+  return finishBuild(acc)
 }

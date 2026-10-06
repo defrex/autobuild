@@ -10,6 +10,7 @@
  * history.
  */
 import type { AbEvent } from '../events/catalog'
+import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import type { BuildDigest } from './types'
 
 /** The event types a digest is derived from. Adapters filter their event
@@ -40,37 +41,62 @@ export type DigestEventRow = Pick<AbEvent, 'type' | 'seq' | 'ts'> & {
  * `merged` follows the same overwrite pattern for `pr.merged` timestamps.
  * The events carry no slug, so the result is slug-less; every adapter attaches
  * `slug` itself when grouping its per-build event rows. */
-export function reduceBuildDigest(events: DigestEventRow[]): Omit<BuildDigest, 'slug'> {
-  let terminal: BuildDigest['terminal']
-  let merged: string | undefined
-  // `pendingPrAttachmentReclaims`: a hosted seq is reclaimed iff a reclaimed
-  // event naming it has a later seq.
-  const hosted = new Set<number>()
-  const reclaimed = new Set<number>()
-  // `openExecution`: the latest start, cleared only by an instance-matched end.
-  let openInstance: string | null = null
-  const observations: { seq: number; ts: string }[] = []
-  for (const event of events) {
-    if (event.type === 'build.completed') terminal = 'done'
-    else if (event.type === 'build.aborted') terminal = 'aborted'
-    else if (event.type === 'pr.merged') merged = event.ts
-    else if (event.type === 'observation.recorded')
-      observations.push({ seq: event.seq, ts: event.ts })
-    else if (event.type === 'pr-attachment.hosted') hosted.add(event.seq)
-    else if (event.type === 'pr-attachment.reclaimed') {
-      if (event.hostedSeq !== undefined && event.seq > event.hostedSeq)
-        reclaimed.add(event.hostedSeq)
-    } else if (event.type === 'execution.started') openInstance = event.instance ?? null
-    else if (event.type === 'execution.ended') {
-      if (openInstance !== null && event.instance === openInstance) openInstance = null
+export type DigestEvent = DigestEventRow
+
+/** The carried accumulator for `reduceBuildDigest`. */
+export interface DigestAcc {
+  terminal?: BuildDigest['terminal']
+  merged?: string
+  observations: { seq: number; ts: string }[]
+  /** `pendingPrAttachmentReclaims`: seqs of hosted events. */
+  hosted: number[]
+  /** Hosted seqs named by a reclaimed event with a later seq. */
+  reclaimed: number[]
+  /** `openExecution`: the latest start's instance, cleared only by an instance-matched end. */
+  openInstance: string | null
+}
+
+/** Bump when `DigestAcc`'s shape or fold semantics change. */
+export const BUILD_DIGEST_REDUCER_VERSION = 2
+
+export const buildDigestReducer: IncrementalReducer<
+  DigestAcc,
+  DigestEvent,
+  Omit<BuildDigest, 'slug'>
+> = defineReducer({
+  version: BUILD_DIGEST_REDUCER_VERSION,
+  initial: (): DigestAcc => ({ observations: [], hosted: [], reclaimed: [], openInstance: null }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'build.completed') acc.terminal = 'done'
+      else if (event.type === 'build.aborted') acc.terminal = 'aborted'
+      else if (event.type === 'pr.merged') acc.merged = event.ts
+      else if (event.type === 'observation.recorded')
+        acc.observations.push({ seq: event.seq, ts: event.ts })
+      else if (event.type === 'pr-attachment.hosted') acc.hosted.push(event.seq)
+      else if (event.type === 'pr-attachment.reclaimed') {
+        if (event.hostedSeq !== undefined && event.seq > event.hostedSeq)
+          acc.reclaimed.push(event.hostedSeq)
+      } else if (event.type === 'execution.started') acc.openInstance = event.instance ?? null
+      else if (event.type === 'execution.ended') {
+        if (acc.openInstance !== null && event.instance === acc.openInstance)
+          acc.openInstance = null
+      }
     }
-  }
-  const reclaimPending = [...hosted].some((seq) => !reclaimed.has(seq))
-  return {
-    observations,
-    ...(merged !== undefined ? { merged } : {}),
-    ...(terminal !== undefined ? { terminal } : {}),
-    ...(reclaimPending ? { reclaimPending: true as const } : {}),
-    ...(openInstance !== null ? { executionOpen: true as const } : {}),
-  }
+  },
+  finish: ({ terminal, merged, observations, hosted, reclaimed, openInstance }) => {
+    const reclaimedSet = new Set(reclaimed)
+    const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
+    return {
+      observations: [...observations],
+      ...(merged !== undefined ? { merged } : {}),
+      ...(terminal !== undefined ? { terminal } : {}),
+      ...(reclaimPending ? { reclaimPending: true as const } : {}),
+      ...(openInstance !== null ? { executionOpen: true as const } : {}),
+    }
+  },
+})
+
+export function reduceBuildDigest(events: DigestEvent[]): Omit<BuildDigest, 'slug'> {
+  return buildDigestReducer.reduce(events)
 }
