@@ -241,6 +241,16 @@ same BuildStore. Consequences, by design:
 
 - **State is a reduction of events.** Any state snapshot is a cache, never
   the source of truth. Resumability falls out.
+- **Reducer snapshots are a cache the log regenerates, never an authority.**
+  The store may keep, per scope (one build log or the repository journal) and
+  reducer, that reducer's serialized state as of a cursor, keyed by scope,
+  reducer, reducer version, and cursor, so a process with no hot memory loads
+  it, reads only the newer events, and advances. A missing snapshot, one
+  written by a different reducer version, or one ahead of the log is ignored
+  and the state is rebuilt by full replay with identical results; stored
+  cursors never decrease; deleting every snapshot changes no observable
+  output. A store without snapshot storage behaves as if every snapshot were
+  missing.
 - **The UI layer is a subscriber** plus a command channel back. TUI, web —
   same adapter pattern. The shipped interactive terminal owns a supervised
   kernel child, and the BuildStore is their only changing-state boundary.

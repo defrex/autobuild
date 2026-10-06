@@ -145,10 +145,33 @@ by a later advance. Each reducer publishes a `version`; bump it whenever the
 accumulator shape or the fold semantics change, because a cached accumulator is
 only valid for the version that wrote it. `kernel/reducer-registry.ts` lists
 every reducer with its version, and its snapshot test fails when an accumulator
-shape changes without a bump. Callers still read whole logs today (the terminal
-dashboard poll is the exception, advancing a carried build accumulator by
-per-build deltas); persisting accumulators keyed by cursor and reducer version,
-rebuilt from the log on any miss, is follow-up work.
+shape changes without a bump. Most callers still read whole logs (the terminal
+dashboard poll advances a carried build accumulator by per-build deltas; the
+dispatcher view below restores from stored accumulators).
+
+**Reducer snapshots.** The `BuildStore` port can keep, per scope (one build log
+or the repository journal) and registered reducer, that reducer's accumulator as
+of a cursor: `getReducerSnapshot(scope, reducer, version)` and
+`putReducerSnapshot(scope, reducer, {version, cursor, state})`
+(`packages/core/src/store/snapshots.ts`). The log stays the only authority. The
+store enforces the invariants: the stored cursor never decreases (a write whose
+cursor does not advance is a no-op, so concurrent writers cannot undo each
+other), a row of another reducer version reads as absent and is replaced once a
+writer advances past it, and a cursor beyond the log's tail is refused and never
+returned. Every consumer treats a missing, mismatched, ahead-of-log, malformed
+or unreadable snapshot as a miss and replays the log, with identical results;
+deleting all snapshots changes no observable output (the integration harness
+audits this for every scenario at cleanup). Memory, SQLite, Postgres and the
+remote client implement it, and the hosted store service serves it on
+`GET|PUT /builds|repos/{id}/snapshots/{reducer}`
+(`docs/remote-store-protocol.md`). SQLite creates the `reducer_snapshots` table
+at open. Postgres keeps it outside the versioned schema: `reducer_snapshots` is
+created by the idempotent `SNAPSHOT_SCHEMA_DDL` in `migratePostgres`, with no
+marker, version or checksum change, so a deployment at the current schema keeps
+serving across the upgrade, a new client against a database that lacks the table
+reads every snapshot as missing and replays (SQLSTATE `42P01` is never an
+error), and an older client never asks. Run `bun run postgres:migrate` once to
+gain the table; until then the dispatcher and every other reader replay in full.
 
 **Dispatcher repository view.** A dispatcher process builds its view of the
 repository once and refreshes it by deltas
@@ -173,7 +196,23 @@ Decisions that deliberately re-read at the last moment
 orchestrator wake pass get per-source windows that hold only events above the
 lowest session cursor. A `--once` invocation builds the view cold and reads each
 log once; a long-running dispatcher pays that replay at its first tick and not
-again. Persisting the view between processes is follow-up work.
+again.
+
+The view restores from reducer snapshots on cold start. The journal comes from
+the `journalView` reducer (the journal pruned on arrival: durable types plus the
+tail from the latest `dispatcher.run-started`); each work build comes from its
+`build`, `logIndex`, `openExecution`, `openBuildWorkspace`, `publicationState`
+and `lastExecutionOutcome` snapshots, which must agree on one cursor. The view
+reads only the events newer than that cursor and holds, for a snapshot-backed
+build, just that delta plus the reduced state of everything before it, so a tick
+with no new events reads zero event rows (apart from the discovery listing and
+digests) and one with M new events reads exactly M. Tick stages that run for every
+build each tick take `buildFacts(slug)` (state, log index, open execution, open
+workspace, publication view) instead of the event array, and read raw history
+only on the branches that act on it. `persistSnapshots()` writes the advanced
+state back at the end of each tick and on shutdown — best effort, throttled in a
+resident dispatcher, always run by a cold single-tick process — and never writes
+a cursor that was not read from the log.
 
 **Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through

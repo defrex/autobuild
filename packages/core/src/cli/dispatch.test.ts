@@ -836,6 +836,58 @@ describe('abDispatch guards', () => {
     }
   }, 10_000)
 
+  test('a second quiet --once reads zero journal rows, and M foreign events cost exactly M', async () => {
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML)
+    try {
+      const once = () =>
+        abDispatch({
+          targetRepo: fx.checkout,
+          env: {},
+          exec: spawnExec,
+          stdout: () => {},
+          stderr: () => {},
+          once: true,
+          plain: true,
+          wire: fx.wire,
+        })
+      let rows = 0
+      // The Harvest runner is a launched child with its own journal reads when
+      // a harvest is due; the dispatcher's view is what this test measures.
+      const fromHarvestRunner = () => new Error().stack?.includes('harvest-runner') === true
+      const read = fx.store.getRepoEvents.bind(fx.store)
+      const readState = fx.store.getRepoStateEvents.bind(fx.store)
+      fx.store.getRepoEvents = async (...args) => {
+        const events = await read(...args)
+        if (!fromHarvestRunner()) rows += events.length
+        return events
+      }
+      fx.store.getRepoStateEvents = async (...args) => {
+        const events = await readState(...args)
+        if (!fromHarvestRunner()) rows += events.length
+        return events
+      }
+      await once()
+      rows = 0
+      await once()
+      expect(rows).toBe(0)
+      await fx.store.appendRepo(fx.origin, {
+        actor: humanActor('op'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: true },
+      })
+      await fx.store.appendRepo(fx.origin, {
+        actor: humanActor('op'),
+        type: 'dispatcher.intake-set',
+        payload: { enabled: false },
+      })
+      rows = 0
+      await once()
+      expect(rows).toBe(2)
+    } finally {
+      await fx.cleanup()
+    }
+  }, 20_000)
+
   test('--once deadline reached mid-drain stops awaiting a slow local-parent execution, which teardown stops', async () => {
     const clock = manualClock()
     const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)

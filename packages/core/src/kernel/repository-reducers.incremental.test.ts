@@ -13,7 +13,8 @@ import {
   randomSettingsJournal,
   randomStatusJournal,
 } from './generators/repository-journals'
-import { checkIncremental } from './incremental-contract'
+import { checkIncremental, seededRandom, shuffled } from './incremental-contract'
+import { journalViewReducer, projectRepositoryStateEvents } from '../store/repo-state-events'
 
 const SEEDS = [1, 2, 3, 4, 5, 6]
 
@@ -35,6 +36,20 @@ describe('repository reducers: incremental contract over generated journals', ()
     })
     test(`sandbox states, seed ${seed}`, () => {
       checkIncremental(sandboxStatesReducer, randomSandboxJournal(seed, 30))
+    })
+    test(`journal view equals the bounded read, seed ${seed}`, () => {
+      // A mixed, seq-ordered journal: durable and run-scoped facts interleaved,
+      // with several run-started anchors.
+      const rand = seededRandom(seed)
+      const mixed = shuffled(rand, [
+        ...randomHarvestJournal(seed, 20),
+        ...randomStatusJournal(seed, 30),
+        ...randomSettingsJournal(seed, 15),
+      ]).map((event, index) => ({ ...event, seq: index + 1 }))
+      // The reducer is held to the oracle whole, and over every split with a
+      // JSON round trip in between (checkIncremental's contract).
+      checkIncremental(journalViewReducer, mixed)
+      expect(journalViewReducer.reduce(mixed)).toEqual(projectRepositoryStateEvents(mixed))
     })
   }
 })

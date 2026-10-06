@@ -59,6 +59,7 @@ import { InProcessBuildExecution } from '../ports/workspace/in-process-build-exe
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import { diagnosticArtifact } from '../processes/build-execution-state'
 import { Dispatcher, type LaunchRunnerResult } from '../processes/dispatcher'
+import { RepoViewStore } from '../processes/repo-view'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
 import { steppingClock } from '../testing/fixed'
@@ -279,6 +280,76 @@ export interface E2eHarness {
   cleanup(): Promise<void>
 }
 
+/** The store with every reducer snapshot deleted: reads miss, writes no-op. */
+export function withoutSnapshots<T extends BuildStore>(store: T): T {
+  return new Proxy(store, {
+    get(target, key) {
+      if (key === 'getReducerSnapshot') return async () => null
+      if (key === 'putReducerSnapshot') return async () => false
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+/** A build's facts with the publication view (closures) reduced to its answers. */
+async function plainFacts(view: RepoViewStore, slug: string) {
+  const { publication, ...rest } = await view.buildFacts(slug)
+  return {
+    ...rest,
+    publication: {
+      pending: publication.pending(),
+      abandoned: publication.abandonedPending(),
+      latest: publication.latestUncompletedRequest(),
+    },
+  }
+}
+
+/** JSON with sorted keys, so two structurally equal values compare equal. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    item !== null && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
+      : item,
+  )
+}
+
+async function repositoryReading(store: BuildStore, repo: string) {
+  const view = new RepoViewStore(store, { repo })
+  await view.refresh()
+  const slugs = (await view.listBuilds()).map((record) => record.slug).sort()
+  const builds: Record<string, unknown> = {}
+  for (const slug of slugs) {
+    builds[slug] = { facts: await plainFacts(view, slug), state: await view.buildState(slug) }
+  }
+  return {
+    journal: view.recordedJournal(),
+    digests: [...(await view.getRepoBuildDigests(repo)).entries()].sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+    builds,
+    view,
+  }
+}
+
+/** Reducer snapshots are a cache the log regenerates (SPEC §7): whatever a
+ * scenario's dispatcher left behind, a cold view restored from it must read
+ * exactly what a cold view over a store with every snapshot deleted reads — and
+ * so must one restored from snapshots written at the final cursor. Run for
+ * every scenario at cleanup. */
+export async function assertSnapshotEquivalence(store: BuildStore, repo: string): Promise<void> {
+  const replayed = await repositoryReading(withoutSnapshots(store), repo)
+  for (const round of ['as left by the scenario', 'written at the final cursor']) {
+    const restored = await repositoryReading(store, repo)
+    const { view: restoredView, ...got } = restored
+    const { view: _replayedView, ...want } = replayed
+    if (canonical(got) !== canonical(want)) {
+      throw new Error(`snapshot-restored reading differs from full replay (${round})`)
+    }
+    await restoredView.persistSnapshots({ force: true })
+  }
+}
+
 export async function makeHarness(opts: {
   handlers: SkillHandlers
   tickets?: Ticket[]
@@ -336,7 +407,11 @@ export async function makeHarness(opts: {
   const clock = steppingClock()
   const ids = sequentialIds()
   const uuids = sequentialUuids()
-  const store = new MemoryBuildStore({ clock })
+  // `AB_E2E_SNAPSHOTS=off` runs every scenario with every snapshot deleted, the
+  // other arm of the "snapshots change no observable output" proof.
+  const snapshotsOff = process.env.AB_E2E_SNAPSHOTS === 'off'
+  const memory = new MemoryBuildStore({ clock })
+  const store = snapshotsOff ? withoutSnapshots(memory) : memory
   const adapted = await opts.storeAdapter?.(store)
   const activeStore = adapted?.store ?? store
   const config = parseConfig(configToml, 'e2e autobuild.toml')
@@ -612,6 +687,7 @@ export async function makeHarness(opts: {
     },
     events: (slug) => store.getEvents(slug),
     cleanup: async () => {
+      if (!snapshotsOff) await assertSnapshotEquivalence(store, origin)
       await activeStore.close()
       if (activeStore !== store) await store.close()
       await adapted?.cleanup?.()

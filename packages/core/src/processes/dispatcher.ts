@@ -55,7 +55,7 @@ import {
   type AutoMergeDefaultFact,
 } from '../kernel/auto-merge-default'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
-import { decideNext } from '../kernel/engine'
+import { decideNextFromFacts } from '../kernel/engine'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
@@ -81,7 +81,7 @@ import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
-import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
+import { settleOpenExecution } from './execution-settlement'
 import { openHarvestExecutions } from './harvest-execution-state'
 import { isWorkDigest, RepoViewStore } from './repo-view'
 import {
@@ -94,7 +94,6 @@ import {
 } from './dispatcher-selectors'
 import type { RepositoryEvent } from '../events/repository'
 import { sandboxStates } from './sandbox-state'
-import { abandonedPublicationPending, publicationPending } from './publication-state'
 import { settlePublicationBeforeRelease } from './publication-loss'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────
@@ -696,6 +695,17 @@ export class Dispatcher {
   }
 
   async tick(opts: TickOpts = {}): Promise<TickReport> {
+    try {
+      return await this.runTick(opts)
+    } finally {
+      // Leave this tick's reduced state behind for the next process (a cache;
+      // a failure to write it is never a tick failure). Throttled in a
+      // resident dispatcher, always run by a cold single-tick process.
+      await this.store.persistSnapshots()
+    }
+  }
+
+  private async runTick(opts: TickOpts): Promise<TickReport> {
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
@@ -921,8 +931,7 @@ export class Dispatcher {
       a.slug.localeCompare(b.slug),
     )) {
       while (true) {
-        const events = await store.getEvents(record.slug)
-        const state = reduceBuild(events)
+        const { state } = await store.buildFacts(record.slug)
         const target = autoMergeDefaultTarget(state, fact)
         if (target === undefined) break
         if (target === 'observed') {
@@ -991,13 +1000,12 @@ export class Dispatcher {
       // Budget gate: once spent, stop settling further foreign executions.
       if (this.outOfBudget(opts)) break
       try {
-        const events = await this.store.getEvents(record.slug)
-        const open = openExecution(events)
+        const { open } = await this.store.buildFacts(record.slug)
         if (open === null) continue
         const owner = this.executionOwner(open.provider)
         const execution = owner?.buildExecution
         if (execution?.observe === undefined || open.commandId === undefined) continue
-        const settlement = await settleExecution(
+        const settlement = await settleOpenExecution(
           {
             store: this.store,
             execution,
@@ -1006,7 +1014,7 @@ export class Dispatcher {
               : {}),
           },
           record.slug,
-          events,
+          open,
         )
         if (settlement === 'settled') report.settled += 1
       } catch {
@@ -1513,8 +1521,8 @@ export class Dispatcher {
     // Only this repo's builds that still have work (§12: another repo's
     // builds are another dispatcher's duty; settled terminal builds cost no
     // event reads).
-    const records = await this.workBuilds()
-    for (const record of records) {
+    const entries = (await this.repoBuildDigests()).filter(({ digest }) => isWorkDigest(digest))
+    for (const { record, digest } of entries) {
       // Budget gate: the janitor's per-build path issues forge/store transport
       // calls (PR probes, closePr, deleteBranch); once the budget is spent,
       // stop starting new ones. The remaining builds stay janitor due — the
@@ -1524,14 +1532,22 @@ export class Dispatcher {
         // Once a record is known, contain its complete janitor path: loading
         // and reducing facts, cleanup, forge/ticket calls, and store writes.
         // Existing partial facts leave the same work due on the next tick.
-        const events = await this.store.getEvents(record.slug)
-        const state = reduceBuild(events)
+        const { state, workspace } = await this.store.buildFacts(record.slug)
         const executionLeaseLive = this.hasLiveExecutionLease(record)
+        // Raw history, read at most once and only by a branch that acts on it:
+        // the facts above answer every quiet-path question without it.
+        let loaded: AbEvent[] | undefined
+        const history = async (): Promise<AbEvent[]> => {
+          loaded ??= await this.store.getEvents(record.slug)
+          return loaded
+        }
         // Pipeline/ticket/workspace state is settled, but release-asset cleanup
         // has its own crash window after build.completed. Revisit only pending
         // hosted handles; this never relaunches a runner or consumes capacity.
         if (state.status === 'done') {
-          await this.reclaimPrAttachments(record.slug, events)
+          if (digest.reclaimPending === true) {
+            await this.reclaimPrAttachments(record.slug, await history())
+          }
           continue
         }
         // Abort is destructive human judgment and therefore outranks a queued
@@ -1546,8 +1562,10 @@ export class Dispatcher {
             type: 'build.aborted',
             payload: {},
           } satisfies EventWrite<'build.aborted'>)
-          events.push(acknowledged)
-          await this.cleanupAborted(record, events, report)
+          void acknowledged
+          // The view folded the acknowledgement it just appended.
+          loaded = undefined
+          await this.cleanupAborted(record, await history(), report)
           continue
         }
         // Discard is a queued-only recovery control. A request that raced with
@@ -1558,15 +1576,23 @@ export class Dispatcher {
           state.status === 'queued' &&
           state.discardRequest !== undefined
         ) {
-          await this.cleanupDiscarded(record, events, report)
+          await this.cleanupDiscarded(record, await history(), report)
           continue
         }
         if (!executionLeaseLive && state.status === 'aborted') {
-          await this.cleanupAborted(record, events, report)
+          await this.cleanupAborted(record, await history(), report)
           continue
         }
-        if (state.pr)
-          await this.checkPr(record, events, state, report, launched, executionLeaseLive)
+        if (state.pr) {
+          await this.checkPr(
+            record,
+            { history, workspace },
+            state,
+            report,
+            launched,
+            executionLeaseLive,
+          )
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         report.janitorFailed += 1
@@ -1576,7 +1602,10 @@ export class Dispatcher {
   }
 
   private forgeWorkspacePath(events: AbEvent[]): string {
-    const open = openWorkspace(events)
+    return this.forgeWorkspacePathOf(openWorkspace(events))
+  }
+
+  private forgeWorkspacePathOf(open: OpenBuildWorkspace | null): string {
     if (open !== null && isRemoteWorkspace(open)) return this.deps.repo
     // Local forges run git with cwd = workspacePath: it must be the physical
     // checkout, never the store identity (an origin URL since the identity
@@ -1788,7 +1817,9 @@ export class Dispatcher {
    * against the reduced `prState`), release/complete, project to the ticket. */
   private async checkPr(
     record: BuildRecord,
-    events: AbEvent[],
+    // `workspace` is the open workspace fact; `history` loads the raw log, which
+    // only the branches that act on a PR transition need.
+    source: { history: () => Promise<AbEvent[]>; workspace: OpenBuildWorkspace | null },
     state: BuildState,
     report: TickReport,
     launched: Set<string>,
@@ -1800,7 +1831,7 @@ export class Dispatcher {
     if (!pr) return
     // Forge calls run from the workspace when it still exists (it does until
     // the build completes); fall back to the repo itself for odd logs.
-    const workspacePath = this.forgeWorkspacePath(events)
+    const workspacePath = this.forgeWorkspacePathOf(source.workspace)
     const prState = await forge.getPrState(workspacePath, pr.number)
     const autoMerge = prState.state === 'open' ? pendingAutoMerge(state) : undefined
 
@@ -1826,6 +1857,7 @@ export class Dispatcher {
       // Dedupe: a reduced prState of 'conflicted' means reconcile is already
       // pending (a `reconcile.completed` returns it to 'open').
       if (state.prState === 'conflicted') return
+      const events = await source.history()
       const baseSha = await this.baseSha(baseBranchOf(events, this.deps.config))
       const conflicted = await store.append(record.slug, {
         actor: DISPATCHER,
@@ -1875,10 +1907,10 @@ export class Dispatcher {
         // command, newly due pipeline work, or application fact suppresses
         // this attempt; the next tick reclassifies from fresh forge state.
         await store.refreshBuild(record.slug)
-        const latestEvents = await store.getEvents(record.slug)
-        const latestState = reduceBuild(latestEvents)
+        const latest = await store.buildFacts(record.slug)
+        const latestState = latest.state
         const latestIntent = pendingAutoMerge(latestState)
-        const decision = decideNext(latestEvents, this.deps.config)
+        const decision = decideNextFromFacts(latest.state, latest.log, this.deps.config)
         if (
           latestState.pr?.number === pr.number &&
           latestIntent?.enabled === true &&
@@ -1894,6 +1926,7 @@ export class Dispatcher {
     switch (prState.state) {
       case 'merged': {
         if (executionLeaseLive) return
+        const events = await source.history()
         // Emit the fact once (a crash between steps re-runs this block; the
         // reduced prState dedupes the event, the log dedupes the release).
         if (state.prState !== 'merged') {
@@ -1919,6 +1952,7 @@ export class Dispatcher {
       }
       case 'closed': {
         if (executionLeaseLive) return
+        const events = await source.history()
         // Closed without merge is a human decision — back to Triage (§15.7).
         if (state.prState !== 'closed') {
           await store.append(record.slug, {
@@ -2572,8 +2606,7 @@ export class Dispatcher {
       }
       // Budget gate: recovery issues store transport calls per build.
       if (this.outOfBudget(opts)) break
-      const events = await this.store.getEvents(record.slug)
-      const state = reduceBuild(events)
+      const { state } = await this.store.buildFacts(record.slug)
       if (
         state.status !== 'queued' ||
         state.discardRequest !== undefined ||
@@ -2616,8 +2649,8 @@ export class Dispatcher {
       // Budget gate: resume launches runners (transport-backed work).
       if (this.outOfBudget(opts)) break
 
-      const events = await store.getEvents(record.slug)
-      const state = reduceBuild(events)
+      const facts = await store.buildFacts(record.slug)
+      const state = facts.state
       if (
         state.status === 'done' ||
         state.status === 'aborted' ||
@@ -2627,7 +2660,7 @@ export class Dispatcher {
         continue
       }
 
-      const decision = decideNext(events, config)
+      const decision = decideNextFromFacts(state, facts.log, config)
       if (decision.kind === 'wait') {
         if (decision.reason === 'blocked' && state.openEscalations.length > 0) {
           report.blockedDiagnostics.push(
@@ -2689,16 +2722,22 @@ export class Dispatcher {
       } else if (now - new Date(record.updatedAt).getTime() < this.leaseTtlMs) {
         continue // absent lease within the first-claim grace (see DispatcherOpts)
       }
-      const events = await this.store.getEvents(record.slug)
-      const state = reduceBuild(events)
+      const facts = await this.store.buildFacts(record.slug)
+      const state = facts.state
       if (
         (state.status === 'queued' && state.discardRequest !== undefined) ||
         heldByRepositoryPause(state, paused)
       ) {
         continue
       }
-      const decision = decideNext(events, this.deps.config)
+      const decision = decideNextFromFacts(state, facts.log, this.deps.config)
       if (state.status === 'done' || state.status === 'aborted') continue
+      // Raw history, read at most once and only by a branch that acts on it.
+      let loaded: AbEvent[] | undefined
+      const history = async (): Promise<AbEvent[]> => {
+        loaded ??= await this.store.getEvents(record.slug)
+        return loaded
+      }
       // Liveness gate (durable supervision): a recorded execution the provider
       // observes as RUNNING is left completely alone — no settle, no reap, no
       // replacement, no re-attach. This is the change that stops a supervisor
@@ -2706,13 +2745,12 @@ export class Dispatcher {
       // proved end settles first (completion facts, lease release, publication)
       // and then falls through to the normal decision; a provider-proved loss
       // falls through to the existing stale path below.
-      const foreignExecution = openExecution(events)
+      const foreignExecution = facts.open
       // A provider- or log-proved end in the same generation re-attaches in
       // place: the guest finished its work, the workspace is still the
       // build's, and replacing the environment would discard a healthy
       // generation. Only an unproven stale lease or a proved loss reaps.
-      const lastExecution = lastExecutionOutcome(events)
-      let endedInPlace = lastExecution === 'completed'
+      let endedInPlace = facts.lastExecution === 'completed'
       if (
         foreignExecution !== null &&
         foreignExecution.commandId !== undefined &&
@@ -2721,7 +2759,7 @@ export class Dispatcher {
         const owner = this.executionOwner(foreignExecution.provider)
         const execution = owner?.buildExecution
         if (execution?.observe !== undefined) {
-          const settlement = await settleExecution(
+          const settlement = await settleOpenExecution(
             {
               store: this.store,
               execution,
@@ -2730,7 +2768,7 @@ export class Dispatcher {
                 : {}),
             },
             record.slug,
-            events,
+            foreignExecution,
           )
           if (settlement === 'running') continue
           if (settlement === 'settled') {
@@ -2742,8 +2780,8 @@ export class Dispatcher {
       const publicationRecoveryDue =
         state.status !== 'paused' &&
         state.status !== 'blocked' &&
-        (publicationPending(events) || abandonedPublicationPending(events))
-      const open = openWorkspace(events)
+        (facts.publication.pending() || facts.publication.abandonedPending())
+      const open = facts.workspace
       // A provider- or log-proved END in the same generation re-attaches in
       // place: the guest finished its work, the workspace is still the
       // build's, and replacing the environment would discard a healthy
@@ -2756,13 +2794,13 @@ export class Dispatcher {
             : state.status === 'blocked'
               ? ('blocked' as const)
               : ('replacement' as const)
-        const reaped = await this.reapStaleWorkspace(record.slug, events, reason)
+        const reaped = await this.reapStaleWorkspace(record.slug, await history(), reason)
         if (!reaped) continue
         if (!parked) {
           // Recovery-capable provider: reap inline (bounded), then kick the
           // same background continuation — it provisions and launches without
           // blocking this tick. Local providers never enter this branch.
-          const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
+          const kicked = await this.ensureProvisionContinuation(record, await history(), 'launch')
           if (kicked === 'kicked') {
             report.provisioning += 1
             report.swept += 1
@@ -2779,11 +2817,11 @@ export class Dispatcher {
       // already continued earlier.
       if (decision.kind === 'wait' && !publicationRecoveryDue) continue
       if (
-        openWorkspace(events) === null &&
+        facts.workspace === null &&
         this.deps.workspaces.recovery !== undefined &&
-        events.some((event) => event.type === 'workspace.provisioned')
+        (await history()).some((event) => event.type === 'workspace.provisioned')
       ) {
-        const kicked = await this.ensureProvisionContinuation(record, events, 'launch')
+        const kicked = await this.ensureProvisionContinuation(record, await history(), 'launch')
         if (kicked === 'kicked') {
           report.provisioning += 1
           report.swept += 1

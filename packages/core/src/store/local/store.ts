@@ -40,6 +40,7 @@ import {
   type SessionEventWrite,
 } from '../../events/sessions'
 import { createBuildScopedStore } from '../build-scope'
+import type { ReducerSnapshot, SnapshotScope } from '../snapshots'
 import { validateCreatedEvent } from '../new-build'
 import { createSessionScopedStore } from '../session-handle'
 import { DIGEST_EVENT_TYPES, type DigestEventRow, reduceBuildDigest } from '../digest'
@@ -135,6 +136,18 @@ import {
 // Exported for the schema-parity test, which pins this DDL against the
 // drizzle schema; schema.ts stays the source of truth, this is its inlined form.
 export const BOOTSTRAP_DDL = [
+  // Reducer snapshots: additive and idempotent, so databases that predate the
+  // table gain it on open.
+  `CREATE TABLE IF NOT EXISTS reducer_snapshots (
+    scope_kind TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    reducer TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    cursor INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope_kind, scope_key, reducer)
+  )`,
   `CREATE TABLE IF NOT EXISTS builds (
     slug TEXT PRIMARY KEY,
     repo TEXT NOT NULL,
@@ -1058,6 +1071,78 @@ export class SqliteBuildStore implements BuildStore {
       .where(eq(repoEvents.repo, repo))
       .get()
     return row?.seq ?? 0
+  }
+
+  /** The scope's log tail, or `undefined` for a scope that does not exist. */
+  private snapshotTail(scope: SnapshotScope): number | undefined {
+    if (scope.kind === 'build') {
+      const row = this.sqlite
+        .query(
+          'SELECT (SELECT COALESCE(MAX(seq), 0) FROM events WHERE build = ?1) AS tail FROM builds WHERE slug = ?1',
+        )
+        .get(scope.slug) as { tail: number } | null
+      return row?.tail
+    }
+    const row = this.sqlite
+      .query(
+        'SELECT (SELECT COALESCE(MAX(seq), 0) FROM repo_events WHERE repo = ?1) AS tail FROM repo_streams WHERE repo = ?1',
+      )
+      .get(scope.repo) as { tail: number } | null
+    return row?.tail
+  }
+
+  async getReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    version: number,
+  ): Promise<ReducerSnapshot | null> {
+    const tail = this.snapshotTail(scope)
+    if (tail === undefined) return null
+    const row = this.sqlite
+      .query(
+        'SELECT version, cursor, state FROM reducer_snapshots WHERE scope_kind = ?1 AND scope_key = ?2 AND reducer = ?3',
+      )
+      .get(scope.kind, scope.kind === 'build' ? scope.slug : scope.repo, reducer) as {
+      version: number
+      cursor: number
+      state: string
+    } | null
+    if (row === null || row.version !== version || row.cursor > tail) return null
+    try {
+      return { version: row.version, cursor: row.cursor, state: JSON.parse(row.state) }
+    } catch {
+      return null
+    }
+  }
+
+  async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    const tail = this.snapshotTail(scope)
+    if (tail === undefined || snapshot.cursor > tail) return false
+    // One statement: the stored cursor never decreases, whatever interleaves.
+    const result = this.sqlite
+      .query(
+        `INSERT INTO reducer_snapshots (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
+           version = excluded.version, cursor = excluded.cursor,
+           state = excluded.state, updated_at = excluded.updated_at
+         WHERE excluded.cursor > reducer_snapshots.cursor
+            OR (excluded.cursor = reducer_snapshots.cursor AND excluded.version > reducer_snapshots.version)`,
+      )
+      .run(
+        scope.kind,
+        scope.kind === 'build' ? scope.slug : scope.repo,
+        reducer,
+        snapshot.version,
+        snapshot.cursor,
+        JSON.stringify(snapshot.state ?? null),
+        this.clock().toISOString(),
+      )
+    return result.changes > 0
   }
 
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {

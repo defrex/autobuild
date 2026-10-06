@@ -807,6 +807,21 @@ export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_DDL)
   .digest('hex')
 
+/** Reducer snapshots (core `store/snapshots.ts`): a cache beside the event log.
+ * Deliberately outside `SCHEMA_DDL`, its marker, version and checksum, and
+ * outside `EXPECTED_COLUMNS`: a deployment at the current schema keeps serving
+ * across the upgrade, a new client against a database that lacks the table
+ * degrades to full replay (SQLSTATE 42P01 reads as "no snapshot"), and an older
+ * client never asks for it. Idempotent — `migratePostgres` creates it next to
+ * the ticket tables. */
+export const SNAPSHOT_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS reducer_snapshots (
+  scope_kind text NOT NULL, scope_key text NOT NULL, reducer text NOT NULL,
+  version integer NOT NULL, cursor bigint NOT NULL, state jsonb NOT NULL,
+  updated_at timestamptz NOT NULL,
+  PRIMARY KEY (scope_kind, scope_key, reducer)
+);`.trim()
+
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
@@ -1235,6 +1250,7 @@ export async function migratePostgres(url: string): Promise<void> {
       await tx`SELECT pg_advisory_xact_lock(470281941)`
       await tx.unsafe(SCHEMA_DDL)
       await tx.unsafe(TICKET_SCHEMA_DDL)
+      await tx.unsafe(SNAPSHOT_SCHEMA_DDL)
       await tx.unsafe(AUTH_SCHEMA_DDL)
       const rows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_schema_migrations WHERE singleton = true FOR UPDATE`

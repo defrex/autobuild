@@ -46,6 +46,7 @@ import {
 import { createBuildScopedStore } from '../build-scope'
 import { createSessionScopedStore } from '../session-handle'
 import { pollingSubscribe } from '../subscribe'
+import type { ReducerSnapshot, SnapshotScope } from '../snapshots'
 import type { BuildDigest } from '../types'
 import type {
   StreamChunk,
@@ -95,6 +96,8 @@ import {
   repoHighWaterSchema,
   repositoryEventListSchema,
   okResponseSchema,
+  reducerSnapshotPutResponseSchema,
+  reducerSnapshotResponseSchema,
   placeholderRev,
   repoDepositsResponseSchema,
   repositoryArtifactGetResponseSchema,
@@ -194,7 +197,7 @@ export class RemoteBuildStore implements BuildStore {
   }
 
   private async raw(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     body?: unknown,
     signal?: AbortSignal,
@@ -534,6 +537,43 @@ export class RemoteBuildStore implements BuildStore {
           opts?.signal,
         ) as Promise<RepositoryEvent[]>,
     )
+  }
+
+  private snapshotPath(scope: SnapshotScope, reducer: string): string {
+    const root = scope.kind === 'build' ? this.buildPath(scope.slug) : this.repoPath(scope.repo)
+    return `${root}/snapshots/${encodeURIComponent(reducer)}`
+  }
+
+  async getReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    version: number,
+  ): Promise<ReducerSnapshot | null> {
+    // Additive routes, no protocol bump. A store that predates them answers
+    // 404 or 405 for the route, which reads as "no snapshot": the caller
+    // replays the log. Auth and transport failures still surface.
+    const response = await this.raw(
+      'GET',
+      `${this.snapshotPath(scope, reducer)}?version=${version}`,
+    )
+    if (response.status === 404 || response.status === 405) return null
+    if (!response.ok) throw await this.toError(response)
+    return reducerSnapshotResponseSchema.parse(await response.json())
+  }
+
+  async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    const response = await this.raw('PUT', this.snapshotPath(scope, reducer), {
+      version: snapshot.version,
+      cursor: snapshot.cursor,
+      state: snapshot.state ?? null,
+    })
+    if (response.status === 404 || response.status === 405) return false
+    if (!response.ok) throw await this.toError(response)
+    return reducerSnapshotPutResponseSchema.parse(await response.json()).written
   }
 
   async getRepoHighWater(repo: string): Promise<number> {

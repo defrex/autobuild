@@ -4,7 +4,7 @@ import type { AbEvent } from '../events/catalog'
 import { MemoryBuildStore } from '../store/memory'
 import { manualClock } from '../testing/fixed'
 import type { BuildExecution, ExecutionObservation } from '../ports/workspace/build-execution'
-import { openExecution, settleExecution } from './execution-settlement'
+import { openExecution, settleExecution, settleOpenExecution } from './execution-settlement'
 
 function started(over: { instance?: string; commandId?: string } = {}): AbEvent {
   return {
@@ -187,4 +187,49 @@ describe('settleExecution', () => {
     expect(result).toBe('running')
     expect(h.observed).toEqual([])
   })
+})
+
+describe('settleOpenExecution', () => {
+  const observations: ExecutionObservation[] = [
+    { state: 'running' },
+    { state: 'ended', exitCode: 0 },
+    { state: 'lost' },
+  ]
+  const logs: AbEvent[][] = [
+    [],
+    [started({ instance: 'a' })],
+    [started({ instance: 'a', commandId: 'c1' })],
+    [started({ instance: 'a', commandId: 'c1' }), ended('a', 'completed')],
+    [started({ instance: 'a', commandId: 'c1' }), started({ instance: 'b', commandId: 'c2' })],
+  ]
+
+  test.each(
+    logs.flatMap((_log, index) => observations.map((observation) => [index, observation] as const)),
+  )(
+    'settleExecution and settleOpenExecution agree: log %i, observation %p',
+    async (index, observation) => {
+      const events = logs[index]!
+      const run = async (settle: 'events' | 'open') => {
+        const store = new MemoryBuildStore({ clock: manualClock() })
+        await store.createBuild({ slug: 'b', repo: 'r' })
+        const execution: BuildExecution = {
+          async start() {
+            throw new Error('not used')
+          },
+          async observe() {
+            return observation
+          },
+        }
+        const result =
+          settle === 'events'
+            ? await settleExecution({ store, execution }, 'b', events)
+            : await settleOpenExecution({ store, execution }, 'b', openExecution(events))
+        return {
+          result,
+          appended: (await store.getEvents('b')).map((event) => [event.type, event.payload]),
+        }
+      }
+      expect(await run('open')).toEqual(await run('events'))
+    },
+  )
 })

@@ -8,6 +8,7 @@
  * scope handles in `session-handle.ts` (hosted-only, AUT-339), which scope a
  * store to a single operator session's record.
  */
+import type { ReducerSnapshot, SnapshotScope } from './snapshots'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
@@ -331,6 +332,24 @@ export function scopeLocalStoreToPhaseSession(
     async getRepoHighWater(repo: string): Promise<number> {
       own('getRepoHighWater', 'repo', repo)
       return store.getRepoHighWater(repo)
+    },
+    async getReducerSnapshot(
+      target: SnapshotScope,
+      reducer: string,
+      version: number,
+    ): Promise<ReducerSnapshot | null> {
+      if (target.kind === 'build') own('getReducerSnapshot', 'build', target.slug)
+      else own('getReducerSnapshot', 'repo', target.repo)
+      return store.getReducerSnapshot(target, reducer, version)
+    },
+    async putReducerSnapshot(
+      target: SnapshotScope,
+      reducer: string,
+      snapshot: ReducerSnapshot,
+    ): Promise<boolean> {
+      if (target.kind === 'build') own('putReducerSnapshot', 'build', target.slug)
+      else own('putReducerSnapshot', 'repo', target.repo)
+      return store.putReducerSnapshot(target, reducer, snapshot)
     },
     async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       own('getRepoBuildDigests', 'repo', repo)

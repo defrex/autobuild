@@ -100,6 +100,7 @@ describe('reducer registry', () => {
         "harvest": 1,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
+        "journalView": 1,
         "lastExecutionOutcome": 1,
         "logIndex": 1,
         "openBuildWorkspace": 1,

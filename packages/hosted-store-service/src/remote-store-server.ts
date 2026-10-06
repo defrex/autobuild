@@ -63,6 +63,9 @@ import {
   newSessionBodySchema,
   putArtifactBodySchema,
   putTicketAssetBodySchema,
+  reducerSnapshotPutBodySchema,
+  SNAPSHOT_REDUCER_NAME,
+  type SnapshotScope,
   removeTicketAssetBodySchema,
   substitutePlaceholderRefs,
   type ErrorBody,
@@ -523,6 +526,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments[0] === 'streams') {
       return streamRoute(req, url, { kind: 'repo', repo }, segments.slice(1))
     }
+    if (segments[0] === 'snapshots' && segments.length === 2) {
+      return snapshotRoute(req, url, { kind: 'repo', repo }, segments[1]!)
+    }
     switch (`${req.method} ${rest}`) {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
@@ -759,6 +765,52 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
   }
 
+  /** A body ceiling for one snapshot: generous for a long build's accumulator,
+   * still a bound, so an oversized or hostile write is a 413 and never reaches
+   * the store. */
+  const MAX_SNAPSHOT_BODY_BYTES = 16 * 1024 * 1024
+
+  /** `GET|PUT …/snapshots/:reducer` for one build or repository journal: a
+   * cache beside the log (core `store/snapshots.ts`). The store enforces the
+   * invariants (never-decreasing cursor, version and log-tail filtering); this
+   * only parses, bounds, and delegates. */
+  async function snapshotRoute(
+    req: Request,
+    url: URL,
+    scope: SnapshotScope,
+    reducer: string,
+  ): Promise<Response> {
+    if (!SNAPSHOT_REDUCER_NAME.test(reducer)) {
+      throw new RequestError(400, 'validation', `invalid reducer name "${reducer}"`)
+    }
+    if (req.method === 'GET') {
+      const version = intParam(url, 'version')
+      if (version === undefined || version < 1) {
+        throw new RequestError(400, 'validation', 'query parameter "version" is required')
+      }
+      return json(200, await store.getReducerSnapshot(scope, reducer, version))
+    }
+    if (req.method === 'PUT') {
+      const text = await req.text()
+      if (utf8.encode(text).length > MAX_SNAPSHOT_BODY_BYTES) {
+        throw new RequestError(413, 'validation', 'snapshot body is over the 16 MiB ceiling')
+      }
+      let raw: unknown
+      try {
+        raw = JSON.parse(text)
+      } catch {
+        throw new RequestError(400, 'validation', 'request body is not valid JSON')
+      }
+      const parsed = reducerSnapshotPutBodySchema.safeParse(raw)
+      if (!parsed.success) {
+        throw new RequestError(400, 'validation', `invalid request body: ${parsed.error.message}`)
+      }
+      const written = await store.putReducerSnapshot(scope, reducer, parsed.data)
+      return json(200, { written })
+    }
+    return fail(404, 'not-found', `no route: ${req.method} snapshots/${reducer}`)
+  }
+
   async function buildRoute(
     req: Request,
     url: URL,
@@ -769,6 +821,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     const segments = rest.split('/')
     if (segments[0] === 'streams') {
       return streamRoute(req, url, { kind: 'build', build: slug }, segments.slice(1))
+    }
+    if (segments[0] === 'snapshots' && segments.length === 2) {
+      return snapshotRoute(req, url, { kind: 'build', slug }, segments[1]!)
     }
     switch (`${req.method} ${rest}`) {
       // The build's frozen ticket assets (SPEC §6.3): read through the build's

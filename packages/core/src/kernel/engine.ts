@@ -34,8 +34,8 @@ import {
   type Phase,
   type PolicyEscalationCause,
 } from '../ontology'
-import { indexLog, type LoopIndex } from './log-index'
-import { reduceBuild, type AnsweredEscalation } from './reducer'
+import { indexLog, type LogIndex, type LoopIndex } from './log-index'
+import { reduceBuild, type AnsweredEscalation, type BuildState } from './reducer'
 import { stalledChains, type FindingChain } from './stall'
 
 // ── The decision contract ────────────────────────────────────────────────────
@@ -108,9 +108,14 @@ export type Decision =
     }
 
 export function decideNext(events: AbEvent[], config: Config): Decision {
-  const state = reduceBuild(events)
-  const log = indexLog(events)
+  return decideNextFromFacts(reduceBuild(events), indexLog(events), config)
+}
 
+/** `decideNext` over already-reduced facts: a caller holding the build state
+ * and log index (a reducer snapshot advanced to the log tail) decides without
+ * the event array. `decideNext(events, config)` is exactly this over
+ * `reduceBuild(events)` and `indexLog(events)`. */
+export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Config): Decision {
   // ── 1. Terminal (§15.5: terminal wins, latest wins) ────────────────────────
   if (state.status === 'aborted') return { kind: 'wait', reason: 'aborted' }
   if (state.status === 'done') return { kind: 'wait', reason: 'done' }

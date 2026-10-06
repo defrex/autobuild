@@ -105,6 +105,23 @@ export const ticketAssets = sqliteTable(
   (t) => [primaryKey({ columns: [t.repo, t.ticketId, t.kind, t.name, t.revision] })],
 )
 
+/** Reducer snapshots (store/snapshots.ts): a cache of one reducer's state as of
+ * a log cursor, per scope (`scope_kind` build|repo, `scope_key` the slug or
+ * repo). Never an authority — the log regenerates any row. */
+export const reducerSnapshots = sqliteTable(
+  'reducer_snapshots',
+  {
+    scopeKind: text('scope_kind').notNull(),
+    scopeKey: text('scope_key').notNull(),
+    reducer: text('reducer').notNull(),
+    version: integer('version').notNull(),
+    cursor: integer('cursor').notNull(),
+    state: text('state').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.scopeKind, t.scopeKey, t.reducer] })],
+)
+
 /** Operator sessions (SPEC §7.1.1): hosted-only durable orchestrator
  * conversation state. Adapters implement the contract uniformly; nothing
  * local creates one. */

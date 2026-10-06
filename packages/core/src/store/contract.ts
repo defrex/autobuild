@@ -915,6 +915,231 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    describe('reducer snapshots (a cache beside the log, never an authority)', () => {
+      const buildScope = (slug: string) => ({ kind: 'build' as const, slug })
+      const repoScope = (repo: string) => ({ kind: 'repo' as const, repo })
+
+      async function buildWithEvents(store: BuildStore, slug: string, count: number) {
+        await store.createBuild(sampleBuildInput(slug))
+        for (let index = 0; index < count; index += 1) {
+          await store.append(slug, sampleEventWrite(`event ${index}`))
+        }
+      }
+
+      /** Deterministic shuffle so a failure replays. */
+      function shuffled<T>(items: T[]): T[] {
+        const out = [...items]
+        let seed = 7
+        for (let index = out.length - 1; index > 0; index -= 1) {
+          seed = (seed * 1103515245 + 12345) & 0x7fffffff
+          const swap = seed % (index + 1)
+          ;[out[index], out[swap]] = [out[swap]!, out[index]!]
+        }
+        return out
+      }
+
+      test('an absent snapshot reads null and an unknown scope reads null with no side effects', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await buildWithEvents(store, 'snap-absent', 2)
+          expect(await store.getReducerSnapshot(buildScope('snap-absent'), 'build', 1)).toBeNull()
+          expect(await store.getReducerSnapshot(buildScope('snap-nobuild'), 'build', 1)).toBeNull()
+          expect(await store.getReducerSnapshot(repoScope('acme/snap-norepo'), 'j', 1)).toBeNull()
+          expect(
+            await store.putReducerSnapshot(buildScope('snap-nobuild'), 'build', {
+              version: 1,
+              cursor: 0,
+              state: {},
+            }),
+          ).toBe(false)
+          expect(
+            await store.putReducerSnapshot(repoScope('acme/snap-norepo'), 'j', {
+              version: 1,
+              cursor: 0,
+              state: {},
+            }),
+          ).toBe(false)
+          expect(await store.getRepo('acme/snap-norepo')).toBeNull()
+          expect(await store.getBuild('snap-nobuild')).toBeNull()
+        })
+      })
+
+      test('round-trips JSON state per scope and reducer, isolated from callers', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await buildWithEvents(store, 'snap-rt', 3)
+          await store.ensureRepo('acme/snap-rt')
+          await store.appendRepo('acme/snap-rt', {
+            actor: humanActor('op'),
+            type: 'dispatcher.intake-set',
+            payload: { enabled: false },
+          })
+          const state = { counts: { a: 1 }, list: [1, 'two', null], flag: true }
+          expect(
+            await store.putReducerSnapshot(buildScope('snap-rt'), 'build', {
+              version: 2,
+              cursor: 3,
+              state,
+            }),
+          ).toBe(true)
+          state.counts.a = 99
+          const read = await store.getReducerSnapshot(buildScope('snap-rt'), 'build', 2)
+          expect(read).toEqual({
+            version: 2,
+            cursor: 3,
+            state: { counts: { a: 1 }, list: [1, 'two', null], flag: true },
+          })
+          ;(read!.state as { counts: { a: number } }).counts.a = 5
+          expect(
+            (await store.getReducerSnapshot(buildScope('snap-rt'), 'build', 2))?.state,
+          ).toEqual({ counts: { a: 1 }, list: [1, 'two', null], flag: true })
+          // Other reducers and the other scope kind are independent.
+          expect(await store.getReducerSnapshot(buildScope('snap-rt'), 'logIndex', 2)).toBeNull()
+          expect(await store.getReducerSnapshot(repoScope('acme/snap-rt'), 'build', 2)).toBeNull()
+          expect(
+            await store.putReducerSnapshot(repoScope('acme/snap-rt'), 'journalView', {
+              version: 1,
+              cursor: 1,
+              state: { retained: [] },
+            }),
+          ).toBe(true)
+          expect(
+            (await store.getReducerSnapshot(repoScope('acme/snap-rt'), 'journalView', 1))?.cursor,
+          ).toBe(1)
+          expect((await store.getReducerSnapshot(buildScope('snap-rt'), 'build', 2))?.cursor).toBe(
+            3,
+          )
+        })
+      })
+
+      test('a stored snapshot of another version is ignored, then replaced by an advancing write', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await buildWithEvents(store, 'snap-ver', 5)
+          const scope = buildScope('snap-ver')
+          await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 3, state: 'v1' })
+          expect(await store.getReducerSnapshot(scope, 'build', 2)).toBeNull()
+          // Same cursor, lower version: no-op.
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 3, state: 'x' }),
+          ).toBe(false)
+          // Higher version at an unchanged cursor replaces the old shape.
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 2, cursor: 3, state: 'v2' }),
+          ).toBe(true)
+          expect(await store.getReducerSnapshot(scope, 'build', 1)).toBeNull()
+          expect((await store.getReducerSnapshot(scope, 'build', 2))?.state).toBe('v2')
+          // A lower version replaces once the cursor advances past the stored one.
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 4, state: 'v1b' }),
+          ).toBe(true)
+          expect(await store.getReducerSnapshot(scope, 'build', 2)).toBeNull()
+          expect((await store.getReducerSnapshot(scope, 'build', 1))?.cursor).toBe(4)
+          // But never at a lower cursor, whatever its version.
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 9, cursor: 2, state: 'old' }),
+          ).toBe(false)
+          expect((await store.getReducerSnapshot(scope, 'build', 1))?.state).toBe('v1b')
+        })
+      })
+
+      test('an equal or lower cursor is a no-op and the stored row is untouched', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await buildWithEvents(store, 'snap-mono', 4)
+          const scope = buildScope('snap-mono')
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 3, state: 'a' }),
+          ).toBe(true)
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 3, state: 'b' }),
+          ).toBe(false)
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 2, state: 'c' }),
+          ).toBe(false)
+          expect(await store.getReducerSnapshot(scope, 'build', 1)).toEqual({
+            version: 1,
+            cursor: 3,
+            state: 'a',
+          })
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 4, state: 'd' }),
+          ).toBe(true)
+        })
+      })
+
+      test('a cursor ahead of the log tail is refused on write and hidden on read', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await buildWithEvents(store, 'snap-ahead', 2)
+          const scope = buildScope('snap-ahead')
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 3, state: 'x' }),
+          ).toBe(false)
+          expect(await store.getReducerSnapshot(scope, 'build', 1)).toBeNull()
+          // Within the tail it is accepted, and stays readable as the log grows.
+          expect(
+            await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 2, state: 'ok' }),
+          ).toBe(true)
+          await store.append('snap-ahead', sampleEventWrite('more'))
+          expect((await store.getReducerSnapshot(scope, 'build', 1))?.cursor).toBe(2)
+        })
+      })
+
+      test('two interleaved writers never regress the stored cursor', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const tail = 12
+          await buildWithEvents(store, 'snap-race', tail)
+          const scope = buildScope('snap-race')
+          const cursors = shuffled(Array.from({ length: tail }, (_, index) => index + 1))
+          const writerA = cursors.filter((_, index) => index % 2 === 0)
+          const writerB = cursors.filter((_, index) => index % 2 === 1)
+          // Each writer reads back sequentially, so its own series is ordered;
+          // reads from different writers overlap and complete in any order, so
+          // only per-writer monotonicity is meaningful.
+          const write = async (list: number[]): Promise<number[]> => {
+            const seen: number[] = []
+            for (const cursor of list) {
+              await store.putReducerSnapshot(scope, 'build', {
+                version: 1,
+                cursor,
+                state: { cursor },
+              })
+              const read = await store.getReducerSnapshot(scope, 'build', 1)
+              if (read !== null) seen.push(read.cursor)
+            }
+            return seen
+          }
+          const series = await Promise.all([write(writerA), write(writerB)])
+          const final = await store.getReducerSnapshot(scope, 'build', 1)
+          expect(final?.cursor).toBe(tail)
+          expect(final?.state).toEqual({ cursor: tail })
+          for (const seen of series) {
+            for (let index = 1; index < seen.length; index += 1) {
+              expect(seen[index]!).toBeGreaterThanOrEqual(seen[index - 1]!)
+            }
+          }
+        })
+      })
+
+      test('writers on mixed versions still only ever raise the stored cursor', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const tail = 9
+          await buildWithEvents(store, 'snap-mixed', tail)
+          const scope = buildScope('snap-mixed')
+          const writes = shuffled(
+            Array.from({ length: tail * 3 }, (_, index) => ({
+              version: (index % 3) + 1,
+              cursor: Math.floor(index / 3) + 1,
+            })),
+          )
+          await Promise.all(
+            writes.map((write) =>
+              store.putReducerSnapshot(scope, 'build', { ...write, state: write }),
+            ),
+          )
+          // The cursor is the max; at that cursor the highest version won.
+          const final = await store.getReducerSnapshot(scope, 'build', 3)
+          expect(final).toEqual({ version: 3, cursor: tail, state: { version: 3, cursor: tail } })
+        })
+      })
+    })
+
     describe('getRepoStateEvents (bounded journal read, AUT-489)', () => {
       /** One no-op hosted dispatcher invocation: the ~4 facts an invocation
        * appends whether or not it did anything. */

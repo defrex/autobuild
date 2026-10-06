@@ -756,6 +756,8 @@ class DispatchLoop {
     private readonly liveConfig: LiveConfig,
     private readonly wiring: DispatchWiring,
     private readonly opts: DispatchOpts,
+    /** The view `abDispatch` already used for its lifecycle appends. */
+    view?: RepoViewStore,
   ) {
     const config = liveConfig.current().config
     // Minted exactly once per invocation: `wiring.ids` is `randomIds()` and a
@@ -792,10 +794,14 @@ class DispatchLoop {
       return result.text
     }
 
-    this.repoView = new RepoViewStore(wiring.store, {
-      repo: this.repoIdentity,
-      resident: opts.once !== true,
-    })
+    // `abDispatch` hands over a view it already used for the lifecycle appends,
+    // so those rows are folded, not re-read, and one flush covers them all.
+    this.repoView =
+      view ??
+      new RepoViewStore(wiring.store, {
+        repo: this.repoIdentity,
+        resident: opts.once !== true,
+      })
     this.dispatcher = new Dispatcher({
       store: this.repoView,
       tickets: wiring.tickets,
@@ -3914,23 +3920,32 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // another dispatcher cannot clobber the latest operator choice with a value
   // it inferred at startup. Fresh-repository fallbacks live in the reducer.
   await wiring.store.ensureRepo(state.repo)
+  // Every own lifecycle append goes through one view, restored from snapshots
+  // before the first of them, so a quiet invocation reads none of its own
+  // rows back and the final flush covers `run-stopped` too.
+  const view = new RepoViewStore(wiring.store, {
+    // The loop's store-keyed identity (an explicit `repo` pins it).
+    repo: resolvedOpts.repo ?? resolvedOpts.targetRepo,
+    resident: resolvedOpts.once !== true,
+  })
+  await view.startJournal()
   const actor = humanActor(buildControlUser(resolvedOpts.env))
   if (resolvedOpts.intake !== undefined) {
-    await wiring.store.appendRepo(state.repo, {
+    await view.appendRepo(state.repo, {
       actor,
       type: 'dispatcher.intake-set',
       payload: { enabled: resolvedOpts.intake, run: runId },
     })
   }
   if (resolvedOpts.defaultAutoMerge !== undefined) {
-    await wiring.store.appendRepo(state.repo, {
+    await view.appendRepo(state.repo, {
       actor,
       type: 'dispatcher.auto-merge-default-set',
       payload: { enabled: resolvedOpts.defaultAutoMerge, run: runId },
     })
   }
 
-  await wiring.store.appendRepoWithArtifacts(
+  await view.appendRepoWithArtifacts(
     state.repo,
     [
       {
@@ -3955,10 +3970,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     },
   )
 
-  const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts)
+  const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
   try {
     await loop.run()
-    await wiring.store.appendRepo(state.repo, {
+    await view.appendRepo(state.repo, {
       actor: DISPATCHER,
       type: 'dispatcher.run-stopped',
       payload: {
@@ -3970,7 +3985,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     })
   } catch (error) {
     try {
-      await wiring.store.appendRepo(state.repo, {
+      await view.appendRepo(state.repo, {
         actor: DISPATCHER,
         type: 'dispatcher.run-stopped',
         payload: {
@@ -3985,6 +4000,10 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     }
     throw error
   } finally {
+    // Every append this invocation made, `run-stopped` included, is in the
+    // view; leave the reduced state behind so the next cold process reads
+    // only what is newer than it.
+    await view.persistSnapshots({ force: true })
     if (resolvedOpts.wire === undefined) await wiring.store.close()
   }
 }

@@ -146,12 +146,23 @@ async function releaseSettledLease(
  * Observation errors are contained and read as `running` (conservative: never
  * reap on an unknown); the next tick retries.
  */
-export async function settleExecution(
+export function settleExecution(
   deps: ExecutionSettlementDeps,
   slug: string,
   events: AbEvent[],
 ): Promise<ExecutionSettlement> {
-  const open = openExecution(events)
+  return settleOpenExecution(deps, slug, openExecution(events))
+}
+
+/** `settleExecution` over an already-derived open execution, for callers that
+ * hold the projection (a reducer snapshot advanced to the log tail) and so
+ * never need the event array. A `running` result or an observation error
+ * touches no event rows. */
+export async function settleOpenExecution(
+  deps: ExecutionSettlementDeps,
+  slug: string,
+  open: OpenExecution | null,
+): Promise<ExecutionSettlement> {
   if (open === null) return 'settled'
   if (open.commandId === undefined || deps.execution.observe === undefined) return 'running'
   let observation: ExecutionObservation

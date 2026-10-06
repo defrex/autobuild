@@ -93,6 +93,7 @@ import {
   type TicketAssetMeta,
   type TicketAssetSummary,
 } from '@defrex/autobuild/store-adapter'
+import type { ReducerSnapshot, SnapshotScope } from '@defrex/autobuild/store-adapter'
 import { assertSchema } from './schema'
 import { PlanRetryRunner, type Exec, type Row } from './retry'
 
@@ -994,6 +995,78 @@ export class PostgresBuildStore implements BuildStore {
       (q) => q`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`,
     )
     return num(rows[0]?.seq ?? 0)
+  }
+
+  /** SQLSTATE 42P01: a database that has not run the additive snapshot
+   * migration. Never cached, so a later `postgres:migrate` starts working
+   * without a restart. */
+  private static missingSnapshotTable(error: unknown): boolean {
+    const code =
+      (error as { code?: string; errno?: string }).errno ?? (error as { code?: string }).code
+    return code === '42P01'
+  }
+
+  async getReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    version: number,
+  ): Promise<ReducerSnapshot | null> {
+    const key = scope.kind === 'build' ? scope.slug : scope.repo
+    try {
+      const rows: Row[] = await this.run(
+        (q) => q`SELECT s.version, s.cursor, s.state FROM reducer_snapshots s
+          WHERE s.scope_kind=${scope.kind} AND s.scope_key=${key} AND s.reducer=${reducer}
+            AND s.version=${version}
+            AND s.cursor <= CASE WHEN ${scope.kind}='build'
+              THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${key}), 0)
+              ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${key}), 0) END
+            AND CASE WHEN ${scope.kind}='build'
+              THEN EXISTS (SELECT 1 FROM builds WHERE slug=${key})
+              ELSE EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key}) END`,
+      )
+      const row = rows[0]
+      if (row === undefined) return null
+      return { version: num(row.version), cursor: num(row.cursor), state: json(row.state) }
+    } catch (error) {
+      if (PostgresBuildStore.missingSnapshotTable(error)) return null
+      throw error
+    }
+  }
+
+  async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    const key = scope.kind === 'build' ? scope.slug : scope.repo
+    const state = JSON.stringify(snapshot.state ?? null)
+    try {
+      // One statement: the existence and log-tail guards, and the
+      // never-decrease rule, evaluate atomically against concurrent writers.
+      const rows: Row[] = await this.run(
+        (q) => q`INSERT INTO reducer_snapshots
+            (scope_kind, scope_key, reducer, version, cursor, state, updated_at)
+          SELECT ${scope.kind}, ${key}, ${reducer}, ${snapshot.version}::integer,
+            ${snapshot.cursor}::bigint, ${state}::jsonb, ${this.now()}::timestamptz
+          WHERE ${snapshot.cursor}::bigint <= CASE WHEN ${scope.kind}='build'
+              THEN COALESCE((SELECT MAX(seq) FROM events WHERE build=${key}), 0)
+              ELSE COALESCE((SELECT MAX(seq) FROM repo_events WHERE repo=${key}), 0) END
+            AND CASE WHEN ${scope.kind}='build'
+              THEN EXISTS (SELECT 1 FROM builds WHERE slug=${key})
+              ELSE EXISTS (SELECT 1 FROM repo_streams WHERE repo=${key}) END
+          ON CONFLICT (scope_kind, scope_key, reducer) DO UPDATE SET
+            version = EXCLUDED.version, cursor = EXCLUDED.cursor,
+            state = EXCLUDED.state, updated_at = EXCLUDED.updated_at
+          WHERE EXCLUDED.cursor > reducer_snapshots.cursor
+            OR (EXCLUDED.cursor = reducer_snapshots.cursor
+              AND EXCLUDED.version > reducer_snapshots.version)
+          RETURNING 1 AS written`,
+      )
+      return rows.length > 0
+    } catch (error) {
+      if (PostgresBuildStore.missingSnapshotTable(error)) return false
+      throw error
+    }
   }
 
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {

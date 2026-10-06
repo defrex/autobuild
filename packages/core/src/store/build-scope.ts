@@ -1,3 +1,4 @@
+import type { ReducerSnapshot, SnapshotScope } from './snapshots'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
@@ -192,6 +193,28 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     },
     getRepoHighWater(repo: string): Promise<number> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoHighWater', repo))
+    },
+    async getReducerSnapshot(
+      target: SnapshotScope,
+      reducer: string,
+      version: number,
+    ): Promise<ReducerSnapshot | null> {
+      if (target.kind !== 'build') {
+        throw new BuildScopeError(scope, 'getReducerSnapshot', target.repo)
+      }
+      own('getReducerSnapshot', target.slug)
+      return store.getReducerSnapshot(target, reducer, version)
+    },
+    async putReducerSnapshot(
+      target: SnapshotScope,
+      reducer: string,
+      snapshot: ReducerSnapshot,
+    ): Promise<boolean> {
+      if (target.kind !== 'build') {
+        throw new BuildScopeError(scope, 'putReducerSnapshot', target.repo)
+      }
+      own('putReducerSnapshot', target.slug)
+      return store.putReducerSnapshot(target, reducer, snapshot)
     },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoBuildDigests', repo))
