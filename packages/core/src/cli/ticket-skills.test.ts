@@ -92,3 +92,17 @@ describe('ticket grooming skill guidance', () => {
     }
   })
 })
+
+describe('ticket skill icebox and custom state guidance', () => {
+  test('describes states, icebox, triage, and category rules', () => {
+    for (const guide of ticketGuides) {
+      expect(guide).not.toMatch(/exactly four/i)
+      expect(guide).toContain('ab ticket states')
+      expect(guide).toContain('ab ticket state create icebox --about')
+      expect(guide).toContain('ab ticket move')
+      expect(guide).toContain('rejected')
+      expect(guide).toContain('never dispatches')
+      expect(guide).not.toContain('SPEC.md')
+    }
+  })
+})
