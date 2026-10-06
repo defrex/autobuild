@@ -69,7 +69,7 @@ import type {
 import { logIndexReducer, type LogIndex } from '../kernel/log-index'
 import { buildReducer, reduceBuild, type BuildAcc, type BuildState } from '../kernel/reducer'
 import { createBuildScopedStore } from '../store/build-scope'
-import { reduceBuildDigest, type DigestEventRow } from '../store/digest'
+import { buildDigestReducer, reduceBuildDigest, type DigestEventRow } from '../store/digest'
 import {
   foldJournalView,
   JOURNAL_VIEW_REDUCER_VERSION,
@@ -139,6 +139,16 @@ const PERSIST_CONCURRENCY = 4
  * name (`kernel/reducer-registry.ts`). Every quiet-path tick stage reads its
  * facts from these, so a snapshot-backed log needs no event array. */
 const EXTRA_REDUCERS = {
+  // The digest reducer folds the narrow rows `digestRow` projects, so it is
+  // adapted to the event-array form the rest of the bundle shares. A restored
+  // log derives its own digest from this, never from discovery.
+  buildDigest: {
+    version: buildDigestReducer.version,
+    initial: buildDigestReducer.initial,
+    advance: (acc: ReturnType<typeof buildDigestReducer.initial>, events: readonly AbEvent[]) =>
+      buildDigestReducer.advance(acc, events.map(digestRow)),
+    finish: buildDigestReducer.finish,
+  },
   logIndex: logIndexReducer,
   openExecution: openExecutionReducer,
   openBuildWorkspace: openBuildWorkspaceReducer,
@@ -548,6 +558,11 @@ export class RepoViewStore implements BuildStore {
 
   private digestOf(slug: string, log: Log): Omit<BuildDigest, 'slug'> {
     if (log.digest === undefined || log.digest.cursor !== log.cursor) {
+      if (log.extra !== undefined) {
+        const value = buildDigestReducer.finish(log.extra.buildDigest as never)
+        log.digest = { cursor: log.cursor, value }
+        return value
+      }
       if (log.from > 0) {
         // A trimmed window cannot derive a digest; discovery owns that slug.
         const found = this.discovery.get(slug)
@@ -578,14 +593,10 @@ export class RepoViewStore implements BuildStore {
   /** Install a work build's log, from its stored reducer state when there is
    * one. Runs on the build's chain. The snapshot-backed log holds only the
    * events newer than the snapshot, plus the accumulators for everything
-   * before; a build discovery does not know (its digest would have to come from
-   * the trimmed log), or any shortfall, is a full read. */
+   * before; any shortfall is a full read. */
   private async loadWork(slug: string): Promise<Log> {
-    if (this.discovery.has(slug)) {
-      const restored = await this.restoreLog(slug)
-      if (restored !== null) return restored
-    }
-    return this.loadFull(slug)
+    const restored = await this.restoreLog(slug)
+    return restored ?? (await this.loadFull(slug))
   }
 
   private async restoreLog(slug: string): Promise<Log | null> {
@@ -661,9 +672,6 @@ export class RepoViewStore implements BuildStore {
         log.extra[name] = reducer.advance(log.extra[name], events)
       }
     }
-    // A trimmed log cannot derive its own digest; discovery owns it, so a fold
-    // that changes the build makes the held digest stale.
-    if (log.from > 0) this.discoveryDirty = true
   }
 
   /** Make the three accumulators exist. Needs the full history unless they are
@@ -928,7 +936,11 @@ export class RepoViewStore implements BuildStore {
         const held = this.logs.get(slug)
         if (held?.dirty === true) await this.ensureCurrent(slug, held)
         const log = this.logs.get(slug)
-        if (this.work.has(slug) && log !== undefined && log.from === 0) {
+        if (
+          this.work.has(slug) &&
+          log !== undefined &&
+          (log.from === 0 || log.extra !== undefined)
+        ) {
           return { slug, ...this.digestOf(slug, log) }
         }
         return this.discovery.get(slug)
