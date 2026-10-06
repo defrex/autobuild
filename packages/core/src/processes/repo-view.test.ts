@@ -418,6 +418,40 @@ describe('RepoViewStore read windows', () => {
     expect(await view.buildState('old')).toEqual(reduceBuild(await store.getEvents('old')))
   })
 
+  test('an own append racing window creation or widening is not lost', async () => {
+    class DeferredStore extends CountingStore {
+      hold: (() => Promise<void>) | undefined
+      override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
+        const events = await super.getRepoEvents(...args)
+        const hold = this.hold
+        this.hold = undefined
+        await hold?.()
+        return events
+      }
+    }
+    const store = new DeferredStore()
+    const view = new RepoViewStore(store, { repo: REPO, resident: true })
+    await store.ensureRepo(REPO)
+    await view.refresh()
+    // Creation: the snapshot is empty, then an own append lands before it returns.
+    store.hold = async () => {
+      await view.appendRepo(REPO, setting(false))
+    }
+    await view.getRepoEvents(REPO, 0)
+    await view.refresh()
+    expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1])
+    // Widening: a later cursor first, then a lower one that races an append.
+    await view.appendRepo(REPO, setting(true))
+    await view.getRepoEvents(REPO, 2)
+    view.releaseWindowsBelow('journal', 2)
+    store.hold = async () => {
+      await view.appendRepo(REPO, setting(false))
+    }
+    await view.getRepoEvents(REPO, 0)
+    await view.refresh()
+    expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1, 2, 3])
+  })
+
   test('the journal window serves every event type above its cursor and reads each row once', async () => {
     const store = new CountingStore()
     const view = new RepoViewStore(store, { repo: REPO, resident: true })
