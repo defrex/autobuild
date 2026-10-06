@@ -41,11 +41,18 @@
  *   every build, settled ones included, from a per-session cursor) get a
  *   per-source window holding only events above their lowest cursor.
  *
- * Cold start is a full replay by design; persisting the view between
- * processes is the snapshot follow-up.
+ * Cold start (reducer snapshots, `store/snapshots.ts`): a process with no hot
+ * memory loads each source's stored reducer state — the pruned journal view; the
+ * build, log-index and open-execution reducers for a work build — as of a
+ * cursor, reads only events newer than it, and advances. A snapshot-backed work
+ * log holds just that delta plus the reduced state of everything before it, so a
+ * quiet tick reads zero event rows. Every snapshot is a cache the log
+ * regenerates: a missing, mismatched-version, ahead-of-log, malformed or
+ * unreadable one is a miss and the source is replayed in full, with identical
+ * results. `persistSnapshots` writes the advanced state back (best effort;
+ * cursors only ever move forward in the store).
  */
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
-import type { ReducerSnapshot, SnapshotScope } from '../store/snapshots'
 import type { EventType } from '../events/payloads'
 import type {
   RepositoryEvent,
@@ -59,10 +66,23 @@ import type {
   SessionEventType,
   SessionEventWrite,
 } from '../events/sessions'
+import { logIndexReducer, type LogIndex, type LogIndexAcc } from '../kernel/log-index'
 import { buildReducer, reduceBuild, type BuildAcc, type BuildState } from '../kernel/reducer'
 import { createBuildScopedStore } from '../store/build-scope'
 import { reduceBuildDigest, type DigestEventRow } from '../store/digest'
-import { REPOSITORY_STATE_EVENT_TYPES } from '../store/repo-state-events'
+import {
+  foldJournalView,
+  JOURNAL_VIEW_REDUCER_VERSION,
+  journalViewReducer,
+  type JournalViewAcc,
+} from '../store/repo-state-events'
+import {
+  loadReducerSnapshot,
+  persistReducerSnapshot,
+  type ReducerSnapshot,
+  type SnapshotScope,
+} from '../store/snapshots'
+import { openExecutionReducer, type OpenExecution } from './execution-settlement'
 import { createSessionScopedStore } from '../store/session-handle'
 import type {
   StreamChunk,
@@ -100,8 +120,26 @@ import type {
   Unsubscribe,
 } from '../store/types'
 
-const RUN_STARTED = 'dispatcher.run-started'
-const DURABLE_JOURNAL_TYPES = new Set<string>(REPOSITORY_STATE_EVENT_TYPES)
+/** Registry names the snapshots are keyed by (kernel/reducer-registry.ts). */
+const SNAPSHOT_JOURNAL = 'journalView'
+const SNAPSHOT_BUILD = 'build'
+const SNAPSHOT_LOG_INDEX = 'logIndex'
+const SNAPSHOT_OPEN_EXECUTION = 'openExecution'
+
+/** A resident view persists at most this often; a cold single-tick process
+ * (the hosted dispatcher) always persists once at its tick's end. */
+const PERSIST_MIN_INTERVAL_MS = 30_000
+/** Builds written back concurrently. */
+const PERSIST_CONCURRENCY = 4
+
+type OpenAcc = { open: OpenExecution | null }
+
+/** The facts a quiet-path stage needs about one build, without its event array. */
+export interface BuildFacts {
+  state: BuildState
+  log: LogIndex
+  open: OpenExecution | null
+}
 
 /** A build that still has tick duties: nonterminal, aborted (awaiting its
  * cleanup's `build.completed`), a `done` build with an unreclaimed release
@@ -140,6 +178,12 @@ interface Log {
   /** The refresh epoch this log was last brought current in. */
   epoch: number
   acc?: BuildAcc
+  /** The log-index and open-execution accumulators ride beside `acc` on a work
+   * log, so the facts a stage derives never need the event array. */
+  index?: LogIndexAcc
+  open?: OpenAcc
+  /** The cursor last read from, or written to, the snapshot store. */
+  persisted: number
   /** Created by a cursor-bearing request: survives refreshes while unneeded. */
   pinned: boolean
   digest?: { cursor: number; value: Omit<BuildDigest, 'slug'> }
@@ -152,6 +196,10 @@ interface JournalWindow {
   last: number
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export interface RepoViewOptions {
   repo: string
   /** A long-running dispatcher: windows are seeded from a full read so the
@@ -159,6 +207,8 @@ export interface RepoViewOptions {
    * at process start). One-shot invocations leave this off and read each
    * window from its cursor, exactly as the wake pass always did. */
   resident?: boolean
+  /** Injectable millisecond clock for the persist throttle (tests). */
+  now?: () => number
 }
 
 /** Runs tasks strictly one after another; `onIdle` fires when the queue drains. */
@@ -201,6 +251,8 @@ export class RepoViewStore implements BuildStore {
   private journalDirty = false
   private journalEpoch = -1
   private journalWindow: JournalWindow | undefined
+  private persistedJournal = 0
+  private lastPersistAt: number | undefined
 
   // Builds.
   private records: BuildRecord[] = []
@@ -214,12 +266,15 @@ export class RepoViewStore implements BuildStore {
   /** Serializes the build listing and the discovery digests. */
   private readonly metaChain = new Chain()
 
+  private readonly now: () => number
+
   constructor(
     private readonly backing: BuildStore,
     opts: RepoViewOptions,
   ) {
     this.repo = opts.repo
     this.resident = opts.resident === true
+    this.now = opts.now ?? Date.now
   }
 
   // ── Refresh ────────────────────────────────────────────────────────────────
@@ -269,12 +324,14 @@ export class RepoViewStore implements BuildStore {
         }
         const log = this.logs.get(slug)
         if (log === undefined) {
-          await this.loadFull(slug)
+          await this.loadWork(slug)
           return
         }
         await this.ensureCurrent(slug, log)
         const current = this.logs.get(slug) ?? log
         if (!isWorkDigest(this.digestOf(slug, current))) {
+          // Its last events are in hand; leave the final state behind.
+          await this.persistLog(slug, current)
           this.work.delete(slug)
           if (!current.pinned) this.logs.delete(slug)
         }
@@ -285,7 +342,7 @@ export class RepoViewStore implements BuildStore {
         if (this.work.has(record.slug)) return
         const digest = this.discovery.get(record.slug)
         if (digest !== undefined && !isWorkDigest(digest)) return
-        await this.loadFull(record.slug)
+        await this.loadWork(record.slug)
         this.work.add(record.slug)
       })
     }
@@ -296,6 +353,9 @@ export class RepoViewStore implements BuildStore {
         if (log !== undefined && !this.work.has(slug) && !log.pinned) this.logs.delete(slug)
       })
     }
+    // The cold start's replay is the expensive part to lose: leave it behind
+    // now rather than only at the tick's end. Later epochs persist at the end.
+    if (this.epoch === 1) await this.persistSnapshots({ cold: true })
   }
 
   private refreshRecords(): Promise<void> {
@@ -339,19 +399,21 @@ export class RepoViewStore implements BuildStore {
     this.journalCursor = 0
     this.journalWindow = undefined
     this.journalDirty = false
+    this.persistedJournal = 0
   }
 
   /** Cold journal load. The true high-water mark is read before the bounded
    * subset: an event the subset excludes is never needed (a later anchor has a
    * higher seq and cannot pull earlier events into the tail), and everything
    * committed between the two reads is either returned or irrelevant. */
-  private async loadJournal(): Promise<void> {
+  private async loadJournal(opts: { snapshot?: boolean } = {}): Promise<void> {
     this.resetJournalState()
     if ((await this.backing.getRepo(this.repo)) === null) {
       this.recorded = false
       return
     }
     this.recorded = true
+    if (opts.snapshot === true && (await this.restoreJournal())) return
     const high = await this.backing.getRepoHighWater(this.repo)
     const subset = await this.backing.getRepoStateEvents(this.repo)
     this.foldJournal(subset)
@@ -359,9 +421,49 @@ export class RepoViewStore implements BuildStore {
     this.journalEpoch = this.epoch
   }
 
+  /** Install the stored journal view and read only the events newer than its
+   * cursor. Any shortfall — no snapshot, a malformed one, a failed or
+   * non-contiguous delta — leaves the state reset and answers `false`, and the
+   * caller replays in full. */
+  private async restoreJournal(): Promise<boolean> {
+    const scope: SnapshotScope = { kind: 'repo', repo: this.repo }
+    const snapshot = await loadReducerSnapshot(
+      this.backing,
+      scope,
+      SNAPSHOT_JOURNAL,
+      journalViewReducer,
+    )
+    if (snapshot === null) return false
+    const state = snapshot.state
+    if (
+      !isObject(state) ||
+      !Array.isArray(state.retained) ||
+      (state.anchor !== undefined && typeof state.anchor !== 'number')
+    ) {
+      return false
+    }
+    try {
+      const delta = (await this.backing.getRepoEvents(this.repo, snapshot.cursor)).filter(
+        (event) => event.seq > snapshot.cursor,
+      )
+      if (!contiguousFrom(delta, snapshot.cursor)) return false
+      this.journal = [...(state.retained as RepositoryEvent[])]
+      this.anchor = state.anchor as number | undefined
+      this.journalCursor = snapshot.cursor
+      this.persistedJournal = snapshot.cursor
+      this.foldJournal(delta)
+      this.journalEpoch = this.epoch
+      return true
+    } catch {
+      this.resetJournalState()
+      this.recorded = true
+      return false
+    }
+  }
+
   private async syncOrLoadJournal(): Promise<void> {
     if (!this.initialized) {
-      await this.loadJournal()
+      await this.loadJournal({ snapshot: true })
       this.initialized = true
     } else {
       await this.syncJournal(true)
@@ -373,7 +475,7 @@ export class RepoViewStore implements BuildStore {
   private async syncJournal(force = false): Promise<void> {
     if (!this.recorded) {
       if ((await this.backing.getRepo(this.repo)) === null) return
-      await this.loadJournal()
+      await this.loadJournal({ snapshot: true })
       return
     }
     if (!force && !this.journalDirty && this.journalEpoch === this.epoch) return
@@ -395,14 +497,13 @@ export class RepoViewStore implements BuildStore {
     for (const event of events) {
       if (event.seq <= this.journalCursor) continue
       this.journalCursor = event.seq
-      if (event.type === RUN_STARTED) {
-        this.anchor = event.seq
-        // Everything before the new anchor that is not durable leaves the tail.
-        this.journal = this.journal.filter((held) => DURABLE_JOURNAL_TYPES.has(held.type))
-      }
-      if (DURABLE_JOURNAL_TYPES.has(event.type) || this.anchor !== undefined) {
-        this.journal.push(event)
-      }
+      // The same prune-on-arrival fold the registered `journalView` reducer
+      // runs, so a snapshot of this state resumes identically.
+      const acc: JournalViewAcc = { retained: this.journal }
+      if (this.anchor !== undefined) acc.anchor = this.anchor
+      foldJournalView(acc, [event])
+      this.journal = acc.retained
+      this.anchor = acc.anchor
       const window = this.journalWindow
       if (window !== undefined && event.seq > window.last) {
         window.events.push(event)
@@ -445,10 +546,62 @@ export class RepoViewStore implements BuildStore {
       cursor: events.at(-1)?.seq ?? 0,
       dirty: false,
       epoch: this.epoch,
+      persisted: previous?.persisted ?? 0,
       pinned: previous?.pinned ?? false,
     }
     this.logs.set(slug, log)
     return log
+  }
+
+  /** Install a work build's log, from its stored reducer state when there is
+   * one. Runs on the build's chain. The snapshot-backed log holds only the
+   * events newer than the snapshot, plus the accumulators for everything
+   * before; a build discovery does not know (its digest would have to come from
+   * the trimmed log), or any shortfall, is a full read. */
+  private async loadWork(slug: string): Promise<Log> {
+    if (this.discovery.has(slug)) {
+      const restored = await this.restoreLog(slug)
+      if (restored !== null) return restored
+    }
+    return this.loadFull(slug)
+  }
+
+  private async restoreLog(slug: string): Promise<Log | null> {
+    const scope: SnapshotScope = { kind: 'build', slug }
+    const [build, index, open] = await Promise.all([
+      loadReducerSnapshot(this.backing, scope, SNAPSHOT_BUILD, buildReducer),
+      loadReducerSnapshot(this.backing, scope, SNAPSHOT_LOG_INDEX, logIndexReducer),
+      loadReducerSnapshot(this.backing, scope, SNAPSHOT_OPEN_EXECUTION, openExecutionReducer),
+    ])
+    // The three must describe the same prefix, else one is stale (a write that
+    // did not finish): replay rather than mix prefixes.
+    if (build === null || index === null || open === null) return null
+    if (build.cursor !== index.cursor || build.cursor !== open.cursor) return null
+    if (!buildAccShape(build) || !indexAccShape(index) || !openAccShape(open)) return null
+    const cursor = build.cursor
+    try {
+      const delta = (await this.backing.getEvents(slug, cursor)).filter(
+        (event) => event.seq > cursor,
+      )
+      if (!contiguousFrom(delta, cursor)) return null
+      const log: Log = {
+        from: cursor,
+        events: [],
+        cursor,
+        dirty: false,
+        epoch: this.epoch,
+        acc: build.state as BuildAcc,
+        index: index.state as LogIndexAcc,
+        open: open.state as OpenAcc,
+        persisted: cursor,
+        pinned: this.logs.get(slug)?.pinned ?? false,
+      }
+      if (delta.length > 0) this.fold(log, delta)
+      this.logs.set(slug, log)
+      return log
+    } catch {
+      return null
+    }
   }
 
   /** Bring one log current: a single delta read from its cursor, skipped when
@@ -473,6 +626,19 @@ export class RepoViewStore implements BuildStore {
     log.events.push(...events)
     log.cursor = events[events.length - 1]!.seq
     if (log.acc !== undefined) log.acc = buildReducer.advance(log.acc, events)
+    if (log.index !== undefined) log.index = logIndexReducer.advance(log.index, events)
+    if (log.open !== undefined) log.open = openExecutionReducer.advance(log.open, events)
+    // A trimmed log cannot derive its own digest; discovery owns it, so a fold
+    // that changes the build makes the held digest stale.
+    if (log.from > 0) this.discoveryDirty = true
+  }
+
+  /** Make the three accumulators exist. Needs the full history unless they are
+   * already held; the caller guarantees `from === 0` or all three present. */
+  private ensureAccs(log: Log): void {
+    log.acc ??= buildReducer.advance(buildReducer.initial(), log.events)
+    log.index ??= logIndexReducer.advance(logIndexReducer.initial(), log.events)
+    log.open ??= openExecutionReducer.advance(openExecutionReducer.initial(), log.events)
   }
 
   private async openWindow(slug: string, since: number): Promise<Log> {
@@ -489,6 +655,7 @@ export class RepoViewStore implements BuildStore {
         dirty: false,
         epoch: this.epoch,
         acc: buildReducer.advance(buildReducer.initial(), all),
+        persisted: 0,
         pinned: true,
       }
     } else {
@@ -499,6 +666,7 @@ export class RepoViewStore implements BuildStore {
         cursor: Math.max(since, events.at(-1)?.seq ?? 0),
         dirty: false,
         epoch: this.epoch,
+        persisted: 0,
         pinned: true,
       }
     }
@@ -557,6 +725,131 @@ export class RepoViewStore implements BuildStore {
       log = this.logs.get(slug) ?? log
       return log.acc !== undefined ? buildReducer.finish(log.acc) : reduceBuild(log.events)
     })
+  }
+
+  /** The reduced facts of one build — state, log index, open execution —
+   * brought current with one delta read, without its event array: a work
+   * build restored from snapshots answers from the accumulators. A log that is
+   * not snapshot-backed is reduced from its events (a full read the first
+   * time), and keeps the accumulators from then on. */
+  buildFacts(slug: string): Promise<BuildFacts> {
+    return this.build(slug, async () => {
+      let log = this.logs.get(slug)
+      if (log === undefined) {
+        log = this.work.has(slug) ? await this.loadWork(slug) : await this.loadFull(slug)
+      } else if (log.from > 0 && (log.acc === undefined || log.index === undefined)) {
+        log = await this.loadFull(slug)
+      }
+      await this.ensureCurrent(slug, log)
+      log = this.logs.get(slug) ?? log
+      this.ensureAccs(log)
+      return {
+        state: buildReducer.finish(log.acc!),
+        log: logIndexReducer.finish(log.index!),
+        open: openExecutionReducer.finish(log.open!),
+      }
+    })
+  }
+
+  // ── Snapshots ──────────────────────────────────────────────────────────────
+
+  /** Write one work log's reducer state back to the snapshot store, if it has
+   * advanced past what was last read or written. Runs on the build's chain.
+   * Best effort: a failure leaves the cursor so the next call retries. A log
+   * that is dirty (a foreign append not yet read) or trimmed without its
+   * accumulators is skipped — only a cursor read from the log is persisted. */
+  private async persistLog(slug: string, log: Log): Promise<void> {
+    if (log.dirty || log.cursor <= log.persisted) return
+    if (
+      log.from > 0 &&
+      (log.acc === undefined || log.index === undefined || log.open === undefined)
+    )
+      return
+    this.ensureAccs(log)
+    const scope: SnapshotScope = { kind: 'build', slug }
+    const cursor = log.cursor
+    const version = (reducer: { version: number }, state: unknown): ReducerSnapshot => ({
+      version: reducer.version,
+      cursor,
+      state,
+    })
+    const writes = [
+      persistReducerSnapshot(this.backing, scope, SNAPSHOT_BUILD, version(buildReducer, log.acc)),
+      persistReducerSnapshot(
+        this.backing,
+        scope,
+        SNAPSHOT_LOG_INDEX,
+        version(logIndexReducer, log.index),
+      ),
+      persistReducerSnapshot(
+        this.backing,
+        scope,
+        SNAPSHOT_OPEN_EXECUTION,
+        version(openExecutionReducer, log.open),
+      ),
+    ]
+    await Promise.all(writes)
+    log.persisted = Math.max(log.persisted, cursor)
+  }
+
+  /** Write the journal view back when it has advanced. Runs on the journal chain. */
+  private async persistJournal(): Promise<void> {
+    if (!this.recorded || this.journalDirty || this.journalCursor <= this.persistedJournal) return
+    const cursor = this.journalCursor
+    const state: JournalViewAcc = {
+      ...(this.anchor !== undefined ? { anchor: this.anchor } : {}),
+      retained: [...this.journal],
+    }
+    await persistReducerSnapshot(
+      this.backing,
+      { kind: 'repo', repo: this.repo },
+      SNAPSHOT_JOURNAL,
+      { version: JOURNAL_VIEW_REDUCER_VERSION, cursor, state },
+    )
+    this.persistedJournal = Math.max(this.persistedJournal, cursor)
+  }
+
+  /** Persist every source that advanced since it was read or last written: the
+   * journal view and each work build. A resident view throttles repeated
+   * persists; `force` and a process's first persist always run. The snapshots
+   * are a cache — nothing here can fail the caller. */
+  async persistSnapshots(opts: { force?: boolean; cold?: boolean } = {}): Promise<void> {
+    if (!this.initialized) return
+    const now = this.now()
+    if (opts.cold !== true) {
+      if (
+        opts.force !== true &&
+        this.lastPersistAt !== undefined &&
+        now - this.lastPersistAt < PERSIST_MIN_INTERVAL_MS
+      ) {
+        return
+      }
+      this.lastPersistAt = now
+    }
+    try {
+      await this.journalChain.run(() => this.persistJournal())
+    } catch {
+      // A cache: the next call retries.
+    }
+    const slugs = [...this.work].filter((slug) => {
+      const log = this.logs.get(slug)
+      return log !== undefined && log.cursor > log.persisted
+    })
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < slugs.length) {
+        const slug = slugs[next++]!
+        try {
+          await this.build(slug, async () => {
+            const log = this.logs.get(slug)
+            if (log !== undefined) await this.persistLog(slug, log)
+          })
+        } catch {
+          // A cache: the next call retries.
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PERSIST_CONCURRENCY, slugs.length) }, worker))
   }
 
   /** Drop retained events at or below `minCursor` for a windowed source — the
@@ -947,6 +1240,31 @@ export class RepoViewStore implements BuildStore {
   close(): Promise<void> {
     return this.backing.close()
   }
+}
+
+/** Cheap structural checks on a stored accumulator: a snapshot that fails one
+ * is a miss. They guard a hand-edited or truncated row; a well-formed row of the
+ * right version is the reducer's own output. */
+function buildAccShape(snapshot: ReducerSnapshot): boolean {
+  const state = snapshot.state
+  return (
+    isObject(state) && Array.isArray(state.openEscalations) && Array.isArray(state.observations)
+  )
+}
+
+function indexAccShape(snapshot: ReducerSnapshot): boolean {
+  const state = snapshot.state
+  return (
+    isObject(state) &&
+    Array.isArray(state.candidates) &&
+    isObject(state.maxRoundEver) &&
+    Array.isArray(state.guidanceDeliveries)
+  )
+}
+
+function openAccShape(snapshot: ReducerSnapshot): boolean {
+  const state = snapshot.state
+  return isObject(state) && 'open' in state && (state.open === null || isObject(state.open))
 }
 
 /** Events are a contiguous run starting right after `cursor`. */

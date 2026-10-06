@@ -155,6 +155,42 @@ export const repositoryStateEventsReducer: IncrementalReducer<
   finish: (acc) => acc.retained.filter((event) => keeps(event, acc.anchor)),
 })
 
+/** Carried state for the pruned journal view: the latest run-started seq and
+ * the subset the bounded read would return as of the events folded so far. Unlike
+ * `RepositoryStateEventsAcc` it prunes on every `dispatcher.run-started`
+ * (everything before the new anchor that is not durable leaves the tail), which
+ * is exact for seq-ordered input — the only input a real journal produces — and
+ * keeps the accumulator bounded, so it is the one a snapshot stores. */
+export interface JournalViewAcc {
+  anchor?: number
+  retained: RepositoryEvent[]
+}
+
+/** Bump when `JournalViewAcc` or its fold changes. */
+export const JOURNAL_VIEW_REDUCER_VERSION = 1
+
+/** Fold seq-ordered events into a journal view in place. */
+export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {
+  for (const event of events) {
+    if (event.type === RUN_STARTED) {
+      acc.anchor = event.seq
+      acc.retained = acc.retained.filter((held) => STATE_TYPES.has(held.type))
+    }
+    if (STATE_TYPES.has(event.type) || acc.anchor !== undefined) acc.retained.push(event)
+  }
+}
+
+export const journalViewReducer: IncrementalReducer<
+  JournalViewAcc,
+  RepositoryEvent,
+  RepositoryEvent[]
+> = defineReducer<JournalViewAcc, RepositoryEvent, RepositoryEvent[]>({
+  version: JOURNAL_VIEW_REDUCER_VERSION,
+  initial: () => ({ retained: [] }),
+  fold: foldJournalView,
+  finish: (acc) => [...acc.retained],
+})
+
 /** The normative subset derivation every adapter implements and the contract
  * tests use as the oracle: durable types across the whole journal, plus —
  * only when the journal has one — every event from the latest

@@ -28,7 +28,7 @@ import { publicationStateReducer } from '../processes/publication-state'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openTickReducer } from '../processes/tick-state'
 import { buildDigestReducer } from '../store/digest'
-import { repositoryStateEventsReducer } from '../store/repo-state-events'
+import { journalViewReducer, repositoryStateEventsReducer } from '../store/repo-state-events'
 import { sessionReducer } from '../store/session-reducer'
 import { pinnedAssetsReducer } from '../store/ticket-assets'
 import { autoMergeDefaultReducer } from './auto-merge-default'
@@ -86,6 +86,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
     reducer: repositoryStateEventsReducer,
     covers: ['projectRepositoryStateEvents'],
   },
+  journalView: { reducer: journalViewReducer, covers: [] },
   openExecution: { reducer: openExecutionReducer, covers: ['openExecution'] },
   lastExecutionOutcome: { reducer: lastExecutionOutcomeReducer, covers: ['lastExecutionOutcome'] },
   openHarvestExecutions: {
