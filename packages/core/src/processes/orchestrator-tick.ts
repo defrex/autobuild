@@ -226,7 +226,7 @@ export async function runOrchestratorTickStep(
       | undefined
     for (const build of builds) {
       const cursor = state.wakeCursors[build.slug] ?? 0
-      const buildEvents = await store.getEvents(build.slug)
+      const buildEvents = await store.getEvents(build.slug, cursor)
       for (const event of buildEvents) {
         if (event.seq <= cursor) continue
         if (!filters.some((regex) => regex.test(event.type))) continue

@@ -278,6 +278,60 @@ describe('orchestrator tick step', () => {
     expect(JSON.stringify(started.payload.wake)).toContain('Code loop stalled')
   })
 
+  test('a pass past every cursor reads zero build and journal event rows; a newer event is still found', async () => {
+    const store = new MemoryBuildStore({ clock: manualClock() })
+    const clock = manualClock()
+    await seedSession(store, clock, { wake: ['escalation.raised', 'harvest.escalated'] })
+    await seedBuild(store, 'b1', { escalate: true })
+    await store.appendRepo(REPO, {
+      actor: KERNEL,
+      type: 'harvest.escalated',
+      payload: {
+        run: 'run-1',
+        source: 'stall',
+        reason: 'Round ceiling reached',
+        observations: [{ build: 'b1', seq: 2 }],
+      },
+    })
+    // Counts the rows each source hands back to the wake pass.
+    let buildRows = 0
+    let journalRows = 0
+    const getEvents = store.getEvents.bind(store)
+    const getRepoEvents = store.getRepoEvents.bind(store)
+    store.getEvents = async (...args) => {
+      const rows = await getEvents(...args)
+      buildRows += rows.length
+      return rows
+    }
+    store.getRepoEvents = async (...args) => {
+      const rows = await getRepoEvents(...args)
+      journalRows += rows.length
+      return rows
+    }
+
+    // Two wakes (journal then build) advance both cursors.
+    await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    buildRows = 0
+    journalRows = 0
+
+    const quiet = await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    expect(quiet.woken).toBe(0)
+    expect(buildRows).toBe(0)
+    expect(journalRows).toBe(0)
+
+    // A new event above the cursor is read and still wakes.
+    await store.append('b1', {
+      actor: agentActor('implement', 'session-x'),
+      type: 'escalation.raised',
+      payload: { id: 'e2', phase: 'implement', round: 2, source: 'agent', question: 'Again?' },
+    })
+    buildRows = 0
+    const woken = await runOrchestratorTickStep(tickOptions(store, clock, textModel()))
+    expect(woken.woken).toBe(1)
+    expect(buildRows).toBeGreaterThan(0)
+  })
+
   test('journal and build wake sources keep separate cursors and re-trigger independently', async () => {
     const store = new MemoryBuildStore({ clock: manualClock() })
     const clock = manualClock()

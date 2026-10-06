@@ -75,6 +75,7 @@ import {
 } from '@defrex/autobuild/store-adapter'
 import {
   DIGEST_EVENT_TYPES,
+  type DigestEventRow,
   REPOSITORY_STATE_EVENT_TYPES,
   readRepoStateEventsWithAnchorRecheck,
   reduceBuildDigest,
@@ -274,7 +275,11 @@ export class PostgresBuildStore implements BuildStore {
     // actual signal, not with total history.
     const rows: Row[] = await this.run((q) =>
       q.unsafe(
-        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type
+        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type,
+              CASE WHEN e.type = 'pr-attachment.reclaimed'
+                THEN (e.payload->>'hostedSeq')::bigint END AS "hostedSeq",
+              CASE WHEN e.type IN ('execution.started', 'execution.ended')
+                THEN e.payload->>'instance' END AS instance
        FROM builds b
        LEFT JOIN events e
          ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map((_, i) => `$${i + 2}`).join(', ')})
@@ -283,7 +288,7 @@ export class PostgresBuildStore implements BuildStore {
         [repo, ...DIGEST_EVENT_TYPES],
       ),
     )
-    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq' | 'ts'>[]>()
+    const eventsByBuild = new Map<string, DigestEventRow[]>()
     for (const row of rows) {
       if (row.seq === null || row.seq === undefined) continue
       const events = eventsByBuild.get(String(row.slug)) ?? []
@@ -291,6 +296,12 @@ export class PostgresBuildStore implements BuildStore {
         type: String(row.type) as AbEvent['type'],
         seq: num(row.seq),
         ts: iso(row.ts),
+        ...(row.hostedSeq !== null && row.hostedSeq !== undefined
+          ? { hostedSeq: num(row.hostedSeq) }
+          : {}),
+        ...(row.instance !== null && row.instance !== undefined
+          ? { instance: String(row.instance) }
+          : {}),
       })
       eventsByBuild.set(String(row.slug), events)
     }
