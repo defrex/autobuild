@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#588](https://github.com/defrex/autobuild/pull/588) — Read only builds that still have work in the dispatcher tick
 - [#586](https://github.com/defrex/autobuild/pull/586) — Make every directory under the file tracker root a ticket state
 
 ## v0.9.0 — 2026-10-03
