@@ -33,6 +33,7 @@ import type {
   TicketDraft,
   TicketListing,
   TicketSource,
+  TicketStateInfo,
   TicketUpdate,
 } from '../types'
 import { validateTicketUpdate } from './update'
@@ -45,6 +46,21 @@ export const DEFAULT_TICKETS_DIR = '.autobuild/tickets'
  * are played by. Always valid state names, because `ensureLayout` creates them.
  */
 const LIFECYCLE_DIRS = ['triage', 'ready', 'doing', 'done'] as const
+
+/** Dotfile inside a state directory holding its one-line purpose. Dot entries
+ * and non-`.md` files are never tickets, so it can never be mistaken for one. */
+const ABOUT_FILE = '.about'
+
+const STATE_NAME_RULE =
+  'a state name is one to forty characters of lowercase letters, digits, and hyphens, starting with a letter'
+const STATE_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/
+
+/** Throws, stating the rule, unless `name` may be used to create a state. */
+export function validateStateName(name: string): void {
+  if (!STATE_NAME_RE.test(name)) {
+    throw new Error(`file ticket source: invalid state name "${name}" — ${STATE_NAME_RULE}`)
+  }
+}
 
 /** The state names a root listing yields: the lifecycle four, then every other
  * non-dot directory alphabetically. Dot entries and files are never states. */
@@ -415,8 +431,51 @@ export class FileTicketSource implements TicketSource {
     return states
   }
 
+  /** Every state with its ticket count and purpose. Reads directories only —
+   * never parses a ticket — so a malformed record cannot hide the states. */
+  async listStates(): Promise<TicketStateInfo[]> {
+    const infos: TicketStateInfo[] = []
+    for (const name of await this.states()) infos.push(await this.stateInfo(name))
+    return infos
+  }
+
+  async addState(
+    name: string,
+    opts: { about?: string } = {},
+  ): Promise<{ state: TicketStateInfo; created: boolean }> {
+    validateStateName(name)
+    const about = opts.about === undefined ? undefined : opts.about.trim()
+    if (about !== undefined && (about === '' || /[\r\n]/.test(about))) {
+      throw new Error('file ticket source: a state purpose must be one nonblank line')
+    }
+    const existing = await this.states()
+    const clash = existing.find((s) => s !== name && s.toLowerCase() === name.toLowerCase())
+    if (clash !== undefined) {
+      throw new Error(
+        `file ticket source: state "${name}" collides with the existing state "${clash}" — ${STATE_NAME_RULE}, ` +
+          'and state names are compared case-insensitively',
+      )
+    }
+    const created = !existing.includes(name)
+    await this.ensureLayout()
+    if (created) await mkdir(join(this.dir, name))
+    if (about !== undefined) await writeFile(join(this.dir, name, ABOUT_FILE), `${about}\n`)
+    return { state: await this.stateInfo(name), created }
+  }
+
+  private async stateInfo(name: string): Promise<TicketStateInfo> {
+    const tickets = (await this.readMarkdown(join(this.dir, name))).length
+    let about: string | undefined
+    try {
+      about = (await readFile(join(this.dir, name, ABOUT_FILE), 'utf8')).trim()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    return { name, tickets, ...(about ? { about } : {}) }
+  }
+
   /**
-   * The four lifecycle dirs (never a custom state: creating one stays an
+   * The four lifecycle dirs (never a custom state: `addState` is the
    * explicit act), plus — for the defaulted backlog only — a
    * self-excluding `.gitignore`. Same move `src/cli/context.ts` makes for
    * `.ab/`: the dir hides itself from git in ANY repo, so the local backlog is

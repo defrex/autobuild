@@ -1183,7 +1183,11 @@ and case-sensitively. The file source matches state names case-insensitively aga
 under the tracker root: the four lifecycle directories (`triage/`, `ready/`,
 `doing/`, `done/`, always present) plus any directory the repository adds, such
 as `icebox/`. A name matching no directory is an error listing those that
-exist, so creating a state stays an explicit act. `createState`, `readyState`,
+exist, so creating a state stays an explicit act: `ab ticket state create <name>
+[--about <text>]` makes one, and `ab ticket states` lists every state with its
+roles, ticket count, and purpose. A purpose is stored as a one-line `.about` file
+inside the state directory, so it travels with a git-tracked `dir` and is never
+read as a ticket. `createState`, `readyState`,
 `triageState`, and `proposalState` may each name any existing directory;
 `ab ticket list` with no filter still lists only `readyState`.
 

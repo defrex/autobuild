@@ -789,8 +789,8 @@ remain fatal: the same id in two state dirs is a loud error naming both paths,
 as are root-level ticket files with no state and filesystem failures. When
 `dir` is defaulted, the backlog writes its own `.gitignore` of `*`, so git never sees it; an
 explicit `dir` is the user's and is left alone. Agents and operators drive it
-through the source-agnostic `ab ticket` commands rather than running `mv` by
-hand.
+through the source-agnostic `ab ticket` commands rather than running `mv` or
+`mkdir` by hand; `ab ticket state create` makes a new state.
 
 **Secrets never live in this file.** `LINEAR_API_KEY` and plugin-declared
 `requiredEnv` credentials are environment variables (a local `.env` works).
@@ -1068,6 +1068,19 @@ with Linear and the file tracker, without provider-specific API/MCP calls:
   labeled metadata and the body verbatim, so it can read a stored spec back.
 - `ab ticket move <id> <state> [--json]` transitions one ticket and reports its
   post-transition value.
+- `ab ticket states [--json]` lists every state of the configured source:
+  lifecycle states first (triage, ready, doing, done), then custom states
+  alphabetically. Each row has the state name, the roles it plays under the
+  current config (create, ready, claimed, triage, proposal, done, or none), its
+  ticket count, and its purpose when set. `--json` emits one bare array of
+  `{name, roles, tickets, about?}`.
+- `ab ticket state create <name> [--about <text>] [--json]` makes a state, for
+  example `icebox`. It is idempotent: an existing state is reported as already
+  existing, and `--about` (one line) records or replaces its purpose. A name is
+  one to forty lowercase letters, digits, and hyphens starting with a letter,
+  and may not match an existing state case-insensitively. There is no rename or
+  delete. Only the file source supports `states` and `state create`; other
+  sources exit nonzero naming the source and the unsupported operation.
 
 State names and ids are source-local. For block and unblock, the first id is the
 ticket being changed and the comma-separated second operand names its blockers.
