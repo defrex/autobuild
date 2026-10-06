@@ -8,12 +8,15 @@
 import { describe, expect, test } from 'bun:test'
 import type { AbEvent } from '../events/catalog'
 import { agentActor, DISPATCHER, KERNEL } from '../events/envelope'
+import { pendingPrAttachmentReclaims } from '../kernel/pr-attachments'
 import { reduceBuild } from '../kernel/reducer'
 import { checkIncremental } from '../kernel/incremental-contract'
+import { openExecution } from '../processes/execution-settlement'
 import {
   buildDigestReducer,
-  reduceBuildDigest as reduceBuildDigestWhole,
   type DigestEvent,
+  type DigestEventRow,
+  reduceBuildDigest as reduceBuildDigestWhole,
 } from './digest'
 
 /** Minimal digest-relevant envelopes — the derivation reads only type/seq/ts. */
@@ -153,6 +156,114 @@ describe('reduceBuildDigest', () => {
     ).toEqual({
       observations: [],
       merged: '2026-07-15T12:00:03.000Z',
+      terminal: 'done',
+    })
+  })
+})
+
+/** Full envelopes for the pending-work facts, with the digest-row projection
+ * an adapter would ship, so both derivations run over the same log. */
+function workLog(
+  items: (
+    | { type: 'execution.started' | 'execution.ended'; instance: string }
+    | { type: 'pr-attachment.hosted' }
+    | { type: 'pr-attachment.reclaimed'; hostedSeq: number }
+  )[],
+): { events: AbEvent[]; rows: DigestEventRow[] } {
+  const events = items.map((item, index) => {
+    const seq = index + 1
+    const payload =
+      item.type === 'execution.started'
+        ? { provider: 'p', workspaceRef: 'w', instance: item.instance }
+        : item.type === 'execution.ended'
+          ? { instance: item.instance, workspaceRef: 'w', outcome: 'completed' }
+          : item.type === 'pr-attachment.reclaimed'
+            ? { hostedSeq: item.hostedSeq }
+            : { designationSeq: 1, asset: {} }
+    return {
+      build: 'b',
+      seq,
+      ts: new Date(Date.parse('2026-07-15T12:00:00.000Z') + seq).toISOString(),
+      actor: DISPATCHER,
+      type: item.type,
+      payload,
+    } as AbEvent
+  })
+  const rows = items.map((item, index) => ({
+    type: item.type,
+    seq: index + 1,
+    ts: events[index]!.ts,
+    ...('instance' in item ? { instance: item.instance } : {}),
+    ...(item.type === 'pr-attachment.reclaimed' ? { hostedSeq: item.hostedSeq } : {}),
+  }))
+  return { events, rows }
+}
+
+describe('reduceBuildDigest pending-work flags', () => {
+  test('executionOpen follows openExecution over matched, mismatched, repeated, and reopened logs', () => {
+    const logs = [
+      [{ type: 'execution.started', instance: 'a' }],
+      [
+        { type: 'execution.started', instance: 'a' },
+        { type: 'execution.ended', instance: 'a' },
+      ],
+      [
+        { type: 'execution.started', instance: 'a' },
+        { type: 'execution.ended', instance: 'other' },
+      ],
+      [
+        { type: 'execution.ended', instance: 'a' },
+        { type: 'execution.started', instance: 'a' },
+      ],
+      [
+        { type: 'execution.started', instance: 'a' },
+        { type: 'execution.ended', instance: 'a' },
+        { type: 'execution.ended', instance: 'a' },
+        { type: 'execution.started', instance: 'b' },
+      ],
+      [
+        { type: 'execution.started', instance: 'a' },
+        { type: 'execution.started', instance: 'b' },
+        { type: 'execution.ended', instance: 'a' },
+      ],
+      [],
+    ] as Parameters<typeof workLog>[0][]
+    const open = logs.map((log) => {
+      const { events, rows } = workLog(log)
+      const digest = reduceBuildDigest(rows)
+      expect(digest.executionOpen === true).toBe(openExecution(events) !== null)
+      return digest.executionOpen === true
+    })
+    expect(open).toEqual([true, false, true, true, true, true, false])
+  })
+
+  test('reclaimPending follows pendingPrAttachmentReclaims over acked, unacked, backwards, and unknown acks', () => {
+    const logs = [
+      [{ type: 'pr-attachment.hosted' }],
+      [{ type: 'pr-attachment.hosted' }, { type: 'pr-attachment.reclaimed', hostedSeq: 1 }],
+      // Backwards ack: the reclaimed event precedes the hosted seq it names.
+      [{ type: 'pr-attachment.reclaimed', hostedSeq: 2 }, { type: 'pr-attachment.hosted' }],
+      // Unknown ack names a seq that is no hosted event.
+      [{ type: 'pr-attachment.hosted' }, { type: 'pr-attachment.reclaimed', hostedSeq: 9 }],
+      [
+        { type: 'pr-attachment.hosted' },
+        { type: 'pr-attachment.hosted' },
+        { type: 'pr-attachment.reclaimed', hostedSeq: 2 },
+      ],
+      [],
+    ] as Parameters<typeof workLog>[0][]
+    const pending = logs.map((log) => {
+      const { events, rows } = workLog(log)
+      const digest = reduceBuildDigest(rows)
+      expect(digest.reclaimPending === true).toBe(pendingPrAttachmentReclaims(events).length > 0)
+      return digest.reclaimPending === true
+    })
+    expect(pending).toEqual([true, false, true, true, true, false])
+  })
+
+  test('neither flag is present for a log without those facts', () => {
+    expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
+      observations: [],
       terminal: 'done',
     })
   })

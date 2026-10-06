@@ -75,7 +75,7 @@ import type {
   WorkspaceProvider,
 } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
-import type { ArtifactMeta, BuildRecord, BuildStore, Clock } from '../store/types'
+import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
 import { samplePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
@@ -806,6 +806,51 @@ export class Dispatcher {
     return this.deps.opts?.triageState ?? defaultTriageState(this.deps.config)
   }
 
+  /** This repository's builds paired with their digests, from one record
+   * listing and one digest read — the tick loops' per-build event reads start
+   * from here so a settled terminal build costs none. Records are read before
+   * digests (as `operator/query.ts` does) so a concurrent create cannot fail
+   * the completeness check. */
+  private async repoBuildDigests(): Promise<{ record: BuildRecord; digest: BuildDigest }[]> {
+    const { store, repo } = this.deps
+    const records = (await store.listBuilds()).filter((record) => record.repo === repo)
+    const digests = await store.getRepoBuildDigests(repo)
+    return records.map((record) => {
+      const digest = digests.get(record.slug)
+      if (digest === undefined) {
+        throw new Error(
+          `build digest missing for ${record.slug}: the digest read broke completeness`,
+        )
+      }
+      return { record, digest }
+    })
+  }
+
+  /** Builds with no terminal fact: the only ones whose tick duties change
+   * their state (decide, resume, lease sweep, capacity). */
+  private async nonterminalBuilds(): Promise<BuildRecord[]> {
+    return (await this.repoBuildDigests())
+      .filter(({ digest }) => digest.terminal === undefined)
+      .map(({ record }) => record)
+  }
+
+  /** Builds that still have work: nonterminal ones, plus terminal builds whose
+   * post-terminal duty is outstanding — an `aborted` build awaiting its
+   * cleanup's `build.completed`, a `done` build with an unreclaimed release
+   * asset, or any build with an execution the provider has not been seen to
+   * end. A terminal, settled build costs no event reads. */
+  private async workBuilds(): Promise<BuildRecord[]> {
+    return (await this.repoBuildDigests())
+      .filter(
+        ({ digest }) =>
+          digest.terminal === undefined ||
+          digest.terminal === 'aborted' ||
+          digest.reclaimPending === true ||
+          digest.executionOpen === true,
+      )
+      .map(({ record }) => record)
+  }
+
   /** Observation-only ready listing for Store-backed frontends while intake is
    * disabled. It shares the active-ticket exclusion with dispatch but performs
    * no dependency fetch, claim, bounce, build, workspace, or launch side
@@ -817,10 +862,8 @@ export class Dispatcher {
   }> {
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     const activeTicketIds = new Set<string>()
-    for (const record of await this.deps.store.listBuilds()) {
-      if (record.repo !== this.deps.repo || record.ticket === undefined) continue
-      const state = reduceBuild(await this.deps.store.getEvents(record.slug))
-      if (state.status !== 'done' && state.status !== 'aborted') {
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (record.ticket !== undefined && digest.terminal === undefined) {
         activeTicketIds.add(record.ticket.id)
       }
     }
@@ -850,9 +893,10 @@ export class Dispatcher {
   private async applyAutoMergeDefault(fact: AutoMergeDefaultFact | undefined): Promise<void> {
     if (fact === undefined) return
     const { store } = this.deps
-    for (const record of (await store.listBuilds())
-      .filter((candidate) => candidate.repo === this.deps.repo)
-      .sort((a, b) => a.slug.localeCompare(b.slug))) {
+    // Terminal builds are never eligible (`autoMergeDefaultEligible`).
+    for (const record of (await this.nonterminalBuilds()).sort((a, b) =>
+      a.slug.localeCompare(b.slug),
+    )) {
       while (true) {
         const events = await store.getEvents(record.slug)
         const state = reduceBuild(events)
@@ -917,8 +961,7 @@ export class Dispatcher {
    * the stage still settles. */
   private async settleForeignExecutions(report: TickReport, opts: TickOpts = {}): Promise<void> {
     const active = this.deps.activeExecutions?.() ?? new Set<string>()
-    for (const record of await this.deps.store.listBuilds()) {
-      if (record.repo !== this.deps.repo) continue
+    for (const record of await this.workBuilds()) {
       if (active.has(record.slug)) continue
       // Budget gate: once spent, stop settling further foreign executions.
       if (this.outOfBudget(opts)) break
@@ -1433,12 +1476,11 @@ export class Dispatcher {
   ): Promise<void> {
     // Listing is repository-wide work: if it fails there is no individual
     // build to attribute, so the caller's existing top-level boundary owns it.
-    const records = await this.deps.store.listBuilds()
+    // Only this repo's builds that still have work (§12: another repo's
+    // builds are another dispatcher's duty; settled terminal builds cost no
+    // event reads).
+    const records = await this.workBuilds()
     for (const record of records) {
-      // One dispatcher per repo (§12), but the store is shared by design
-      // (§7.2) — another repo's builds are another dispatcher's duty. Acting
-      // on them would poll foreign PRs and break single-writer discipline.
-      if (record.repo !== this.deps.repo) continue
       // Budget gate: the janitor's per-build path issues forge/store transport
       // calls (PR probes, closePr, deleteBranch); once the budget is spent,
       // stop starting new ones. The remaining builds stay janitor due — the
@@ -2479,9 +2521,8 @@ export class Dispatcher {
     paused: boolean,
     opts: TickOpts = {},
   ): Promise<void> {
-    for (const record of await this.deps.store.listBuilds()) {
+    for (const record of await this.nonterminalBuilds()) {
       if (
-        record.repo !== this.deps.repo ||
         record.ticket === undefined ||
         launched.has(record.slug) ||
         this.continuations.has(record.slug)
@@ -2528,8 +2569,8 @@ export class Dispatcher {
     opts: TickOpts = {},
   ): Promise<void> {
     const { store, config } = this.deps
-    for (const record of await store.listBuilds()) {
-      if (record.repo !== this.deps.repo || launched.has(record.slug)) continue
+    for (const record of await this.nonterminalBuilds()) {
+      if (launched.has(record.slug)) continue
       // Budget gate: resume launches runners (transport-backed work).
       if (this.outOfBudget(opts)) break
 
@@ -2595,8 +2636,9 @@ export class Dispatcher {
     opts: TickOpts = {},
   ): Promise<void> {
     const now = this.deps.clock().getTime()
-    for (const record of await this.deps.store.listBuilds()) {
-      if (record.repo !== this.deps.repo) continue // §12: not this dispatcher's build
+    // Terminal builds are filtered on the digest before the lease and TTL
+    // checks, so a zero TTL cannot fall through to a log read.
+    for (const record of await this.nonterminalBuilds()) {
       if (launched.has(record.slug)) continue
       // Budget gate: the sweep re-attaches runners per expired build.
       if (this.outOfBudget(opts)) break
@@ -2730,10 +2772,8 @@ export class Dispatcher {
     // (§16.1) — another repo's builds never consume this repo's slots.
     let active = 0
     const activeTicketIds = new Set<string>()
-    for (const record of await store.listBuilds()) {
-      if (record.repo !== this.deps.repo) continue
-      const state = reduceBuild(await store.getEvents(record.slug))
-      if (state.status !== 'done' && state.status !== 'aborted') {
+    for (const { record, digest } of await this.repoBuildDigests()) {
+      if (digest.terminal === undefined) {
         active += 1
         if (record.ticket) activeTicketIds.add(record.ticket.id)
       }

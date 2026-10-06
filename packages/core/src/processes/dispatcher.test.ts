@@ -7047,3 +7047,163 @@ describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
     expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 0, 3)])
   })
 })
+
+// ── Tick reads only builds that still have work ──────────────────────────────
+
+/** A memory store that counts `getEvents` calls per build, so a tick's
+ * per-build read set can be asserted. */
+class ReadCountingStore extends MemoryBuildStore {
+  readonly reads = new Map<string, number>()
+  override getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+    this.reads.set(args[0], (this.reads.get(args[0]) ?? 0) + 1)
+    return super.getEvents(...args)
+  }
+  /** Distinct builds read since the last call, clearing the counter. */
+  drain(): string[] {
+    const slugs = [...this.reads.keys()].sort()
+    this.reads.clear()
+    return slugs
+  }
+}
+
+describe('Dispatcher tick event reads', () => {
+  function countingHarness(over: Parameters<typeof harness>[0] = {}) {
+    const store = new ReadCountingStore({ clock: manualClock() })
+    return { store, h: harness({ ...over, store }) }
+  }
+
+  const complete = (h: Harness, slug: string, outcome: 'merged' | 'abandoned' = 'abandoned') =>
+    h.store.append(slug, { actor: DISPATCHER, type: 'build.completed', payload: { outcome } })
+
+  test('settled terminal builds cost no event reads; only nonterminal builds are read', async () => {
+    const { store, h } = countingHarness()
+    const terminal: string[] = []
+    for (let i = 0; i < 4; i += 1) {
+      const slug = await seedBuild(h, { slug: `done-${i}` })
+      await complete(h, slug, 'merged')
+      terminal.push(slug)
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const slug = await seedBuild(h, { slug: `aborted-${i}` })
+      await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+      await complete(h, slug)
+      terminal.push(slug)
+    }
+    const live = ['live-a', 'live-b']
+    for (const slug of live) await seedBuild(h, { slug })
+    store.drain()
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const read = store.drain()
+    expect(read.filter((slug) => terminal.includes(slug))).toEqual([])
+    expect(read.length).toBeLessThanOrEqual(live.length)
+  })
+
+  test('a lease sweep with a zero TTL never reads a terminal build', async () => {
+    const { store, h } = countingHarness()
+    const slug = await seedBuild(h, { slug: 'swept' })
+    await complete(h, slug)
+    expect(await h.store.claimLease(slug, 'old', 100)).toBe(true)
+    await h.store.releaseLease(slug, 'old')
+    h.clock.advance(1_000)
+    store.drain()
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drain()).toEqual([])
+  })
+
+  test('an aborted build is read until cleanup records build.completed, then not again', async () => {
+    const { store, h } = countingHarness()
+    const slug = await seedBuild(h, { slug: 'cleaning' })
+    await h.store.append(slug, { actor: KERNEL, type: 'build.aborted', payload: {} })
+    store.drain()
+
+    const first = await h.dispatcher.tick({ acceptNewWork: false })
+    expect(first.abandoned).toBe(1)
+    expect(store.drain()).toContain(slug)
+    expect(reduceBuild(await h.store.getEvents(slug)).status).toBe('done')
+    store.drain()
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drain()).toEqual([])
+  })
+
+  test('a done build with an unreclaimed attachment is read until the reclaim is recorded', async () => {
+    const { store, h } = countingHarness({ prAttachments: true })
+    const slug = await seedBuild(h, { slug: 'reclaim', workspace: false })
+    await seedHostedPrAttachment(h, slug)
+    await complete(h, slug)
+    h.forge.failNextPrAttachmentReclaim('outage')
+    store.drain()
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drain()).toContain(slug)
+    // The failed attempt left the reclaim pending: still read.
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drain()).toContain(slug)
+    expect(
+      (await h.store.getEvents(slug)).filter((event) => event.type === 'pr-attachment.reclaimed'),
+    ).toHaveLength(1)
+    store.drain()
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drain()).toEqual([])
+  })
+
+  test('a terminal build with an open execution is still settled, then costs no reads', async () => {
+    let state: 'running' | 'ended' = 'running'
+    const execution: BuildExecution = {
+      async start() {
+        throw new Error('not used')
+      },
+      async observe() {
+        return state === 'running' ? { state: 'running' } : { state: 'ended', exitCode: 0 }
+      },
+    }
+    const provider: WorkspaceProvider = {
+      name: 'remote-test',
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      buildExecution: execution,
+      async provision() {
+        throw new Error('not used')
+      },
+      async release() {},
+    }
+    const { store, h } = countingHarness({ workspaceProvider: provider })
+    const slug = await seedBuild(h, { slug: 'open-exec', workspace: false })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: {
+        provider: 'remote-test',
+        workspaceRef: 'sandbox-g0',
+        instance: 'foreign-1',
+        environmentId: 'sandbox-g0',
+        sessionId: 'session-1',
+        commandId: 'cmd-1',
+      },
+    })
+    await complete(h, slug)
+    // A settled terminal build alongside it: never read.
+    const settled = await seedBuild(h, { slug: 'settled', workspace: false })
+    await complete(h, settled)
+    store.drain()
+
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).settled).toBe(0)
+    expect(store.drain()).toEqual([slug])
+
+    state = 'ended'
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).settled).toBe(1)
+    expect(store.drain()).toEqual([slug])
+    expect((await h.store.getEvents(slug)).at(-1)?.type).toBe('execution.ended')
+    store.drain()
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drain()).toEqual([])
+  })
+})

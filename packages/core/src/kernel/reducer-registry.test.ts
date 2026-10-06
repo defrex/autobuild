@@ -91,7 +91,7 @@ describe('reducer registry', () => {
         "autoMergeDefault": 1,
         "baseBranch": 1,
         "build": 1,
-        "buildDigest": 1,
+        "buildDigest": 2,
         "currentDeferralObservation": 1,
         "currentPrAttachments": 1,
         "dispatchSettings": 1,

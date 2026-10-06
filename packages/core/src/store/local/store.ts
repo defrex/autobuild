@@ -42,7 +42,7 @@ import {
 import { createBuildScopedStore } from '../build-scope'
 import { validateCreatedEvent } from '../new-build'
 import { createSessionScopedStore } from '../session-handle'
-import { DIGEST_EVENT_TYPES, reduceBuildDigest } from '../digest'
+import { DIGEST_EVENT_TYPES, type DigestEventRow, reduceBuildDigest } from '../digest'
 import {
   REPOSITORY_STATE_EVENT_TYPES,
   readRepoStateEventsWithAnchorRecheck,
@@ -491,7 +491,11 @@ export class SqliteBuildStore implements BuildStore {
     // per build, so the answer cannot drift from `reduceBuild`.
     const rows = this.sqlite
       .query(
-        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type
+        `SELECT b.slug AS slug, e.seq AS seq, e.ts AS ts, e.type AS type,
+                CASE WHEN e.type = 'pr-attachment.reclaimed'
+                  THEN json_extract(e.payload, '$.hostedSeq') END AS hostedSeq,
+                CASE WHEN e.type IN ('execution.started', 'execution.ended')
+                  THEN json_extract(e.payload, '$.instance') END AS instance
          FROM builds b
          LEFT JOIN events e
            ON e.build = b.slug AND e.type IN (${DIGEST_EVENT_TYPES.map(() => '?').join(', ')})
@@ -503,12 +507,20 @@ export class SqliteBuildStore implements BuildStore {
       seq: number | null
       ts: string | null
       type: string | null
+      hostedSeq: number | null
+      instance: string | null
     }[]
-    const eventsByBuild = new Map<string, Pick<AbEvent, 'type' | 'seq' | 'ts'>[]>()
+    const eventsByBuild = new Map<string, DigestEventRow[]>()
     for (const row of rows) {
       if (row.seq === null || row.ts === null || row.type === null) continue
       const events = eventsByBuild.get(row.slug) ?? []
-      events.push({ type: row.type as AbEvent['type'], seq: row.seq, ts: row.ts })
+      events.push({
+        type: row.type as AbEvent['type'],
+        seq: row.seq,
+        ts: row.ts,
+        ...(row.hostedSeq !== null ? { hostedSeq: row.hostedSeq } : {}),
+        ...(row.instance !== null ? { instance: row.instance } : {}),
+      })
       eventsByBuild.set(row.slug, events)
     }
     const digests = new Map<string, BuildDigest>()
