@@ -8,6 +8,7 @@
  * supervisor died.
  */
 import type { RepositoryEvent } from '../events/repository'
+import { defineReducer } from '../kernel/incremental'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   actionableHarvestRun,
@@ -16,42 +17,53 @@ import {
 } from '../kernel/harvest'
 import type { HarvestRunnerResult } from './harvest-runner'
 
-/** Open harvest executions: every `harvest.execution.started` not followed by
- * a matching `harvest.execution.released`, in journal order. */
-export function openHarvestExecutions(events: readonly RepositoryEvent[]): Array<{
+export interface OpenHarvestExecution {
   execution: string
   provider: string
   environmentId: string
   sessionId?: string
   commandId?: string
   seq: number
-}> {
-  const open = new Map<
-    string,
-    {
-      execution: string
-      provider: string
-      environmentId: string
-      sessionId?: string
-      commandId?: string
-      seq: number
+}
+
+export const OPEN_HARVEST_EXECUTIONS_REDUCER_VERSION = 1
+
+/** Open harvest executions: every `harvest.execution.started` not followed by
+ * a matching `harvest.execution.released`, in journal order. The accumulator is
+ * an ordered array: a re-started execution keeps its original position, as it
+ * did in the `Map` this replaces. */
+export const openHarvestExecutionsReducer = defineReducer<
+  { open: OpenHarvestExecution[] },
+  RepositoryEvent,
+  OpenHarvestExecution[]
+>({
+  version: OPEN_HARVEST_EXECUTIONS_REDUCER_VERSION,
+  initial: () => ({ open: [] }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'harvest.execution.started') {
+        const entry: OpenHarvestExecution = {
+          execution: event.payload.execution,
+          provider: event.payload.provider,
+          environmentId: event.payload.environmentId,
+          ...(event.payload.sessionId !== undefined ? { sessionId: event.payload.sessionId } : {}),
+          ...(event.payload.commandId !== undefined ? { commandId: event.payload.commandId } : {}),
+          seq: event.seq,
+        }
+        const index = acc.open.findIndex((item) => item.execution === entry.execution)
+        if (index === -1) acc.open.push(entry)
+        else acc.open[index] = entry
+      } else if (event.type === 'harvest.execution.released') {
+        const index = acc.open.findIndex((item) => item.execution === event.payload.execution)
+        if (index !== -1) acc.open.splice(index, 1)
+      }
     }
-  >()
-  for (const event of events) {
-    if (event.type === 'harvest.execution.started') {
-      open.set(event.payload.execution, {
-        execution: event.payload.execution,
-        provider: event.payload.provider,
-        environmentId: event.payload.environmentId,
-        ...(event.payload.sessionId !== undefined ? { sessionId: event.payload.sessionId } : {}),
-        ...(event.payload.commandId !== undefined ? { commandId: event.payload.commandId } : {}),
-        seq: event.seq,
-      })
-    } else if (event.type === 'harvest.execution.released') {
-      open.delete(event.payload.execution)
-    }
-  }
-  return [...open.values()]
+  },
+  finish: (acc) => acc.open.map((item) => ({ ...item })),
+})
+
+export function openHarvestExecutions(events: readonly RepositoryEvent[]): OpenHarvestExecution[] {
+  return openHarvestExecutionsReducer.reduce(events)
 }
 
 export interface HarvestExecutionClassificationInput {

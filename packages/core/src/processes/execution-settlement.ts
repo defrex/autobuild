@@ -18,58 +18,80 @@ import type {
   BuildExecutionIdentity,
   ExecutionObservation,
 } from '../ports/workspace/build-execution'
+import { defineReducer } from '../kernel/incremental'
 import type { BuildStore } from '../store/types'
 
-/** The latest `execution.started` not followed by an instance-matched
- * `execution.ended`, or null when no execution is open. */
-export function openExecution(events: AbEvent[]): {
+export interface OpenExecution {
   instance: string
   workspaceRef: string
   provider: string
   environmentId?: string
   sessionId?: string
   commandId?: string
-} | null {
-  let open: {
-    instance: string
-    workspaceRef: string
-    provider: string
-    environmentId?: string
-    sessionId?: string
-    commandId?: string
-  } | null = null
-  for (const event of events) {
-    if (event.type === 'execution.started') {
-      const payload = event.payload
-      open = {
-        instance: payload.instance,
-        workspaceRef: payload.workspaceRef,
-        provider: payload.provider,
-        ...(payload.environmentId !== undefined ? { environmentId: payload.environmentId } : {}),
-        ...(payload.sessionId !== undefined ? { sessionId: payload.sessionId } : {}),
-        ...(payload.commandId !== undefined ? { commandId: payload.commandId } : {}),
-      }
-    } else if (event.type === 'execution.ended' && open !== null) {
-      if (event.payload.instance === open.instance) open = null
-    }
-  }
-  return open
 }
+
+export const OPEN_EXECUTION_REDUCER_VERSION = 1
+
+/** The latest `execution.started` not followed by an instance-matched
+ * `execution.ended`, or null when no execution is open. */
+export const openExecutionReducer = defineReducer<
+  { open: OpenExecution | null },
+  AbEvent,
+  OpenExecution | null
+>({
+  version: OPEN_EXECUTION_REDUCER_VERSION,
+  initial: () => ({ open: null }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'execution.started') {
+        const payload = event.payload
+        acc.open = {
+          instance: payload.instance,
+          workspaceRef: payload.workspaceRef,
+          provider: payload.provider,
+          ...(payload.environmentId !== undefined ? { environmentId: payload.environmentId } : {}),
+          ...(payload.sessionId !== undefined ? { sessionId: payload.sessionId } : {}),
+          ...(payload.commandId !== undefined ? { commandId: payload.commandId } : {}),
+        }
+      } else if (event.type === 'execution.ended' && acc.open !== null) {
+        if (event.payload.instance === acc.open.instance) acc.open = null
+      }
+    }
+  },
+  finish: (acc) => (acc.open === null ? null : { ...acc.open }),
+})
+
+export function openExecution(events: AbEvent[]): OpenExecution | null {
+  return openExecutionReducer.reduce(events)
+}
+
+export type ExecutionOutcome = 'open' | 'completed' | 'stopped' | 'lost' | 'none'
+
+export const LAST_EXECUTION_OUTCOME_REDUCER_VERSION = 1
 
 /** The lifecycle state of the latest recorded execution: `open` (no matching
  * end yet), `completed`/`stopped`/`lost` (its recorded end), or `none`. */
-export function lastExecutionOutcome(
-  events: AbEvent[],
-): 'open' | 'completed' | 'stopped' | 'lost' | 'none' {
-  let state: 'open' | 'completed' | 'stopped' | 'lost' | 'none' = 'none'
-  for (const event of events) {
-    if (event.type === 'execution.started') {
-      state = 'open'
-    } else if (event.type === 'execution.ended' && state === 'open') {
-      state = event.payload.outcome
+export const lastExecutionOutcomeReducer = defineReducer<
+  { state: ExecutionOutcome },
+  AbEvent,
+  ExecutionOutcome
+>({
+  version: LAST_EXECUTION_OUTCOME_REDUCER_VERSION,
+  initial: () => ({ state: 'none' }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'execution.started') {
+        acc.state = 'open'
+      } else if (event.type === 'execution.ended' && acc.state === 'open') {
+        acc.state = event.payload.outcome
+      }
     }
-  }
-  return state
+  },
+  finish: (acc) => acc.state,
+})
+
+export function lastExecutionOutcome(events: AbEvent[]): ExecutionOutcome {
+  return lastExecutionOutcomeReducer.reduce(events)
 }
 
 function observationIdentity(open: {

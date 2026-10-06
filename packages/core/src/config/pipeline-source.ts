@@ -10,6 +10,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AbEvent } from '../events/catalog'
+import { defineReducer } from '../kernel/incremental'
 import type { Forge } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
@@ -101,15 +102,26 @@ export function isActionablePipelineFailure(failure: PipelineSourceFailure): boo
   )
 }
 
+export const RECORDED_BASE_SHA_REDUCER_VERSION = 1
+
 /** The recorded base commit of the build's latest workspace. The newest
  * `workspace.provisioned` wins: a re-provisioned workspace is what the build's
  * current environment was cut from. */
+export const recordedBaseShaReducer = defineReducer<{ base?: string }, AbEvent, string | undefined>(
+  {
+    version: RECORDED_BASE_SHA_REDUCER_VERSION,
+    initial: () => ({}),
+    fold(acc, events) {
+      for (const event of events) {
+        if (event.type === 'workspace.provisioned') acc.base = event.payload.base.sha
+      }
+    },
+    finish: (acc) => acc.base,
+  },
+)
+
 export function recordedBaseSha(events: readonly AbEvent[]): string | undefined {
-  let base: string | undefined
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') base = event.payload.base.sha
-  }
-  return base
+  return recordedBaseShaReducer.reduce(events)
 }
 
 function buildBranch(record: Pick<BuildRecord, 'branch'>, slug: string): string {

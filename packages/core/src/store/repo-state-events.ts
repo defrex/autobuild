@@ -47,6 +47,7 @@
  * re-ordered, and a replay from the start is untouched.
  */
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
+import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import {
   dispatcherSettingEventPayloadSchemas,
   dispatcherStatusEventPayloadSchemas,
@@ -120,6 +121,47 @@ export async function readRepoStateEventsWithAnchorRecheck(
   return rechecked === undefined ? events : select(rechecked)
 }
 
+/** Carried state for the bounded read: the latest run-started seq (the last
+ * in array order, as the whole-array pass overwrites it) and the events a
+ * final filter could still keep, in array order — every durable event plus
+ * every other event at or after the anchor (or all of them while there is no
+ * anchor yet). Events below the anchor are dropped for good, so the carried
+ * form is exact when run-started events arrive in nondecreasing seq order
+ * (any journal read); a later run-started with a lower seq than an earlier
+ * one cannot resurrect what was already dropped. `finish` re-applies the
+ * filter against the final anchor. */
+export interface RepositoryStateEventsAcc {
+  anchor?: number
+  retained: RepositoryEvent[]
+}
+
+/** Bump when `RepositoryStateEventsAcc` or its fold changes. */
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 1
+
+const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
+  STATE_TYPES.has(event.type) || (anchor !== undefined && event.seq >= anchor)
+
+export const repositoryStateEventsReducer: IncrementalReducer<
+  RepositoryStateEventsAcc,
+  RepositoryEvent,
+  RepositoryEvent[]
+> = defineReducer<RepositoryStateEventsAcc, RepositoryEvent, RepositoryEvent[]>({
+  version: REPOSITORY_STATE_EVENTS_REDUCER_VERSION,
+  initial: () => ({ retained: [] }),
+  fold(acc, events) {
+    // Decide retention against the batch's final anchor, so a whole-array
+    // reduction is exact for any array order.
+    for (const event of events) {
+      if (event.type === RUN_STARTED) acc.anchor = event.seq
+      acc.retained.push(event)
+    }
+    const anchor = acc.anchor
+    // Until an anchor exists every event may still fall in its tail.
+    if (anchor !== undefined) acc.retained = acc.retained.filter((event) => keeps(event, anchor))
+  },
+  finish: (acc) => acc.retained.filter((event) => keeps(event, acc.anchor)),
+})
+
 /** The normative subset derivation every adapter implements and the contract
  * tests use as the oracle: durable types across the whole journal, plus —
  * only when the journal has one — every event from the latest
@@ -130,11 +172,5 @@ export async function readRepoStateEventsWithAnchorRecheck(
 export function projectRepositoryStateEvents(
   events: readonly RepositoryEvent[],
 ): RepositoryEvent[] {
-  let anchor: number | undefined
-  for (const event of events) {
-    if (event.type === RUN_STARTED) anchor = event.seq
-  }
-  return events.filter(
-    (event) => STATE_TYPES.has(event.type) || (anchor !== undefined && event.seq >= anchor),
-  )
+  return repositoryStateEventsReducer.reduce(events)
 }

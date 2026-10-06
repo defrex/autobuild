@@ -84,6 +84,14 @@ import { recordInfrastructureFailure as appendInfrastructureFailure } from './in
 import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
 import { openHarvestExecutions } from './harvest-execution-state'
 import { readRepoEventsIfRecorded } from './harvest'
+import {
+  baseBranchReducer,
+  openBuildWorkspace,
+  provisionMarkerReducer,
+  recoveryCheckpointReducer,
+  type OpenBuildWorkspace,
+  type ProvisionMarker,
+} from './dispatcher-selectors'
 import type { RepositoryEvent } from '../events/repository'
 import { sandboxStates } from './sandbox-state'
 import { abandonedPublicationPending, publicationPending } from './publication-state'
@@ -575,30 +583,14 @@ export interface DispatcherDeps {
 /** Latest `workspace.provisioned` not followed by a `workspace.released` —
  * the reducer deliberately ignores workspace events (liveness is the
  * dispatcher's concern), so the janitor scans the raw log. */
-function openWorkspace(
-  events: AbEvent[],
-): { provider: string; ref: string; path?: string; localPath?: string; branch: string } | null {
-  let open: {
-    provider: string
-    ref: string
-    path?: string
-    localPath?: string
-    branch: string
-  } | null = null
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') open = event.payload
-    else if (event.type === 'workspace.released') open = null
-  }
-  return open
+function openWorkspace(events: AbEvent[]): OpenBuildWorkspace | null {
+  return openBuildWorkspace(events)
 }
 
 /** The build's base branch, from its own `build.created` fact (§15.3);
  * falls back to the repo config for logs missing one. */
 function baseBranchOf(events: AbEvent[], config: Config): string {
-  for (const event of events) {
-    if (event.type === 'build.created') return event.payload.baseBranch
-  }
-  return config.baseBranch
+  return baseBranchReducer.reduce(events) ?? config.baseBranch
 }
 
 function artifactRefOf(deposited: ArtifactMeta[]): ArtifactRef {
@@ -1161,23 +1153,8 @@ export class Dispatcher {
 
   /** The latest `workspace.provision-started` not yet followed by a
    * provisioned/released fact — an open provisioning marker. */
-  private openProvisionMarker(
-    events: AbEvent[],
-  ): { provider: string; branch: string; generation: number; ts: string; seq: number } | undefined {
-    let marker:
-      | { provider: string; branch: string; generation: number; ts: string; seq: number }
-      | undefined
-    for (const event of events) {
-      if (event.type === 'workspace.provision-started') {
-        marker = { ...event.payload, ts: event.ts, seq: event.seq }
-      } else if (
-        marker !== undefined &&
-        (event.type === 'workspace.provisioned' || event.type === 'workspace.released')
-      ) {
-        marker = undefined
-      }
-    }
-    return marker
+  private openProvisionMarker(events: AbEvent[]): ProvisionMarker | undefined {
+    return provisionMarkerReducer.reduce(events)
   }
 
   /** Liveness of the lease behind an open provision marker: `live` means a
@@ -1945,24 +1922,7 @@ export class Dispatcher {
   }
 
   private recoveryCheckpoint(events: AbEvent[]): string | undefined {
-    let settled: string | undefined
-    let original: string | undefined
-    for (const event of events) {
-      if (event.type === 'workspace.provisioned' && original === undefined) {
-        original = event.payload.base.sha
-      } else if (event.type === 'implement.completed') {
-        settled = event.payload.commits.head
-      } else if (event.type === 'reconcile.completed') {
-        settled = event.payload.mergeCommit
-      } else if (
-        event.type === 'finalize.step-completed' &&
-        event.payload.ok &&
-        event.payload.headSha !== undefined
-      ) {
-        settled = event.payload.headSha
-      }
-    }
-    return settled ?? original
+    return recoveryCheckpointReducer.reduce(events)
   }
 
   private async recordInfrastructureFailure(

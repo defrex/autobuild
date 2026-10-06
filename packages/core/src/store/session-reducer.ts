@@ -86,8 +86,6 @@ function foldSession(acc: SessionAcc, events: readonly SessionEvent[]): void {
   const wakeCursors = acc.wakeCursors
   let journalWakeCursor = acc.journalWakeCursor
 
-  const open = (): TurnEntry | undefined => turns.findLast((turn) => !isTerminal(turn.state))
-
   for (const event of events) {
     if (archived) break
     switch (event.type) {

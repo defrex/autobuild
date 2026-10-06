@@ -3,6 +3,7 @@ import { configSchema } from '../config/schema'
 import { BUILD_OWNED_CONFIG_PATHS } from '../config/live'
 import { isPipelineSourceRef, type PipelineSourceMeta } from '../config/pipeline-source'
 import type { AbEvent } from '../events/catalog'
+import { defineReducer } from '../kernel/incremental'
 import type { Artifact, ArtifactInput } from '../store/types'
 
 export const BUILD_EFFECTIVE_CONFIG_ARTIFACT = 'build-runner-effective-config'
@@ -83,26 +84,41 @@ export function buildOwnedSectionsDiffer(a: Config, b: Config): boolean {
   )
 }
 
-/** Latest workspace location not followed by release. Historical events use
- * the provider ref as the path compatibility fallback. */
-export function selectOpenWorkspace(events: readonly AbEvent[]): {
+export interface OpenWorkspaceLocation {
   ref: string
   path: string
   branch: string
-} | null {
-  let open: { ref: string; path: string; branch: string } | null = null
-  for (const event of events) {
-    if (event.type === 'workspace.provisioned') {
-      open = {
-        ref: event.payload.ref,
-        path: event.payload.path ?? event.payload.ref,
-        branch: event.payload.branch,
+}
+
+export const OPEN_WORKSPACE_REDUCER_VERSION = 1
+
+/** Latest workspace location not followed by release. Historical events use
+ * the provider ref as the path compatibility fallback. */
+export const openWorkspaceReducer = defineReducer<
+  { open: OpenWorkspaceLocation | null },
+  AbEvent,
+  OpenWorkspaceLocation | null
+>({
+  version: OPEN_WORKSPACE_REDUCER_VERSION,
+  initial: () => ({ open: null }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'workspace.provisioned') {
+        acc.open = {
+          ref: event.payload.ref,
+          path: event.payload.path ?? event.payload.ref,
+          branch: event.payload.branch,
+        }
+      } else if (event.type === 'workspace.released') {
+        acc.open = null
       }
-    } else if (event.type === 'workspace.released') {
-      open = null
     }
-  }
-  return open
+  },
+  finish: (acc) => (acc.open === null ? null : { ...acc.open }),
+})
+
+export function selectOpenWorkspace(events: readonly AbEvent[]): OpenWorkspaceLocation | null {
+  return openWorkspaceReducer.reduce(events)
 }
 
 export function diagnosticArtifact(diagnostic: BuildRunnerDiagnostic): ArtifactInput {
