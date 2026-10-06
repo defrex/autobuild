@@ -31,6 +31,7 @@ import { reduceSession, type SessionTurnTrigger } from '../store/session-reducer
 import { reduceBuild } from '../kernel/reducer'
 import type { AbEvent } from '../events/catalog'
 import type { BuildStore, Clock } from '../store/types'
+import type { RepoViewStore } from './repo-view'
 import type { IdSource } from '../ids'
 import type { LanguageModel } from 'ai'
 import {
@@ -69,6 +70,10 @@ export interface OrchestratorTickOptions {
    * Less than ORCHESTRATOR_MIN_TURN_SECONDS skips the whole step
    * (suspension state is durable — skipping is safe). */
   remainingBudgetSeconds?: number
+  /** The dispatcher's repository view, when the tick runs under one: the wake
+   * pass reads its full build state through it (no replay of history the view
+   * already folded) and releases consumed window history through it. */
+  view?: Pick<RepoViewStore, 'buildState' | 'releaseWindowsBelow'>
   log?: (message: string) => void
 }
 
@@ -202,9 +207,28 @@ export async function runOrchestratorTickStep(
 
   // ── Wake pass ───────────────────────────────────────────────────────────
   const builds = (await store.listBuilds()).filter((candidate) => candidate.repo === repo)
+  /** The lowest wake cursor across every session that scans, per source: the
+   * view may drop window history at or below it once the pass ends. */
+  const lowestBuildCursor = new Map<string, number>()
+  let lowestJournalCursor: number | undefined
+  let scanners = 0
   for (const record of sessions) {
     const events = await store.getSessionEvents(record.id)
     const state = reduceSession(events)
+    if (state.wakeGlobs.length > 0) {
+      scanners += 1
+      for (const build of builds) {
+        const cursor = state.wakeCursors[build.slug] ?? 0
+        lowestBuildCursor.set(
+          build.slug,
+          Math.min(lowestBuildCursor.get(build.slug) ?? cursor, cursor),
+        )
+      }
+      lowestJournalCursor = Math.min(
+        lowestJournalCursor ?? state.journalWakeCursor,
+        state.journalWakeCursor,
+      )
+    }
     if (state.status !== 'idle') continue
     if (state.wakeGlobs.length === 0) continue
     let filters: RegExp[]
@@ -283,7 +307,9 @@ export async function runOrchestratorTickStep(
         ? { event }
         : {
             event,
-            buildState: reduceBuild(await store.getEvents(newest.build)) as unknown as Record<
+            buildState: (options.view !== undefined
+              ? await options.view.buildState(newest.build)
+              : reduceBuild(await store.getEvents(newest.build))) as unknown as Record<
               string,
               unknown
             >,
@@ -298,6 +324,15 @@ export async function runOrchestratorTickStep(
       // duplicate a wake — and other builds' matching events re-trigger on
       // later ticks.
       await start.outcome
+    }
+  }
+
+  if (options.view !== undefined && scanners > 0) {
+    for (const [slug, cursor] of lowestBuildCursor) {
+      if (cursor > 0) options.view.releaseWindowsBelow({ build: slug }, cursor)
+    }
+    if (lowestJournalCursor !== undefined && lowestJournalCursor > 0) {
+      options.view.releaseWindowsBelow('journal', lowestJournalCursor)
     }
   }
 
