@@ -418,6 +418,51 @@ describe('RepoViewStore read windows', () => {
     expect(await view.buildState('old')).toEqual(reduceBuild(await store.getEvents('old')))
   })
 
+  test('appends during both the window read and its repair read are not lost', async () => {
+    class DeferredStore extends CountingStore {
+      holds: Array<() => Promise<void>> = []
+      override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
+        const events = await super.getRepoEvents(...args)
+        await this.holds.shift()?.()
+        return events
+      }
+    }
+    const store = new DeferredStore()
+    const view = new RepoViewStore(store, { repo: REPO, resident: true })
+    await store.ensureRepo(REPO)
+    await view.refresh()
+    store.holds = [
+      async () => void (await view.appendRepo(REPO, setting(false))),
+      async () => void (await view.appendRepo(REPO, setting(true))),
+    ]
+    await view.getRepoEvents(REPO, 0)
+    await view.refresh()
+    expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1, 2])
+  })
+
+  test('a gap append during an in-flight build delta is not forgotten', async () => {
+    class DeferredStore extends CountingStore {
+      hold: (() => Promise<void>) | undefined
+      override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+        const events = await super.getEvents(...args)
+        const hold = this.hold
+        this.hold = undefined
+        await hold?.()
+        return events
+      }
+    }
+    const store = new DeferredStore()
+    const view = new RepoViewStore(store, { repo: REPO })
+    await store.ensureRepo(REPO)
+    await newBuild(store, 'a')
+    await view.refresh()
+    await touch(store, 'a')
+    store.hold = async () =>
+      void (await view.append('a', { actor: KERNEL, type: 'build.paused', payload: {} } as never))
+    await view.refreshBuild('a')
+    expect((await view.getEvents('a')).map((event) => event.seq)).toEqual([1, 2, 3])
+  })
+
   test('an own append racing window creation or widening is not lost', async () => {
     class DeferredStore extends CountingStore {
       hold: (() => Promise<void>) | undefined

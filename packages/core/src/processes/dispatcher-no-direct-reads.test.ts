@@ -65,6 +65,7 @@ describe('tick stages read state only through the repository view', () => {
       /private async launchRunner\(/,
       /private async settlePendingPublication\(/,
       /private async resolveBuildPipeline\(/,
+      /private async recordInfrastructureFailure\(/,
     ]) {
       for (const { line, text } of methodBody(source, declaration)) {
         if (forbidden.test(text) && !/^\s*(\/\/|\*)/.test(text)) {

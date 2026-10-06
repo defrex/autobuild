@@ -2632,11 +2632,13 @@ class DispatchLoop {
     cleanupPending: boolean
     identity?: BuildExecutionHandle['identity']
   }): Promise<void> {
+    // The failed executor may have appended through its own handle.
+    await this.repoView.refreshBuild(input.slug)
     await appendInfrastructureFailure(
-      { store: this.wiring.store, ids: this.wiring.ids },
+      { store: this.repoView, ids: this.wiring.ids },
       {
         slug: input.slug,
-        events: await this.wiring.store.getEvents(input.slug),
+        events: await this.repoView.getEvents(input.slug),
         maxAttempts: this.currentConfig().config.policy.maxInfrastructureAttempts,
         provider: input.identity?.provider ?? this.wiring.workspaces.name,
         workspaceRef: input.workspaceRef,

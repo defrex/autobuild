@@ -280,18 +280,23 @@ export class RepoViewStore implements BuildStore {
       return
     }
     if (!force && !this.journalDirty && this.journalEpoch === this.epoch) return
-    const delta = (await this.backing.getRepoEvents(this.repo, this.journalCursor)).filter(
-      (event) => event.seq > this.journalCursor,
-    )
-    this.journalDirty = false
-    this.journalEpoch = this.epoch
-    if (delta.length === 0) return
-    if (!contiguousFrom(delta, this.journalCursor)) {
-      // A hole: discard and re-read from scratch rather than skip an event.
-      await this.loadJournal()
-      return
+    // Cleared before the read for the same reason as build logs: an own append
+    // across a gap during the read must stay marked.
+    let again = force
+    while (again || this.journalDirty) {
+      again = false
+      this.journalDirty = false
+      this.journalEpoch = this.epoch
+      const read = await this.backing.getRepoEvents(this.repo, this.journalCursor)
+      const delta = read.filter((event) => event.seq > this.journalCursor)
+      if (delta.length === 0) continue
+      if (!contiguousFrom(delta, this.journalCursor)) {
+        // A hole: discard and re-read from scratch rather than skip an event.
+        await this.loadJournal()
+        return
+      }
+      this.foldJournal(delta)
     }
-    this.foldJournal(delta)
   }
 
   /** Fold events newer than the cursor into the bounded subset and the window. */
@@ -357,18 +362,22 @@ export class RepoViewStore implements BuildStore {
   /** Bring one log current: a single delta read from its cursor, skipped when
    * it was already brought current in this epoch and nothing marked it dirty. */
   private async ensureCurrent(slug: string, log: Log): Promise<void> {
-    if (!log.dirty && log.epoch === this.epoch) return
-    const delta = (await this.backing.getEvents(slug, log.cursor)).filter(
-      (event) => event.seq > log.cursor,
-    )
-    log.dirty = false
-    log.epoch = this.epoch
-    if (delta.length === 0) return
-    if (!contiguousFrom(delta, log.cursor)) {
-      await this.loadFull(slug)
-      return
-    }
-    this.fold(log, delta)
+    // The flag is cleared before the read, so an invalidation that lands while
+    // it is in flight (an own append across a gap, a lost compare-and-set)
+    // survives and sends us round again instead of being forgotten.
+    do {
+      if (!log.dirty && log.epoch === this.epoch) return
+      log.dirty = false
+      log.epoch = this.epoch
+      const read = await this.backing.getEvents(slug, log.cursor)
+      const delta = read.filter((event) => event.seq > log.cursor)
+      if (delta.length === 0) continue
+      if (!contiguousFrom(delta, log.cursor)) {
+        await this.loadFull(slug)
+        return
+      }
+      this.fold(log, delta)
+    } while (log.dirty)
   }
 
   private fold(log: Log, events: AbEvent[]): void {
@@ -532,13 +541,21 @@ export class RepoViewStore implements BuildStore {
       // An own append that completed while the read was in flight advanced the
       // cursor but could not reach a window that did not exist yet: read what
       // the window is missing from its own tail.
-      while (created.last < this.journalCursor) {
-        const tail = await this.backing.getRepoEvents(repo, created.last)
-        const fresh = tail.filter((event) => event.seq > created.last)
-        if (fresh.length === 0) break
-        created.events.push(...fresh)
-        created.last = fresh[fresh.length - 1]!.seq
-        this.foldJournal(fresh)
+      // Folds that landed during the read (or during this repair) may already
+      // sit in the window ahead of the rows we read, so merge by seq against
+      // what the window holds rather than appending behind `last`.
+      for (
+        let attempt = 0;
+        attempt < 5 && !windowComplete(created, this.journalCursor);
+        attempt += 1
+      ) {
+        const tail = await this.backing.getRepoEvents(repo, created.from)
+        const held = new Set(created.events.map((event) => event.seq))
+        const missing = tail.filter((event) => !held.has(event.seq))
+        if (missing.length === 0) break
+        created.events = [...created.events, ...missing].sort((a, b) => a.seq - b.seq)
+        created.last = Math.max(created.last, created.events.at(-1)!.seq)
+        this.foldJournal(missing)
       }
     }
     return window.events.filter((event) => event.seq > sinceSeq)
@@ -834,4 +851,18 @@ function contiguousFrom(events: readonly { seq: number }[], cursor: number): boo
     expected += 1
   }
   return true
+}
+
+/** A journal window is complete when its events are contiguous from `from + 1`
+ * through at least the view's journal cursor. */
+function windowComplete(
+  window: { from: number; events: readonly { seq: number }[] },
+  cursor: number,
+): boolean {
+  let expected = window.from + 1
+  for (const event of window.events) {
+    if (event.seq !== expected) return false
+    expected += 1
+  }
+  return expected - 1 >= cursor
 }
