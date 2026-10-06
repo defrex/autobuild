@@ -851,16 +851,19 @@ describe('abDispatch guards', () => {
           wire: fx.wire,
         })
       let rows = 0
+      // The Harvest runner is a launched child with its own journal reads when
+      // a harvest is due; the dispatcher's view is what this test measures.
+      const fromHarvestRunner = () => new Error().stack?.includes('harvest-runner') === true
       const read = fx.store.getRepoEvents.bind(fx.store)
       const readState = fx.store.getRepoStateEvents.bind(fx.store)
       fx.store.getRepoEvents = async (...args) => {
         const events = await read(...args)
-        rows += events.length
+        if (!fromHarvestRunner()) rows += events.length
         return events
       }
       fx.store.getRepoStateEvents = async (...args) => {
         const events = await readState(...args)
-        rows += events.length
+        if (!fromHarvestRunner()) rows += events.length
         return events
       }
       await once()

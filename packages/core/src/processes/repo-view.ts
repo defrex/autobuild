@@ -273,6 +273,8 @@ export class RepoViewStore implements BuildStore {
   private readonly resident: boolean
   private epoch = 0
   private initialized = false
+  /** The journal alone is loaded (`startJournal`): own journal appends fold. */
+  private journalReady = false
   private initializing: Promise<void> | undefined
 
   // Journal.
@@ -493,9 +495,21 @@ export class RepoViewStore implements BuildStore {
     }
   }
 
+  /** Restore the journal alone, ahead of the first `refresh()`, so the
+   * lifecycle appends a process makes before its first tick fold into the view
+   * and are not read back. Costs no listing, digest, or build read. */
+  startJournal(): Promise<void> {
+    return this.journalChain.run(async () => {
+      if (this.journalReady || this.initialized) return
+      await this.loadJournal({ snapshot: true })
+      this.journalReady = true
+    })
+  }
+
   private async syncOrLoadJournal(): Promise<void> {
     if (!this.initialized) {
-      await this.loadJournal({ snapshot: true })
+      if (this.journalReady) await this.syncJournal(true)
+      else await this.loadJournal({ snapshot: true })
       this.initialized = true
     } else {
       await this.syncJournal(true)
@@ -879,7 +893,7 @@ export class RepoViewStore implements BuildStore {
    * persists; `force` and a process's first persist always run. The snapshots
    * are a cache — nothing here can fail the caller. */
   async persistSnapshots(opts: { force?: boolean; cold?: boolean } = {}): Promise<void> {
-    if (!this.initialized) return
+    if (!this.initialized && !this.journalReady) return
     const now = this.now()
     if (opts.cold !== true) {
       if (
@@ -1057,7 +1071,7 @@ export class RepoViewStore implements BuildStore {
     return this.journalChain.run(async () => {
       // Before the cold load there is no journal state to extend; it reads the
       // journal, this append included.
-      if (!this.initialized) return
+      if (!this.initialized && !this.journalReady) return
       this.recorded = true
       if (envelope.seq <= this.journalCursor) return
       if (envelope.seq === this.journalCursor + 1) {

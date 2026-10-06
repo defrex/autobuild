@@ -3924,10 +3924,11 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   // before the first of them, so a quiet invocation reads none of its own
   // rows back and the final flush covers `run-stopped` too.
   const view = new RepoViewStore(wiring.store, {
-    repo: state.repo,
+    // The loop's store-keyed identity (an explicit `repo` pins it).
+    repo: resolvedOpts.repo ?? resolvedOpts.targetRepo,
     resident: resolvedOpts.once !== true,
   })
-  await view.refresh()
+  await view.startJournal()
   const actor = humanActor(buildControlUser(resolvedOpts.env))
   if (resolvedOpts.intake !== undefined) {
     await view.appendRepo(state.repo, {
