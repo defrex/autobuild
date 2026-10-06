@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#593](https://github.com/defrex/autobuild/pull/593) — Derive every operator read from the snapshot-backed repository view
 - Serve the operator dashboard, status, Harvest status and build listings from the snapshot-backed repository view, so a poll reads no event rows at idle and only the new rows after new events; a work build's reducer snapshots now live in one atomic `work` row, so the first poll after upgrading replays each active or aborted build once
 - [#592](https://github.com/defrex/autobuild/pull/592) — Cache reducer state snapshots in the build store so cold starts skip full log replay
 - Store reducer snapshots, a cache the event log regenerates, and restore the dispatcher's view from them so a quiet tick reads no event rows
