@@ -28,6 +28,7 @@ function actorFor(type: EventType): Actor {
 const w = (type: EventType, payload: Record<string, unknown>): EventWrite =>
   validateEventWrite({ actor: actorFor(type), type, payload } as EventWrite)
 
+const SHA = 'a'.repeat(40)
 const ART = (kind: string, rev: number) => ({ kind, rev })
 
 /** Plausible payload templates drawn from the catalog; ids and rounds come
@@ -145,6 +146,92 @@ function randomWrite(rand: () => number): EventWrite {
       }),
     () => w('runner.setup-failed', { command: 'bun install', attempt, exitStatus: 1, output: 'x' }),
     () => w('build.discard-requested', {}),
+    () =>
+      w('escalation.raised', {
+        id,
+        phase: 'plan',
+        source: 'policy',
+        policyCause: 'infrastructure-failure-limit',
+        question: 'q',
+      }),
+    () =>
+      w('workspace.provision-started', { provider: 'worktree', branch: 'ab/x', generation: round }),
+    () =>
+      w('workspace.provisioned', {
+        provider: 'worktree',
+        ref: `/ws/${round}`,
+        branch: 'ab/x',
+        base: { source: 'remote', sha: `base${round}` },
+        ...(rand() < 0.5 ? { remote: true } : {}),
+      }),
+    () => w('workspace.released', rand() < 0.5 ? {} : { ref: '/ws/1', reason: 'completion' }),
+    () =>
+      w('publication.requested', {
+        operation: 'implement',
+        branch: 'ab/x',
+        sha: SHA,
+        round,
+        base: SHA,
+        artifact: ART('implement-notes', round),
+      }),
+    () =>
+      w('publication.requested', {
+        operation: 'reconcile',
+        branch: 'ab/x',
+        sha: SHA,
+        artifact: ART('reconcile-notes', round),
+      }),
+    () =>
+      w('publication.lost', {
+        request: round,
+        operation: 'implement',
+        branch: 'ab/x',
+        sha: SHA,
+        reason: 'released',
+      }),
+    () =>
+      w('pr-attachment.designated', {
+        artifact: ART('screenshot', round),
+        filename: `shot${round}.png`,
+        mediaType: 'image/png',
+      }),
+    () =>
+      w('pr-attachment.hosted', {
+        designationSeq: 1 + Math.floor(rand() * 20),
+        asset: {
+          provider: 'github-release',
+          repository: 'o/r',
+          releaseId: round,
+          assetId: attempt,
+          url: 'https://example.com/a.png',
+        },
+      }),
+    () => w('pr-attachment.reclaimed', { hostedSeq: 1 + Math.floor(rand() * 20) }),
+    () => w('build.auto-merge-default-observed', { defaultSeq: round }),
+    () =>
+      w('observation.recorded', {
+        id: `o_d${round}`,
+        kind: 'followup',
+        summary: 'deferred',
+        files: [],
+        refs: [`auto-merge-gate:pr:7:${round}`],
+      }),
+    () =>
+      w('spec.revised', {
+        artifact: ART('spec', round),
+        escalation: 1,
+        assets: [
+          {
+            kind: 'design',
+            name: 'a',
+            revision: round,
+            layout: 'file',
+            size: 1,
+            fileCount: 1,
+            dirCount: 0,
+          },
+        ],
+      }),
   ]
   return pick(rand, templates)()
 }

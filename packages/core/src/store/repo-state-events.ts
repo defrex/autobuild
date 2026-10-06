@@ -122,14 +122,12 @@ export async function readRepoStateEventsWithAnchorRecheck(
 }
 
 /** Carried state for the bounded read: the latest run-started seq (the last
- * in array order, as the whole-array pass overwrites it) and the events a
- * final filter could still keep, in array order — every durable event plus
- * every other event at or after the anchor (or all of them while there is no
- * anchor yet). Events below the anchor are dropped for good, so the carried
- * form is exact when run-started events arrive in nondecreasing seq order
- * (any journal read); a later run-started with a lower seq than an earlier
- * one cannot resurrect what was already dropped. `finish` re-applies the
- * filter against the final anchor. */
+ * in array order, as the whole-array pass overwrites it) and every event seen,
+ * in array order. Nothing is pruned: a later run-started may carry a lower seq
+ * than an earlier one and restore events below the earlier anchor, so only
+ * `finish` can apply the filter exactly. Pruning below a monotone anchor is
+ * valid only for seq-ordered input and belongs with the cached-state
+ * follow-up. */
 export interface RepositoryStateEventsAcc {
   anchor?: number
   retained: RepositoryEvent[]
@@ -149,15 +147,10 @@ export const repositoryStateEventsReducer: IncrementalReducer<
   version: REPOSITORY_STATE_EVENTS_REDUCER_VERSION,
   initial: () => ({ retained: [] }),
   fold(acc, events) {
-    // Decide retention against the batch's final anchor, so a whole-array
-    // reduction is exact for any array order.
     for (const event of events) {
       if (event.type === RUN_STARTED) acc.anchor = event.seq
       acc.retained.push(event)
     }
-    const anchor = acc.anchor
-    // Until an anchor exists every event may still fall in its tail.
-    if (anchor !== undefined) acc.retained = acc.retained.filter((event) => keeps(event, anchor))
   },
   finish: (acc) => acc.retained.filter((event) => keeps(event, acc.anchor)),
 })

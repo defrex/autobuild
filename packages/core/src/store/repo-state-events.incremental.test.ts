@@ -94,19 +94,21 @@ describe('repositoryStateEventsReducer', () => {
     })
   }
 
-  test('whole-array form is exact for a fully shuffled journal', () => {
-    for (let seed = 1; seed <= 20; seed++) {
+  for (let seed = 1; seed <= 20; seed++) {
+    test(`contract on a fully shuffled journal, every split: seed ${seed}`, () => {
       const log = generated(seed, true)
       expect(projectRepositoryStateEvents(log)).toEqual(oracle(log))
-    }
-  })
+      checkIncremental(repositoryStateEventsReducer, log)
+    })
+  }
 
-  test('the carried state drops events below the anchor', () => {
-    const acc = repositoryStateEventsReducer.advance(
-      repositoryStateEventsReducer.initial(),
-      fixtures.anchored as RepositoryEvent[],
-    )
-    expect(acc.anchor).toBe(5)
-    expect(acc.retained.map((e) => e.seq)).toEqual([3, 5, 6, 7])
+  test('a later run-started with a lower seq restores events an earlier anchor excluded', () => {
+    const log = [
+      ev(2, 'dispatcher.tick-started'),
+      ev(5, 'dispatcher.run-started'),
+      ev(1, 'dispatcher.run-started'),
+    ]
+    expect(projectRepositoryStateEvents(log).map((e) => e.seq)).toEqual([2, 5, 1])
+    checkIncremental(repositoryStateEventsReducer, log)
   })
 })

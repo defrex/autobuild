@@ -77,6 +77,21 @@ export function randomHarvestJournal(seed: number, length: number): RepositoryEv
         payload: { run: open.run, source: 'agent', reason: 'judgment', observations: open.obs },
       })
       open = undefined
+    } else if (r < 0.95) {
+      const execution = `x${i % 3}`
+      specs.push(
+        rand() < 0.6
+          ? {
+              type: 'harvest.execution.started',
+              payload: { execution, provider: 'vercel', environmentId: 'env', sessionId: 's' },
+              actor: DISPATCHER,
+            }
+          : {
+              type: 'harvest.execution.released',
+              payload: { execution, environmentId: 'env', snapshots: { outcome: 'confirmed' } },
+              actor: DISPATCHER,
+            },
+      )
     } else {
       specs.push({
         type: 'dispatcher.intake-set',
@@ -143,6 +158,7 @@ export function randomStatusJournal(seed: number, length: number): RepositoryEve
         },
       }),
       () => ({ type: 'dispatcher.tick-failed', payload: { run, error: 'e' } }),
+      () => ({ type: 'dispatcher.tick-started', payload: { run } }),
       () => ({ type: 'dispatcher.config-rejected', payload: { run, error: 'bad' } }),
       () => ({
         type: 'dispatcher.operator-reported',

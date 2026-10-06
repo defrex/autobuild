@@ -1,10 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { Glob } from 'bun'
-import { sandboxStatesReducer } from '../processes/sandbox-state'
-import { sessionReducer } from '../store/session-reducer'
+import type { RegisteredReducer } from './reducer-registry'
 import { randomSessionLog } from './generators/session-log'
 import { EXCLUDED, REDUCERS } from './reducer-registry'
-import { buildReducer } from './reducer'
 import { randomBuildLog } from './generators/build-log'
 import {
   randomHarvestJournal,
@@ -12,9 +10,6 @@ import {
   randomSettingsJournal,
   randomStatusJournal,
 } from './generators/repository-journals'
-import { dispatchSettingsReducer } from './dispatch-settings'
-import { dispatchStatusReducer } from './dispatch-status'
-import { harvestReducer } from './harvest'
 
 /** The sorted set of JSON key paths and value types in an accumulator. */
 function fingerprint(value: unknown, path = '$', out = new Set<string>()): string[] {
@@ -30,23 +25,59 @@ function fingerprint(value: unknown, path = '$', out = new Set<string>()): strin
   return [...out].sort()
 }
 
-/** Accumulators populated from generated logs, so optional and nested fields
- * show up in the fingerprint; the rest fingerprint their empty accumulator. */
-const SAMPLES: Record<string, () => unknown> = {
-  build: () => buildReducer.advance(buildReducer.initial(), randomBuildLog(1, 80)),
-  harvest: () => harvestReducer.advance(harvestReducer.initial(), randomHarvestJournal(1, 60)),
-  dispatchSettings: () =>
-    dispatchSettingsReducer.advance(
-      dispatchSettingsReducer.initial(),
-      randomSettingsJournal(1, 20),
-    ),
-  dispatchStatus: () => {
-    const reducer = dispatchStatusReducer('run-a')
-    return reducer.advance(reducer.initial(), randomStatusJournal(1, 40))
-  },
-  session: () => sessionReducer.advance(sessionReducer.initial(), randomSessionLog(1, 40, false)),
-  sandboxStates: () =>
-    sandboxStatesReducer.advance(sandboxStatesReducer.initial(), randomSandboxJournal(1, 30)),
+const SEEDS = [1, 2, 3, 4, 5, 6]
+
+/** Event corpora the registered reducers are driven with. Each reducer ignores
+ * the event types it does not read, so every reducer is fed every corpus and
+ * the union of the shapes it reaches is fingerprinted. */
+function corpora(): unknown[][] {
+  return [
+    ...SEEDS.map((seed) => randomBuildLog(seed, 150)),
+    ...SEEDS.map((seed) => randomHarvestJournal(seed, 80)),
+    ...SEEDS.map((seed) => randomSettingsJournal(seed, 30)),
+    ...SEEDS.map((seed) => randomStatusJournal(seed, 60)),
+    ...SEEDS.map((seed) => randomSandboxJournal(seed, 40)),
+    ...SEEDS.map((seed) => randomSessionLog(seed, 50, seed % 2 === 0)),
+  ]
+}
+
+const logs = corpora()
+const CHUNK = 12
+const fingerprints = new Map<string, string[]>()
+
+/** Union of accumulator fingerprints after every chunk of every corpus, so
+ * optional and variant fields are covered. A corpus a reducer cannot fold
+ * (it throws on a malformed reference) contributes the chunks before. */
+function unionFingerprint(name: string, reducer: RegisteredReducer['reducer']): string[] {
+  const cached = fingerprints.get(name)
+  if (cached !== undefined) return cached
+  const paths = new Set<string>(fingerprint(reducer.initial()))
+  for (const log of logs) {
+    let acc = reducer.initial()
+    try {
+      for (let i = 0; i < log.length; i += CHUNK) {
+        acc = reducer.advance(acc, log.slice(i, i + CHUNK))
+        fingerprint(acc, '$', paths)
+      }
+    } catch {
+      // A corpus for another domain; keep what was reached.
+    }
+  }
+  const result = [...paths].sort()
+  fingerprints.set(name, result)
+  return result
+}
+
+/** Reducers whose empty accumulator already has every field, so the corpora
+ * cannot add paths to it. */
+const COMPLETE_WHEN_EMPTY = new Set(['dispatchSettings', 'lastExecutionOutcome'])
+
+/** Names that are neither the in-place half of a registered reducer, covered
+ * by a registered reducer, nor excluded with a reason. */
+function unclassified(found: Iterable<string>, covered: ReadonlySet<string>): string[] {
+  return [...found].filter(
+    (name) => !name.startsWith('fold') && !covered.has(name) && !(name in EXCLUDED),
+  )
 }
 
 describe('reducer registry', () => {
@@ -98,13 +129,21 @@ describe('reducer registry', () => {
     // REDUCER'S VERSION (and the 'published versions' snapshot above) rather
     // than only re-snapshotting. Cached accumulators are valid per version.
     const shapes = Object.fromEntries(
-      Object.entries(REDUCERS).map(([name, r]) => [
-        name,
-        fingerprint((SAMPLES[name] ?? (() => r.reducer.initial()))()),
-      ]),
+      Object.entries(REDUCERS).map(([name, r]) => [name, unionFingerprint(name, r.reducer)]),
     )
     expect(shapes).toMatchSnapshot()
-  })
+  }, 120_000)
+
+  test('every reducer is populated by the corpora (its fingerprint is not just the empty accumulator)', () => {
+    const thin = Object.entries(REDUCERS)
+      .filter(([name]) => !COMPLETE_WHEN_EMPTY.has(name))
+      .filter(
+        ([name, r]) =>
+          unionFingerprint(name, r.reducer).length <= fingerprint(r.reducer.initial()).length,
+      )
+      .map(([name]) => name)
+    expect(thin).toEqual([])
+  }, 120_000)
 
   test('every event-array projection is registered or excluded with a reason', async () => {
     const covered = new Set(Object.values(REDUCERS).flatMap((r) => r.covers))
@@ -124,16 +163,18 @@ describe('reducer registry', () => {
         }
       }
     }
-    // Internal fold helpers and the whole-array wrappers' names are covered
-    // through `covers`; `fold*` are the in-place halves of registered reducers.
-    const unclassified = [...found].filter(
-      (name) =>
-        !name.startsWith('fold') &&
-        !name.startsWith('reduce') &&
-        !covered.has(name) &&
-        !(name in EXCLUDED),
-    )
-    expect(unclassified).toEqual([])
+    // `fold*` are the in-place halves of registered reducers; every other
+    // projection, `reduce*` wrappers included, must be registered or excluded.
+    expect(unclassified(found, covered)).toEqual([])
     for (const reason of Object.values(EXCLUDED)) expect(reason.length).toBeGreaterThan(10)
+  })
+
+  test('the guard rejects an unregistered reduce-prefixed projection', () => {
+    const covered = new Set(Object.values(REDUCERS).flatMap((r) => r.covers))
+    expect(unclassified(['reduceNewProjection', 'reduceBuild'], covered)).toEqual([
+      'reduceNewProjection',
+    ])
+    const withoutBuild = new Set([...covered].filter((name) => name !== 'reduceBuild'))
+    expect(unclassified(['reduceBuild'], withoutBuild)).toEqual(['reduceBuild'])
   })
 })

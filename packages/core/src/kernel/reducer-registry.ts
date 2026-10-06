@@ -59,7 +59,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
   build: { reducer: buildReducer, covers: ['reduceBuild'] },
   harvest: { reducer: harvestReducer, covers: ['reduceHarvest'] },
   dispatchSettings: { reducer: dispatchSettingsReducer, covers: ['reduceDispatchSettings'] },
-  dispatchStatus: { reducer: dispatchStatusReducer('run'), covers: ['reduceDispatchStatus'] },
+  dispatchStatus: { reducer: dispatchStatusReducer('run-a'), covers: ['reduceDispatchStatus'] },
   session: { reducer: sessionReducer, covers: ['reduceSession'] },
   buildDigest: { reducer: buildDigestReducer, covers: ['reduceBuildDigest'] },
   sandboxStates: { reducer: sandboxStatesReducer, covers: ['sandboxStates'] },
@@ -92,7 +92,7 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
     reducer: openHarvestExecutionsReducer,
     covers: ['openHarvestExecutions'],
   },
-  openTick: { reducer: openTickReducer('run'), covers: ['hasOpenTick'] },
+  openTick: { reducer: openTickReducer('run-a'), covers: ['hasOpenTick'] },
   infrastructureFailureReset: {
     reducer: infrastructureFailureResetReducer,
     covers: ['infrastructureFailureResetSeq'],
