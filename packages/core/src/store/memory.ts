@@ -318,7 +318,22 @@ export class MemoryBuildStore implements BuildStore {
     const digests = new Map<string, BuildDigest>()
     for (const slug of slugs) {
       const state = this.builds.get(slug)!
-      digests.set(slug, { slug, ...reduceBuildDigest(state.events) })
+      digests.set(slug, {
+        slug,
+        ...reduceBuildDigest(
+          state.events.map((event) => ({
+            type: event.type,
+            seq: event.seq,
+            ts: event.ts,
+            ...(event.type === 'pr-attachment.reclaimed'
+              ? { hostedSeq: event.payload.hostedSeq }
+              : {}),
+            ...(event.type === 'execution.started' || event.type === 'execution.ended'
+              ? { instance: event.payload.instance }
+              : {}),
+          })),
+        ),
+      })
     }
     return digests
   }

@@ -432,6 +432,81 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         })
       })
 
+      test('executionOpen and reclaimPending follow the openExecution and pendingPrAttachmentReclaims rules', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/dg-work'
+          const slug = 'dg-work'
+          await store.createBuild(sampleBuildInput(slug, { repo }))
+          await store.append(slug, buildCreatedWrite())
+          const flags = async (): Promise<{ executionOpen?: true; reclaimPending?: true }> => {
+            const digest = (await store.getRepoBuildDigests(repo)).get(slug)!
+            return {
+              ...(digest.executionOpen ? { executionOpen: true as const } : {}),
+              ...(digest.reclaimPending ? { reclaimPending: true as const } : {}),
+            }
+          }
+          const started = (instance: string): EventWrite<'execution.started'> => ({
+            actor: DISPATCHER,
+            type: 'execution.started',
+            payload: { provider: 'p', workspaceRef: 'w', instance },
+          })
+          const ended = (instance: string): EventWrite<'execution.ended'> => ({
+            actor: DISPATCHER,
+            type: 'execution.ended',
+            payload: { instance, workspaceRef: 'w', outcome: 'completed' },
+          })
+          expect(await flags()).toEqual({})
+
+          await store.append(slug, started('a'))
+          expect(await flags()).toEqual({ executionOpen: true })
+          // A mismatched end leaves the execution open.
+          await store.append(slug, ended('other'))
+          expect(await flags()).toEqual({ executionOpen: true })
+          await store.append(slug, ended('a'))
+          expect(await flags()).toEqual({})
+          await store.append(slug, started('b'))
+          expect(await flags()).toEqual({ executionOpen: true })
+          // Completion does not close an execution.
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'build.completed',
+            payload: { outcome: 'abandoned' },
+          })
+          expect(await flags()).toEqual({ executionOpen: true })
+          await store.append(slug, ended('b'))
+          expect(await flags()).toEqual({})
+
+          const hosted = await store.append(slug, {
+            actor: KERNEL,
+            type: 'pr-attachment.hosted',
+            payload: {
+              designationSeq: 1,
+              asset: {
+                provider: 'github-release',
+                repository: 'acme/assets',
+                releaseId: 1,
+                assetId: 2,
+                url: 'https://example.invalid/a.png',
+              },
+            },
+          })
+          expect(await flags()).toEqual({ reclaimPending: true })
+          // Unknown and backwards acks do not clear it.
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'pr-attachment.reclaimed',
+            payload: { hostedSeq: hosted.seq + 100 },
+          })
+          expect(await flags()).toEqual({ reclaimPending: true })
+          await store.append(slug, {
+            actor: DISPATCHER,
+            type: 'pr-attachment.reclaimed',
+            payload: { hostedSeq: hosted.seq },
+          })
+          expect(await flags()).toEqual({})
+        })
+      })
+
       test('the digest equals the full-log ground truth over every lifecycle shape', async () => {
         await withStore(factory, undefined, async (store) => {
           const repo = 'acme/dg-life'

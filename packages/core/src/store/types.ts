@@ -115,6 +115,12 @@ export interface BuildDigest {
    * when any of its merges is strictly after the oldest unclaimed
    * observation). */
   merged?: string
+  /** A `pr-attachment.hosted` has no later matching `pr-attachment.reclaimed`
+   * (the `pendingPrAttachmentReclaims` rule). Absent otherwise. */
+  reclaimPending?: true
+  /** The latest `execution.started` has no later `execution.ended` with the
+   * same `instance` (the `openExecution` rule). Absent otherwise. */
+  executionOpen?: true
 }
 
 export interface RepositoryRecord {
