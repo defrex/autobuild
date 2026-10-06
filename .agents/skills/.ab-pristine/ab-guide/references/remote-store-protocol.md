@@ -297,6 +297,8 @@ it to exist. An unknown build returns `404 not-found`.
 | `appendIfCurrent` | `POST /builds/{slug}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + build event envelope; stream advanced: `200 null` |
 | `getEvents` | `GET /builds/{slug}/events?since={n}&wait={s}` | optional `since` query value, parsed below; absence defaults to `0`. Optional `wait` in whole seconds, parsed per the event-wait rules below | `200` + envelopes whose `seq` is strictly greater than parsed `since`, in increasing sequence order |
 | `appendWithArtifacts` | `POST /builds/{slug}/deposits` | atomic deposit request | `201` + `{event, artifacts}` |
+| `getReducerSnapshot` | `GET /builds/{slug}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, or ahead of the build log's tail; an unknown build is `404`, which the shipped client also maps to `null` |
+| `putReducerSnapshot` | `PUT /builds/{slug}/snapshots/{reducer}` | `{"version": int >= 1, "cursor": int >= 0, "state": JSON}`, at most 16 MiB (`413` above) | `200 {"written": boolean}`; the stored cursor never decreases, so a write at an equal or lower cursor (or an equal cursor at an equal or lower version) and one past the log's tail answer `written: false` |
 | `putArtifact` | `POST /builds/{slug}/artifacts` | artifact input | `201` + build artifact metadata |
 | `getArtifact` | `GET /builds/{slug}/artifacts?kind={kind}&rev={n}` | `kind` is required and nonempty; optional `rev` is parsed below | `200` + artifact read; an absent `rev` parameter selects the latest revision; a missing kind/revision is `200 null` |
 | `listArtifacts` | `GET /builds/{slug}/artifact-list?kind={kind}` | optional `kind`; absence means all kinds | `200` + metadata ordered by kind and then increasing revision |
@@ -335,6 +337,32 @@ No pagination, deletion, retention, range request, or streaming endpoint is
 part of this protocol. Retention is enforced server-side inside the store at
 deposit time (bounded pruning of dispatcher run/config artifact revisions),
 not through any endpoint.
+
+### Reducer snapshots
+
+A reducer snapshot is one registered reducer's serialized state as of a log
+cursor, kept per scope (one build log or one repository journal) and reducer
+name. It is a cache the log regenerates, never an authority: a process with no
+hot memory loads it, reads only the events newer than its cursor, advances the
+reducer, and writes the advanced state back, and deleting every snapshot changes
+no observable output. The routes above and in section 4 are additive and carry
+no protocol-version bump. The store, not the client, enforces the invariants:
+
+- the stored cursor never decreases, whatever the versions of the competing
+  writers; a write succeeds only when no row exists, when its cursor is above the
+  stored one, or when its cursor equals the stored one and its version is higher
+  (an upgraded reducer replacing the old shape at an unchanged tail);
+- a read answers `null` for a row whose version differs from the requested one,
+  and for one whose cursor is beyond the scope's log tail; a write beyond the
+  tail is refused;
+- an unknown build or repository answers `null` (read) or `written: false`
+  (write) and never creates the scope.
+
+A client treats `404` and `405` from either route as "no snapshot", so a client
+newer than its store replays the log with no error, and a client older than its
+store never calls the routes. Authentication and transport failures still
+surface normally. A build token may touch only its own build's snapshots and a
+repository token only its own repository's, exactly as for events.
 
 ### The event-read bounded wait
 
@@ -382,6 +410,8 @@ without a journal record, or a repository without builds.
 | `appendRepo` | `POST /repos/{repo}/events` | event write | `201` + repository event envelope |
 | `getRepoEvents` | `GET /repos/{repo}/events?since={n}&wait={s}` | optional `since` query value, parsed as in section 3; absence defaults to `0`. Optional `wait` in whole seconds, per the event-wait rules of section 3 | `200` + envelopes with `seq >` parsed `since`, in increasing sequence order |
 | `getRepoStateEvents` | `GET /repos/{repo}/state-events` | none | `200` + the bounded repository-journal subset (AUT-489): every durable event type (`harvest.*`, `orchestrator.sandbox.*`, the three dispatcher setting types) plus, when the journal has one, the tail from the latest `dispatcher.run-started`, in increasing sequence order; served inside the repository-existence gate like `GET events`, so an unknown repository is `404` |
+| `getReducerSnapshot` (repo scope) | `GET /repos/{repo}/snapshots/{reducer}?version={n}` | required `version` query value, a positive integer; `reducer` is a registry name (`^[A-Za-z][A-Za-z0-9._-]{0,63}$`) | `200` + `{"version", "cursor", "state"}` or `200 null` when absent, written by another reducer version, ahead of the journal's tail, or the repository has no journal record; an unknown repository is `404`, which the shipped client also maps to `null` |
+| `putReducerSnapshot` (repo scope) | `PUT /repos/{repo}/snapshots/{reducer}` | `{"version": int >= 1, "cursor": int >= 0, "state": JSON}`, at most 16 MiB (`413` above) | `200 {"written": boolean}`; the stored cursor never decreases, so a write at an equal or lower cursor (or an equal cursor at an equal or lower version) and one past the journal's tail answer `written: false` |
 | `appendRepoWithArtifacts` | `POST /repos/{repo}/deposits` | atomic deposit request | `201` + `{event, artifacts}` using repository shapes |
 | `putRepoArtifact` | `POST /repos/{repo}/artifacts` | artifact input | `201` + repository artifact metadata |
 | `getRepoArtifact` | `GET /repos/{repo}/artifacts?kind={kind}&rev={n}` | required nonempty `kind`; optional `rev` is parsed as in section 3 | `200` + artifact read; latest only when the `rev` parameter is absent; missing kind/revision is `200 null` |
@@ -833,6 +863,11 @@ resource access; an explicit resource whose id is `"*"` is not admin.
 | build | no | exact id only | no | no | no | no | no | no | no |
 | repo | no | no | no | exact id only | yes | exact id only | exact id only | exact repo only | no |
 | session | no | no | no | no | no | no | no | no | exact id only |
+
+The snapshot routes (`/builds/{slug}/snapshots/{reducer}` and
+`/repos/{repo}/snapshots/{reducer}`) follow the one-matching-build and
+one-matching-repo columns: a build token reads and writes only its own build's
+snapshots, a repo token only its own repository's.
 
 A valid token used for the wrong resource receives `403 auth`. Resource scope
 gates all operations, including reads, artifact operations, and leases. A

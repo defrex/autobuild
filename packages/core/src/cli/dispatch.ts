@@ -3510,6 +3510,9 @@ class DispatchLoop {
         // the repository lease, so the next supervisor adopts immediately.
         await this.dispatcher.stopProvisioning()
         await this.finishRendering()
+        // Every append this invocation made is in the view; leave the reduced
+        // state behind so the next cold process reads only what is newer.
+        await this.repoView.persistSnapshots({ force: true })
         await this.releaseRepoLease()
       }
       return
@@ -3563,6 +3566,7 @@ class DispatchLoop {
       for (const report of await this.publishSettlementReports()) {
         this.printReport(report, false)
       }
+      await this.repoView.persistSnapshots({ force: true })
       await this.releaseRepoLease()
     }
     // The finished interactive frame stays on screen; never append a late line

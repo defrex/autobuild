@@ -327,6 +327,41 @@ describe('hosted store service', () => {
     })
   })
 
+  test('snapshot routes classify as store routes for GET and PUT only', async () => {
+    const backing = new MemoryBuildStore({ clock })
+    let opens = 0
+    const service = createHostedStoreService({
+      env,
+      clock,
+      openStore: async () => {
+        opens++
+        return backing
+      },
+    })
+    // Reducer snapshots: served inside the existence gates, so an unknown
+    // build or repository answers the store server's own 404 (persistence
+    // opened); any other method is the generic unclassified 404.
+    for (const path of [
+      '/builds/never/snapshots/build?version=1',
+      '/repos/acme%2Fnever/snapshots/journalView?version=1',
+    ]) {
+      const response = await service.fetch(
+        new Request(`http://hosted.test${path}`, { headers: machineHeaders }),
+      )
+      expect(opens).toBe(1)
+      expect(response.status).toBe(404)
+      expect(((await response.json()) as { error: string }).error).toContain('unknown')
+    }
+    const deleted = await service.fetch(
+      new Request('http://hosted.test/builds/never/snapshots/build', {
+        method: 'DELETE',
+        headers: machineHeaders,
+      }),
+    )
+    expect(deleted.status).toBe(404)
+    expect(((await deleted.json()) as { error: string }).error).toContain('no route')
+  })
+
   test('retries lazy store initialization after a rejected attempt', async () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })

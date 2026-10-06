@@ -55,7 +55,7 @@ import {
   type AutoMergeDefaultFact,
 } from '../kernel/auto-merge-default'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
-import { decideNext, decideNextFromFacts } from '../kernel/engine'
+import { decideNextFromFacts } from '../kernel/engine'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
@@ -81,7 +81,7 @@ import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
-import { settleOpenExecution, type OpenExecution } from './execution-settlement'
+import { settleOpenExecution } from './execution-settlement'
 import { openHarvestExecutions } from './harvest-execution-state'
 import { isWorkDigest, RepoViewStore } from './repo-view'
 import {
@@ -94,7 +94,6 @@ import {
 } from './dispatcher-selectors'
 import type { RepositoryEvent } from '../events/repository'
 import { sandboxStates } from './sandbox-state'
-import { abandonedPublicationPending, publicationPending } from './publication-state'
 import { settlePublicationBeforeRelease } from './publication-loss'
 
 // ── Readiness resolution (SPEC §3.3) ─────────────────────────────────────────

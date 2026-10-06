@@ -194,24 +194,24 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     getRepoHighWater(repo: string): Promise<number> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoHighWater', repo))
     },
-    getReducerSnapshot(
+    async getReducerSnapshot(
       target: SnapshotScope,
       reducer: string,
       version: number,
     ): Promise<ReducerSnapshot | null> {
       if (target.kind !== 'build') {
-        return Promise.reject(new BuildScopeError(scope, 'getReducerSnapshot', target.repo))
+        throw new BuildScopeError(scope, 'getReducerSnapshot', target.repo)
       }
       own('getReducerSnapshot', target.slug)
       return store.getReducerSnapshot(target, reducer, version)
     },
-    putReducerSnapshot(
+    async putReducerSnapshot(
       target: SnapshotScope,
       reducer: string,
       snapshot: ReducerSnapshot,
     ): Promise<boolean> {
       if (target.kind !== 'build') {
-        return Promise.reject(new BuildScopeError(scope, 'putReducerSnapshot', target.repo))
+        throw new BuildScopeError(scope, 'putReducerSnapshot', target.repo)
       }
       own('putReducerSnapshot', target.slug)
       return store.putReducerSnapshot(target, reducer, snapshot)

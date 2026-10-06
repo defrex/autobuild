@@ -396,6 +396,127 @@ describe('D8 scope enforcement over the wire', () => {
     })
   })
 
+  test('the snapshot routes enforce token scope, answer null for unknown scopes, and bound the body', async () => {
+    await withSecureStore(async ({ url, admin }) => {
+      await admin.createBuild(sampleBuildInput('build-a'))
+      await admin.createBuild(sampleBuildInput('build-b'))
+      await admin.append('build-a', sampleEventWrite('one'))
+      await admin.ensureRepo('acme/repo')
+      const scope = { kind: 'build', slug: 'build-a' } as const
+      const own = scopedClient(url, 'build-a')
+      expect(
+        await own.putReducerSnapshot(scope, 'build', { version: 1, cursor: 1, state: { n: 1 } }),
+      ).toBe(true)
+      expect(await own.getReducerSnapshot(scope, 'build', 1)).toEqual({
+        version: 1,
+        cursor: 1,
+        state: { n: 1 },
+      })
+      // A lower cursor does not regress the stored row.
+      expect(
+        await own.putReducerSnapshot(scope, 'build', { version: 1, cursor: 0, state: {} }),
+      ).toBe(false)
+      expect(await own.getReducerSnapshot(scope, 'build', 2)).toBeNull()
+      // Another build's snapshots are out of scope for this token.
+      expect(
+        await own
+          .getReducerSnapshot({ kind: 'build', slug: 'build-b' }, 'build', 1)
+          .catch((error: unknown) => error),
+      ).toBeInstanceOf(AuthError)
+      expect(
+        await own
+          .putReducerSnapshot({ kind: 'build', slug: 'build-b' }, 'build', {
+            version: 1,
+            cursor: 0,
+            state: {},
+          })
+          .catch((error: unknown) => error),
+      ).toBeInstanceOf(AuthError)
+      // Unknown scopes read null and refuse the write; nothing is created.
+      expect(await admin.getReducerSnapshot({ kind: 'build', slug: 'nope' }, 'build', 1)).toBeNull()
+      expect(
+        await admin.putReducerSnapshot({ kind: 'build', slug: 'nope' }, 'build', {
+          version: 1,
+          cursor: 0,
+          state: {},
+        }),
+      ).toBe(false)
+      expect(
+        await admin.getReducerSnapshot({ kind: 'repo', repo: 'acme/nope' }, 'journalView', 1),
+      ).toBeNull()
+      expect(await admin.getBuild('nope')).toBeNull()
+      // A repo token reaches only its own repository's snapshots.
+      const repoClient = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, {
+          resource: { kind: 'repo', id: 'acme/repo' },
+          session: 'hs_one',
+          exp: EXP,
+        }),
+      })
+      expect(
+        await repoClient.putReducerSnapshot({ kind: 'repo', repo: 'acme/repo' }, 'journalView', {
+          version: 1,
+          cursor: 0,
+          state: { retained: [] },
+        }),
+      ).toBe(true)
+      expect(
+        await repoClient
+          .getReducerSnapshot({ kind: 'build', slug: 'build-a' }, 'build', 1)
+          .catch((error: unknown) => error),
+      ).toBeInstanceOf(AuthError)
+      // Malformed and oversized writes are validation failures, not stored.
+      const admintoken = mintToken(SECRET, { build: '*', session: '*', exp: EXP })
+      const identity = {
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      }
+      const raw = (body: string) =>
+        fetch(`${url}/builds/build-a/snapshots/build`, {
+          method: 'PUT',
+          headers: {
+            ...identity,
+            authorization: `Bearer ${admintoken}`,
+            'content-type': 'application/json',
+          },
+          body,
+        })
+      expect((await raw('not json')).status).toBe(400)
+      expect((await raw(JSON.stringify({ version: 0, cursor: 1, state: {} }))).status).toBe(400)
+      expect((await raw(JSON.stringify({ version: 1, cursor: 1.5, state: {} }))).status).toBe(400)
+      expect(
+        (await raw(JSON.stringify({ version: 1, cursor: 1, state: 'x'.repeat(17 * 1024 * 1024) })))
+          .status,
+      ).toBe(413)
+      const badName = await fetch(`${url}/builds/build-a/snapshots/bad%20name?version=1`, {
+        headers: { ...identity, authorization: `Bearer ${admintoken}` },
+      })
+      expect(badName.status).toBe(400)
+    })
+  })
+
+  test('a store that predates the snapshot routes reads as no snapshots, never an error', async () => {
+    const old = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ error: 'no route', kind: 'not-found' }), { status: 404 }),
+    })
+    try {
+      const client = new RemoteBuildStore({ url: `http://localhost:${old.port}` })
+      expect(await client.getReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', 1)).toBeNull()
+      expect(
+        await client.putReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', {
+          version: 1,
+          cursor: 0,
+          state: {},
+        }),
+      ).toBe(false)
+    } finally {
+      old.stop(true)
+    }
+  })
+
   test('the state-events route: repo-token scope, the repo-existence gate, and the bounded wire shape', async () => {
     await withSecureStore(async ({ url, admin, backing }) => {
       await admin.createBuild(sampleBuildInput('build-a'))

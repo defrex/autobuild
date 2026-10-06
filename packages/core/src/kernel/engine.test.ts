@@ -19,7 +19,9 @@ import {
 import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { CorePhase, Feedback, Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
-import { decideNext, type Decision, type WaitReason } from './engine'
+import { decideNext, decideNextFromFacts, type Decision, type WaitReason } from './engine'
+import { randomBuildLog } from './generators/build-log'
+import { reduceBuild } from './reducer'
 import { checkIncremental } from './incremental-contract'
 import { logIndexReducer } from './log-index'
 
@@ -3192,5 +3194,32 @@ describe('decideNext: spec revision restart (§6.3)', () => {
 
   test('a crashed plan round after the restart re-runs at the continued number', () => {
     expect(decide([...revised, ev('plan.started', { round: 2 })])).toEqual(runPhase('plan', 2))
+  })
+})
+
+describe('decideNextFromFacts', () => {
+  test('is exactly decideNext over the reduced facts, including through a serialized accumulator', () => {
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const log = randomBuildLog(seed, 60)
+      for (const cut of [0, 1, 7, 20, 41, log.length]) {
+        const prefix = log.slice(0, cut)
+        const facts = decideNextFromFacts(
+          reduceBuild(prefix),
+          logIndexReducer.reduce(prefix),
+          config,
+        )
+        expect(facts).toEqual(decideNext(prefix, config))
+        // A snapshot-restored index (JSON round trip, advanced by the rest) agrees.
+        const head = JSON.parse(
+          JSON.stringify(
+            logIndexReducer.advance(logIndexReducer.initial(), prefix.slice(0, cut >> 1)),
+          ),
+        )
+        const restored = logIndexReducer.finish(
+          logIndexReducer.advance(head, prefix.slice(cut >> 1)),
+        )
+        expect(decideNextFromFacts(reduceBuild(prefix), restored, config)).toEqual(facts)
+      }
+    }
   })
 })
