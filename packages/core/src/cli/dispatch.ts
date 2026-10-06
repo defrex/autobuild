@@ -598,6 +598,8 @@ interface ActiveBuildExecution {
    * running, so the completion chain must append no `execution.ended`, release
    * no lease, settle no publication, and record no wait failure. */
   detaching?: boolean
+  /** A wait failure being recorded; teardown lets it finish rather than drop it. */
+  recording?: Promise<void>
 }
 
 /** The dispatch loop owns deterministic decisions and supervises one
@@ -2799,7 +2801,7 @@ class DispatchLoop {
             // A rejected executor completion cannot prove the remote VM was
             // stopped. Keep the lease until expiry: recovery fences and reaps
             // the exact recorded identity before authorizing a replacement.
-            await this.recordInfrastructureFailure({
+            active.recording = this.recordInfrastructureFailure({
               slug,
               instance,
               workspaceRef,
@@ -2808,6 +2810,7 @@ class DispatchLoop {
               cleanupPending: true,
               identity,
             })
+            await active.recording
           },
         )
         .finally(() => {
@@ -2943,6 +2946,9 @@ class DispatchLoop {
           } catch {
             // Detach is best-effort: an unresolvable wait still exits.
           }
+          // A wait failure already being recorded is durable work, not
+          // supervision: let it land before the process exits.
+          await entry.recording?.catch(() => {})
           this.activeBuildRuns.delete(slug)
           if (entry.settled !== undefined) {
             this.inFlight.delete(entry.settled)

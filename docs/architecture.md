@@ -163,7 +163,12 @@ an event a stage appends is folded in at once and later stages in the same tick
 see it with no re-read; a foreign append interleaved with ours leaves a seq gap
 that marks the log dirty, a lost compare-and-set does the same, and any delta
 that is not contiguous from its cursor discards the log and re-reads it in full,
-so no event is skipped. Decisions that deliberately re-read at the last moment
+so no event is skipped. Every state transition of one source (a build, the
+journal) runs on that source's single promise chain — snapshot and delta reads,
+window opening and widening, the fold after an own append, a lost
+compare-and-set's invalidation — and readers queue on it too, so overlapping
+readers join the repair in flight instead of observing half-applied state.
+Decisions that deliberately re-read at the last moment
 (`refreshBuild`) take an explicit delta. Cursor-bearing readers such as the
 orchestrator wake pass get per-source windows that hold only events above the
 lowest session cursor. A `--once` invocation builds the view cold and reads each

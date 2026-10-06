@@ -97,6 +97,16 @@ const complete = (store: BuildStore, slug: string) =>
     payload: { outcome: 'abandoned' },
   })
 
+/** Own writes started from inside a backing read hook. They complete on the
+ * backing store while the read is in flight; the view folds them on the
+ * source's chain, behind that read, so the hook must not await the fold. */
+const pending: Promise<unknown>[] = []
+const racing = (write: () => Promise<unknown>) => async (): Promise<void> => {
+  pending.push(write())
+  await new Promise<void>((resolve) => setTimeout(resolve, 5))
+}
+const settleRacing = async (): Promise<void> => void (await Promise.all(pending.splice(0)))
+
 function setup() {
   const store = new CountingStore()
   const view = new RepoViewStore(store, { repo: REPO })
@@ -432,10 +442,11 @@ describe('RepoViewStore read windows', () => {
     await store.ensureRepo(REPO)
     await view.refresh()
     store.holds = [
-      async () => void (await view.appendRepo(REPO, setting(false))),
-      async () => void (await view.appendRepo(REPO, setting(true))),
+      racing(() => view.appendRepo(REPO, setting(false))),
+      racing(() => view.appendRepo(REPO, setting(true))),
     ]
     await view.getRepoEvents(REPO, 0)
+    await settleRacing()
     await view.refresh()
     expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1, 2])
   })
@@ -457,9 +468,9 @@ describe('RepoViewStore read windows', () => {
     await newBuild(store, 'a')
     await view.refresh()
     await touch(store, 'a')
-    store.hold = async () =>
-      void (await view.append('a', { actor: KERNEL, type: 'build.paused', payload: {} } as never))
+    store.hold = racing(() => touch(view, 'a'))
     await view.refreshBuild('a')
+    await settleRacing()
     expect((await view.getEvents('a')).map((event) => event.seq)).toEqual([1, 2, 3])
   })
 
@@ -474,8 +485,7 @@ describe('RepoViewStore read windows', () => {
         return events
       }
     }
-    const pause = (view: RepoViewStore) => async () =>
-      void (await view.append('old', { actor: KERNEL, type: 'build.paused', payload: {} } as never))
+    const pause = (view: RepoViewStore) => racing(() => touch(view, 'old'))
     async function settled(resident: boolean) {
       const store = new DeferredStore()
       const view = new RepoViewStore(store, { repo: REPO, resident })
@@ -489,7 +499,9 @@ describe('RepoViewStore read windows', () => {
     test.each([true, false])('window initialization (resident=%p)', async (resident) => {
       const { store, view } = await settled(resident)
       store.hold = pause(view)
-      expect((await view.getEvents('old', 1)).map((event) => event.seq)).toEqual([2, 3])
+      const first = (await view.getEvents('old', 1)).map((event) => event.seq)
+      await settleRacing()
+      expect(first.length).toBeGreaterThanOrEqual(1)
       expect((await view.getEvents('old', 1)).map((event) => event.seq)).toEqual([2, 3])
       expect((await view.buildState('old')).lastSeq).toBe(3)
     })
@@ -499,6 +511,8 @@ describe('RepoViewStore read windows', () => {
       await view.getEvents('old', 2)
       view.releaseWindowsBelow({ build: 'old' }, 2)
       store.hold = pause(view)
+      await view.getEvents('old', 0)
+      await settleRacing()
       expect((await view.getEvents('old', 0)).map((event) => event.seq)).toEqual([1, 2, 3])
     })
 
@@ -506,6 +520,8 @@ describe('RepoViewStore read windows', () => {
       const { store, view } = await settled(false)
       await view.getEvents('old', 1)
       store.hold = pause(view)
+      await view.buildState('old')
+      await settleRacing()
       expect((await view.buildState('old')).lastSeq).toBe(3)
       expect(await view.getEvents('old')).toEqual(await store.getEvents('old'))
     })
@@ -527,20 +543,18 @@ describe('RepoViewStore read windows', () => {
     await store.ensureRepo(REPO)
     await view.refresh()
     // Creation: the snapshot is empty, then an own append lands before it returns.
-    store.hold = async () => {
-      await view.appendRepo(REPO, setting(false))
-    }
+    store.hold = racing(() => view.appendRepo(REPO, setting(false)))
     await view.getRepoEvents(REPO, 0)
+    await settleRacing()
     await view.refresh()
     expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1])
     // Widening: a later cursor first, then a lower one that races an append.
     await view.appendRepo(REPO, setting(true))
     await view.getRepoEvents(REPO, 2)
     view.releaseWindowsBelow('journal', 2)
-    store.hold = async () => {
-      await view.appendRepo(REPO, setting(false))
-    }
+    store.hold = racing(() => view.appendRepo(REPO, setting(false)))
     await view.getRepoEvents(REPO, 0)
+    await settleRacing()
     await view.refresh()
     expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1, 2, 3])
   })
@@ -565,5 +579,146 @@ describe('RepoViewStore read windows', () => {
     expect(store.rows.repoEvents).toBe(1)
     view.releaseWindowsBelow('journal', 2)
     expect((await view.getRepoEvents(REPO, 2)).map((event) => event.seq)).toEqual([3])
+  })
+})
+
+describe('RepoViewStore overlapping readers', () => {
+  /** A store whose reads of each kind park until released, counting calls. */
+  class GatedStore extends CountingStore {
+    gate: Promise<void> = Promise.resolve()
+    eventReads = 0
+    repoReads = 0
+    override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+      this.eventReads += 1
+      const events = await super.getEvents(...args)
+      await this.gate
+      return events
+    }
+    override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
+      this.repoReads += 1
+      const events = await super.getRepoEvents(...args)
+      await this.gate
+      return events
+    }
+    close_gate(): () => void {
+      let open!: () => void
+      this.gate = new Promise<void>((resolve) => {
+        open = resolve
+      })
+      return open
+    }
+  }
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5))
+
+  async function seeded(resident = false) {
+    const store = new GatedStore()
+    const view = new RepoViewStore(store, { repo: REPO, resident })
+    await store.ensureRepo(REPO)
+    await newBuild(store, 'a')
+    await touch(store, 'a')
+    await view.refresh()
+    return { store, view }
+  }
+
+  test('two getEvents readers during one repair join it and agree', async () => {
+    const { store, view } = await seeded()
+    await touch(store, 'a')
+    const open = store.close_gate()
+    store.eventReads = 0
+    const repair = view.refreshBuild('a')
+    const first = view.getEvents('a')
+    const second = view.getEvents('a')
+    await tick()
+    open()
+    const [, one, two] = await Promise.all([repair, first, second])
+    expect(store.eventReads).toBe(1)
+    expect(one).toEqual(await store.getEvents('a'))
+    expect(two).toEqual(one)
+  })
+
+  test('getEvents and buildState overlapping a delta both see the repaired log', async () => {
+    const { store, view } = await seeded()
+    await touch(store, 'a')
+    const open = store.close_gate()
+    store.eventReads = 0
+    const repair = view.refreshBuild('a')
+    const events = view.getEvents('a')
+    const state = view.buildState('a')
+    await tick()
+    open()
+    await repair
+    expect((await events).map((event) => event.seq)).toEqual([1, 2, 3])
+    expect((await state).lastSeq).toBe(3)
+    expect(store.eventReads).toBe(1)
+  })
+
+  test('two journal readers during one repair join it', async () => {
+    const { store, view } = await seeded()
+    await store.appendRepo(REPO, setting(false))
+    const open = store.close_gate()
+    store.repoReads = 0
+    const repair = view.refreshJournal()
+    const first = view.getRepoEvents(REPO, 0)
+    const second = view.getRepoStateEvents(REPO)
+    const third = view.getRepoEvents(REPO, 0)
+    await tick()
+    open()
+    const [, one, state, two] = await Promise.all([repair, first, second, third])
+    expect(store.repoReads).toBe(2) // delta sync, then the one window read
+    expect(one.map((event) => event.seq)).toEqual([1])
+    expect(two).toEqual(one)
+    expect(state.map((event) => event.seq)).toEqual([1])
+  })
+
+  test('an own append during overlapping readers is folded once and seen by both', async () => {
+    const { store, view } = await seeded()
+    const open = store.close_gate()
+    const repair = view.refreshBuild('a')
+    const first = view.getEvents('a')
+    const second = view.getEvents('a')
+    await tick()
+    const appended = touch(view, 'a')
+    await tick()
+    open()
+    await Promise.all([repair, first, second, appended])
+    const expected = await store.getEvents('a')
+    expect(await view.getEvents('a')).toEqual(expected)
+    expect((await view.buildState('a')).lastSeq).toBe(expected.at(-1)!.seq)
+  })
+
+  test('an own journal append during overlapping readers is not lost', async () => {
+    const { store, view } = await seeded()
+    await store.appendRepo(REPO, setting(true))
+    const open = store.close_gate()
+    const repair = view.refreshJournal()
+    const first = view.getRepoEvents(REPO, 0)
+    const second = view.getRepoStateEvents(REPO)
+    await tick()
+    const appended = view.appendRepo(REPO, setting(false))
+    await tick()
+    open()
+    await Promise.all([repair, first, second, appended])
+    expect((await view.getRepoEvents(REPO, 0)).map((event) => event.seq)).toEqual([1, 2])
+    expect((await view.getRepoStateEvents(REPO)).map((event) => event.seq)).toEqual([1, 2])
+  })
+
+  test('a lost compare-and-set during overlapping readers invalidates the repaired log', async () => {
+    const { store, view } = await seeded()
+    await touch(store, 'a')
+    const open = store.close_gate()
+    const repair = view.refreshBuild('a')
+    const first = view.getEvents('a')
+    const second = view.getEvents('a')
+    await tick()
+    const lost = view.appendIfCurrent('a', 1, {
+      actor: KERNEL,
+      type: 'build.paused',
+      payload: {},
+    } as never)
+    await tick()
+    open()
+    const [, , , result] = await Promise.all([repair, first, second, lost])
+    expect(result).toBeNull()
+    expect(await view.getEvents('a')).toEqual(await store.getEvents('a'))
   })
 })

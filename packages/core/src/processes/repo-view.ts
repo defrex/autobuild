@@ -15,6 +15,16 @@
  * - a failed compare-and-set marks its log dirty, so every existing CAS loop
  *   that re-reads after a conflict observes the winner's event unchanged.
  *
+ * Concurrency: every state transition of one source (a build slug, the journal,
+ * the listing/discovery pair) runs on that source's single in-flight promise
+ * chain — snapshot reads, delta reads, window opening and widening, the fold
+ * after an own append, a lost compare-and-set's invalidation. Readers run on the
+ * chain too, so a second reader joins the repair already in flight and never
+ * observes half-applied state; nothing interleaves inside a transition, which
+ * is why no write-generation or re-check bookkeeping is needed. Chain tasks only
+ * call the backing store and the private unlocked helpers, never a public
+ * method (that would deadlock behind itself).
+ *
  * Safety net: every delta must begin at `cursor + 1` and stay contiguous; if
  * it does not, the log is discarded and re-read in full, so "no event is ever
  * skipped" is enforced here rather than assumed of the adapters.
@@ -150,6 +160,29 @@ export interface RepoViewOptions {
   resident?: boolean
 }
 
+/** Runs tasks strictly one after another; `onIdle` fires when the queue drains. */
+class Chain {
+  private tail: Promise<void> = Promise.resolve()
+  private pending = 0
+
+  constructor(private readonly onIdle?: () => void) {}
+
+  run<T>(task: () => Promise<T>): Promise<T> {
+    this.pending += 1
+    const result = this.tail.then(task)
+    this.tail = result
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .then(() => {
+        this.pending -= 1
+        if (this.pending === 0) this.onIdle?.()
+      })
+    return result
+  }
+}
+
 export type WindowSource = { build: string } | 'journal'
 
 export class RepoViewStore implements BuildStore {
@@ -157,6 +190,7 @@ export class RepoViewStore implements BuildStore {
   private readonly resident: boolean
   private epoch = 0
   private initialized = false
+  private initializing: Promise<void> | undefined
 
   // Journal.
   private recorded = false
@@ -174,9 +208,10 @@ export class RepoViewStore implements BuildStore {
   private discoveryDirty = false
   private readonly logs = new Map<string, Log>()
   private readonly work = new Set<string>()
-  /** Bumped by every own write that touches a build log or invalidates it, so
-   * a snapshot read in flight can tell it was overtaken before installing. */
-  private readonly writeGen = new Map<string, number>()
+  private readonly buildChains = new Map<string, Chain>()
+  private readonly journalChain = new Chain()
+  /** Serializes the build listing and the discovery digests. */
+  private readonly metaChain = new Chain()
 
   constructor(
     private readonly backing: BuildStore,
@@ -188,62 +223,111 @@ export class RepoViewStore implements BuildStore {
 
   // ── Refresh ────────────────────────────────────────────────────────────────
 
+  /** One build's transitions, strictly in order. */
+  private build<T>(slug: string, task: () => Promise<T>): Promise<T> {
+    let chain = this.buildChains.get(slug)
+    if (chain === undefined) {
+      const created: Chain = new Chain(() => {
+        if (this.buildChains.get(slug) === created) this.buildChains.delete(slug)
+      })
+      chain = created
+      this.buildChains.set(slug, created)
+    }
+    return chain.run(task)
+  }
+
+  /** Cold start once, shared by every reader that arrives before it finishes. */
+  private ensureInit(): Promise<void> {
+    if (this.initialized) return Promise.resolve()
+    this.initializing ??= this.refresh().finally(() => {
+      this.initializing = undefined
+    })
+    return this.initializing
+  }
+
   /** The once-per-tick entry and lazy initializer. Cold (first call): the
    * journal's high-water mark, the bounded journal read, the build listing and
    * digests, and a full read of every work build. Warm: only what is newer. */
   async refresh(): Promise<void> {
     this.epoch += 1
-    if (!this.initialized) {
-      await this.loadJournal()
-      this.initialized = true
-    } else {
-      await this.syncJournal(true)
-    }
-    this.records = await this.backing.listBuilds()
-    this.recordsDirty = false
-    this.discovery = await this.backing.getRepoBuildDigests(this.repo)
-    this.discoveryDirty = false
+    await this.journalChain.run(() => this.syncOrLoadJournal())
+    await this.refreshRecords()
+    await this.refreshDiscovery()
 
     const own = this.records.filter((record) => record.repo === this.repo)
     const known = new Set(own.map((record) => record.slug))
     // Every build held at refresh start reads its tail first, regardless of
     // what discovery says; only then may a now-settled build be evicted.
     for (const slug of [...this.work]) {
-      if (!known.has(slug)) {
-        this.work.delete(slug)
-        this.logs.delete(slug)
-        continue
-      }
-      const log = this.logs.get(slug)
-      if (log === undefined) {
-        await this.loadFull(slug)
-        continue
-      }
-      await this.ensureCurrent(slug, log)
-      if (!isWorkDigest(this.digestOf(slug, log))) {
-        this.work.delete(slug)
-        if (!log.pinned) this.logs.delete(slug)
-      }
+      await this.build(slug, async () => {
+        if (!this.work.has(slug)) return
+        if (!known.has(slug)) {
+          this.work.delete(slug)
+          this.logs.delete(slug)
+          return
+        }
+        const log = this.logs.get(slug)
+        if (log === undefined) {
+          await this.loadFull(slug)
+          return
+        }
+        await this.ensureCurrent(slug, log)
+        const current = this.logs.get(slug) ?? log
+        if (!isWorkDigest(this.digestOf(slug, current))) {
+          this.work.delete(slug)
+          if (!current.pinned) this.logs.delete(slug)
+        }
+      })
     }
     for (const record of own) {
-      if (this.work.has(record.slug)) continue
-      const digest = this.discovery.get(record.slug)
-      if (digest !== undefined && !isWorkDigest(digest)) continue
-      await this.loadFull(record.slug)
-      this.work.add(record.slug)
+      await this.build(record.slug, async () => {
+        if (this.work.has(record.slug)) return
+        const digest = this.discovery.get(record.slug)
+        if (digest !== undefined && !isWorkDigest(digest)) return
+        await this.loadFull(record.slug)
+        this.work.add(record.slug)
+      })
     }
     // Unpinned logs read for one request do not outlive the epoch.
-    for (const [slug, log] of this.logs) {
-      if (!this.work.has(slug) && !log.pinned) this.logs.delete(slug)
+    for (const slug of [...this.logs.keys()]) {
+      await this.build(slug, async () => {
+        const log = this.logs.get(slug)
+        if (log !== undefined && !this.work.has(slug) && !log.pinned) this.logs.delete(slug)
+      })
     }
+  }
+
+  private refreshRecords(): Promise<void> {
+    return this.metaChain.run(async () => {
+      // Cleared before the read: an own write that lands during it re-marks.
+      this.recordsDirty = false
+      try {
+        this.records = await this.backing.listBuilds()
+      } catch (error) {
+        this.recordsDirty = true
+        throw error
+      }
+    })
+  }
+
+  private refreshDiscovery(): Promise<void> {
+    return this.metaChain.run(async () => {
+      this.discoveryDirty = false
+      try {
+        this.discovery = await this.backing.getRepoBuildDigests(this.repo)
+      } catch (error) {
+        this.discoveryDirty = true
+        throw error
+      }
+    })
   }
 
   /** The journal-only delta, for a stage that needs foreign journal appends
    * mid-tick (the ready scan) without paying for discovery. */
   async refreshJournal(): Promise<void> {
-    if (!this.initialized) return this.refresh()
+    if (!this.initialized) return this.ensureInit()
     // The build epoch is untouched: build logs stay current for this tick.
-    await this.syncJournal(true)
+    await this.journalChain.run(() => this.syncJournal(true))
   }
 
   // ── Journal ────────────────────────────────────────────────────────────────
@@ -274,8 +358,17 @@ export class RepoViewStore implements BuildStore {
     this.journalEpoch = this.epoch
   }
 
+  private async syncOrLoadJournal(): Promise<void> {
+    if (!this.initialized) {
+      await this.loadJournal()
+      this.initialized = true
+    } else {
+      await this.syncJournal(true)
+    }
+  }
+
   /** Bring the journal current: one delta read from the cursor (a repository
-   * no tick has recorded yet is re-probed instead). */
+   * no tick has recorded yet is re-probed instead). Runs on the journal chain. */
   private async syncJournal(force = false): Promise<void> {
     if (!this.recorded) {
       if ((await this.backing.getRepo(this.repo)) === null) return
@@ -283,23 +376,17 @@ export class RepoViewStore implements BuildStore {
       return
     }
     if (!force && !this.journalDirty && this.journalEpoch === this.epoch) return
-    // Cleared before the read for the same reason as build logs: an own append
-    // across a gap during the read must stay marked.
-    let again = force
-    while (again || this.journalDirty) {
-      again = false
-      this.journalDirty = false
-      this.journalEpoch = this.epoch
-      const read = await this.backing.getRepoEvents(this.repo, this.journalCursor)
-      const delta = read.filter((event) => event.seq > this.journalCursor)
-      if (delta.length === 0) continue
-      if (!contiguousFrom(delta, this.journalCursor)) {
-        // A hole: discard and re-read from scratch rather than skip an event.
-        await this.loadJournal()
-        return
-      }
-      this.foldJournal(delta)
+    const read = await this.backing.getRepoEvents(this.repo, this.journalCursor)
+    this.journalDirty = false
+    this.journalEpoch = this.epoch
+    const delta = read.filter((event) => event.seq > this.journalCursor)
+    if (delta.length === 0) return
+    if (!contiguousFrom(delta, this.journalCursor)) {
+      // A hole: discard and re-read from scratch rather than skip an event.
+      await this.loadJournal()
+      return
     }
+    this.foldJournal(delta)
   }
 
   /** Fold events newer than the cursor into the bounded subset and the window. */
@@ -347,12 +434,8 @@ export class RepoViewStore implements BuildStore {
     return log.digest.value
   }
 
-  private bumpGen(slug: string): void {
-    this.writeGen.set(slug, (this.writeGen.get(slug) ?? 0) + 1)
-  }
-
+  /** Full read, installed as the slug's log. Runs on the build's chain. */
   private async loadFull(slug: string): Promise<Log> {
-    const gen = this.writeGen.get(slug) ?? 0
     const events = await this.backing.getEvents(slug)
     const previous = this.logs.get(slug)
     const log: Log = {
@@ -363,32 +446,26 @@ export class RepoViewStore implements BuildStore {
       epoch: this.epoch,
       pinned: previous?.pinned ?? false,
     }
-    // An own write that completed during the read is not in the snapshot:
-    // keep the log invalid so the next read reconciles before serving it.
-    if ((this.writeGen.get(slug) ?? 0) !== gen) log.dirty = true
     this.logs.set(slug, log)
     return log
   }
 
   /** Bring one log current: a single delta read from its cursor, skipped when
-   * it was already brought current in this epoch and nothing marked it dirty. */
+   * it was already brought current in this epoch and nothing marked it dirty.
+   * Runs on the build's chain, so nothing marks the log while the read is in
+   * flight. */
   private async ensureCurrent(slug: string, log: Log): Promise<void> {
-    // The flag is cleared before the read, so an invalidation that lands while
-    // it is in flight (an own append across a gap, a lost compare-and-set)
-    // survives and sends us round again instead of being forgotten.
-    do {
-      if (!log.dirty && log.epoch === this.epoch) return
-      log.dirty = false
-      log.epoch = this.epoch
-      const read = await this.backing.getEvents(slug, log.cursor)
-      const delta = read.filter((event) => event.seq > log.cursor)
-      if (delta.length === 0) continue
-      if (!contiguousFrom(delta, log.cursor)) {
-        await this.loadFull(slug)
-        return
-      }
-      this.fold(log, delta)
-    } while (log.dirty)
+    if (!log.dirty && log.epoch === this.epoch) return
+    const read = await this.backing.getEvents(slug, log.cursor)
+    log.dirty = false
+    log.epoch = this.epoch
+    const delta = read.filter((event) => event.seq > log.cursor)
+    if (delta.length === 0) return
+    if (!contiguousFrom(delta, log.cursor)) {
+      await this.loadFull(slug)
+      return
+    }
+    this.fold(log, delta)
   }
 
   private fold(log: Log, events: AbEvent[]): void {
@@ -400,7 +477,6 @@ export class RepoViewStore implements BuildStore {
   private async openWindow(slug: string, since: number): Promise<Log> {
     if (this.work.has(slug)) return this.loadFull(slug)
     let log: Log
-    const gen = this.writeGen.get(slug) ?? 0
     if (this.resident) {
       // One pass over the log: reduce all of it, retain only what the reader
       // has not consumed.
@@ -425,7 +501,6 @@ export class RepoViewStore implements BuildStore {
         pinned: true,
       }
     }
-    if ((this.writeGen.get(slug) ?? 0) !== gen) log.dirty = true
     this.logs.set(slug, log)
     return log
   }
@@ -438,41 +513,46 @@ export class RepoViewStore implements BuildStore {
     if (opts?.waitSeconds !== undefined || opts?.signal !== undefined) {
       return this.backing.getEvents(slug, sinceSeq, opts)
     }
-    let log = this.logs.get(slug)
-    if (log === undefined || sinceSeq < log.from) {
-      log = await this.openWindow(slug, sinceSeq)
+    return this.build(slug, async () => {
+      let log = this.logs.get(slug)
+      if (log === undefined || sinceSeq < log.from) {
+        log = await this.openWindow(slug, sinceSeq)
+      } else if (sinceSeq > 0) {
+        log.pinned = true
+      }
       await this.ensureCurrent(slug, log)
-    } else {
-      if (sinceSeq > 0) log.pinned = true
-      await this.ensureCurrent(slug, log)
-    }
-    // `ensureCurrent` may have replaced the log after a gap.
-    log = this.logs.get(slug) ?? log
-    return log.events.filter((event) => event.seq > sinceSeq)
+      // `ensureCurrent` may have replaced the log after a gap.
+      log = this.logs.get(slug) ?? log
+      return log.events.filter((event) => event.seq > sinceSeq)
+    })
   }
 
   /** Take one build's delta now, even if it was already read this epoch — for
    * the decisions that deliberately re-read at the last possible moment so a
    * concurrent writer's cancellation or request is honored. */
   async refreshBuild(slug: string): Promise<void> {
-    const log = this.logs.get(slug)
-    if (log === undefined) return
-    log.dirty = true
-    await this.ensureCurrent(slug, log)
+    await this.build(slug, async () => {
+      const log = this.logs.get(slug)
+      if (log === undefined) return
+      log.dirty = true
+      await this.ensureCurrent(slug, log)
+    })
   }
 
   /** The reduced state of one build without replaying history the view already
    * folded: a held log is reduced in place; a resident window brings itself
    * current and finishes its accumulator; anything else is one full read,
    * then held. */
-  async buildState(slug: string): Promise<BuildState> {
-    let log = this.logs.get(slug)
-    if (log === undefined || (log.from > 0 && log.acc === undefined)) {
-      log = await this.loadFull(slug)
-    }
-    await this.ensureCurrent(slug, log)
-    log = this.logs.get(slug) ?? log
-    return log.acc !== undefined ? buildReducer.finish(log.acc) : reduceBuild(log.events)
+  buildState(slug: string): Promise<BuildState> {
+    return this.build(slug, async () => {
+      let log = this.logs.get(slug)
+      if (log === undefined || (log.from > 0 && log.acc === undefined)) {
+        log = await this.loadFull(slug)
+      }
+      await this.ensureCurrent(slug, log)
+      log = this.logs.get(slug) ?? log
+      return log.acc !== undefined ? buildReducer.finish(log.acc) : reduceBuild(log.events)
+    })
   }
 
   /** Drop retained events at or below `minCursor` for a windowed source — the
@@ -495,11 +575,8 @@ export class RepoViewStore implements BuildStore {
   }
 
   async listBuilds(): Promise<BuildRecord[]> {
-    if (!this.initialized) await this.refresh()
-    if (this.recordsDirty) {
-      this.records = await this.backing.listBuilds()
-      this.recordsDirty = false
-    }
+    await this.ensureInit()
+    if (this.recordsDirty) await this.refreshRecords()
     return this.records.map((record) => structuredClone(record))
   }
 
@@ -508,26 +585,21 @@ export class RepoViewStore implements BuildStore {
     const records = (await this.listBuilds()).filter((record) => record.repo === repo)
     const missing = (): boolean =>
       records.some((record) => !this.work.has(record.slug) && !this.discovery.has(record.slug))
-    if (this.discoveryDirty || missing()) {
-      this.discovery = await this.backing.getRepoBuildDigests(repo)
-      this.discoveryDirty = false
-    }
-    // A log invalidated by an own write that raced its installation resolves
-    // here, before its events feed a digest.
-    for (const record of records) {
-      const held = this.logs.get(record.slug)
-      if (held?.dirty === true) await this.ensureCurrent(record.slug, held)
-    }
+    if (this.discoveryDirty || missing()) await this.refreshDiscovery()
     const digests = new Map<string, BuildDigest>()
     for (const record of records) {
-      const log = this.logs.get(record.slug)
-      const found = this.work.has(record.slug) && log !== undefined && log.from === 0
-      if (found) {
-        digests.set(record.slug, { slug: record.slug, ...this.digestOf(record.slug, log) })
-        continue
-      }
-      const digest = this.discovery.get(record.slug)
-      if (digest !== undefined) digests.set(record.slug, digest)
+      const slug = record.slug
+      const digest = await this.build(slug, async () => {
+        // A log invalidated by an own write resolves before it feeds a digest.
+        const held = this.logs.get(slug)
+        if (held?.dirty === true) await this.ensureCurrent(slug, held)
+        const log = this.logs.get(slug)
+        if (this.work.has(slug) && log !== undefined && log.from === 0) {
+          return { slug, ...this.digestOf(slug, log) }
+        }
+        return this.discovery.get(slug)
+      })
+      if (digest !== undefined) digests.set(slug, digest)
     }
     return digests
   }
@@ -542,50 +614,34 @@ export class RepoViewStore implements BuildStore {
     if (repo !== this.repo || opts?.waitSeconds !== undefined || opts?.signal !== undefined) {
       return this.backing.getRepoEvents(repo, sinceSeq, opts)
     }
-    if (!this.initialized) await this.refresh()
-    await this.syncJournal()
-    if (!this.recorded) return this.backing.getRepoEvents(repo, sinceSeq)
-    let window = this.journalWindow
-    if (window === undefined || sinceSeq < window.from) {
-      const events = await this.backing.getRepoEvents(repo, sinceSeq)
-      const created: JournalWindow = {
-        from: sinceSeq,
-        events,
-        last: Math.max(sinceSeq, events.at(-1)?.seq ?? 0),
+    await this.ensureInit()
+    return this.journalChain.run(async () => {
+      await this.syncJournal()
+      if (!this.recorded) return this.backing.getRepoEvents(repo, sinceSeq)
+      let window = this.journalWindow
+      if (window === undefined || sinceSeq < window.from) {
+        const events = await this.backing.getRepoEvents(repo, sinceSeq)
+        window = {
+          from: sinceSeq,
+          events,
+          last: Math.max(sinceSeq, events.at(-1)?.seq ?? 0),
+        }
+        this.journalWindow = window
+        // Anything newer than the cursor feeds the bounded subset too.
+        this.foldJournal(events)
       }
-      window = created
-      this.journalWindow = created
-      // Anything newer than the cursor feeds the bounded subset too.
-      this.foldJournal(events)
-      // An own append that completed while the read was in flight advanced the
-      // cursor but could not reach a window that did not exist yet: read what
-      // the window is missing from its own tail.
-      // Folds that landed during the read (or during this repair) may already
-      // sit in the window ahead of the rows we read, so merge by seq against
-      // what the window holds rather than appending behind `last`.
-      for (
-        let attempt = 0;
-        attempt < 5 && !windowComplete(created, this.journalCursor);
-        attempt += 1
-      ) {
-        const tail = await this.backing.getRepoEvents(repo, created.from)
-        const held = new Set(created.events.map((event) => event.seq))
-        const missing = tail.filter((event) => !held.has(event.seq))
-        if (missing.length === 0) break
-        created.events = [...created.events, ...missing].sort((a, b) => a.seq - b.seq)
-        created.last = Math.max(created.last, created.events.at(-1)!.seq)
-        this.foldJournal(missing)
-      }
-    }
-    return window.events.filter((event) => event.seq > sinceSeq)
+      return window.events.filter((event) => event.seq > sinceSeq)
+    })
   }
 
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
     if (repo !== this.repo) return this.backing.getRepoStateEvents(repo)
-    if (!this.initialized) await this.refresh()
-    await this.syncJournal()
-    if (!this.recorded) return this.backing.getRepoStateEvents(repo)
-    return [...this.journal]
+    await this.ensureInit()
+    return this.journalChain.run(async () => {
+      await this.syncJournal()
+      if (!this.recorded) return this.backing.getRepoStateEvents(repo)
+      return [...this.journal]
+    })
   }
 
   async getRepoHighWater(repo: string): Promise<number> {
@@ -594,50 +650,58 @@ export class RepoViewStore implements BuildStore {
 
   // ── Writes: delegate, then fold ────────────────────────────────────────────
 
-  private foldBuildAppend(slug: string, envelope: AbEvent): void {
-    this.bumpGen(slug)
-    this.recordsDirty = true
-    const log = this.logs.get(slug)
-    if (log === undefined) {
-      // An append to a build the view holds no log for may change its digest.
-      this.discoveryDirty = true
-      return
-    }
-    if (envelope.seq <= log.cursor) return
-    if (envelope.seq === log.cursor + 1) this.fold(log, [envelope])
-    else log.dirty = true
+  /** Fold an own build append on the build's chain, after any read in flight:
+   * contiguous folds in place, a gap (a foreign append interleaved) marks the
+   * log dirty so the next read deltas. */
+  private foldBuildAppend(slug: string, envelope: AbEvent): Promise<void> {
+    return this.build(slug, async () => {
+      this.recordsDirty = true
+      const log = this.logs.get(slug)
+      if (log === undefined) {
+        // An append to a build the view holds no log for may change its digest.
+        this.discoveryDirty = true
+        return
+      }
+      if (envelope.seq <= log.cursor) return
+      if (envelope.seq === log.cursor + 1) this.fold(log, [envelope])
+      else log.dirty = true
+    })
   }
 
-  /** Fold an own journal append. A seq gap means a foreign append interleaved:
-   * repair it now, because stages snapshot the journal synchronously through
-   * `recordedJournal()` and must see our own write. */
-  private async foldJournalAppend(envelope: RepositoryEvent): Promise<void> {
-    // Before the cold load there is no journal state to extend; it reads the
-    // journal, this append included.
-    if (!this.initialized) return
-    this.recorded = true
-    if (envelope.seq <= this.journalCursor) return
-    if (envelope.seq === this.journalCursor + 1) {
-      this.foldJournal([envelope])
-      return
-    }
-    this.journalDirty = true
-    await this.syncJournal()
+  /** Fold an own journal append on the journal chain. A seq gap means a foreign
+   * append interleaved: repair it now, because stages snapshot the journal
+   * synchronously through `recordedJournal()` and must see our own write. */
+  private foldJournalAppend(envelope: RepositoryEvent): Promise<void> {
+    return this.journalChain.run(async () => {
+      // Before the cold load there is no journal state to extend; it reads the
+      // journal, this append included.
+      if (!this.initialized) return
+      this.recorded = true
+      if (envelope.seq <= this.journalCursor) return
+      if (envelope.seq === this.journalCursor + 1) {
+        this.foldJournal([envelope])
+        return
+      }
+      this.journalDirty = true
+      await this.syncJournal()
+    })
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
     const record = await this.backing.createBuild(input)
     this.recordsDirty = true
     if (record.repo === this.repo) {
-      await this.loadFull(record.slug)
-      this.work.add(record.slug)
+      await this.build(record.slug, async () => {
+        await this.loadFull(record.slug)
+        this.work.add(record.slug)
+      })
     }
     return record
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
     const envelope = await this.backing.append(slug, event)
-    this.foldBuildAppend(slug, envelope as unknown as AbEvent)
+    await this.foldBuildAppend(slug, envelope as unknown as AbEvent)
     return envelope
   }
 
@@ -648,12 +712,13 @@ export class RepoViewStore implements BuildStore {
   ): Promise<EventEnvelope<T> | null> {
     const envelope = await this.backing.appendIfCurrent(slug, expectedSeq, event)
     if (envelope === null) {
-      this.bumpGen(slug)
-      const log = this.logs.get(slug)
-      if (log !== undefined) log.dirty = true
+      await this.build(slug, async () => {
+        const log = this.logs.get(slug)
+        if (log !== undefined) log.dirty = true
+      })
       return null
     }
-    this.foldBuildAppend(slug, envelope as unknown as AbEvent)
+    await this.foldBuildAppend(slug, envelope as unknown as AbEvent)
     return envelope
   }
 
@@ -663,7 +728,7 @@ export class RepoViewStore implements BuildStore {
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
     const result = await this.backing.appendWithArtifacts(slug, artifacts, makeEvent)
-    this.foldBuildAppend(slug, result.event as unknown as AbEvent)
+    await this.foldBuildAppend(slug, result.event as unknown as AbEvent)
     return result
   }
 
@@ -872,18 +937,4 @@ function contiguousFrom(events: readonly { seq: number }[], cursor: number): boo
     expected += 1
   }
   return true
-}
-
-/** A journal window is complete when its events are contiguous from `from + 1`
- * through at least the view's journal cursor. */
-function windowComplete(
-  window: { from: number; events: readonly { seq: number }[] },
-  cursor: number,
-): boolean {
-  let expected = window.from + 1
-  for (const event of window.events) {
-    if (event.seq !== expected) return false
-    expected += 1
-  }
-  return expected - 1 >= cursor
 }
