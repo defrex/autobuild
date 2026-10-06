@@ -42,6 +42,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
       'packages/core/src/cli/dashboard/**',
       'packages/core/src/cli/dispatch.ts',
       'tools/dashboard-capture.ts',
+      'tools/capture-parity.ts',
       '.agents/skills/ab-verify-dashboard/SKILL.md',
     ],
   })
@@ -51,6 +52,9 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
     paths: [
       'packages/hosted-store-service/app/**',
       'packages/web-dashboard-capture/src/**',
+      'packages/core/src/operator/**',
+      'packages/core/src/cli/dashboard/**',
+      'tools/capture-parity.ts',
       '.agents/skills/verify-web-dashboard/SKILL.md',
       'DESIGN.md',
     ],
