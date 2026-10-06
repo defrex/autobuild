@@ -200,9 +200,14 @@ again.
 
 The view restores from reducer snapshots on cold start. The journal comes from
 the `journalView` reducer (the journal pruned on arrival: durable types plus the
-tail from the latest `dispatcher.run-started`); each work build comes from its
-`build`, `logIndex`, `openExecution`, `openBuildWorkspace`, `publicationState`
-and `lastExecutionOutcome` snapshots, which must agree on one cursor. The view
+tail from the latest `dispatcher.run-started`); each work build comes from one
+`work` snapshot row — the `build`, `logIndex`, `openExecution`,
+`openBuildWorkspace`, `publicationState`, `lastExecutionOutcome`, `buildDigest`,
+`dashboardFacts` and `currentDeferralObservation` accumulators at a single
+cursor. One row is one atomic write on every adapter, so a reader in another
+process sees the old bundle or the new, never a mix; the bundle version is
+derived from the component reducer versions, so a stale bundle misses and the
+build is replayed once. The view
 reads only the events newer than that cursor and holds, for a snapshot-backed
 build, just that delta plus the reduced state of everything before it, so a tick
 with no new events reads zero event rows (apart from the discovery listing and
@@ -213,6 +218,27 @@ only on the branches that act on it. `persistSnapshots()` writes the advanced
 state back at the end of each tick and on shutdown — best effort, throttled in a
 resident dispatcher, always run by a cold single-tick process — and never writes
 a cursor that was not read from the log.
+
+**Operator reads.** The web dashboard, the repository and Harvest status
+routes, the operator build listings, and the `ab watch`/`ab wait` discovery
+passes derive from that same view instead of replaying the log
+(`packages/core/src/operator/read-view.ts`). A dashboard row renders from the
+`BuildState` plus the `dashboardFacts` reducer
+(`packages/core/src/cli/dashboard/facts.ts`: queued-row dispatch text, session
+brackets, phase intervals, pause time, and the per-round loop-output seqs) and
+the auto-merge deferral ledger; `projectBuild(…, events)` is the same projection
+over the whole-array reduction, so the snapshot and replay paths cannot differ.
+Within one serving process, passes are single-flight per repository: requests
+arriving while a pass runs join the one trailing pass, which restores from the
+snapshot the previous pass persisted. A poll at idle therefore reads no event
+rows beyond snapshot lookups and build discovery, and a poll after M new events
+reads those M rows once, however many tabs or watchers the process serves.
+Serving processes do not coordinate: with P of them, each may read the same M
+rows once, so duplicate reads are bounded by P and never by history, tabs, or
+watchers. A settled build listed under `--all` is restored from the snapshot the
+dispatcher left at settlement, or read once and then persisted. The first
+operator poll after upgrading replays each work build once, because the stored
+bundle layout changed.
 
 **Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through

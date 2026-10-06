@@ -14,7 +14,7 @@ import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { buildReducer } from '../kernel/reducer'
 import { MemoryBuildStore } from '../store/memory'
 import type { ReducerSnapshot, SnapshotScope } from '../store/snapshots'
-import { RepoViewStore } from './repo-view'
+import { RepoViewStore, WORK_BUNDLE_VERSION } from './repo-view'
 
 const REPO = 'acme/widgets'
 const KERNEL = { kind: 'kernel' } as const
@@ -187,31 +187,61 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     }
     expect(store.rows.events).toBeGreaterThan(0)
 
+    /** Rewrite one part of the stored work bundle; the journal stays intact. */
+    const inBundle =
+      (rewrite: (bundle: { build: unknown; extra: Record<string, unknown> }) => void) =>
+      (_scope: SnapshotScope, reducer: string, found: ReducerSnapshot): ReducerSnapshot => {
+        if (reducer !== 'work') return found
+        const state = structuredClone(found.state) as {
+          build: unknown
+          extra: Record<string, unknown>
+        }
+        rewrite(state)
+        return { ...found, state }
+      }
     const tampers: Record<
       string,
       (scope: SnapshotScope, reducer: string, found: ReducerSnapshot) => ReducerSnapshot | null
     > = {
       'no snapshot': () => null,
-      'malformed build state': (_scope, reducer, found) =>
-        reducer === 'build' ? { ...found, state: 'garbage' } : found,
+      'malformed bundle state': (_scope, reducer, found) =>
+        reducer === 'work' ? { ...found, state: 'garbage' } : found,
+      'bundle without its extras': inBundle((bundle) => {
+        bundle.extra = undefined as never
+      }),
+      'malformed build state': inBundle((bundle) => {
+        bundle.build = 'garbage'
+      }),
       'malformed journal state': (_scope, reducer, found) =>
         reducer === 'journalView' ? { ...found, state: { retained: 'x' } } : found,
-      'incomplete digest accumulator': (_scope, reducer, found) =>
-        reducer === 'buildDigest' ? { ...found, state: {} } : found,
-      'incomplete publication ledger': (_scope, reducer, found) =>
-        reducer === 'publicationState' ? { ...found, state: {} } : found,
-      'incomplete log index': (_scope, reducer, found) =>
-        reducer === 'logIndex'
-          ? { ...found, state: { candidates: [], maxRoundEver: {}, guidanceDeliveries: [] } }
-          : found,
-      'openExecution without its open field': (_scope, reducer, found) =>
-        reducer === 'openExecution' ? { ...found, state: {} } : found,
-      'workspace with a malformed open field': (_scope, reducer, found) =>
-        reducer === 'openBuildWorkspace' ? { ...found, state: { open: 3 } } : found,
-      'last execution without its state': (_scope, reducer, found) =>
-        reducer === 'lastExecutionOutcome' ? { ...found, state: {} } : found,
-      'prefixes that disagree': (_scope, reducer, found) =>
-        reducer === 'logIndex' ? { ...found, cursor: found.cursor - 1 } : found,
+      'incomplete digest accumulator': inBundle((bundle) => {
+        bundle.extra.buildDigest = {}
+      }),
+      'incomplete publication ledger': inBundle((bundle) => {
+        bundle.extra.publicationState = {}
+      }),
+      'incomplete log index': inBundle((bundle) => {
+        bundle.extra.logIndex = { candidates: [], maxRoundEver: {}, guidanceDeliveries: [] }
+      }),
+      'openExecution without its open field': inBundle((bundle) => {
+        bundle.extra.openExecution = {}
+      }),
+      'workspace with a malformed open field': inBundle((bundle) => {
+        bundle.extra.openBuildWorkspace = { open: 3 }
+      }),
+      'last execution without its state': inBundle((bundle) => {
+        bundle.extra.lastExecutionOutcome = {}
+      }),
+      'dashboard facts without their sessions': inBundle((bundle) => {
+        bundle.extra.dashboardFacts = {}
+      }),
+      'deferral ledger without its entries': inBundle((bundle) => {
+        bundle.extra.currentDeferralObservation = {}
+      }),
+      'a bundle that predates the dashboard extras': inBundle((bundle) => {
+        delete bundle.extra.dashboardFacts
+        delete bundle.extra.currentDeferralObservation
+      }),
     }
     for (const [name, tamper] of Object.entries(tampers)) {
       store.snapshotsOn = true
@@ -230,11 +260,11 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     await snapshotsOf(store, fresh(store))
     // Version mismatch: the adapter answers null for any other version, and a
     // write at a higher cursor-equal version replaces it.
-    expect(await store.getReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', 999)).toBeNull()
+    expect(await store.getReducerSnapshot({ kind: 'build', slug: 'a' }, 'work', 999)).toBeNull()
     // Ahead of the log: refused at write, hidden at read.
     expect(
-      await store.putReducerSnapshot({ kind: 'build', slug: 'a' }, 'logIndex', {
-        version: 1,
+      await store.putReducerSnapshot({ kind: 'build', slug: 'a' }, 'work', {
+        version: WORK_BUNDLE_VERSION,
         cursor: 99,
         state: {},
       }),
@@ -374,7 +404,15 @@ describe('a restored openExecution accumulator', () => {
     await seededRepo(store)
     await snapshotsOf(store, fresh(store))
     store.tamper = (_scope, reducer, found) =>
-      reducer === 'openExecution' ? { ...found, state: {} } : found
+      reducer === 'work'
+        ? {
+            ...found,
+            state: {
+              ...(found.state as object),
+              extra: { ...(found.state as { extra: object }).extra, openExecution: {} },
+            },
+          }
+        : found
     const view = fresh(store)
     await view.refresh()
     expect((await view.buildFacts('a')).open).toBeNull()
@@ -396,3 +434,141 @@ describe('a restored openExecution accumulator', () => {
     expect((await view.buildFacts('a')).open).toBeNull()
   })
 })
+
+describe('the work bundle is one atomic row', () => {
+  const scopeOf = (slug: string): SnapshotScope => ({ kind: 'build', slug })
+
+  test('a work build persists one `work` row and no per-reducer rows', async () => {
+    const store = new CountingStore()
+    await seededRepo(store)
+    await snapshotsOf(store, fresh(store))
+    const bundle = await store.getReducerSnapshot(scopeOf('a'), 'work', WORK_BUNDLE_VERSION)
+    expect(bundle).not.toBeNull()
+    expect(Object.keys((bundle!.state as { extra: object }).extra).sort()).toEqual(
+      [
+        'buildDigest',
+        'currentDeferralObservation',
+        'dashboardFacts',
+        'lastExecutionOutcome',
+        'logIndex',
+        'openBuildWorkspace',
+        'openExecution',
+        'publicationState',
+      ].sort(),
+    )
+    for (const name of ['build', 'logIndex', 'buildDigest', 'dashboardFacts']) {
+      expect(await store.getReducerSnapshot(scopeOf('a'), name, 1)).toBeNull()
+    }
+  })
+
+  test('the bundle version moves with the component reducer versions', () => {
+    // Bump WORK_BUNDLE_LAYOUT (or a component reducer's version) and this pin
+    // together: a stale bundle must miss instead of mixing shapes.
+    expect(WORK_BUNDLE_VERSION).toBe(pinnedBundleVersion())
+  })
+
+  test('a reader racing a publisher sees the old or the new bundle, never history', async () => {
+    const store = new CountingStore()
+    await seededRepo(store)
+    await snapshotsOf(store, fresh(store))
+    for (let i = 0; i < 50; i++) await pause(store, 'a')
+    // Publisher A reads the new tail and parks before its put lands.
+    let release!: () => void
+    const parked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let reached!: () => void
+    const inPut = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const publisher = new Proxy(store, {
+      get(target, prop) {
+        if (prop === 'putReducerSnapshot') {
+          return async (...args: Parameters<MemoryBuildStore['putReducerSnapshot']>) => {
+            reached()
+            await parked
+            return target.putReducerSnapshot(...args)
+          }
+        }
+        const value = Reflect.get(target, prop, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as unknown as MemoryBuildStore
+    const writer = new RepoViewStore(publisher, { repo: REPO })
+    // The cold refresh reads the delta, then publishes it at its end.
+    const persisting = writer.refresh()
+    await inPut
+    // B restores while A's write is in flight: the old coherent bundle plus
+    // its delta, never a mixed or full replay of A's log.
+    store.reset()
+    const during = fresh(store)
+    await during.refresh()
+    const during_ = await plainFacts(during, 'a')
+    const rowsDuring = store.rows.events
+    expect(rowsDuring).toBeLessThanOrEqual(50)
+    release()
+    await persisting
+    store.reset()
+    const after = fresh(store)
+    await after.refresh()
+    expect(store.rows.events).toBe(0)
+    expect(await plainFacts(after, 'a')).toEqual(during_)
+  })
+
+  test('a settled build read for one request restores from, and then leaves, a bundle', async () => {
+    const store = new CountingStore()
+    await seededRepo(store)
+    await store.append('a', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    // No snapshot exists for the settled build: the first read replays it.
+    const first = fresh(store)
+    await first.refresh()
+    store.reset()
+    await first.buildFacts('a')
+    expect(store.rows.events).toBeGreaterThan(0)
+    await first.persistSnapshots({ force: true, held: true })
+    // The next process restores it with zero rows.
+    const second = fresh(store)
+    await second.refresh()
+    store.reset()
+    const facts = await second.buildFacts('a')
+    expect(store.rows.events).toBe(0)
+    expect(facts.state.status).toBe('done')
+    expect(facts.state).toEqual(buildReducer.reduce(await store.getEvents('a')))
+  })
+})
+
+import { buildReducer as pinBuild } from '../kernel/reducer'
+import { currentDeferralObservationReducer as pinDeferral } from '../kernel/auto-merge'
+import { dashboardFactsReducer as pinFacts } from '../cli/dashboard/facts'
+import { logIndexReducer as pinLogIndex } from '../kernel/log-index'
+import {
+  openExecutionReducer as pinOpen,
+  lastExecutionOutcomeReducer as pinLast,
+} from './execution-settlement'
+import { openBuildWorkspaceReducer as pinWorkspace } from './dispatcher-selectors'
+import { publicationStateReducer as pinPublication } from './publication-state'
+import { buildDigestReducer as pinDigest } from '../store/digest'
+
+function pinnedBundleVersion(): number {
+  const layout = 1
+  return (
+    layout +
+    [
+      pinBuild,
+      pinDeferral,
+      pinFacts,
+      pinLogIndex,
+      pinOpen,
+      pinLast,
+      pinWorkspace,
+      pinPublication,
+      pinDigest,
+    ]
+      .map((reducer) => reducer.version)
+      .reduce((a, b) => a + b, 0)
+  )
+}

@@ -27,6 +27,7 @@ import { infrastructureFailureResetReducer } from '../processes/infrastructure-f
 import { publicationStateReducer } from '../processes/publication-state'
 import { sandboxStatesReducer } from '../processes/sandbox-state'
 import { openTickReducer } from '../processes/tick-state'
+import { dashboardFactsReducer } from '../cli/dashboard/facts'
 import { buildDigestReducer } from '../store/digest'
 import { journalViewReducer, repositoryStateEventsReducer } from '../store/repo-state-events'
 import { sessionReducer } from '../store/session-reducer'
@@ -121,6 +122,10 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
       'hasAutoMergeDeferralObservation',
       'currentAutoMergeDeferral',
     ],
+  },
+  dashboardFacts: {
+    reducer: dashboardFactsReducer,
+    covers: ['phaseIntervals', 'projectSessions'],
   },
   autoMergeDefault: { reducer: autoMergeDefaultReducer, covers: ['latestAutoMergeDefault'] },
   pinnedAssets: { reducer: pinnedAssetsReducer, covers: ['findPinnedRevision'] },

@@ -67,6 +67,8 @@ import type {
   SessionEventType,
   SessionEventWrite,
 } from '../events/sessions'
+import { dashboardFactsReducer, type DashboardFacts } from '../cli/dashboard/facts'
+import { currentDeferralObservationReducer, type DeferralLedger } from '../kernel/auto-merge'
 import { logIndexReducer, type LogIndex } from '../kernel/log-index'
 import { buildReducer, reduceBuild, type BuildAcc, type BuildState } from '../kernel/reducer'
 import { createBuildScopedStore } from '../store/build-scope'
@@ -155,10 +157,30 @@ const EXTRA_REDUCERS = {
   openBuildWorkspace: openBuildWorkspaceReducer,
   publicationState: publicationStateReducer,
   lastExecutionOutcome: lastExecutionOutcomeReducer,
+  // The operator dashboard's row facts (`cli/dashboard/facts.ts`) and the
+  // auto-merge deferral ledger, so a row derives from the snapshot too.
+  dashboardFacts: dashboardFactsReducer,
+  currentDeferralObservation: currentDeferralObservationReducer,
 } as const
 type ExtraName = keyof typeof EXTRA_REDUCERS
 const EXTRA_NAMES = Object.keys(EXTRA_REDUCERS) as ExtraName[]
 type ExtraAccs = Record<ExtraName, unknown>
+
+/** The one build-scope snapshot row a work build is restored from. Every
+ * accumulator rides in it at a single cursor, so one `putReducerSnapshot` —
+ * atomic per row on every adapter — publishes them together and a reader in
+ * another process sees either the old bundle or the new, never a mix (a mixed
+ * restore would fall back to a full replay). */
+const SNAPSHOT_WORK = 'work'
+/** Bump when the bundle layout changes. */
+const WORK_BUNDLE_LAYOUT = 1
+/** Derived from the component versions (they only ever increase), so a bundle
+ * written under any other reducer version misses instead of mixing shapes. */
+export const WORK_BUNDLE_VERSION =
+  WORK_BUNDLE_LAYOUT +
+  buildReducer.version +
+  EXTRA_NAMES.reduce((total, name) => total + EXTRA_REDUCERS[name].version, 0)
+const WORK_BUNDLE_REDUCER = { version: WORK_BUNDLE_VERSION }
 
 /** The facts a quiet-path stage needs about one build, without its event array. */
 export interface BuildFacts {
@@ -169,6 +191,9 @@ export interface BuildFacts {
   workspace: OpenBuildWorkspace | null
   publication: PublicationView
   lastExecution: ExecutionOutcome
+  /** What a dashboard row reads beyond the build state. */
+  dashboard: DashboardFacts
+  deferral: DeferralLedger
 }
 
 /** A build that still has tick duties: nonterminal, aborted (awaiting its
@@ -261,6 +286,18 @@ function extraAccsShape(extra: ExtraAccs): boolean {
   }
   if (typeof field(extra.lastExecutionOutcome, 'state') !== 'string') return false
   if (!Array.isArray(field(extra.publicationState, 'ledger'))) return false
+  const dashboard = extra.dashboardFacts
+  if (
+    !(
+      isObject(dashboard) &&
+      Array.isArray(dashboard.sessionEvents) &&
+      isObject(dashboard.intervals) &&
+      isObject(dashboard.produced)
+    )
+  ) {
+    return false
+  }
+  if (!Array.isArray(field(extra.currentDeferralObservation, 'entries'))) return false
   const digest = extra.buildDigest
   return (
     isObject(digest) &&
@@ -663,24 +700,21 @@ export class RepoViewStore implements BuildStore {
 
   private async restoreLog(slug: string): Promise<Log | null> {
     const scope: SnapshotScope = { kind: 'build', slug }
-    const [build, ...rest] = await Promise.all([
-      loadReducerSnapshot(this.backing, scope, 'build', buildReducer),
-      ...EXTRA_NAMES.map((name) =>
-        loadReducerSnapshot(this.backing, scope, name, EXTRA_REDUCERS[name]),
-      ),
-    ])
-    // Every one must be present and describe the same prefix, else one is stale
-    // (a write that did not finish) or missing: replay rather than mix prefixes.
-    if (build === null || !buildAccShape(build)) return null
-    const extra = {} as ExtraAccs
-    for (const [at, name] of EXTRA_NAMES.entries()) {
-      const found = rest[at]
-      if (found === null || found === undefined || found.cursor !== build.cursor) return null
-      if (!isObject(found.state)) return null
-      extra[name] = found.state
-    }
-    if (!extraAccsShape(extra)) return null
+    const bundle = await loadReducerSnapshot(
+      this.backing,
+      scope,
+      SNAPSHOT_WORK,
+      WORK_BUNDLE_REDUCER,
+    )
+    if (bundle === null || !isObject(bundle.state)) return null
+    const buildState = bundle.state.build
+    const extra = bundle.state.extra
+    if (!isObject(extra)) return null
+    if (!buildAccShape({ ...bundle, state: buildState })) return null
+    for (const name of EXTRA_NAMES) if (!isObject(extra[name])) return null
+    if (!extraAccsShape(extra as ExtraAccs)) return null
     if (!indexAccShape(extra.logIndex)) return null
+    const build = { cursor: bundle.cursor, state: buildState }
     const cursor = build.cursor
     try {
       const delta = (await this.backing.getEvents(slug, cursor)).filter(
@@ -694,7 +728,7 @@ export class RepoViewStore implements BuildStore {
         dirty: false,
         epoch: this.epoch,
         acc: build.state as BuildAcc,
-        extra,
+        extra: extra as ExtraAccs,
         persisted: cursor,
         pinned: this.logs.get(slug)?.pinned ?? false,
       }
@@ -742,6 +776,8 @@ export class RepoViewStore implements BuildStore {
     publication.latestUncompletedRequest()
     lastExecutionOutcomeReducer.finish(extra.lastExecutionOutcome as never)
     buildDigestReducer.finish(extra.buildDigest as never)
+    dashboardFactsReducer.finish(extra.dashboardFacts as never)
+    currentDeferralObservationReducer.finish(extra.currentDeferralObservation as never)
   }
 
   private fold(log: Log, events: AbEvent[]): void {
@@ -867,7 +903,7 @@ export class RepoViewStore implements BuildStore {
     return this.build(slug, async () => {
       let log = this.logs.get(slug)
       if (log === undefined) {
-        log = this.work.has(slug) ? await this.loadWork(slug) : await this.loadFull(slug)
+        log = await this.loadWork(slug)
       } else if (log.from > 0 && !hasAccs(log)) {
         log = await this.loadFull(slug)
       }
@@ -882,6 +918,10 @@ export class RepoViewStore implements BuildStore {
         workspace: openBuildWorkspaceReducer.finish(extra.openBuildWorkspace as never),
         publication: publicationStateReducer.finish(extra.publicationState as never),
         lastExecution: lastExecutionOutcomeReducer.finish(extra.lastExecutionOutcome as never),
+        dashboard: dashboardFactsReducer.finish(extra.dashboardFacts as never),
+        deferral: currentDeferralObservationReducer.finish(
+          extra.currentDeferralObservation as never,
+        ),
       }
     })
   }
@@ -899,24 +939,11 @@ export class RepoViewStore implements BuildStore {
     this.ensureAccs(log)
     const scope: SnapshotScope = { kind: 'build', slug }
     const cursor = log.cursor
-    const version = (reducer: { version: number }, state: unknown): ReducerSnapshot => ({
-      version: reducer.version,
+    await persistReducerSnapshot(this.backing, scope, SNAPSHOT_WORK, {
+      version: WORK_BUNDLE_VERSION,
       cursor,
-      state,
+      state: { build: log.acc, extra: log.extra },
     })
-    const extra = log.extra!
-    const writes = [
-      persistReducerSnapshot(this.backing, scope, 'build', version(buildReducer, log.acc)),
-      ...EXTRA_NAMES.map((name) =>
-        persistReducerSnapshot(
-          this.backing,
-          scope,
-          name,
-          version(EXTRA_REDUCERS[name], extra[name]),
-        ),
-      ),
-    ]
-    await Promise.all(writes)
     log.persisted = Math.max(log.persisted, cursor)
   }
 
@@ -941,7 +968,9 @@ export class RepoViewStore implements BuildStore {
    * journal view and each work build. A resident view throttles repeated
    * persists; `force` and a process's first persist always run. The snapshots
    * are a cache — nothing here can fail the caller. */
-  async persistSnapshots(opts: { force?: boolean; cold?: boolean } = {}): Promise<void> {
+  async persistSnapshots(
+    opts: { force?: boolean; cold?: boolean; held?: boolean } = {},
+  ): Promise<void> {
     if (!this.initialized && !this.journalReady) return
     const now = this.now()
     if (opts.cold !== true) {
@@ -959,7 +988,10 @@ export class RepoViewStore implements BuildStore {
     } catch {
       // A cache: the next call retries.
     }
-    const slugs = [...this.work].filter((slug) => {
+    // `held` also writes a log read for one request (a settled build the view
+    // never tracks as work), so its cold full read is paid once.
+    const candidates = opts.held === true ? [...this.logs.keys()] : [...this.work]
+    const slugs = candidates.filter((slug) => {
       const log = this.logs.get(slug)
       return log !== undefined && log.cursor > log.persisted
     })

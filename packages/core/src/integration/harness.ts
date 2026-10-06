@@ -59,6 +59,12 @@ import { InProcessBuildExecution } from '../ports/workspace/in-process-build-exe
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
 import { diagnosticArtifact } from '../processes/build-execution-state'
 import { Dispatcher, type LaunchRunnerResult } from '../processes/dispatcher'
+import {
+  getHarvestStatus,
+  getOperatorDashboard,
+  getRepositoryStatus,
+  listOperatorBuilds,
+} from '../operator/query'
 import { RepoViewStore } from '../processes/repo-view'
 import { MemoryBuildStore } from '../store/memory'
 import type { BuildStore } from '../store/types'
@@ -347,6 +353,36 @@ export async function assertSnapshotEquivalence(store: BuildStore, repo: string)
       throw new Error(`snapshot-restored reading differs from full replay (${round})`)
     }
     await restoredView.persistSnapshots({ force: true })
+  }
+  // The operator routes derive from the same view: each response with
+  // snapshots present equals the response with every snapshot deleted.
+  const at = new Date('2026-01-01T00:00:00.000Z')
+  const routes = async (target: BuildStore) => {
+    const attempt = async (read: () => Promise<unknown>): Promise<unknown> => {
+      try {
+        return await read()
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+    return {
+      dashboard: await attempt(() =>
+        getOperatorDashboard({ store: target, repo, clock: () => at }),
+      ),
+      status: await attempt(() => getRepositoryStatus(target, repo)),
+      harvest: await attempt(() => getHarvestStatus(target, repo)),
+      lists: await Promise.all(
+        (['active', 'queued', 'all'] as const).map((scope) =>
+          attempt(() => listOperatorBuilds({ store: target, repo, scope, now: at })),
+        ),
+      ),
+    }
+  }
+  const replayedRoutes = canonical(await routes(withoutSnapshots(store)))
+  for (const round of ['as left', 'warmed by a first poll']) {
+    if (canonical(await routes(store)) !== replayedRoutes) {
+      throw new Error(`snapshot-backed operator routes differ from full replay (${round})`)
+    }
   }
 }
 
