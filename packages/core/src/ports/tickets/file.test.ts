@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { manualClock } from '../../testing/fixed'
@@ -302,6 +302,19 @@ describe('FileTicketSource', () => {
       expect(created.state).toBe('icebox')
       expect(await readdir(join(dir, 'icebox'))).toEqual([`${created.ref.id}.md`])
       expect(() => source({ createState: 'parked' })).toThrow(/unknown state "parked"/)
+    })
+
+    test('a symlinked state directory is a state for configuration and per-call resolution', async () => {
+      const target = await mkdtemp(join(tmpdir(), 'ab-file-icebox-target-'))
+      try {
+        await mkdir(dir, { recursive: true })
+        await symlink(target, join(dir, 'icebox'))
+        const tickets = source({ createState: 'icebox', doneState: 'icebox' })
+        expect((await tickets.create({ title: 'T', body: 'b' })).state).toBe('icebox')
+        expect((await tickets.listReady({ state: 'icebox' })).tickets).toHaveLength(1)
+      } finally {
+        await rm(target, { recursive: true, force: true })
+      }
     })
 
     test('create with an explicit custom state writes into that directory', async () => {

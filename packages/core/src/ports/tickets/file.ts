@@ -20,7 +20,7 @@
  * human edits are explicitly last-write-wins. State renames never cross a
  * filesystem: `<dir>/ready` → `<dir>/doing` is one mount by construction.
  */
-import { readdirSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -454,7 +454,15 @@ export class FileTicketSource implements TicketSource {
   private statesSync(): string[] {
     try {
       const entries = readdirSync(this.dir, { withFileTypes: true })
-      return statesIn(entries.filter((e) => e.isDirectory()).map((e) => e.name))
+      const directories = entries
+        .filter(
+          (e) =>
+            e.isDirectory() ||
+            (e.isSymbolicLink() &&
+              statSync(join(this.dir, e.name), { throwIfNoEntry: false })?.isDirectory()),
+        )
+        .map((e) => e.name)
+      return statesIn(directories)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return statesIn([])
       throw error
