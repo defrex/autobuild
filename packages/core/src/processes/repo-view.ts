@@ -559,6 +559,9 @@ export class RepoViewStore implements BuildStore {
    * repair it now, because stages snapshot the journal synchronously through
    * `recordedJournal()` and must see our own write. */
   private async foldJournalAppend(envelope: RepositoryEvent): Promise<void> {
+    // Before the cold load there is no journal state to extend; it reads the
+    // journal, this append included.
+    if (!this.initialized) return
     this.recorded = true
     if (envelope.seq <= this.journalCursor) return
     if (envelope.seq === this.journalCursor + 1) {
