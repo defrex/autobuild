@@ -336,7 +336,7 @@ dir = "tickets"
     expect(events.filter((event) => event.type === 'workspace.provisioned')).toHaveLength(1)
     expect(events.filter((event) => event.type === 'spec.imported')).toHaveLength(1)
     expect(launched).toEqual(['recover-dispatch'])
-    expect((await tickets.get(transient.ref.id))?.state).toBe('Doing')
+    expect((await tickets.get(transient.ref.id))?.state).toBe('doing')
 
     const permanent = await tickets.create({
       title: 'Permanent dispatch',
@@ -360,7 +360,7 @@ dir = "tickets"
       status: 'done',
       outcome: 'discarded',
     })
-    expect((await tickets.get(permanent.ref.id))?.state).toBe('Ready')
+    expect((await tickets.get(permanent.ref.id))?.state).toBe('ready')
 
     workspaces.setFailure('provision', null)
     expect(await dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
@@ -1904,7 +1904,7 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
     expect(await h.store.listBuilds()).toEqual([])
     // Held means untouched — and since this source's claim IS a rename into
     // doing/, "not claimed" is checkable by where the file still sits.
-    expect((await source.get(dependent.ref.id))?.state).toBe('Ready')
+    expect((await source.get(dependent.ref.id))?.state).toBe('ready')
     expect(await readdir(join(dir, 'doing'))).toEqual([`${blocker.ref.id}.md`])
 
     // The blocker completes by the source's OWN lifecycle — nothing else.
@@ -1948,12 +1948,12 @@ test('d3. post-create blocker writes immediately govern file-source dispatch (§
     const held = await h.dispatcher.tick()
     expect(held.dependencyBlocked).toBe(1)
     expect(held.dispatched).toBe(0)
-    expect((await source.get(dependent.ref.id))?.state).toBe('Ready')
+    expect((await source.get(dependent.ref.id))?.state).toBe('ready')
 
     await source.removeBlocker(dependent.ref.id, blocker.ref.id)
     const unblockedFile = await readFile(join(dir, 'ready', `${dependent.ref.id}.md`), 'utf8')
     expect(unblockedFile).not.toContain('blockedBy')
-    expect((await source.get(blocker.ref.id))?.state).toBe('Doing')
+    expect((await source.get(blocker.ref.id))?.state).toBe('doing')
 
     const released = await h.dispatcher.tick()
     expect(released.dependencyBlocked).toBe(0)
@@ -2042,7 +2042,7 @@ test('d4. dispatch withholds a ready ticket while its Autobuild creation is in f
       `ticket ${dependentId}: creation withheld — Harvest run h_inflight_e2e`,
     )
     expect(await h.store.listBuilds()).toEqual([])
-    expect((await source.get(dependentId))?.state).toBe('Ready')
+    expect((await source.get(dependentId))?.state).toBe('ready')
 
     releaseBlockerWrite()
     await filing

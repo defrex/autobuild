@@ -732,7 +732,7 @@ state eligible.
 |---|---|---|---|
 | `source` | — | **required**, nonblank builtin or plugin registration name | Which provider backs all ticket operations. Unknown names report every available builtin and plugin source. |
 | `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. |
-| `readyState` | — | **required**, non-blank string | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file canonicalizes it to a state directory (`ready` → `ready/`). There is no any-state mode. |
+| `readyState` | — | **required**, non-blank string | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`). There is no any-state mode. |
 | `teamKey` | — | required by `linear`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`) or an existing plugin configuration field. |
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |
@@ -772,11 +772,16 @@ Cross-field rules, each an **error**:
   janitor completion. Every source-agnostic `ab ticket` command loads and uses
   the same configured registration.
 
-The file tracker is **directory-per-state**: `<dir>/<state>/<id>.md` over
-`triage/ ready/ doing/ done/`. The directory *is* the state, so a transition or
+The file tracker is **directory-per-state**: `<dir>/<state>/<id>.md`, where
+every directory directly under the root is a state: the four lifecycle
+directories `triage/ ready/ doing/ done/` (always present, created on first use)
+plus any others the repository adds, such as `icebox/`. A state exists when its
+directory exists; state names match directories case-insensitively, and a name
+with no directory is an error listing those that exist. The directory *is* the
+state, so a transition or
 claim is a rename — frontmatter carries no `state`/`claimedBy`, and a ticket
 body survives byte-exactly because a move never rewrites the file. A malformed
-record in any lifecycle directory is diagnosed with its path and validation
+record in any state directory is diagnosed with its path and validation
 problem, left untouched, and excluded from listing/claim so unrelated valid
 ready work can continue. `ab ticket list` sends those diagnostics to stderr and
 keeps JSON stdout as one bare valid-ticket array. Tracker-wide safety checks
@@ -1849,7 +1854,7 @@ default, when you need to know what this repo's version says).
 | Skill | Place in the lifecycle | Purpose |
 |---|---|---|
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
-| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between `triage/ ready/ doing/ done/`. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
+| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the tracker's state directories (`triage/ ready/ doing/ done/` plus any the repo adds). The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. Its editable `references/setup.md` guides the init handoff. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |

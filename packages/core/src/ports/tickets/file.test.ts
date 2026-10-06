@@ -28,7 +28,7 @@ describeTicketSourceContract('FileTicketSource', async () => {
   const contractDir = await mkdtemp(join(tmpdir(), 'ab-file-ticket-contract-'))
   return {
     source: new FileTicketSource({ dir: contractDir }),
-    states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
+    states: { ready: 'ready', claimed: 'doing', completed: 'done' },
     editableLabel: 'contract-editable',
     cleanup: () => rm(contractDir, { recursive: true, force: true }),
   }
@@ -48,7 +48,12 @@ const SPEC_BODY = [
 /** Seed `<state>/<id>.md` — the state is the directory, so it's a param of the path. */
 async function seedTicket(
   id: string,
-  over: { state?: string; labels?: string[]; body?: string; blockedBy?: string[] } = {},
+  over: {
+    state?: string
+    labels?: string[]
+    body?: string
+    blockedBy?: string[]
+  } = {},
 ): Promise<string> {
   const state = (over.state ?? 'ready').toLowerCase()
   const lines = ['+++', `id = ${JSON.stringify(id)}`, `title = "Ticket ${id}"`]
@@ -76,8 +81,12 @@ describe('FileTicketSource', () => {
       body: SPEC_BODY,
       labels: ['autobuild'],
     })
-    expect(created.ref).toEqual({ source: 'file', id: 'file-1', title: 'Rate-limit auth' })
-    expect(created.state).toBe('Ready')
+    expect(created.ref).toEqual({
+      source: 'file',
+      id: 'file-1',
+      title: 'Rate-limit auth',
+    })
+    expect(created.state).toBe('ready')
 
     const got = await tickets.get('file-1')
     expect(got).toEqual(created)
@@ -89,10 +98,10 @@ describe('FileTicketSource', () => {
     ).toEqual(['file-1'])
 
     expect(await tickets.claim('file-1')).toBe(true)
-    expect((await tickets.get('file-1'))?.state).toBe('Doing')
+    expect((await tickets.get('file-1'))?.state).toBe('doing')
 
     await tickets.transition('file-1', 'Done')
-    expect((await tickets.get('file-1'))?.state).toBe('Done')
+    expect((await tickets.get('file-1'))?.state).toBe('done')
 
     await tickets.comment('file-1', 'Build started.')
     const after = await tickets.get('file-1')
@@ -118,7 +127,7 @@ describe('FileTicketSource', () => {
     expect(adopted.ref.id).toBe('file-1')
     expect(adopted.creationKey).toBe('harvest-cluster-1')
     expect((await source().get('file-1'))?.creationKey).toBe('harvest-cluster-1')
-    expect(adopted.state).toBe('Done')
+    expect(adopted.state).toBe('done')
     expect(await readdir(join(dir, 'triage'))).toEqual([])
     expect(await readFile(path('done', 'file-1'), 'utf8')).toContain(
       'idempotencyKey = "harvest-cluster-1"',
@@ -130,7 +139,7 @@ describe('FileTicketSource', () => {
       { title: 'Harvested', body: SPEC_BODY },
       { state: 'Triage' },
     )
-    expect(created.state).toBe('Triage')
+    expect(created.state).toBe('triage')
     expect(await readdir(join(dir, 'triage'))).toContain('file-1.md')
   })
 
@@ -142,7 +151,7 @@ describe('FileTicketSource', () => {
       labels: ['ingest:sentry'],
     })
 
-    expect(created.state).toBe('Triage')
+    expect(created.state).toBe('triage')
     expect(await readdir(join(dir, 'triage'))).toEqual([`${created.ref.id}.md`])
     expect(await readdir(join(dir, 'ready'))).toEqual([])
 
@@ -162,14 +171,17 @@ describe('FileTicketSource', () => {
   })
 
   test('transition moves the file and leaves the bytes identical', async () => {
-    const seeded = await seedTicket('file-1', { state: 'ready', body: SPEC_BODY })
+    const seeded = await seedTicket('file-1', {
+      state: 'ready',
+      body: SPEC_BODY,
+    })
     const tickets = source()
 
     await tickets.transition('file-1', 'Done')
 
     expect(await readFile(path('done', 'file-1'), 'utf8')).toBe(seeded)
     expect(await readdir(join(dir, 'ready'))).toEqual([])
-    expect((await tickets.get('file-1'))?.state).toBe('Done')
+    expect((await tickets.get('file-1'))?.state).toBe('done')
   })
 
   // Idempotency, not the early-return at file.ts:208. This test CANNOT
@@ -186,13 +198,16 @@ describe('FileTicketSource', () => {
   // an already-Done ticket again. If that threw, the janitor would wedge on the
   // build forever. Same shape for the bounce/abort paths to Triage.
   test('transition to the current state succeeds and leaves the ticket untouched', async () => {
-    const seeded = await seedTicket('file-1', { state: 'ready', body: SPEC_BODY })
+    const seeded = await seedTicket('file-1', {
+      state: 'ready',
+      body: SPEC_BODY,
+    })
     const tickets = source()
 
     await tickets.transition('file-1', 'Ready')
     await tickets.transition('file-1', 'Ready') // retried after a crash
 
-    expect((await tickets.get('file-1'))?.state).toBe('Ready')
+    expect((await tickets.get('file-1'))?.state).toBe('ready')
     expect(await readFile(path('ready', 'file-1'), 'utf8')).toBe(seeded)
     expect(await readdir(join(dir, 'ready'))).toEqual(['file-1.md'])
   })
@@ -207,20 +222,142 @@ describe('FileTicketSource', () => {
 
     // `[tickets] readyState = "ready"` must mean the ready/ directory.
     await tickets.transition('file-1', 'ready')
-    expect((await tickets.get('file-1'))?.state).toBe('Ready')
+    expect((await tickets.get('file-1'))?.state).toBe('ready')
     expect((await tickets.listReady({ state: 'READY' })).tickets.map((t) => t.ref.id)).toEqual([
       'file-1',
     ])
   })
 
-  test('an unknown state name is an error listing the four directories', async () => {
+  test('an unknown state name is an error listing the directories that exist', async () => {
     await seedTicket('file-1')
     await expect(source().transition('file-1', 'Shipped')).rejects.toThrow(
-      /unknown state "Shipped".*Triage, Ready, Doing, Done/s,
+      /unknown state "Shipped".*triage, ready, doing, done/s,
     )
     await expect(source().listReady({ state: 'Backlog' })).rejects.toThrow(
       'unknown state "Backlog"',
     )
+  })
+
+  // ── Custom states: every directory under the root is a state ───────────────
+
+  describe('custom state directories', () => {
+    test('a ticket in icebox/ is found, shown, and reported as icebox', async () => {
+      await seedTicket('file-7', { state: 'icebox' })
+      const found = await source().get('file-7')
+      expect(found?.state).toBe('icebox')
+    })
+
+    test('listReady --state matches case-insensitively and never leaks custom states', async () => {
+      await seedTicket('file-7', { state: 'icebox' })
+      await seedTicket('file-8', { state: 'ready' })
+      const tickets = source()
+      expect((await tickets.listReady({ state: 'icebox' })).tickets.map((t) => t.ref.id)).toEqual([
+        'file-7',
+      ])
+      expect((await tickets.listReady({ state: 'ICEBOX' })).tickets.map((t) => t.ref.id)).toEqual([
+        'file-7',
+      ])
+      expect((await tickets.listReady({ state: 'Ready' })).tickets.map((t) => t.ref.id)).toEqual([
+        'file-8',
+      ])
+    })
+
+    test('transition into and out of icebox/ renames without rewriting', async () => {
+      const content = await seedTicket('file-7', { state: 'ready' })
+      await mkdir(join(dir, 'icebox'))
+      const tickets = source()
+
+      await tickets.transition('file-7', 'icebox')
+      expect(await readFile(path('icebox', 'file-7'), 'utf8')).toBe(content)
+      expect(await readdir(join(dir, 'ready'))).toEqual([])
+
+      await tickets.transition('file-7', 'ready')
+      expect(await readFile(path('ready', 'file-7'), 'utf8')).toBe(content)
+      expect(await readdir(join(dir, 'icebox'))).toEqual([])
+    })
+
+    test('a missing state fails naming it and the existing ones, changing no file', async () => {
+      const content = await seedTicket('file-7', { state: 'ready' })
+      for (const state of ['icebox', 'triage', 'doing', 'done']) {
+        await mkdir(join(dir, state))
+      }
+      const before = (await readdir(dir)).sort()
+      const tickets = source()
+      const message = /unknown state "parked".*triage, ready, doing, done, icebox/s
+
+      await expect(tickets.transition('file-7', 'parked')).rejects.toThrow(message)
+      await expect(tickets.create({ title: 'T', body: 'b' }, { state: 'parked' })).rejects.toThrow(
+        message,
+      )
+      await expect(tickets.listReady({ state: 'parked' })).rejects.toThrow(message)
+      expect((await readdir(dir)).sort()).toEqual(before)
+      expect(await readFile(path('ready', 'file-7'), 'utf8')).toBe(content)
+      expect(await readdir(join(dir, 'triage'))).toEqual([])
+    })
+
+    test('createState and doneState may name an existing custom directory', async () => {
+      await mkdir(join(dir, 'icebox'))
+      const tickets = source({ createState: 'icebox', doneState: 'ICEBOX' })
+      const created = await tickets.create({ title: 'T', body: 'b' })
+      expect(created.state).toBe('icebox')
+      expect(await readdir(join(dir, 'icebox'))).toEqual([`${created.ref.id}.md`])
+      expect(() => source({ createState: 'parked' })).toThrow(/unknown state "parked"/)
+    })
+
+    test('create with an explicit custom state writes into that directory', async () => {
+      await mkdir(join(dir, 'icebox'))
+      const created = await source().create({ title: 'T', body: 'b' }, { state: 'icebox' })
+      expect(created.state).toBe('icebox')
+      expect(await readdir(join(dir, 'icebox'))).toEqual([`${created.ref.id}.md`])
+    })
+
+    test('a custom readyState directory is claimable; doing and done are not', async () => {
+      await seedTicket('file-1', { state: 'queued' })
+      await seedTicket('file-2', { state: 'doing' })
+      await seedTicket('file-3', { state: 'done' })
+      const tickets = source()
+      expect(await tickets.claim('file-1')).toBe(true)
+      expect(await readdir(join(dir, 'queued'))).toEqual([])
+      expect(await readdir(join(dir, 'doing'))).toContain('file-1.md')
+      expect(await tickets.claim('file-2')).toBe(false)
+      expect(await tickets.claim('file-3')).toBe(false)
+    })
+
+    test('a blocker in a custom state exists but is unresolved until it is done', async () => {
+      await seedTicket('file-1', { state: 'icebox' })
+      const tickets = source()
+      expect(await tickets.dependencyStates(['file-1'])).toEqual([
+        { id: 'file-1', exists: true, resolved: false, blockedBy: [] },
+      ])
+      await tickets.transition('file-1', 'done')
+      expect(await tickets.dependencyStates(['file-1'])).toEqual([
+        { id: 'file-1', exists: true, resolved: true, blockedBy: [] },
+      ])
+    })
+
+    test('the same id in icebox/ and ready/ is a fatal duplicate naming both paths', async () => {
+      await seedTicket('file-1', { state: 'icebox' })
+      await seedTicket('file-1', { state: 'ready' })
+      const tickets = source()
+      for (const run of [() => tickets.get('file-1'), () => tickets.listReady({})]) {
+        await expect(run()).rejects.toThrow(/icebox.*file-1\.md.*ready.*file-1\.md|ready.*icebox/s)
+      }
+    })
+
+    test('dot directories and root files are not states', async () => {
+      await seedTicket('file-1', { state: '.hidden' })
+      await writeFile(join(dir, 'notes.txt'), 'hi')
+      const tickets = source()
+      expect((await tickets.listReady({})).tickets).toEqual([])
+      expect(await tickets.get('file-1')).toBeNull()
+      await expect(tickets.listReady({ state: 'notes.txt' })).rejects.toThrow(/unknown state/)
+      await expect(tickets.listReady({ state: '.hidden' })).rejects.toThrow(/unknown state/)
+    })
+
+    test('first write creates only the lifecycle directories, never a custom one', async () => {
+      await source().create({ title: 'A', body: 'a' })
+      expect((await readdir(dir)).sort()).toEqual(['doing', 'done', 'ready', 'triage'])
+    })
   })
 
   // ── Claim ──────────────────────────────────────────────────────────────────
@@ -293,10 +430,11 @@ describe('FileTicketSource', () => {
 
   test('a .md at the tracker root is an error naming the path and the state dirs', async () => {
     await seedTicket('file-1', { state: 'ready' })
+    await mkdir(join(dir, 'icebox'))
     await writeFile(join(dir, 'loose.md'), '+++\nid = "loose"\ntitle = "x"\n+++\nbody\n')
 
     await expect(source().listReady({})).rejects.toThrow(
-      /loose\.md.*outside a state directory.*triage\/, ready\/, doing\/, done\//s,
+      /loose\.md.*outside a state directory.*triage\/, ready\/, doing\/, done\/, icebox\//s,
     )
   })
 
@@ -324,18 +462,30 @@ describe('FileTicketSource', () => {
 
   test('listReady on a tracker that does not exist yet returns []', async () => {
     const tickets = new FileTicketSource({ dir: join(dir, 'missing') })
-    expect(await tickets.listReady({})).toEqual({ tickets: [], diagnostics: [] })
+    expect(await tickets.listReady({})).toEqual({
+      tickets: [],
+      diagnostics: [],
+    })
   })
 
   // ── listReady filtering ────────────────────────────────────────────────────
 
   test('listReady requires every requested label and matches state', async () => {
-    await seedTicket('file-1', { state: 'ready', labels: ['autobuild', 'bug'] })
+    await seedTicket('file-1', {
+      state: 'ready',
+      labels: ['autobuild', 'bug'],
+    })
     await seedTicket('file-2', { state: 'ready', labels: ['autobuild'] })
-    await seedTicket('file-3', { state: 'triage', labels: ['autobuild', 'bug'] })
+    await seedTicket('file-3', {
+      state: 'triage',
+      labels: ['autobuild', 'bug'],
+    })
     const tickets = source()
 
-    const ready = await tickets.listReady({ labels: ['autobuild', 'bug'], state: 'Ready' })
+    const ready = await tickets.listReady({
+      labels: ['autobuild', 'bug'],
+      state: 'Ready',
+    })
     expect(ready.tickets.map((t) => t.ref.id)).toEqual(['file-1'])
     expect(ready.diagnostics).toEqual([])
     expect((await tickets.listReady({})).tickets).toHaveLength(3)
@@ -544,7 +694,7 @@ describe('FileTicketSource', () => {
       ref: { title: 'Renamed' },
       title: 'Renamed',
       body: bodyBefore,
-      state: 'Ready',
+      state: 'ready',
       labels: ['new'],
       blockedBy: [blocker.ref.id],
     })
@@ -634,7 +784,10 @@ describe('FileTicketSource', () => {
    * rename, so the content must arrive at the new state byte-identically —
    * this pins that the dependency field added no rewrite path of its own. */
   test('a file without blockedBy survives a transition byte-identically', async () => {
-    const original = await seedTicket('file-1', { state: 'Ready', labels: ['autobuild'] })
+    const original = await seedTicket('file-1', {
+      state: 'Ready',
+      labels: ['autobuild'],
+    })
     const tickets = source()
 
     await tickets.transition('file-1', 'Doing')
@@ -681,7 +834,7 @@ describe('FileTicketSource', () => {
     const tickets = source({ doneState: 'Triage' })
 
     expect(await tickets.claim('file-1')).toBe(false)
-    expect((await tickets.get('file-1'))?.state).toBe('Triage')
+    expect((await tickets.get('file-1'))?.state).toBe('triage')
   })
 
   test('an unknown doneState is a loud error, not a silently dead gate', async () => {

@@ -296,7 +296,7 @@ describe('abTicketCreate', () => {
       stdout: (line) => out.push(line),
     })
 
-    expect(out).toEqual(['ticket created: file:file-1 (Triage)'])
+    expect(out).toEqual(['ticket created: file:file-1 (triage)'])
     // Triage is the directory, not a frontmatter field — new tickets land in
     // <dir>/triage/ (the printed state above is read back off that directory).
     const written = await readFile(join(tmp, 'tickets', 'triage', 'file-1.md'), 'utf8')
@@ -331,7 +331,7 @@ describe('abTicketCreate', () => {
       stdout: (line) => out.push(line),
     })
 
-    expect(out).toEqual(['ticket created: file:file-2 (Ready) — blocked by file-1'])
+    expect(out).toEqual(['ticket created: file:file-2 (ready) — blocked by file-1'])
     expect(existsSync(join(tmp, 'tickets', 'done', 'file-2.md'))).toBe(false)
     const written = await readFile(join(tmp, 'tickets', 'ready', 'file-2.md'), 'utf8')
     expect(written).toContain('title = "Ready dependent"')
@@ -354,7 +354,7 @@ describe('abTicketCreate', () => {
       stdout: (line) => out.push(line),
     })
 
-    expect(out).toEqual(['ticket created: file:file-1 (Done)'])
+    expect(out).toEqual(['ticket created: file:file-1 (done)'])
     expect(await readFile(join(tmp, 'tickets', 'done', 'file-1.md'), 'utf8')).toContain(
       'title = "Use configured default"',
     )
@@ -375,7 +375,7 @@ describe('abTicketCreate', () => {
         stdout: () => {},
       }),
     ).rejects.toThrow(
-      'unknown state "Review" — this tracker\'s states are the directories: Triage, Ready, Doing, Done',
+      'unknown state "Review" — this tracker\'s states are the directories: triage, ready, doing, done',
     )
     for (const state of ['triage', 'ready', 'doing', 'done']) {
       expect(existsSync(join(tmp, 'tickets', state, 'file-1.md'))).toBe(false)
@@ -428,7 +428,7 @@ describe('abTicketCreate', () => {
 
     const path = join(tmp, '.autobuild', 'tickets', 'triage', 'file-1.md')
     expect(await readFile(path, 'utf8')).toContain('title = "Rate-limit auth"')
-    expect(lines).toEqual(['ticket created: file:file-1 (Triage)'])
+    expect(lines).toEqual(['ticket created: file:file-1 (triage)'])
   })
 
   test('AB_STORE relocates the default file tracker with local state', async () => {
@@ -559,7 +559,7 @@ describe('abTicketCreate', () => {
       stdout: (line) => out.push(line),
     })
 
-    expect(out).toEqual(['ticket created: file:file-2 (Triage) — blocked by file-1'])
+    expect(out).toEqual(['ticket created: file:file-2 (triage) — blocked by file-1'])
     const written = await readFile(join(tmp, 'tickets', 'triage', 'file-2.md'), 'utf8')
     expect(written).toContain('blockedBy = [ "file-1" ]')
   })
@@ -900,7 +900,7 @@ describe('abTicketMove', () => {
     expect(existsSync(triagePath)).toBe(false)
     expect(await readFile(readyPath, 'utf8')).toBe(rawBefore)
     expect(human).toEqual([
-      'ticket moved: file:file-1 (Ready) — Move without rewriting — labels: api',
+      'ticket moved: file:file-1 (ready) — Move without rewriting — labels: api',
     ])
 
     const json: string[] = []
@@ -913,7 +913,7 @@ describe('abTicketMove', () => {
       stdout: (line) => json.push(line),
     })
     const moved = JSON.parse(json.join('\n')) as Ticket
-    expect(moved.state).toBe('Doing')
+    expect(moved.state).toBe('doing')
     expect(moved.body).toBe('line one\n\nline two\n')
   })
 
@@ -947,7 +947,7 @@ describe('abTicketMove', () => {
         stdout: () => {},
       }),
     ).rejects.toThrow(
-      'unknown state "Review" — this tracker\'s states are the directories: Triage, Ready, Doing, Done',
+      'unknown state "Review" — this tracker\'s states are the directories: triage, ready, doing, done',
     )
   })
 })
@@ -1013,7 +1013,7 @@ describe('runCli — ticket routing', () => {
     expect(
       await runCli(['ticket', 'create', 'Ready now', '--body', bodyFile, '--state', 'ready'], deps),
     ).toBe(0)
-    expect(out).toEqual(['ticket created: file:file-1 (Ready)'])
+    expect(out).toEqual(['ticket created: file:file-1 (ready)'])
     expect(existsSync(join(tmp, 'tickets', 'ready', 'file-1.md'))).toBe(true)
     expect(existsSync(join(tmp, 'tickets', 'done', 'file-1.md'))).toBe(false)
   })
@@ -1030,7 +1030,7 @@ describe('runCli — ticket routing', () => {
         deps,
       ),
     ).toBe(0)
-    expect(out.join('\n')).toContain('ticket created: file:file-2 (Triage) — blocked by file-1')
+    expect(out.join('\n')).toContain('ticket created: file:file-2 (triage) — blocked by file-1')
   })
 
   test('an unknown --blocked-by id exits nonzero with the actionable error', async () => {
@@ -1063,7 +1063,7 @@ describe('runCli — ticket routing', () => {
     expect(JSON.parse(out.at(-1)!)).toEqual([])
 
     expect(await runCli(['ticket', 'move', 'file-1', 'ready'], deps)).toBe(0)
-    expect(out.at(-1)).toContain('file:file-1 (Ready)')
+    expect(out.at(-1)).toContain('file:file-1 (ready)')
 
     expect(await runCli(['ticket', 'list', '--labels', 'api,cli', '--json'], deps)).toBe(0)
     expect((JSON.parse(out.at(-1)!) as Ticket[])[0]?.ref.id).toBe('file-1')
@@ -1072,7 +1072,33 @@ describe('runCli — ticket routing', () => {
     expect((JSON.parse(out.at(-1)!) as Ticket).body).toBe('the exact body\n')
 
     expect(await runCli(['ticket', 'move', 'file-1', 'done', '--json'], deps)).toBe(0)
-    expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('Done')
+    expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('done')
+  })
+
+  test('a custom icebox/ directory is a state for show, list --state, and move', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'the exact body\n')
+    const { deps, out, err } = sessionlessDeps()
+    expect(await runCli(['ticket', 'create', 'Parked', '--body', bodyFile], deps)).toBe(0)
+
+    // A state exists when its directory does: no directory, loud error.
+    expect(await runCli(['ticket', 'move', 'file-1', 'icebox'], deps)).toBe(1)
+    expect(err.join('\n')).toContain('unknown state "icebox"')
+
+    await mkdir(join(tmp, 'tickets', 'icebox'))
+    expect(await runCli(['ticket', 'move', 'file-1', 'icebox', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('icebox')
+
+    expect(await runCli(['ticket', 'show', 'file-1', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('icebox')
+    expect(await runCli(['ticket', 'list', '--state', 'icebox', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket[]).map((t) => t.ref.id)).toEqual(['file-1'])
+    expect(await runCli(['ticket', 'list', '--json'], deps)).toBe(0)
+    expect(JSON.parse(out.at(-1)!)).toEqual([])
+
+    expect(await runCli(['ticket', 'move', 'file-1', 'ready', '--json'], deps)).toBe(0)
+    expect((JSON.parse(out.at(-1)!) as Ticket).state).toBe('ready')
   })
 
   test('every mutator JSON form emits the complete resulting ticket and no prose', async () => {

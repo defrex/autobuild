@@ -1,6 +1,7 @@
 /**
  * File-based TicketSource (SPEC §3.2, §13): the default tracker. A directory
- * of state directories — `triage/ ready/ doing/ done/` — each holding
+ * of state directories — the lifecycle four `triage/ ready/ doing/ done/`
+ * plus any the repository adds, such as `icebox/` — each holding
  * `<id>.md` files: TOML frontmatter between `+++` fences, then the ticket
  * body, where the spec lives pre-build (§6.3). This adapter is the policy's
  * proof: a source with nowhere to put blobs must be fully workable, because
@@ -19,6 +20,7 @@
  * human edits are explicitly last-write-wins. State renames never cross a
  * filesystem: `<dir>/ready` → `<dir>/doing` is one mount by construction.
  */
+import { readdirSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
@@ -35,36 +37,44 @@ import type {
 } from '../types'
 import { validateTicketUpdate } from './update'
 
-/**
- * The canonical states, in workflow order. This set is closed: the states are
- * directories, and a tracker whose states are discoverable by `ls` cannot also
- * let config invent new ones.
- */
-export const TICKET_STATES = ['Triage', 'Ready', 'Doing', 'Done'] as const
-export type TicketState = (typeof TICKET_STATES)[number]
-
 /** Repo-relative fallback when no selected local-state root is supplied. */
 export const DEFAULT_TICKETS_DIR = '.autobuild/tickets'
 
 /**
- * Canonicalize a state name to its directory. Case-insensitive in (a config's
- * `readyState = "ready"` means the `ready/` directory), canonical out — and
- * anything else is a loud error, because a typo'd state must not silently
- * create a fifth directory no `ls` of the four would ever show.
+ * The directories the dispatcher's roles (create, ready, claim, triage, done)
+ * are played by. Always valid state names, because `ensureLayout` creates them.
  */
-export function stateDir(state: string): TicketState {
-  const match = TICKET_STATES.find((s) => s.toLowerCase() === state.toLowerCase())
-  if (match === undefined) {
-    throw new Error(
-      `file ticket source: unknown state "${state}" — this tracker's states are ` +
-        `the directories: ${TICKET_STATES.join(', ')}`,
-    )
-  }
-  return match
+const LIFECYCLE_DIRS = ['triage', 'ready', 'doing', 'done'] as const
+
+/** The state names a root listing yields: the lifecycle four, then every other
+ * non-dot directory alphabetically. Dot entries and files are never states. */
+function statesIn(directories: string[]): string[] {
+  const lifecycle: string[] = [...LIFECYCLE_DIRS]
+  const extra = directories
+    .filter((name) => !name.startsWith('.') && !lifecycle.includes(name))
+    .sort()
+  return [...lifecycle, ...extra]
 }
 
-function dirName(state: TicketState): string {
-  return state.toLowerCase()
+/**
+ * Resolve a state name to its directory. Case-insensitive in (a config's
+ * `readyState = "ready"` means the `ready/` directory), the directory's real
+ * name out — and a name matching no directory is a loud error, because a
+ * typo'd state must not silently create a directory no `ls` would show.
+ */
+function resolveState(name: string, existing: string[]): string {
+  if (existing.includes(name)) return name
+  const matches = existing.filter((s) => s.toLowerCase() === name.toLowerCase())
+  if (matches.length === 1) return matches[0] as string
+  if (matches.length > 1) {
+    throw new Error(
+      `file ticket source: ambiguous state "${name}" — it matches the directories ${matches.join(', ')}`,
+    )
+  }
+  throw new Error(
+    `file ticket source: unknown state "${name}" — this tracker's states are ` +
+      `the directories: ${existing.join(', ')}`,
+  )
 }
 
 const frontmatterSchema = z.strictObject({
@@ -138,7 +148,7 @@ function serializeTicketFile(front: Frontmatter, body: string): string {
 /** A ticket file found on disk: its id, its state (= its directory), its path. */
 interface Located {
   id: string
-  state: TicketState
+  state: string
   path: string
 }
 
@@ -147,8 +157,8 @@ export class FileTicketSource implements TicketSource {
 
   private readonly dir: string
   private readonly clock: Clock
-  private readonly createState: TicketState
-  private readonly doneState: TicketState
+  private readonly createState: string
+  private readonly doneState: string
   private readonly selfIgnore: boolean
 
   constructor(opts: {
@@ -174,14 +184,16 @@ export class FileTicketSource implements TicketSource {
   }) {
     this.dir = opts.dir
     this.clock = opts.clock ?? systemClock
-    this.createState = stateDir(opts.createState ?? 'Triage')
-    this.doneState = stateDir(opts.doneState ?? 'Done')
+    const existing = this.statesSync()
+    this.createState = resolveState(opts.createState ?? 'Triage', existing)
+    this.doneState = resolveState(opts.doneState ?? 'Done', existing)
     this.selfIgnore = opts.selfIgnore ?? false
   }
 
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
-    const state = criteria.state === undefined ? undefined : stateDir(criteria.state)
+    const state =
+      criteria.state === undefined ? undefined : resolveState(criteria.state, await this.states())
     // Through listAll, not a single readdir: scan completes its layout and
     // duplicate-id checks before any per-record validation is contained. A
     // malformed record can never weaken the invariant preventing a `cp`
@@ -209,8 +221,8 @@ export class FileTicketSource implements TicketSource {
    * the claim record — no `claimedBy` field, which is what makes "claiming
    * visibly removes it from ready/" true.
    *
-   * The guard refuses a ticket already in Doing or in this source's configured
-   * terminal state rather than requiring one in Ready. That inversion is
+   * The guard refuses a ticket already in doing or in this source's configured
+   * terminal state rather than requiring one in ready. That inversion is
    * deliberate: a legal `[tickets] readyState = "Triage"` would otherwise
    * stall forever. Other nonterminal states remain claimable after an explicit
    * handback, while terminal work can never be reopened by claim.
@@ -224,8 +236,8 @@ export class FileTicketSource implements TicketSource {
     // this closes the list→claim window where a human could corrupt a record
     // after it was listed but before the dispatcher claims it.
     await this.loadAt(found)
-    if (found.state === 'Doing' || found.state === this.doneState) return false
-    await rename(found.path, this.pathIn('Doing', id))
+    if (found.state === 'doing' || found.state === this.doneState) return false
+    await rename(found.path, this.pathIn('doing', id))
     return true
   }
 
@@ -250,7 +262,7 @@ export class FileTicketSource implements TicketSource {
   /** A move, never a rewrite — which is why the body survives byte-exactly. */
   async transition(id: string, state: string): Promise<void> {
     await this.ensureLayout()
-    const target = stateDir(state)
+    const target = resolveState(state, await this.states())
     const found = await this.locate(id)
     if (found === null) {
       throw new Error(`file ticket source: transition on unknown ticket "${id}"`)
@@ -270,9 +282,16 @@ export class FileTicketSource implements TicketSource {
    * or adopts the ticket carrying the same idempotency key. */
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     await this.ensureLayout()
+    // Resolve before anything is read or written: an unknown state touches no file.
+    const targetState =
+      opts.state === undefined ? this.createState : resolveState(opts.state, await this.states())
     const located = await this.scan()
     if (opts.idempotencyKey !== undefined) {
-      const matches: Array<{ found: Located; front: Frontmatter; body: string }> = []
+      const matches: Array<{
+        found: Located
+        front: Frontmatter
+        body: string
+      }> = []
       for (const found of located) {
         const loaded = await this.loadAt(found)
         if (loaded.front.idempotencyKey === opts.idempotencyKey) {
@@ -301,7 +320,6 @@ export class FileTicketSource implements TicketSource {
         : {}),
       ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
     }
-    const targetState = opts.state === undefined ? this.createState : stateDir(opts.state)
     await writeFile(this.pathIn(targetState, front.id), serializeTicketFile(front, draft.body))
     return this.toTicket(front, draft.body, targetState)
   }
@@ -398,21 +416,53 @@ export class FileTicketSource implements TicketSource {
   }
 
   /**
-   * The four state dirs, plus — for the defaulted backlog only — a
+   * The four lifecycle dirs (never a custom state: creating one stays an
+   * explicit act), plus — for the defaulted backlog only — a
    * self-excluding `.gitignore`. Same move `src/cli/context.ts` makes for
    * `.ab/`: the dir hides itself from git in ANY repo, so the local backlog is
    * never staged, without mutating the repo's own tracked `.gitignore` as an
    * unreviewed side effect. Idempotent; called at the head of every write.
    */
   private async ensureLayout(): Promise<void> {
-    for (const state of TICKET_STATES) {
-      await mkdir(join(this.dir, dirName(state)), { recursive: true })
+    for (const state of LIFECYCLE_DIRS) {
+      await mkdir(join(this.dir, state), { recursive: true })
     }
     if (this.selfIgnore) await writeFile(join(this.dir, '.gitignore'), '*\n')
   }
 
-  private pathIn(state: TicketState, id: string): string {
-    return join(this.dir, dirName(state), `${this.safeId(id)}.md`)
+  /** The state names that exist now. Re-read per operation so a directory
+   * created while a long-running dispatcher is up is seen. */
+  private async states(): Promise<string[]> {
+    try {
+      const entries = await readdir(this.dir, { withFileTypes: true })
+      const directories: string[] = []
+      for (const entry of entries) {
+        if (entry.isDirectory()) directories.push(entry.name)
+        else if (entry.isSymbolicLink()) {
+          const target = await stat(join(this.dir, entry.name)).catch(() => null)
+          if (target?.isDirectory()) directories.push(entry.name)
+        }
+      }
+      return statesIn(directories)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return statesIn([])
+      throw error
+    }
+  }
+
+  /** Constructor-time twin of `states()`: the only sync IO in this adapter. */
+  private statesSync(): string[] {
+    try {
+      const entries = readdirSync(this.dir, { withFileTypes: true })
+      return statesIn(entries.filter((e) => e.isDirectory()).map((e) => e.name))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return statesIn([])
+      throw error
+    }
+  }
+
+  private pathIn(state: string, id: string): string {
+    return join(this.dir, state, `${this.safeId(id)}.md`)
   }
 
   private safeId(id: string): string {
@@ -426,7 +476,7 @@ export class FileTicketSource implements TicketSource {
   private async locate(id: string): Promise<Located | null> {
     this.safeId(id)
     const hits: Located[] = []
-    for (const state of TICKET_STATES) {
+    for (const state of await this.states()) {
       const path = this.pathIn(state, id)
       try {
         await stat(path)
@@ -443,14 +493,14 @@ export class FileTicketSource implements TicketSource {
     return hits[0] ?? null
   }
 
-  /** Every ticket file across the four state dirs, sorted, duplicates rejected. */
+  /** Every ticket file across every state dir, sorted, duplicates rejected. */
   private async scan(): Promise<Located[]> {
     await this.assertNoLooseTickets()
     const byId = new Map<string, Located[]>()
-    for (const state of TICKET_STATES) {
-      for (const entry of await this.readMarkdown(join(this.dir, dirName(state)))) {
+    for (const state of await this.states()) {
+      for (const entry of await this.readMarkdown(join(this.dir, state))) {
         const id = entry.slice(0, -'.md'.length)
-        const located = { id, state, path: join(this.dir, dirName(state), entry) }
+        const located = { id, state, path: join(this.dir, state, entry) }
         byId.set(id, [...(byId.get(id) ?? []), located])
       }
     }
@@ -473,7 +523,7 @@ export class FileTicketSource implements TicketSource {
       throw new Error(
         `${join(this.dir, entry)}: ticket file outside a state directory — a ticket's ` +
           `state is the directory it sits in; move it into one of: ` +
-          `${TICKET_STATES.map(dirName).join('/, ')}/`,
+          `${(await this.states()).join('/, ')}/`,
       )
     }
   }
@@ -535,7 +585,7 @@ export class FileTicketSource implements TicketSource {
     return { tickets, diagnostics }
   }
 
-  private toTicket(front: Frontmatter, body: string, state: TicketState): Ticket {
+  private toTicket(front: Frontmatter, body: string, state: string): Ticket {
     return {
       ref: { source: this.name, id: front.id, title: front.title },
       ...(front.idempotencyKey !== undefined ? { creationKey: front.idempotencyKey } : {}),

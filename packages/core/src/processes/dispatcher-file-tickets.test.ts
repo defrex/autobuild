@@ -19,7 +19,7 @@
  * those repositories.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { abInit } from '../cli/init'
@@ -113,7 +113,10 @@ describe('minimal config dispatch over the real file tracker', () => {
 
     // Create files to triage/, then groom it exactly the way a human or the
     // ab-tickets skill would: one mv. No label, no frontmatter edit.
-    const created = await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
+    const created = await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
     expect(await ls('triage')).toEqual([`${created.ref.id}.md`])
     await h.tickets.transition(created.ref.id, 'Ready')
 
@@ -177,7 +180,10 @@ describe('minimal config dispatch over the real file tracker', () => {
 
   test('a second tick does not dispatch the same ticket a second time', async () => {
     const h = await harness()
-    const created = await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
+    const created = await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
     await h.tickets.transition(created.ref.id, 'Ready')
 
     await h.dispatcher.tick()
@@ -195,7 +201,10 @@ describe('minimal config dispatch over the real file tracker', () => {
 
   test('a ticket left in triage/ is not dispatched', async () => {
     const h = await harness()
-    await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
+    await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
 
     await h.dispatcher.tick()
 
@@ -206,14 +215,20 @@ describe('minimal config dispatch over the real file tracker', () => {
 
   test('the default tracker gitignores itself — git never sees the local backlog', async () => {
     const h = await harness()
-    await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
+    await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
 
     expect(await Bun.file(join(trackerDir(), '.gitignore')).text()).toBe('*\n')
   })
 
   test('a non-conforming spec bounces back to triage/, not into doing/', async () => {
     const h = await harness()
-    const created = await h.tickets.create({ title: 'Vague idea', body: 'make auth better' })
+    const created = await h.tickets.create({
+      title: 'Vague idea',
+      body: 'make auth better',
+    })
     await h.tickets.transition(created.ref.id, 'Ready')
 
     await h.dispatcher.tick()
@@ -233,10 +248,16 @@ describe('minimal config dispatch over the real file tracker', () => {
 
     const generatedConfig = await Bun.file(join(repoDir, 'autobuild.toml')).text()
     const h = await harness(generatedConfig)
-    const created = await h.tickets.create({ title: 'Vague idea', body: 'make auth better' })
+    const created = await h.tickets.create({
+      title: 'Vague idea',
+      body: 'make auth better',
+    })
     await h.tickets.transition(created.ref.id, 'Ready')
 
-    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), bounced: 1 })
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      bounced: 1,
+    })
 
     const bounced = await Bun.file(join(trackerDir(), 'triage', `${created.ref.id}.md`)).text()
     expect(h.launches).toEqual([])
@@ -247,9 +268,39 @@ describe('minimal config dispatch over the real file tracker', () => {
     expect(bounced).toContain("an '## Out of scope' heading")
   })
 
+  test('a blocker parked in a custom state is unresolved, not nonexistent', async () => {
+    const h = await harness()
+    const blocker = await h.tickets.create({
+      title: 'Parked',
+      body: CONFORMING_BODY,
+    })
+    await mkdir(join(trackerDir(), 'icebox'))
+    await h.tickets.transition(blocker.ref.id, 'icebox')
+    const dependent = await h.tickets.create(
+      {
+        title: 'Dependent',
+        body: CONFORMING_BODY,
+        blockedBy: [blocker.ref.id],
+      },
+      { state: 'ready' },
+    )
+
+    const report = await h.dispatcher.tick()
+
+    expect(h.launches).toEqual([])
+    expect(report.dependencyBlocked).toBe(1)
+    const lines = report.dependencyDiagnostics.join('\n')
+    expect(lines).toContain(`${dependent.ref.id} blocked by ${blocker.ref.id} (not complete)`)
+    expect(lines).not.toContain('does not exist')
+    expect(await ls('ready')).toEqual([`${dependent.ref.id}.md`])
+  })
+
   test('a cp instead of an mv is a loud error, never a double dispatch', async () => {
     const h = await harness()
-    const created = await h.tickets.create({ title: 'Add rate limiting', body: CONFORMING_BODY })
+    const created = await h.tickets.create({
+      title: 'Add rate limiting',
+      body: CONFORMING_BODY,
+    })
     const file = `${created.ref.id}.md`
     // The mistake the AC names: copy, don't move.
     await Bun.write(join(trackerDir(), 'ready', file), Bun.file(join(trackerDir(), 'triage', file)))
@@ -262,7 +313,10 @@ describe('minimal config dispatch over the real file tracker', () => {
     const h = await harness(
       '[tickets]\nsource = "file"\ndir = "tickets"\nreadyLabels = ["autobuild"]\n',
     )
-    const plain = await h.tickets.create({ title: 'Unlabelled', body: CONFORMING_BODY })
+    const plain = await h.tickets.create({
+      title: 'Unlabelled',
+      body: CONFORMING_BODY,
+    })
     const labelled = await h.tickets.create({
       title: 'Labelled',
       body: CONFORMING_BODY,

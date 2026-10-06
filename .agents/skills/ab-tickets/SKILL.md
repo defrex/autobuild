@@ -12,7 +12,7 @@ content and blocker relationships. The default file source needs no secret.
 ## Where it lives
 
 `.autobuild/tickets/` by default (if `autobuild.toml` has a `[tickets] dir`,
-that directory instead), holding exactly four state directories:
+that directory instead), holding the four lifecycle state directories plus any others this repo adds:
 
 ```
 .autobuild/tickets/
@@ -20,6 +20,7 @@ that directory instead), holding exactly four state directories:
   ready/    # groomed; file lifecycle-state gate satisfied
   doing/    # claimed; a build is running
   done/     # merged
+  icebox/   # optional example of a repo-added state, present only if created
 ```
 
 **A ticket's state is the directory it is in.** There is no `state` field
@@ -76,7 +77,7 @@ ls .autobuild/tickets/doing     # what's building right now
 ```
 
 The filename is the id. For a title, read the file's frontmatter. To report
-the whole backlog, list all four directories — that listing is complete and
+the whole backlog, list every directory under the tracker root — that listing is complete and
 current by construction.
 
 ## Groom / transition a ticket
@@ -132,7 +133,7 @@ listing under default config. That does not make `ready/` sufficient;
 unresolved blockers are an independent dispatch gate.
 
 No Linear lifecycle UI. Directory-based lifecycle operations (`ls`, `mv`, and
-the four state directories) are file-tracker-only. If this repo's
+the state directories) are file-tracker-only. If this repo's
 `autobuild.toml` sets `[tickets] source = "linear"`, do not apply that lifecycle
 guidance: state and labels live in Linear. The source-agnostic `ab ticket block`
 and `ab ticket unblock` commands still edit blocker relationships through the
