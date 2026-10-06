@@ -371,6 +371,13 @@ export interface BuildStore {
    * replay yields (`projectRepositoryStateEvents` is the normative oracle).
    * Unknown repo rejects like `getRepoEvents`. */
   getRepoStateEvents(repo: string): Promise<RepositoryEvent[]>
+  /** The journal's true high-water mark: the greatest assigned seq of any
+   * event type, 0 for an empty journal. Returns no event rows — the cursor a
+   * long-lived reader (the dispatcher's repository view) needs to resume with
+   * `getRepoEvents(repo, cursor)` even when the bounded subset excludes the
+   * journal's trailing events. Unknown repo rejects like `getRepoEvents`;
+   * never an `ensureRepo` side effect. */
+  getRepoHighWater(repo: string): Promise<number>
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>

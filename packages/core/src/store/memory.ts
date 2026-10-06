@@ -693,6 +693,10 @@ export class MemoryBuildStore implements BuildStore {
     })
   }
 
+  async getRepoHighWater(repo: string): Promise<number> {
+    return this.repoState(repo).events.at(-1)?.seq ?? 0
+  }
+
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
     // The oracle runs on the in-memory journal itself, which keeps the pure
     // derivation honest against real adapter data.

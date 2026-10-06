@@ -1050,6 +1050,16 @@ export class SqliteBuildStore implements BuildStore {
     })
   }
 
+  async getRepoHighWater(repo: string): Promise<number> {
+    this.requireRepo(repo)
+    const row = this.db
+      .select({ seq: sql<number | null>`max(${repoEvents.seq})` })
+      .from(repoEvents)
+      .where(eq(repoEvents.repo, repo))
+      .get()
+    return row?.seq ?? 0
+  }
+
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
     this.requireRepo(repo)
     // Two queries, mirroring the oracle's derivation: the latest

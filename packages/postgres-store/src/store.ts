@@ -988,6 +988,14 @@ export class PostgresBuildStore implements BuildStore {
     })
   }
 
+  async getRepoHighWater(repo: string): Promise<number> {
+    if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
+    const rows: Row[] = await this.run(
+      (q) => q`SELECT COALESCE(MAX(seq), 0) AS seq FROM repo_events WHERE repo=${repo}`,
+    )
+    return num(rows[0]?.seq ?? 0)
+  }
+
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
     if (!(await this.getRepo(repo))) throw new Error(`unknown repo "${repo}"`)
     // Two queries, mirroring the oracle's derivation: the latest run-started

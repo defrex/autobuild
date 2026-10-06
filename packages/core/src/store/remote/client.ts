@@ -92,6 +92,7 @@ import {
   eventEnvelopeWireSchema,
   eventListSchema,
   repositoryEventEnvelopeWireSchema,
+  repoHighWaterSchema,
   repositoryEventListSchema,
   okResponseSchema,
   placeholderRev,
@@ -532,6 +533,14 @@ export class RemoteBuildStore implements BuildStore {
           undefined,
           opts?.signal,
         ) as Promise<RepositoryEvent[]>,
+    )
+  }
+
+  async getRepoHighWater(repo: string): Promise<number> {
+    // Additive route beside `state-events`; the store service and client
+    // ship in version lockstep, so no protocol bump.
+    return this.requestJson('GET', `${this.repoPath(repo)}/high-water`, repoHighWaterSchema).then(
+      (body) => (body as { seq: number }).seq,
     )
   }
 
