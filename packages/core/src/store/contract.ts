@@ -1089,27 +1089,30 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           const cursors = shuffled(Array.from({ length: tail }, (_, index) => index + 1))
           const writerA = cursors.filter((_, index) => index % 2 === 0)
           const writerB = cursors.filter((_, index) => index % 2 === 1)
-          const seen: number[] = []
-          const sample = async (): Promise<void> => {
-            const read = await store.getReducerSnapshot(scope, 'build', 1)
-            if (read !== null) seen.push(read.cursor)
-          }
-          const write = async (list: number[]): Promise<void> => {
+          // Each writer reads back sequentially, so its own series is ordered;
+          // reads from different writers overlap and complete in any order, so
+          // only per-writer monotonicity is meaningful.
+          const write = async (list: number[]): Promise<number[]> => {
+            const seen: number[] = []
             for (const cursor of list) {
               await store.putReducerSnapshot(scope, 'build', {
                 version: 1,
                 cursor,
                 state: { cursor },
               })
-              await sample()
+              const read = await store.getReducerSnapshot(scope, 'build', 1)
+              if (read !== null) seen.push(read.cursor)
             }
+            return seen
           }
-          await Promise.all([write(writerA), write(writerB)])
+          const series = await Promise.all([write(writerA), write(writerB)])
           const final = await store.getReducerSnapshot(scope, 'build', 1)
           expect(final?.cursor).toBe(tail)
           expect(final?.state).toEqual({ cursor: tail })
-          for (let index = 1; index < seen.length; index += 1) {
-            expect(seen[index]!).toBeGreaterThanOrEqual(seen[index - 1]!)
+          for (const seen of series) {
+            for (let index = 1; index < seen.length; index += 1) {
+              expect(seen[index]!).toBeGreaterThanOrEqual(seen[index - 1]!)
+            }
           }
         })
       })
