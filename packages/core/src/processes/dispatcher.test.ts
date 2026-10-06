@@ -7050,15 +7050,18 @@ describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
 
 // ── Tick reads only builds that still have work ──────────────────────────────
 
-/** A memory store that counts `getEvents` calls per build, so a tick's
- * per-build read set can be asserted. */
+/** A memory store that counts the event rows `getEvents` returns per build, so
+ * a tick's per-build read set can be asserted. Rows, not calls: the dispatcher's
+ * repository view asks every held build for its tail each tick, and an empty
+ * answer is not a read of that build's history. */
 class ReadCountingStore extends MemoryBuildStore {
   readonly reads = new Map<string, number>()
-  override getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
-    this.reads.set(args[0], (this.reads.get(args[0]) ?? 0) + 1)
-    return super.getEvents(...args)
+  override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+    const events = await super.getEvents(...args)
+    if (events.length > 0) this.reads.set(args[0], (this.reads.get(args[0]) ?? 0) + events.length)
+    return events
   }
-  /** Distinct builds read since the last call, clearing the counter. */
+  /** Distinct builds with rows read since the last call, clearing the counter. */
   drain(): string[] {
     const slugs = [...this.reads.keys()].sort()
     this.reads.clear()
@@ -7138,9 +7141,10 @@ describe('Dispatcher tick event reads', () => {
 
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drain()).toContain(slug)
-    // The failed attempt left the reclaim pending: still read.
+    // The failed attempt left the reclaim pending: the view still holds the
+    // build and retries it, but its log is already in memory — no rows read.
     await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drain()).toContain(slug)
+    expect(store.drain()).toEqual([])
     expect(
       (await h.store.getEvents(slug)).filter((event) => event.type === 'pr-attachment.reclaimed'),
     ).toHaveLength(1)
@@ -7199,7 +7203,9 @@ describe('Dispatcher tick event reads', () => {
 
     state = 'ended'
     expect((await h.dispatcher.tick({ acceptNewWork: false })).settled).toBe(1)
-    expect(store.drain()).toEqual([slug])
+    // The held log already carried the open execution; settling appends
+    // through the view, so nothing is read.
+    expect(store.drain()).toEqual([])
     expect((await h.store.getEvents(slug)).at(-1)?.type).toBe('execution.ended')
     store.drain()
 

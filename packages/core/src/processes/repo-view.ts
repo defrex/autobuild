@@ -428,6 +428,16 @@ export class RepoViewStore implements BuildStore {
     return log.events.filter((event) => event.seq > sinceSeq)
   }
 
+  /** Take one build's delta now, even if it was already read this epoch — for
+   * the decisions that deliberately re-read at the last possible moment so a
+   * concurrent writer's cancellation or request is honored. */
+  async refreshBuild(slug: string): Promise<void> {
+    const log = this.logs.get(slug)
+    if (log === undefined) return
+    log.dirty = true
+    await this.ensureCurrent(slug, log)
+  }
+
   /** The reduced state of one build without replaying history the view already
    * folded: a held log is reduced in place; a resident window brings itself
    * current and finishes its accumulator; anything else is one full read,

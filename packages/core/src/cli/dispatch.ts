@@ -140,6 +140,7 @@ import {
   type LaunchRunnerResult,
   type TickReport,
 } from '../processes/dispatcher'
+import { RepoViewStore } from '../processes/repo-view'
 import {
   BuildControlError,
   buildControlUser,
@@ -604,6 +605,10 @@ interface ActiveBuildExecution {
  * Store; child completion is liveness evidence used for reaping/single-flight. */
 class DispatchLoop {
   private readonly dispatcher: Dispatcher
+  /** The incremental repository view (AUT-647) the dispatcher and this
+   * frontend's tick-path journal reads and writes share. Resident for a
+   * watch loop; `--once` builds it cold for its single tick. */
+  private readonly repoView: RepoViewStore
   private readonly host = hostname()
   private readonly maxHarvestRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
@@ -785,8 +790,12 @@ class DispatchLoop {
       return result.text
     }
 
+    this.repoView = new RepoViewStore(wiring.store, {
+      repo: this.repoIdentity,
+      resident: opts.once !== true,
+    })
     this.dispatcher = new Dispatcher({
-      store: wiring.store,
+      store: this.repoView,
       tickets: wiring.tickets,
       workspaces: wiring.workspaces,
       ...(wiring.retiredWorkspaces === undefined
@@ -1019,7 +1028,7 @@ class DispatchLoop {
   }
 
   private async appendStatus(event: RepositoryEventWrite): Promise<void> {
-    await this.wiring.store.appendRepo(this.repoIdentity, event)
+    await this.repoView.appendRepo(this.repoIdentity, event)
   }
 
   private async refreshConfig(): Promise<void> {
@@ -1084,9 +1093,10 @@ class DispatchLoop {
   }
 
   private async readDispatchSettings(): Promise<ReturnType<typeof reduceDispatchSettings>> {
-    // Bounded read (AUT-489): the settings reducer consumes durable types only.
-    const events = await this.wiring.store.getRepoStateEvents(this.repoIdentity)
-    return reduceDispatchSettings(events)
+    // The view's bounded subset (AUT-489): the settings reducer consumes
+    // durable types only. `refresh()` ran first in the tick, so this is the
+    // delta-current journal, never a store read.
+    return reduceDispatchSettings(this.repoView.recordedJournal())
   }
 
   private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
@@ -1127,6 +1137,7 @@ class DispatchLoop {
 
       // Sample inside the serialized tick, not at process startup. Every
       // dispatcher therefore gates claims from the latest repository facts.
+      await this.repoView.refresh()
       const settings = await this.readDispatchSettings()
       const readyObservation =
         settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
@@ -1134,6 +1145,7 @@ class DispatchLoop {
           : await this.dispatcher.observeReady()
       const report = await this.dispatcher.tick({
         resumeCurrent,
+        viewRefreshed: true,
         acceptNewWork: settings.intake,
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
@@ -2286,10 +2298,11 @@ class DispatchLoop {
       // the pure Store-read pressure check; the guest rescans authoritatively
       // once provisioned, so a threshold crossing between gate and guest scan
       // is never suppressed by this check.
-      const record = await store.getRepo(repo)
-      // Bounded read (AUT-489): the harvest control decision reduces durable
-      // types only.
-      const events = record === null ? [] : await store.getRepoStateEvents(repo)
+      // The view's bounded subset (AUT-489): the harvest control decision
+      // reduces durable types only. Take the journal delta first — guests and
+      // other dispatchers write harvest facts between ticks.
+      await this.repoView.refreshJournal()
+      const events = this.repoView.recordedJournal()
       const state = reduceHarvest(events)
       const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
       const resumePending =
@@ -2331,7 +2344,7 @@ class DispatchLoop {
         )
       }
       this.hostedHarvest = { execution, handle, detached }
-      const started = await store.appendRepo(repo, {
+      const started = await this.repoView.appendRepo(repo, {
         actor: DISPATCHER,
         type: 'harvest.execution.started',
         payload: {
@@ -2406,8 +2419,10 @@ class DispatchLoop {
     startedSeq: number,
   ): Promise<HarvestRunnerResult> {
     const { store } = this.wiring
-    // Bounded read (AUT-489): classifyHarvestOutcome reduces harvest facts only.
-    const events = await store.getRepoStateEvents(repo)
+    // Bounded subset (AUT-489): classifyHarvestOutcome reduces harvest facts
+    // only. A guest wrote the facts through its own handle, so read the delta.
+    await this.repoView.refreshJournal()
+    const events = this.repoView.recordedJournal()
     const record = await store.getRepo(repo)
     return classifyHarvestOutcome(events, {
       executionStartedSeq: startedSeq,
@@ -2433,7 +2448,7 @@ class DispatchLoop {
       branch: '',
     }
     const reap = await this.reapHostedWorkspace(workspaceHandle)
-    await this.wiring.store.appendRepo(repo, {
+    await this.repoView.appendRepo(repo, {
       actor: DISPATCHER,
       type: 'harvest.execution.released',
       payload: {
@@ -3409,7 +3424,7 @@ class DispatchLoop {
       const holder = record?.lease?.holder
       if (holder === undefined || this.yieldedTo === holder) return
       this.yieldedTo = holder
-      await this.wiring.store.appendRepo(this.repoIdentity, {
+      await this.repoView.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
         type: 'dispatcher.tick-yielded',
         payload: {

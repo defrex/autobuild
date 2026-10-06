@@ -656,6 +656,18 @@ export class Dispatcher {
    * (AUT-647): `deps.store` itself when the caller already wrapped it. */
   private readonly store: RepoViewStore
 
+  /** `deps.settlePublication`, followed by a delta read of the build: the
+   * guest-side settlement appends through its own store handle, which the view
+   * only learns of by reading. */
+  private get settlePublication(): ((slug: string) => Promise<void>) | undefined {
+    const settle = this.deps.settlePublication
+    if (settle === undefined) return undefined
+    return async (slug) => {
+      await settle(slug)
+      await this.store.refreshBuild(slug)
+    }
+  }
+
   constructor(private readonly deps: DispatcherDeps) {
     this.store =
       deps.store instanceof RepoViewStore
@@ -989,8 +1001,8 @@ export class Dispatcher {
           {
             store: this.store,
             execution,
-            ...(this.deps.settlePublication !== undefined
-              ? { settlePublication: this.deps.settlePublication }
+            ...(this.settlePublication !== undefined
+              ? { settlePublication: this.settlePublication }
               : {}),
           },
           record.slug,
@@ -1854,6 +1866,7 @@ export class Dispatcher {
         // Re-read at the last possible point. A cancellation, replacement
         // command, newly due pipeline work, or application fact suppresses
         // this attempt; the next tick reclassifies from fresh forge state.
+        await store.refreshBuild(record.slug)
         const latestEvents = await store.getEvents(record.slug)
         const latestState = reduceBuild(latestEvents)
         const latestIntent = pendingAutoMerge(latestState)
@@ -2047,7 +2060,7 @@ export class Dispatcher {
     // failure propagates — a stale workspace with an unrecorded pending
     // request is never reaped (the next tick retries).
     events = await settlePublicationBeforeRelease(
-      { store: this.store, settlePublication: this.deps.settlePublication },
+      { store: this.store, settlePublication: this.settlePublication },
       slug,
       events,
       reason,
@@ -2136,7 +2149,7 @@ export class Dispatcher {
     // workspace still exists. The guard's append failure propagates — the
     // release never proceeds past an unrecorded pending request.
     events = await settlePublicationBeforeRelease(
-      { store: this.store, settlePublication: this.deps.settlePublication },
+      { store: this.store, settlePublication: this.settlePublication },
       slug,
       events,
       reason,
@@ -2508,6 +2521,7 @@ export class Dispatcher {
       // Discard validation and recovery selection happened before several
       // provider awaits. Re-read immediately before launch so a request made
       // during those boundaries parks cleanly for the next janitor pass.
+      await store.refreshBuild(record.slug)
       const launchState = reduceBuild(await store.getEvents(record.slug))
       if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) {
         return 'parked'
@@ -2703,8 +2717,8 @@ export class Dispatcher {
             {
               store: this.store,
               execution,
-              ...(this.deps.settlePublication !== undefined
-                ? { settlePublication: this.deps.settlePublication }
+              ...(this.settlePublication !== undefined
+                ? { settlePublication: this.settlePublication }
                 : {}),
             },
             record.slug,
