@@ -1867,7 +1867,7 @@ default, when you need to know what this repo's version says).
 | Skill | Place in the lifecycle | Purpose |
 |---|---|---|
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
-| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the tracker's state directories (`triage/ ready/ doing/ done/` plus any the repo adds). The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
+| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the lifecycle directories (`triage/ ready/ doing/ done/`) and any repository-defined states, including the icebox. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. Its editable `references/setup.md` guides the init handoff. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |

@@ -1,6 +1,6 @@
 ---
 name: tickets
-description: Work this repo's local ticket tracker — create or edit a ticket, amend blockedBy dependencies, report the backlog, move work between triage/ready/doing/done, or answer "what's the status of ticket X". Use whenever the user asks about tickets, blockers, the backlog, or wants something queued for autobuild to build.
+description: Work this repo's local ticket tracker — create or edit a ticket, amend blockedBy dependencies, report the backlog, triage the inbox, move work between the lifecycle directories and any repository-defined states such as the icebox, or answer "what's the status of ticket X". Use whenever the user asks about tickets, blockers, the backlog, or wants something queued for autobuild to build.
 ---
 
 # /tickets
@@ -12,7 +12,11 @@ content and blocker relationships. The default file source needs no secret.
 ## Where it lives
 
 `.autobuild/tickets/` by default (if `autobuild.toml` has a `[tickets] dir`,
-that directory instead), holding the four lifecycle state directories plus any others this repo adds:
+that directory instead), holding the four lifecycle state directories plus any others this repo adds.
+`triage/`, `ready/`, `doing/`, and `done/` are the lifecycle directories the
+dispatcher uses. Any other directory is a repository-defined state: the
+dispatcher never moves tickets into it and never dispatches from it unless
+`autobuild.toml` names it (for example `readyState` or `proposalState`).
 
 ```
 .autobuild/tickets/
@@ -20,7 +24,7 @@ that directory instead), holding the four lifecycle state directories plus any o
   ready/    # groomed; file lifecycle-state gate satisfied
   doing/    # claimed; a build is running
   done/     # merged
-  icebox/   # optional example of a repo-added state, present only if created
+  icebox/   # example of a repo-added state, present only once created
 ```
 
 **A ticket's state is the directory it is in.** There is no `state` field
@@ -72,13 +76,17 @@ retry, and adding validates the blocker exists and is not the ticket itself.
 ## Report the backlog
 
 ```
+ab ticket states                # every state, lifecycle and custom: role, count, purpose
 ls .autobuild/tickets/ready     # groomed candidates in the ready lifecycle state
 ls .autobuild/tickets/doing     # what's building right now
 ```
 
 The filename is the id. For a title, read the file's frontmatter. To report
-the whole backlog, list every directory under the tracker root — that listing is complete and
-current by construction.
+the whole backlog, cover every state — lifecycle and custom — via
+`ab ticket states` or by listing every directory under the tracker root, so the
+report includes `icebox/` and any other category. `ab ticket list` without
+filters shows only the ready state, regardless of custom states, so it is not a
+backlog report.
 
 ## Groom / transition a ticket
 
@@ -113,6 +121,49 @@ bounces.
 
 **Don't hand-move anything out of `doing/`** — a build owns it. If you need to
 stop a build, that's `ab` (or a human), not `mv`.
+
+## Icebox
+
+`icebox/` is work deliberately deferred, groomed or not, that nothing
+dispatches from. The first time it is needed, create it:
+
+```
+ab ticket state create icebox --about "Deferred on purpose; nothing dispatches from here"
+```
+
+Move a ticket in with `ab ticket move file-3 icebox`. To revive one, move it to
+`triage/` when it needs regrooming, or to `ready/` when its spec still holds.
+
+## Triage the backlog
+
+To run a pass over `triage/`:
+
+1. Run `ab ticket states` to see which destinations exist.
+2. For each ticket in `triage/`, read it with `ab ticket show <id>` and judge
+   whether its body meets the
+   [spec standard](../ab-guide/references/spec-standard.md).
+3. Move it to `ready/` if it conforms and should be built; to `icebox/` if it
+   should wait; to another existing category if one fits; otherwise leave it in
+   `triage/` and tell the user why.
+4. Report every move to the user in the session — id, title, destination, and
+   reason. A move leaves no comment on the ticket, so the report is the only
+   record of why.
+
+## Inventing categories
+
+Run `ab ticket states` before creating anything. Reuse an existing state whose
+purpose fits. Create a new one only for a recurring reason that no existing
+state covers, with a lowercase hyphenated noun name and a one-line `--about`
+purpose. `icebox` is the first worked example; `rejected` is a second:
+
+```
+ab ticket state create rejected --about "Considered and declined; kept for the record"
+```
+
+Never invent a second ready, doing, or done state, never move anything out of
+`doing/`, and never create states for a build's internal progress — the
+lifecycle belongs to the dispatcher. Remember that `ab ticket list` without
+filters still shows only the ready state, however many custom states exist.
 
 ## Rules
 
