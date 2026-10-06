@@ -7108,18 +7108,6 @@ class RowCountingStore extends MemoryBuildStore {
   override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
     const events = await super.getEvents(...args)
     this.rows += events.length
-    if (process.env.TRACE_ROWS && events.length > 0)
-      console.log(
-        'ROWS',
-        args[0],
-        args[1],
-        events.length,
-        new Error().stack
-          ?.split('\n')
-          .filter((l) => l.includes('/processes/') || l.includes('/cli/'))
-          .slice(0, 12)
-          .join(' | '),
-      )
     return events
   }
   override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
@@ -7337,13 +7325,18 @@ describe('Dispatcher tick event reads', () => {
 // ── Reducer snapshots: the quiet second tick (AUT-648) ───────────────────────
 
 describe('Dispatcher over reducer snapshots', () => {
+  /** One entry per provider observation of a foreign execution. */
+  const observations: string[] = []
+
   async function seededRepository() {
+    observations.length = 0
     const { provider } = (() => {
       const execution: BuildExecution = {
         async start() {
           throw new Error('not used')
         },
         async observe() {
+          observations.push('observed')
           return { state: 'running' as const }
         },
       }
@@ -7409,9 +7402,14 @@ describe('Dispatcher over reducer snapshots', () => {
     const before = await Promise.all(slugs.map((slug) => store.getEvents(slug)))
     const journalBefore = await store.getRepoEvents(REPO)
     store.rows = 0
+    observations.length = 0
     const second = harness({ store, workspaceProvider: provider })
+    second.clock.advance(1_000)
     await second.dispatcher.tick({ acceptNewWork: false })
     expect(store.rows).toBe(0)
+    // Both settlement paths — the foreign pass and the stale-lease sweep —
+    // asked the provider, and the answer cost no event row.
+    expect(observations.length).toBeGreaterThanOrEqual(3)
     store.rows = 0
     const after = await Promise.all(slugs.map((slug) => store.getEvents(slug)))
     expect(after.map((events) => events.map((event) => event.type))).toEqual(
@@ -7424,7 +7422,9 @@ describe('Dispatcher over reducer snapshots', () => {
   test('M events between ticks cost exactly M rows', async () => {
     const { store, provider, first } = await seededRepository()
     await first.dispatcher.tick({ acceptNewWork: false })
-    await harness({ store, workspaceProvider: provider }).dispatcher.tick({ acceptNewWork: false })
+    const quiet = harness({ store, workspaceProvider: provider })
+    quiet.clock.advance(1_000)
+    await quiet.dispatcher.tick({ acceptNewWork: false })
     const note = (summary: string) => ({
       actor: agentActor('implement', 's_test'),
       type: 'observation.recorded' as const,
@@ -7439,7 +7439,9 @@ describe('Dispatcher over reducer snapshots', () => {
       payload: { enabled: true },
     })
     store.rows = 0
-    await harness({ store, workspaceProvider: provider }).dispatcher.tick({ acceptNewWork: false })
+    const third = harness({ store, workspaceProvider: provider })
+    third.clock.advance(1_000)
+    await third.dispatcher.tick({ acceptNewWork: false })
     expect(store.rows).toBe(4)
   })
 })
