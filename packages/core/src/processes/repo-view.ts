@@ -174,6 +174,9 @@ export class RepoViewStore implements BuildStore {
   private discoveryDirty = false
   private readonly logs = new Map<string, Log>()
   private readonly work = new Set<string>()
+  /** Bumped by every own write that touches a build log or invalidates it, so
+   * a snapshot read in flight can tell it was overtaken before installing. */
+  private readonly writeGen = new Map<string, number>()
 
   constructor(
     private readonly backing: BuildStore,
@@ -344,7 +347,12 @@ export class RepoViewStore implements BuildStore {
     return log.digest.value
   }
 
+  private bumpGen(slug: string): void {
+    this.writeGen.set(slug, (this.writeGen.get(slug) ?? 0) + 1)
+  }
+
   private async loadFull(slug: string): Promise<Log> {
+    const gen = this.writeGen.get(slug) ?? 0
     const events = await this.backing.getEvents(slug)
     const previous = this.logs.get(slug)
     const log: Log = {
@@ -355,6 +363,9 @@ export class RepoViewStore implements BuildStore {
       epoch: this.epoch,
       pinned: previous?.pinned ?? false,
     }
+    // An own write that completed during the read is not in the snapshot:
+    // keep the log invalid so the next read reconciles before serving it.
+    if ((this.writeGen.get(slug) ?? 0) !== gen) log.dirty = true
     this.logs.set(slug, log)
     return log
   }
@@ -389,6 +400,7 @@ export class RepoViewStore implements BuildStore {
   private async openWindow(slug: string, since: number): Promise<Log> {
     if (this.work.has(slug)) return this.loadFull(slug)
     let log: Log
+    const gen = this.writeGen.get(slug) ?? 0
     if (this.resident) {
       // One pass over the log: reduce all of it, retain only what the reader
       // has not consumed.
@@ -413,6 +425,7 @@ export class RepoViewStore implements BuildStore {
         pinned: true,
       }
     }
+    if ((this.writeGen.get(slug) ?? 0) !== gen) log.dirty = true
     this.logs.set(slug, log)
     return log
   }
@@ -428,6 +441,7 @@ export class RepoViewStore implements BuildStore {
     let log = this.logs.get(slug)
     if (log === undefined || sinceSeq < log.from) {
       log = await this.openWindow(slug, sinceSeq)
+      await this.ensureCurrent(slug, log)
     } else {
       if (sinceSeq > 0) log.pinned = true
       await this.ensureCurrent(slug, log)
@@ -455,10 +469,9 @@ export class RepoViewStore implements BuildStore {
     let log = this.logs.get(slug)
     if (log === undefined || (log.from > 0 && log.acc === undefined)) {
       log = await this.loadFull(slug)
-    } else {
-      await this.ensureCurrent(slug, log)
-      log = this.logs.get(slug) ?? log
     }
+    await this.ensureCurrent(slug, log)
+    log = this.logs.get(slug) ?? log
     return log.acc !== undefined ? buildReducer.finish(log.acc) : reduceBuild(log.events)
   }
 
@@ -498,6 +511,12 @@ export class RepoViewStore implements BuildStore {
     if (this.discoveryDirty || missing()) {
       this.discovery = await this.backing.getRepoBuildDigests(repo)
       this.discoveryDirty = false
+    }
+    // A log invalidated by an own write that raced its installation resolves
+    // here, before its events feed a digest.
+    for (const record of records) {
+      const held = this.logs.get(record.slug)
+      if (held?.dirty === true) await this.ensureCurrent(record.slug, held)
     }
     const digests = new Map<string, BuildDigest>()
     for (const record of records) {
@@ -576,6 +595,7 @@ export class RepoViewStore implements BuildStore {
   // ── Writes: delegate, then fold ────────────────────────────────────────────
 
   private foldBuildAppend(slug: string, envelope: AbEvent): void {
+    this.bumpGen(slug)
     this.recordsDirty = true
     const log = this.logs.get(slug)
     if (log === undefined) {
@@ -628,6 +648,7 @@ export class RepoViewStore implements BuildStore {
   ): Promise<EventEnvelope<T> | null> {
     const envelope = await this.backing.appendIfCurrent(slug, expectedSeq, event)
     if (envelope === null) {
+      this.bumpGen(slug)
       const log = this.logs.get(slug)
       if (log !== undefined) log.dirty = true
       return null

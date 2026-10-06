@@ -463,6 +463,54 @@ describe('RepoViewStore read windows', () => {
     expect((await view.getEvents('a')).map((event) => event.seq)).toEqual([1, 2, 3])
   })
 
+  describe('an own build append racing log installation is not lost', () => {
+    class DeferredStore extends CountingStore {
+      hold: (() => Promise<void>) | undefined
+      override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+        const events = await super.getEvents(...args)
+        const hold = this.hold
+        this.hold = undefined
+        await hold?.()
+        return events
+      }
+    }
+    const pause = (view: RepoViewStore) => async () =>
+      void (await view.append('old', { actor: KERNEL, type: 'build.paused', payload: {} } as never))
+    async function settled(resident: boolean) {
+      const store = new DeferredStore()
+      const view = new RepoViewStore(store, { repo: REPO, resident })
+      await store.ensureRepo(REPO)
+      await newBuild(store, 'old')
+      await complete(store, 'old')
+      await view.refresh()
+      return { store, view }
+    }
+
+    test.each([true, false])('window initialization (resident=%p)', async (resident) => {
+      const { store, view } = await settled(resident)
+      store.hold = pause(view)
+      expect((await view.getEvents('old', 1)).map((event) => event.seq)).toEqual([2, 3])
+      expect((await view.getEvents('old', 1)).map((event) => event.seq)).toEqual([2, 3])
+      expect((await view.buildState('old')).lastSeq).toBe(3)
+    })
+
+    test('widening', async () => {
+      const { store, view } = await settled(true)
+      await view.getEvents('old', 2)
+      view.releaseWindowsBelow({ build: 'old' }, 2)
+      store.hold = pause(view)
+      expect((await view.getEvents('old', 0)).map((event) => event.seq)).toEqual([1, 2, 3])
+    })
+
+    test('full replacement by buildState', async () => {
+      const { store, view } = await settled(false)
+      await view.getEvents('old', 1)
+      store.hold = pause(view)
+      expect((await view.buildState('old')).lastSeq).toBe(3)
+      expect(await view.getEvents('old')).toEqual(await store.getEvents('old'))
+    })
+  })
+
   test('an own append racing window creation or widening is not lost', async () => {
     class DeferredStore extends CountingStore {
       hold: (() => Promise<void>) | undefined
