@@ -190,6 +190,9 @@ const storeResourceRoutes = new Set([
   // 404 before createStoreServer runs, and after the reader cutover every
   // dispatcher tick's unguarded journal read would reject over HTTP.
   'GET state-events',
+  // The journal's high-water mark (AUT-647), the dispatcher view's cursor:
+  // served inside the repo-existence gate like `GET state-events`.
+  'GET high-water',
   'POST lease/claim',
   'POST lease/heartbeat',
   'POST lease/release',

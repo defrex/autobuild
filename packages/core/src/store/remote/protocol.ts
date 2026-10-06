@@ -120,6 +120,9 @@ export const repositoryEventEnvelopeWireSchema = z.object({
 })
 export const repositoryEventListSchema = z.array(repositoryEventEnvelopeWireSchema)
 
+/** `GET repos/:repo/high-water`: the journal's greatest assigned seq. */
+export const repoHighWaterSchema = z.object({ seq: z.number().int().nonnegative() })
+
 export const repositoryArtifactMetaWireSchema = z.object({
   repo: z.string(),
   kind: z.string(),

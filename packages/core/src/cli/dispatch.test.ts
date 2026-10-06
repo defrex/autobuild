@@ -1610,6 +1610,76 @@ describe('dispatcher run identity without a kernelRunId', () => {
   }, 30_000)
 })
 
+describe('abDispatch long-running view (AUT-647)', () => {
+  test('repository controls written by another handle between ticks reach the next tick', async () => {
+    const fx = await makeFixture(
+      readyTicket('T-first', { title: 'First' }),
+      happyHandlers(),
+      DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 3'),
+    )
+    const stop = new AbortController()
+    try {
+      let sleeps = 0
+      const claimsAtSleep: string[][] = []
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: { USER: 'owner' },
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          sleeps += 1
+          claimsAtSleep.push([...fx.tickets.claims])
+          if (sleeps === 1) {
+            // Another process turns intake off and files a ticket behind it.
+            await fx.store.appendRepo(fx.origin, {
+              actor: { kind: 'human', user: 'op' },
+              type: 'dispatcher.intake-set',
+              payload: { enabled: false },
+            })
+            fx.tickets.add(readyTicket('T-second', { title: 'Second' }))
+          } else if (sleeps === 2) {
+            // Intake back on, with the claim-time auto-merge default.
+            await fx.store.appendRepo(fx.origin, {
+              actor: { kind: 'human', user: 'op' },
+              type: 'dispatcher.intake-set',
+              payload: { enabled: true },
+            })
+            await fx.store.appendRepo(fx.origin, {
+              actor: { kind: 'human', user: 'op' },
+              type: 'dispatcher.auto-merge-default-set',
+              payload: { enabled: true },
+            })
+          } else if (sleeps >= 3) {
+            stop.abort()
+          }
+        },
+        wire: fx.wire,
+      })
+
+      // Tick 1 (cold) claimed the first ticket; tick 2 saw intake OFF and left
+      // the second alone; tick 3 saw intake ON and claimed it.
+      expect(claimsAtSleep[0]).toEqual(['T-first'])
+      expect(claimsAtSleep[1]).toEqual(['T-first'])
+      expect(fx.tickets.claims).toEqual(['T-first', 'T-second'])
+      const second = (await fx.store.listBuilds()).find(
+        (record) => record.ticket?.id === 'T-second',
+      )
+      expect(second).toBeDefined()
+      expect(
+        (await fx.store.getEvents(second!.slug)).some(
+          (event) => event.type === 'build.auto-merge-requested',
+        ),
+      ).toBe(true)
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 60_000)
+})
+
 describe('abDispatch --once', () => {
   test('dispatches a Ready ticket and runs the build in-process to PR-open', async () => {
     const fx = await makeFixture(readyTicket('T-1'), happyHandlers())

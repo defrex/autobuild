@@ -190,6 +190,9 @@ export function createBuildScopedStore(store: BuildStore, scope: string): BuildS
     getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoStateEvents', repo))
     },
+    getRepoHighWater(repo: string): Promise<number> {
+      return Promise.reject(new BuildScopeError(scope, 'getRepoHighWater', repo))
+    },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new BuildScopeError(scope, 'getRepoBuildDigests', repo))
     },

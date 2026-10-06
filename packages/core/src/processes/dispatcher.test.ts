@@ -5990,6 +5990,38 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxSettleFailures).toBe(0)
   })
 
+  test('activity appended by another process mid-tick keeps the sandbox alive', async () => {
+    let hook: (() => Promise<void>) | undefined
+    class HookStore extends MemoryBuildStore {
+      override async getRepoBuildDigests(repo: string) {
+        const hooked = hook
+        hook = undefined
+        await hooked?.()
+        return super.getRepoBuildDigests(repo)
+      }
+    }
+    const storeClock = manualClock()
+    const store = new HookStore({ clock: storeClock })
+    const h = harness({
+      store,
+      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+    })
+    await seedLiveSandbox(h)
+    h.clock.advance(31 * 60 * 1000)
+    storeClock.advance(31 * 60 * 1000)
+    hook = async () => {
+      await store.appendRepo(REPO, {
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.activity',
+        payload: { operator: 'ops', environmentId: 'env-1' },
+      })
+    }
+    const report = await h.dispatcher.tick()
+    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    expect(types).not.toContain('orchestrator.sandbox.stopped')
+    expect(report.sandboxIdleStops).toBe(0)
+  })
+
   test('a sandbox inside the threshold is left alone', async () => {
     const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)
@@ -7050,21 +7082,100 @@ describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
 
 // ── Tick reads only builds that still have work ──────────────────────────────
 
-/** A memory store that counts `getEvents` calls per build, so a tick's
- * per-build read set can be asserted. */
+/** A memory store that counts the event rows `getEvents` returns per build, so
+ * a tick's per-build read set can be asserted. Rows, not calls: the dispatcher's
+ * repository view asks every held build for its tail each tick, and an empty
+ * answer is not a read of that build's history. */
 class ReadCountingStore extends MemoryBuildStore {
   readonly reads = new Map<string, number>()
-  override getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
-    this.reads.set(args[0], (this.reads.get(args[0]) ?? 0) + 1)
-    return super.getEvents(...args)
+  override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+    const events = await super.getEvents(...args)
+    if (events.length > 0) this.reads.set(args[0], (this.reads.get(args[0]) ?? 0) + events.length)
+    return events
   }
-  /** Distinct builds read since the last call, clearing the counter. */
+  /** Distinct builds with rows read since the last call, clearing the counter. */
   drain(): string[] {
     const slugs = [...this.reads.keys()].sort()
     this.reads.clear()
     return slugs
   }
 }
+
+/** Counts every event row a read returns — builds, repository journal, and
+ * the bounded journal subset — so a tick's total event traffic is assertable. */
+class RowCountingStore extends MemoryBuildStore {
+  rows = 0
+  override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+    const events = await super.getEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
+    const events = await super.getRepoEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  override async getRepoStateEvents(...args: Parameters<MemoryBuildStore['getRepoStateEvents']>) {
+    const events = await super.getRepoStateEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  drainRows(): number {
+    const rows = this.rows
+    this.rows = 0
+    return rows
+  }
+}
+
+describe('Dispatcher incremental view reads (AUT-647)', () => {
+  function rowHarness() {
+    const store = new RowCountingStore({ clock: manualClock() })
+    return { store, h: harness({ store }) }
+  }
+
+  test('an idle tick after the first reads zero event rows; a tick after M foreign events reads exactly M', async () => {
+    const { store, h } = rowHarness()
+    await store.ensureRepo(REPO)
+    const live = await seedBuild(h, { slug: 'live' })
+    const other = await seedBuild(h, { slug: 'other' })
+    const done = await seedBuild(h, { slug: 'done' })
+    await h.store.append(done, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBeGreaterThan(0)
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(0)
+
+    // Another process appends: two build events and one journal setting.
+    await h.store.append(live, { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    await h.store.append(other, { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('op'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+    store.drainRows()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(3)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(0)
+  })
+
+  test('--once style: a fresh dispatcher reads each work build once and no more than its history', async () => {
+    const { store, h } = rowHarness()
+    await store.ensureRepo(REPO)
+    const live = await seedBuild(h, { slug: 'live' })
+    const history = (await h.store.getEvents(live)).length
+    store.drainRows()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(history)
+  })
+})
 
 describe('Dispatcher tick event reads', () => {
   function countingHarness(over: Parameters<typeof harness>[0] = {}) {
@@ -7138,9 +7249,10 @@ describe('Dispatcher tick event reads', () => {
 
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drain()).toContain(slug)
-    // The failed attempt left the reclaim pending: still read.
+    // The failed attempt left the reclaim pending: the view still holds the
+    // build and retries it, but its log is already in memory — no rows read.
     await h.dispatcher.tick({ acceptNewWork: false })
-    expect(store.drain()).toContain(slug)
+    expect(store.drain()).toEqual([])
     expect(
       (await h.store.getEvents(slug)).filter((event) => event.type === 'pr-attachment.reclaimed'),
     ).toHaveLength(1)
@@ -7199,7 +7311,9 @@ describe('Dispatcher tick event reads', () => {
 
     state = 'ended'
     expect((await h.dispatcher.tick({ acceptNewWork: false })).settled).toBe(1)
-    expect(store.drain()).toEqual([slug])
+    // The held log already carried the open execution; settling appends
+    // through the view, so nothing is read.
+    expect(store.drain()).toEqual([])
     expect((await h.store.getEvents(slug)).at(-1)?.type).toBe('execution.ended')
     store.drain()
 

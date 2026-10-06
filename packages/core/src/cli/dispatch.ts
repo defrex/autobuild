@@ -140,6 +140,7 @@ import {
   type LaunchRunnerResult,
   type TickReport,
 } from '../processes/dispatcher'
+import { RepoViewStore } from '../processes/repo-view'
 import {
   BuildControlError,
   buildControlUser,
@@ -597,6 +598,8 @@ interface ActiveBuildExecution {
    * running, so the completion chain must append no `execution.ended`, release
    * no lease, settle no publication, and record no wait failure. */
   detaching?: boolean
+  /** A wait failure being recorded; teardown lets it finish rather than drop it. */
+  recording?: Promise<void>
 }
 
 /** The dispatch loop owns deterministic decisions and supervises one
@@ -604,6 +607,10 @@ interface ActiveBuildExecution {
  * Store; child completion is liveness evidence used for reaping/single-flight. */
 class DispatchLoop {
   private readonly dispatcher: Dispatcher
+  /** The incremental repository view (AUT-647) the dispatcher and this
+   * frontend's tick-path journal reads and writes share. Resident for a
+   * watch loop; `--once` builds it cold for its single tick. */
+  private readonly repoView: RepoViewStore
   private readonly host = hostname()
   private readonly maxHarvestRecoveryAttempts = DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS
   /** In-flight build and harvest runs (fire-and-forget) — awaited before a
@@ -785,8 +792,12 @@ class DispatchLoop {
       return result.text
     }
 
+    this.repoView = new RepoViewStore(wiring.store, {
+      repo: this.repoIdentity,
+      resident: opts.once !== true,
+    })
     this.dispatcher = new Dispatcher({
-      store: wiring.store,
+      store: this.repoView,
       tickets: wiring.tickets,
       workspaces: wiring.workspaces,
       ...(wiring.retiredWorkspaces === undefined
@@ -839,7 +850,7 @@ class DispatchLoop {
       // the record's `branch` (when present) is the same fact. Using the event
       // keeps this read to the events the caller already needs and avoids an
       // extra build-record lookup on the hot launch path.
-      const events = await this.wiring.store.getEvents(slug)
+      const events = await this.repoView.getEvents(slug)
       const workspace = selectOpenWorkspace(events)
       const source = await resolvePipelineSource({
         slug,
@@ -1019,7 +1030,7 @@ class DispatchLoop {
   }
 
   private async appendStatus(event: RepositoryEventWrite): Promise<void> {
-    await this.wiring.store.appendRepo(this.repoIdentity, event)
+    await this.repoView.appendRepo(this.repoIdentity, event)
   }
 
   private async refreshConfig(): Promise<void> {
@@ -1084,9 +1095,10 @@ class DispatchLoop {
   }
 
   private async readDispatchSettings(): Promise<ReturnType<typeof reduceDispatchSettings>> {
-    // Bounded read (AUT-489): the settings reducer consumes durable types only.
-    const events = await this.wiring.store.getRepoStateEvents(this.repoIdentity)
-    return reduceDispatchSettings(events)
+    // The view's bounded subset (AUT-489): the settings reducer consumes
+    // durable types only. `refresh()` ran first in the tick, so this is the
+    // delta-current journal, never a store read.
+    return reduceDispatchSettings(this.repoView.recordedJournal())
   }
 
   private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
@@ -1127,6 +1139,7 @@ class DispatchLoop {
 
       // Sample inside the serialized tick, not at process startup. Every
       // dispatcher therefore gates claims from the latest repository facts.
+      await this.repoView.refresh()
       const settings = await this.readDispatchSettings()
       const readyObservation =
         settings.intake || (!this.dashboard && this.opts.kernelRunId === undefined)
@@ -1134,6 +1147,7 @@ class DispatchLoop {
           : await this.dispatcher.observeReady()
       const report = await this.dispatcher.tick({
         resumeCurrent,
+        viewRefreshed: true,
         acceptNewWork: settings.intake,
         defaultAutoMerge: settings.defaultAutoMerge,
         autoMergeUser: buildControlUser(this.opts.env),
@@ -2286,10 +2300,11 @@ class DispatchLoop {
       // the pure Store-read pressure check; the guest rescans authoritatively
       // once provisioned, so a threshold crossing between gate and guest scan
       // is never suppressed by this check.
-      const record = await store.getRepo(repo)
-      // Bounded read (AUT-489): the harvest control decision reduces durable
-      // types only.
-      const events = record === null ? [] : await store.getRepoStateEvents(repo)
+      // The view's bounded subset (AUT-489): the harvest control decision
+      // reduces durable types only. Take the journal delta first — guests and
+      // other dispatchers write harvest facts between ticks.
+      await this.repoView.refreshJournal()
+      const events = this.repoView.recordedJournal()
       const state = reduceHarvest(events)
       const control = decideHarvestControl(state, this.maxHarvestRecoveryAttempts)
       const resumePending =
@@ -2331,7 +2346,7 @@ class DispatchLoop {
         )
       }
       this.hostedHarvest = { execution, handle, detached }
-      const started = await store.appendRepo(repo, {
+      const started = await this.repoView.appendRepo(repo, {
         actor: DISPATCHER,
         type: 'harvest.execution.started',
         payload: {
@@ -2406,8 +2421,10 @@ class DispatchLoop {
     startedSeq: number,
   ): Promise<HarvestRunnerResult> {
     const { store } = this.wiring
-    // Bounded read (AUT-489): classifyHarvestOutcome reduces harvest facts only.
-    const events = await store.getRepoStateEvents(repo)
+    // Bounded subset (AUT-489): classifyHarvestOutcome reduces harvest facts
+    // only. A guest wrote the facts through its own handle, so read the delta.
+    await this.repoView.refreshJournal()
+    const events = this.repoView.recordedJournal()
     const record = await store.getRepo(repo)
     return classifyHarvestOutcome(events, {
       executionStartedSeq: startedSeq,
@@ -2433,7 +2450,7 @@ class DispatchLoop {
       branch: '',
     }
     const reap = await this.reapHostedWorkspace(workspaceHandle)
-    await this.wiring.store.appendRepo(repo, {
+    await this.repoView.appendRepo(repo, {
       actor: DISPATCHER,
       type: 'harvest.execution.released',
       payload: {
@@ -2590,9 +2607,11 @@ class DispatchLoop {
   }
 
   private async settlePendingPublication(slug: string): Promise<void> {
+    // The guest appended through its own handle; settle against fresh state.
+    await this.repoView.refreshBuild(slug)
     await settleWorkspacePublication(
       {
-        store: this.wiring.store,
+        store: this.repoView,
         storeRef: this.wiring.storeRef,
         publication: this.wiring.workspaces.publication,
         forge: this.wiring.forge,
@@ -2615,11 +2634,13 @@ class DispatchLoop {
     cleanupPending: boolean
     identity?: BuildExecutionHandle['identity']
   }): Promise<void> {
+    // The failed executor may have appended through its own handle.
+    await this.repoView.refreshBuild(input.slug)
     await appendInfrastructureFailure(
-      { store: this.wiring.store, ids: this.wiring.ids },
+      { store: this.repoView, ids: this.wiring.ids },
       {
         slug: input.slug,
-        events: await this.wiring.store.getEvents(input.slug),
+        events: await this.repoView.getEvents(input.slug),
         maxAttempts: this.currentConfig().config.policy.maxInfrastructureAttempts,
         provider: input.identity?.provider ?? this.wiring.workspaces.name,
         workspaceRef: input.workspaceRef,
@@ -2650,11 +2671,7 @@ class DispatchLoop {
 
     try {
       await this.publishBuildConfig(slug)
-      leaseClaimed = await this.wiring.store.claimLease(
-        slug,
-        instance,
-        BUILD_EXECUTION_LEASE_TTL_MS,
-      )
+      leaseClaimed = await this.repoView.claimLease(slug, instance, BUILD_EXECUTION_LEASE_TTL_MS)
       if (!leaseClaimed) {
         this.activeBuildRuns.delete(slug)
         await this.appendStatus({
@@ -2665,7 +2682,7 @@ class DispatchLoop {
         this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
       }
-      const launchEvents = await this.wiring.store.getEvents(slug)
+      const launchEvents = await this.repoView.getEvents(slug)
       let workspaceRef: string | undefined
       let workspaceProvider: string | undefined
       for (const event of launchEvents) {
@@ -2709,7 +2726,7 @@ class DispatchLoop {
         provider: owning.name,
         workspaceRef,
       }
-      await this.wiring.store.append(slug, {
+      await this.repoView.append(slug, {
         actor: DISPATCHER,
         type: 'execution.started',
         payload: { ...identity, instance },
@@ -2724,7 +2741,7 @@ class DispatchLoop {
             // supervisor settles the execution from the Store.
             if (active.detaching) return
             try {
-              await this.wiring.store.append(slug, {
+              await this.repoView.append(slug, {
                 actor: DISPATCHER,
                 type: 'execution.ended',
                 payload: {
@@ -2746,7 +2763,8 @@ class DispatchLoop {
                 return
               }
 
-              const state = reduceBuild(await this.wiring.store.getEvents(slug))
+              await this.repoView.refreshBuild(slug)
+              const state = reduceBuild(await this.repoView.getEvents(slug))
               if (diagnostic === null && exit.exitCode === 0) {
                 await this.appendStatus({
                   actor: DISPATCHER,
@@ -2772,7 +2790,7 @@ class DispatchLoop {
               })
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
-              await this.wiring.store.releaseLease(slug, instance)
+              await this.repoView.releaseLease(slug, instance)
               await this.settlePendingPublication(slug)
             }
           },
@@ -2783,7 +2801,7 @@ class DispatchLoop {
             // A rejected executor completion cannot prove the remote VM was
             // stopped. Keep the lease until expiry: recovery fences and reaps
             // the exact recorded identity before authorizing a replacement.
-            await this.recordInfrastructureFailure({
+            active.recording = this.recordInfrastructureFailure({
               slug,
               instance,
               workspaceRef,
@@ -2792,6 +2810,7 @@ class DispatchLoop {
               cleanupPending: true,
               identity,
             })
+            await active.recording
           },
         )
         .finally(() => {
@@ -2810,7 +2829,9 @@ class DispatchLoop {
         this.activeBuildRuns.delete(slug)
       }
       if (leaseClaimed) {
-        const events = await this.wiring.store.getEvents(slug)
+        // The runner appended through its own handle: take the delta.
+        await this.repoView.refreshBuild(slug)
+        const events = await this.repoView.getEvents(slug)
         let workspaceRef = ''
         for (const event of events) {
           if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
@@ -2829,7 +2850,7 @@ class DispatchLoop {
         // Local start failures have no possible remote holder. Remote failures
         // retain the lease until its TTL fences an ambiguous start.
         if (this.wiring.workspaces.recovery === undefined) {
-          await this.wiring.store.releaseLease(slug, instance)
+          await this.repoView.releaseLease(slug, instance)
         }
       }
       await this.appendStatus({
@@ -2925,6 +2946,9 @@ class DispatchLoop {
           } catch {
             // Detach is best-effort: an unresolvable wait still exits.
           }
+          // A wait failure already being recorded is durable work, not
+          // supervision: let it land before the process exits.
+          await entry.recording?.catch(() => {})
           this.activeBuildRuns.delete(slug)
           if (entry.settled !== undefined) {
             this.inFlight.delete(entry.settled)
@@ -3409,7 +3433,7 @@ class DispatchLoop {
       const holder = record?.lease?.holder
       if (holder === undefined || this.yieldedTo === holder) return
       this.yieldedTo = holder
-      await this.wiring.store.appendRepo(this.repoIdentity, {
+      await this.repoView.appendRepo(this.repoIdentity, {
         actor: DISPATCHER,
         type: 'dispatcher.tick-yielded',
         payload: {

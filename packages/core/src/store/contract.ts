@@ -878,6 +878,43 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       })
     })
 
+    describe('getRepoHighWater', () => {
+      test('unknown repo rejects like getRepoEvents and creates nothing', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await expect(store.getRepoHighWater('acme/never-seen')).rejects.toThrow(/unknown repo/)
+          expect(await store.getRepo('acme/never-seen')).toBeNull()
+        })
+      })
+
+      test('an empty journal answers 0', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/hw-empty')
+          expect(await store.getRepoHighWater('acme/hw-empty')).toBe(0)
+        })
+      })
+
+      test('equals the last appended seq regardless of event type', async () => {
+        await withStore(factory, undefined, async (store) => {
+          await store.ensureRepo('acme/hw')
+          await store.appendRepo('acme/hw', {
+            actor: humanActor('op'),
+            type: 'dispatcher.intake-set',
+            payload: { enabled: false },
+          })
+          expect(await store.getRepoHighWater('acme/hw')).toBe(1)
+          // A run-scoped, non-durable type must still move the mark.
+          const tick = await store.appendRepo('acme/hw', {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-started',
+            payload: { run: 'r1' },
+          })
+          expect(tick.seq).toBe(2)
+          expect(await store.getRepoHighWater('acme/hw')).toBe(2)
+          expect((await store.getRepoEvents('acme/hw')).at(-1)?.seq).toBe(2)
+        })
+      })
+    })
+
     describe('getRepoStateEvents (bounded journal read, AUT-489)', () => {
       /** One no-op hosted dispatcher invocation: the ~4 facts an invocation
        * appends whether or not it did anything. */

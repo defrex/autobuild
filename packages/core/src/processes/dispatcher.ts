@@ -83,7 +83,7 @@ export { specConformance, type SpecConformance } from '../spec-standard'
 import { recordInfrastructureFailure as appendInfrastructureFailure } from './infrastructure-failure-budget'
 import { lastExecutionOutcome, openExecution, settleExecution } from './execution-settlement'
 import { openHarvestExecutions } from './harvest-execution-state'
-import { readRepoEventsIfRecorded } from './harvest'
+import { isWorkDigest, RepoViewStore } from './repo-view'
 import {
   baseBranchReducer,
   openBuildWorkspace,
@@ -477,6 +477,10 @@ export interface TickOpts {
    * escalations remain human gates and are only reported as parked.
    */
   resumeCurrent?: boolean
+  /** The caller refreshed the repository view for this tick already (the CLI
+   * does, to sample the repository-wide controls from the same state). The
+   * tick then skips its own refresh so one tick performs one discovery read. */
+  viewRefreshed?: boolean
   /**
    * Repository-derived intake gate supplied by the CLI for this tick. False
    * skips only the ready-ticket list/claim/dispatch stage; janitor, startup
@@ -648,7 +652,27 @@ export class Dispatcher {
    * slug here defers to the continuation; it never blocks on it. */
   private readonly continuations = new Map<string, ProvisionContinuation>()
 
+  /** The incremental repository view every stage reads and writes through
+   * (AUT-647): `deps.store` itself when the caller already wrapped it. */
+  private readonly store: RepoViewStore
+
+  /** `deps.settlePublication`, followed by a delta read of the build: the
+   * guest-side settlement appends through its own store handle, which the view
+   * only learns of by reading. */
+  private get settlePublication(): ((slug: string) => Promise<void>) | undefined {
+    const settle = this.deps.settlePublication
+    if (settle === undefined) return undefined
+    return async (slug) => {
+      await settle(slug)
+      await this.store.refreshBuild(slug)
+    }
+  }
+
   constructor(private readonly deps: DispatcherDeps) {
+    this.store =
+      deps.store instanceof RepoViewStore
+        ? deps.store
+        : new RepoViewStore(deps.store, { repo: deps.repo })
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
     this.doneState = deps.opts?.doneState ?? 'Done'
     this.slugNamingTimeoutMs = deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
@@ -675,6 +699,7 @@ export class Dispatcher {
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
+    if (opts.viewRefreshed !== true) await this.store.refresh()
     let autoMergeUser: string | undefined
     if (opts.defaultAutoMerge === true) {
       autoMergeUser = opts.autoMergeUser?.trim()
@@ -691,7 +716,7 @@ export class Dispatcher {
     // likewise samples before calling `tick`); the auto-merge default fact is
     // the durable driver of this tick's fan-out below. Neither control
     // pretends to a serialization the store does not offer.
-    const repoEvents = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
+    const repoEvents = this.store.recordedJournal()
     const paused = reduceDispatchSettings(repoEvents).paused
     const autoMergeDefault = latestAutoMergeDefault(repoEvents)
     // The claim-time seed cites the newest fact whose enabled state matches
@@ -768,7 +793,7 @@ export class Dispatcher {
         let sandbox: OperatorSandboxService | undefined
         try {
           sandbox = await createOperatorSandboxService({
-            store: this.deps.store,
+            store: this.store,
             repo: this.deps.repo,
             provider: this.deps.workspaces,
             sandbox: this.deps.config.orchestrator.sandbox,
@@ -781,7 +806,8 @@ export class Dispatcher {
           sandbox = undefined
         }
         await runOrchestratorTickStep({
-          store: this.deps.store,
+          store: this.store,
+          view: this.store,
           repo: this.deps.repo,
           config: this.deps.config,
           clock: this.deps.clock,
@@ -812,7 +838,8 @@ export class Dispatcher {
    * digests (as `operator/query.ts` does) so a concurrent create cannot fail
    * the completeness check. */
   private async repoBuildDigests(): Promise<{ record: BuildRecord; digest: BuildDigest }[]> {
-    const { store, repo } = this.deps
+    const store = this.store
+    const { repo } = this.deps
     const records = (await store.listBuilds()).filter((record) => record.repo === repo)
     const digests = await store.getRepoBuildDigests(repo)
     return records.map((record) => {
@@ -841,13 +868,7 @@ export class Dispatcher {
    * end. A terminal, settled build costs no event reads. */
   private async workBuilds(): Promise<BuildRecord[]> {
     return (await this.repoBuildDigests())
-      .filter(
-        ({ digest }) =>
-          digest.terminal === undefined ||
-          digest.terminal === 'aborted' ||
-          digest.reclaimPending === true ||
-          digest.executionOpen === true,
-      )
+      .filter(({ digest }) => isWorkDigest(digest))
       .map(({ record }) => record)
   }
 
@@ -861,6 +882,7 @@ export class Dispatcher {
     ticketDiagnostics: string[]
   }> {
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
+    await this.store.refresh()
     const activeTicketIds = new Set<string>()
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (record.ticket !== undefined && digest.terminal === undefined) {
@@ -892,7 +914,8 @@ export class Dispatcher {
    * report shape stays compatible. */
   private async applyAutoMergeDefault(fact: AutoMergeDefaultFact | undefined): Promise<void> {
     if (fact === undefined) return
-    const { store } = this.deps
+    const store = this.store
+
     // Terminal builds are never eligible (`autoMergeDefaultEligible`).
     for (const record of (await this.nonterminalBuilds()).sort((a, b) =>
       a.slug.localeCompare(b.slug),
@@ -926,13 +949,15 @@ export class Dispatcher {
   private async triggerHarvest(): Promise<void> {
     const start = this.deps.startHarvest
     if (start === undefined) return
-    const record = await this.deps.store.getRepo(this.deps.repo)
-    if (record === null) {
+    // The journal moves under foreign harvest writers while the stages run, so
+    // take the delta before deciding.
+    await this.store.refreshJournal()
+    if (!this.store.journalRecorded()) {
       start()
       return
     }
-    // Bounded read (AUT-489): the harvest reducer consumes durable types only.
-    const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
+    // Bounded subset (AUT-489): the harvest reducer consumes durable types only.
+    const state = reduceHarvest(this.store.recordedJournal())
     if (decideHarvestControl(state, this.maxHarvestRecoveryAttempts).kind !== 'park') {
       start()
     }
@@ -966,7 +991,7 @@ export class Dispatcher {
       // Budget gate: once spent, stop settling further foreign executions.
       if (this.outOfBudget(opts)) break
       try {
-        const events = await this.deps.store.getEvents(record.slug)
+        const events = await this.store.getEvents(record.slug)
         const open = openExecution(events)
         if (open === null) continue
         const owner = this.executionOwner(open.provider)
@@ -974,10 +999,10 @@ export class Dispatcher {
         if (execution?.observe === undefined || open.commandId === undefined) continue
         const settlement = await settleExecution(
           {
-            store: this.deps.store,
+            store: this.store,
             execution,
-            ...(this.deps.settlePublication !== undefined
-              ? { settlePublication: this.deps.settlePublication }
+            ...(this.settlePublication !== undefined
+              ? { settlePublication: this.settlePublication }
               : {}),
           },
           record.slug,
@@ -1006,7 +1031,11 @@ export class Dispatcher {
     const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
     let events: RepositoryEvent[]
     try {
-      events = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
+      // The earlier stages awaited providers; take the journal delta so a
+      // foreign append (operator activity, harvest facts) made meanwhile is
+      // seen before any destructive decision below.
+      await this.store.refreshJournal()
+      events = this.store.recordedJournal()
     } catch {
       // The read itself failed (a transient store error — a missing record
       // answers `[]` inside the helper, so it never reaches this arm):
@@ -1062,7 +1091,7 @@ export class Dispatcher {
             branch: '',
           })
         }
-        await this.deps.store.appendRepo(this.deps.repo, {
+        await this.store.appendRepo(this.deps.repo, {
           actor: DISPATCHER,
           type: 'harvest.execution.released',
           payload: {
@@ -1105,7 +1134,11 @@ export class Dispatcher {
     const providerName = this.deps.workspaces.name
     let events: RepositoryEvent[]
     try {
-      events = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
+      // The earlier stages awaited providers; take the journal delta so a
+      // foreign append (operator activity, harvest facts) made meanwhile is
+      // seen before any destructive decision below.
+      await this.store.refreshJournal()
+      events = this.store.recordedJournal()
     } catch {
       // The read itself failed (a transient store error — a missing record
       // answers `[]` inside the helper, so it never reaches this arm):
@@ -1132,7 +1165,7 @@ export class Dispatcher {
           // never a stop: nothing was stopped through a provider this
           // dispatcher no longer owns. If the provider returns, the next
           // operator ensure() re-provisions and re-brackets the environment.
-          await this.deps.store.appendRepo(this.deps.repo, {
+          await this.store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
             type: 'orchestrator.sandbox.released',
             payload: {
@@ -1153,7 +1186,7 @@ export class Dispatcher {
         })
         if (outcome.outcome === 'unsupported') continue
         if (outcome.outcome === 'stopped') {
-          await this.deps.store.appendRepo(this.deps.repo, {
+          await this.store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
             type: 'orchestrator.sandbox.stopped',
             payload: {
@@ -1168,7 +1201,7 @@ export class Dispatcher {
           // dead host): close the orphan's trail with an unconfirmed-purge
           // release fact, dispatcher-authored exactly as
           // `harvest.execution.released` is.
-          await this.deps.store.appendRepo(this.deps.repo, {
+          await this.store.appendRepo(this.deps.repo, {
             actor: DISPATCHER,
             type: 'orchestrator.sandbox.released',
             payload: {
@@ -1206,7 +1239,7 @@ export class Dispatcher {
    * may have crashed between marker and claim — adopted only after the
    * `provisionStaleMs` backstop. */
   private async provisionMarkerLiveness(slug: string): Promise<'live' | 'expired' | 'absent'> {
-    const record = await this.deps.store.getBuild(slug)
+    const record = await this.store.getBuild(slug)
     if (record?.lease === undefined) return 'absent'
     return new Date(record.lease.expiresAt).getTime() > this.deps.clock().getTime()
       ? 'live'
@@ -1255,7 +1288,7 @@ export class Dispatcher {
     }
     const branch = record.branch ?? `ab/${slug}`
     const generation = events.filter((event) => event.type === 'workspace.provisioned').length
-    await this.deps.store.append(slug, {
+    await this.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.provision-started',
       payload: { provider: this.deps.workspaces.name, branch, generation },
@@ -1303,7 +1336,8 @@ export class Dispatcher {
       tail: 'dispatch' | 'launch'
     },
   ): Promise<void> {
-    const { store, workspaces, config } = this.deps
+    const store = this.store
+    const { workspaces, config } = this.deps
     const slug = entry.slug
     let leaseClaimed = false
     let heartbeat: ReturnType<typeof setInterval> | undefined
@@ -1442,10 +1476,10 @@ export class Dispatcher {
     for (const entry of entries) entry.controller.abort()
     for (const entry of entries) {
       try {
-        const events = await this.deps.store.getEvents(entry.slug)
+        const events = await this.store.getEvents(entry.slug)
         if (this.openProvisionMarker(events) !== undefined) {
           const attempt = events.filter((event) => event.type === 'dispatch.failed').length + 1
-          await this.deps.store.append(entry.slug, {
+          await this.store.append(entry.slug, {
             actor: DISPATCHER,
             type: 'dispatch.failed',
             payload: {
@@ -1460,7 +1494,7 @@ export class Dispatcher {
         // The durable marker plus the released lease still gate adoption.
       }
       try {
-        await this.deps.store.releaseLease(entry.slug, entry.instance)
+        await this.store.releaseLease(entry.slug, entry.instance)
       } catch {
         // Expiry fences an ambiguous release.
       }
@@ -1490,7 +1524,7 @@ export class Dispatcher {
         // Once a record is known, contain its complete janitor path: loading
         // and reducing facts, cleanup, forge/ticket calls, and store writes.
         // Existing partial facts leave the same work due on the next tick.
-        const events = await this.deps.store.getEvents(record.slug)
+        const events = await this.store.getEvents(record.slug)
         const state = reduceBuild(events)
         const executionLeaseLive = this.hasLiveExecutionLease(record)
         // Pipeline/ticket/workspace state is settled, but release-asset cleanup
@@ -1507,7 +1541,7 @@ export class Dispatcher {
           state.status === 'queued' &&
           state.pendingCommands.some((command) => command.command === 'abort')
         ) {
-          const acknowledged = await this.deps.store.append(record.slug, {
+          const acknowledged = await this.store.append(record.slug, {
             actor: DISPATCHER,
             type: 'build.aborted',
             payload: {},
@@ -1565,7 +1599,8 @@ export class Dispatcher {
     events: AbEvent[],
     report: TickReport,
   ): Promise<void> {
-    const { store, tickets, forge } = this.deps
+    const store = this.store
+    const { tickets, forge } = this.deps
     const branch = record.branch
     // Whether this build ever owned a local checkout workspace, judged on the
     // provisioned facts (not the open one, which is null when the build never
@@ -1728,7 +1763,8 @@ export class Dispatcher {
     events: AbEvent[],
     report: TickReport,
   ): Promise<void> {
-    const { store, tickets } = this.deps
+    const store = this.store
+    const { tickets } = this.deps
     await this.releaseWorkspace(record.slug, events, 'discard')
     if (record.lease !== undefined) {
       await store.releaseLease(record.slug, record.lease.holder)
@@ -1758,7 +1794,8 @@ export class Dispatcher {
     launched: Set<string>,
     executionLeaseLive: boolean,
   ): Promise<void> {
-    const { store, tickets, forge } = this.deps
+    const store = this.store
+    const { tickets, forge } = this.deps
     const pr = state.pr
     if (!pr) return
     // Forge calls run from the workspace when it still exists (it does until
@@ -1837,6 +1874,7 @@ export class Dispatcher {
         // Re-read at the last possible point. A cancellation, replacement
         // command, newly due pipeline work, or application fact suppresses
         // this attempt; the next tick reclassifies from fresh forge state.
+        await store.refreshBuild(record.slug)
         const latestEvents = await store.getEvents(record.slug)
         const latestState = reduceBuild(latestEvents)
         const latestIntent = pendingAutoMerge(latestState)
@@ -1937,14 +1975,14 @@ export class Dispatcher {
           workspacePath: this.deps.checkout ?? this.deps.repo,
           asset: hosted.payload.asset,
         })
-        await this.deps.store.append(slug, {
+        await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'pr-attachment.reclaimed',
           payload: { hostedSeq: hosted.seq },
         })
       } catch (error) {
         try {
-          await this.deps.store.append(slug, {
+          await this.store.append(slug, {
             actor: DISPATCHER,
             type: 'pr-attachment.reclaim-failed',
             payload: {
@@ -1980,7 +2018,7 @@ export class Dispatcher {
   ): Promise<void> {
     const execution = [...events].reverse().find((event) => event.type === 'execution.started')
     const appended = await appendInfrastructureFailure(
-      { store: this.deps.store, ids: this.deps.ids },
+      { store: this.store, ids: this.deps.ids },
       {
         slug,
         events,
@@ -2030,7 +2068,7 @@ export class Dispatcher {
     // failure propagates — a stale workspace with an unrecorded pending
     // request is never reaped (the next tick retries).
     events = await settlePublicationBeforeRelease(
-      { store: this.deps.store, settlePublication: this.deps.settlePublication },
+      { store: this.store, settlePublication: this.settlePublication },
       slug,
       events,
       reason,
@@ -2049,7 +2087,7 @@ export class Dispatcher {
         ...(open.localPath !== undefined ? { localPath: open.localPath } : {}),
         branch: open.branch,
       })
-      const cleaned = await this.deps.store.append(slug, {
+      const cleaned = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'infrastructure.cleanup-attempted',
         payload: {
@@ -2062,7 +2100,7 @@ export class Dispatcher {
         },
       })
       events.push(cleaned)
-      const released = await this.deps.store.append(slug, {
+      const released = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'workspace.released',
         payload: { ref: open.ref, reason },
@@ -2071,7 +2109,7 @@ export class Dispatcher {
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const failed = await this.deps.store.append(slug, {
+      const failed = await this.store.append(slug, {
         actor: DISPATCHER,
         type: 'infrastructure.cleanup-attempted',
         payload: {
@@ -2119,7 +2157,7 @@ export class Dispatcher {
     // workspace still exists. The guard's append failure propagates — the
     // release never proceeds past an unrecorded pending request.
     events = await settlePublicationBeforeRelease(
-      { store: this.deps.store, settlePublication: this.deps.settlePublication },
+      { store: this.store, settlePublication: this.settlePublication },
       slug,
       events,
       reason,
@@ -2134,7 +2172,7 @@ export class Dispatcher {
         ).length + 1
       try {
         const outcome = await recovery.reap(handle)
-        const cleaned = await this.deps.store.append(slug, {
+        const cleaned = await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'infrastructure.cleanup-attempted',
           payload: {
@@ -2149,7 +2187,7 @@ export class Dispatcher {
         events.push(cleaned)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const failed = await this.deps.store.append(slug, {
+        const failed = await this.store.append(slug, {
           actor: DISPATCHER,
           type: 'infrastructure.cleanup-attempted',
           payload: {
@@ -2174,7 +2212,7 @@ export class Dispatcher {
     } else {
       await owner.release(handle)
     }
-    return this.deps.store.append(slug, {
+    return this.store.append(slug, {
       actor: DISPATCHER,
       type: 'workspace.released',
       payload: { ref: open.ref, reason },
@@ -2272,7 +2310,8 @@ export class Dispatcher {
       assets?: PinnedAsset[]
     },
   ): Promise<DispatchOutcome> {
-    const { store, config } = this.deps
+    const store = this.store
+    const { config } = this.deps
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'create'
     try {
       let events = await store.getEvents(record.slug)
@@ -2408,7 +2447,8 @@ export class Dispatcher {
     report?: TickReport,
     launched?: Set<string>,
   ): Promise<Exclude<DispatchOutcome, 'deferred'>> {
-    const { store } = this.deps
+    const store = this.store
+
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'spec'
     let authored = false
     try {
@@ -2489,6 +2529,7 @@ export class Dispatcher {
       // Discard validation and recovery selection happened before several
       // provider awaits. Re-read immediately before launch so a request made
       // during those boundaries parks cleanly for the next janitor pass.
+      await store.refreshBuild(record.slug)
       const launchState = reduceBuild(await store.getEvents(record.slug))
       if (launchState.status !== 'queued' || launchState.discardRequest !== undefined) {
         return 'parked'
@@ -2531,7 +2572,7 @@ export class Dispatcher {
       }
       // Budget gate: recovery issues store transport calls per build.
       if (this.outOfBudget(opts)) break
-      const events = await this.deps.store.getEvents(record.slug)
+      const events = await this.store.getEvents(record.slug)
       const state = reduceBuild(events)
       if (
         state.status !== 'queued' ||
@@ -2568,7 +2609,8 @@ export class Dispatcher {
     paused: boolean,
     opts: TickOpts = {},
   ): Promise<void> {
-    const { store, config } = this.deps
+    const store = this.store
+    const { config } = this.deps
     for (const record of await this.nonterminalBuilds()) {
       if (launched.has(record.slug)) continue
       // Budget gate: resume launches runners (transport-backed work).
@@ -2647,7 +2689,7 @@ export class Dispatcher {
       } else if (now - new Date(record.updatedAt).getTime() < this.leaseTtlMs) {
         continue // absent lease within the first-claim grace (see DispatcherOpts)
       }
-      const events = await this.deps.store.getEvents(record.slug)
+      const events = await this.store.getEvents(record.slug)
       const state = reduceBuild(events)
       if (
         (state.status === 'queued' && state.discardRequest !== undefined) ||
@@ -2681,10 +2723,10 @@ export class Dispatcher {
         if (execution?.observe !== undefined) {
           const settlement = await settleExecution(
             {
-              store: this.deps.store,
+              store: this.store,
               execution,
-              ...(this.deps.settlePublication !== undefined
-                ? { settlePublication: this.deps.settlePublication }
+              ...(this.settlePublication !== undefined
+                ? { settlePublication: this.settlePublication }
                 : {}),
             },
             record.slug,
@@ -2766,7 +2808,8 @@ export class Dispatcher {
     opts: TickOpts = {},
     autoMergeSeedFact: AutoMergeDefaultFact | undefined = undefined,
   ): Promise<void> {
-    const { store, tickets, config } = this.deps
+    const store = this.store
+    const { tickets, config } = this.deps
     // Blocked and paused builds still occupy a slot: their workspaces and
     // pending work are live, only waiting on a human. Capacity is per repo
     // (§16.1) — another repo's builds never consume this repo's slots.
@@ -2784,9 +2827,11 @@ export class Dispatcher {
     // standing queue-depth report and must stay honest exactly when the
     // dispatcher is saturated. Sources that keep a claimed ticket in the
     // ready state are deduped against the active builds embodying them.
-    const journalBeforeReady = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
+    await this.store.refreshJournal()
+    const journalBeforeReady = this.store.recordedJournal()
     const listing = await tickets.listReady(readyCriteria(config))
-    const journalAfterReady = await readRepoEventsIfRecorded(this.deps.store, this.deps.repo)
+    await this.store.refreshJournal()
+    const journalAfterReady = this.store.recordedJournal()
     const creationHolds = new Map(
       harvestCreationsDuringReadyScan(journalBeforeReady, journalAfterReady).map((creation) => [
         creation.creationKey.toLowerCase(),
@@ -3023,7 +3068,7 @@ export class Dispatcher {
   /** Valid bounded base, deduped store-wide with -2/-3/… suffixes. */
   private async uniqueSlug(base: string): Promise<string> {
     let slug = base
-    for (let n = 2; (await this.deps.store.getBuild(slug)) !== null; n += 1) {
+    for (let n = 2; (await this.store.getBuild(slug)) !== null; n += 1) {
       slug = `${base}-${n}`
     }
     return slug

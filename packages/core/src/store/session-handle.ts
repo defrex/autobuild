@@ -171,6 +171,9 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoStateEvents', repo))
     },
+    getRepoHighWater(repo: string): Promise<number> {
+      return Promise.reject(new SessionScopeError(scope, 'getRepoHighWater', repo))
+    },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoBuildDigests', repo))
     },

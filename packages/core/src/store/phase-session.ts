@@ -328,6 +328,10 @@ export function scopeLocalStoreToPhaseSession(
       own('getRepoStateEvents', 'repo', repo)
       return store.getRepoStateEvents(repo)
     },
+    async getRepoHighWater(repo: string): Promise<number> {
+      own('getRepoHighWater', 'repo', repo)
+      return store.getRepoHighWater(repo)
+    },
     async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       own('getRepoBuildDigests', 'repo', repo)
       return store.getRepoBuildDigests(repo)

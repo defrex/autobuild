@@ -545,6 +545,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
           ),
         )
       }
+      case 'GET high-water': {
+        return json(200, { seq: await store.getRepoHighWater(repo) })
+      }
       case 'GET state-events': {
         // The bounded repository-journal read (AUT-489), inside the same
         // repo-existence and authorization gates as `GET events` above: an
