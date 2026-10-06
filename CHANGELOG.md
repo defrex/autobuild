@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#591](https://github.com/defrex/autobuild/pull/591) — Build the dispatcher's repository view once and refresh it by cursor each tick
 - [#590](https://github.com/defrex/autobuild/pull/590) — Make every event-array reducer incremental
 - [#589](https://github.com/defrex/autobuild/pull/589) — Teach the ab-tickets skill about the icebox and custom states
 - [#588](https://github.com/defrex/autobuild/pull/588) — Read only builds that still have work in the dispatcher tick
