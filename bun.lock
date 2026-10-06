@@ -31,7 +31,7 @@
     },
     "packages/core": {
       "name": "@defrex/autobuild-core",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
         "@ai-sdk/gateway": "4.0.82",
         "@modelcontextprotocol/sdk": "^1.30.0",
@@ -45,7 +45,7 @@
     },
     "packages/hosted-dispatcher": {
       "name": "@defrex/autobuild-hosted-dispatcher",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "bin": {
         "ab-hosted-dispatcher": "./src/bin.ts",
       },
@@ -56,7 +56,7 @@
     },
     "packages/hosted-store-service": {
       "name": "@defrex/autobuild-hosted-store-service",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "bin": {
         "ab-hosted-store": "./src/bin.ts",
       },
@@ -84,7 +84,7 @@
     },
     "packages/postgres-store": {
       "name": "@defrex/autobuild-postgres-store",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "bin": {
         "ab-postgres-store": "./src/bin.ts",
       },
@@ -101,7 +101,7 @@
     },
     "packages/vercel-sandbox": {
       "name": "@defrex/autobuild-vercel-sandbox",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "dependencies": {
         "@vercel/sandbox": "^3.1.0",
       },
@@ -111,7 +111,7 @@
     },
     "packages/web-dashboard-capture": {
       "name": "@defrex/autobuild-web-dashboard-capture",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "devDependencies": {
         "@types/react": "19.2.14",
         "@types/react-dom": "19.2.3",
@@ -121,7 +121,7 @@
     },
     "packages/website": {
       "name": "@defrex/autobuild-website",
-      "version": "0.8.0",
+      "version": "0.9.0",
     },
   },
   "patchedDependencies": {
