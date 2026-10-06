@@ -250,6 +250,27 @@ function retainedShape(retained: unknown[], cursor: number): boolean {
   return last <= cursor
 }
 
+/** Structural checks on the small accumulators a later fold dereferences. */
+function extraAccsShape(extra: ExtraAccs): boolean {
+  const field = (acc: unknown, key: string): unknown => (isObject(acc) ? acc[key] : undefined)
+  const open = field(extra.openExecution, 'open')
+  if (open !== null && !(isObject(open) && typeof open.instance === 'string')) return false
+  const workspace = field(extra.openBuildWorkspace, 'open')
+  if (workspace !== null && !(isObject(workspace) && typeof workspace.ref === 'string')) {
+    return false
+  }
+  if (typeof field(extra.lastExecutionOutcome, 'state') !== 'string') return false
+  if (!Array.isArray(field(extra.publicationState, 'ledger'))) return false
+  const digest = extra.buildDigest
+  return (
+    isObject(digest) &&
+    Array.isArray(digest.observations) &&
+    Array.isArray(digest.hosted) &&
+    Array.isArray(digest.reclaimed) &&
+    (digest.openInstance === null || typeof digest.openInstance === 'string')
+  )
+}
+
 function hasAccs(log: Log): boolean {
   return log.acc !== undefined && log.extra !== undefined
 }
@@ -658,6 +679,7 @@ export class RepoViewStore implements BuildStore {
       if (!isObject(found.state)) return null
       extra[name] = found.state
     }
+    if (!extraAccsShape(extra)) return null
     if (!indexAccShape(extra.logIndex)) return null
     const cursor = build.cursor
     try {

@@ -204,6 +204,12 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
         reducer === 'logIndex'
           ? { ...found, state: { candidates: [], maxRoundEver: {}, guidanceDeliveries: [] } }
           : found,
+      'openExecution without its open field': (_scope, reducer, found) =>
+        reducer === 'openExecution' ? { ...found, state: {} } : found,
+      'workspace with a malformed open field': (_scope, reducer, found) =>
+        reducer === 'openBuildWorkspace' ? { ...found, state: { open: 3 } } : found,
+      'last execution without its state': (_scope, reducer, found) =>
+        reducer === 'lastExecutionOutcome' ? { ...found, state: {} } : found,
       'prefixes that disagree': (_scope, reducer, found) =>
         reducer === 'logIndex' ? { ...found, cursor: found.cursor - 1 } : found,
     }
@@ -359,5 +365,34 @@ describe('a malformed journal snapshot at a quiet tail', () => {
       'dispatcher.intake-set',
       'dispatcher.run-started',
     ])
+  })
+})
+
+describe('a restored openExecution accumulator', () => {
+  test('missing its open field replays, and a later execution.ended folds', async () => {
+    const store = new CountingStore()
+    await seededRepo(store)
+    await snapshotsOf(store, fresh(store))
+    store.tamper = (_scope, reducer, found) =>
+      reducer === 'openExecution' ? { ...found, state: {} } : found
+    const view = fresh(store)
+    await view.refresh()
+    expect((await view.buildFacts('a')).open).toBeNull()
+    const started = {
+      provider: 'p',
+      workspaceRef: 'w',
+      instance: 'i1',
+      environmentId: 'w',
+      sessionId: 's',
+      commandId: 'c',
+    }
+    await view.append('a', { actor: DISPATCHER, type: 'execution.started', payload: started })
+    expect((await view.buildFacts('a')).open?.instance).toBe('i1')
+    await view.append('a', {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: 'i1', workspaceRef: 'w', outcome: 'lost' },
+    })
+    expect((await view.buildFacts('a')).open).toBeNull()
   })
 })
