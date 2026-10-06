@@ -520,19 +520,24 @@ export class RepoViewStore implements BuildStore {
     let window = this.journalWindow
     if (window === undefined || sinceSeq < window.from) {
       const events = await this.backing.getRepoEvents(repo, sinceSeq)
-      window = { from: sinceSeq, events, last: Math.max(sinceSeq, events.at(-1)?.seq ?? 0) }
-      this.journalWindow = window
+      const created: JournalWindow = {
+        from: sinceSeq,
+        events,
+        last: Math.max(sinceSeq, events.at(-1)?.seq ?? 0),
+      }
+      window = created
+      this.journalWindow = created
       // Anything newer than the cursor feeds the bounded subset too.
       this.foldJournal(events)
       // An own append that completed while the read was in flight advanced the
       // cursor but could not reach a window that did not exist yet: read what
       // the window is missing from its own tail.
-      while (window.last < this.journalCursor) {
-        const tail = await this.backing.getRepoEvents(repo, window.last)
-        const fresh = tail.filter((event) => event.seq > window.last)
+      while (created.last < this.journalCursor) {
+        const tail = await this.backing.getRepoEvents(repo, created.last)
+        const fresh = tail.filter((event) => event.seq > created.last)
         if (fresh.length === 0) break
-        window.events.push(...fresh)
-        window.last = fresh[fresh.length - 1]!.seq
+        created.events.push(...fresh)
+        created.last = fresh[fresh.length - 1]!.seq
         this.foldJournal(fresh)
       }
     }
