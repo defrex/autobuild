@@ -122,6 +122,15 @@ export interface TicketUpdate {
   labels?: string[]
 }
 
+/** One workflow state of a source that can enumerate them. */
+export interface TicketStateInfo {
+  name: string
+  /** Tickets currently in the state. */
+  tickets: number
+  /** One-line purpose recorded when the state was created, if any. */
+  about?: string
+}
+
 export interface TicketSource {
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
@@ -154,6 +163,22 @@ export interface TicketSource {
    * are initiation, so §13's "never consulted mid-build" is untouched.
    */
   dependencyStates(ids: string[]): Promise<DependencyState[]>
+  /**
+   * Optional state discovery (`ab ticket states`): every state the source has,
+   * lifecycle states first in workflow order, then the rest alphabetically.
+   * Sources that cannot enumerate their states omit it.
+   */
+  listStates?(): Promise<TicketStateInfo[]>
+  /**
+   * Optional state creation (`ab ticket state create`). Idempotent: an existing
+   * state is reported with `created: false`, and a supplied `about` replaces its
+   * purpose. Rejects a malformed or case-colliding name without creating anything.
+   * Named `addState` because adapters already hold a `createState` option field.
+   */
+  addState?(
+    name: string,
+    opts?: { about?: string },
+  ): Promise<{ state: TicketStateInfo; created: boolean }>
 }
 
 // ── Workspace (SPEC §3.2, §7) ────────────────────────────────────────────────

@@ -473,6 +473,8 @@ describe('ab-guide — source-agnostic ticket operations', () => {
       '`ab ticket list [--state <state>] [--labels a,b] [--json]`',
       '`ab ticket show <id> [--json]`',
       '`ab ticket move <id> <state> [--json]`',
+      '`ab ticket states [--json]`',
+      '`ab ticket state create <name> [--about <text>] [--json]`',
     ]) {
       expect(guide).toContain(form)
     }

@@ -887,3 +887,137 @@ describe('FileTicketSource', () => {
     )
   })
 })
+
+describe('state discovery and creation', () => {
+  test('listStates puts the lifecycle four first, then custom states alphabetically, with counts', async () => {
+    await mkdir(join(dir, 'zeta'), { recursive: true })
+    await mkdir(join(dir, 'icebox'), { recursive: true })
+    await mkdir(join(dir, '.hidden'), { recursive: true })
+    await writeFile(join(dir, 'stray.txt'), 'x')
+    await seedTicket('file-1', { state: 'ready' })
+    await seedTicket('file-2', { state: 'icebox' })
+    await seedTicket('file-3', { state: 'icebox' })
+    expect(await source().listStates()).toEqual([
+      { name: 'triage', tickets: 0 },
+      { name: 'ready', tickets: 1 },
+      { name: 'doing', tickets: 0 },
+      { name: 'done', tickets: 0 },
+      { name: 'icebox', tickets: 2 },
+      { name: 'zeta', tickets: 0 },
+    ])
+  })
+
+  test('addState creates a state that accepts transitions and creates', async () => {
+    const tickets = source()
+    const result = await tickets.addState('icebox')
+    expect(result).toEqual({ state: { name: 'icebox', tickets: 0 }, created: true })
+    const ticket = await tickets.create({ title: 'Later', body: 'b' }, { state: 'icebox' })
+    expect(ticket.state).toBe('icebox')
+    await tickets.transition(ticket.ref.id, 'triage')
+    await tickets.transition(ticket.ref.id, 'icebox')
+    expect((await tickets.listStates()).find((s) => s.name === 'icebox')?.tickets).toBe(1)
+  })
+
+  test('purpose round-trips, is replaced by a new --about, and survives a bare re-create', async () => {
+    const tickets = source()
+    await tickets.addState('icebox', { about: 'Worth doing, not now' })
+    expect((await tickets.listStates()).find((s) => s.name === 'icebox')?.about).toBe(
+      'Worth doing, not now',
+    )
+    const same = await tickets.addState('icebox')
+    expect(same).toEqual({
+      state: { name: 'icebox', tickets: 0, about: 'Worth doing, not now' },
+      created: false,
+    })
+    const updated = await tickets.addState('icebox', { about: 'Parked' })
+    expect(updated.created).toBe(false)
+    expect(updated.state.about).toBe('Parked')
+    expect(await readFile(join(dir, 'icebox', '.about'), 'utf8')).toBe('Parked\n')
+  })
+
+  test('lifecycle states already exist and may carry a purpose', async () => {
+    const tickets = source()
+    expect((await tickets.addState('ready')).created).toBe(false)
+    const withAbout = await tickets.addState('done', { about: 'Merged work' })
+    expect(withAbout.created).toBe(false)
+    expect(withAbout.state.about).toBe('Merged work')
+  })
+
+  test.each([
+    '',
+    'a'.repeat(41),
+    '1icebox',
+    '-icebox',
+    'Icebox2',
+    'ice_box',
+    'ice box',
+    '../escape',
+    'a/b',
+  ])('rejects the invalid name %p and creates nothing', async (name) => {
+    const tickets = source()
+    await expect(tickets.addState(name)).rejects.toThrow(
+      'one to forty characters of lowercase letters, digits, and hyphens, starting with a letter',
+    )
+    expect((await tickets.listStates()).map((s) => s.name)).toEqual([
+      'triage',
+      'ready',
+      'doing',
+      'done',
+    ])
+  })
+
+  test('accepts a forty-character name', async () => {
+    const name = `a${'b'.repeat(39)}`
+    expect((await source().addState(name)).created).toBe(true)
+  })
+
+  test('rejects a name that matches an existing state under a different spelling', async () => {
+    await mkdir(join(dir, 'Icebox'), { recursive: true })
+    await expect(source().addState('icebox')).rejects.toThrow(
+      /collides with the existing state "Icebox"/,
+    )
+    await expect(source().addState('READY')).rejects.toThrow(/invalid state name/)
+    expect((await readdir(dir)).sort()).toEqual(['Icebox'])
+  })
+
+  test('rejects a blank or multiline purpose', async () => {
+    await expect(source().addState('icebox', { about: '  ' })).rejects.toThrow(/one nonblank line/)
+    await expect(source().addState('icebox', { about: 'a\nb' })).rejects.toThrow(
+      /one nonblank line/,
+    )
+    expect(await readdir(dir)).toEqual([])
+  })
+
+  test('purposes are never tickets: scans, listings, and dependencies are unchanged', async () => {
+    const tickets = source()
+    await seedTicket('file-1', { state: 'ready' })
+    await tickets.addState('icebox', { about: 'Parked' })
+    await tickets.addState('ready', { about: 'Dispatchable' })
+    await writeFile(join(dir, '.about'), 'root\n')
+    const listing = await tickets.listReady({})
+    expect(listing.tickets.map((t) => t.ref.id)).toEqual(['file-1'])
+    expect(listing.diagnostics).toEqual([])
+    expect(await tickets.get('.about')).toBeNull()
+    expect(await tickets.dependencyStates(['file-1'])).toHaveLength(1)
+  })
+
+  test('a tracker holding only purposes has zero tickets', async () => {
+    const tickets = source()
+    await tickets.addState('icebox', { about: 'Parked' })
+    expect((await tickets.listReady({})).tickets).toEqual([])
+  })
+
+  test('listing states works with a malformed ticket present and through a symlinked state', async () => {
+    await seedTicket('file-1', { state: 'ready' })
+    await writeFile(join(dir, 'ready', 'file-1.md'), 'not a ticket')
+    const target = await mkdtemp(join(tmpdir(), 'ab-state-target-'))
+    try {
+      await symlink(target, join(dir, 'linked'))
+      const states = await source().listStates()
+      expect(states.find((s) => s.name === 'ready')?.tickets).toBe(1)
+      expect(states.map((s) => s.name)).toContain('linked')
+    } finally {
+      await rm(target, { recursive: true, force: true })
+    }
+  })
+})
