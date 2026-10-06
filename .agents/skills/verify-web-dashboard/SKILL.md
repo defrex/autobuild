@@ -30,17 +30,23 @@ inspect the diff and not to decide applicability again.
    and no server, network, forge, or live agent runner. It deposits nothing
    itself. Its deterministic evidence checks fail the command when a frame
    omits required text; that is a failing verdict, not a retry.
-4. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
+4. Run `bun tools/capture-parity.ts`. It captures the terminal and web frames
+   at the merge base and on this branch and byte-compares every PNG. A nonzero
+   exit (a differing, missing, or extra frame, or a failed capture) is a failing
+   verdict unless the build's spec expects the frames to change; when it does,
+   name each expected difference in the report. When the spec says the frames
+   must be unchanged, a differing frame is never a pass.
+5. Open **every** `.ab/web-dashboard-frames/*.png` with the image-capable file
    tool, both viewports. Judge the images themselves. The `.html` files are
    human evidence and may help identify a frame, but they are not a basis for
    your verdict. Confirm the signed-in control line has no surface tab words,
    while the multi-repository frame retains its repository selector.
-5. Append criterion-by-criterion visual observations to the generated report,
+6. Append criterion-by-criterion visual observations to the generated report,
    ticking or failing each checklist item. In its **Web dashboard visual
    verdict** section, record pass or fail explicitly. On a guidance-assisted
    retry, also record how the answered escalation affected the capture, the
    interpretation of the evidence, or the verdict.
-6. If and only if every visual criterion passes, designate the reviewed frames
+7. If and only if every visual criterion passes, designate the reviewed frames
    as ordinary PR attachments, then issue the passing verdict:
 
    ```

@@ -5,9 +5,11 @@ import {
   describeBuildStoreContract,
   sampleBuildInput,
   systemClock,
+  type BuildStore,
 } from '@defrex/autobuild/plugin-sdk'
+import { getOperatorDashboard } from '@defrex/autobuild/operator'
 import { AuthError, RemoteBuildStore, mintToken } from '@defrex/autobuild/remote-store'
-import { humanActor, type Via } from '@defrex/autobuild/testing'
+import { DISPATCHER, KERNEL, humanActor, parseConfig, type Via } from '@defrex/autobuild/testing'
 import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
 import { openPostgresBuildStore } from '@defrex/autobuild-postgres-store/store'
 import { createHostedStoreService } from './service'
@@ -179,6 +181,108 @@ if (!testUrl) {
       } finally {
         await admin.close()
         await server.stop(true)
+        await backing.close()
+        await database.cleanup()
+      }
+    })
+  })
+  describe('operator dashboard over hosted PostgreSQL snapshots', () => {
+    test('polls through reducer snapshots, reading no rows at idle and matching a full replay', async () => {
+      const database = await isolatedDatabase()
+      const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), {
+        clock: systemClock,
+      })
+      const repo = 'acme/live'
+      const config = parseConfig(`
+capacity = 2
+[tickets]
+source = "file"
+readyState = "ready"
+[verify]
+steps = []
+[finalize]
+steps = []
+`)
+      try {
+        await backing.ensureRepo(repo)
+        const artifact = await backing.putRepoArtifact(repo, {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            ...config,
+            verify: { steps: [] },
+            finalize: { steps: [] },
+          }),
+        })
+        await backing.appendRepo(repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: 'live_1',
+            pid: 1,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: [],
+          },
+        })
+        for (const slug of ['live-running', 'live-aborted']) {
+          await backing.createBuild({ slug, repo })
+          await backing.append(slug, {
+            actor: KERNEL,
+            type: 'runner.attached',
+            payload: { instance: `${slug}-i`, host: 'host' },
+          })
+          await backing.append(slug, { actor: KERNEL, type: 'plan.started', payload: { round: 1 } })
+        }
+        await backing.append('live-aborted', { actor: KERNEL, type: 'build.aborted', payload: {} })
+
+        let rows = 0
+        const counted = new Proxy(backing as unknown as Record<string, unknown>, {
+          get(target, prop) {
+            const value = Reflect.get(target, prop, target)
+            if (typeof value !== 'function') return value
+            const fn = value as (...args: unknown[]) => Promise<unknown>
+            if (prop === 'getEvents' || prop === 'getRepoEvents' || prop === 'getRepoStateEvents') {
+              return async (...args: unknown[]) => {
+                const events = (await fn.apply(target, args)) as unknown[]
+                rows += events.length
+                return events
+              }
+            }
+            return fn.bind(target)
+          },
+        }) as unknown as BuildStore
+        const withoutSnapshots = new Proxy(backing as unknown as Record<string, unknown>, {
+          get(target, prop) {
+            if (prop === 'getReducerSnapshot') return async () => null
+            if (prop === 'putReducerSnapshot') return async () => false
+            const value = Reflect.get(target, prop, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        }) as unknown as BuildStore
+        const clock = () => new Date('2026-10-06T12:00:00.000Z')
+
+        const first = await getOperatorDashboard({ store: counted, repo, clock })
+        expect(first.model.builds.map((row) => row.slug).sort()).toEqual([
+          'live-aborted',
+          'live-running',
+        ])
+        // The second poll restores from the snapshots the first one left: no
+        // event rows, same response.
+        rows = 0
+        const second = await getOperatorDashboard({ store: counted, repo, clock })
+        expect(rows).toBe(0)
+        expect(second).toEqual(first)
+        // New events cost exactly their own rows, and the answer still equals
+        // the one a replay with every snapshot deleted gives.
+        await backing.append('live-running', {
+          actor: KERNEL,
+          type: 'observation.recorded',
+          payload: { id: 'o1', kind: 'followup', summary: 'noted' },
+        })
+        rows = 0
+        const third = await getOperatorDashboard({ store: counted, repo, clock })
+        expect(rows).toBe(1)
+        expect(third).toEqual(await getOperatorDashboard({ store: withoutSnapshots, repo, clock }))
+      } finally {
         await backing.close()
         await database.cleanup()
       }
