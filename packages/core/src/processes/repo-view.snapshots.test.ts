@@ -10,6 +10,7 @@ import type { AbEvent, EventWrite } from '../events/catalog'
 import type { RepositoryEventWrite } from '../events/repository'
 import { randomBuildLog } from '../kernel/generators/build-log'
 import { seededRandom } from '../kernel/incremental-contract'
+import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { buildReducer } from '../kernel/reducer'
 import { MemoryBuildStore } from '../store/memory'
 import type { ReducerSnapshot, SnapshotScope } from '../store/snapshots'
@@ -309,6 +310,28 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     // And the accumulators still agree with the retained history.
     const facts = await view.buildFacts('b')
     expect(facts.state).toEqual(buildReducer.reduce(await store.getEvents('b')))
+  })
+})
+
+describe('a journal snapshot whose retained payload is invalid', () => {
+  test.each([
+    ['missing', undefined],
+    ['of the wrong shape', { enabled: 'yes' }],
+  ])('a payload %s replays, and the settings reduction still runs', async (_name, payload) => {
+    const store = new CountingStore()
+    await store.ensureRepo(REPO)
+    const written = await store.appendRepo(REPO, intake(false))
+    const { payload: _dropped, ...rest } = written
+    expect(
+      await store.putReducerSnapshot({ kind: 'repo', repo: REPO }, 'journalView', {
+        version: 1,
+        cursor: 1,
+        state: { retained: [{ ...rest, ...(payload === undefined ? {} : { payload }) }] },
+      }),
+    ).toBe(true)
+    const view = fresh(store)
+    await view.startJournal()
+    expect(reduceDispatchSettings(view.recordedJournal()).intake).toBe(false)
   })
 })
 

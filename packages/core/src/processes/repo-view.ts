@@ -53,6 +53,7 @@
  * cursors only ever move forward in the store).
  */
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
+import { validateRepositoryEventWrite } from '../events/repository'
 import type { EventType } from '../events/payloads'
 import type {
   RepositoryEvent,
@@ -234,6 +235,17 @@ function retainedShape(retained: unknown[], cursor: number): boolean {
     if (typeof event.repo !== 'string' || !isObject(event.actor)) return false
     if (!Number.isInteger(event.seq) || (event.seq as number) <= last) return false
     last = event.seq as number
+    // The payload must satisfy the repository event contract for its type, so a
+    // reducer never meets an entry a full replay would not have produced.
+    try {
+      validateRepositoryEventWrite({
+        actor: event.actor,
+        type: event.type,
+        payload: event.payload,
+      } as never)
+    } catch {
+      return false
+    }
   }
   return last <= cursor
 }
