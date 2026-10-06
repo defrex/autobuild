@@ -934,4 +934,44 @@ describe('orchestrator wake pass under the repository view (AUT-647)', () => {
     const state = reduceSession(await store.getSessionEvents(sessionId))
     expect(state.wakeCursors).toEqual({ old: 6, live: 3 })
   })
+
+  test('a budget break does not trim windows a later session still needs', async () => {
+    const clock = manualClock()
+    const store = new RowCountingStore({ clock })
+    const view = new RepoViewStore(store, { repo: REPO, resident: true })
+    await seedSession(store, clock, { wake: ['escalation.raised'] })
+    await seedSession(store, clock, { wake: ['never.matches'] })
+    await seedBuild(store, 'old')
+    await store.append('old', escalation)
+    await store.append('old', { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    await store.append('old', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    const tick = async (remainingBudgetSeconds?: number) => {
+      await view.refresh()
+      return runOrchestratorTickStep({
+        ...tickOptions(store, clock, textModel(), tickConfig(['escalation.raised'])),
+        store: view,
+        view,
+        ...(remainingBudgetSeconds !== undefined ? { remainingBudgetSeconds } : {}),
+      })
+    }
+    // The first session consumes the history match (cursor 2); the second
+    // session's cursor stays at 0.
+    expect((await tick()).woken).toBe(1)
+    // A new match for the first session arrives, but the budget only fits the
+    // scan: the pass breaks before visiting the second session.
+    await store.append('old', escalation)
+    store.drain()
+    expect((await tick(50)).woken).toBe(0)
+    store.drain()
+    // The second session's window must still be resident: no replay.
+    await view.refresh()
+    store.drain()
+    const replayed = await view.getEvents('old', 0)
+    expect(store.drain()).toBe(0)
+    expect(replayed).toHaveLength(5)
+  })
 })

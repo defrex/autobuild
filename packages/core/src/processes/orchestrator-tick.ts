@@ -138,6 +138,9 @@ export async function runOrchestratorTickStep(
   const sessions = await store.listSessions(repo)
 
   // ── Resume pass ─────────────────────────────────────────────────────────
+  // The lowest cursors only cover sessions visited; a budget break leaves later
+  // sessions (possibly with lower cursors) uncounted, so it skips the trim.
+  let visitedAll = true
   for (const record of sessions) {
     const events = await store.getSessionEvents(record.id)
     const state = reduceSession(events)
@@ -286,7 +289,10 @@ export async function runOrchestratorTickStep(
     // by the step's shared deadline; past the floor the wake defers to a
     // later tick.
     const remaining = remainingNow() - ORCHESTRATOR_MIN_TURN_SECONDS
-    if (remaining < ORCHESTRATOR_MIN_TURN_SECONDS) break
+    if (remaining < ORCHESTRATOR_MIN_TURN_SECONDS) {
+      visitedAll = false
+      break
+    }
 
     // A journal wake delivers the frozen event record only — the turn's
     // operator registry already exposes bounded repository reads, so no
@@ -327,7 +333,7 @@ export async function runOrchestratorTickStep(
     }
   }
 
-  if (options.view !== undefined && scanners > 0) {
+  if (options.view !== undefined && scanners > 0 && visitedAll) {
     for (const [slug, cursor] of lowestBuildCursor) {
       if (cursor > 0) options.view.releaseWindowsBelow({ build: slug }, cursor)
     }
