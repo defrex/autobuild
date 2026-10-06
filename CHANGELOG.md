@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#592](https://github.com/defrex/autobuild/pull/592) — Cache reducer state snapshots in the build store so cold starts skip full log replay
 - Store reducer snapshots, a cache the event log regenerates, and restore the dispatcher's view from them so a quiet tick reads no event rows
 - [#591](https://github.com/defrex/autobuild/pull/591) — Build the dispatcher's repository view once and refresh it by cursor each tick
 - [#590](https://github.com/defrex/autobuild/pull/590) — Make every event-array reducer incremental
