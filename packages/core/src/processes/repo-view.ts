@@ -507,9 +507,10 @@ export class RepoViewStore implements BuildStore {
 
   async getEvents(
     slug: string,
-    sinceSeq = 0,
+    cursor?: number,
     opts?: { waitSeconds?: number; signal?: AbortSignal },
   ): Promise<AbEvent[]> {
+    const sinceSeq = cursor ?? 0
     if (opts?.waitSeconds !== undefined || opts?.signal !== undefined) {
       return this.backing.getEvents(slug, sinceSeq, opts)
     }
@@ -517,7 +518,9 @@ export class RepoViewStore implements BuildStore {
       let log = this.logs.get(slug)
       if (log === undefined || sinceSeq < log.from) {
         log = await this.openWindow(slug, sinceSeq)
-      } else if (sinceSeq > 0) {
+      } else if (cursor !== undefined) {
+        // An explicit cursor, zero included, marks a cursor-bearing consumer
+        // (the wake pass); an omitted one is a plain read.
         log.pinned = true
       }
       await this.ensureCurrent(slug, log)

@@ -405,6 +405,23 @@ describe('RepoViewStore read windows', () => {
     expect(state).toEqual(reduceBuild(await store.getEvents('old')))
   })
 
+  test('an explicit zero cursor survives a live build settling elsewhere without a replay', async () => {
+    const store = new CountingStore()
+    const view = new RepoViewStore(store, { repo: REPO, resident: true })
+    await store.ensureRepo(REPO)
+    await newBuild(store, 'a')
+    await touch(store, 'a')
+    await view.refresh()
+    expect(await view.getEvents('a', 0)).toHaveLength(2)
+    await complete(store, 'a')
+    store.reset()
+    await view.refresh()
+    expect(store.rows.events).toBe(1)
+    // A nonmatching wake scanner re-reads from its cursor: still no replay.
+    expect((await view.getEvents('a', 0)).map((event) => event.seq)).toEqual([1, 2, 3])
+    expect(store.rows.events).toBe(1)
+  })
+
   test('one-shot: the window reads from its cursor exactly as a direct read would', async () => {
     const { store, view } = await settledWithHistory(false)
     store.reset()
