@@ -20,6 +20,7 @@ import type {
 } from '../ports/types'
 import { runCli } from './main'
 import {
+  abTicket,
   abTicketBlock,
   abTicketCreate,
   abTicketList,
@@ -28,6 +29,7 @@ import {
   abTicketUnblock,
   abTicketUpdate,
   openTicketSource,
+  stateRoles,
 } from './ticket'
 
 let tmp: string
@@ -1394,3 +1396,120 @@ describe('runCli — ticket routing', () => {
     }
   })
 })
+
+describe('ab ticket states / state create', () => {
+  const tickets = (over: Partial<TicketsConfig> = {}): TicketsConfig =>
+    ({ source: 'file', readyState: 'ready', labels: [], ...over }) as TicketsConfig
+
+  test('stateRoles uses the defaults, case-insensitive matching, and fixed doing for claimed', () => {
+    const names = ['triage', 'ready', 'doing', 'done', 'icebox']
+    expect([...stateRoles(tickets(), names)]).toEqual([
+      ['triage', ['create', 'triage', 'proposal']],
+      ['ready', ['ready']],
+      ['doing', ['claimed']],
+      ['done', ['done']],
+      ['icebox', []],
+    ])
+    const custom = stateRoles(
+      tickets({
+        readyState: 'Icebox',
+        createState: 'Ready',
+        triageState: 'icebox',
+        proposalState: 'Triage',
+      }),
+      names,
+    )
+    expect(custom.get('icebox')).toEqual(['ready', 'triage'])
+    expect(custom.get('ready')).toEqual(['create'])
+    expect(custom.get('triage')).toEqual(['proposal'])
+  })
+
+  test('states prints the table, and --json is exactly one bare array', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    await abTicket(['state', 'create', 'icebox', '--about', 'Worth doing, not now'], cliOpts(tmp))
+    const human: string[] = []
+    await abTicket(['states'], cliOpts(tmp, human))
+    expect(human).toEqual([
+      'triage  create,triage,proposal  0 tickets',
+      'ready   ready                   0 tickets',
+      'doing   claimed                 0 tickets',
+      'done    done                    0 tickets',
+      'icebox  none                    0 tickets  Worth doing, not now',
+    ])
+    const json: string[] = []
+    await abTicket(['states', '--json'], cliOpts(tmp, json))
+    expect(JSON.parse(json.join('\n'))).toEqual([
+      { name: 'triage', roles: ['create', 'triage', 'proposal'], tickets: 0 },
+      { name: 'ready', roles: ['ready'], tickets: 0 },
+      { name: 'doing', roles: ['claimed'], tickets: 0 },
+      { name: 'done', roles: ['done'], tickets: 0 },
+      { name: 'icebox', roles: [], tickets: 0, about: 'Worth doing, not now' },
+    ])
+    expect(json).toHaveLength(1)
+  })
+
+  test('state create is idempotent, reports purpose updates, and feeds ticket move', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bodyFile = join(tmp, 'spec.md')
+    await writeFile(bodyFile, 'body\n')
+    await abTicketCreate({ targetRepo: tmp, title: 'Later', bodyFile, env: {}, stdout: () => {} })
+    const out: string[] = []
+    await abTicket(['state', 'create', 'icebox'], cliOpts(tmp, out))
+    await abTicket(['state', 'create', 'icebox'], cliOpts(tmp, out))
+    await abTicket(['state', 'create', 'icebox', '--about', 'Parked'], cliOpts(tmp, out))
+    await abTicket(['state', 'create', 'ready'], cliOpts(tmp, out))
+    expect(out).toEqual([
+      'ticket state created: icebox',
+      'ticket state already exists: icebox',
+      'ticket state already exists: icebox (purpose updated)',
+      'ticket state already exists: ready',
+    ])
+    const json: string[] = []
+    await abTicket(['state', 'create', 'icebox', '--json'], cliOpts(tmp, json))
+    expect(JSON.parse(json.join('\n'))).toEqual({
+      name: 'icebox',
+      roles: [],
+      tickets: 0,
+      about: 'Parked',
+      created: false,
+    })
+    const moved: string[] = []
+    await abTicket(['move', 'file-1', 'icebox'], cliOpts(tmp, moved))
+    expect(moved[0]).toContain('(icebox)')
+  })
+
+  test('invalid names and usage errors create nothing', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    await expect(abTicket(['state', 'create', 'Ice Box'], cliOpts(tmp))).rejects.toThrow(
+      'lowercase letters, digits, and hyphens',
+    )
+    expect(existsSync(join(tmp, 'tickets', 'Ice Box'))).toBe(false)
+    for (const argv of [
+      ['state', 'create'],
+      ['state', 'create', 'a', 'b'],
+      ['state', 'create', 'a', '--about', ' '],
+      ['state', 'delete', 'a'],
+      ['state'],
+      ['states', 'extra'],
+    ]) {
+      await expect(abTicket(argv, cliOpts(tmp))).rejects.toThrow('usage: ab ticket')
+    }
+  })
+
+  test('a source without the optional methods fails naming the source and operation', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const bare = (): TicketSource =>
+      Object.defineProperty(Object.create(new FakeTicketSource()), 'name', { value: 'linear' })
+    const factoryOpts = { ...cliOpts(tmp), sourceFactory: bare }
+    await expect(abTicket(['states'], factoryOpts)).rejects.toThrow(
+      'ticket source "linear" does not support state discovery (ab ticket states)',
+    )
+    await expect(abTicket(['state', 'create', 'icebox'], factoryOpts)).rejects.toThrow(
+      'ticket source "linear" does not support state creation (ab ticket state create)',
+    )
+  })
+})
+
+function cliOpts(targetRepo: string, out: string[] = []) {
+  return { targetRepo, env: {}, stdout: (line: string) => out.push(line), stderr: () => {} }
+}

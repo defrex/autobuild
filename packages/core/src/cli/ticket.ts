@@ -19,7 +19,7 @@ import {
   ticketListCriteria,
   updateTicket,
 } from '../ports/tickets/operations'
-import type { Ticket, TicketSource, TicketUpdate } from '../ports/types'
+import type { Ticket, TicketSource, TicketStateInfo, TicketUpdate } from '../ports/types'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildStore } from '../store/types'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
@@ -140,7 +140,20 @@ export interface TicketMoveOpts extends TicketCommandOpts {
   json?: boolean
 }
 
+export interface TicketStatesOpts extends TicketCommandOpts {
+  json?: boolean
+}
+
+export interface TicketStateCreateOpts extends TicketCommandOpts {
+  name: string
+  /** One-line purpose; absent leaves an existing purpose untouched. */
+  about?: string
+  json?: boolean
+}
+
 type TicketCommandName =
+  | 'states'
+  | 'state create'
   | 'create'
   | 'update'
   | 'block'
@@ -525,6 +538,108 @@ export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
   opts.stdout(`ticket moved: ${ticketSummary(moved)}`)
 }
 
+export type TicketStateRole = 'create' | 'ready' | 'claimed' | 'triage' | 'proposal' | 'done'
+
+export interface TicketStateRow extends TicketStateInfo {
+  roles: TicketStateRole[]
+}
+
+/**
+ * The lifecycle roles each state plays under `config`, for a source whose
+ * states are directories (names match case-insensitively, as `ab ticket move`
+ * does). The file adapter always claims into `doing`, so that is shown as
+ * claimed whatever `[tickets].claimedState` says. Roles naming no existing
+ * state are omitted.
+ */
+export function stateRoles(
+  tickets: TicketsConfig,
+  names: string[],
+): Map<string, TicketStateRole[]> {
+  const triage = tickets.triageState ?? 'triage'
+  const named: Array<[TicketStateRole, string]> = [
+    ['create', tickets.createState ?? 'triage'],
+    ['ready', tickets.readyState],
+    ['claimed', 'doing'],
+    ['triage', triage],
+    ['proposal', tickets.proposalState ?? triage],
+    ['done', 'done'],
+  ]
+  const roles = new Map<string, TicketStateRole[]>(names.map((name) => [name, []]))
+  for (const [role, target] of named) {
+    const match =
+      names.find((name) => name === target) ??
+      names.find((name) => name.toLowerCase() === target.toLowerCase())
+    if (match !== undefined) roles.get(match)?.push(role)
+  }
+  return roles
+}
+
+function stateRow(info: TicketStateInfo, roles: Map<string, TicketStateRole[]>): TicketStateRow {
+  return {
+    name: info.name,
+    roles: roles.get(info.name) ?? [],
+    tickets: info.tickets,
+    ...(info.about !== undefined ? { about: info.about } : {}),
+  }
+}
+
+function unsupported(source: TicketSource, operation: string): Error {
+  return new Error(`ticket source "${source.name}" does not support ${operation}`)
+}
+
+/** `ab ticket states` — every state of the source, its roles, counts, purpose. */
+export async function abTicketStates(opts: TicketStatesOpts): Promise<void> {
+  const { config, source } = await resolveTicketCommand(opts, 'states')
+  if (typeof source.listStates !== 'function') {
+    throw unsupported(source, 'state discovery (ab ticket states)')
+  }
+  const infos = await source.listStates()
+  const roles = stateRoles(
+    config.tickets,
+    infos.map((info) => info.name),
+  )
+  const rows = infos.map((info) => stateRow(info, roles))
+  if (opts.json === true) {
+    opts.stdout(JSON.stringify(rows, null, 2))
+    return
+  }
+  const nameWidth = Math.max(...rows.map((row) => row.name.length))
+  const roleText = rows.map((row) => (row.roles.length > 0 ? row.roles.join(',') : 'none'))
+  const roleWidth = Math.max(...roleText.map((text) => text.length))
+  rows.forEach((row, index) => {
+    const count = `${row.tickets} ${row.tickets === 1 ? 'ticket' : 'tickets'}`
+    const line = `${row.name.padEnd(nameWidth)}  ${(roleText[index] as string).padEnd(roleWidth)}  ${count}`
+    opts.stdout(row.about === undefined ? line : `${line}  ${row.about}`)
+  })
+}
+
+/** `ab ticket state create <name> [--about <text>]` — idempotent. */
+export async function abTicketStateCreate(opts: TicketStateCreateOpts): Promise<void> {
+  const { config, source } = await resolveTicketCommand(opts, 'state create')
+  if (typeof source.addState !== 'function') {
+    throw unsupported(source, 'state creation (ab ticket state create)')
+  }
+  const aboutBefore =
+    opts.about === undefined
+      ? undefined
+      : (await source.listStates?.())?.find((info) => info.name === opts.name)?.about
+  const { state, created } = await source.addState(opts.name, {
+    ...(opts.about !== undefined ? { about: opts.about } : {}),
+  })
+  const names = (await source.listStates?.())?.map((info) => info.name) ?? [state.name]
+  const row = stateRow(state, stateRoles(config.tickets, names))
+  if (opts.json === true) {
+    opts.stdout(JSON.stringify({ ...row, created }, null, 2))
+    return
+  }
+  const purposeChanged = !created && opts.about !== undefined && state.about !== aboutBefore
+  opts.stdout(
+    created
+      ? `ticket state created: ${state.name}`
+      : `ticket state already exists: ${state.name}${purposeChanged ? ' (purpose updated)' : ''}`,
+  )
+}
+
 const CREATE_USAGE =
   'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json] (§8.8)'
 const UPDATE_USAGE =
@@ -540,6 +655,8 @@ const ASSET_GET_USAGE =
 const ASSET_RM_USAGE =
   'usage: ab ticket asset rm <id> <kind> <name> [--store <ref>] [--json] (§8.8)'
 const MOVE_USAGE = 'usage: ab ticket move <id> <state> [--json] (§8.8)'
+const STATES_USAGE = 'usage: ab ticket states [--json] (§8.8)'
+const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>] [--json] (§8.8)'
 export const TICKET_USAGE = [
   CREATE_USAGE,
   UPDATE_USAGE,
@@ -548,6 +665,8 @@ export const TICKET_USAGE = [
   LIST_USAGE,
   SHOW_USAGE,
   MOVE_USAGE,
+  STATES_USAGE,
+  STATE_CREATE_USAGE,
   ATTACH_USAGE,
   ASSET_GET_USAGE,
   ASSET_RM_USAGE,
@@ -755,6 +874,32 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         return
       }
       throw new Error(TICKET_USAGE)
+    }
+
+    case 'states': {
+      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      if (parsed.positionals.length !== 0) throw new Error(STATES_USAGE)
+      await abTicketStates({ ...opts, json: parsed.flags.has('json') })
+      return
+    }
+
+    case 'state': {
+      const [action, ...stateArgs] = args
+      if (action !== 'create') throw new Error(STATE_CREATE_USAGE)
+      const parsed = parseArgs(stateArgs, { about: 'value', json: 'boolean' }, TICKET_USAGE)
+      const [name, ...extra] = parsed.positionals
+      if (name === undefined || name.trim() === '' || extra.length > 0) {
+        throw new Error(STATE_CREATE_USAGE)
+      }
+      const about = stringFlag(parsed, 'about')
+      if (about !== undefined && about.trim() === '') throw new Error(STATE_CREATE_USAGE)
+      await abTicketStateCreate({
+        ...opts,
+        name,
+        ...(about !== undefined ? { about } : {}),
+        json: parsed.flags.has('json'),
+      })
+      return
     }
 
     case 'move': {
