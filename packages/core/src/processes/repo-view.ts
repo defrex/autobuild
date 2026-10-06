@@ -555,11 +555,18 @@ export class RepoViewStore implements BuildStore {
     else log.dirty = true
   }
 
-  private foldJournalAppend(envelope: RepositoryEvent): void {
+  /** Fold an own journal append. A seq gap means a foreign append interleaved:
+   * repair it now, because stages snapshot the journal synchronously through
+   * `recordedJournal()` and must see our own write. */
+  private async foldJournalAppend(envelope: RepositoryEvent): Promise<void> {
     this.recorded = true
     if (envelope.seq <= this.journalCursor) return
-    if (envelope.seq === this.journalCursor + 1) this.foldJournal([envelope])
-    else this.journalDirty = true
+    if (envelope.seq === this.journalCursor + 1) {
+      this.foldJournal([envelope])
+      return
+    }
+    this.journalDirty = true
+    await this.syncJournal()
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
@@ -608,7 +615,7 @@ export class RepoViewStore implements BuildStore {
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T>> {
     const envelope = await this.backing.appendRepo(repo, event)
-    if (repo === this.repo) this.foldJournalAppend(envelope as unknown as RepositoryEvent)
+    if (repo === this.repo) await this.foldJournalAppend(envelope as unknown as RepositoryEvent)
     return envelope
   }
 
@@ -618,7 +625,7 @@ export class RepoViewStore implements BuildStore {
     makeEvent: (deposited: RepositoryArtifactMeta[]) => RepositoryEventWrite<T>,
   ): Promise<{ event: RepositoryEventEnvelope<T>; artifacts: RepositoryArtifactMeta[] }> {
     const result = await this.backing.appendRepoWithArtifacts(repo, artifacts, makeEvent)
-    if (repo === this.repo) this.foldJournalAppend(result.event as unknown as RepositoryEvent)
+    if (repo === this.repo) await this.foldJournalAppend(result.event as unknown as RepositoryEvent)
     return result
   }
 

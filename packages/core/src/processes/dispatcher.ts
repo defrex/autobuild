@@ -1031,6 +1031,10 @@ export class Dispatcher {
     const active = this.deps.activeHarvestExecutions?.() ?? new Set<string>()
     let events: RepositoryEvent[]
     try {
+      // The earlier stages awaited providers; take the journal delta so a
+      // foreign append (operator activity, harvest facts) made meanwhile is
+      // seen before any destructive decision below.
+      await this.store.refreshJournal()
       events = this.store.recordedJournal()
     } catch {
       // The read itself failed (a transient store error — a missing record
@@ -1130,6 +1134,10 @@ export class Dispatcher {
     const providerName = this.deps.workspaces.name
     let events: RepositoryEvent[]
     try {
+      // The earlier stages awaited providers; take the journal delta so a
+      // foreign append (operator activity, harvest facts) made meanwhile is
+      // seen before any destructive decision below.
+      await this.store.refreshJournal()
       events = this.store.recordedJournal()
     } catch {
       // The read itself failed (a transient store error — a missing record

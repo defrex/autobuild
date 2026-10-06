@@ -5990,6 +5990,38 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     expect(report.sandboxSettleFailures).toBe(0)
   })
 
+  test('activity appended by another process mid-tick keeps the sandbox alive', async () => {
+    let hook: (() => Promise<void>) | undefined
+    class HookStore extends MemoryBuildStore {
+      override async getRepoBuildDigests(repo: string) {
+        const hooked = hook
+        hook = undefined
+        await hooked?.()
+        return super.getRepoBuildDigests(repo)
+      }
+    }
+    const storeClock = manualClock()
+    const store = new HookStore({ clock: storeClock })
+    const h = harness({
+      store,
+      toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n',
+    })
+    await seedLiveSandbox(h)
+    h.clock.advance(31 * 60 * 1000)
+    storeClock.advance(31 * 60 * 1000)
+    hook = async () => {
+      await store.appendRepo(REPO, {
+        actor: humanActor('ops'),
+        type: 'orchestrator.sandbox.activity',
+        payload: { operator: 'ops', environmentId: 'env-1' },
+      })
+    }
+    const report = await h.dispatcher.tick()
+    const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
+    expect(types).not.toContain('orchestrator.sandbox.stopped')
+    expect(report.sandboxIdleStops).toBe(0)
+  })
+
   test('a sandbox inside the threshold is left alone', async () => {
     const h = harness({ toml: '[orchestrator]\nenabled = true\nmodel = "test/mock"\n' })
     await seedLiveSandbox(h)

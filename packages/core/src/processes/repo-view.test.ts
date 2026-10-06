@@ -234,6 +234,15 @@ describe('RepoViewStore', () => {
     expect(journal.map((event) => event.seq)).toEqual([1, 2])
   })
 
+  test('an own journal append across a gap is reconciled for the synchronous snapshot', async () => {
+    const { store, view } = setup()
+    await store.ensureRepo(REPO)
+    await view.refresh()
+    await store.appendRepo(REPO, setting(false))
+    await view.appendRepo(REPO, setting(true))
+    expect(view.recordedJournal().map((event) => event.seq)).toEqual([1, 2])
+  })
+
   test('a failed appendIfCurrent refreshes so the retry sees the winner', async () => {
     const { store, view } = setup()
     await store.ensureRepo(REPO)
