@@ -224,6 +224,20 @@ interface JournalWindow {
   last: number
 }
 
+/** Every retained journal entry is an event envelope, in increasing seq order
+ * and no newer than the snapshot's cursor. */
+function retainedShape(retained: unknown[], cursor: number): boolean {
+  let last = 0
+  for (const event of retained) {
+    if (!isObject(event)) return false
+    if (typeof event.type !== 'string' || typeof event.ts !== 'string') return false
+    if (typeof event.repo !== 'string' || !isObject(event.actor)) return false
+    if (!Number.isInteger(event.seq) || (event.seq as number) <= last) return false
+    last = event.seq as number
+  }
+  return last <= cursor
+}
+
 function hasAccs(log: Log): boolean {
   return log.acc !== undefined && log.extra !== undefined
 }
@@ -472,7 +486,8 @@ export class RepoViewStore implements BuildStore {
     if (
       !isObject(state) ||
       !Array.isArray(state.retained) ||
-      (state.anchor !== undefined && typeof state.anchor !== 'number')
+      (state.anchor !== undefined && typeof state.anchor !== 'number') ||
+      !retainedShape(state.retained, snapshot.cursor)
     ) {
       return false
     }

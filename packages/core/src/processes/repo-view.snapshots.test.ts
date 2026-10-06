@@ -311,3 +311,30 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     expect(facts.state).toEqual(buildReducer.reduce(await store.getEvents('b')))
   })
 })
+
+describe('a malformed journal snapshot at a quiet tail', () => {
+  test.each([
+    ['a null entry', { retained: [null] }],
+    ['an entry without a type', { retained: [{ repo: REPO, seq: 1, ts: 't', actor: {} }] }],
+    ['a non-numeric anchor', { retained: [] as unknown[], anchor: 'x' }],
+  ])('%s replays, and the next own append still folds', async (_name, state) => {
+    const store = new CountingStore()
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, intake(false))
+    expect(
+      await store.putReducerSnapshot({ kind: 'repo', repo: REPO }, 'journalView', {
+        version: 1,
+        cursor: 1,
+        state,
+      }),
+    ).toBe(true)
+    const view = fresh(store)
+    await view.startJournal()
+    const appended = await view.appendRepo(REPO, runStarted('r1'))
+    expect(appended.seq).toBe(2)
+    expect(view.recordedJournal().map((event) => event.type)).toEqual([
+      'dispatcher.intake-set',
+      'dispatcher.run-started',
+    ])
+  })
+})
