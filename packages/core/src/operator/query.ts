@@ -7,13 +7,20 @@ import {
   parseEffectiveBuildConfig,
 } from '../processes/build-execution-state'
 import type { Artifact } from '../store/types'
-import { detail, statusFilter, summarize, type BuildDetail, type BuildSummary } from '../cli/status'
+import {
+  detail,
+  statusFilter,
+  summarizeFrom,
+  type BuildDetail,
+  type BuildSummary,
+} from '../cli/status'
 import { projectRepositoryStatus, type RepositoryStatus } from '../cli/repository-status'
 import { projectHarvestStatus, type HarvestStatusView } from '../cli/harvest'
 import {
   buildDashboardFromProjected,
   effectiveStatus,
   projectBuild,
+  projectBuildFromFacts,
   type DashboardBuild,
   type DashboardModel,
 } from '../cli/dashboard/model'
@@ -21,6 +28,8 @@ import { reduceBuild, type BuildState } from '../kernel/reducer'
 import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 import { reduceDispatchStatus } from '../kernel/dispatch-status'
 import { readRepoEventsIfRecorded, unclaimedObservationCount } from '../processes/harvest'
+import type { RepoViewStore } from '../processes/repo-view'
+import { withOperatorView } from './read-view'
 import type { RepositoryEvent } from '../events/repository'
 import type { BuildStore, Clock } from '../store/types'
 
@@ -42,6 +51,13 @@ export async function listOperatorBuilds(opts: {
   scope: BuildListScope
   now: Date
 }): Promise<BuildSummary[]> {
+  return withOperatorView(opts.store, opts.repo, 'builds', (view) => listFromView(view, opts))
+}
+
+async function listFromView(
+  view: RepoViewStore,
+  opts: { repo: string; scope: BuildListScope; now: Date },
+): Promise<BuildSummary[]> {
   const statuses = new Set(statusFilter(opts.scope === 'all', opts.scope === 'queued'))
   // Records are read and held before the digest read: builds are never
   // deleted, so every record iterated below is guaranteed an entry in the
@@ -50,14 +66,14 @@ export async function listOperatorBuilds(opts: {
   // check can only ever catch a genuine adapter bug, never a concurrent
   // dispatch. The reverse order would let a concurrent creation abort the
   // whole listing (AUT-488 finding f_3cb67aba).
-  const records = await opts.store.listBuilds()
-  // One digest read gates the per-build history reads (AUT-488): the active
-  // and queued scopes never show a terminal build, so a build whose digest
-  // already carries a terminal fact skips its `getEvents` round trip and the
-  // listing's store cost stays flat as finished builds accumulate. The `--all`
-  // scope includes terminal statuses, so it takes no digest read and skips
-  // nothing — byte-for-byte the old loop.
-  const digests = opts.scope === 'all' ? undefined : await opts.store.getRepoBuildDigests(opts.repo)
+  const records = await view.listBuilds()
+  // One digest read gates the per-build reads (AUT-488): the active and queued
+  // scopes never show a terminal build, so a build whose digest already
+  // carries a terminal fact is skipped and the listing's cost stays flat as
+  // finished builds accumulate. The `--all` scope includes terminal statuses,
+  // so it takes no digest read and skips nothing; its terminal builds are
+  // restored from the reducer snapshots the dispatcher leaves at settlement.
+  const digests = opts.scope === 'all' ? undefined : await view.getRepoBuildDigests(opts.repo)
   const output: BuildSummary[] = []
   for (const record of records) {
     if (record.repo !== opts.repo) continue
@@ -74,10 +90,10 @@ export async function listOperatorBuilds(opts: {
       // cleared — pinned against `reduceBuild` in store/digest.test.ts), so
       // `terminal !== undefined` is exactly reduced status `done`/`aborted`,
       // which the active and queued status sets never include. Skipping the
-      // history read therefore cannot change the emitted summaries.
+      // build therefore cannot change the emitted summaries.
       if (digest.terminal !== undefined) continue
     }
-    const projected = summarize(record, await opts.store.getEvents(record.slug), opts.now)
+    const projected = summarizeFrom(record, (await view.buildFacts(record.slug)).state, opts.now)
     if (statuses.has(projected.status)) output.push(projected)
   }
   return output.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -95,12 +111,15 @@ async function requireBuild(store: BuildStore, repo: string, slug: string) {
 export async function effectiveConfig(
   store: BuildStore,
   repo: string,
+  /** The bounded journal, when the caller already holds it (a repository
+   * view); otherwise it is read from the store. */
+  journal?: RepositoryEvent[],
 ): Promise<{
   config: Config
   repositoryEvents: RepositoryEvent[]
   status: ReturnType<typeof reduceDispatchStatus>
 }> {
-  const repositoryEvents = await readRepoEventsIfRecorded(store, repo)
+  const repositoryEvents = journal ?? (await readRepoEventsIfRecorded(store, repo))
   let latestRun: string | undefined
   for (const event of repositoryEvents) {
     if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
@@ -237,14 +256,18 @@ export async function getRepositoryStatus(
   store: BuildStore,
   repo: string,
 ): Promise<RepositoryStatus> {
-  return projectRepositoryStatus(repo, await readRepoEventsIfRecorded(store, repo))
+  return withOperatorView(store, repo, 'journal', async (view) =>
+    projectRepositoryStatus(repo, view.recordedJournal()),
+  )
 }
 
 export async function getHarvestStatus(
   store: BuildStore,
   repo: string,
 ): Promise<HarvestStatusView> {
-  return projectHarvestStatus(repo, await readRepoEventsIfRecorded(store, repo))
+  return withOperatorView(store, repo, 'journal', async (view) =>
+    projectHarvestStatus(repo, view.recordedJournal()),
+  )
 }
 
 export interface OperatorDashboardSnapshot {
@@ -263,15 +286,26 @@ export async function getOperatorDashboard(opts: {
   repo: string
   clock: Clock
 }): Promise<OperatorDashboardSnapshot> {
-  const { config, repositoryEvents, status } = await effectiveConfig(opts.store, opts.repo)
-  const records = await opts.store.listBuilds()
+  return withOperatorView(opts.store, opts.repo, 'builds', (view) => dashboardFromView(view, opts))
+}
+
+async function dashboardFromView(
+  view: RepoViewStore,
+  opts: { repo: string; clock: Clock },
+): Promise<OperatorDashboardSnapshot> {
+  const { config, repositoryEvents, status } = await effectiveConfig(
+    view,
+    opts.repo,
+    view.recordedJournal(),
+  )
+  const records = await view.listBuilds()
   // One digest read covers every build of the repository (AUT-487): the
-  // row gate (a `done` digest means no row) and the observation count no
-  // longer need per-build histories, so the snapshot's store traffic stays
-  // flat as finished builds accumulate. Row-rendering builds still get their
-  // full history below, and the digest itself is derived from the event log
-  // on every call — nothing is persisted or cached between snapshots.
-  const digests = await opts.store.getRepoBuildDigests(opts.repo)
+  // row gate (a `done` digest means no row) and the observation count need no
+  // per-build histories, so the snapshot's traffic stays flat as finished
+  // builds accumulate. Row-rendering builds derive from the repository view's
+  // reducer snapshots plus a delta read (AUT-650); every snapshot is a cache
+  // the event log regenerates, so the response equals a full replay's.
+  const digests = await view.getRepoBuildDigests(opts.repo)
   const projected: DashboardBuild[] = []
   let activeCount = 0
   for (const record of records) {
@@ -295,12 +329,18 @@ export async function getOperatorDashboard(opts: {
     // could never be surfaced. The digest already excluded `done` builds
     // above; the gate stays as the authority for the row projection so the
     // digest and the reducer cannot silently diverge. Every row-rendering
-    // build still gets its full history and pinned pipeline.
-    const events = await opts.store.getEvents(record.slug)
-    const state = reduceBuild(events)
-    if (projectsNoDashboardRow(state)) continue
-    const pinned = await readPinnedConfig(opts.store, record.slug, config)
-    const row = projectBuild(record, state, config, events, undefined, pinned.config)
+    // build still gets its facts and pinned pipeline.
+    const facts = await view.buildFacts(record.slug)
+    if (projectsNoDashboardRow(facts.state)) continue
+    const pinned = await readPinnedConfig(view, record.slug, config)
+    const row = projectBuildFromFacts(
+      record,
+      facts.state,
+      { dashboard: facts.dashboard, log: facts.log, deferral: facts.deferral },
+      config,
+      undefined,
+      pinned.config,
+    )
     if (row !== null) projected.push(decorateWithPinnedMeta(row, pinned))
   }
   // The unclaimed-observation count comes from the digests and the journal

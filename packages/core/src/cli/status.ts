@@ -205,7 +205,7 @@ function leaseInfo(record: BuildRecord, now: Date): LeaseInfo {
  * The summary over an ALREADY-reduced state — so `detail` reduces the log
  * once and builds both projections from it, rather than reducing twice.
  */
-function summarizeFrom(record: BuildRecord, state: BuildState, now: Date): BuildSummary {
+export function summarizeFrom(record: BuildRecord, state: BuildState, now: Date): BuildSummary {
   // `phase`, `round`, and `attempt` describe ONE phase occurrence, so they come
   // from ONE source: the in-flight phase, else the last completed one — the
   // same `currentPhase ?? lastCompletedPhase` the reducer uses to derive

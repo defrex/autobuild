@@ -256,9 +256,17 @@ export function currentAutoMergeDeferral(
   events: AbEvent[],
   state: Pick<BuildState, 'autoMerge' | 'pr'>,
 ): string | undefined {
+  return currentAutoMergeDeferralFrom(currentDeferralObservationReducer.reduce(events), state)
+}
+
+/** `currentAutoMergeDeferral` over an already-reduced ledger. */
+export function currentAutoMergeDeferralFrom(
+  ledger: DeferralLedger,
+  state: Pick<BuildState, 'autoMerge' | 'pr'>,
+): string | undefined {
   const pending = pendingAutoMerge(state)
   if (pending?.enabled !== true || state.pr === undefined) return undefined
-  return currentDeferralObservation(events, state.pr.number, pending.commandSeq)?.payload.summary
+  return deferralObservationFrom(ledger, state.pr.number, pending.commandSeq)?.payload.summary
 }
 
 const DEFERRAL_SUMMARIES = {

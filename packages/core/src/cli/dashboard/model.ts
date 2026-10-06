@@ -40,9 +40,20 @@ import type { RepositoryEvent } from '../../events/repository'
 import type { Config } from '../../config/schema'
 import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { BuildState, PhaseContext, PrLifecycle } from '../../kernel/reducer'
-import { currentAutoMergeDeferral } from '../../kernel/auto-merge'
-import { decideNext } from '../../kernel/engine'
+import {
+  currentAutoMergeDeferralFrom,
+  currentDeferralObservationReducer,
+  type DeferralLedger,
+} from '../../kernel/auto-merge'
+import { decideNextFromFacts } from '../../kernel/engine'
 import { verifyPhase } from '../../ontology'
+import { indexLog, type LogIndex } from '../../kernel/log-index'
+import {
+  dashboardFactsReducer,
+  producedAfter,
+  type DashboardFacts,
+  type PhaseTiming,
+} from './facts'
 import type { BuildRecord, StreamRecord } from '../../store/types'
 import { reduceDispatchSettings } from '../../kernel/dispatch-settings'
 import { projectSessions, type DashboardSession } from './detail'
@@ -386,99 +397,6 @@ function step(label: string, done: boolean, current: boolean, extra: StepExtra =
   }
 }
 
-/** One phase occurrence's wall-clock span, keyed by phase. `startSeq` is the
- * seq of the `*.started` event, so callers can scope by the same seq
- * boundaries (`restartSince`/`cycleSince`) the step STATES already use. */
-interface PhaseInterval {
-  start: number
-  end: number
-  startSeq: number
-}
-interface PhaseTiming {
-  closed: PhaseInterval[]
-  open?: { start: number; startSeq: number }
-}
-
-/**
- * Walk the raw event log into per-phase `[start, end]` intervals in epoch-ms
- * (`Date.parse(ev.ts)`), the durations the reducer collapses away. Each
- * `*.started` opens an interval for its phase key and its terminal event
- * (`.completed`/`.verdict`) closes it. A second `*.started` while one is still
- * open REPLACES the open start — a §15.6-C cross-sandbox re-run starts the
- * phase afresh, so the crashed attempt contributes nothing. Finalize post-steps
- * (`finalize.step-completed`) have no `.started` and so no interval.
- */
-function phaseIntervals(events: AbEvent[]): Map<string, PhaseTiming> {
-  const timings = new Map<string, PhaseTiming>()
-  const get = (key: string): PhaseTiming => {
-    let t = timings.get(key)
-    if (t === undefined) {
-      t = { closed: [] }
-      timings.set(key, t)
-    }
-    return t
-  }
-  for (const ev of events) {
-    const ms = Date.parse(ev.ts)
-    const open = (key: string): void => {
-      get(key).open = { start: ms, startSeq: ev.seq }
-    }
-    const close = (key: string): void => {
-      const t = get(key)
-      if (t.open === undefined) return
-      t.closed.push({ start: t.open.start, end: ms, startSeq: t.open.startSeq })
-      t.open = undefined
-    }
-    switch (ev.type) {
-      case 'plan.started':
-        open('plan')
-        break
-      case 'plan.completed':
-        close('plan')
-        break
-      case 'plan-review.started':
-        open('plan-review')
-        break
-      case 'plan-review.verdict':
-        close('plan-review')
-        break
-      case 'implement.started':
-        open('implement')
-        break
-      case 'implement.completed':
-        close('implement')
-        break
-      case 'code-review.started':
-        open('code-review')
-        break
-      case 'code-review.verdict':
-        close('code-review')
-        break
-      case 'verify.started':
-        open(verifyPhase(ev.payload.step))
-        break
-      case 'verify.completed':
-        close(verifyPhase(ev.payload.step))
-        break
-      case 'finalize.started':
-        open('finalize')
-        break
-      case 'finalize.completed':
-        close('finalize')
-        break
-      case 'reconcile.started':
-        open('reconcile')
-        break
-      case 'reconcile.completed':
-        close('reconcile')
-        break
-      default:
-        break
-    }
-  }
-  return timings
-}
-
 /**
  * Sum the in-scope occurrences of one phase into a `StepTiming`, or `undefined`
  * when the phase never ran in scope (the step shows no time, AC 6). Scope is
@@ -489,12 +407,12 @@ function phaseIntervals(events: AbEvent[]): Map<string, PhaseTiming> {
  * not advance (AC 10).
  */
 function timingFor(
-  intervals: Map<string, PhaseTiming>,
+  intervals: Record<string, PhaseTiming>,
   key: string,
   sinceSeq: number,
   frozenNow: number | undefined,
 ): StepTiming | undefined {
-  const t = intervals.get(key)
+  const t = intervals[key]
   if (t === undefined) return undefined
   let accumulatedMs = 0
   let inScope = false
@@ -533,7 +451,40 @@ export function projectBuild(
   streams?: readonly StreamRecord[],
   pinnedConfig?: Config,
 ): DashboardBuild | null {
+  return projectBuildFromFacts(
+    record,
+    state,
+    {
+      dashboard: dashboardFactsReducer.reduce(events),
+      log: indexLog(events),
+      deferral: currentDeferralObservationReducer.reduce(events),
+    },
+    config,
+    streams,
+    pinnedConfig,
+  )
+}
+
+/** The reduced facts a row renders from, beside the build state: what
+ * `projectBuild` derives from the event array, advanced incrementally. */
+export interface DashboardRowFacts {
+  dashboard: DashboardFacts
+  log: LogIndex
+  deferral: DeferralLedger
+}
+
+/** `projectBuild` over already-reduced facts — the one implementation of the
+ * row projection, so a snapshot-backed row and a replayed row cannot differ. */
+export function projectBuildFromFacts(
+  record: BuildRecord,
+  state: BuildState,
+  facts: DashboardRowFacts,
+  config: Config,
+  streams?: readonly StreamRecord[],
+  pinnedConfig?: Config,
+): DashboardBuild | null {
   const pipeline = pinnedConfig ?? config
+  const dashboard = facts.dashboard
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
   const abortProgress =
@@ -546,35 +497,29 @@ export function projectBuild(
         : undefined
 
   if (status === 'queued') {
-    const created = events.findLast((event) => event.type === 'build.created')
-    const workspace = events.findLast((event) => event.type === 'workspace.provisioned')
-    const released = events.findLast((event) => event.type === 'workspace.released')
+    const created = dashboard.created
+    const workspace = dashboard.workspaceProvisioned
+    const released = dashboard.workspaceReleased
     const openWorkspace =
-      workspace !== undefined && (released === undefined || workspace.seq > released.seq)
-    const spec = events.findLast(
-      (event) => event.type === 'spec.imported' || event.type === 'spec.authored',
-    )
-    const commentPosted = events.findLast((event) => event.type === 'dispatch.comment-posted')
-    const latestFailure = events.findLast((event) => event.type === 'dispatch.failed')
+      workspace !== undefined && (released === undefined || workspace > released)
+    const spec = dashboard.specLanded
+    const commentPosted = dashboard.commentPosted
+    const latestFailure = dashboard.latestFailure
     const failureSuperseded =
       latestFailure !== undefined &&
-      ((latestFailure.payload.stage === 'create' &&
-        created !== undefined &&
-        created.seq > latestFailure.seq) ||
-        (latestFailure.payload.stage === 'workspace' &&
+      ((latestFailure.stage === 'create' && created !== undefined && created > latestFailure.seq) ||
+        (latestFailure.stage === 'workspace' &&
           workspace !== undefined &&
-          workspace.seq > latestFailure.seq) ||
-        (latestFailure.payload.stage === 'spec' &&
-          spec !== undefined &&
-          spec.seq > latestFailure.seq) ||
-        (latestFailure.payload.stage === 'comment' &&
+          workspace > latestFailure.seq) ||
+        (latestFailure.stage === 'spec' && spec !== undefined && spec > latestFailure.seq) ||
+        (latestFailure.stage === 'comment' &&
           commentPosted !== undefined &&
-          commentPosted.seq > latestFailure.seq))
+          commentPosted > latestFailure.seq))
     const dispatch =
       state.discardRequest !== undefined
         ? 'discard requested; cleanup and Ready handback pending'
         : latestFailure !== undefined && !failureSuperseded
-          ? `dispatch ${latestFailure.payload.stage} failed (attempt ${latestFailure.payload.attempt}): ${latestFailure.payload.error}`
+          ? `dispatch ${latestFailure.stage} failed (attempt ${latestFailure.attempt}): ${latestFailure.error}`
           : created === undefined
             ? 'dispatch initialization pending'
             : !openWorkspace
@@ -591,7 +536,7 @@ export function projectBuild(
       dispatch,
       blockers: [],
       autoMerge: autoMergeDisplay(state),
-      sessions: projectSessions(events, streams),
+      sessions: projectSessions(dashboard.sessionEvents, streams),
     }
   }
 
@@ -612,7 +557,7 @@ export function projectBuild(
       ...(state.pr !== undefined && state.prState !== undefined
         ? { pr: { url: state.pr.url, state: state.prState } }
         : {}),
-      sessions: projectSessions(events, streams),
+      sessions: projectSessions(dashboard.sessionEvents, streams),
     }
   }
 
@@ -676,11 +621,8 @@ export function projectBuild(
   // blocked build freezes at the latest durable event. Timers therefore do not
   // advance behind either gate (AC 10). Each step scopes by the SAME seq boundary its state uses, so
   // durations and states restart in lockstep (AC 12).
-  const intervals = phaseIntervals(events)
-  const pausedAt =
-    state.status === 'paused'
-      ? events.findLast((event) => event.type === 'build.paused')?.ts
-      : undefined
+  const intervals = dashboard.intervals
+  const pausedAt = state.status === 'paused' ? dashboard.pausedAt : undefined
   const frozenNow =
     state.status === 'running'
       ? undefined
@@ -721,29 +663,25 @@ export function projectBuild(
   // boundary. Starts and timing intervals are deliberately insufficient: a
   // crashed phase has run, but has produced no output. Matching the round also
   // drops a review verdict as soon as the next producer round starts.
-  const planProduced = events.some(
-    (ev) =>
-      ev.seq > restartSince &&
-      ev.type === 'plan.completed' &&
-      ev.payload.round === state.plan.round,
+  const planProduced = producedAfter(
+    dashboard.produced.planCompleted,
+    state.plan.round,
+    restartSince,
   )
-  const planReviewProduced = events.some(
-    (ev) =>
-      ev.seq > restartSince &&
-      ev.type === 'plan-review.verdict' &&
-      ev.payload.round === state.plan.round,
+  const planReviewProduced = producedAfter(
+    dashboard.produced.planReviewVerdict,
+    state.plan.round,
+    restartSince,
   )
-  const implementProduced = events.some(
-    (ev) =>
-      ev.seq > restartSince &&
-      ev.type === 'implement.completed' &&
-      ev.payload.round === state.implement.round,
+  const implementProduced = producedAfter(
+    dashboard.produced.implementCompleted,
+    state.implement.round,
+    restartSince,
   )
-  const codeReviewProduced = events.some(
-    (ev) =>
-      ev.seq > restartSince &&
-      ev.type === 'code-review.verdict' &&
-      ev.payload.round === state.implement.round,
+  const codeReviewProduced = producedAfter(
+    dashboard.produced.codeReviewVerdict,
+    state.implement.round,
+    restartSince,
   )
 
   // Finalize ran for the CURRENT spec — NOT `prState !== undefined`, which a
@@ -902,10 +840,10 @@ export function projectBuild(
               : `exit status ${state.setupFailure.exitStatus}`
           }): ${state.setupFailure.output || '(no output)'}`
 
-  const decision = decideNext(events, pipeline)
+  const decision = decideNextFromFacts(state, facts.log, pipeline)
   const mergeWaitReason =
     decision.kind === 'wait' && decision.reason === 'awaiting-pr'
-      ? currentAutoMergeDeferral(events, state)
+      ? currentAutoMergeDeferralFrom(facts.deferral, state)
       : undefined
 
   return {
@@ -926,7 +864,7 @@ export function projectBuild(
     ...(state.pr !== undefined && state.prState !== undefined
       ? { pr: { url: state.pr.url, state: state.prState } }
       : {}),
-    sessions: projectSessions(events, streams),
+    sessions: projectSessions(dashboard.sessionEvents, streams),
   }
 }
 
