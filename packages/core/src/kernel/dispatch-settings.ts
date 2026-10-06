@@ -4,6 +4,7 @@
  * is authoritative; fresh repositories retain the historical process defaults.
  */
 import type { RepositoryEvent } from '../events/repository'
+import { defineReducer, type IncrementalReducer } from './incremental'
 
 export const DEFAULT_DISPATCH_INTAKE = true
 export const DEFAULT_DISPATCH_PAUSED = false
@@ -21,32 +22,36 @@ export interface DispatchSettings {
   defaultAutoMerge: boolean
 }
 
-export function reduceDispatchSettings(events: RepositoryEvent[]): DispatchSettings {
-  let intake = DEFAULT_DISPATCH_INTAKE
-  let paused = DEFAULT_DISPATCH_PAUSED
-  let defaultAutoMerge = DEFAULT_DISPATCH_AUTO_MERGE
-  let intakeSeq = 0
-  let pausedSeq = 0
-  let autoMergeSeq = 0
+/** The carried accumulator: the settings plus the seq of the fact that set
+ * each, which decides last-writer-wins independent of array order. */
+export interface DispatchSettingsAcc extends DispatchSettings {
+  intakeSeq: number
+  pausedSeq: number
+  autoMergeSeq: number
+}
 
+/** Bump when `DispatchSettingsAcc`'s shape or fold semantics change. */
+export const DISPATCH_SETTINGS_REDUCER_VERSION = 1
+
+function foldDispatchSettings(acc: DispatchSettingsAcc, events: readonly RepositoryEvent[]): void {
   for (const event of events) {
     switch (event.type) {
       case 'dispatcher.intake-set':
-        if (event.seq > intakeSeq) {
-          intake = event.payload.enabled
-          intakeSeq = event.seq
+        if (event.seq > acc.intakeSeq) {
+          acc.intake = event.payload.enabled
+          acc.intakeSeq = event.seq
         }
         break
       case 'dispatcher.pause-set':
-        if (event.seq > pausedSeq) {
-          paused = event.payload.enabled
-          pausedSeq = event.seq
+        if (event.seq > acc.pausedSeq) {
+          acc.paused = event.payload.enabled
+          acc.pausedSeq = event.seq
         }
         break
       case 'dispatcher.auto-merge-default-set':
-        if (event.seq > autoMergeSeq) {
-          defaultAutoMerge = event.payload.enabled
-          autoMergeSeq = event.seq
+        if (event.seq > acc.autoMergeSeq) {
+          acc.defaultAutoMerge = event.payload.enabled
+          acc.autoMergeSeq = event.seq
         }
         break
       default:
@@ -55,6 +60,26 @@ export function reduceDispatchSettings(events: RepositoryEvent[]): DispatchSetti
         break
     }
   }
+}
 
-  return { intake, paused, defaultAutoMerge }
+export const dispatchSettingsReducer: IncrementalReducer<
+  DispatchSettingsAcc,
+  RepositoryEvent,
+  DispatchSettings
+> = defineReducer({
+  version: DISPATCH_SETTINGS_REDUCER_VERSION,
+  initial: () => ({
+    intake: DEFAULT_DISPATCH_INTAKE,
+    paused: DEFAULT_DISPATCH_PAUSED,
+    defaultAutoMerge: DEFAULT_DISPATCH_AUTO_MERGE,
+    intakeSeq: 0,
+    pausedSeq: 0,
+    autoMergeSeq: 0,
+  }),
+  fold: foldDispatchSettings,
+  finish: ({ intake, paused, defaultAutoMerge }) => ({ intake, paused, defaultAutoMerge }),
+})
+
+export function reduceDispatchSettings(events: RepositoryEvent[]): DispatchSettings {
+  return dispatchSettingsReducer.reduce(events)
 }

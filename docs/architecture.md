@@ -131,6 +131,25 @@ session's status, open turn, pending approval, and wake cursors from its own
 closed catalog. No decision anywhere
 consults a snapshot in place of the append-only log.
 
+**Incremental reducers.** Every pure projection of an event array is a fold plus
+a final derivation, defined once with `defineReducer` in
+`packages/core/src/kernel/incremental.ts`: `initial()` builds an empty
+accumulator, `advance(acc, events)` folds in only the events newer than the
+accumulator, and `finish(acc)` derives the public state. The whole-array
+functions (`reduceBuild`, `reduceHarvest`, `reduceSession`, and the rest) are
+wrappers over the same fold, so results cannot diverge, and a property test
+checks every split point of fixture and generated logs. The accumulator is plain
+JSON, so it survives a serialize-and-parse round trip. `advance` never mutates
+its input: it clones, then folds, so a state derived earlier is never disturbed
+by a later advance. Each reducer publishes a `version`; bump it whenever the
+accumulator shape or the fold semantics change, because a cached accumulator is
+only valid for the version that wrote it. `kernel/reducer-registry.ts` lists
+every reducer with its version, and its snapshot test fails when an accumulator
+shape changes without a bump. Callers still read whole logs today (the terminal
+dashboard poll is the exception, advancing a carried build accumulator by
+per-build deltas); persisting accumulators keyed by cursor and reducer version,
+rebuilt from the log on any miss, is follow-up work.
+
 **Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through
 `packages/core/src/cli/store-opening.ts`. `packages/core/src/cli/env.ts` also classifies optional ambient

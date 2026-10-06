@@ -9,6 +9,7 @@
  * orphaned environment.
  */
 import type { RepositoryEvent } from '../events/repository'
+import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 
 export type SandboxEnvironmentState = 'live' | 'stopped' | 'released'
 
@@ -45,7 +46,18 @@ type MutableSnapshot = {
  * derived from both). Latest fact wins; `released` environments stay in the
  * result with their closing evidence so callers can distinguish them. */
 export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnvironmentSnapshot[] {
-  const byEnvironment = new Map<string, MutableSnapshot>()
+  return sandboxStatesReducer.reduce(events)
+}
+
+/** The carried accumulator: environments in `Map` insertion order (a re-set
+ * of an existing id keeps its position). */
+export type SandboxStatesAcc = MutableSnapshot[]
+
+/** Bump when `SandboxStatesAcc`'s shape or fold semantics change. */
+export const SANDBOX_STATES_REDUCER_VERSION = 1
+
+function foldSandboxStates(acc: SandboxStatesAcc, events: readonly RepositoryEvent[]): void {
+  const byEnvironment = new Map<string, MutableSnapshot>(acc.map((s) => [s.environmentId, s]))
   for (const event of events) {
     const ts = event.ts
     if (event.type === 'orchestrator.sandbox.provisioned') {
@@ -107,5 +119,17 @@ export function sandboxStates(events: readonly RepositoryEvent[]): SandboxEnviro
       })
     }
   }
-  return [...byEnvironment.values()]
+  acc.length = 0
+  acc.push(...byEnvironment.values())
 }
+
+export const sandboxStatesReducer: IncrementalReducer<
+  SandboxStatesAcc,
+  RepositoryEvent,
+  SandboxEnvironmentSnapshot[]
+> = defineReducer({
+  version: SANDBOX_STATES_REDUCER_VERSION,
+  initial: (): SandboxStatesAcc => [],
+  fold: foldSandboxStates,
+  finish: (acc) => acc.map((s) => ({ ...s })),
+})

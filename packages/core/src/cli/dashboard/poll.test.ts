@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../../config/load'
-import { KERNEL } from '../../events/envelope'
+import { KERNEL, humanActor } from '../../events/envelope'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   effectiveBuildConfigContent,
 } from '../../processes/build-execution-state'
+import { reduceBuild } from '../../kernel/reducer'
+import { steppingClock } from '../../testing/fixed'
 import { MemoryBuildStore } from '../../store/memory'
 import type { BuildRecord } from '../../store/types'
 import { DashboardBuildPollCache, type DashboardBuildReader } from './poll'
@@ -100,6 +102,33 @@ function row(snapshot: Awaited<ReturnType<DashboardBuildPollCache['refresh']>>, 
 }
 
 describe('DashboardBuildPollCache', () => {
+  test('the incremental reduction equals reducing the whole log after every refresh', async () => {
+    const store = new MemoryBuildStore({ clock: steppingClock() })
+    await addRunning(store, 'inc')
+    const cache = new DashboardBuildPollCache(new CountingReader(store), REPO, CONFIG)
+    const batches: Array<Parameters<MemoryBuildStore['append']>[1][]> = [
+      [],
+      [{ actor: KERNEL, type: 'plan.started', payload: { round: 1 } }],
+      [],
+      [
+        {
+          actor: { kind: 'agent', role: 'plan', session: 's_plan' },
+          type: 'plan.completed',
+          payload: { round: 1, artifact: { kind: 'plan', rev: 0 } },
+        },
+        { actor: KERNEL, type: 'plan-review.started', payload: { round: 1 } },
+        { actor: humanActor('aron'), type: 'build.pause-requested', payload: {} },
+      ],
+      [{ actor: KERNEL, type: 'build.paused', payload: {} }],
+      [],
+    ]
+    for (const batch of batches) {
+      for (const write of batch) await store.append('inc', write)
+      const snapshot = await cache.refresh()
+      expect(snapshot.states.get('inc')).toEqual(reduceBuild(await store.getEvents('inc')))
+    }
+  })
+
   test('reuses the row when heartbeat and lease advance without an event delta', async () => {
     let now = Date.parse('2026-07-14T21:00:00.000Z')
     const store = new MemoryBuildStore({ clock: () => new Date(now) })

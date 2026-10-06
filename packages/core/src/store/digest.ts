@@ -10,6 +10,7 @@
  * history.
  */
 import type { AbEvent } from '../events/catalog'
+import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
 import type { BuildDigest } from './types'
 
 /** The event types a digest is derived from. Adapters filter their event
@@ -28,22 +29,41 @@ export const DIGEST_EVENT_TYPES = [
  * `merged` follows the same overwrite pattern for `pr.merged` timestamps.
  * The events carry no slug, so the result is slug-less; every adapter attaches
  * `slug` itself when grouping its per-build event rows. */
-export function reduceBuildDigest(
-  events: Pick<AbEvent, 'type' | 'seq' | 'ts'>[],
-): Omit<BuildDigest, 'slug'> {
-  let terminal: BuildDigest['terminal']
-  let merged: string | undefined
-  const observations: { seq: number; ts: string }[] = []
-  for (const event of events) {
-    if (event.type === 'build.completed') terminal = 'done'
-    else if (event.type === 'build.aborted') terminal = 'aborted'
-    else if (event.type === 'pr.merged') merged = event.ts
-    else if (event.type === 'observation.recorded')
-      observations.push({ seq: event.seq, ts: event.ts })
-  }
-  return {
-    observations,
+export type DigestEvent = Pick<AbEvent, 'type' | 'seq' | 'ts'>
+
+/** The carried accumulator for `reduceBuildDigest`. */
+export interface DigestAcc {
+  terminal?: BuildDigest['terminal']
+  merged?: string
+  observations: { seq: number; ts: string }[]
+}
+
+/** Bump when `DigestAcc`'s shape or fold semantics change. */
+export const BUILD_DIGEST_REDUCER_VERSION = 1
+
+export const buildDigestReducer: IncrementalReducer<
+  DigestAcc,
+  DigestEvent,
+  Omit<BuildDigest, 'slug'>
+> = defineReducer({
+  version: BUILD_DIGEST_REDUCER_VERSION,
+  initial: (): DigestAcc => ({ observations: [] }),
+  fold(acc, events) {
+    for (const event of events) {
+      if (event.type === 'build.completed') acc.terminal = 'done'
+      else if (event.type === 'build.aborted') acc.terminal = 'aborted'
+      else if (event.type === 'pr.merged') acc.merged = event.ts
+      else if (event.type === 'observation.recorded')
+        acc.observations.push({ seq: event.seq, ts: event.ts })
+    }
+  },
+  finish: ({ terminal, merged, observations }) => ({
+    observations: [...observations],
     ...(merged !== undefined ? { merged } : {}),
     ...(terminal !== undefined ? { terminal } : {}),
-  }
+  }),
+})
+
+export function reduceBuildDigest(events: DigestEvent[]): Omit<BuildDigest, 'slug'> {
+  return buildDigestReducer.reduce(events)
 }

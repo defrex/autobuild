@@ -17,7 +17,19 @@ import type { eventPayloadSchemas, EventType } from '../events/payloads'
 import type { Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { resetsPhaseFailureBudget } from '../processes/phase-failure-budget'
-import { reduceBuild, type BuildState } from './reducer'
+import { checkIncremental } from './incremental-contract'
+import { buildReducer, reduceBuild as reduceBuildWhole, type BuildState } from './reducer'
+
+/** Every fixture log reduced here is also held to the incremental contract
+ * (every split point, JSON round trip), once per distinct log array. */
+const checkedLogs = new WeakSet<AbEvent[]>()
+function reduceBuild(events: AbEvent[]): BuildState {
+  if (!checkedLogs.has(events)) {
+    checkedLogs.add(events)
+    checkIncremental(buildReducer, events, { stepwise: false })
+  }
+  return reduceBuildWhole(events)
+}
 
 const BUILD = 'auth-rate-limit'
 

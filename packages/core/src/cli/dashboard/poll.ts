@@ -2,7 +2,7 @@ import type { Config } from '../../config/schema'
 import { composeBuildConfig } from '../../config/live'
 import type { PipelineSourceMeta } from '../../config/pipeline-source'
 import type { AbEvent } from '../../events/catalog'
-import { reduceBuild, type BuildState } from '../../kernel/reducer'
+import { buildReducer, type BuildAcc, type BuildState } from '../../kernel/reducer'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   parseBuildConfigMetadata,
@@ -38,6 +38,9 @@ export interface DashboardPollSnapshot {
 interface LiveEntry {
   kind: 'live'
   events: AbEvent[]
+  /** The reducer accumulator `state` was derived from; the next delta is
+   * folded into a copy of it instead of re-reducing the whole log. */
+  acc: BuildAcc
   state: BuildState
   build: DashboardBuild | null
 }
@@ -219,7 +222,8 @@ export class DashboardBuildPollCache {
       }
 
       const events = current === undefined ? delta : [...current.events, ...delta]
-      const state = reduceBuild(events)
+      const acc = buildReducer.advance(current?.acc ?? buildReducer.initial(), delta)
+      const state = buildReducer.finish(acc)
       if (isTerminal(state)) {
         next.set(record.slug, { kind: 'terminal' })
         continue
@@ -227,6 +231,7 @@ export class DashboardBuildPollCache {
       next.set(record.slug, {
         kind: 'live',
         events,
+        acc,
         state,
         build: await this.projectRow(record, state, events, config),
       })
