@@ -696,6 +696,17 @@ export class Dispatcher {
   }
 
   async tick(opts: TickOpts = {}): Promise<TickReport> {
+    try {
+      return await this.runTick(opts)
+    } finally {
+      // Leave this tick's reduced state behind for the next process (a cache;
+      // a failure to write it is never a tick failure). Throttled in a
+      // resident dispatcher, always run by a cold single-tick process.
+      await this.store.persistSnapshots()
+    }
+  }
+
+  private async runTick(opts: TickOpts): Promise<TickReport> {
     // One immutable config for this complete decision pass. A reload racing the
     // tick is observed by the next tick, never half-way through this one.
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config

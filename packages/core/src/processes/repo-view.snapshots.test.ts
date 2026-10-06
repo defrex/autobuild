@@ -54,6 +54,19 @@ class CountingStore extends MemoryBuildStore {
   }
 }
 
+/** `BuildFacts` with its publication view (closures) reduced to its answers. */
+async function plainFacts(view: RepoViewStore, slug: string) {
+  const { publication, ...rest } = await view.buildFacts(slug)
+  return {
+    ...rest,
+    publication: {
+      pending: publication.pending(),
+      abandoned: publication.abandonedPending(),
+      latest: publication.latestUncompletedRequest(),
+    },
+  }
+}
+
 const fresh = (store: MemoryBuildStore) => new RepoViewStore(store, { repo: REPO })
 
 const asWrite = (event: AbEvent): EventWrite =>
@@ -167,8 +180,8 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
     store.snapshotsOn = false
     await reference.refresh()
     const expected = {
-      a: await reference.buildFacts('a'),
-      b: await reference.buildFacts('b'),
+      a: await plainFacts(reference, 'a'),
+      b: await plainFacts(reference, 'b'),
       journal: reference.recordedJournal(),
     }
     expect(store.rows.events).toBeGreaterThan(0)
@@ -190,8 +203,8 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
       store.tamper = tamper
       const view = fresh(store)
       await view.refresh()
-      expect({ name, a: await view.buildFacts('a') }).toEqual({ name, a: expected.a })
-      expect({ name, b: await view.buildFacts('b') }).toEqual({ name, b: expected.b })
+      expect({ name, a: await plainFacts(view, 'a') }).toEqual({ name, a: expected.a })
+      expect({ name, b: await plainFacts(view, 'b') }).toEqual({ name, b: expected.b })
       expect({ name, journal: view.recordedJournal() }).toEqual({ name, journal: expected.journal })
     }
   })
@@ -262,7 +275,7 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
         store.snapshotsOn = true
         expect(withSnapshots.recordedJournal()).toEqual(replayed.recordedJournal())
         for (const { slug } of logs) {
-          expect(await withSnapshots.buildFacts(slug)).toEqual(await replayed.buildFacts(slug))
+          expect(await plainFacts(withSnapshots, slug)).toEqual(await plainFacts(replayed, slug))
           expect(await withSnapshots.buildState(slug)).toEqual(await replayed.buildState(slug))
         }
         expect(await withSnapshots.getRepoBuildDigests(REPO)).toEqual(

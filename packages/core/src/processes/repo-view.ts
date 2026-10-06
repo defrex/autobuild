@@ -66,7 +66,7 @@ import type {
   SessionEventType,
   SessionEventWrite,
 } from '../events/sessions'
-import { logIndexReducer, type LogIndex, type LogIndexAcc } from '../kernel/log-index'
+import { logIndexReducer, type LogIndex } from '../kernel/log-index'
 import { buildReducer, reduceBuild, type BuildAcc, type BuildState } from '../kernel/reducer'
 import { createBuildScopedStore } from '../store/build-scope'
 import { reduceBuildDigest, type DigestEventRow } from '../store/digest'
@@ -82,7 +82,14 @@ import {
   type ReducerSnapshot,
   type SnapshotScope,
 } from '../store/snapshots'
-import { openExecutionReducer, type OpenExecution } from './execution-settlement'
+import { openBuildWorkspaceReducer, type OpenBuildWorkspace } from './dispatcher-selectors'
+import {
+  type ExecutionOutcome,
+  lastExecutionOutcomeReducer,
+  openExecutionReducer,
+  type OpenExecution,
+} from './execution-settlement'
+import { type PublicationView, publicationStateReducer } from './publication-state'
 import { createSessionScopedStore } from '../store/session-handle'
 import type {
   StreamChunk,
@@ -122,23 +129,35 @@ import type {
 
 /** Registry names the snapshots are keyed by (kernel/reducer-registry.ts). */
 const SNAPSHOT_JOURNAL = 'journalView'
-const SNAPSHOT_BUILD = 'build'
-const SNAPSHOT_LOG_INDEX = 'logIndex'
-const SNAPSHOT_OPEN_EXECUTION = 'openExecution'
-
 /** A resident view persists at most this often; a cold single-tick process
  * (the hosted dispatcher) always persists once at its tick's end. */
 const PERSIST_MIN_INTERVAL_MS = 30_000
 /** Builds written back concurrently. */
 const PERSIST_CONCURRENCY = 4
 
-type OpenAcc = { open: OpenExecution | null }
+/** The reducers a work build's snapshots hold beside `build`, keyed by registry
+ * name (`kernel/reducer-registry.ts`). Every quiet-path tick stage reads its
+ * facts from these, so a snapshot-backed log needs no event array. */
+const EXTRA_REDUCERS = {
+  logIndex: logIndexReducer,
+  openExecution: openExecutionReducer,
+  openBuildWorkspace: openBuildWorkspaceReducer,
+  publicationState: publicationStateReducer,
+  lastExecutionOutcome: lastExecutionOutcomeReducer,
+} as const
+type ExtraName = keyof typeof EXTRA_REDUCERS
+const EXTRA_NAMES = Object.keys(EXTRA_REDUCERS) as ExtraName[]
+type ExtraAccs = Record<ExtraName, unknown>
 
 /** The facts a quiet-path stage needs about one build, without its event array. */
 export interface BuildFacts {
   state: BuildState
   log: LogIndex
   open: OpenExecution | null
+  /** The open workspace (the latest provisioned, not yet released). */
+  workspace: OpenBuildWorkspace | null
+  publication: PublicationView
+  lastExecution: ExecutionOutcome
 }
 
 /** A build that still has tick duties: nonterminal, aborted (awaiting its
@@ -178,10 +197,9 @@ interface Log {
   /** The refresh epoch this log was last brought current in. */
   epoch: number
   acc?: BuildAcc
-  /** The log-index and open-execution accumulators ride beside `acc` on a work
-   * log, so the facts a stage derives never need the event array. */
-  index?: LogIndexAcc
-  open?: OpenAcc
+  /** The other work-build accumulators ride beside `acc`, so the facts a stage
+   * derives never need the event array. */
+  extra?: ExtraAccs
   /** The cursor last read from, or written to, the snapshot store. */
   persisted: number
   /** Created by a cursor-bearing request: survives refreshes while unneeded. */
@@ -194,6 +212,10 @@ interface JournalWindow {
   events: RepositoryEvent[]
   /** Highest seq held (≥ from). */
   last: number
+}
+
+function hasAccs(log: Log): boolean {
+  return log.acc !== undefined && log.extra !== undefined
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -568,16 +590,23 @@ export class RepoViewStore implements BuildStore {
 
   private async restoreLog(slug: string): Promise<Log | null> {
     const scope: SnapshotScope = { kind: 'build', slug }
-    const [build, index, open] = await Promise.all([
-      loadReducerSnapshot(this.backing, scope, SNAPSHOT_BUILD, buildReducer),
-      loadReducerSnapshot(this.backing, scope, SNAPSHOT_LOG_INDEX, logIndexReducer),
-      loadReducerSnapshot(this.backing, scope, SNAPSHOT_OPEN_EXECUTION, openExecutionReducer),
+    const [build, ...rest] = await Promise.all([
+      loadReducerSnapshot(this.backing, scope, 'build', buildReducer),
+      ...EXTRA_NAMES.map((name) =>
+        loadReducerSnapshot(this.backing, scope, name, EXTRA_REDUCERS[name]),
+      ),
     ])
-    // The three must describe the same prefix, else one is stale (a write that
-    // did not finish): replay rather than mix prefixes.
-    if (build === null || index === null || open === null) return null
-    if (build.cursor !== index.cursor || build.cursor !== open.cursor) return null
-    if (!buildAccShape(build) || !indexAccShape(index) || !openAccShape(open)) return null
+    // Every one must be present and describe the same prefix, else one is stale
+    // (a write that did not finish) or missing: replay rather than mix prefixes.
+    if (build === null || !buildAccShape(build)) return null
+    const extra = {} as ExtraAccs
+    for (const [at, name] of EXTRA_NAMES.entries()) {
+      const found = rest[at]
+      if (found === null || found === undefined || found.cursor !== build.cursor) return null
+      if (!isObject(found.state)) return null
+      extra[name] = found.state
+    }
+    if (!indexAccShape(extra.logIndex)) return null
     const cursor = build.cursor
     try {
       const delta = (await this.backing.getEvents(slug, cursor)).filter(
@@ -591,8 +620,7 @@ export class RepoViewStore implements BuildStore {
         dirty: false,
         epoch: this.epoch,
         acc: build.state as BuildAcc,
-        index: index.state as LogIndexAcc,
-        open: open.state as OpenAcc,
+        extra,
         persisted: cursor,
         pinned: this.logs.get(slug)?.pinned ?? false,
       }
@@ -626,8 +654,13 @@ export class RepoViewStore implements BuildStore {
     log.events.push(...events)
     log.cursor = events[events.length - 1]!.seq
     if (log.acc !== undefined) log.acc = buildReducer.advance(log.acc, events)
-    if (log.index !== undefined) log.index = logIndexReducer.advance(log.index, events)
-    if (log.open !== undefined) log.open = openExecutionReducer.advance(log.open, events)
+    if (log.extra !== undefined) {
+      for (const name of EXTRA_NAMES) {
+        // biome-ignore lint/suspicious/noExplicitAny: the table is heterogeneous
+        const reducer = EXTRA_REDUCERS[name] as any
+        log.extra[name] = reducer.advance(log.extra[name], events)
+      }
+    }
     // A trimmed log cannot derive its own digest; discovery owns it, so a fold
     // that changes the build makes the held digest stale.
     if (log.from > 0) this.discoveryDirty = true
@@ -637,8 +670,15 @@ export class RepoViewStore implements BuildStore {
    * already held; the caller guarantees `from === 0` or all three present. */
   private ensureAccs(log: Log): void {
     log.acc ??= buildReducer.advance(buildReducer.initial(), log.events)
-    log.index ??= logIndexReducer.advance(logIndexReducer.initial(), log.events)
-    log.open ??= openExecutionReducer.advance(openExecutionReducer.initial(), log.events)
+    if (log.extra === undefined) {
+      const extra = {} as ExtraAccs
+      for (const name of EXTRA_NAMES) {
+        // biome-ignore lint/suspicious/noExplicitAny: the table is heterogeneous
+        const reducer = EXTRA_REDUCERS[name] as any
+        extra[name] = reducer.advance(reducer.initial(), log.events)
+      }
+      log.extra = extra
+    }
   }
 
   private async openWindow(slug: string, since: number): Promise<Log> {
@@ -737,16 +777,20 @@ export class RepoViewStore implements BuildStore {
       let log = this.logs.get(slug)
       if (log === undefined) {
         log = this.work.has(slug) ? await this.loadWork(slug) : await this.loadFull(slug)
-      } else if (log.from > 0 && (log.acc === undefined || log.index === undefined)) {
+      } else if (log.from > 0 && !hasAccs(log)) {
         log = await this.loadFull(slug)
       }
       await this.ensureCurrent(slug, log)
       log = this.logs.get(slug) ?? log
       this.ensureAccs(log)
+      const extra = log.extra!
       return {
         state: buildReducer.finish(log.acc!),
-        log: logIndexReducer.finish(log.index!),
-        open: openExecutionReducer.finish(log.open!),
+        log: logIndexReducer.finish(extra.logIndex as never),
+        open: openExecutionReducer.finish(extra.openExecution as never),
+        workspace: openBuildWorkspaceReducer.finish(extra.openBuildWorkspace as never),
+        publication: publicationStateReducer.finish(extra.publicationState as never),
+        lastExecution: lastExecutionOutcomeReducer.finish(extra.lastExecutionOutcome as never),
       }
     })
   }
@@ -760,11 +804,7 @@ export class RepoViewStore implements BuildStore {
    * accumulators is skipped — only a cursor read from the log is persisted. */
   private async persistLog(slug: string, log: Log): Promise<void> {
     if (log.dirty || log.cursor <= log.persisted) return
-    if (
-      log.from > 0 &&
-      (log.acc === undefined || log.index === undefined || log.open === undefined)
-    )
-      return
+    if (log.from > 0 && !hasAccs(log)) return
     this.ensureAccs(log)
     const scope: SnapshotScope = { kind: 'build', slug }
     const cursor = log.cursor
@@ -773,19 +813,16 @@ export class RepoViewStore implements BuildStore {
       cursor,
       state,
     })
+    const extra = log.extra!
     const writes = [
-      persistReducerSnapshot(this.backing, scope, SNAPSHOT_BUILD, version(buildReducer, log.acc)),
-      persistReducerSnapshot(
-        this.backing,
-        scope,
-        SNAPSHOT_LOG_INDEX,
-        version(logIndexReducer, log.index),
-      ),
-      persistReducerSnapshot(
-        this.backing,
-        scope,
-        SNAPSHOT_OPEN_EXECUTION,
-        version(openExecutionReducer, log.open),
+      persistReducerSnapshot(this.backing, scope, 'build', version(buildReducer, log.acc)),
+      ...EXTRA_NAMES.map((name) =>
+        persistReducerSnapshot(
+          this.backing,
+          scope,
+          name,
+          version(EXTRA_REDUCERS[name], extra[name]),
+        ),
       ),
     ]
     await Promise.all(writes)
@@ -1252,19 +1289,13 @@ function buildAccShape(snapshot: ReducerSnapshot): boolean {
   )
 }
 
-function indexAccShape(snapshot: ReducerSnapshot): boolean {
-  const state = snapshot.state
+function indexAccShape(state: unknown): boolean {
   return (
     isObject(state) &&
     Array.isArray(state.candidates) &&
     isObject(state.maxRoundEver) &&
     Array.isArray(state.guidanceDeliveries)
   )
-}
-
-function openAccShape(snapshot: ReducerSnapshot): boolean {
-  const state = snapshot.state
-  return isObject(state) && 'open' in state && (state.open === null || isObject(state.open))
 }
 
 /** Events are a contiguous run starting right after `cursor`. */

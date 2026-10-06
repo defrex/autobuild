@@ -7108,6 +7108,18 @@ class RowCountingStore extends MemoryBuildStore {
   override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
     const events = await super.getEvents(...args)
     this.rows += events.length
+    if (process.env.TRACE_ROWS && events.length > 0)
+      console.log(
+        'ROWS',
+        args[0],
+        args[1],
+        events.length,
+        new Error().stack
+          ?.split('\n')
+          .filter((l) => l.includes('/processes/') || l.includes('/cli/'))
+          .slice(0, 12)
+          .join(' | '),
+      )
     return events
   }
   override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
@@ -7319,5 +7331,115 @@ describe('Dispatcher tick event reads', () => {
 
     await h.dispatcher.tick({ acceptNewWork: false })
     expect(store.drain()).toEqual([])
+  })
+})
+
+// ── Reducer snapshots: the quiet second tick (AUT-648) ───────────────────────
+
+describe('Dispatcher over reducer snapshots', () => {
+  async function seededRepository() {
+    const { provider } = (() => {
+      const execution: BuildExecution = {
+        async start() {
+          throw new Error('not used')
+        },
+        async observe() {
+          return { state: 'running' as const }
+        },
+      }
+      const provider: WorkspaceProvider = {
+        name: 'remote-test',
+        buildExecution: execution,
+        async provision(opts) {
+          return {
+            provider: 'remote-test',
+            ref: 'sandbox-g1',
+            path: '/remote/workspace',
+            branch: opts.branch,
+            base: { source: 'existing', sha: opts.revision ?? 'fake-base-sha' },
+          }
+        },
+        async release() {},
+      }
+      return { provider }
+    })()
+    const store = new RowCountingStore({ clock: manualClock() })
+    await store.ensureRepo(REPO)
+    const first = harness({ store, workspaceProvider: provider })
+    // A running build holding a live lease.
+    const running = await seedBuild(first, { slug: 'running-one', attached: true })
+    await store.claimLease(running, 'runner-1', 10_000_000)
+    // A paused build.
+    const paused = await seedBuild(first, { slug: 'paused-one', attached: true })
+    await store.append(paused, { actor: KERNEL, type: 'build.paused', payload: {} } as never)
+    // A foreign open execution the provider reports running, with a live lease
+    // (the settlement stage observes it) and with an expired one (the lease
+    // sweep does too).
+    for (const [slug, ttl] of [
+      ['foreign-live', 10_000_000],
+      ['foreign-stale', 100],
+    ] as const) {
+      await seedBuild(first, {
+        slug,
+        workspaceRef: `sandbox-${slug}`,
+        workspaceProvider: 'remote-test',
+      })
+      await store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: {
+          provider: 'remote-test',
+          workspaceRef: `sandbox-${slug}`,
+          instance: `inst-${slug}`,
+          environmentId: `sandbox-${slug}`,
+          sessionId: 'session-1',
+          commandId: `cmd-${slug}`,
+        },
+      })
+      await store.claimLease(slug, `inst-${slug}`, ttl)
+    }
+    first.clock.advance(1_000)
+    return { store, provider, first }
+  }
+
+  test('a second cold tick with no new events reads zero event rows and appends nothing', async () => {
+    const { store, provider, first } = await seededRepository()
+    await first.dispatcher.tick({ acceptNewWork: false })
+    const slugs = ['running-one', 'paused-one', 'foreign-live', 'foreign-stale']
+    const before = await Promise.all(slugs.map((slug) => store.getEvents(slug)))
+    const journalBefore = await store.getRepoEvents(REPO)
+    store.rows = 0
+    const second = harness({ store, workspaceProvider: provider })
+    await second.dispatcher.tick({ acceptNewWork: false })
+    expect(store.rows).toBe(0)
+    store.rows = 0
+    const after = await Promise.all(slugs.map((slug) => store.getEvents(slug)))
+    expect(after.map((events) => events.map((event) => event.type))).toEqual(
+      before.map((events) => events.map((event) => event.type)),
+    )
+    // The tick's own journal facts are the only appends.
+    expect((await store.getRepoEvents(REPO)).length - journalBefore.length).toBeLessThanOrEqual(4)
+  })
+
+  test('M events between ticks cost exactly M rows', async () => {
+    const { store, provider, first } = await seededRepository()
+    await first.dispatcher.tick({ acceptNewWork: false })
+    await harness({ store, workspaceProvider: provider }).dispatcher.tick({ acceptNewWork: false })
+    const note = (summary: string) => ({
+      actor: agentActor('implement', 's_test'),
+      type: 'observation.recorded' as const,
+      payload: { id: `o_${summary}`, kind: 'followup' as const, summary },
+    })
+    await store.append('running-one', note('a'))
+    await store.append('running-one', note('b'))
+    await store.append('paused-one', note('c'))
+    await store.appendRepo(REPO, {
+      actor: humanActor('op'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+    store.rows = 0
+    await harness({ store, workspaceProvider: provider }).dispatcher.tick({ acceptNewWork: false })
+    expect(store.rows).toBe(4)
   })
 })
