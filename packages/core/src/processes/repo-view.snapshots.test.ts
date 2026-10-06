@@ -195,6 +195,14 @@ describe('RepoViewStore cold start from reducer snapshots', () => {
         reducer === 'build' ? { ...found, state: 'garbage' } : found,
       'malformed journal state': (_scope, reducer, found) =>
         reducer === 'journalView' ? { ...found, state: { retained: 'x' } } : found,
+      'incomplete digest accumulator': (_scope, reducer, found) =>
+        reducer === 'buildDigest' ? { ...found, state: {} } : found,
+      'incomplete publication ledger': (_scope, reducer, found) =>
+        reducer === 'publicationState' ? { ...found, state: {} } : found,
+      'incomplete log index': (_scope, reducer, found) =>
+        reducer === 'logIndex'
+          ? { ...found, state: { candidates: [], maxRoundEver: {}, guidanceDeliveries: [] } }
+          : found,
       'prefixes that disagree': (_scope, reducer, found) =>
         reducer === 'logIndex' ? { ...found, cursor: found.cursor - 1 } : found,
     }

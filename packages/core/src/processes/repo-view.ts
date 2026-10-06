@@ -635,7 +635,12 @@ export class RepoViewStore implements BuildStore {
         persisted: cursor,
         pinned: this.logs.get(slug)?.pinned ?? false,
       }
+      // Exercise every projection a stage will derive, before the state is
+      // installed: a structurally incomplete accumulator that passed the cheap
+      // shape checks throws here and the build is replayed instead.
+      this.probe(log)
       if (delta.length > 0) this.fold(log, delta)
+      this.probe(log)
       this.logs.set(slug, log)
       return log
     } catch {
@@ -659,6 +664,21 @@ export class RepoViewStore implements BuildStore {
       return
     }
     this.fold(log, delta)
+  }
+
+  /** Derive every projection of a log's accumulators (throws on malformed state). */
+  private probe(log: Log): void {
+    const extra = log.extra!
+    buildReducer.finish(log.acc!)
+    logIndexReducer.finish(extra.logIndex as never)
+    openExecutionReducer.finish(extra.openExecution as never)
+    openBuildWorkspaceReducer.finish(extra.openBuildWorkspace as never)
+    const publication = publicationStateReducer.finish(extra.publicationState as never)
+    publication.pending()
+    publication.abandonedPending()
+    publication.latestUncompletedRequest()
+    lastExecutionOutcomeReducer.finish(extra.lastExecutionOutcome as never)
+    buildDigestReducer.finish(extra.buildDigest as never)
   }
 
   private fold(log: Log, events: AbEvent[]): void {
