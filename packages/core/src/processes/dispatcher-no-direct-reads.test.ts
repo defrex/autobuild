@@ -56,6 +56,25 @@ describe('tick stages read state only through the repository view', () => {
     expect(offenders.map(({ line, text }) => `dispatcher.ts:${line}: ${text.trim()}`)).toEqual([])
   })
 
+  test('the frontend callbacks the tick awaits read and write build state through the view', () => {
+    const source = lines('../cli/dispatch.ts')
+    const forbidden =
+      /wiring\.store\.(?:getEvents|getRepoEvents|getRepoStateEvents|listBuilds|getRepoBuildDigests|append|appendIfCurrent|appendWithArtifacts|appendRepo|claimLease|releaseLease)\(/
+    const offenders: string[] = []
+    for (const declaration of [
+      /private async launchRunner\(/,
+      /private async settlePendingPublication\(/,
+      /private async resolveBuildPipeline\(/,
+    ]) {
+      for (const { line, text } of methodBody(source, declaration)) {
+        if (forbidden.test(text) && !/^\s*(\/\/|\*)/.test(text)) {
+          offenders.push(`cli/dispatch.ts:${line}: ${text.trim()}`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
   test("the frontend's tick-path methods read the journal through the view", () => {
     const source = lines('../cli/dispatch.ts')
     const forbidden =

@@ -848,7 +848,7 @@ class DispatchLoop {
       // the record's `branch` (when present) is the same fact. Using the event
       // keeps this read to the events the caller already needs and avoids an
       // extra build-record lookup on the hot launch path.
-      const events = await this.wiring.store.getEvents(slug)
+      const events = await this.repoView.getEvents(slug)
       const workspace = selectOpenWorkspace(events)
       const source = await resolvePipelineSource({
         slug,
@@ -2605,9 +2605,11 @@ class DispatchLoop {
   }
 
   private async settlePendingPublication(slug: string): Promise<void> {
+    // The guest appended through its own handle; settle against fresh state.
+    await this.repoView.refreshBuild(slug)
     await settleWorkspacePublication(
       {
-        store: this.wiring.store,
+        store: this.repoView,
         storeRef: this.wiring.storeRef,
         publication: this.wiring.workspaces.publication,
         forge: this.wiring.forge,
@@ -2665,11 +2667,7 @@ class DispatchLoop {
 
     try {
       await this.publishBuildConfig(slug)
-      leaseClaimed = await this.wiring.store.claimLease(
-        slug,
-        instance,
-        BUILD_EXECUTION_LEASE_TTL_MS,
-      )
+      leaseClaimed = await this.repoView.claimLease(slug, instance, BUILD_EXECUTION_LEASE_TTL_MS)
       if (!leaseClaimed) {
         this.activeBuildRuns.delete(slug)
         await this.appendStatus({
@@ -2680,7 +2678,7 @@ class DispatchLoop {
         this.failureNotice(`build ${slug} already held by another runner — skipped`)
         return 'already-active'
       }
-      const launchEvents = await this.wiring.store.getEvents(slug)
+      const launchEvents = await this.repoView.getEvents(slug)
       let workspaceRef: string | undefined
       let workspaceProvider: string | undefined
       for (const event of launchEvents) {
@@ -2724,7 +2722,7 @@ class DispatchLoop {
         provider: owning.name,
         workspaceRef,
       }
-      await this.wiring.store.append(slug, {
+      await this.repoView.append(slug, {
         actor: DISPATCHER,
         type: 'execution.started',
         payload: { ...identity, instance },
@@ -2739,7 +2737,7 @@ class DispatchLoop {
             // supervisor settles the execution from the Store.
             if (active.detaching) return
             try {
-              await this.wiring.store.append(slug, {
+              await this.repoView.append(slug, {
                 actor: DISPATCHER,
                 type: 'execution.ended',
                 payload: {
@@ -2761,7 +2759,8 @@ class DispatchLoop {
                 return
               }
 
-              const state = reduceBuild(await this.wiring.store.getEvents(slug))
+              await this.repoView.refreshBuild(slug)
+              const state = reduceBuild(await this.repoView.getEvents(slug))
               if (diagnostic === null && exit.exitCode === 0) {
                 await this.appendStatus({
                   actor: DISPATCHER,
@@ -2787,7 +2786,7 @@ class DispatchLoop {
               })
               this.warn(`build ${slug} runner failed: ${detail}`)
             } finally {
-              await this.wiring.store.releaseLease(slug, instance)
+              await this.repoView.releaseLease(slug, instance)
               await this.settlePendingPublication(slug)
             }
           },
@@ -2825,7 +2824,9 @@ class DispatchLoop {
         this.activeBuildRuns.delete(slug)
       }
       if (leaseClaimed) {
-        const events = await this.wiring.store.getEvents(slug)
+        // The runner appended through its own handle: take the delta.
+        await this.repoView.refreshBuild(slug)
+        const events = await this.repoView.getEvents(slug)
         let workspaceRef = ''
         for (const event of events) {
           if (event.type === 'workspace.provisioned') workspaceRef = event.payload.ref
@@ -2844,7 +2845,7 @@ class DispatchLoop {
         // Local start failures have no possible remote holder. Remote failures
         // retain the lease until its TTL fences an ambiguous start.
         if (this.wiring.workspaces.recovery === undefined) {
-          await this.wiring.store.releaseLease(slug, instance)
+          await this.repoView.releaseLease(slug, instance)
         }
       }
       await this.appendStatus({
