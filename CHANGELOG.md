@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#590](https://github.com/defrex/autobuild/pull/590) — Make every event-array reducer incremental
+- [#589](https://github.com/defrex/autobuild/pull/589) — Teach the ab-tickets skill about the icebox and custom states
+- [#587](https://github.com/defrex/autobuild/pull/587) — Add `ab ticket states` and `ab ticket state create`
 - [#586](https://github.com/defrex/autobuild/pull/586) — Make every directory under the file tracker root a ticket state
 
 ## v0.9.0 — 2026-10-03

@@ -789,8 +789,8 @@ remain fatal: the same id in two state dirs is a loud error naming both paths,
 as are root-level ticket files with no state and filesystem failures. When
 `dir` is defaulted, the backlog writes its own `.gitignore` of `*`, so git never sees it; an
 explicit `dir` is the user's and is left alone. Agents and operators drive it
-through the source-agnostic `ab ticket` commands rather than running `mv` by
-hand.
+through the source-agnostic `ab ticket` commands rather than running `mv` or
+`mkdir` by hand; `ab ticket state create` makes a new state.
 
 **Secrets never live in this file.** `LINEAR_API_KEY` and plugin-declared
 `requiredEnv` credentials are environment variables (a local `.env` works).
@@ -1068,6 +1068,19 @@ with Linear and the file tracker, without provider-specific API/MCP calls:
   labeled metadata and the body verbatim, so it can read a stored spec back.
 - `ab ticket move <id> <state> [--json]` transitions one ticket and reports its
   post-transition value.
+- `ab ticket states [--json]` lists every state of the configured source:
+  lifecycle states first (triage, ready, doing, done), then custom states
+  alphabetically. Each row has the state name, the roles it plays under the
+  current config (create, ready, claimed, triage, proposal, done, or none), its
+  ticket count, and its purpose when set. `--json` emits one bare array of
+  `{name, roles, tickets, about?}`.
+- `ab ticket state create <name> [--about <text>] [--json]` makes a state, for
+  example `icebox`. It is idempotent: an existing state is reported as already
+  existing, and `--about` (one line) records or replaces its purpose. A name is
+  one to forty lowercase letters, digits, and hyphens starting with a letter,
+  and may not match an existing state case-insensitively. There is no rename or
+  delete. Only the file source supports `states` and `state create`; other
+  sources exit nonzero naming the source and the unsupported operation.
 
 State names and ids are source-local. For block and unblock, the first id is the
 ticket being changed and the comma-separated second operand names its blockers.
@@ -1854,7 +1867,7 @@ default, when you need to know what this repo's version says).
 | Skill | Place in the lifecycle | Purpose |
 |---|---|---|
 | `ab-spec` | Before a build exists | Design a feature spec-first through conversation, or flesh out a ticket to the spec standard. The human-interactive surface; takes a ticket, not a build slug. **Model-invocable.** |
-| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the tracker's state directories (`triage/ ready/ doing/ done/` plus any the repo adds). The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
+| `ab-tickets` | Before a build exists | Drive this repo's local file tracker: create a ticket, report the backlog, groom or move one between the lifecycle directories (`triage/ ready/ doing/ done/`) and any repository-defined states, including the icebox. The agent-facing surface on the tracker — use it instead of `mv`. **Model-invocable.** |
 | `ab-guide` | Outside the pipeline | This skill: reference for the lifecycle, config surface, setup/upgrade behavior, and the installed skills. Its editable `references/setup.md` guides the init handoff. **Model-invocable.** |
 | `ab-harvest` | harvest `synthesize` step | Continue the producer across review rounds: cluster the claimed structured observations and author typed spec-standard create/join/suppress proposals. Runner-only. |
 | `ab-harvest-review` | harvest `review` step | Fresh adversarial reviewer for proposal coverage, semantic dedup, spec quality, and evidence; returns `approve`/`revise`/`escalate`. Runner-only. |

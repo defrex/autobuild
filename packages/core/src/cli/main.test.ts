@@ -90,6 +90,8 @@ describe('runCli — routing and exit codes', () => {
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
       'ab ticket show <id> [--store <ref>] [--json]',
       'ab ticket move <id> <state> [--json]',
+      'ab ticket states [--json]',
+      'ab ticket state create <name> [--about <text>] [--json]',
       'ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]',
       'ab ticket asset get <id> <kind> <name> <dest> [--rev <n>] [--store <ref>] [--json]',
       'ab ticket asset rm <id> <kind> <name> [--store <ref>] [--json]',
