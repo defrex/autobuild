@@ -266,7 +266,7 @@ export class RepoViewStore implements BuildStore {
     this.recorded = true
     const high = await this.backing.getRepoHighWater(this.repo)
     const subset = await this.backing.getRepoStateEvents(this.repo)
-    this.ingestJournal(subset)
+    this.foldJournal(subset)
     this.journalCursor = Math.max(high, this.journalCursor)
     this.journalEpoch = this.epoch
   }
@@ -291,11 +291,11 @@ export class RepoViewStore implements BuildStore {
       await this.loadJournal()
       return
     }
-    this.ingestJournal(delta)
+    this.foldJournal(delta)
   }
 
   /** Fold events newer than the cursor into the bounded subset and the window. */
-  private ingestJournal(events: readonly RepositoryEvent[]): void {
+  private foldJournal(events: readonly RepositoryEvent[]): void {
     for (const event of events) {
       if (event.seq <= this.journalCursor) continue
       this.journalCursor = event.seq
@@ -523,7 +523,7 @@ export class RepoViewStore implements BuildStore {
       window = { from: sinceSeq, events, last: Math.max(sinceSeq, events.at(-1)?.seq ?? 0) }
       this.journalWindow = window
       // Anything newer than the cursor feeds the bounded subset too.
-      this.ingestJournal(events)
+      this.foldJournal(events)
     }
     return window.events.filter((event) => event.seq > sinceSeq)
   }
@@ -558,7 +558,7 @@ export class RepoViewStore implements BuildStore {
   private foldJournalAppend(envelope: RepositoryEvent): void {
     this.recorded = true
     if (envelope.seq <= this.journalCursor) return
-    if (envelope.seq === this.journalCursor + 1) this.ingestJournal([envelope])
+    if (envelope.seq === this.journalCursor + 1) this.foldJournal([envelope])
     else this.journalDirty = true
   }
 

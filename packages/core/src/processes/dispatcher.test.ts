@@ -7069,6 +7069,82 @@ class ReadCountingStore extends MemoryBuildStore {
   }
 }
 
+/** Counts every event row a read returns — builds, repository journal, and
+ * the bounded journal subset — so a tick's total event traffic is assertable. */
+class RowCountingStore extends MemoryBuildStore {
+  rows = 0
+  override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+    const events = await super.getEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
+    const events = await super.getRepoEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  override async getRepoStateEvents(...args: Parameters<MemoryBuildStore['getRepoStateEvents']>) {
+    const events = await super.getRepoStateEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  drainRows(): number {
+    const rows = this.rows
+    this.rows = 0
+    return rows
+  }
+}
+
+describe('Dispatcher incremental view reads (AUT-647)', () => {
+  function rowHarness() {
+    const store = new RowCountingStore({ clock: manualClock() })
+    return { store, h: harness({ store }) }
+  }
+
+  test('an idle tick after the first reads zero event rows; a tick after M foreign events reads exactly M', async () => {
+    const { store, h } = rowHarness()
+    await store.ensureRepo(REPO)
+    const live = await seedBuild(h, { slug: 'live' })
+    const other = await seedBuild(h, { slug: 'other' })
+    const done = await seedBuild(h, { slug: 'done' })
+    await h.store.append(done, {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBeGreaterThan(0)
+
+    await h.dispatcher.tick({ acceptNewWork: false })
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(0)
+
+    // Another process appends: two build events and one journal setting.
+    await h.store.append(live, { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    await h.store.append(other, { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    await h.store.appendRepo(REPO, {
+      actor: humanActor('op'),
+      type: 'dispatcher.intake-set',
+      payload: { enabled: true },
+    })
+    store.drainRows()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(3)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(0)
+  })
+
+  test('--once style: a fresh dispatcher reads each work build once and no more than its history', async () => {
+    const { store, h } = rowHarness()
+    await store.ensureRepo(REPO)
+    const live = await seedBuild(h, { slug: 'live' })
+    const history = (await h.store.getEvents(live)).length
+    store.drainRows()
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(store.drainRows()).toBe(history)
+  })
+})
+
 describe('Dispatcher tick event reads', () => {
   function countingHarness(over: Parameters<typeof harness>[0] = {}) {
     const store = new ReadCountingStore({ clock: manualClock() })

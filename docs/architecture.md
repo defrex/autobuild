@@ -150,6 +150,26 @@ dashboard poll is the exception, advancing a carried build accumulator by
 per-build deltas); persisting accumulators keyed by cursor and reducer version,
 rebuilt from the log on any miss, is follow-up work.
 
+**Dispatcher repository view.** A dispatcher process builds its view of the
+repository once and refreshes it by deltas
+(`packages/core/src/processes/repo-view.ts`). `RepoViewStore` decorates the
+`BuildStore` port: the first `refresh()` reads the journal's high-water mark
+(`getRepoHighWater`), the bounded journal subset, the build listing and digests,
+and the full log of every build that still has work (the same predicate the tick
+loops use); every later `refresh()` reads only events newer than its cursors —
+one journal delta, one delta per held build, plus the listing and digest reads
+that discover new builds. Every tick stage reads and writes through the view, so
+an event a stage appends is folded in at once and later stages in the same tick
+see it with no re-read; a foreign append interleaved with ours leaves a seq gap
+that marks the log dirty, a lost compare-and-set does the same, and any delta
+that is not contiguous from its cursor discards the log and re-reads it in full,
+so no event is skipped. Decisions that deliberately re-read at the last moment
+(`refreshBuild`) take an explicit delta. Cursor-bearing readers such as the
+orchestrator wake pass get per-source windows that hold only events above the
+lowest session cursor. A `--once` invocation builds the view cold and reads each
+log once; a long-running dispatcher pays that replay at its first tick and not
+again. Persisting the view between processes is follow-up work.
+
 **Session Store authority.** `packages/core/src/cli/binary.ts` validates a complete build or
 Harvest ambient tuple before opening its phase Store through
 `packages/core/src/cli/store-opening.ts`. `packages/core/src/cli/env.ts` also classifies optional ambient

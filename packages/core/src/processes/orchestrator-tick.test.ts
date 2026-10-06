@@ -15,6 +15,7 @@ import type { Clock } from '../store/types'
 import { sequentialIds } from '../ids'
 import { reduceSession } from '../store/session-reducer'
 import { runOrchestratorTickStep, orchestratorTickRegistry } from './orchestrator-tick'
+import { RepoViewStore } from './repo-view'
 
 const REPO = 'https://github.com/acme/widgets'
 
@@ -837,5 +838,100 @@ describe('orchestrator tick — sandbox backend (AUT-584)', () => {
     await expect(
       registry.call('sandbox.exec', { repo: REPO, command: 'echo hi' }, { identity: 'op' }),
     ).rejects.toThrow('unknown tool "sandbox.exec"')
+  })
+})
+
+/** Counts every event row a build or journal read returns. */
+class RowCountingStore extends MemoryBuildStore {
+  rows = 0
+  override async getEvents(...args: Parameters<MemoryBuildStore['getEvents']>) {
+    const events = await super.getEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  override async getRepoEvents(...args: Parameters<MemoryBuildStore['getRepoEvents']>) {
+    const events = await super.getRepoEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  override async getRepoStateEvents(...args: Parameters<MemoryBuildStore['getRepoStateEvents']>) {
+    const events = await super.getRepoStateEvents(...args)
+    this.rows += events.length
+    return events
+  }
+  drain(): number {
+    const rows = this.rows
+    this.rows = 0
+    return rows
+  }
+}
+
+describe('orchestrator wake pass under the repository view (AUT-647)', () => {
+  const escalation = {
+    actor: agentActor('implement', 'session-x'),
+    type: 'escalation.raised',
+    payload: { id: 'e1', phase: 'implement', round: 1, source: 'agent', question: 'Which way?' },
+  } as const
+
+  test('an idle session reads its history once, then only the rows of matching new events', async () => {
+    const clock = manualClock()
+    const store = new RowCountingStore({ clock })
+    const view = new RepoViewStore(store, { repo: REPO, resident: true })
+    const sessionId = await seedSession(store, clock, { wake: ['escalation.raised'] })
+    // Non-matching history on a settled build, a live build, and the journal.
+    await seedBuild(store, 'old')
+    for (let i = 0; i < 3; i += 1) {
+      await store.append('old', { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    }
+    await store.append('old', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    await seedBuild(store, 'live')
+    await store.append('live', { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-started',
+      payload: { run: 'r' },
+    })
+
+    const tick = async () => {
+      await view.refresh()
+      return runOrchestratorTickStep({
+        ...tickOptions(store, clock, textModel(), tickConfig(['escalation.raised'])),
+        store: view,
+        view,
+      })
+    }
+
+    expect((await tick()).woken).toBe(0)
+    expect(store.drain()).toBeGreaterThan(0)
+    expect((await tick()).woken).toBe(0)
+    expect(store.drain()).toBe(0)
+    expect((await tick()).woken).toBe(0)
+    expect(store.drain()).toBe(0)
+
+    // Matching events land elsewhere: one on the settled build, one on the live
+    // one, plus a non-matching journal fact. Exactly those rows are read.
+    await store.append('old', escalation)
+    await store.append('live', escalation)
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-started',
+      payload: { run: 'r' },
+    })
+    store.drain()
+    const woke = await tick()
+    expect(woke.woken).toBe(1)
+    expect(store.drain()).toBe(3)
+
+    // The other build's match wakes on the next tick, reading nothing new.
+    expect((await tick()).woken).toBe(1)
+    expect(store.drain()).toBe(0)
+    expect((await tick()).woken).toBe(0)
+    expect(store.drain()).toBe(0)
+    const state = reduceSession(await store.getSessionEvents(sessionId))
+    expect(state.wakeCursors).toEqual({ old: 6, live: 3 })
   })
 })
