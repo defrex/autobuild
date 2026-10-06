@@ -894,6 +894,24 @@ command = "postgres"
     }
   })
 
+  test('a build in its abort-cleanup window renders a cleaning row; once cleanup is recorded the snapshot never reads it', async () => {
+    const raw = await seedDashboardStore(0)
+    const before = countingStore(raw)
+    const cleaning = await getOperatorDashboard({ store: before.store, repo: REPO, clock })
+    expect(cleaning.model.builds.find((build) => build.slug === 'aborted')?.status).toBe('cleaning')
+    expect(before.eventSlugs).toContain('aborted')
+
+    await raw.append('aborted', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'abandoned' },
+    })
+    const after = countingStore(raw)
+    const settled = await getOperatorDashboard({ store: after.store, repo: REPO, clock })
+    expect(settled.model.builds.find((build) => build.slug === 'aborted')).toBeUndefined()
+    expect(after.eventSlugs).not.toContain('aborted')
+  })
+
   test('adding finished builds does not increase the snapshot store round trips (AUT-487)', async () => {
     // AC 1: with a fixed set of row-rendering builds, adding done builds
     // that carry no unclaimed observations must not increase the number of

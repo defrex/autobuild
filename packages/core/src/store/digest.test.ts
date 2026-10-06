@@ -160,9 +160,9 @@ function workLog(
         ? { provider: 'p', workspaceRef: 'w', instance: item.instance }
         : item.type === 'execution.ended'
           ? { instance: item.instance, workspaceRef: 'w', outcome: 'completed' }
-          : item.type === 'pr-attachment.hosted'
-            ? { designationSeq: 1, asset: {} }
-            : { hostedSeq: item.hostedSeq }
+          : item.type === 'pr-attachment.reclaimed'
+            ? { hostedSeq: item.hostedSeq }
+            : { designationSeq: 1, asset: {} }
     return {
       build: 'b',
       seq,
@@ -177,7 +177,7 @@ function workLog(
     seq: index + 1,
     ts: events[index]!.ts,
     ...('instance' in item ? { instance: item.instance } : {}),
-    ...('hostedSeq' in item ? { hostedSeq: item.hostedSeq } : {}),
+    ...(item.type === 'pr-attachment.reclaimed' ? { hostedSeq: item.hostedSeq } : {}),
   }))
   return { events, rows }
 }
