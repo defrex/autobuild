@@ -110,3 +110,12 @@ export type {
   Unsubscribe,
 } from './types'
 export { normalizeOperator } from './types'
+export {
+  loadReducerSnapshot,
+  persistReducerSnapshot,
+  reducerSnapshotWireSchema,
+  SNAPSHOT_REDUCER_NAME,
+  snapshotScopeKey,
+  snapshotSupersedes,
+} from './snapshots'
+export type { ReducerSnapshot, SnapshotScope } from './snapshots'

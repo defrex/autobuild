@@ -446,6 +446,64 @@ if (testUrl) {
       }
     })
   })
+
+  describe('PostgreSQL reducer snapshots: additive table', () => {
+    const scope = { kind: 'build', slug: 'snap-live' } as const
+
+    test('a database without the snapshot table serves full replay with no errors, then gains it on migrate', async () => {
+      const database = await isolatedDatabase()
+      const raw = new SQL(database.url)
+      const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+      try {
+        await store.createBuild(sampleBuildInput('snap-live'))
+        await store.append('snap-live', sampleEventWrite('one'))
+        await raw.unsafe('DROP TABLE reducer_snapshots')
+        // The frozen-schema assertion does not know the table: a store opens
+        // against a database that lacks it.
+        const second = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+        expect(await second.getReducerSnapshot(scope, 'build', 1)).toBeNull()
+        expect(
+          await second.putReducerSnapshot(scope, 'build', { version: 1, cursor: 1, state: {} }),
+        ).toBe(false)
+        expect((await second.getEvents('snap-live')).length).toBe(1)
+        await second.close()
+        // The failure is not cached: once the table exists the same store works.
+        await migratePostgres(database.url)
+        expect(
+          await store.putReducerSnapshot(scope, 'build', {
+            version: 1,
+            cursor: 1,
+            state: { a: 1 },
+          }),
+        ).toBe(true)
+        expect(await store.getReducerSnapshot(scope, 'build', 1)).toEqual({
+          version: 1,
+          cursor: 1,
+          state: { a: 1 },
+        })
+      } finally {
+        await store.close()
+        await raw.close()
+        await database.cleanup()
+      }
+    })
+
+    test('the migration is idempotent and leaves stored snapshots untouched', async () => {
+      const database = await isolatedDatabase()
+      const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+      try {
+        await store.createBuild(sampleBuildInput('snap-live'))
+        await store.append('snap-live', sampleEventWrite('one'))
+        await store.putReducerSnapshot(scope, 'build', { version: 1, cursor: 1, state: [1, 2] })
+        await migratePostgres(database.url)
+        await migratePostgres(database.url)
+        expect((await store.getReducerSnapshot(scope, 'build', 1))?.state).toEqual([1, 2])
+      } finally {
+        await store.close()
+        await database.cleanup()
+      }
+    })
+  })
 } else {
   describe('PostgreSQL live contract', () => {
     test.skip('set AB_POSTGRES_TEST_URL to run the PostgreSQL contract and concurrency suite', () => {})

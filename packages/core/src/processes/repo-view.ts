@@ -45,6 +45,7 @@
  * processes is the snapshot follow-up.
  */
 import type { AbEvent, EventEnvelope, EventWrite } from '../events/catalog'
+import type { ReducerSnapshot, SnapshotScope } from '../store/snapshots'
 import type { EventType } from '../events/payloads'
 import type {
   RepositoryEvent,
@@ -645,6 +646,22 @@ export class RepoViewStore implements BuildStore {
       if (!this.recorded) return this.backing.getRepoStateEvents(repo)
       return [...this.journal]
     })
+  }
+
+  getReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    version: number,
+  ): Promise<ReducerSnapshot | null> {
+    return this.backing.getReducerSnapshot(scope, reducer, version)
+  }
+
+  putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    return this.backing.putReducerSnapshot(scope, reducer, snapshot)
   }
 
   async getRepoHighWater(repo: string): Promise<number> {

@@ -26,6 +26,8 @@ import type {
 } from '../events/sessions'
 export type { SessionEventEnvelope }
 import type { TicketRef } from '../ontology'
+import type { ReducerSnapshot, SnapshotScope } from './snapshots'
+export type { ReducerSnapshot, SnapshotScope }
 import type {
   TicketAsset,
   TicketAssetInput,
@@ -378,6 +380,29 @@ export interface BuildStore {
    * journal's trailing events. Unknown repo rejects like `getRepoEvents`;
    * never an `ensureRepo` side effect. */
   getRepoHighWater(repo: string): Promise<number>
+  /** The stored reducer snapshot for a scope (a build log or a repository
+   * journal), a cache beside the log and never an authority. `null` when
+   * absent, when the stored version differs from `version`, when the stored
+   * cursor is ahead of the scope's log tail, or when the scope is unknown (no
+   * `ensureRepo` side effect, no rejection). A store without snapshot storage
+   * answers `null`. */
+  getReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    version: number,
+  ): Promise<ReducerSnapshot | null>
+  /** Upsert a reducer snapshot; the stored cursor never decreases. Writes only
+   * when no row exists, when `cursor` is above the stored one (whatever the
+   * versions — a mismatched row is replaced as soon as any writer advances
+   * past it), or when the cursor is equal and `version` is higher. Everything
+   * else, and any cursor beyond the log tail, is a no-op. Atomic, so
+   * concurrent writers cannot undo each other's progress. Resolves `true`
+   * when the row was written. */
+  putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean>
   putRepoArtifact(repo: string, artifact: ArtifactInput): Promise<RepositoryArtifactMeta>
   getRepoArtifact(repo: string, kind: string, rev?: number): Promise<RepositoryArtifact | null>
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>

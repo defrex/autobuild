@@ -1,3 +1,4 @@
+import type { ReducerSnapshot, SnapshotScope } from './snapshots'
 import type { EventType } from '../events/payloads'
 import type { EventWrite } from '../events/catalog'
 import type { RepositoryEventType, RepositoryEventWrite } from '../events/repository'
@@ -173,6 +174,32 @@ export function createSessionScopedStore(store: BuildStore, scope: string): Sess
     },
     getRepoHighWater(repo: string): Promise<number> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoHighWater', repo))
+    },
+    getReducerSnapshot(
+      target: SnapshotScope,
+      _reducer: string,
+      _version: number,
+    ): Promise<ReducerSnapshot | null> {
+      return Promise.reject(
+        new SessionScopeError(
+          scope,
+          'getReducerSnapshot',
+          target.kind === 'build' ? target.slug : target.repo,
+        ),
+      )
+    },
+    putReducerSnapshot(
+      target: SnapshotScope,
+      _reducer: string,
+      _snapshot: ReducerSnapshot,
+    ): Promise<boolean> {
+      return Promise.reject(
+        new SessionScopeError(
+          scope,
+          'putReducerSnapshot',
+          target.kind === 'build' ? target.slug : target.repo,
+        ),
+      )
     },
     getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
       return Promise.reject(new SessionScopeError(scope, 'getRepoBuildDigests', repo))

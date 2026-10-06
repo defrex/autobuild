@@ -26,6 +26,12 @@ import {
 } from '../events/sessions'
 import { humanActor } from '../events/envelope'
 import { createBuildScopedStore } from './build-scope'
+import {
+  type ReducerSnapshot,
+  type SnapshotScope,
+  snapshotScopeKey,
+  snapshotSupersedes,
+} from './snapshots'
 import { validateCreatedEvent } from './new-build'
 import { createSessionScopedStore } from './session-handle'
 import { reduceBuildDigest } from './digest'
@@ -163,6 +169,8 @@ export class MemoryBuildStore implements BuildStore {
    * stream's close against its appends inside this process (AUT-348). */
   private readonly streamLocks = new StreamLocks()
   private readonly sessions = new Map<string, SessionState>()
+  /** Reducer snapshots (store/snapshots.ts), keyed by scope and reducer name. */
+  private readonly snapshots = new Map<string, ReducerSnapshot>()
   /** `[repo, ticketId, kind, name]` → rows in revision order. A removal is a
    * tombstone row (`removed`, empty manifest) taking the next revision. */
   private readonly ticketAssets = new Map<string, { meta: TicketAssetMeta; removed: boolean }[]>()
@@ -695,6 +703,46 @@ export class MemoryBuildStore implements BuildStore {
 
   async getRepoHighWater(repo: string): Promise<number> {
     return this.repoState(repo).events.at(-1)?.seq ?? 0
+  }
+
+  /** The scope's log tail, or `undefined` for a scope that does not exist. */
+  private snapshotTail(scope: SnapshotScope): number | undefined {
+    const events =
+      scope.kind === 'build'
+        ? this.builds.get(scope.slug)?.events
+        : this.repos.get(scope.repo)?.events
+    return events === undefined ? undefined : (events.at(-1)?.seq ?? 0)
+  }
+
+  async getReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    version: number,
+  ): Promise<ReducerSnapshot | null> {
+    const tail = this.snapshotTail(scope)
+    if (tail === undefined) return null
+    const stored = this.snapshots.get(`${snapshotScopeKey(scope)}\u0000${reducer}`)
+    if (stored === undefined || stored.version !== version || stored.cursor > tail) return null
+    return { version: stored.version, cursor: stored.cursor, state: structuredClone(stored.state) }
+  }
+
+  async putReducerSnapshot(
+    scope: SnapshotScope,
+    reducer: string,
+    snapshot: ReducerSnapshot,
+  ): Promise<boolean> {
+    const tail = this.snapshotTail(scope)
+    if (tail === undefined || snapshot.cursor > tail) return false
+    const key = `${snapshotScopeKey(scope)}\u0000${reducer}`
+    if (!snapshotSupersedes(snapshot, this.snapshots.get(key))) return false
+    // The JSON round trip is the stored form every adapter shares, so callers
+    // cannot alias what the store holds.
+    this.snapshots.set(key, {
+      version: snapshot.version,
+      cursor: snapshot.cursor,
+      state: JSON.parse(JSON.stringify(snapshot.state ?? null)),
+    })
+    return true
   }
 
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {

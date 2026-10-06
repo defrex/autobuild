@@ -347,6 +347,15 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     return ticketAssetRoutes.has(assetRoute) ? 'store' : undefined
   }
 
+  // Reducer snapshots (a cache beside the log): `GET|PUT …/snapshots/:reducer`
+  // under a build or repository journal, served inside the existence gates.
+  if (
+    (root === 'builds' || root === 'repos') &&
+    segments[2] === 'snapshots' &&
+    segments.length === 4
+  ) {
+    return req.method === 'GET' || req.method === 'PUT' ? 'store' : undefined
+  }
   const route = `${req.method} ${segments.slice(2).join('/')}`
   if (root === 'builds' && route === 'POST events/conditional') return 'store'
   // A build's frozen ticket assets (SPEC §6.3): manifest and one file.

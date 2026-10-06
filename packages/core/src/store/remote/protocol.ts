@@ -24,6 +24,7 @@
  * Arbitrary computation over the assigned revisions inside `makeEvent`
  * (e.g. `rev + 1`, string interpolation) is unsupported by design.
  */
+import { reducerSnapshotWireSchema } from '../snapshots'
 import { z } from 'zod'
 import { actorSchema } from '../../events/envelope'
 import { ticketRefSchema } from '../../ontology'
@@ -122,6 +123,15 @@ export const repositoryEventListSchema = z.array(repositoryEventEnvelopeWireSche
 
 /** `GET repos/:repo/high-water`: the journal's greatest assigned seq. */
 export const repoHighWaterSchema = z.object({ seq: z.number().int().nonnegative() })
+
+/** `GET builds|repos/:id/snapshots/:reducer?version=N`: the snapshot or `null`. */
+/** `PUT …/snapshots/:reducer` request body. */
+export const reducerSnapshotPutBodySchema = reducerSnapshotWireSchema
+
+export const reducerSnapshotResponseSchema = reducerSnapshotWireSchema.nullable()
+
+/** `PUT builds|repos/:id/snapshots/:reducer`: whether the row was written. */
+export const reducerSnapshotPutResponseSchema = z.object({ written: z.boolean() })
 
 export const repositoryArtifactMetaWireSchema = z.object({
   repo: z.string(),
