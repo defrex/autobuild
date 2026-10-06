@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#590](https://github.com/defrex/autobuild/pull/590) — Make every event-array reducer incremental
 - [#586](https://github.com/defrex/autobuild/pull/586) — Make every directory under the file tracker root a ticket state
 
 ## v0.9.0 — 2026-10-03
