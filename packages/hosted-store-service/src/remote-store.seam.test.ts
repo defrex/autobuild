@@ -368,6 +368,34 @@ describe('D8 scope enforcement over the wire', () => {
     })
   })
 
+  test('the high-water route answers the journal tail for a repo token and rejects an unknown repo', async () => {
+    await withSecureStore(async ({ url, admin }) => {
+      await admin.createBuild(sampleBuildInput('build-a'))
+      await admin.ensureRepo('acme/repo')
+      expect(
+        await new RemoteBuildStore({
+          url,
+          token: mintToken(SECRET, {
+            resource: { kind: 'repo', id: 'acme/repo' },
+            session: 'hs_one',
+            exp: EXP,
+          }),
+        }).getRepoHighWater('acme/repo'),
+      ).toBe(0)
+      await admin.appendRepo('acme/repo', {
+        actor: DISPATCHER,
+        type: 'dispatcher.tick-started',
+        payload: { run: 'r_1' },
+      })
+      const wildcard = new RemoteBuildStore({
+        url,
+        token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
+      })
+      expect(await wildcard.getRepoHighWater('acme/repo')).toBe(1)
+      await expect(wildcard.getRepoHighWater('acme/never-seen')).rejects.toThrow()
+    })
+  })
+
   test('the state-events route: repo-token scope, the repo-existence gate, and the bounded wire shape', async () => {
     await withSecureStore(async ({ url, admin, backing }) => {
       await admin.createBuild(sampleBuildInput('build-a'))
