@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#586](https://github.com/defrex/autobuild/pull/586) — Make every directory under the file tracker root a ticket state
+
 ## v0.9.0 — 2026-10-03
 
 This release introduces ticket assets, which are files and folders attached to a ticket and stored in the BuildStore, frozen into the build at claim, and exported from designs by the skills during grooming. It also adds a durable embedded orchestrator over the shared tool registry, PR-only publication from operator sandboxes through a hosted sandbox backend, and sessions that wake on repository-journal events. The hosted dispatcher, store, operator, and ticket servers now ship as separate packages from core, the Vercel Sandbox provider is available as a plugin, each build pins its pipeline config to its own branch, and `ab wait` long-polls remote stores. Dashboard cost now stays flat as finished builds accumulate because journal reads are bounded, the published tarballs are tighter and better guarded, and a new one-page marketing site comes with its own visual verify step.

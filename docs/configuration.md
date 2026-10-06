@@ -1179,8 +1179,13 @@ and plugin sources use `[]`, meaning no host-imposed label gate. An explicit val
 wins. A nonempty list is
 conjunctive: every configured label must be present. `readyState` remains
 mandatory regardless of labels. Linear compares state and label names exactly
-and case-sensitively. The file source accepts state names case-insensitively and
-canonicalizes them to `triage/`, `ready/`, `doing/`, or `done/`.
+and case-sensitively. The file source matches state names case-insensitively against the directories
+under the tracker root: the four lifecycle directories (`triage/`, `ready/`,
+`doing/`, `done/`, always present) plus any directory the repository adds, such
+as `icebox/`. A name matching no directory is an error listing those that
+exist, so creating a state stays an explicit act. `createState`, `readyState`,
+`triageState`, and `proposalState` may each name any existing directory;
+`ab ticket list` with no filter still lists only `readyState`.
 
 Source-specific validation is strict:
 

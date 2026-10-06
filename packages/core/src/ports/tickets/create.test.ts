@@ -132,7 +132,7 @@ describe('createTicketSource — file', () => {
       {},
       repo,
     )
-    expect((await source.create({ title: 'T', body: 'b' })).state).toBe('Ready')
+    expect((await source.create({ title: 'T', body: 'b' })).state).toBe('ready')
   })
 })
 
