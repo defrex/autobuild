@@ -30,6 +30,12 @@ verification report stay under `.ab/dashboard-frames/`.
 Run the command a second time when checking reproducibility; an unchanged
 source must produce the same bytes.
 
+The website hero is the same scripted scenario tracked as text: the
+`website-hero` frame's exact ANSI lines live in
+`packages/website/src/hero-frame.txt`. A dashboard rendering change stales it
+too; regenerate it with `bun run capture:website-hero`, which `bun run check`
+also verifies byte for byte.
+
 ## Inspect and check
 
 Open `docs/assets/headline-wide.png` and inspect it at approximately the

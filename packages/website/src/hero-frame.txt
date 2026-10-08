@@ -1,0 +1,22 @@
+ [36m> [0m[1mAutobuild[0m  origin  [2mqueue 0 | active 5/6 | observations 0/5[0m
+   [32mintake ON[0m  [32mauto merge ON[0m  [32mharvest ON[0m
+
+   [1mHarvest[0m  [2m3 observations[0m                                                                                                   [32mRUNNING[0m
+   [32m[x] scan(1s)[0m [1m[36m[>] synthesize(8m20s)[0m[0m [2m[ ] review[0m [2m[ ] file[0m
+
+   [34mAUT-131[0m  [1mcache-warm-on-deploy[0m                                                              [32mauto merge enabled[0m  ]8;;https://github.com/defrex/autobuild/pull/41PR merged]8;;  [32mRUNNING[0m
+   [32m[x] plan(1s)[0m [32m[x] plan-review(1s)[0m [32m[x] implement(2s)[0m [32m[x] code-review(2s)[0m [32m[x] verify:unit(1s)[0m [32m[x] finalize(1s)[0m [2m[ ] merge(waiting)[0m
+
+   [34mAUT-134[0m  [1mdashboard-key-legend[0m                                                                       [36mauto merge requested[0m  [32mRUNNING[0m
+   [32m[x] plan(1s)[0m [32m[x] plan-review(1s)[0m [1m[36m[>] implement(9m17s)[0m[0m [2m[ ] code-review[0m [2m[ ] verify:unit[0m [2m[ ] finalize[0m [2m[ ] merge(waiting)[0m
+
+   [34mAUT-136[0m  [1mharvest-dedup-window[0m                                                                       [36mauto merge requested[0m  [32mRUNNING[0m
+   [1m[36m[>] plan(9m08s)[0m[0m [2m[ ] plan-review[0m [2m[ ] implement[0m [2m[ ] code-review[0m [2m[ ] verify:unit[0m [2m[ ] finalize[0m [2m[ ] merge(waiting)[0m
+
+   [34mAUT-129[0m  [1mparallel-verify-steps[0m                                                                      [36mauto merge requested[0m  [32mRUNNING[0m
+   [32m[x] plan(2s/2)[0m [32m[x] plan-review(2s/2)[0m [32m[x] implement(2s)[0m [32m[x] code-review(2s)[0m [1m[36m[>] verify:unit(8m42s)[0m[0m [2m[ ] finalize[0m [2m[ ] merge(waiting)[0m
+
+   [34mAUT-133[0m  [1mticket-source-adapters[0m                                                                     [36mauto merge requested[0m  [32mRUNNING[0m
+   [32m[x] plan(1s)[0m [32m[x] plan-review(1s)[0m [33m[~] implement(2s)[0m [1m[36m[>] code-review(8m25s)[0m[0m [2m[ ] verify:unit[0m [2m[ ] finalize[0m [2m[ ] merge(waiting)[0m
+
+ [2mKeys: Up/Down select  h harvest  m auto-merge  i intake  p pause all  r resume all  Ctrl-C quit[0m

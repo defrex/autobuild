@@ -10,13 +10,19 @@ Design canvas so builds can read it without access to claude.ai.
   are screenshots of `reference.html`. `reference-desktop-remote.png` and
   `reference-phone-remote.png` show the seam selector after switching every seam
   to remote, with Codex selected as the runtime.
-- Below 720px each of the four wide figures (dashboard demo, pipeline,
-  dispatcher, intake) is replaced by a portrait layout of the same content, so
-  nothing scrolls sideways; at desktop width nothing changes. The dashboard
-  takes two lines per build, the pipeline runs top to bottom, the dispatcher
-  shows one build-runner with stacked cards behind it above a full-width build
-  store, and the intake lays its four sources in a 2×2 grid with the PM agent
-  below.
+- The hero dashboard in the reference is drawn by hand and its steps and
+  states do not match the product. The built page supersedes it with the
+  real `ab dispatch` frame (`packages/website/src/hero-frame.txt`, captured
+  from the scripted dashboard scenario), rendered as preformatted text in the
+  reference's well; on narrow viewports that frame scrolls sideways inside
+  its own container, as the design system allows for diagrams. The rest of
+  the page still follows the reference.
+- Below 720px each of the three remaining wide figures (pipeline, dispatcher,
+  intake) is replaced by a portrait layout of the same content, so nothing
+  scrolls sideways; at desktop width nothing changes. The pipeline runs top
+  to bottom, the dispatcher shows one build-runner with stacked cards behind
+  it above a full-width build store, and the intake lays its four sources in
+  a 2×2 grid with the PM agent below.
 - Sections are 288px apart at desktop width and 192px apart below 720px, with
   the same space after the last section. No horizontal rules appear anywhere.
   The pipeline section has no "inside one build-runner" caption, and the page

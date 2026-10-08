@@ -130,34 +130,53 @@ const SESSION_CLOSED_PARTS: readonly StreamPart[] = [
   errorPart('the provider rate limit was exhausted'),
 ]
 
+const HAPPY_EVIDENCE = [
+  'intake ON',
+  'auto merge ON',
+  'harvest ON',
+  'active 5/6',
+  'AUT-131',
+  'AUT-129',
+  'AUT-133',
+  'AUT-134',
+  'AUT-136',
+  'PR merged',
+  'Harvest',
+  'RUNNING',
+] as const
+const HAPPY_FORBIDDEN = [
+  'BLOCKED',
+  'PAUSED',
+  '(held)',
+  'Unicode',
+  UNICODE_EVIDENCE,
+  'more rows - Enter details',
+] as const
+
+/** Terminal width of the website hero frame; `packages/website` lays the
+ * frame out at exactly this many cells. */
+export const WEBSITE_HERO_COLUMNS = 133
+
 export const FRAME_SPECS: readonly FrameSpec[] = [
   {
     id: 'headline-happy-wide',
     scenario: 'happy',
     columns: 140,
     rows: 40,
-    requires: [
-      'intake ON',
-      'auto merge ON',
-      'harvest ON',
-      'active 5/6',
-      'AUT-131',
-      'AUT-129',
-      'AUT-133',
-      'AUT-134',
-      'AUT-136',
-      'PR merged',
-      'Harvest',
-      'RUNNING',
-    ],
-    forbids: [
-      'BLOCKED',
-      'PAUSED',
-      '(held)',
-      'Unicode',
-      UNICODE_EVIDENCE,
-      'more rows - Enter details',
-    ],
+    requires: HAPPY_EVIDENCE,
+    forbids: HAPPY_FORBIDDEN,
+  },
+  {
+    // The website hero: the same happy scenario at the narrowest width that
+    // keeps every pipeline row on one line, so the frame fits the page at
+    // the 14px cell with a 2ch well on either side. `packages/website/src/hero-frame.txt` tracks its exact
+    // ANSI lines; `bun run capture:website-hero` keeps the two in step.
+    id: 'website-hero',
+    scenario: 'happy',
+    columns: WEBSITE_HERO_COLUMNS,
+    rows: 40,
+    requires: HAPPY_EVIDENCE,
+    forbids: HAPPY_FORBIDDEN,
   },
   {
     id: 'mixed-wide',

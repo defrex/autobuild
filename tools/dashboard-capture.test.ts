@@ -2,8 +2,14 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
+import { stripAnsi } from '../packages/core/src/cli/dashboard/render'
 import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
-import { captureDashboardFrames, type DashboardCaptureResult } from './dashboard-capture'
+import {
+  captureDashboardFrames,
+  type DashboardCaptureResult,
+  WEBSITE_HERO_COLUMNS,
+} from './dashboard-capture'
 
 let tmp: string
 
@@ -60,6 +66,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
     'headline-happy-wide',
+    'website-hero',
     'mixed-wide',
     'mixed-narrow',
     'unicode-transcript',
@@ -89,7 +96,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     expect(frame.text).toBe(again.text)
     expect(frame.png).toEqual(again.png)
     expect(frame.png.slice(0, 8)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]))
-    if (frame.id === 'headline-happy-wide') {
+    if (frame.id === 'headline-happy-wide' || frame.id === 'website-hero') {
       expect(frame.text).toContain('AUT-131')
       expect(frame.text).toContain('AUT-129')
       expect(frame.text).toContain('AUT-133')
@@ -124,6 +131,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     if (
       frame.id !== 'unicode-transcript' &&
       frame.id !== 'headline-happy-wide' &&
+      frame.id !== 'website-hero' &&
       !frame.id.startsWith('session-')
     ) {
       expect(frame.text).toContain('BLOCKED')
@@ -151,6 +159,17 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(headline).not.toContain('more rows - Enter details')
   expect(headline).not.toContain('naïve — “日本語”')
   expect(headline.split('\n').some((line) => line.endsWith('~'))).toBe(false)
+
+  // The website hero is the headline scenario at the narrowest width that
+  // keeps every pipeline row whole: the same words, only the pinning differs.
+  const hero = first.result.frames.find((frame) => frame.id === 'website-hero')!
+  expect(hero.terminal).toEqual({ columns: WEBSITE_HERO_COLUMNS, rows: 40 })
+  expect(hero.text.replace(/ +/g, ' ')).toBe(headline.replace(/ +/g, ' '))
+  expect(hero.text.split('\n').some((line) => line.endsWith('~'))).toBe(false)
+  for (const line of hero.lines) {
+    expect(cellWidth(stripAnsi(line))).toBeLessThanOrEqual(WEBSITE_HERO_COLUMNS)
+  }
+  expect(hero.lines.some((line) => line.includes('\x1b['))).toBe(true)
 
   for (const id of ['mixed-wide', 'mixed-narrow']) {
     const mixed = first.result.frames.find((frame) => frame.id === id)!.text

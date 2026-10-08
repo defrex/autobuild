@@ -24,6 +24,23 @@ function textOf(html: string): string[] {
     .filter((t) => t.length > 0)
 }
 
+/** The page or the reference without its hero dashboard figure. */
+function withoutHeroFigure(html: string): string {
+  return html
+    .replace(
+      /<div class="scroll desk-only" style="background: #141414;[\s\S]*?<\/div><\/div>\n/,
+      '',
+    )
+    .replace(
+      /<div class="phone-only" role="img" aria-label="Terminal dashboard[\s\S]*?<\/div><\/div>\n/,
+      '',
+    )
+    .replace(
+      /<div class="scroll" tabindex="0" role="region"[^>]*><pre class="frame">[\s\S]*?<\/pre><\/div>/,
+      '',
+    )
+}
+
 const tmp: string[] = []
 afterAll(async () => {
   for (const dir of tmp) await rm(dir, { recursive: true, force: true })
@@ -37,12 +54,24 @@ describe('static site', () => {
     expect((await readdir(dir)).sort()).toEqual(['index.html', 'site.css', 'site.js'])
   })
 
-  test('copy matches the design reference word for word', async () => {
+  test('copy matches the design reference word for word, except the hero frame', async () => {
+    // The reference draws the hero dashboard by hand; the page shows the real
+    // captured frame instead, so both figures are set aside before comparing.
     const { 'index.html': html } = await buildFiles()
-    const reference = textOf(await readFile(REFERENCE, 'utf8'))
+    const reference = textOf(withoutHeroFigure(await readFile(REFERENCE, 'utf8')))
     // Diagram labels are absolutely positioned, so only their DOM order may differ from the reference.
     const words = (tokens: string[]): string[] => tokens.join(' ').split(' ').sort()
-    expect(words(textOf(html))).toEqual(words(reference))
+    expect(words(textOf(withoutHeroFigure(html)))).toEqual(words(reference))
+  })
+
+  test('the hero is the tracked dispatch frame, preformatted, with no portrait substitute', async () => {
+    const { 'index.html': html } = await buildFiles()
+    const hero = html.slice(html.indexOf('<section'), html.indexOf('</section>'))
+    expect(hero).toContain('<pre class="frame">')
+    expect(hero).toContain('AUT-131')
+    expect(hero).toContain('[&gt;] implement(9m17s)')
+    expect(hero).not.toContain('phone-only')
+    expect(hero).not.toContain('\x1b')
   })
 
   test('structure: one h1, h2 per section, initial seam state, links', async () => {
@@ -52,7 +81,7 @@ describe('static site', () => {
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(7)
     expect(html.match(/aria-pressed="false"/g)).toHaveLength(10)
     expect(html).toContain(`href="${REPO_URL}"`)
-    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(7)
+    expect(html.match(/role="img" aria-label="[^"]+"/g)).toHaveLength(6)
     expect(html).toContain('fully local')
   })
 
@@ -72,8 +101,8 @@ describe('static site', () => {
 
   test('each figure has a desktop and a portrait form with one description', async () => {
     const { 'index.html': html, 'site.css': css } = await buildFiles()
-    expect(html.match(/class="scroll desk-only"/g)).toHaveLength(4)
-    expect(html.match(/class="phone-only"/g)).toHaveLength(4)
+    expect(html.match(/class="scroll desk-only"/g)).toHaveLength(3)
+    expect(html.match(/class="phone-only"/g)).toHaveLength(3)
     const desk = [...html.matchAll(/class="scroll desk-only"[^>]*aria-label="([^"]+)"/g)].map(
       (m) => m[1],
     )

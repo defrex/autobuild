@@ -1,4 +1,4 @@
-import { dashboardRendition } from './dashboard'
+import { heroFrame } from './frame'
 import { dispatcherDiagram, dispatcherLegend, intakeDiagram, pipelineDiagram } from './diagrams'
 import { INSTALL_COMMAND, REPO_URL } from './constants'
 import { seamSelector } from './seams-view'
@@ -18,7 +18,8 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
   return `<div class="cmd"><span>${promptHtml}<b${style}>${command}</b></span><span class="dim">${note}</span></div>`
 }
 
-const hero = `<section class="section"><div class="hero"><h1 class="display">Tickets in,<br>Product out.</h1><p class="lead">Autobuild runs coding agents through a fixed pipeline that plans, implements, reviews, and verifies every ticket before it merges.</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a></div></div>${dashboardRendition()}</section>`
+const hero = (frame: string): string =>
+  `<section class="section"><div class="hero"><h1 class="display">Tickets in,<br>Product out.</h1><p class="lead">Autobuild runs coding agents through a fixed pipeline that plans, implements, reviews, and verifies every ticket before it merges.</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a></div></div>${heroFrame(frame)}</section>`
 
 const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}${pipelineDiagram()}</section>`
 
@@ -32,7 +33,12 @@ const intake = `<section class="section">${intro('autobuild · intake', 'Let the
 
 const start = `<section class="section">${intro('autobuild · get started', 'Start with one ticket')}<div class="terminal">${cmd(prompt, INSTALL_COMMAND, 'install the ab CLI')}${cmd(prompt, 'ab init', 'vendor the skills, write autobuild.toml')}${cmd(prompt, 'ab dispatch', 'start the dispatcher and the dashboard', '#65b868')}${cmd(`<span class="dim">&gt; </span>`, '/ab-spec add a retry budget', 'groom a ticket in your coding agent', '#55b8b8')}</div><div class="actions links"><a class="btn" href="${REPO_URL}">View on GitHub</a></div></section>`
 
-export function renderPage(): string {
+export interface PageInput {
+  /** The tracked `hero-frame.txt`: the dashboard's own ANSI lines. */
+  heroFrame: string
+}
+
+export function renderPage({ heroFrame: frame }: PageInput): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -46,7 +52,7 @@ export function renderPage(): string {
 </head>
 <body>
 <header class="wrap"><div class="masthead"><b class="title">Autobuild</b><a class="dim" href="${REPO_URL}"><span class="hide-sm">github.com/defrex/autobuild</span><span class="show-sm">GitHub</span></a></div></header>
-<main class="wrap"><div class="sections">${hero}${pipeline}${dispatcher}${seams}${throughput}${intake}${start}</div></main>
+<main class="wrap"><div class="sections">${hero(frame)}${pipeline}${dispatcher}${seams}${throughput}${intake}${start}</div></main>
 <footer class="wrap"><div class="foot"><span>Autobuild · Apache-2.0</span><a class="dim" href="${REPO_URL}">github.com/defrex/autobuild</a></div></footer>
 </body>
 </html>

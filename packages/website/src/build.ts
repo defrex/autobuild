@@ -21,7 +21,7 @@ export async function buildFiles(): Promise<SiteFiles> {
   if (!bundle.success) throw new Error(bundle.logs.map(String).join('\n'))
   const [output] = bundle.outputs
   return {
-    'index.html': renderPage(),
+    'index.html': renderPage({ heroFrame: await Bun.file(join(SRC, 'hero-frame.txt')).text() }),
     'site.css': await Bun.file(join(SRC, 'styles.css')).text(),
     'site.js': await (output as Bun.BuildArtifact).text(),
   }

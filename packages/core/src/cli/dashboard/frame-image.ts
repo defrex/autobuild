@@ -3,20 +3,15 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
 import { distributionPath } from '../../distribution'
-import { graphemes } from './cells'
+import { type Foreground, type ParsedFrameLine, parseFrame } from './frame-parse'
 
 /**
  * Deterministic dashboard-frame rendering.
  *
- * The dashboard deliberately emits a tiny terminal vocabulary: SGR reset,
- * bold/dim and six named foreground colours, plus OSC 8 hyperlinks. This
- * adapter accepts exactly that vocabulary. Unknown control traffic is an
- * error rather than evidence that merely looks plausible after bytes were
- * dropped.
+ * `frame-parse.ts` owns the strict reading of the dashboard's terminal
+ * vocabulary; this adapter paints those exact cells into an SVG and PNG.
  */
 
-const ESC = '\x1b'
-const BEL = '\x07'
 const FONT_FAMILY = 'DejaVu Sans Mono'
 const FONT_FAMILIES = [
   FONT_FAMILY,
@@ -35,7 +30,7 @@ const PADDING_Y = 10
 const BASELINE = 16
 const EMOJI_CLUSTER = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u
 
-const PALETTE = {
+const PALETTE: Record<Foreground | 'background', string> = {
   background: '#0d1117',
   foreground: '#c9d1d9',
   red: '#ff7b72',
@@ -43,28 +38,6 @@ const PALETTE = {
   yellow: '#d29922',
   blue: '#58a6ff',
   cyan: '#39c5cf',
-} as const
-
-type Foreground = Exclude<keyof typeof PALETTE, 'background'>
-
-interface Style {
-  foreground: Foreground
-  bold: boolean
-  dim: boolean
-  href?: string
-}
-
-interface TextRun {
-  column: number
-  cells: number
-  text: string
-  style: Style
-}
-
-interface ParsedLine {
-  text: string
-  cells: number
-  runs: TextRun[]
 }
 
 export interface FrameImageOptions {
@@ -83,167 +56,6 @@ export interface RenderedFrameImage {
   columns: number
 }
 
-function cloneStyle(style: Style): Style {
-  return {
-    foreground: style.foreground,
-    bold: style.bold,
-    dim: style.dim,
-    ...(style.href !== undefined ? { href: style.href } : {}),
-  }
-}
-
-function sameStyle(left: Style, right: Style): boolean {
-  return (
-    left.foreground === right.foreground &&
-    left.bold === right.bold &&
-    left.dim === right.dim &&
-    left.href === right.href
-  )
-}
-
-function applySgr(style: Style, raw: string, line: number): void {
-  const codes = raw === '' ? [0] : raw.split(';').map((part) => Number(part))
-  if (codes.some((code) => !Number.isInteger(code))) {
-    throw new Error(`dashboard frame line ${line}: malformed SGR sequence ESC[${raw}m`)
-  }
-  for (const code of codes) {
-    switch (code) {
-      case 0:
-        style.foreground = 'foreground'
-        style.bold = false
-        style.dim = false
-        break
-      case 1:
-        style.bold = true
-        break
-      case 2:
-        style.dim = true
-        break
-      case 22:
-        style.bold = false
-        style.dim = false
-        break
-      case 31:
-        style.foreground = 'red'
-        break
-      case 32:
-        style.foreground = 'green'
-        break
-      case 33:
-        style.foreground = 'yellow'
-        break
-      case 34:
-        style.foreground = 'blue'
-        break
-      case 36:
-        style.foreground = 'cyan'
-        break
-      case 39:
-        style.foreground = 'foreground'
-        break
-      default:
-        throw new Error(`dashboard frame line ${line}: unsupported SGR code ${code} in ESC[${raw}m`)
-    }
-  }
-}
-
-function parseLine(value: string, lineNumber: number): ParsedLine {
-  const style: Style = {
-    foreground: 'foreground',
-    bold: false,
-    dim: false,
-  }
-  const runs: TextRun[] = []
-  let text = ''
-  let cells = 0
-
-  const append = (cluster: string, width: number): void => {
-    const previous = runs.at(-1)
-    // ASCII runs may coalesce. Unicode clusters stay independently pinned to
-    // their terminal cell columns so font fallback/advance cannot shift the
-    // run that follows a wide glyph.
-    if (
-      previous !== undefined &&
-      previous.column + previous.cells === cells &&
-      /^[\x20-\x7e]*$/.test(previous.text) &&
-      /^[\x20-\x7e]$/.test(cluster) &&
-      sameStyle(previous.style, style)
-    ) {
-      previous.text += cluster
-      previous.cells += width
-    } else {
-      runs.push({ column: cells, cells: width, text: cluster, style: cloneStyle(style) })
-    }
-    text += cluster
-    cells += width
-  }
-
-  for (let index = 0; index < value.length; ) {
-    if (value[index] === ESC) {
-      const family = value[index + 1]
-      if (family === '[') {
-        const rest = value.slice(index + 2)
-        const match = /^([0-9;]*)m/.exec(rest)
-        if (match === null) {
-          throw new Error(
-            `dashboard frame line ${lineNumber}: unsupported or unterminated CSI sequence`,
-          )
-        }
-        applySgr(style, match[1]!, lineNumber)
-        index += 2 + match[0].length
-        continue
-      }
-      if (family === ']') {
-        const end = value.indexOf(BEL, index + 2)
-        if (end === -1) {
-          throw new Error(`dashboard frame line ${lineNumber}: unterminated OSC sequence`)
-        }
-        const payload = value.slice(index + 2, end)
-        const match = /^8;;(.*)$/.exec(payload)
-        if (match === null) {
-          throw new Error(
-            `dashboard frame line ${lineNumber}: unsupported OSC sequence ${JSON.stringify(payload)}`,
-          )
-        }
-        const href = match[1]!
-        style.href = href === '' ? undefined : href
-        index = end + 1
-        continue
-      }
-      throw new Error(
-        `dashboard frame line ${lineNumber}: unsupported escape family ${JSON.stringify(family ?? '')}`,
-      )
-    }
-
-    const nextEscape = value.indexOf(ESC, index)
-    const stop = nextEscape === -1 ? value.length : nextEscape
-    const plain = value.slice(index, stop)
-    for (const character of plain) {
-      const code = character.codePointAt(0)!
-      if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
-        throw new Error(
-          `dashboard frame line ${lineNumber}: unsupported control U+${code
-            .toString(16)
-            .toUpperCase()
-            .padStart(4, '0')}`,
-        )
-      }
-    }
-    for (const cluster of graphemes(plain)) append(cluster.text, cluster.width)
-    index = stop
-  }
-
-  if (style.href !== undefined) {
-    throw new Error(`dashboard frame line ${lineNumber}: OSC 8 hyperlink was not closed`)
-  }
-  if (style.foreground !== 'foreground' || style.bold || style.dim) {
-    throw new Error(
-      `dashboard frame line ${lineNumber}: SGR style was not reset before end of line`,
-    )
-  }
-  return { text, cells, runs }
-}
-
 function xml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -254,7 +66,7 @@ function xml(value: string): string {
 }
 
 function svgFor(
-  parsed: ParsedLine[],
+  parsed: ParsedFrameLine[],
   columns: number,
 ): {
   svg: string
@@ -324,20 +136,7 @@ export function renderDashboardFrameImage(
   lines: readonly string[],
   options: FrameImageOptions,
 ): RenderedFrameImage {
-  if (!Number.isInteger(options.columns) || options.columns <= 0) {
-    throw new Error(`dashboard frame columns must be a positive integer, got ${options.columns}`)
-  }
-  if (lines.length === 0) {
-    throw new Error('dashboard frame is empty')
-  }
-  const parsed = lines.map((line, index) => parseLine(line, index + 1))
-  for (const [index, line] of parsed.entries()) {
-    if (line.cells > options.columns) {
-      throw new Error(
-        `dashboard frame line ${index + 1} is ${line.cells} cells wide, exceeding declared terminal width ${options.columns}`,
-      )
-    }
-  }
+  const parsed = parseFrame(lines, options.columns)
 
   const { svg, width, height } = svgFor(parsed, options.columns)
   const rendered = new Resvg(svg, {
