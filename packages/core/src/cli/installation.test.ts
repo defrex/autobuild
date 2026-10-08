@@ -21,6 +21,12 @@ async function fixture(
     tag?: string
     /** npm registry provenance instead of the default github: forge records. */
     npm?: { dependency: string; lockRecord?: unknown[] }
+    /** Manifest section declaring the package (default `dependencies`). */
+    section?: 'dependencies' | 'devDependencies' | 'optionalDependencies'
+    /** Also declare it, with this value, in the other of the two sections. */
+    both?: string
+    /** Section of the lock workspace block; defaults to `section`. */
+    lockSection?: string
   } = {},
 ): Promise<{
   owner: string
@@ -36,36 +42,42 @@ async function fixture(
   await mkdir(globalBin)
   await writeFile(
     join(dist, 'package.json'),
-    JSON.stringify({ name: 'autobuild', version: '2.0.0', bin: { ab: 'bin/ab.ts' } }),
+    JSON.stringify({
+      name: 'autobuild',
+      version: '2.0.0',
+      bin: { ab: 'bin/ab.ts' },
+    }),
   )
   await writeFile(join(dist, 'bin', 'ab.ts'), '')
+  const section = options.section ?? 'dependencies'
+  const lockSection = options.lockSection ?? section
+  let dependency: string
+  let packages: string
   if (options.npm === undefined) {
     await writeFile(join(dist, '.bun-tag'), options.tag ?? 'fork-owner-repo-name-a1b2c3d')
-    await writeFile(
-      join(owner, 'package.json'),
-      JSON.stringify({ dependencies: { autobuild: 'github:fork-owner/repo-name#main' } }),
-    )
-    await writeFile(
-      join(owner, 'bun.lock'),
-      `{
-      "workspaces": { "": { "dependencies": { "autobuild": "github:fork-owner/repo-name#main", }, }, },
-      "packages": { "autobuild": ["autobuild@github:fork-owner/repo-name#a1b2c3d", {}, "fork-owner-repo-name-a1b2c3d"], },
-    }`,
-    )
+    dependency = 'github:fork-owner/repo-name#main'
+    packages = `["autobuild@github:fork-owner/repo-name#a1b2c3d", {}, "fork-owner-repo-name-a1b2c3d"]`
   } else {
-    const record = options.npm.lockRecord ?? ['autobuild@2.0.0', '', {}, 'sha512-fixture']
-    await writeFile(
-      join(owner, 'package.json'),
-      JSON.stringify({ dependencies: { autobuild: options.npm.dependency } }),
-    )
-    await writeFile(
-      join(owner, 'bun.lock'),
-      `{
-      "workspaces": { "": { "dependencies": { "autobuild": ${JSON.stringify(options.npm.dependency)}, }, }, },
-      "packages": { "autobuild": ${JSON.stringify(record)}, },
-    }`,
+    dependency = options.npm.dependency
+    packages = JSON.stringify(
+      options.npm.lockRecord ?? ['autobuild@2.0.0', '', {}, 'sha512-fixture'],
     )
   }
+  const manifest: Record<string, unknown> = {
+    [section]: { autobuild: dependency },
+  }
+  if (options.both !== undefined) {
+    const other = section === 'devDependencies' ? 'dependencies' : 'devDependencies'
+    manifest[other] = { autobuild: options.both }
+  }
+  await writeFile(join(owner, 'package.json'), JSON.stringify(manifest))
+  await writeFile(
+    join(owner, 'bun.lock'),
+    `{
+      "workspaces": { "": { ${JSON.stringify(lockSection)}: { "autobuild": ${JSON.stringify(dependency)}, }, }, },
+      "packages": { "autobuild": ${packages}, },
+    }`,
+  )
   if (options.git === 'file') await writeFile(join(dist, '.git'), 'gitdir: elsewhere')
   if (options.git === 'directory') await mkdir(join(dist, '.git'))
   return { owner, dist, globalBin }
@@ -124,7 +136,10 @@ describe('installed distribution identity and Bun provenance', () => {
     expect(globalResult.kind === 'bun-forge' && globalResult.installation.scope).toBe('global')
 
     const bad = await fixture({ tag: 'someone-else-repository-a1b2c3d' })
-    const badResult = await inspectInstallation({ distRoot: bad.dist, globalBin: bad.globalBin })
+    const badResult = await inspectInstallation({
+      distRoot: bad.dist,
+      globalBin: bad.globalBin,
+    })
     expect(badResult.kind).toBe('unknown')
     if (badResult.kind === 'unknown') expect(badResult.reason).toContain('.bun-tag')
   })
@@ -165,7 +180,10 @@ describe('installed distribution identity and Bun provenance', () => {
     }
 
     const staleLock = await fixture({
-      npm: { dependency: '^2.0.0', lockRecord: ['autobuild@2.0.1', '', {}, 'sha512-other'] },
+      npm: {
+        dependency: '^2.0.0',
+        lockRecord: ['autobuild@2.0.1', '', {}, 'sha512-other'],
+      },
     })
     const staleResult = await inspectInstallation({
       distRoot: staleLock.dist,
@@ -192,7 +210,11 @@ describe('installed distribution identity and Bun provenance', () => {
     const { dist } = await fixture()
     await writeFile(
       join(dist, 'package.json'),
-      JSON.stringify({ name: 'autobuild', version: 'main', bin: { ab: 'bin/ab.ts' } }),
+      JSON.stringify({
+        name: 'autobuild',
+        version: 'main',
+        bin: { ab: 'bin/ab.ts' },
+      }),
     )
     await expect(readDistributionIdentity(dist)).rejects.toThrow('invalid package version')
 
@@ -206,5 +228,111 @@ describe('installed distribution identity and Bun provenance', () => {
       }),
     ).toBe(1)
     expect(errors).toEqual(['usage: ab --version'])
+  })
+
+  const sections = ['dependencies', 'devDependencies'] as const
+  const channels = [
+    { name: 'npm', kind: 'npm-registry', npm: { dependency: '^2.0.0' } },
+    { name: 'github', kind: 'bun-forge', npm: undefined },
+  ] as const
+  const scopes = ['local', 'global'] as const
+
+  for (const section of sections) {
+    for (const channel of channels) {
+      for (const scope of scopes) {
+        test(`recognizes a ${scope} ${channel.name} install declared under ${section}`, async () => {
+          const f = await fixture({
+            section,
+            ...(channel.npm === undefined ? {} : { npm: channel.npm }),
+          })
+          if (scope === 'global') {
+            await symlink(join(f.dist, 'bin', 'ab.ts'), join(f.globalBin, 'ab'))
+          }
+          const result = await inspectInstallation({
+            distRoot: f.dist,
+            globalBin: f.globalBin,
+          })
+          expect(result.kind).toBe(channel.kind)
+          if (result.kind !== 'npm-registry' && result.kind !== 'bun-forge') return
+          expect(result.installation).toMatchObject({
+            section,
+            scope,
+            dual: false,
+          })
+        })
+      }
+    }
+  }
+
+  test('a package in both sections resolves to dependencies and follows its lock block', async () => {
+    const f = await fixture({ npm: { dependency: '^2.0.0' }, both: '2.0.0' })
+    const result = await inspectInstallation({
+      distRoot: f.dist,
+      globalBin: f.globalBin,
+    })
+    expect(result.kind).toBe('npm-registry')
+    if (result.kind !== 'npm-registry') return
+    expect(result.installation).toMatchObject({
+      section: 'dependencies',
+      dependency: '^2.0.0',
+      dual: true,
+    })
+
+    const devOnlyLock = await fixture({
+      npm: { dependency: '^2.0.0' },
+      both: '2.0.0',
+      lockSection: 'devDependencies',
+    })
+    const refused = await inspectInstallation({
+      distRoot: devOnlyLock.dist,
+      globalBin: devOnlyLock.globalBin,
+    })
+    expect(refused.kind).toBe('unknown')
+    if (refused.kind === 'unknown') expect(refused.reason).toContain('does not agree')
+  })
+
+  test('refuses a lock that records the dependency in the other section', async () => {
+    for (const [section, lockSection] of [
+      ['devDependencies', 'dependencies'],
+      ['dependencies', 'devDependencies'],
+    ] as const) {
+      const f = await fixture({
+        section,
+        lockSection,
+        npm: { dependency: '^2.0.0' },
+      })
+      const result = await inspectInstallation({
+        distRoot: f.dist,
+        globalBin: f.globalBin,
+      })
+      expect(result.kind).toBe('unknown')
+      if (result.kind === 'unknown') expect(result.reason).toContain(`${section} entry`)
+    }
+  })
+
+  test('names the searched sections when nothing is declared there, or the range is unsatisfied', async () => {
+    const optional = await fixture({
+      section: 'optionalDependencies',
+      npm: { dependency: '^2.0.0' },
+    })
+    const result = await inspectInstallation({
+      distRoot: optional.dist,
+      globalBin: optional.globalBin,
+    })
+    expect(result.kind).toBe('unknown')
+    if (result.kind === 'unknown') {
+      expect(result.reason).toContain('under dependencies or devDependencies')
+    }
+
+    const unsatisfied = await fixture({
+      section: 'devDependencies',
+      npm: { dependency: '^3.0.0' },
+    })
+    const second = await inspectInstallation({
+      distRoot: unsatisfied.dist,
+      globalBin: unsatisfied.globalBin,
+    })
+    expect(second.kind).toBe('unknown')
+    if (second.kind === 'unknown') expect(second.reason).toContain('under devDependencies')
   })
 })

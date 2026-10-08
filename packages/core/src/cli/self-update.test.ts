@@ -7,6 +7,7 @@ import type { ExecResult } from '../ports/workspace/git-worktree'
 import { runCli } from './main'
 import {
   availableRelease,
+  rewriteDeclaredSpecifiers,
   registryVersionUrl,
   selfUpdate,
   type RegistryLookup,
@@ -28,6 +29,7 @@ afterEach(async () => {
 async function installFixture(
   scope: 'local' | 'global' = 'local',
   channel: 'github' | 'npm' = 'github',
+  section: 'dependencies' | 'devDependencies' = 'dependencies',
 ): Promise<{
   owner: string
   dist: string
@@ -42,31 +44,37 @@ async function installFixture(
   await mkdir(globalBin)
   await writeFile(
     join(dist, 'package.json'),
-    JSON.stringify({ name: 'autobuild', version: '2.0.0', bin: { ab: 'bin/ab.ts' } }),
+    JSON.stringify({
+      name: 'autobuild',
+      version: '2.0.0',
+      bin: { ab: 'bin/ab.ts' },
+    }),
   )
   await writeFile(join(dist, 'bin', 'ab.ts'), '')
   if (channel === 'github') {
     await writeFile(join(dist, '.bun-tag'), 'a-fork-autobuild-a1b2c3d')
     await writeFile(
       join(owner, 'package.json'),
-      JSON.stringify({ dependencies: { autobuild: 'github:a-fork/autobuild#v2.0.0' } }),
+      JSON.stringify({
+        [section]: { autobuild: 'github:a-fork/autobuild#v2.0.0' },
+      }),
     )
     await writeFile(
       join(owner, 'bun.lock'),
       `{
-      "workspaces": { "": { "dependencies": { "autobuild": "github:a-fork/autobuild#v2.0.0", }, }, },
+      "workspaces": { "": { "${section}": { "autobuild": "github:a-fork/autobuild#v2.0.0", }, }, },
       "packages": { "autobuild": ["autobuild@github:a-fork/autobuild#a1b2c3d", {}, "a-fork-autobuild-a1b2c3d"], },
     }`,
     )
   } else {
     await writeFile(
       join(owner, 'package.json'),
-      JSON.stringify({ dependencies: { autobuild: '2.0.0' } }),
+      JSON.stringify({ [section]: { autobuild: '2.0.0' } }),
     )
     await writeFile(
       join(owner, 'bun.lock'),
       `{
-      "workspaces": { "": { "dependencies": { "autobuild": "2.0.0", }, }, },
+      "workspaces": { "": { "${section}": { "autobuild": "2.0.0", }, }, },
       "packages": { "autobuild": ["autobuild@2.0.0", "", {}, "sha512-fixture"], },
     }`,
     )
@@ -91,7 +99,10 @@ function registryDocs(
 
 function scripted(
   replies: ExecResult[],
-  calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }>,
+  calls: Array<{
+    command: string[]
+    options: Parameters<SelfUpdateCommand>[1]
+  }>,
 ): SelfUpdateCommand {
   return async (command, options) => {
     calls.push({ command, options })
@@ -107,7 +118,10 @@ describe('silent available-release probe', () => {
       ['v2.0.0', undefined],
       ['v1.9.0', undefined],
     ] as const) {
-      const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+      const calls: Array<{
+        command: string[]
+        options: Parameters<SelfUpdateCommand>[1]
+      }> = []
       expect(
         await availableRelease({
           distRoot: fixture.dist,
@@ -197,10 +211,79 @@ describe('silent available-release probe', () => {
   })
 })
 
+describe('self-update across scope, section, and channel', () => {
+  const registryDoc = { status: 200, body: '{"version":"2.1.0"}' }
+  for (const section of ['dependencies', 'devDependencies'] as const) {
+    for (const channel of ['github', 'npm'] as const) {
+      test(`the probe reports a newer release for a ${channel} install under ${section}`, async () => {
+        const fixture = await installFixture('local', channel, section)
+        const calls: string[][] = []
+        const found = await availableRelease({
+          distRoot: fixture.dist,
+          registry: registryDocs([registryDoc], []),
+          command: async (command) => {
+            calls.push(command)
+            return command[0] === 'gh'
+              ? result('{"tag_name":"v2.1.0"}')
+              : result(`${fixture.globalBin}\n`)
+          },
+        })
+        expect(found).toBe('2.1.0')
+      })
+
+      for (const scope of ['local', 'global'] as const) {
+        test(`${scope} ${channel} update under ${section} uses the right Bun argv`, async () => {
+          const fixture = await installFixture(scope, channel, section)
+          const calls: string[][] = []
+          const update = await selfUpdate({
+            targetRepo: '/repo',
+            distRoot: fixture.dist,
+            registry: registryDocs([registryDoc], []),
+            command: async (command) => {
+              calls.push(command)
+              return command[1] === 'pm'
+                ? result(`${fixture.globalBin}\n`)
+                : result('{"tag_name":"v2.1.0"}')
+            },
+            stdout: () => {},
+            stderr: () => {},
+          })
+          expect(update.kind).toBe('handoff')
+          const spec = channel === 'github' ? 'github:a-fork/autobuild#v2.1.0' : 'autobuild@2.1.0'
+          const add = calls.find((command) => command[1] === 'add')
+          expect(add).toEqual(
+            scope === 'global'
+              ? ['bun', 'add', '--global', spec]
+              : [
+                  'bun',
+                  'add',
+                  '--cwd',
+                  fixture.owner,
+                  ...(section === 'devDependencies' ? ['-d'] : []),
+                  spec,
+                ],
+          )
+        })
+      }
+    }
+  }
+
+  test('rewriteDeclaredSpecifiers touches only the declared specifiers', () => {
+    const text =
+      '{\n\t"name": "x",\n\t"dependencies": {\n\t\t"a": "^1.0.0",\n\t\t"p": "^1.0.0"\n\t},\n\t"devDependencies": {\n\t\t"p": "1.0.0"\n\t}\n}\n'
+    expect(rewriteDeclaredSpecifiers(text, 'p', '^2.0.0')).toBe(
+      text.replace('"p": "^1.0.0"', '"p": "^2.0.0"').replace('"p": "1.0.0"', '"p": "^2.0.0"'),
+    )
+  })
+})
+
 describe('distribution self-update orchestration', () => {
   test('latest local update resolves the fork, mutates through Bun, then only hands off', async () => {
     const fixture = await installFixture()
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const out: string[] = []
     const update = await selfUpdate({
       targetRepo: '/target/repo',
@@ -226,7 +309,10 @@ describe('distribution self-update orchestration', () => {
       ['bun', 'add', '--cwd', fixture.owner, 'github:a-fork/autobuild#v2.1.0'],
       ['bun', join(fixture.dist, 'bin', 'ab.ts'), 'upgrade', '/target/repo'],
     ])
-    expect(calls[3]?.options.env).toMatchObject({ PATH: '/bin', AB_SELF_UPDATE_HANDOFF: '1' })
+    expect(calls[3]?.options.env).toMatchObject({
+      PATH: '/bin',
+      AB_SELF_UPDATE_HANDOFF: '1',
+    })
     expect(out.join('\n')).toContain('package.json')
     expect(out.join('\n')).toContain('bun.lock')
     expect(out).toContain('ab-plan: adopted')
@@ -269,7 +355,10 @@ describe('distribution self-update orchestration', () => {
     await Bun.$`git add .`.cwd(local.owner)
     await Bun.$`git commit -qm baseline`.cwd(local.owner)
     const localContext = await createUpgradeCommitContext(local.owner)
-    const localCalls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const localCalls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     await selfUpdate({
       targetRepo: local.owner,
       distRoot: local.dist,
@@ -316,7 +405,10 @@ describe('distribution self-update orchestration', () => {
 
   test('--no-commit is forwarded explicitly to the replacement binary', async () => {
     const fixture = await installFixture()
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     await selfUpdate({
       targetRepo: '/repo',
       noCommit: true,
@@ -339,7 +431,10 @@ describe('distribution self-update orchestration', () => {
 
   test('uses global Bun operation and permits an explicit downgrade', async () => {
     const fixture = await installFixture('global')
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const update = await selfUpdate({
       targetRepo: '/repo',
       version: '1.9.0',
@@ -358,7 +453,10 @@ describe('distribution self-update orchestration', () => {
 
   test('does not reinstall the current latest release', async () => {
     const fixture = await installFixture()
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const update = await selfUpdate({
       targetRepo: '/repo',
       distRoot: fixture.dist,
@@ -372,7 +470,10 @@ describe('distribution self-update orchestration', () => {
 
   test('latest failures warn and continue, while explicit install failures stop before merge', async () => {
     const fixture = await installFixture()
-    const latestCalls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const latestCalls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const warnings: string[] = []
     expect(
       await selfUpdate({
@@ -534,7 +635,10 @@ describe('npm registry channel', () => {
 
   test('the silent probe reads the registry, never gh, for an npm install', async () => {
     const fixture = await installFixture('global', 'npm')
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const urls: string[] = []
     const available = await availableRelease({
       distRoot: fixture.dist,
@@ -562,13 +666,19 @@ describe('npm registry channel', () => {
 
   test('a global npm install updates through bun add <name>@<version> and hands off', async () => {
     const fixture = await installFixture('global', 'npm')
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const urls: string[] = []
     const out: string[] = []
     const update = await selfUpdate({
       targetRepo: '/target/repo',
       distRoot: fixture.dist,
-      env: { PATH: '/bin', NPM_CONFIG_REGISTRY: 'https://registry.example.test/' },
+      env: {
+        PATH: '/bin',
+        NPM_CONFIG_REGISTRY: 'https://registry.example.test/',
+      },
       command: scripted(
         [result(`${fixture.globalBin}\n`), result('installed'), result('ab-plan: adopted\n')],
         calls,
@@ -584,13 +694,19 @@ describe('npm registry channel', () => {
       ['bun', 'add', '--global', 'autobuild@2.1.0'],
       ['bun', join(fixture.dist, 'bin', 'ab.ts'), 'upgrade', '/target/repo'],
     ])
-    expect(calls[2]?.options.env).toMatchObject({ PATH: '/bin', AB_SELF_UPDATE_HANDOFF: '1' })
+    expect(calls[2]?.options.env).toMatchObject({
+      PATH: '/bin',
+      AB_SELF_UPDATE_HANDOFF: '1',
+    })
     expect(out).toContain('ab-plan: adopted')
   })
 
   test('an exact npm version reads its own document and fails closed when absent', async () => {
     const fixture = await installFixture('local', 'npm')
-    const calls: Array<{ command: string[]; options: Parameters<SelfUpdateCommand>[1] }> = []
+    const calls: Array<{
+      command: string[]
+      options: Parameters<SelfUpdateCommand>[1]
+    }> = []
     const urls: string[] = []
     const downgrade = await selfUpdate({
       targetRepo: '/repo',
