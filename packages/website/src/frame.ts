@@ -49,6 +49,11 @@ function runHtml(run: FrameRun): string {
   return style ? `<span${style}>${text}</span>` : text
 }
 
+/** The frame with every escape removed, one string per terminal row. */
+export function frameText(lines: readonly string[]): string[] {
+  return parseFrame(lines, WEBSITE_HERO_COLUMNS).map((line) => line.text)
+}
+
 /** Preformatted HTML for the frame, one `<pre>` row per terminal row. */
 export function frameHtml(lines: readonly string[]): string {
   const parsed = parseFrame(lines, WEBSITE_HERO_COLUMNS)

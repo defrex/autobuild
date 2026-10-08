@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { stripAnsi } from '../../core/src/cli/dashboard/render'
 import { WEBSITE_HERO_COLUMNS } from '../../../tools/dashboard-capture'
-import { frameHtml, frameLines, heroFrame } from './frame'
+import { frameHtml, frameLines, frameText, heroFrame } from './frame'
 import { COLOR } from './svg'
 
 const TRACKED = join(import.meta.dir, 'hero-frame.txt')
@@ -39,7 +38,7 @@ describe('frameHtml', () => {
 describe('the tracked hero frame', () => {
   test('is the colored happy dispatch frame, whole at the hero width', async () => {
     const lines = frameLines(await Bun.file(TRACKED).text())
-    const plain = lines.map(stripAnsi)
+    const plain = frameText(lines)
     expect(lines.some((line) => line.includes('\x1b['))).toBe(true)
     expect(Math.max(...plain.map((line) => line.length))).toBeLessThanOrEqual(WEBSITE_HERO_COLUMNS)
     expect(plain.some((line) => line.endsWith('~'))).toBe(false)
