@@ -1,3 +1,4 @@
+import { readFile, writeFile } from 'node:fs/promises'
 import semver from 'semver'
 import type { ExecResult } from '../ports/workspace/git-worktree'
 import { registryBaseUrl, registryVersionUrl } from '../registry'
@@ -230,6 +231,36 @@ export function updateDependency(install: ManagedInstallation, version: string):
     : `${install.packageName}@${version}`
 }
 
+/** The specifier written into package.json for a resolved version: what
+ * `bun add <pkg>@<version>` writes (the exact version) for the registry, the tag for a forge. */
+function manifestSpecifier(install: ManagedInstallation, version: string): string {
+  return install.channel === 'github'
+    ? `github:${install.owner}/${install.repository}#v${version}`
+    : version
+}
+
+/** Set the package's specifier in every section that declares it, preserving
+ * key order, indentation, and the trailing newline. Returns the new bytes. */
+export function rewriteDeclaredSpecifiers(
+  manifestText: string,
+  packageName: string,
+  specifier: string,
+): string {
+  const manifest = JSON.parse(manifestText) as Record<string, unknown>
+  for (const section of ['dependencies', 'devDependencies']) {
+    const entries = manifest[section]
+    if (
+      typeof entries === 'object' &&
+      entries !== null &&
+      typeof (entries as Record<string, unknown>)[packageName] === 'string'
+    ) {
+      ;(entries as Record<string, unknown>)[packageName] = specifier
+    }
+  }
+  const indent = /^([ \t]+)"/m.exec(manifestText)?.[1] ?? 2
+  return JSON.stringify(manifest, null, indent) + (manifestText.endsWith('\n') ? '\n' : '')
+}
+
 /** Silently determine whether this installation has a newer published release.
  * This read-only courtesy intentionally collapses every unsupported install,
  * command failure, malformed response, and cancellation to no result. */
@@ -244,7 +275,9 @@ export async function availableRelease(
     const identity = await readDistributionIdentity(distRoot)
     if (identity.sourceCheckout || signalAborted(options.signal)) return undefined
 
-    const globalBin = await command(['bun', 'pm', 'bin', '-g'], { signal: options.signal })
+    const globalBin = await command(['bun', 'pm', 'bin', '-g'], {
+      signal: options.signal,
+    })
     if (
       globalBin.exitCode !== 0 ||
       globalBin.stdout.trim() === '' ||
@@ -369,11 +402,53 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
     options.stdout(
       `Updating Autobuild to v${resolved} in ${install.ownerRoot}; Bun will rewrite ${install.ownerManifest} and ${install.ownerLock}.`,
     )
-    updateCommand = ['bun', 'add', '--cwd', install.ownerRoot, dependency]
+    if (install.dual) {
+      // Bun cannot reconcile two differing specifiers through `bun add`: it
+      // exits 0 yet keeps the old version. Bring both entries to the new
+      // specifier and let `bun install` apply it.
+      options.stdout(
+        `${install.packageName} is declared in both dependencies and devDependencies; updating both entries.`,
+      )
+      updateCommand = ['bun', 'install', '--cwd', install.ownerRoot]
+    } else {
+      updateCommand = [
+        'bun',
+        'add',
+        '--cwd',
+        install.ownerRoot,
+        ...(install.section === 'devDependencies' ? ['-d'] : []),
+        dependency,
+      ]
+    }
+  }
+
+  let originalManifest: string | undefined
+  if (install.scope === 'local' && install.dual) {
+    try {
+      originalManifest = await readFile(install.ownerManifest, 'utf8')
+      await writeFile(
+        install.ownerManifest,
+        rewriteDeclaredSpecifiers(
+          originalManifest,
+          install.packageName,
+          manifestSpecifier(install, resolved),
+        ),
+      )
+    } catch (error) {
+      const reason = `rewriting ${install.ownerManifest}: ${error instanceof Error ? error.message : String(error)}`
+      if (explicit) {
+        options.stderr(`self-update failed: ${reason}`)
+        return { kind: 'failed' }
+      }
+      return warn(options, reason)
+    }
   }
 
   const update = await invoke(updateCommand, {})
   if (update.exitCode !== 0) {
+    if (originalManifest !== undefined) {
+      await writeFile(install.ownerManifest, originalManifest).catch(() => undefined)
+    }
     const reason = commandFailure(`installing v${resolved}`, update)
     if (explicit) {
       options.stderr(`self-update failed: ${reason}`)

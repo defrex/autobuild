@@ -21,13 +21,25 @@ export type InstallScope = 'local' | 'global'
  * forge dependency, or a version range satisfied from the npm registry. */
 export type InstallChannel = 'github' | 'npm'
 
+/** The owning manifest sections a self-update target may be declared in. */
+export type DependencySection = 'dependencies' | 'devDependencies'
+
+/** Searched in this order; when a manifest declares the package in both, the
+ * first wins (the runtime declaration, which a plain `bun add` would rewrite). */
+const DEPENDENCY_SECTIONS: readonly DependencySection[] = ['dependencies', 'devDependencies']
+const SEARCHED_SECTIONS = DEPENDENCY_SECTIONS.join(' or ')
+
 interface ManagedInstallationBase extends DistributionIdentity {
   sourceCheckout: false
   ownerRoot: string
   ownerManifest: string
   ownerLock: string
-  /** The owning manifest's direct dependency value, byte for byte. */
+  /** The owning manifest's direct dependency value in `section`, byte for byte. */
   dependency: string
+  /** The manifest section the dependency was chosen from. */
+  section: DependencySection
+  /** The manifest also declares the package in the other section. */
+  dual: boolean
   scope: InstallScope
 }
 
@@ -180,9 +192,27 @@ async function parseJsonc(path: string): Promise<Record<string, unknown>> {
   }
 }
 
-function lockDependency(lock: Record<string, unknown>, packageName: string): unknown {
+function lockDependency(
+  lock: Record<string, unknown>,
+  packageName: string,
+  section: DependencySection,
+): unknown {
   const workspace = object(object(lock.workspaces)?.[''])
-  return object(workspace?.dependencies)?.[packageName]
+  return object(workspace?.[section])?.[packageName]
+}
+
+/** Pick the section that declares the package: a pure function of the
+ * manifest, in fixed `DEPENDENCY_SECTIONS` order. */
+function declaredSection(
+  manifest: Record<string, unknown>,
+  packageName: string,
+): { section: DependencySection; value: string; dual: boolean } | undefined {
+  const declared = DEPENDENCY_SECTIONS.flatMap((section) => {
+    const value = object(manifest[section])?.[packageName]
+    return typeof value === 'string' ? [{ section, value }] : []
+  })
+  const first = declared[0]
+  return first === undefined ? undefined : { ...first, dual: declared.length > 1 }
 }
 
 function lockPackageRecord(
@@ -235,21 +265,29 @@ export async function inspectInstallation(options: {
   try {
     const manifest = await parseJson(ownerManifest)
     const lock = await parseJsonc(ownerLock)
-    const dependency = object(manifest.dependencies)?.[identity.packageName]
-    const repository = githubDependency(dependency)
-    const registry = repository === undefined && registryDependency(dependency, identity.version)
-    if ((repository === undefined && !registry) || typeof dependency !== 'string') {
+    const declared = declaredSection(manifest, identity.packageName)
+    if (declared === undefined) {
       return {
         kind: 'unknown',
         identity,
-        reason: `${ownerManifest} does not declare ${identity.packageName} as a direct github: dependency or an npm registry version range satisfied by ${identity.version}`,
+        reason: `${ownerManifest} does not declare ${identity.packageName} under ${SEARCHED_SECTIONS} as a direct github: dependency or an npm registry version range satisfied by ${identity.version}`,
       }
     }
-    if (lockDependency(lock, identity.packageName) !== dependency) {
+    const { section, value: dependency, dual } = declared
+    const repository = githubDependency(dependency)
+    const registry = repository === undefined && registryDependency(dependency, identity.version)
+    if (repository === undefined && !registry) {
       return {
         kind: 'unknown',
         identity,
-        reason: `${ownerLock} does not agree with the direct dependency in ${ownerManifest}`,
+        reason: `${ownerManifest} declares ${identity.packageName} under ${section} as "${dependency}", which is neither a direct github: dependency nor an npm registry version range satisfied by ${identity.version}`,
+      }
+    }
+    if (lockDependency(lock, identity.packageName, section) !== dependency) {
+      return {
+        kind: 'unknown',
+        identity,
+        reason: `${ownerLock} does not agree with the direct ${section} entry in ${ownerManifest}`,
       }
     }
     const scope: InstallScope = (await samePath(join(options.globalBin, 'ab'), identity.binaryPath))
@@ -280,6 +318,8 @@ export async function inspectInstallation(options: {
           ownerManifest,
           ownerLock,
           dependency,
+          section,
+          dual,
           scope,
         },
       }
@@ -320,6 +360,8 @@ export async function inspectInstallation(options: {
         owner: repository.owner,
         repository: repository.repository,
         dependency,
+        section,
+        dual,
         scope,
       },
     }
