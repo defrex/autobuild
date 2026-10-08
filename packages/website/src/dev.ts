@@ -4,6 +4,7 @@ const TYPES: Record<string, string> = {
   'index.html': 'text/html; charset=utf-8',
   'site.css': 'text/css; charset=utf-8',
   'site.js': 'text/javascript; charset=utf-8',
+  'og.png': 'image/png',
 }
 
 const server = Bun.serve({

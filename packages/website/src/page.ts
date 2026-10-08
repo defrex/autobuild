@@ -1,6 +1,7 @@
 import { heroFrame } from './frame'
 import { dispatcherDiagram, dispatcherLegend, intakeDiagram, pipelineDiagram } from './diagrams'
-import { INSTALL_COMMAND, REPO_URL } from './constants'
+import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
+import { OG_HEIGHT, OG_IMAGE_ALT, OG_WIDTH } from './og'
 import { seamSelector } from './seams-view'
 
 const FONT_URL =
@@ -19,7 +20,7 @@ function cmd(promptHtml: string, command: string, note: string, color?: string):
 }
 
 const hero = (frame: string): string =>
-  `<section class="section"><div class="hero"><h1 class="display">Tickets in,<br>Product out.</h1><p class="lead">Autobuild runs coding agents through a fixed pipeline that plans, implements, reviews, and verifies every ticket before it merges.</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a></div></div>${heroFrame(frame)}</section>`
+  `<section class="section"><div class="hero"><h1 class="display">${HEADLINE.replace(', ', ',<br>')}</h1><p class="lead">${LEAD}</p><div class="actions"><div class="install"><span>${prompt}<code>${INSTALL_COMMAND}</code></span><button class="word" type="button" data-copy>copy</button></div><a class="btn" href="${REPO_URL}">View on GitHub</a></div></div>${heroFrame(frame)}</section>`
 
 const pipeline = `<section class="section">${intro('autobuild · how it works', 'Every ticket runs the pipeline', 'Each ticket moves through deterministic phases inside its own build-runner. Every phase is a fresh agent session, with artifacts knitting them together.', 'how')}${pipelineDiagram()}</section>`
 
@@ -45,6 +46,23 @@ export function renderPage({ heroFrame: frame }: PageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Autobuild</title>
+<meta name="description" content="${LEAD}">
+<link rel="canonical" href="${SITE_URL}/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Autobuild">
+<meta property="og:title" content="${HEADLINE}">
+<meta property="og:description" content="${LEAD}">
+<meta property="og:url" content="${SITE_URL}/">
+<meta property="og:image" content="${SITE_URL}/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="${OG_WIDTH}">
+<meta property="og:image:height" content="${OG_HEIGHT}">
+<meta property="og:image:alt" content="${OG_IMAGE_ALT}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${HEADLINE}">
+<meta name="twitter:description" content="${LEAD}">
+<meta name="twitter:image" content="${SITE_URL}/og.png">
+<meta name="twitter:image:alt" content="${OG_IMAGE_ALT}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="${FONT_URL}">
 <link rel="stylesheet" href="site.css">

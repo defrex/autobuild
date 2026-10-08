@@ -278,6 +278,7 @@ const CONTENT_TYPES: Record<string, string> = {
   html: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
+  png: 'image/png',
 }
 
 /** Serve the built site on an ephemeral loopback port, plus `/__frame-<id>.html` variants. */

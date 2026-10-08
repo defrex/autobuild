@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFiles, buildSite } from './build'
 import { copyText } from './client'
-import { INSTALL_COMMAND, REPO_URL } from './constants'
+import { HEADLINE, INSTALL_COMMAND, LEAD, REPO_URL, SITE_URL } from './constants'
 
 const REFERENCE = join(import.meta.dir, '..', '..', '..', 'design', 'website', 'reference.html')
 
@@ -51,7 +51,7 @@ describe('static site', () => {
     const dir = await mkdtemp(join(tmpdir(), 'website-'))
     tmp.push(dir)
     await buildSite(dir)
-    expect((await readdir(dir)).sort()).toEqual(['index.html', 'site.css', 'site.js'])
+    expect((await readdir(dir)).sort()).toEqual(['index.html', 'og.png', 'site.css', 'site.js'])
   })
 
   test('copy matches the design reference word for word, except the hero frame', async () => {
@@ -120,12 +120,36 @@ describe('static site', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
+  test('a shared link previews with the headline, the lead, and the card image', async () => {
+    const { 'index.html': html, 'og.png': png } = await buildFiles()
+    const head = html.slice(0, html.indexOf('<body'))
+    const meta = (selector: string): string | undefined =>
+      new RegExp(`<meta (?:property|name)="${selector}" content="([^"]*)">`).exec(head)?.[1]
+    expect(meta('description')).toBe(LEAD)
+    expect(meta('og:title')).toBe(HEADLINE)
+    expect(meta('og:description')).toBe(LEAD)
+    expect(meta('og:url')).toBe(`${SITE_URL}/`)
+    expect(meta('og:image')).toBe(`${SITE_URL}/og.png`)
+    expect(meta('og:image:width')).toBe('1200')
+    expect(meta('og:image:height')).toBe('630')
+    expect(meta('og:image:alt')).toBeTruthy()
+    expect(meta('twitter:card')).toBe('summary_large_image')
+    expect(meta('twitter:image')).toBe(`${SITE_URL}/og.png`)
+    expect(head).toContain(`<link rel="canonical" href="${SITE_URL}/">`)
+    // The tracked card is a 1200x630 PNG: the signature, then IHDR width and height.
+    expect([...png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    const view = new DataView(png.buffer, png.byteOffset, png.byteLength)
+    expect([view.getUint32(16), view.getUint32(20)]).toEqual([1200, 630])
+  })
+
   test('no resources beyond its own files and the webfont', async () => {
     const { 'index.html': html, 'site.js': js } = await buildFiles()
     const hosts = [...html.matchAll(/(?:src|href)="(https?:\/\/[^"]+)"/g)].map(
       (m) => new URL((m[1] ?? '').replace(/&amp;/g, '&')).host,
     )
-    expect(new Set(hosts)).toEqual(new Set(['fonts.googleapis.com', 'github.com']))
+    expect(new Set(hosts)).toEqual(
+      new Set(['fonts.googleapis.com', 'github.com', 'www.autobuild.run']),
+    )
     expect(js).not.toContain('fetch(')
   })
 
