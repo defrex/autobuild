@@ -238,9 +238,41 @@ export class LinearTicketSource implements TicketSource {
     return [...(await this.getTeamInfo('workflow states')).stateIds.keys()]
   }
 
-  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
+  /** The Linear user a `readyAssignee` value names: `me` is the API key's
+   * owner, anything else is an email. Null when no user matches. */
+  async resolveAssignee(
+    assignee: string,
+  ): Promise<{ id: string; name: string; email: string } | null> {
+    if (assignee === 'me') {
+      const data = await this.gql<{ viewer: { id: string; name: string; email: string } | null }>(
+        'resolveAssignee',
+        'query Viewer { viewer { id name email } }',
+        {},
+      )
+      return data.viewer ?? null
+    }
+    const data = await this.gql<{
+      users: { nodes: { id: string; name: string; email: string }[] }
+    }>(
+      'resolveAssignee',
+      'query UserByEmail($email: String!) { users(filter: { email: { eq: $email } }) { nodes { id name email } } }',
+      { email: assignee },
+    )
+    return data.users.nodes[0] ?? null
+  }
+
+  async listReady(criteria: {
+    labels?: string[]
+    state?: string
+    assignee?: string
+  }): Promise<TicketListing> {
     const filter: Record<string, unknown> = {
       team: { key: { eq: this.teamKey } },
+    }
+    if (criteria.assignee !== undefined) {
+      // An unassigned issue matches neither predicate, so it is never ready.
+      filter.assignee =
+        criteria.assignee === 'me' ? { isMe: { eq: true } } : { email: { eq: criteria.assignee } }
     }
     if (criteria.state !== undefined) {
       filter.state = { name: { eq: criteria.state } }

@@ -136,7 +136,13 @@ export interface TicketSource {
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
    * actionable diagnostics for individual source records excluded as invalid.
    * Fatal source failures and invariants still reject the call. */
-  listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing>
+  listReady(criteria: {
+    labels?: string[]
+    state?: string
+    /** `me` (the API key's owner) or a user's email; only sources that can honour it
+     * accept it — others reject `[tickets].readyAssignee` at config parse. */
+    assignee?: string
+  }): Promise<TicketListing>
   get(id: string): Promise<Ticket | null>
   /** Claim-before-launch (§12): acquires nonterminal work and returns true.
    * Returns false for an unknown, already-claimed/contested, or terminal ticket.

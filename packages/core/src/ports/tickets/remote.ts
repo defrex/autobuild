@@ -86,7 +86,14 @@ export class HostedTicketSource implements TicketSource {
     return schema.parse(await response.json())
   }
 
-  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
+  async listReady(criteria: {
+    labels?: string[]
+    state?: string
+    assignee?: string
+  }): Promise<TicketListing> {
+    if (criteria.assignee !== undefined) {
+      throw new Error('the hosted ticket source does not support an assignee gate')
+    }
     const listing = await this.request('list-ready', criteria, ticketListingWireSchema)
     return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
   }

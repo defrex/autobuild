@@ -110,6 +110,60 @@ describe('LinearTicketSource', () => {
     expect(calls).toHaveLength(1)
   })
 
+  test('listReady adds an isMe assignee predicate for "me", conjunctive with state and labels', async () => {
+    const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: { nodes: [] } } } }])
+    await makeSource(fetchFn).listReady({
+      labels: ['autobuild', 'bug'],
+      state: 'Ready',
+      assignee: 'me',
+    })
+    expect(calls[0]?.variables).toEqual({
+      filter: {
+        team: { key: { eq: 'ENG' } },
+        state: { name: { eq: 'Ready' } },
+        assignee: { isMe: { eq: true } },
+        and: [
+          { labels: { some: { name: { eq: 'autobuild' } } } },
+          { labels: { some: { name: { eq: 'bug' } } } },
+        ],
+      },
+    })
+  })
+
+  test('listReady filters by assignee email and omits the predicate when absent', async () => {
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { issues: { nodes: [] } } } },
+      { body: { data: { issues: { nodes: [] } } } },
+    ])
+    const source = makeSource(fetchFn)
+    await source.listReady({ state: 'Ready', assignee: 'p@example.com' })
+    await source.listReady({ state: 'Ready' })
+    expect(calls[0]?.variables).toEqual({
+      filter: {
+        team: { key: { eq: 'ENG' } },
+        state: { name: { eq: 'Ready' } },
+        assignee: { email: { eq: 'p@example.com' } },
+      },
+    })
+    expect(calls[1]?.variables).toEqual({
+      filter: { team: { key: { eq: 'ENG' } }, state: { name: { eq: 'Ready' } } },
+    })
+  })
+
+  test('resolveAssignee resolves me through the viewer and an email through users', async () => {
+    const user = { id: 'u1', name: 'Pat', email: 'p@example.com' }
+    const { fetchFn, calls } = fakeLinear([
+      { body: { data: { viewer: user } } },
+      { body: { data: { users: { nodes: [user] } } } },
+      { body: { data: { users: { nodes: [] } } } },
+    ])
+    const source = makeSource(fetchFn)
+    expect(await source.resolveAssignee('me')).toEqual(user)
+    expect(await source.resolveAssignee('p@example.com')).toEqual(user)
+    expect(calls[1]?.variables).toEqual({ email: 'p@example.com' })
+    expect(await source.resolveAssignee('nobody@example.com')).toBeNull()
+  })
+
   test('listReady sends team + state + and-of-label filters and maps issues to Tickets', async () => {
     const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: { nodes: [gqlIssue()] } } } }])
     const source = makeSource(fetchFn)

@@ -31,6 +31,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
     source: 'restart',
     readyLabels: 'hot',
     readyState: 'hot',
+    readyAssignee: 'hot',
     teamKey: 'restart',
     claimedState: 'restart',
     createState: 'restart',

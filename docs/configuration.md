@@ -202,7 +202,7 @@ These fields hot-reload:
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
-| `tickets.readyLabels`, `tickets.readyState` | Next ready-ticket scan. |
+| `tickets.readyLabels`, `tickets.readyState`, `tickets.readyAssignee` | Next ready-ticket scan. |
 | `tickets.triageState`, `tickets.proposalState` | Next dispatcher handback or harvest filing boundary. |
 
 Adapter selectors and factory inputs are constructed once and require a
@@ -1167,12 +1167,24 @@ state. Within a present table, `source` and `readyState` are required.
 | `source` | — | required nonblank builtin or plugin registration name | Select the ticket adapter after configured plugins load. |
 | `readyLabels` | source-aware | optional array of nonempty strings; `[]` allowed | Require every listed label in addition to the state gate. |
 | `readyState` | — | required nonblank string | The one workflow state eligible for dispatch. |
+| `readyAssignee` | — | optional; `"me"` or an email address; Linear only (rejected for file, hosted, and plugin sources) | Require the ticket to be assigned to one Linear user, in addition to the state and label gates. |
 | `teamKey` | — | required for Linear and hosted; forbidden for file; optional for plugins | Backend team key such as `"ENG"`, or an existing plugin config field. |
 | `claimedState` | `"In Progress"` for direct Linear; hosted backend default otherwise | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
 | `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
 | `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
+
+`readyAssignee = "me"` resolves to the Linear user who owns `LINEAR_API_KEY`,
+so one committed value makes each person's local dispatcher take only the work
+assigned to them; an email names a specific user, for a shared or bot key. The
+gate is conjunctive with `readyState` and `readyLabels`, and a ticket with no
+assignee is never ready while it is set. It applies to every ready surface
+(dispatch, the queued count, and `ab ticket list` without filters); blockers
+still prevent claim. It is empty or blank, or neither `"me"` nor an email,
+fails validation. `ab init --validate` prints the user the gate resolves to and
+fails when an email matches no workspace user. The field reloads without a
+restart.
 
 When `readyLabels` is absent, direct Linear uses `["autobuild"]`; hosted, file,
 and plugin sources use `[]`, meaning no host-imposed label gate. An explicit value always

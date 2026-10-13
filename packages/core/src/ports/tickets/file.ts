@@ -206,7 +206,11 @@ export class FileTicketSource implements TicketSource {
     this.selfIgnore = opts.selfIgnore ?? false
   }
 
-  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
+  async listReady(criteria: {
+    labels?: string[]
+    state?: string
+    assignee?: string
+  }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     const state =
       criteria.state === undefined ? undefined : resolveState(criteria.state, await this.states())

@@ -556,6 +556,20 @@ export const ticketsSchema = z.strictObject({
       (s) => s.trim().length > 0,
       '[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
     ),
+  /**
+   * Narrows readiness to tickets assigned to one Linear user — a third
+   * conjunctive gate beside readyState and readyLabels. `"me"` is the owner of
+   * the dispatcher's LINEAR_API_KEY; an email names a specific user (for a
+   * shared or bot key). Unassigned tickets are never ready while it is set.
+   * Linear only; absent leaves readiness unchanged.
+   */
+  readyAssignee: z
+    .string()
+    .refine(
+      (s) => s === 'me' || (s === s.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)),
+      '[tickets].readyAssignee must be "me" (the owner of the API key) or a user email address (e.g. "person@example.com")',
+    )
+    .optional(),
   /** Backend team key (e.g. "ENG") — required for linear and hosted. */
   teamKey: z.string().min(1).optional(),
   /** Workflow state claim() moves an issue to (§12); Linear and hosted. */
@@ -922,6 +936,13 @@ export const configSchema = configRootSchema.superRefine((config, ctx) => {
         })
       }
     }
+  }
+  if (tickets.source !== 'linear' && tickets.readyAssignee !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['tickets', 'readyAssignee'],
+      message: `[tickets].readyAssignee applies only to source = "linear" — remove it or select that source (selected source: "${tickets.source}")`,
+    })
   }
   // Plugin sources receive the existing ticket lifecycle/configuration fields
   // unchanged; adapter-specific validation belongs to their factory.

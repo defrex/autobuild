@@ -5180,6 +5180,18 @@ describe('readyCriteria — readiness is resolved against the ticket source (§3
     })
   })
 
+  test('readyAssignee joins the criteria only when configured', () => {
+    expect(criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "me"\n`)).toEqual({
+      labels: ['autobuild'],
+      state: 'Ready',
+      assignee: 'me',
+    })
+    expect(
+      criteria(`${LINEAR}readyState = "Ready"\nreadyAssignee = "a@example.com"\n`).assignee,
+    ).toBe('a@example.com')
+    expect('assignee' in criteria(`${LINEAR}readyState = "Ready"\n`)).toBe(false)
+  })
+
   test('plugin sources have no host-imposed label convention', () => {
     expect(criteria(`${PLUGIN}readyState = "Open"\n`)).toEqual({
       labels: [],

@@ -115,11 +115,22 @@ import { settlePublicationBeforeRelease } from './publication-loss'
  * is otherwise the directory, so it defaults to no label gate. Plugin sources
  * likewise receive no host-imposed label convention. An explicit
  * `readyLabels` wins for every source.
+ *
+ * `[tickets].readyAssignee` (Linear only) adds a third conjunctive gate: the
+ * ticket must be assigned to that user.
  */
-export function readyCriteria(config: Config): { labels: string[]; state: string } {
-  const { readyLabels, readyState } = config.tickets
+export function readyCriteria(config: Config): {
+  labels: string[]
+  state: string
+  assignee?: string
+} {
+  const { readyLabels, readyState, readyAssignee } = config.tickets
   if (config.tickets.source === 'linear') {
-    return { labels: readyLabels ?? ['autobuild'], state: readyState }
+    return {
+      labels: readyLabels ?? ['autobuild'],
+      state: readyState,
+      ...(readyAssignee !== undefined ? { assignee: readyAssignee } : {}),
+    }
   }
   return { labels: readyLabels ?? [], state: readyState }
 }

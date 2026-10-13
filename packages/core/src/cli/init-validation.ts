@@ -22,6 +22,7 @@ import type { VercelSandboxFacade } from '../ports/workspace/vercel-sandbox'
 import { diagnosePlugins, loadPlugins } from '../plugins/load'
 import { materializePluginRuntimes } from '../plugins/runtimes'
 import { createTicketSource } from '../ports/tickets/create'
+import { LinearTicketSource } from '../ports/tickets/linear'
 import { inspectLocalStoreSnapshot } from '../store/local/store'
 import type { StoreOpener } from './store-opening'
 import { openProductionStore } from './store-opening'
@@ -402,6 +403,7 @@ export async function validateInitReadiness(opts: {
     providerConfig !== undefined ? (builtinCaps?.guestEnvNames?.(providerConfig) ?? []) : [],
   )
   let caps: WorkspaceProviderCapabilities | undefined
+  let assigneeLine: string | undefined
   try {
     hostPreflight(config, opts.env)
     // Ticket acquisition is a host responsibility for both workspace providers.
@@ -460,7 +462,22 @@ export async function validateInitReadiness(opts: {
       await ticketSource.listReady({
         ...(config.tickets.readyLabels !== undefined ? { labels: config.tickets.readyLabels } : {}),
         state: config.tickets.readyState,
+        ...(config.tickets.readyAssignee !== undefined
+          ? { assignee: config.tickets.readyAssignee }
+          : {}),
       })
+      const assignee = config.tickets.readyAssignee
+      if (assignee !== undefined && ticketSource instanceof LinearTicketSource) {
+        const user = await ticketSource.resolveAssignee(assignee)
+        if (user === null) {
+          throw new Error(
+            assignee === 'me'
+              ? '[tickets].readyAssignee = "me" but LINEAR_API_KEY did not resolve to a Linear user — check the key'
+              : `[tickets].readyAssignee "${assignee}" matches no user in the Linear workspace — check the address or use "me"`,
+          )
+        }
+        assigneeLine = `Ticket assignee gate: ${assignee} → ${user.name} <${user.email}>`
+      }
     }
   } catch (error) {
     throw new Error(redact(error))
@@ -586,6 +603,7 @@ export async function validateInitReadiness(opts: {
   stdout(`Readiness: ${report.context} (${report.provider})`)
   stdout(`Store: ${state.storeRef}`)
   stdout(`Forge: ${config.forge}`)
+  if (assigneeLine !== undefined) stdout(assigneeLine)
   // Same raw `[workspace.config]` fallback guestEnvNames gets (f_55ba7591): a
   // provider that declares describeEnvironment without a configSchema still
   // receives a defined argument — the raw table — never undefined.
