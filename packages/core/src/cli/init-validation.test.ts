@@ -1416,6 +1416,71 @@ readyState = "ready"
     expect(deletes).toBe(1)
   })
 
+  describe('readyAssignee gate', () => {
+    const originalFetch = globalThis.fetch
+    afterEach(() => {
+      globalThis.fetch = originalFetch
+    })
+
+    async function linearRepo(assignee: string) {
+      const { repo } = await committedLocalRepo('ab-assignee-')
+      await writeFile(
+        join(repo, 'autobuild.toml'),
+        `baseBranch = "main"
+[commands]
+[roles.default]
+runtime = "fake"
+[tickets]
+source = "linear"
+teamKey = "ENG"
+readyState = "Ready"
+readyAssignee = "${assignee}"
+`,
+      )
+      await spawnExec(['git', 'commit', '-am', 'linear'], { cwd: repo })
+      return repo
+    }
+
+    function stubLinear(user: { id: string; name: string; email: string } | null) {
+      globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+        const query = JSON.parse(init?.body ?? '{}').query as string
+        const data = query.includes('viewer')
+          ? { viewer: user }
+          : query.includes('users(')
+            ? { users: { nodes: user === null ? [] : [user] } }
+            : { issues: { nodes: [] } }
+        return new Response(JSON.stringify({ data }), { status: 200 })
+      }) as unknown as typeof fetch
+    }
+
+    test('reports the Linear user a me gate resolves to', async () => {
+      const repo = await linearRepo('me')
+      stubLinear({ id: 'u1', name: 'Pat Doe', email: 'pat@example.com' })
+      const output: string[] = []
+      await validateInitReadiness({
+        targetRepo: repo,
+        env: { LINEAR_API_KEY: 'lin_api_test' },
+        exec: spawnExec,
+        runtimes: usableRuntime,
+        stdout: (line) => output.push(line),
+      })
+      expect(output).toContain('Ticket assignee gate: me → Pat Doe <pat@example.com>')
+    })
+
+    test('fails with remediation when an email matches no Linear user', async () => {
+      const repo = await linearRepo('ghost@example.com')
+      stubLinear(null)
+      await expect(
+        validateInitReadiness({
+          targetRepo: repo,
+          env: { LINEAR_API_KEY: 'lin_api_test' },
+          exec: spawnExec,
+          runtimes: usableRuntime,
+        }),
+      ).rejects.toThrow('ghost@example.com" matches no user in the Linear workspace')
+    })
+  })
+
   test('reports an absent local Store without creating ignored repository state', async () => {
     const { repo } = await committedLocalRepo('ab-local-absent-')
     const output: string[] = []

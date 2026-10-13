@@ -733,6 +733,7 @@ state eligible.
 | `source` | — | **required**, nonblank builtin or plugin registration name | Which provider backs all ticket operations. Unknown names report every available builtin and plugin source. |
 | `readyLabels` | — (source-aware) | optional; array of nonempty strings | A ticket must carry **every** listed label to be dispatchable. `[]` = **no label gate**. Absent uses the source default below. |
 | `readyState` | — | **required**, non-blank string | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`). There is no any-state mode. |
+| `readyAssignee` | — | optional; `"me"` or an email; `linear` only | Also require the ticket to be assigned to that Linear user (`me` = owner of `LINEAR_API_KEY`); unassigned tickets are never ready. |
 | `teamKey` | — | required by `linear`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`) or an existing plugin configuration field. |
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |

@@ -79,7 +79,11 @@ export class FakeTicketSource implements TicketSource {
     this.tickets.set(ticket.ref.id, cloneTicket(ticket))
   }
 
-  async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
+  async listReady(criteria: {
+    labels?: string[]
+    state?: string
+    assignee?: string
+  }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
     return {
       tickets: [...this.tickets.values()]

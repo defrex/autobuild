@@ -1034,6 +1034,29 @@ describe('parseConfig — [tickets]', () => {
     )
   })
 
+  test('readyAssignee accepts "me" or an email on linear and rejects everything else', () => {
+    const linear = (value: string) =>
+      `[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\nreadyAssignee = ${value}\n`
+    expect(parseConfig(linear('"me"')).tickets.readyAssignee).toBe('me')
+    expect(parseConfig(linear('"person@example.com"')).tickets.readyAssignee).toBe(
+      'person@example.com',
+    )
+    expect(
+      parseConfig('[tickets]\nsource = "linear"\nteamKey = "ENG"\nreadyState = "Todo"\n').tickets
+        .readyAssignee,
+    ).toBeUndefined()
+    for (const bad of ['""', '"   "', '"ME"', '"someone"', '"a@b"', '" me"', '" a@b.co"']) {
+      expect(parseError(linear(bad)).message).toContain('readyAssignee')
+    }
+    for (const source of ['file', 'hosted', 'jira-cloud']) {
+      const message = parseError(
+        `[tickets]\nsource = "${source}"\nteamKey = "ENG"\nreadyState = "Todo"\nreadyAssignee = "me"\n`,
+      ).message
+      expect(message).toContain('tickets.readyAssignee')
+      expect(message).toContain(`selected source: "${source}"`)
+    }
+  })
+
   test('source-specific fields are cross-validated', () => {
     expect(parseError('[tickets]\nsource = "linear"\nreadyState = "Todo"\n').message).toContain(
       'tickets.teamKey',

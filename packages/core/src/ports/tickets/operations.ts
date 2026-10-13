@@ -44,7 +44,7 @@ export async function requirePostMutationTicket(
 export function ticketListCriteria(
   config: Config,
   filters: { state?: string; labels?: string[] },
-): { state?: string; labels?: string[] } {
+): { state?: string; labels?: string[]; assignee?: string } {
   return filters.state === undefined && filters.labels === undefined
     ? readyCriteria(config)
     : filters
