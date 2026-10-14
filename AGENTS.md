@@ -100,6 +100,22 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
 
 Only `verify:*` and `finalize:*` are configurable extension points. Agents interact with build state only through the typed `ab` CLI; never infer outcomes from agent stdout. Git pushes and forge operations are kernel-side plumbing.
 
+## The orchestrator is an external agent
+
+The orchestrator files tickets, watches builds, unblocks them, and drives
+work to merge. It is a role an operator's own agent takes on, never something
+Autobuild hosts or starts:
+
+- **Locally**, it is any agent harness loaded at the repository root, driving
+  Autobuild through the `ab` CLI (`ab watch` / `ab wait` to monitor, `ab answer`,
+  `ab ticket`, and so on).
+- **When the web server is configured**, it is any agent running anywhere,
+  connected through the MCP connector and calling the operator tools.
+
+There is no orchestrator setup step, and no human has to start it. The embedded
+hosted turn runner (AUT-342) is an abandoned direction, removed by AUT-658;
+do not extend it, and do not cite SPEC §7.1.2 as current design.
+
 ## Development conventions
 
 - Keep tests colocated as `*.test.ts`; integration scenarios are in `packages/core/src/integration/`.
