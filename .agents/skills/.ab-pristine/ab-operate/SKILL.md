@@ -67,17 +67,27 @@ Checking once is not shepherding. When you take responsibility for builds:
    even with `--since`, so a finished build would be returned again and the
    loop would spin on it. If you use `ab wait`, use only `--event <glob>`
    conditions (satisfied by new events only), never `--for`.
-3. When it returns, react: read the record, inspect the build, answer or
-   escalate, then re-arm from the last cursor. Keep your own outcome table:
-   mark a build done when you see `pr.merged`, `pr.closed`, or
-   `build.aborted`. A timeout (exit 3, or a watch that ends with only a
-   `{"cursor": …}` line) means nothing happened — re-arm from that cursor; it
-   is not completion.
-4. Stop only when every build in the set has an outcome in your table.
+3. Reconcile current state right after the first watch is armed, and again
+   whenever a watch ends without records: a watch baselines each build at its
+   current position and does not emit what already happened, so a build that
+   merged, or an escalation already open, before registration would otherwise
+   never reach you. Run `ab build status <slug> --json` for every slug in the
+   set. Reading status after arming leaves no gap — anything earlier shows in
+   the status, anything later arrives as an event. Treat a terminal status
+   (merged, closed, aborted) as that build's outcome, and an open escalation
+   or failed phase as attention to handle now.
+4. When a watch returns records, react: read the record, inspect the build,
+   answer or escalate, then re-arm from the last cursor. Keep your own
+   outcome table: mark a build done when you see `pr.merged`, `pr.closed`, or
+   `build.aborted`, or when status shows it. A timeout (exit 3, or a watch
+   that ends with only a `{"cursor": …}` line) is not completion — reconcile
+   as in step 3, then re-arm from that cursor.
+5. Stop only when every build in the set has an outcome in your table.
    `pr.conflicted` is not terminal — reconcile follows. An open escalation
-   (`blocked`) needs a response, not patience. If a watch ends because every
-   named build is terminal, check your table before declaring the work done.
-5. Report each outcome to the operator, and file or move tickets when the
+   (`blocked`) needs a response, not patience. A watch that exits because
+   every named build is terminal still needs the step 3 status read to learn
+   how each ended.
+6. Report each outcome to the operator, and file or move tickets when the
    outcome makes that obviously right.
 
 ### Inspect
