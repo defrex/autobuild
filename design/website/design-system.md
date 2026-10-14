@@ -9,7 +9,7 @@ Engineer to engineer: direct, confident, plain. Short declarative sentences. No 
 - The name is one word, **Autobuild**, capitalized as a proper noun. Never split into two words or hyphenated. The CLI is `ab`, always in code.
 - Headlines are claims in sentence case: "One ticket, one fixed pipeline", "Every seam is an adapter", "One log. Everything else is derived."
 - Eyebrows are lowercase locators with a middle dot: `autobuild · the map`, `autobuild · state`.
-- The tagline is "Tickets in, PRs out. No babysitting required."
+- The tagline is "Tickets in, Product out."
 - Use the product's vocabulary verbatim: build, slug, phase or step, `spec`, `plan`, `plan-review`, `implement`, `code-review`, `verify:*`, `finalize`, `reconcile`, `merged`; escalation, blocker, observation, harvest, proposal, operator, auto merge, intake.
 - Never invent customers, testimonials, benchmarks, throughput figures or pricing. Example ticket ids and slugs (`AUT-412 add-retry-budget`) are fixtures and read as examples.
 

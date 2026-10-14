@@ -39,7 +39,7 @@ Autobuild is an agent-driven software development lifecycle. A groomed ticket
 goes through spec, plan, plan review, implementation, code review,
 verification, PR creation, conflict reconciliation, and merge, with humans
 involved only for grooming and escalations. The README puts it as "Tickets in,
-PRs out. No babysitting required."
+Product out."
 
 The web dashboard, titled "Autobuild operator" today, is the browser front on
 that system. Success for the operator is that ten builds in flight cost the
@@ -150,7 +150,7 @@ Undecided:
   operator" today.
 - **Voice:** engineer to engineer, direct, confident, plain. Short declarative
   sentences in the README's register. No superlatives, no exclamation points.
-  The tagline in use is "Tickets in, PRs out. No babysitting required."
+  The tagline in use is "Tickets in, Product out."
 - **Terminology is binding.** The vocabulary above matches `SPEC.md`, the CLI,
   and the terminal dashboard; the web uses it verbatim.
 - **Visual constraint, binding, set by the maintainer on 2026-09-07:** the
