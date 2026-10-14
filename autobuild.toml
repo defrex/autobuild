@@ -83,33 +83,33 @@ skill = "ab-finalize-changelog"
 # Runtime, model, and args per phase role. `default` is the inheritance base
 # and is never dispatched as a phase; every other role overrides each field
 # independently, and a declared args list replaces rather than unions.
-# Producers run on Claude Sonnet and reviewers on GPT, so a reviewer never
+# Producers run on GPT and reviewers on Claude Opus, so a reviewer never
 # shares the implementer's blind spots. Each role falls back to the other
 # provider's model when its own is overloaded or out of quota.
 [roles.default]
-runtime = "claude"
-model = "claude-sonnet-5-5"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
+runtime = "codex"
+model = "gpt-6.1-sol"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5" }]
 
 [roles.plan]
-runtime = "claude"
-model = "claude-sonnet-5-5"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
+runtime = "codex"
+model = "gpt-6.1-sol"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5" }]
 
 [roles.implement]
-runtime = "claude"
-model = "claude-sonnet-5-5"
-alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
+runtime = "codex"
+model = "gpt-6.1-sol"
+alternates = [{ runtime = "claude", model = "claude-opus-5-5" }]
 
 [roles.plan-review]
-runtime = "codex"
-model = "gpt-6.1-sol"
-alternates = [{ runtime = "claude", model = "claude-sonnet-5-5" }]
+runtime = "claude"
+model = "claude-opus-5-5"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 
 [roles.code-review]
-runtime = "codex"
-model = "gpt-6.1-sol"
-alternates = [{ runtime = "claude", model = "claude-sonnet-5-5" }]
+runtime = "claude"
+model = "claude-opus-5-5"
+alternates = [{ runtime = "codex", model = "gpt-6.1-sol" }]
 
 [policy]
 stallRounds = 3          # a finding surviving N review rounds escalates
