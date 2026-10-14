@@ -8,15 +8,15 @@ import { evaluateVerifyApplicability } from '../packages/core/src/kernel/verify-
 
 const REPO_ROOT = join(import.meta.dir, '..')
 
-const PRODUCER = { runtime: 'claude', model: 'claude-sonnet-5-5' }
-const REVIEWER = { runtime: 'codex', model: 'gpt-6.1-sol' }
+const PRODUCER = { runtime: 'codex', model: 'gpt-6.1-sol' }
+const REVIEWER = { runtime: 'claude', model: 'claude-opus-5-5' }
 
 test('repository builds in local worktrees on the local Claude Code and Codex CLIs', async () => {
   const config = await loadConfig(join(REPO_ROOT, 'autobuild.toml'))
 
   expect(config.workspace).toEqual({ provider: 'git-worktree', config: {} })
 
-  // Producers run on Claude and reviewers on Codex, each falling back to the
+  // Producers run on Codex and reviewers on Claude, each falling back to the
   // other provider. Every route stays on a subscription-billed local CLI:
   // no Pi, no gateway-qualified model id.
   const expected: Record<string, typeof PRODUCER> = {
