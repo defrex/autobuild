@@ -33,7 +33,10 @@ const production = createProductionRuntimes().runtimes
 const TEST_RUNTIMES: RuntimeRegistry = Object.fromEntries(
   Object.entries(production).map(([name, registration]) => [
     name,
-    { ...registration, initUsable: async () => ({ usable: true, reason: `${name} ready` }) },
+    {
+      ...registration,
+      initUsable: async () => ({ usable: true, reason: `${name} ready` }),
+    },
   ]),
 )
 
@@ -48,7 +51,12 @@ afterEach(async () => {
 })
 
 async function init(opts: Omit<Parameters<typeof abInit>[0], 'targetRepo' | 'runtimes'> = {}) {
-  return abInit({ targetRepo: target, runtimes: TEST_RUNTIMES, env: {}, ...opts })
+  return abInit({
+    targetRepo: target,
+    runtimes: TEST_RUNTIMES,
+    env: {},
+    ...opts,
+  })
 }
 
 describe('agent-driven ab init', () => {
@@ -59,7 +67,7 @@ describe('agent-driven ab init', () => {
     expect(report.skills).toHaveLength(12)
     expect(report.skills.map((entry) => entry.skill)).not.toContain('ab-setup')
     expect(report.skills.map((entry) => entry.skill)).not.toContain('ab-verify-e2e')
-    expect([...MODEL_INVOCABLE_SKILLS].sort()).toEqual(['guide', 'spec', 'tickets'])
+    expect([...MODEL_INVOCABLE_SKILLS].sort()).toEqual(['guide', 'operate', 'spec', 'tickets'])
 
     const distributed = await readDistSkills(defaultDistRoot())
     expect(report.skills.map((entry) => entry.skill)).toEqual(
@@ -85,6 +93,21 @@ describe('agent-driven ab init', () => {
         !MODEL_INVOCABLE_SKILLS.has(skill.name),
       )
     }
+    const operate = await readFile(installedSkillFilePath(target, 'ab-operate', 'SKILL.md'), 'utf8')
+    expect(operate).not.toContain('disable-model-invocation')
+    for (const command of [
+      'ab watch',
+      'ab wait',
+      'ab answer',
+      'ab pause',
+      'ab resume',
+      'ab abort',
+      'ab auto-merge',
+      'ab ticket',
+    ]) {
+      expect(operate).toContain(command)
+    }
+    expect(operate).not.toContain('hosted service only')
     const setupReference = 'references/setup.md'
     const liveReference = await readFile(
       installedSkillFilePath(target, 'ab-guide', setupReference),
@@ -198,7 +221,10 @@ describe('agent-driven ab init', () => {
       },
       pi: {
         ...production.pi!,
-        initUsable: async () => ({ usable: false, reason: 'provider logged out' }),
+        initUsable: async () => ({
+          usable: false,
+          reason: 'provider logged out',
+        }),
       },
     }
     const report = await abInit({
@@ -244,14 +270,19 @@ describe('agent-driven ab init', () => {
   test('a partial distribution without the setup reference still installs and prints the pointer', async () => {
     const partial = await mkdtemp(join(tmpdir(), 'ab-init-partial-'))
     try {
-      await cp(join(defaultDistRoot(), 'skills'), join(partial, 'skills'), { recursive: true })
+      await cp(join(defaultDistRoot(), 'skills'), join(partial, 'skills'), {
+        recursive: true,
+      })
       await cp(join(defaultDistRoot(), 'templates'), join(partial, 'templates'), {
         recursive: true,
       })
       await rm(join(partial, 'skills', 'guide', 'references', 'setup.md'))
       const lines: string[] = []
 
-      const report = await init({ distRoot: partial, stdout: (line) => lines.push(line) })
+      const report = await init({
+        distRoot: partial,
+        stdout: (line) => lines.push(line),
+      })
 
       expect(report.exitCode).toBe(0)
       expect(existsSync(installedSkillFilePath(target, 'ab-guide', 'references/setup.md'))).toBe(

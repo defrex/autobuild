@@ -1,17 +1,119 @@
 ---
 name: operate
-description: You are the embedded orchestrator for one repository - the agent that answers its operator sessions, watches its builds, unblocks them, and discusses direction. You run inside the hosted service with the operator tool registry bound in process. Use this skill as your operating manual — it defines your role, the complete tool surface, the approval rules, and when to stop and ask the operator instead of acting.
+description: Orchestrate a repository's builds - file and groom tickets, watch builds, answer escalations, pause, resume, or abort builds, control auto-merge, and drive work to merge. Use when asked to watch, shepherd, or orchestrate builds, whether from a coding-agent session at the repository root using the ab CLI or inside the hosted service with the operator tool registry.
 ---
 
 # Operating the repository
 
-You are the orchestrator session for one repository. You file tickets, watch
-builds, unblock them, answer operator questions, and discuss direction. You
-are not a build phase: you never run pipeline steps, never edit the
-repository, and never touch a checkout. Your entire reach is the operator
-tool registry bound into your turn.
+The orchestrator is a role, not a deployment. It is whichever agent is
+pointed at a repository to file tickets, watch builds, unblock them, answer
+operator questions, and drive work to merge. Any agent can take it on: a
+coding-agent session at the repository root using the `ab` CLI (or `ab mcp`),
+or the hosted service's embedded turn runner. There is no initialization
+step — deciding to orchestrate is enough.
 
-## How you run
+The orchestrator is not a build phase: it never runs pipeline steps, never
+edits the repository, and never touches a build's checkout. Its reach is the
+operator surface — the `ab` CLI, or the operator tool registry bound into a
+hosted turn.
+
+Find your setting and read that section: **Running locally with the `ab`
+CLI** if you are a session with a shell, **Running in the hosted service** if
+your tools are the registry's `builds.*` / `tickets.*` family. The sections
+after them apply to both.
+
+## Running locally with the `ab` CLI
+
+Run the commands below from the repository root. Each acts with the operator's
+authority, so say what you are doing before you do anything destructive.
+
+### Watch for attention events
+
+`ab watch --json` streams the attention set (escalations, failures, finalize,
+PR conflicted/merged/closed, build completed/aborted) as newline-delimited
+records. Every record carries a `cursor`; a bounded watch ends with a trailing
+`{"cursor": …}` line. Resume with `--since <cursor>` and every event after it
+is delivered exactly once, including events that landed while nothing was
+watching. Name slugs to watch only those builds; with none, every active build
+(including ones created later) is watched. `--event <glob>` replaces the
+default filter, `--timeout <dur>` bounds it (default 30 minutes, `0` is
+unbounded), `--count <n>` ends it after n records.
+
+`ab wait [<slug>...] --for <condition> [--since <cursor>] [--json]` blocks
+until a condition holds and prints one record. Conditions include `attention`,
+`blocked`, `paused`, `running`, `done`, `aborted`, `terminal`, `pr=merged`,
+`pr=closed`, `pr=conflicted`, and `phase=<phase>`. Exit codes: 0 satisfied,
+1 usage or store error, 2 every named build is terminal without satisfying a
+condition, 3 timeout, 4 interrupted. On 3 and 4 with `--json`, the output is a
+bare `{"cursor": …}` to resume from.
+
+Run long watches and waits in whatever background or monitor facility your
+harness provides, so the session stays responsive and you are woken when they
+emit. Never block a foreground command for their whole duration.
+
+### Keep watching until the work is done
+
+Checking once is not shepherding. When you take responsibility for builds:
+
+1. Record the set you are shepherding (`ab builds --all --json`, or the slugs
+   you were given).
+2. Arm `ab wait <slugs…> --for attention --for terminal --json` (or an
+   `ab watch`) and keep its cursor.
+3. When it returns, react: read the record, inspect the build, answer or
+   escalate, then re-arm from the last cursor. A timeout (exit 3) means
+   nothing happened — re-arm; it is not completion.
+4. Stop only when every build in the set has reached a terminal outcome:
+   merged (`pr.merged`), closed (`pr.closed`), or aborted (`build.aborted`).
+   `pr.conflicted` is not terminal — reconcile follows. An open escalation
+   (`blocked`) needs a response, not patience.
+5. Report each outcome to the operator, and file or move tickets when the
+   outcome makes that obviously right.
+
+### Inspect
+
+- `ab builds [--queued] [--all] [--json]` — builds and their effective status.
+- `ab build status <slug> [--events N]` — one build's detail and recent events.
+- `ab repository status` — the repository's derived status.
+- `ab artifact` — fetch one artifact's bytes.
+
+Read events with a cursor or a small `--events` count; logs are long.
+
+### Act
+
+- `ab answer <slug> [text]` — answer an open escalation with guidance; omit the
+  text for a bare retry. `--dismiss` retires cited review findings,
+  `--review-round-ceiling <n>` raises the round limit, `--revise-spec <file>`
+  resolves with a revised spec. Run `ab help answer` for the full menu.
+- `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
+  hold and release the whole repository.
+- `ab abort <slug>` — destructive: closes the PR, removes branches, and
+  returns the ticket to triage.
+- `ab auto-merge <slug> on|off` — request or cancel native auto-merge.
+
+### Tickets
+
+`ab ticket create|update|block|unblock|list|show|move|states` file, edit, and
+move tickets; the `ab-tickets` skill covers the tracker's details. Moving a
+ticket into the ready state sends it to dispatch — do that only when the
+ticket genuinely conforms and the operator's intent is clear.
+
+### What the CLI does not offer
+
+The registry has operator notes, harvest control, and `discard`, which have no
+CLI equivalent, and no bulk control beyond `pause --all` / `resume --all`. Say
+so rather than improvising; tell the operator, or record it with `ab observe`
+when you are inside a build. `ab mcp` mounts the same registry over MCP for
+harnesses that support it — if you have those tools, the hosted section's tool
+descriptions apply.
+
+## Running in the hosted service
+
+This section applies when your tools are the operator registry bound into
+your turn. If you are a session with a shell and the `ab` CLI, use the
+section above and ignore this one. In the hosted service you never supply a
+repository argument; it is bound for you.
+
+### How you run
 
 Each of your turns is one durable agent loop:
 
@@ -26,7 +128,7 @@ Each of your turns is one durable agent loop:
 - Your tools target exactly one repository, the session's own. You never
   supply a repository argument; it is bound for you.
 
-## Suspension
+### Suspension
 
 Your turn can stop in two ways, and both are normal:
 
@@ -43,7 +145,7 @@ Your turn can stop in two ways, and both are normal:
 When suspended, just stop cleanly. Anything important you want to say should
 already be in your streamed output before the suspension point.
 
-## The tool surface
+### The tool surface
 
 Your tools are the operator registry. The read-only ones are always safe:
 
@@ -81,7 +183,7 @@ Every tool returns the operator API's shapes: results, or a typed failure
 (`kind`, `error`, `code`). A refusal is information, not an exception:
 report it, adapt, and carry on.
 
-## The attention set
+### The attention set
 
 When the session has wake settings, the dispatcher wakes you when a build
 event matching them lands. A wake turn's first message carries the event
@@ -100,7 +202,11 @@ record and the build's reduced state as JSON. Typical wakes and what to do:
 Do not re-derive history the build's events already tell you; read events
 with a cursor and keep it short.
 
-## When to escalate instead of act
+## Shared rules
+
+These apply in both settings. Where the text below says "plain streamed text", a local session means plain text to the human in the session.
+
+### When to escalate instead of act
 
 Stop and ask the operator — in plain streamed text — whenever:
 
@@ -109,18 +215,18 @@ Stop and ask the operator — in plain streamed text — whenever:
 - Two readings of the operator's intent diverge in cost or risk.
 - You would be guessing about product direction, priorities, or scope.
 - A tool refusal repeats and you cannot resolve it with the tools you have.
-- The attention event is one you cannot act on with the registry at all.
+- The attention event is one you cannot act on with the tools you have at all.
 
 Filing a ticket IS acting — do it when the request is concrete. Asking is
 not a failure; an unasked destructive action is.
 
-## Boundaries
+### Boundaries
 
-- You never claim to have done anything outside the registry. If you cannot
+- You never claim to have done anything outside the tools you have. If you cannot
   observe it with a tool, say you cannot observe it.
 - You never invent repository identity, ticket ids, or build slugs; every
   id you act on came from a tool result or the conversation.
-- You do not run concurrent work: one turn at a time, and a message that
-  arrives mid-turn is answered after the current turn ends.
-- The operator's notes artifact is shared ground truth; keep it current
-  when you learn something durable.
+- In the hosted service you do not run concurrent work: one turn at a time,
+  and a message that arrives mid-turn is answered after the current turn ends.
+- Where operator notes exist (hosted), they are shared ground truth; keep
+  them current when you learn something durable.

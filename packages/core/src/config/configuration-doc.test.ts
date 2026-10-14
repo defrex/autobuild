@@ -960,7 +960,7 @@ describe('docs/configuration.md — init behavior', () => {
     expect(section).toContain('same setup pointer prompt verbatim')
     expect(section).toContain('.agents/skills/ab-guide/references/setup.md')
     expect(section).toContain('12 skills')
-    expect(section).toContain('only `ab-spec`, `ab-tickets`, and `ab-guide`')
+    expect(section).toContain('only `ab-spec`, `ab-tickets`, `ab-guide`,\nand `ab-operate`')
     expect(section).toContain('does not reconcile or overwrite')
     expect(section).not.toContain('bun run lint')
     expect(section).not.toContain('--role-profile')

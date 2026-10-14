@@ -501,8 +501,11 @@ stream read's ([docs/remote-store-protocol.md](docs/remote-store-protocol.md),
 
 #### 7.1.2 The embedded orchestrator (turns)
 
-The orchestrator is the agent that files tickets, watches builds, unblocks
-them, and discusses direction — played in the hosted service by a stateless
+The orchestrator is a role, not a deployment: the agent that files tickets,
+watches builds, unblocks them, and discusses direction. Any agent can take it
+on — a coding-agent session at the repository root using the `ab` CLI or
+`ab mcp` needs no initialization — and the canonical `ab-operate` skill is its
+manual in either setting. In the hosted service it is played by a stateless
 turn runner over the operator tool registry, not by an agent living in a
 sandbox (parity with MCP; no credential plumbing) and not by an external
 workflow engine (durability comes from the store; the tick pattern already
@@ -2423,8 +2426,8 @@ installs into a repo:
   non-agent-invocable: they are invoked explicitly by the runner or a human,
   never auto-triggered by a model pattern-matching a description — a model
   must not start a pipeline phase by accident. The model-invocable exceptions
-  (`ab-spec`, `ab-tickets`, `ab-guide`) are exactly the three skills that
-  **drive no phase**; membership is decided by that criterion, not taste.
+  (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-operate`) are exactly the four
+  skills that **drive no phase**; membership is decided by that criterion, not taste.
 
 When `.agents/skills` and `.claude/skills` resolve to the same filesystem
 entry, that repository-level alias already satisfies harness discovery. Init
