@@ -2,7 +2,12 @@
 
 ## Unreleased
 
+## v0.10.1 — 2026-10-14
+
+This release makes the ab-operate skill model-invocable, so an agent can load it on its own when it takes on the orchestrator role. That works the same way for local orchestration through the ab CLI and for hosted orchestration through the MCP connector. Any agent that drives Autobuild now finds its operating guidance automatically, with no manual setup step.
+
 - [#596](https://github.com/defrex/autobuild/pull/596) — Make ab-operate model-invocable for local and hosted orchestration
+
 ## v0.10.0 — 2026-10-13
 
 This release cuts the cost of reading build state. Reducers are now incremental, the dispatcher builds its repository view once and refreshes it by cursor, and reducer snapshots are cached in the build store. Together these let cold starts skip full log replay and let quiet dispatcher ticks and idle operator dashboard polls read no event rows at all. The file tracker now treats every directory as a ticket state, adds `ab ticket states` and `ab ticket state create`, and teaches the ab-tickets skill about the icebox and custom states. A new `[tickets].readyAssignee` setting gates Linear readiness on a single assignee, and self-update now recognises devDependencies installs.
