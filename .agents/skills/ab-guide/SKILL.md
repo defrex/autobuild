@@ -899,7 +899,7 @@ repo path, needs no `AB_*` environment, and is safe to re-run. It:
   base for `ab upgrade`'s three-way merges.
 - Rewrites frontmatter on install: `name` → `ab-<name>`, and
   `disable-model-invocation: true` on every skill outside the model-invocable
-  set (`ab-spec`, `ab-tickets`, `ab-guide`).
+  set (`ab-spec`, `ab-tickets`, `ab-guide`, `ab-operate`).
 
 The final report states `autobuild.toml: written|skipped`, aggregates all skill
 counts, names only attention-worthy `kept` and `overwritten` skills, and reports
@@ -1878,16 +1878,14 @@ default, when you need to know what this repo's version says).
 | `ab-code-review` | `code-review` phase | Fresh skeptic: review the implementation diff against spec and plan, same verdict vocabulary. |
 | `ab-reconcile` | `reconcile` phase (epilogue) | Resolve a conflicted PR with one merge commit, base merged *into* the build branch. Never rebases. |
 | `ab-finalize` | `finalize` phase | Write the PR description for a green build; the kernel opens the PR. |
-| `ab-operate` | hosted only | The embedded orchestrator's own operating manual: its role, the registry tool surface with the approval semantics, the attention set, wake-trigger input, budget/approval suspension, and when to escalate to the operator rather than act. Invoked by the embedded orchestrator, never vendored into a build session. |
+| `ab-operate` | outside the pipeline; model-invocable | The orchestrator role's operating manual, for any agent: file and groom tickets, watch builds with a resumable `ab watch` / `ab wait` loop, answer escalations, pause, resume, abort, control auto-merge, and keep going until every shepherded build is merged, closed, or aborted. Also read by the hosted turn runner as its system prompt (registry tools, approval and budget suspension, wake turns). |
 
-Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`, and
-`ab-guide` carries `disable-model-invocation: true` — do not invoke a phase
-skill yourself, and do not remove that key to make one convenient to call. A
-model starting a pipeline phase by pattern-matching a description is exactly
-what the flag prevents. Those three exceptions drive no build phase, which is
-the criterion for membership (§16.3): `ab-spec` and `ab-tickets` are
-human/agent-facing pre-build surfaces, and `ab-guide` is read-only reference
-including the setup handoff guidance. The fourth skill outside the
-model-invocable set, `ab-operate`, is not a build-phase skill either: it is the
-embedded orchestrator's own operating manual, read by the hosted turn runner as
-its system prompt and never invoked by a model in a build session.
+Autobuild installs 12 skills. Everything except `ab-spec`, `ab-tickets`,
+`ab-guide`, and `ab-operate` carries `disable-model-invocation: true` — do not
+invoke a phase skill yourself, and do not remove that key to make one
+convenient to call. A model starting a pipeline phase by pattern-matching a
+description is exactly what the flag prevents. Those four exceptions drive no
+build phase, which is the criterion for membership (§16.3): `ab-spec` and
+`ab-tickets` are human/agent-facing pre-build surfaces, `ab-guide` is
+read-only reference including the setup handoff guidance, and `ab-operate` is
+the manual for the orchestrator role, which any agent may take on.

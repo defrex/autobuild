@@ -9,7 +9,9 @@
  * packages/hosted-dispatcher/src/ship-packed-distribution.ts). It is
  * self-contained per the vendored-skill rule and teaches the tool surface,
  * the attention set, and when to escalate rather than act; nothing
- * repository-specific may be inlined here.
+ * repository-specific may be inlined here. The same skill is the manual for
+ * the orchestrator role in a local coding-agent session (the `ab` CLI), so
+ * hosted-only material stays under its own heading.
  */
 import { readFile } from 'node:fs/promises'
 import { distributionPath } from '../distribution'

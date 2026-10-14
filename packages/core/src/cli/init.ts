@@ -161,11 +161,12 @@ export async function ensureLocalStateIgnored(targetRepo: string): Promise<boole
  * pattern-matching a description. Membership here is reserved for skills that
  * drive NO phase — `spec` is the conversation that writes a spec before a build
  * exists, `tickets` is how "move ticket X to ready" becomes an action, and
- * `guide` is read-only reference material about the system. For these, model
+ * `guide` is read-only reference material about the system, and `operate` is the
+ * orchestrator role's manual (a role any agent takes on, not a pipeline phase). For these, model
  * invocation is precisely the point. Keep this set small; widening it needs the
  * §16.3 criterion, not convenience.
  */
-export const MODEL_INVOCABLE_SKILLS = new Set(['spec', 'tickets', 'guide'])
+export const MODEL_INVOCABLE_SKILLS = new Set(['spec', 'tickets', 'guide', 'operate'])
 
 /**
  * Rewrite a canonical skill's YAML frontmatter for installation (§16.3):

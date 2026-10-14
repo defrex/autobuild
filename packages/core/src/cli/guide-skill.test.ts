@@ -195,7 +195,7 @@ describe('ab-guide — init behavior', () => {
     expect(setup).toContain('with empty\n  `[commands]`')
     expect(setup).toContain('[repository setup reference](references/setup.md)')
     expect(setup).toContain('Vendors 12 skills before handoff')
-    expect(setup).toContain('(`ab-spec`, `ab-tickets`, `ab-guide`)')
+    expect(setup).toContain('(`ab-spec`, `ab-tickets`, `ab-guide`, `ab-operate`)')
     expect(setup).toContain('creates no build, session, event,\n  transcript, or BuildStore record')
   })
 })
