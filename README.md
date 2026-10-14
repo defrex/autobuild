@@ -36,8 +36,9 @@ ab init
 ```
 
 This vendors the editable `ab-*` skills, writes a stack-neutral config, and
-hands repository-aware setup to a coding agent. Once
-readiness is clean, start the dispatcher and its live dashboard:
+hands repository-aware setup to a coding agent. The
+[configuration reference](docs/configuration.md) covers every field. Then
+start the dispatcher and its live dashboard:
 
 ```sh
 ab dispatch
