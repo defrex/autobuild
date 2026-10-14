@@ -39,8 +39,10 @@ watching. Name slugs to watch only those builds; with none, every active build
 default filter, `--timeout <dur>` bounds it (default 30 minutes, `0` is
 unbounded), `--count <n>` ends it after n records.
 
-`ab wait [<slug>...] --for <condition> [--since <cursor>] [--json]` blocks
-until a condition holds and prints one record. Conditions include `attention`,
+`ab wait [<slug>...] (--for <condition> | --event <glob>) [--since <cursor>] [--json]`
+blocks until a condition holds and prints one record. `--for` state conditions
+are also satisfied immediately by a build already in that state; `--event` is
+satisfied only by new events. Conditions include `attention`,
 `blocked`, `paused`, `running`, `done`, `aborted`, `terminal`, `pr=merged`,
 `pr=closed`, `pr=conflicted`, and `phase=<phase>`. Exit codes: 0 satisfied,
 1 usage or store error, 2 every named build is terminal without satisfying a
@@ -57,15 +59,24 @@ Checking once is not shepherding. When you take responsibility for builds:
 
 1. Record the set you are shepherding (`ab builds --all --json`, or the slugs
    you were given).
-2. Arm `ab wait <slugs…> --for attention --for terminal --json` (or an
-   `ab watch`) and keep its cursor.
+2. Arm an event-only watch and keep its cursor:
+   `ab watch <slugs…> --json --since <cursor>` (omit `--since` the first
+   time). Events are delivered exactly once, so a build that already finished
+   is never replayed. Do not loop on `ab wait --for terminal|attention|…`:
+   state conditions are satisfied at once by any build already in that state,
+   even with `--since`, so a finished build would be returned again and the
+   loop would spin on it. If you use `ab wait`, use only `--event <glob>`
+   conditions (satisfied by new events only), never `--for`.
 3. When it returns, react: read the record, inspect the build, answer or
-   escalate, then re-arm from the last cursor. A timeout (exit 3) means
-   nothing happened — re-arm; it is not completion.
-4. Stop only when every build in the set has reached a terminal outcome:
-   merged (`pr.merged`), closed (`pr.closed`), or aborted (`build.aborted`).
+   escalate, then re-arm from the last cursor. Keep your own outcome table:
+   mark a build done when you see `pr.merged`, `pr.closed`, or
+   `build.aborted`. A timeout (exit 3, or a watch that ends with only a
+   `{"cursor": …}` line) means nothing happened — re-arm from that cursor; it
+   is not completion.
+4. Stop only when every build in the set has an outcome in your table.
    `pr.conflicted` is not terminal — reconcile follows. An open escalation
-   (`blocked`) needs a response, not patience.
+   (`blocked`) needs a response, not patience. If a watch ends because every
+   named build is terminal, check your table before declaring the work done.
 5. Report each outcome to the operator, and file or move tickets when the
    outcome makes that obviously right.
 
