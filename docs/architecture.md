@@ -599,7 +599,15 @@ phase-only commands report their complete runner context when run by hand.
 correlations, and pending cleanup without coupling to a producer or verify-step
 name. `packages/core/src/cli/pr-attachments.ts` performs optional image hosting through the
 narrow Forge capability, while `packages/core/src/cli/pr-summary.ts` renders the same complete
-text projection for finalize and late designations. The GitHub release transport
+text projection for finalize and late designations. `cli/pr-summary-publication.ts`
+coalesces these at completed phase boundaries with durable attempt, result,
+cooldown, request, and disposition facts. Built-in forges upsert one hidden
+per-build marker; legacy plugins keep the existing bounded `commentOnPr` API.
+Oversized bodies become a compact pinned download of a full `pr-summary`
+store artifact. Local runners publish under their lease; remote guests request
+and yield, and dispatcher settlement fences ended execution and owns the
+publication lease before launching replacement work. Summary failure never
+changes phase outcomes. The GitHub release transport
 lives in `packages/core/src/ports/forge/github-pr-attachments.ts`; terminal-build reclamation
 and retry facts remain dispatcher janitor duty.
 

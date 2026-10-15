@@ -100,6 +100,8 @@ const HAPPY_PREFIX = [
   'session.started',
   'finalize.completed',
   'session.ended',
+  'pr-summary.attempted',
+  'pr-summary.result',
 ]
 
 // ── a. Happy path, outer loop to merged (§15.6, §12, §15.7) ──────────────────
@@ -1443,6 +1445,8 @@ test('b. verify failure routes back to implement with the report, then re-verifi
     'session.started',
     'finalize.completed',
     'session.ended',
+    'pr-summary.attempted',
+    'pr-summary.result',
   ])
 
   // The failed check: verify.completed{outcome:fail} with the report artifact.
@@ -1679,6 +1683,8 @@ test('c. persists chain stalls, human guidance unblocks, loop converges (§15.6-
     'session.started',
     'finalize.completed',
     'session.ended',
+    'pr-summary.attempted',
+    'pr-summary.result',
   ])
   const attached2 = ofType(events, 'runner.attached')[1]!
   expect(attached2.payload.instance).toBe('runner-2')

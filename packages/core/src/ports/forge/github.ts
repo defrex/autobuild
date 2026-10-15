@@ -1,3 +1,4 @@
+import { findSummaryMarker } from './summary-marker'
 /**
  * GitHubForge (SPEC §3.2): the Forge adapter for GitHub, speaking the GitHub
  * REST API through an injectable transport seam. All remote access is
@@ -1131,11 +1132,34 @@ export class GitHubForge implements Forge {
   /** The build's summary comment (SPEC §7.5) — links into the store. */
   async commentOnPr(_workspacePath: string, number: number, body: string): Promise<void> {
     const { owner, name } = await this.requireCoordinates()
-    await this.request(
-      'POST',
-      `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/issues/${number}/comments`,
-      { body: { body } },
-    )
+    const root = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+    const collection = `${root}/issues/${number}/comments`
+    const marker = findSummaryMarker(body)
+    if (marker !== undefined) {
+      const schema = z.array(z.object({ id: z.number().int().positive(), body: z.string() }))
+      // A failed discovery never authorizes creation. Re-scan once if an edit
+      // races deletion; an uncertain POST is rediscovered on the next phase.
+      for (let scan = 0; scan < 2; scan++) {
+        let match: { id: number; body: string } | undefined
+        for (let page = 1; ; page++) {
+          const response = await this.request('GET', collection, {
+            query: { per_page: '100', page: String(page) },
+          })
+          const comments = schema.parse(response.json)
+          match ??= comments.find((comment) => findSummaryMarker(comment.body) === marker)
+          if (comments.length < 100) break
+        }
+        if (match === undefined) break
+        if (match.body === body) return
+        try {
+          await this.request('PATCH', `${root}/issues/comments/${match.id}`, { body: { body } })
+          return
+        } catch (error) {
+          if (!(error instanceof GitHubApiError) || error.status !== 404 || scan !== 0) throw error
+        }
+      }
+    }
+    await this.request('POST', collection, { body: { body } })
   }
 
   // ── Optional capabilities (checkout-less dispatcher) ──────────────────────

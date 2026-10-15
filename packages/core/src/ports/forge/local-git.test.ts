@@ -362,3 +362,37 @@ describe('LocalGitForge', () => {
     expect(await Bun.file(join(f.root, 'feature.txt')).text()).toBe('feature\n')
   })
 })
+
+test('marked summaries replace one private-ref entry across adapters and recreate after deletion', async () => {
+  const f = await fixture()
+  const pr = await f.forge.openPr({
+    workspacePath: f.workspace,
+    head: f.head,
+    base: 'main',
+    title: 'Summary',
+    body: '',
+  })
+  const marker = '<!-- autobuild-summary:v1:6162 -->'
+  await f.forge.commentOnPr(f.workspace, pr.number, 'unrelated')
+  await f.forge.commentOnPr(f.workspace, pr.number, `${marker}\nold`)
+  await new LocalGitForge().commentOnPr(f.workspace, pr.number, `${marker}\nnew`)
+  const ref = `refs/autobuild/local-git/prs/${pr.number}`
+  const read = async () =>
+    JSON.parse(await git(f.root, 'cat-file', 'blob', ref)) as { comments: string[] }
+  const record = await read()
+  expect(record.comments).toEqual(['unrelated', `${marker}\nnew`])
+  record.comments = ['unrelated']
+  const hash = Bun.spawn(['git', 'hash-object', '-w', '--stdin'], {
+    cwd: f.root,
+    stdin: 'pipe',
+    stdout: 'pipe',
+  })
+  hash.stdin.write(JSON.stringify(record))
+  hash.stdin.end()
+  const sha = (await new Response(hash.stdout).text()).trim()
+  expect(await hash.exited).toBe(0)
+  await git(f.root, 'update-ref', ref, sha)
+  await new LocalGitForge().commentOnPr(f.workspace, pr.number, `${marker}\nrecreated`)
+  await new LocalGitForge().commentOnPr(f.workspace, pr.number, `${marker}\nlatest`)
+  expect((await read()).comments).toEqual(['unrelated', `${marker}\nlatest`])
+})

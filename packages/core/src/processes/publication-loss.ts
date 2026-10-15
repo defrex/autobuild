@@ -1,3 +1,5 @@
+import { summaryBoundary } from '../kernel/pr-summary'
+import { isRemoteWorkspace } from '../events/workspace-remote'
 /**
  * Last-chance publication settlement at the workspace-release boundary
  * (AUT-328). A pending `publication.requested` whose workspace is destroyed
@@ -37,7 +39,22 @@ export async function settlePublicationBeforeRelease(
   reason: string,
 ): Promise<AbEvent[]> {
   const request = latestUncompletedPublicationRequest(events)
-  if (request === undefined) return events
+  if (request === undefined) {
+    const workspace = events.findLast((event) => event.type === 'workspace.provisioned')
+    if (
+      workspace?.type === 'workspace.provisioned' &&
+      isRemoteWorkspace(workspace.payload) &&
+      summaryBoundary(events) !== undefined
+    ) {
+      try {
+        await deps.settlePublication?.(slug)
+      } catch {
+        /* Summary is best effort. */
+      }
+      return deps.store.getEvents(slug)
+    }
+    return events
+  }
   try {
     await deps.settlePublication?.(slug)
   } catch {

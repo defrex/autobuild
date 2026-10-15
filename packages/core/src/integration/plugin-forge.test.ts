@@ -185,3 +185,39 @@ test('an attachment-capable plugin forge uploads inline images and janitor recla
     await h.cleanup()
   }
 }, 30_000)
+
+test('current-API plugin receives bounded summary calls for hundreds of post-PR designations', async () => {
+  let writes = 0
+  const handlers = happyHandlers()
+  handlers['many-attachments'] = async (cli) => {
+    const file = await writeFileIn(cli.ws, '.ab/evidence.txt', 'evidence\n')
+    for (let i = 0; i < 300; i++) {
+      await cli.run(['artifact', 'put', `evidence:${i}`, file, '--attach'])
+      expect(writes).toBe(1) // initial finalize boundary only
+    }
+  }
+  const h = await makeHarness({
+    handlers,
+    tickets: [readyTicket('PF-many')],
+    configToml: `${PLUGIN_CONFIG}\n[finalize]\nsteps = ["evidence"]\n[finalize.evidence]\nkind = "agent"\nskill = "many-attachments"\n`,
+    pluginForge: {},
+  })
+  try {
+    // This plugin still exposes only the existing commentOnPr contract.
+    const original = h.forge.commentOnPr.bind(h.forge)
+    h.forge.commentOnPr = async (...args) => {
+      writes++
+      return original(...args)
+    }
+    await h.dispatcher.tick()
+    await h.runLatest()
+    expect(h.cliErrors).toEqual([])
+    expect(writes).toBe(2)
+    const events = await h.events(h.launched[0]!.slug)
+    expect(ofType(events, 'pr-attachment.designated')).toHaveLength(300)
+    expect(ofType(events, 'pr-summary.attempted')).toHaveLength(2)
+    expect(h.forge.comments[0]!.body.length).toBeLessThanOrEqual(65_536)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)

@@ -52,7 +52,12 @@ export class GitHubApiError extends Error {
   readonly status: number
   readonly body?: unknown
 
-  constructor(status: number, message: string, body?: unknown) {
+  constructor(
+    status: number,
+    message: string,
+    body?: unknown,
+    readonly headers: Record<string, string> = {},
+  ) {
     super(message)
     this.name = 'GitHubApiError'
     this.status = status
@@ -225,6 +230,7 @@ export function createGitHubFetchTransport(opts: {
         response.status,
         `${githubErrorMessage(response.status, json, text)}${anonymous}`,
         json,
+        headerMap,
       )
     }
     return {
@@ -360,4 +366,33 @@ export function githubTokenSource(
   exec?: GitHubCliExec,
 ): () => Promise<GitHubCredential> {
   return () => resolveGitHubToken(env, exec)
+}
+
+/** Documented primary and secondary limits; permission failures are ordinary errors. */
+export function githubRateLimitUntil(error: unknown, now: number): string | undefined {
+  if (!(error instanceof GitHubApiError)) return undefined
+  if (
+    error.status !== 429 &&
+    !(
+      error.status === 403 &&
+      (error.headers['x-ratelimit-remaining'] === '0' ||
+        /rate limit|secondary.*limit|content.creation.*limit/i.test(error.message))
+    )
+  )
+    return undefined
+  const retry = error.headers['retry-after']
+  const seconds = retry === undefined ? NaN : Number(retry)
+  const retryAt = Number.isFinite(seconds) ? now + seconds * 1000 : Date.parse(retry ?? '')
+  // The reset describes the primary quota window, even on secondary-limit responses.
+  const reset =
+    error.headers['x-ratelimit-remaining'] === '0'
+      ? Number(error.headers['x-ratelimit-reset']) * 1000
+      : NaN
+  return new Date(
+    Math.max(
+      now + 60_000,
+      Number.isFinite(retryAt) ? retryAt : 0,
+      Number.isFinite(reset) ? reset : 0,
+    ),
+  ).toISOString()
 }

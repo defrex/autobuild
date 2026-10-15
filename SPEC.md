@@ -817,8 +817,27 @@ Four base-selection invariants make this safe with Git:
 
 ### 7.5 What the PR gets
 
-A summary comment — verdict history, verification results, links into the
-store. The full audit trail is queryable, not committed to the branch.
+One marked summary comment contains verdict history, verification results,
+and links into the store. Built-in forges discover its per-build marker on
+every refresh and edit it, recreating it only after confirmed absence. The
+full audit trail is queryable, not committed to the branch.
+
+Summary publication is best effort, once per completed phase occurrence,
+after sessions end; attaching artifacts performs no summary write. Durable
+claim-before-write facts consume the occurrence budget even across crashes.
+Rate limits stop that occurrence and persist a cooldown (provider headers or
+at least one minute) before a later phase may catch up. Failures never fail
+artifact designation or phase completion. Bodies are capped at 65,536 UTF-16
+code units. Oversized projections are deposited as a non-attached `pr-summary`
+artifact; a compact comment provides the exact pinned download command.
+Current-API plugins retain `commentOnPr` and receive the same bounded calls;
+legacy plugins may append instead of editing.
+
+Local runners publish under their build lease. Remote guests record durable
+summary boundary requests and yield; only the credentialed dispatcher settles
+those requests, after guest execution ends and under exclusive ownership,
+before replacement execution or workspace cleanup. Attempts and request
+dispositions survive restart and do not alter pipeline routing.
 
 Any agent session can explicitly designate an exact deposited artifact as a PR
 attachment through `ab artifact put <kind> <file> --attach`. Designation is a
@@ -838,8 +857,8 @@ dispatcher reclaims them after the build reaches a terminal outcome, while
 store artifacts remain under the store's retention policy. Upload/validation/timeout failures record follow-up
 observations and preserve the complete text projection; they never fail
 verification or block finalize. Agents receive no forge credentials. A
-designation after the PR exists publishes a new complete summary, so finalize
-post-steps and post-reconcile verifiers need no custom phase.
+designation after the PR exists is included at the completed phase boundary,
+so finalize post-steps and post-reconcile verifiers need no custom phase.
 
 ### 7.6 Streams (the third primitive)
 
@@ -1907,7 +1926,8 @@ with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-completed {step, ok, headSha?}` |
+| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
+| PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.completed` |
 | Cross-cutting | `observation.recorded`, `escalation.raised`, `phase.failed` |
