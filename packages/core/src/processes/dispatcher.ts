@@ -2950,7 +2950,7 @@ export class Dispatcher {
       // readyLabels / readyState gate: those criteria produced `ready`, and the
       // gate subtracts from it — labels and state can make a ticket a
       // candidate but can never override an unresolved blocker.
-      if ((ticket.blockedBy ?? []).length > 0) {
+      if (ticket.blockersResolved !== true && (ticket.blockedBy ?? []).length > 0) {
         let verdict: DependencyVerdict
         try {
           await this.loadDependencyGraph(ticket, nodes)

@@ -1,3 +1,4 @@
+import { expect, test } from 'bun:test'
 import { describeTicketSourceContract, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { HostedTicketSource } from './remote-tickets'
 import { mintToken } from '@defrex/autobuild/remote-store'
@@ -42,4 +43,33 @@ describeTicketSourceContract('hosted service composition', async () => {
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'autobuild',
   }
+})
+
+test.each([true, undefined])('real hosted transport preserves listing hint %s', async (hint) => {
+  const backend = new FakeTicketSource([])
+  backend.listReady = async () => ({
+    tickets: [
+      {
+        ref: { source: 'linear', id: 'ENG-1', title: 'Example' },
+        title: 'Example',
+        body: 'Spec',
+        resolved: false,
+        labels: [],
+        blockedBy: ['ENG-2'],
+        ...(hint === undefined ? {} : { blockersResolved: hint }),
+      },
+    ],
+    diagnostics: [],
+  })
+  const service = createHostedStoreService({ env, clock: () => now, sourceFor: () => backend })
+  const token = mintToken(secret, { operator: true, session: '*', exp: now.getTime() + 60_000 })
+  const source = new HostedTicketSource({
+    url: 'https://hosted.example',
+    token,
+    teamKey: 'ENG',
+    fetchFn: (input, init) => service.fetch(new Request(input.toString(), init)),
+  })
+  const ticket = (await source.listReady({})).tickets[0]!
+  expect(ticket.blockersResolved).toBe(hint)
+  expect(Object.hasOwn(ticket, 'blockersResolved')).toBe(hint !== undefined)
 })
