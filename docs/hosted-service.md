@@ -141,9 +141,15 @@ Fresh databases install ticket schema v2 directly. Existing team-keyed v1
 queues migrate in one transaction. For each registered project, migration reads
 the effective configuration selected by its latest dispatcher run and reloads,
 including the actual immutable artifact bytes in blob storage. A legacy team
-must have one claimant, or an explicit owner assignment. Missing configuration,
-unclaimed teams, conflicting claimants, inaccessible/malformed blobs and asset
-ownership conflicts stop migration without changing schema markers or tickets.
+must have one claimant, or an explicit owner assignment. A registered project
+with no dispatcher run or no selected effective-config reference makes no team
+claim and does not block other projects. Unclaimed teams still stop unchanged.
+When ownership must be inferred, a selected but missing, inaccessible or invalid
+configuration fails closed with the project and remaining teams in the message.
+Restore those bytes or explicitly assign every remaining legacy team, then
+rerun; complete assignments to registered projects settle ownership without
+reading unrelated configurations. Conflicting claimants and asset ownership
+conflicts also stop without changing schema markers or tickets.
 Historical ids, states, timestamps, blockers, comments and asset rows remain
 unchanged. Review the named projects and resolve a shared legacy team locally:
 

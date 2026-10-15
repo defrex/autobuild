@@ -137,20 +137,28 @@ export async function effectiveConfig(
   }
 }
 
-export function selectEffectiveConfig(repositoryEvents: RepositoryEvent[], repo: string) {
+function latestDispatchConfigStatus(repositoryEvents: RepositoryEvent[]) {
   let latestRun: string | undefined
   for (const event of repositoryEvents) {
     if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
   }
-  if (latestRun === undefined) {
+  return latestRun === undefined ? undefined : reduceDispatchStatus(repositoryEvents, latestRun)
+}
+
+/** Absence is distinct from a selected reference whose bytes cannot be read. */
+export function findEffectiveConfigRef(repositoryEvents: RepositoryEvent[]) {
+  return latestDispatchConfigStatus(repositoryEvents)?.effectiveConfig
+}
+
+export function selectEffectiveConfig(repositoryEvents: RepositoryEvent[], repo: string) {
+  const status = latestDispatchConfigStatus(repositoryEvents)
+  if (status === undefined) {
     throw new OperatorQueryError(
       'effective-config-unavailable',
       `effective config unavailable for repository "${repo}": no dispatcher run is recorded`,
     )
   }
-  const status = reduceDispatchStatus(repositoryEvents, latestRun)
-  const ref = status.effectiveConfig
-  if (ref === undefined) {
+  if (status.effectiveConfig === undefined) {
     throw new OperatorQueryError(
       'effective-config-unavailable',
       `effective config unavailable for repository "${repo}"`,

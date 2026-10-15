@@ -1293,3 +1293,184 @@ if (testUrl)
       await world.cleanup()
     }
   })
+
+import { openTicketAssignmentsFromEnv } from './ticket-assignments'
+
+if (testUrl) {
+  test('registered projects without a dispatcher run or effective-config reference make no team claim', async () => {
+    const world = await legacyTickets()
+    const owner = 'https://github.com/acme/owner'
+    const fresh = 'https://github.com/acme/fresh'
+    const unconfigured = 'https://github.com/acme/unconfigured'
+    try {
+      const artifact = await world.project(owner, 'ONE')
+      await world.seed('ONE')
+      for (const repo of [fresh, unconfigured]) {
+        await world.sql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),${repo},'added','owner',${CONTRACT_T0})`
+      }
+      await world.store.ensureRepo(unconfigured)
+      // Historical run without a config ref: no claim, not an unreadable ref.
+      await world.sql`INSERT INTO repo_events (repo,seq,ts,actor,type,payload) VALUES (${unconfigured},1,${CONTRACT_T0},${DISPATCHER},'dispatcher.run-started',${{ run: 'unconfigured', pid: 1, roleWarnings: [] }})`
+      await migratePostgres(world.url, { openBlobs: () => world.blobs })
+      await assertTicketSchema(world.sql)
+      expect(world.reads).toEqual([artifact.blobRef])
+      expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(owner)
+      expect(
+        Number((await world.sql`SELECT count(*) AS count FROM project_journal`)[0].count),
+      ).toBe(3)
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('v9 legacy import tolerates a listed project that never ran a dispatcher', async () => {
+    const owner = 'https://github.com/acme/released'
+    const fresh = 'https://github.com/acme/fresh'
+    const world = await releasedV9Tickets([owner])
+    world.env.AB_WEB_REPOSITORIES = `${owner},${fresh}`
+    try {
+      const result = await world.run(false, ['migrate'])
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT repo FROM project_journal ORDER BY repo`)]).toEqual([
+        { repo: fresh },
+        { repo: owner },
+      ])
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
+        { repo: owner },
+      ])
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('a legacy team with no configured claimant fails closed and owner assignment recovers without removing the fresh project', async () => {
+    const fresh = 'https://github.com/acme/fresh'
+    const world = await releasedV9Tickets([])
+    world.env.AB_WEB_REPOSITORIES = fresh
+    try {
+      const before = await world.snapshot()
+      const result = await world.run(false, ['migrate'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('no project claims this team')
+      expect(result.stderr).toContain('assign-team')
+      expect(await world.snapshot()).toEqual(before)
+      expect(
+        (await world.run(true, ['tickets', 'assign-team', 'ENG', fresh, '--user', 'owner'])).code,
+      ).toBe(0)
+      world.requests.length = 0
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      expect(world.requests).toEqual([])
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
+        { repo: fresh },
+      ])
+      expect([...(await world.sql`SELECT repo FROM project_journal`)]).toEqual([{ repo: fresh }])
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('unreadable selected configs fail closed with actionable guidance and complete owner assignments unblock migration', async () => {
+    for (const failure of [
+      'missing-blob',
+      'denied-blob',
+      'invalid-json',
+      'invalid-config',
+      'missing-revision',
+    ]) {
+      const world = await legacyTickets()
+      const owner = 'https://github.com/acme/owner'
+      const unrelated = 'https://github.com/acme/unreadable'
+      try {
+        await world.project(owner, 'ONE')
+        const artifact = await world.project(unrelated, 'OTHER')
+        await world.seed('ONE')
+        if (failure === 'missing-revision')
+          await world.sql`DELETE FROM repo_artifacts WHERE repo = ${unrelated}`
+        const blobs: BlobStore = {
+          ...world.blobs,
+          get: async (hash) => {
+            if (hash !== artifact.blobRef) return world.blobs.get(hash)
+            if (failure === 'missing-blob') return null
+            if (failure === 'denied-blob') throw new Error('provider-secret-must-not-leak')
+            if (failure === 'invalid-json') return new TextEncoder().encode('{broken')
+            if (failure === 'invalid-config') return new TextEncoder().encode('{}')
+            return world.blobs.get(hash)
+          },
+        }
+        const before = await world.snapshot()
+        let failureMessage: string | undefined
+        try {
+          await migratePostgres(world.url, { openBlobs: () => blobs })
+        } catch (error) {
+          failureMessage = (error as Error).message
+        }
+        expect(failureMessage).toContain('Ticket migration stopped unchanged:')
+        expect(failureMessage).toContain('assign every remaining legacy team (ONE)')
+        expect(failureMessage).not.toContain('provider-secret-must-not-leak')
+        expect(await world.snapshot()).toEqual(before)
+        const assignments = await openTicketAssignmentsFromEnv({ AB_POSTGRES_URL: world.url })
+        try {
+          await assignments.assign('ONE', owner, 'owner')
+        } finally {
+          await assignments.close()
+        }
+        await migratePostgres(world.url, {
+          openBlobs: () => ({
+            ...blobs,
+            get: async () => {
+              throw new Error('config bytes must not be read after all ownership is explicit')
+            },
+          }),
+        })
+        await assertTicketSchema(world.sql)
+        expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(owner)
+        expect(
+          Number((await world.sql`SELECT count(*) AS count FROM project_journal`)[0].count),
+        ).toBe(2)
+      } finally {
+        await world.cleanup()
+      }
+    }
+  })
+}
+
+if (testUrl)
+  test('partial assignments do not suppress unreadable configuration when another legacy team still needs ownership', async () => {
+    const world = await legacyTickets()
+    const one = 'https://github.com/acme/one',
+      two = 'https://github.com/acme/two'
+    try {
+      await world.project(one, 'ONE')
+      const unreadable = await world.project(two, 'TWO')
+      await world.seed('ONE')
+      await world.seed('TWO')
+      const assignments = await openTicketAssignmentsFromEnv({ AB_POSTGRES_URL: world.url })
+      try {
+        await assignments.assign('ONE', one, 'owner')
+        const blobs = {
+          ...world.blobs,
+          get: async (hash: string) => (hash === unreadable.blobRef ? null : world.blobs.get(hash)),
+        }
+        const before = await world.snapshot()
+        await expect(migratePostgres(world.url, { openBlobs: () => blobs })).rejects.toThrow(
+          'assign every remaining legacy team (TWO)',
+        )
+        expect(await world.snapshot()).toEqual(before)
+        await assignments.assign('TWO', two, 'owner')
+        await migratePostgres(world.url, { openBlobs: () => blobs })
+        await assertTicketSchema(world.sql)
+        expect(
+          (await world.sql`SELECT repo FROM ab_tickets WHERE id = 'old-1' ORDER BY repo`).map(
+            (row: { repo: string }) => row.repo,
+          ),
+        ).toEqual([one, two])
+      } finally {
+        await assignments.close()
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })

@@ -388,8 +388,13 @@ reapplied from later environment edits.
 
 Ticket schema v1 migration assigns each whole legacy team to its sole claimant
 among registered projects' latest effective configs, reading their actual blob
-bytes. Conflicts, missing configuration, unclaimed teams, blob failures and asset
-ownership mismatches stop unchanged. Resolve ownership locally, then rerun:
+bytes. Projects with no dispatcher run or no effective-config reference make
+no team claim and do not block other projects. Unclaimed teams still fail closed.
+When inferring ownership, a selected configuration whose revision/blob is missing,
+unreadable or invalid stops unchanged with recovery guidance. Restore the selected
+configuration or assign every remaining legacy team explicitly; complete owner
+assignments to registered projects bypass unrelated configuration reads. Conflicts
+and asset ownership mismatches also stop unchanged. Resolve ownership, then rerun:
 
 ```sh
 ab-hosted-store tickets assign-team TEAM https://github.com/acme/app --user owner@example.com

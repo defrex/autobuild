@@ -1,6 +1,6 @@
 import type { SQL } from 'bun'
 import type { BlobStore, RepositoryEvent } from '@defrex/autobuild/plugin-sdk'
-import { selectEffectiveConfig, decodeEffectiveConfig } from '@defrex/autobuild/operator'
+import { findEffectiveConfigRef, decodeEffectiveConfig } from '@defrex/autobuild/operator'
 import { TICKET_ASSIGNMENTS_DDL } from './ticket-assignments'
 
 /** Called only inside the schema migration transaction. Locks preserve the
@@ -32,8 +32,15 @@ export async function migrateLegacyTickets(
     const projects: { repo: string }[] = await sql`SELECT repo FROM (
       SELECT DISTINCT ON (repo) repo, action FROM project_journal ORDER BY repo, seq DESC
     ) latest WHERE action = 'added' ORDER BY repo`
+    const overrides: { team: string; repo: string }[] =
+      await sql`SELECT DISTINCT ON (team) team, repo FROM ticket_team_assignments ORDER BY team, seq DESC`
+    const remaining = teams.filter(({ team }) => !overrides.some((item) => item.team === team))
+    const configFailure = (detail: string) =>
+      new Error(
+        `Ticket migration stopped unchanged: ${detail}. Restore the selected effective configuration/blob, or explicitly assign every remaining legacy team (${remaining.map(({ team }) => team).join(', ')}) with ab-hosted-store tickets assign-team TEAM REPOSITORY --user IDENTITY, then rerun migration.`,
+      )
     const claimants = new Map<string, string[]>()
-    for (const { repo } of projects) {
+    for (const { repo } of remaining.length > 0 ? projects : []) {
       const rows: { seq: number; ts: string; actor: unknown; type: string; payload: unknown }[] =
         await sql`SELECT seq, ts, actor, type, payload FROM repo_events WHERE repo = ${repo} ORDER BY seq`
       const events = rows.map((row) => ({
@@ -42,31 +49,36 @@ export async function migrateLegacyTickets(
         seq: Number(row.seq),
         ts: new Date(row.ts).toISOString(),
       })) as RepositoryEvent[]
-      const ref = selectEffectiveConfig(events, repo).effectiveConfig!
+      const ref = findEffectiveConfigRef(events)
+      // Registration/onboarding alone makes no team claim.
+      if (ref === undefined) continue
       const [artifact] =
         await sql`SELECT blob_ref FROM repo_artifacts WHERE repo = ${repo} AND kind = ${ref.kind} AND revision = ${ref.rev}`
       if (!artifact)
-        throw new Error(
-          `Ticket migration: effective config ${ref.kind}@${ref.rev} unavailable for ${repo}`,
-        )
+        throw configFailure(`effective config ${ref.kind}@${ref.rev} unavailable for ${repo}`)
       let bytes: Uint8Array | null
       try {
         bytes = await blobs.get(artifact.blob_ref)
       } catch {
-        throw new Error(
-          `Ticket migration: cannot read effective configuration blob for ${repo}; check blob access and prefix`,
+        throw configFailure(
+          `cannot read effective configuration blob for ${repo}; check blob access and prefix`,
         )
       }
       if (bytes === null)
-        throw new Error(
-          `Ticket migration: missing effective configuration blob for ${repo}; check blob backend and prefix`,
+        throw configFailure(
+          `missing effective configuration blob for ${repo}; check blob backend and prefix`,
         )
-      const config = decodeEffectiveConfig(bytes, `${repo} ${ref.kind}@${ref.rev}`)
+      let config: ReturnType<typeof decodeEffectiveConfig>
+      try {
+        config = decodeEffectiveConfig(bytes, `${repo} ${ref.kind}@${ref.rev}`)
+      } catch {
+        throw configFailure(
+          `selected effective config ${ref.kind}@${ref.rev} for ${repo} is invalid`,
+        )
+      }
       const team = config.tickets.teamKey
       if (team !== undefined) claimants.set(team, [...(claimants.get(team) ?? []), repo])
     }
-    const overrides: { team: string; repo: string }[] =
-      await sql`SELECT DISTINCT ON (team) team, repo FROM ticket_team_assignments ORDER BY team, seq DESC`
     const errors: string[] = []
     for (const { team } of teams) {
       const override = overrides.find((item) => item.team === team)
