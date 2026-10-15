@@ -1995,13 +1995,40 @@ for (const remote of [false, true]) {
       },
     })
     const storeRef = remote ? 'https://stores.example.com/ab' : `${REPO}/.autobuild`
+    let heldReads = 0
+    const quietRemote = new Proxy(store, {
+      get(target, property) {
+        if (property === 'getRepoEvents')
+          return async (
+            repo: string,
+            since?: number,
+            opts?: { waitSeconds?: number; signal?: AbortSignal },
+          ) => {
+            if (opts?.waitSeconds) {
+              heldReads += 1
+              // A genuinely quiet long-poll never returns until cancelled.
+              return await new Promise<import('../events/repository').RepositoryEvent[]>(
+                (resolve) => {
+                  if (opts.signal?.aborted) resolve([])
+                  else opts.signal?.addEventListener('abort', () => resolve([]), { once: true })
+                },
+              )
+            }
+            return target.getRepoEvents(repo, since)
+          }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
     const h = harness(store, {
       now: clock,
+      openStore: () => (remote ? quietRemote : store),
       delay: async () => {
         clock.advance(1000)
       },
     })
     await abWatch({ ...h.base, storeRef, count: 1, timeout: '10' })
+    if (remote) expect(heldReads).toBeGreaterThan(0)
     const record = JSON.parse(h.out[0]!)
     expect(record).toMatchObject({
       build: null,
