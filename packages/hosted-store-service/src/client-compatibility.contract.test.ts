@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { expect, test } from 'bun:test'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
@@ -43,9 +44,10 @@ for (const version of ['0.9.0', '0.10.0', '0.11.0', '0.11.999', '0.8.99', '0.12.
         return new FakeTicketSource()
       },
     })
-    const operators = createOperatorServer({ store, secret })
+    const operators = createOperatorServer({ store, secret, projects: testProjects(['repo']) })
     let opens = 0
     const composed = createHostedStoreService({
+      openProjectRegistry: async () => testProjects(['repo']),
       env: {
         AB_STORE_SECRET: secret,
         AB_POSTGRES_URL: 'postgres://unused/test',
@@ -265,7 +267,7 @@ for (const version of ['0.9.0', '0.10.0']) {
 
   test(`historical ${version} operator read/control/error and generic tool contract`, async () => {
     const store = new MemoryBuildStore()
-    const server = createOperatorServer({ store, secret })
+    const server = createOperatorServer({ store, secret, projects: testProjects(['repo']) })
     const read = await server.fetch(
       request('/operator/v1/repos/repo/builds', version, undefined, operator),
     )

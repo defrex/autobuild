@@ -22,6 +22,10 @@
     "./store": {
       "types": "./src/store.ts",
       "import": "./src/store.ts"
+    },
+    "./projects": {
+      "types": "./src/projects.ts",
+      "import": "./src/projects.ts"
     }
   },
   "bin": {

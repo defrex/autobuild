@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { parseConfig } from '@defrex/autobuild/testing'
@@ -127,6 +128,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => {
@@ -154,6 +156,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => {
@@ -200,6 +203,7 @@ describe('hosted store service', () => {
   test('routes the generic tools POST to the operator server', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => backing,
@@ -241,6 +245,7 @@ describe('hosted store service', () => {
     }
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => backing,
@@ -279,6 +284,7 @@ describe('hosted store service', () => {
   test('unknown and unsupported routes return 404 without opening persistence', async () => {
     let opens = 0
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       openStore: async () => {
         opens++
@@ -312,6 +318,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => {
@@ -340,6 +347,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => {
@@ -375,6 +383,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => {
@@ -401,6 +410,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     const deferred = Promise.withResolvers<MemoryBuildStore>()
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => {
@@ -422,7 +432,12 @@ describe('hosted store service', () => {
 
   test('round-trips 1 MiB and rejects ceiling-plus-one without mutation', async () => {
     const backing = new MemoryBuildStore({ clock })
-    const service = createHostedStoreService({ env, clock, openStore: async () => backing })
+    const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
+      env,
+      clock,
+      openStore: async () => backing,
+    })
     const client = clientFor(service)
     await client.createBuild({ slug: 'demo', repo: 'acme/repo' })
 
@@ -442,6 +457,7 @@ describe('hosted store service', () => {
 
   test('reports package skew before authentication and redacts opener failures', async () => {
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => new MemoryBuildStore({ clock }),
@@ -455,6 +471,7 @@ describe('hosted store service', () => {
     const failure = new Error('postgres://user:password@secret-host/db')
     const reports: unknown[][] = []
     const failed = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       openStore: async () => {
         throw failure
@@ -483,6 +500,7 @@ describe('hosted store service', () => {
     }
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => backing,
@@ -508,6 +526,7 @@ describe('hosted store service', () => {
 
   test('passes expected protocol errors through unchanged', async () => {
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => new MemoryBuildStore({ clock }),
@@ -528,6 +547,7 @@ describe('hosted store service', () => {
     await publishOrchestratorConfig(backing)
     const scheduled: (() => Promise<void>)[] = []
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => backing,
@@ -565,6 +585,7 @@ describe('hosted store service', () => {
     // Neither scheduleBackground nor a reporter: pin only what the default
     // guarantees through the public surface.
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => backing,
@@ -663,6 +684,7 @@ model = "test/mock"
   ) {
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env: { ...env, ...extraEnv },
       clock,
       openStore: async () => backing,
@@ -799,4 +821,25 @@ model = "test/mock"
     // No origin → no composition attempt → no diagnostic.
     expect(reports).toEqual([])
   })
+})
+
+test('project discovery opens independently of blobs and retries failed initialization', async () => {
+  let attempts = 0
+  const projects = testProjects(['https://github.com/acme/one'])
+  const service = createHostedStoreService({
+    env: {},
+    openStore: async () => {
+      throw new Error('project discovery opened blobs')
+    },
+    openProjectRegistry: async () => {
+      attempts++
+      if (attempts === 1) throw new Error('temporary registry outage')
+      return projects
+    },
+  })
+  await expect(service.projects.list()).rejects.toThrow('temporary registry outage')
+  expect(await service.projects.has('https://github.com/acme/one')).toBe(true)
+  await projects.remove('https://github.com/acme/one', 'Ada')
+  expect(await service.projects.list()).toEqual([])
+  expect(attempts).toBe(2)
 })

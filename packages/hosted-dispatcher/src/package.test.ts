@@ -27,10 +27,11 @@ describe('hosted-dispatcher package manifest', () => {
     expect(manifest.engines?.bun).toBe('>=1.4.0')
   })
 
-  test('peers on exactly the core CLI and the hosted store service', () => {
+  test('peers on the core CLI, hosted service and durable registry', () => {
     expect(Object.keys(manifest.peerDependencies ?? {}).sort()).toEqual([
       '@defrex/autobuild',
       '@defrex/autobuild-hosted-store-service',
+      '@defrex/autobuild-postgres-store',
     ])
   })
 

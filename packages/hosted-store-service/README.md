@@ -89,17 +89,9 @@ two together if you change either.
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`: server-only OAuth app values.
 - `AB_WEB_AUTH_PROVIDERS=github`: enabled provider set.
 - `AB_WEB_ALLOWED_EMAILS`: comma-separated, case-insensitive operator allowlist.
-- `AB_WEB_REPOSITORIES`: comma-separated repositories visible through the web
-  gateway. Entries are repository identities — normalized `https://` origins
-  (e.g. `https://github.com/defrex/autobuild`); ssh-like spellings such as
-  `git@github.com:defrex/autobuild.git` are accepted and normalized. They must
-  match the Store's identity for the repository: since the checkoutless
-  dispatch change, `BuildRecord.repo` and the dispatcher's repository key are
-  the repository's normalized origin URL, not a checkout path. Records written
-  before that change are keyed by checkout path, are not migrated, and remain
-  visible only where their recorded `repoOrigin` matches the querying
-  checkout's origin (decision 2026-09-10: dropping the old identity's history
-  is acceptable).
+- `AB_WEB_REPOSITORIES` (deprecated): optional once-per-database import of
+  normalized repository origins. The durable registry is authoritative after
+  import; edits and restarts never resurrect removed projects.
 - `AB_WEB_MCP_RESOURCE` (optional): the protected resource the MCP server
   binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. See the
   [MCP server](https://github.com/defrex/autobuild/blob/main/docs/mcp.md).
@@ -129,3 +121,50 @@ The Sandbox SDK authenticates with the deployment's own OIDC identity inside
 Vercel functions, so no `VERCEL_TOKEN` belongs on a hosted deployment either
 way; see the dispatcher package's README for the dispatcher environment
 variables and credential handling.
+
+## Connected projects
+
+Migrate PostgreSQL from the pinned release before deploying (`bun run
+postgres:migrate`). The service keeps an independent, durable project registry;
+existing build or ticket data does not register a project. An administrator
+with deployment database credentials manages it without redeploying:
+
+```sh
+ab-hosted-store projects list
+ab-hosted-store projects add https://github.com/owner/project --user owner@example.com
+ab-hosted-store projects remove https://github.com/owner/project --user owner@example.com
+```
+
+From a source checkout, substitute `bun packages/hosted-store-service/src/bin.ts`
+for `ab-hosted-store`. Configure `AB_POSTGRES_URL` or `DATABASE_URL` in that
+process. Database possession grants administration; `--user` is declared audit
+attribution, not a verified login. Ordinary project/store tokens cannot manage
+registrations. Each entry records the normalized origin URL, addition time,
+and adding identity. SSH git spellings normalize to HTTPS; local paths and
+credential-bearing HTTPS URLs are rejected. Duplicate adds preserve metadata;
+remove is idempotent, and re-adding records a fresh addition.
+
+Every allowlisted signed-in user owns every registered project. The dashboard,
+MCP discovery and calls, and every operator API route consult current
+registration. Removal hides a project from all these surfaces and subsequent
+hosted dispatcher invocations; builds, events, artifacts and tickets remain,
+and re-registration restores access. Already-started work is not cancelled.
+Machine BuildStore and ticket credentials retain their existing authority;
+project-bound credentials are a separate feature.
+
+Link directly to `/?repo=<URL-encoded normalized origin>`. The page selects the
+first registered origin when the requested one is missing or removed, and an
+empty registry shows no project data or controls. Registry errors fail closed;
+there is no environment fallback on database failure.
+
+`AB_WEB_REPOSITORIES` is deprecated. A nonempty CSV is imported exactly once per
+database, on the first registry initialization with that variable configured,
+with actor `system:AB_WEB_REPOSITORIES`. The import and durable marker commit
+atomically across concurrent starts. An absent variable does not consume the
+marker. Later restarts or edits to the variable never re-add removed projects;
+use the owner commands for subsequent administration.
+
+The hosted dispatcher queries current registrations on every authorized
+invocation. With `AB_DISPATCHER_REPOSITORIES` unset, it serves all registered
+projects; an explicit list preserves its order and is intersected with current
+registration. An empty registry is a successful zero-project invocation.

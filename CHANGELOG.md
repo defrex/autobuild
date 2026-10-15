@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- [#608](https://github.com/defrex/autobuild/pull/608) — Add a durable hosted project registry
+
 - [#610](https://github.com/defrex/autobuild/pull/610) — Accept hosted clients within a release-line compatibility window
 - [#609](https://github.com/defrex/autobuild/pull/609) — Package the full hosted service for standalone Vercel deployments
 - [#607](https://github.com/defrex/autobuild/pull/607) — Coalesce PR summaries into one bounded comment per build

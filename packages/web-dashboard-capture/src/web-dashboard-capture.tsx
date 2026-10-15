@@ -377,9 +377,9 @@ function shell(
       controls={
         opts.model ? (
           <DispatcherControls model={opts.model} onSetting={noop} onHarvest={noop} onBulk={noop} />
-        ) : (
+        ) : repo ? (
           <LoadingControls />
-        )
+        ) : null
       }
     >
       {children}

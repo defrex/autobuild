@@ -1,4 +1,8 @@
 import {
+  openPostgresProjectRegistryFromEnv,
+  type ProjectRegistryReader,
+} from '@defrex/autobuild-postgres-store/projects'
+import {
   openPostgresBuildStoreFromEnv,
   openPostgresTicketDatabase,
   type PostgresTicketDatabase,
@@ -52,6 +56,7 @@ export interface HostedStoreErrorContext {
 }
 
 export interface HostedStoreServiceOptions {
+  openProjectRegistry?: (env: HostedStoreEnv) => Promise<ProjectRegistryReader>
   env?: HostedStoreEnv
   clock?: Clock
   openStore?: (env: HostedStoreEnv, options: { clock?: Clock }) => Promise<BuildStore>
@@ -370,8 +375,25 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
 /** Host-neutral Fetch handler. Persistence opens once, on the first recognized machine request. */
 export function createHostedStoreService(options: HostedStoreServiceOptions = {}): {
   fetch(req: Request): Promise<Response>
+  projects: ProjectRegistryReader
 } {
   const env = options.env ?? process.env
+  let projectPromise: Promise<ProjectRegistryReader> | undefined
+  const openProjects = () => {
+    if (!projectPromise) {
+      const attempt = (options.openProjectRegistry ?? openPostgresProjectRegistryFromEnv)(env)
+      projectPromise = attempt
+      void attempt.catch(() => {
+        if (projectPromise === attempt) projectPromise = undefined
+      })
+    }
+    return projectPromise
+  }
+  const projects: ProjectRegistryReader = {
+    list: async () => (await openProjects()).list(),
+    has: async (repo) => (await openProjects()).has(repo),
+  }
+
   const opener = options.openStore ?? openPostgresBuildStoreFromEnv
   const ticketOpener = options.openTicketDatabase ?? openPostgresTicketDatabase
   const reporter =
@@ -480,6 +502,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           ...shared,
         })
         const operatorServer = createOperatorServer({
+          projects,
           store,
           secret: config.secret,
           ticketBackend: {
@@ -603,6 +626,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   }
 
   return {
+    projects,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url)
       if (req.method === 'GET' && url.pathname === '/health') {

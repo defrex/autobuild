@@ -20,7 +20,6 @@ describe('web auth configuration', () => {
     expect(isAllowedEmail(config.allowedEmails, 'ADA@example.COM')).toBe(true)
     expect(safeWebConfig(config)).toEqual({
       providers: ['github'],
-      repositories: ['https://github.com/owner/one', 'https://github.com/owner/two'],
       mcpResource: 'https://operator.example/mcp',
     })
     expect(JSON.stringify(safeWebConfig(config))).not.toContain('secret')
@@ -45,8 +44,6 @@ describe('web auth configuration', () => {
     ['weak secret', { BETTER_AUTH_SECRET: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
     ['URL path', { BETTER_AUTH_URL: 'https://operator.example/path' }],
     ['blank allowlist entry', { AB_WEB_ALLOWED_EMAILS: 'ada@example.com,' }],
-    ['non-origin repository', { AB_WEB_REPOSITORIES: '/srv/git/one' }],
-    ['blank repository entry', { AB_WEB_REPOSITORIES: 'https://github.com/owner/one,' }],
   ])('rejects %s', (_name, patch) => {
     expect(() => parseWebAuthEnv({ ...env, ...patch })).toThrow()
   })

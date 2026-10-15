@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '@defrex/autobuild/testing'
 import { DISPATCHER } from '@defrex/autobuild/testing'
@@ -45,6 +46,7 @@ async function setup(source: FakeTicketSource) {
     },
   })
   const server = createOperatorServer({
+    projects: testProjects([repo]),
     store,
     secret,
     clock: () => now,

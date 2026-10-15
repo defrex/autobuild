@@ -66,7 +66,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `GITHUB_CLIENT_SECRET` | GitHub sign-in | Server-only OAuth application secret. |
 | `AB_WEB_AUTH_PROVIDERS` | Web dashboard | Comma-separated provider set; currently exactly `github`. |
 | `AB_WEB_ALLOWED_EMAILS` | Web dashboard | Nonempty comma-separated operator email allowlist; matching is case-insensitive. |
-| `AB_WEB_REPOSITORIES` | Web dashboard | Nonempty comma-separated repository allowlist exposed to signed-in operators. Entries are repository identities — normalized `https://` origins (ssh-like spellings such as `git@github.com:owner/repo.git` are accepted and normalized); they must match the Store's identity for the repository. |
+| `AB_WEB_REPOSITORIES` | Hosted service | Deprecated once-per-database bootstrap CSV for the durable project registry. Use owner commands thereafter; see [connected projects](setup.md#connected-projects). |
 
 GitHub's callback is `{BETTER_AUTH_URL}/api/auth/callback/github`; the app needs
 the `user:email` scope (or GitHub App read-only email permission). Sessions are
@@ -1806,6 +1806,18 @@ progress is not shown. Harvest does not consume build capacity.
 - **Remote BuildStore:** confirm the effective `AB_STORE` URL and `AB_TOKEN`.
   A protected store reports 401 for a missing, invalid, or expired token and
   403 when the token is valid but scoped to another build/session.
+
+### Hosted project selection
+
+The durable PostgreSQL project registry controls dashboard, MCP and operator
+API access. Every allowlisted user sees every active entry. Administer it with
+`ab-hosted-store projects list|add|remove` using deployment database credentials;
+mutations require `--user IDENTITY` for declared attribution. See
+[connected projects](setup.md#connected-projects) for migration and retention.
+`AB_DISPATCHER_REPOSITORIES` optionally selects an ordered subset of current
+registrations. When unset, each authorized tick queries all active entries.
+Removed credential override keys are inert in dynamic mode; explicit-list
+configuration still rejects unknown override keys.
 
 ## Hosted service client compatibility
 

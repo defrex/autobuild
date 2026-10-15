@@ -13,6 +13,8 @@ import {
 } from '@defrex/autobuild/operator-presentation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from './api'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { projectLink } from './project-selection'
 import {
   type BuildControlAction,
   BuildsView,
@@ -30,6 +32,7 @@ import { reconcileDashboard } from './view-model'
 
 interface ClientProps {
   identity: string
+  initialSelection: string
   repositories: readonly string[]
 }
 
@@ -107,8 +110,18 @@ export function createRowControlHandlers(deps: RowControlHandlerDependencies) {
   }
 }
 
-export function DashboardClient({ identity, repositories }: ClientProps) {
-  const [repo, setRepo] = useState(repositories[0] ?? '')
+export function DashboardClient({ identity, repositories, initialSelection }: ClientProps) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const repo = initialSelection
+  const routerRef = useRef(router)
+  routerRef.current = router
+  const lastRegistryRefresh = useRef(0)
+  const refreshRegistry = useCallback(() => {
+    if (Date.now() - lastRegistryRefresh.current < 5000) return
+    lastRegistryRefresh.current = Date.now()
+    routerRef.current.refresh()
+  }, [])
   const [snapshot, setSnapshot] = useState<OperatorDashboardSnapshot>()
   const [selection, setSelection] = useState<Selection>()
   const [hoverPreview, setHoverPreview] = useState<Selection>()
@@ -133,7 +146,21 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
   // it must be created before the repository effect below hands it a repo.
   useEffect(() => {
     const refresher = createDashboardRefresher({
-      fetch: api.dashboard,
+      fetch: async (repository, signal) => {
+        try {
+          return await api.dashboard(repository, signal)
+        } catch (cause) {
+          if (!signal.aborted && cause instanceof api.WebOperatorError && cause.status === 404) {
+            setSnapshot(undefined)
+            setTranscript(undefined)
+            setSelection(undefined)
+            setHoverPreview(undefined)
+            setAnswerStep(undefined)
+            refreshRegistry()
+          }
+          throw cause
+        }
+      },
       visible: () => !document.hidden,
       onSnapshot: (next) => {
         setSnapshot((old) => ({ ...next, model: reconcileDashboard(old?.model, next.model) }))
@@ -148,14 +175,19 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       onPendingChange: setPollPending,
     })
     refresherRef.current = refresher
-    const onVisibility = () => refresher.onVisibilityChange()
+    const onVisibility = () => {
+      refresher.onVisibilityChange()
+      if (!document.hidden) refreshRegistry()
+    }
+    window.addEventListener('focus', refreshRegistry)
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', refreshRegistry)
       refresher.dispose()
       refresherRef.current = undefined
     }
-  }, [])
+  }, [refreshRegistry])
 
   const requestRefresh = useCallback(() => refresherRef.current?.request() ?? Promise.resolve(), [])
 
@@ -165,6 +197,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
     setSnapshot(undefined)
     setTranscript(undefined)
     setHoverPreview(undefined)
+    setSelection(undefined)
+    setAnswerStep(undefined)
+    setConfirmingAbort(undefined)
+    setDetailOpen(false)
+    setError(undefined)
     refresherRef.current?.setRepo(repo)
   }, [repo])
   // The now-ticker pauses with the document like the refresher above: no
@@ -445,11 +482,11 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
       identity={identity}
       clock={snapshot ? clockText(snapshot.generatedAt, now) : undefined}
       pending={pending !== undefined || pollPending}
-      error={error}
+      error={repo ? error : 'no repository configured'}
       onRepo={(next) => {
         if (answerPending.current) return
         setHoverPreview(undefined)
-        setRepo(next)
+        router.push(projectLink(next, searchParams.toString()))
         deselect()
       }}
       onSignOut={async () => {
@@ -465,39 +502,41 @@ export function DashboardClient({ identity, repositories }: ClientProps) {
             onHarvest={harvest}
             onBulk={bulk}
           />
-        ) : (
+        ) : repo ? (
           <LoadingControls />
-        )
+        ) : null
       }
     >
-      <BuildsView
-        repo={repo}
-        model={model}
-        now={now}
-        pending={pending}
-        selection={selection}
-        hoverPreview={hoverPreview}
-        detailOpen={detailOpen}
-        confirmingAbort={confirmingAbort}
-        answerStep={answerStep}
-        answerPending={answerPending.current}
-        transcript={transcript}
-        onActivate={activate}
-        onHoverPreview={setHoverPreview}
-        onRowBuildControl={rowControls.buildControl}
-        onRowRequestAbort={rowControls.requestAbort}
-        onCancelAbort={() => {
-          setConfirmingAbort(undefined)
-          releaseSelection()
-        }}
-        onRowToggleDetail={rowControls.toggleDetail}
-        onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
-        onSubmitAnswerStep={submitAnswerStep}
-        onCancelAnswerStep={cancelAnswerStep}
-        onAnswer={answer}
-        onTranscript={loadTranscript}
-        onRowHarvest={rowControls.runHarvest}
-      />
+      {repo && (
+        <BuildsView
+          repo={repo}
+          model={model}
+          now={now}
+          pending={pending}
+          selection={selection}
+          hoverPreview={hoverPreview}
+          detailOpen={detailOpen}
+          confirmingAbort={confirmingAbort}
+          answerStep={answerStep}
+          answerPending={answerPending.current}
+          transcript={transcript}
+          onActivate={activate}
+          onHoverPreview={setHoverPreview}
+          onRowBuildControl={rowControls.buildControl}
+          onRowRequestAbort={rowControls.requestAbort}
+          onCancelAbort={() => {
+            setConfirmingAbort(undefined)
+            releaseSelection()
+          }}
+          onRowToggleDetail={rowControls.toggleDetail}
+          onAnswerStepInput={(input) => setAnswerStep((step) => (step ? { ...step, input } : step))}
+          onSubmitAnswerStep={submitAnswerStep}
+          onCancelAnswerStep={cancelAnswerStep}
+          onAnswer={answer}
+          onTranscript={loadTranscript}
+          onRowHarvest={rowControls.runHarvest}
+        />
+      )}
     </OperatorShell>
   )
 }

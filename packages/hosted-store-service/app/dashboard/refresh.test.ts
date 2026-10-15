@@ -372,3 +372,30 @@ test('criterion 7: becoming visible during an in-flight request runs a trailing 
   await flush()
   expect(h.generated()).toEqual(['a', 'b'])
 })
+
+test('empty project selection cancels work and cannot receive a late response or error', async () => {
+  const timers = new TimerQueue()
+  let reject: (error: Error) => void = () => {}
+  const snapshots: OperatorDashboardSnapshot[] = []
+  const errors: string[] = []
+  const refresher = createDashboardRefresher({
+    fetch: () =>
+      new Promise((_resolve, fail) => {
+        reject = fail
+      }),
+    visible: () => true,
+    onSnapshot: (value) => snapshots.push(value),
+    onError: (message) => errors.push(message),
+    onPendingChange: () => {},
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  })
+  refresher.setRepo('removed-project')
+  refresher.setRepo('')
+  reject(new Error('late registry failure'))
+  await flush()
+  timers.advance(30_000)
+  expect(snapshots).toEqual([])
+  expect(errors).toEqual([])
+  refresher.dispose()
+})

@@ -12,7 +12,7 @@ import {
   type StreamPart,
 } from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
-import { EVENT_WAIT_POLL_MS, openPostgresBuildStore, PostgresBuildStore } from './store'
+import { EVENT_WAIT_POLL_MS, PostgresBuildStore, openPostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -78,9 +78,9 @@ if (testUrl) {
   describe('PostgreSQL durability and concurrency', () => {
     test('concurrent repository ensures create one absent row and return the winning record', async () => {
       const database = await isolatedDatabase()
-      // Eight independent connections exercise the race without eight default
-      // pools exhausting a shared verification database during schema checks.
-      // isolatedDatabase already migrated and validated this schema.
+      // Each independent contender needs one connection, not a default pool.
+      // The schema was migrated above; keep the eight-way database race bounded
+      // even on PostgreSQL instances with the default max_connections limit.
       const stores = Array.from(
         { length: 8 },
         () =>
@@ -120,9 +120,9 @@ if (testUrl) {
 
     test('concurrent creation of one absent build has one winner and normalized losers', async () => {
       const database = await isolatedDatabase()
-      // Eight independent connections exercise the race without eight default
-      // pools exhausting a shared verification database during schema checks.
-      // isolatedDatabase already migrated and validated this schema.
+      // Each independent contender needs one connection, not a default pool.
+      // The schema was migrated above; keep the eight-way database race bounded
+      // even on PostgreSQL instances with the default max_connections limit.
       const stores = Array.from(
         { length: 8 },
         () =>

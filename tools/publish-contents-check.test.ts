@@ -1447,9 +1447,10 @@ describe('the real sub-package manifests', () => {
   // sub-packages must keep pinning the AUT-490 shape exactly.
   const POSTGRES_AUT_500_FILES = [...AUT_490_BROADENED_FILES, '!src/testing/**']
   const AUT_500_FILES_BY_DIRECTORY: Record<string, string[]> = {
-    'hosted-dispatcher': AUT_490_BROADENED_FILES,
+    'hosted-dispatcher': [...AUT_490_BROADENED_FILES, '!src/testing/**'],
     'hosted-store-service': [
       ...AUT_490_BROADENED_FILES,
+      '!src/testing/**',
       'app',
       'server.ts',
       'next.config.ts',

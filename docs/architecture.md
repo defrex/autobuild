@@ -884,3 +884,16 @@ because they cannot be manufactured safely against a live account.
 
 Provisioning or scheduling these credentials/resources in CI is deliberately
 out of scope; live runs remain explicit.
+
+## Hosted project registry
+
+`packages/postgres-store/src/projects.ts` owns a narrow project registry port
+beside BuildStore. Schema v10 adds an independent append-only project journal
+and singleton mutation/bootstrap lock and marker, with no build/ticket foreign
+keys. Active entries reduce the latest sequence per origin; timestamps are
+metadata, not ordering. Runtime opens assert schema and never run DDL.
+`ab-hosted-store projects` administers registrations using database authority.
+The service exposes one lazy live reader to the operator server, web gateway,
+MCP and server-rendered repository picker. Initialization failures clear the
+cached promise for retry. The dispatcher opens its own shared pool and queries
+membership each invocation. See [owner workflow](setup.md#connected-projects).

@@ -1,3 +1,4 @@
+import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 /**
  * The hosted MCP endpoint (AUT-341): the agent tool registry served over
  * Streamable HTTP on the same origin as the operator dashboard, authorized by
@@ -67,7 +68,8 @@ export const MCP_SERVER_INSTRUCTIONS = [
 ].join(' ')
 
 export interface McpEndpointOptions {
-  /** The parsed web auth config (repositories, baseURL, mcpResource). */
+  projects: ProjectRegistryReader
+  /** The parsed web auth config (baseURL, mcpResource). */
   config: WebAuthConfig
   /** The Better Auth instance carrying the MCP plugin. */
   auth: WebAuth
@@ -197,7 +199,7 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
           async (args: unknown) => {
             try {
               const parsed = (args ?? {}) as { repo?: unknown }
-              if (typeof parsed.repo !== 'string' || !config.repositories.includes(parsed.repo)) {
+              if (typeof parsed.repo !== 'string' || !(await options.projects.has(parsed.repo))) {
                 return {
                   content: [
                     {
@@ -250,14 +252,25 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
           inputSchema: {},
           annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
         },
-        async () => ({
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({ repositories: [...config.repositories] }),
-            },
-          ],
-        }),
+        async () => {
+          try {
+            const repositories = (await options.projects.list()).map((entry) => entry.repo)
+            return { content: [{ type: 'text' as const, text: JSON.stringify({ repositories }) }] }
+          } catch {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    kind: 'internal',
+                    error: 'project registry is unavailable',
+                  }),
+                },
+              ],
+            }
+          }
+        },
       )
 
       const transport = new WebStandardStreamableHTTPServerTransport({

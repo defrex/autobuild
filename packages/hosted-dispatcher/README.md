@@ -40,9 +40,12 @@ Dispatcher variables (server-only, like every secret; none reach the browser):
   for the kernel, the hosted ticket source, and guests. Absolute http(s)
   origin; https required in production.
 - `AB_DISPATCHER_REPOSITORIES`: comma-separated repositories the dispatcher
-  serves, normalized `https://` identities exactly like `AB_WEB_REPOSITORIES`.
-  When unset, the deployment's `AB_WEB_REPOSITORIES` set is used, so a
-  deployment configures its repository set once.
+  selects in configured order, intersected with the current durable project
+  registry. When unset, every authorized invocation queries all active
+  registrations. An empty registry is a successful zero-project tick. Removing
+  a project stops subsequent ticks, without cancelling already-started work.
+  Registry failures fail closed. Configure `AB_POSTGRES_URL` or `DATABASE_URL`;
+  the registry pool is reused while membership is queried each invocation.
 - `AB_DISPATCHER_BUDGET_SECONDS`: per-invocation work budget (default 240,
   clamped 10–780); pair it with the route's `maxDuration` as described in the
   operator procedure.
@@ -87,3 +90,12 @@ events keep growing by roughly one tick per minute per repository (intentional);
 the run/config artifacts themselves are retention-bounded — the store keeps the
 latest 200 revisions per dispatcher artifact kind and prunes older revisions at
 deposit time, overridable with `AB_ARTIFACT_RETENTION_MAX_REVISIONS`.
+
+Manage projects through the deployment's database-authorized
+`ab-hosted-store projects list|add|remove` commands (mutations require
+`--user IDENTITY`); see [connected projects](../../docs/setup.md#connected-projects).
+Migrate PostgreSQL before deployment. Deprecated `AB_WEB_REPOSITORIES` seeds
+registrations once per database, including standalone dispatcher deployments;
+subsequent changes to it are not administration. Forge token override keys are
+validated eagerly. In fallback mode a removed project's override is inert; an
+explicit repository selection still rejects unknown keys.

@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 /**
  * The hosted dispatcher integration scenario (AUT-303, SPEC §12): a real
  * `createDispatcherEndpoint` drives the REAL origin-mode dispatch kernel over
@@ -324,6 +325,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     return listReady(...args)
   }
   const service = createHostedStoreService({
+    openProjectRegistry: async () => testProjects([REPO]),
     env: storeEnv,
     clock,
     openStore: async () => backing,
@@ -503,6 +505,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   }
 
   const endpoint = createDispatcherEndpoint({
+    openProjectRegistry: async () => testProjects([REPO]),
     env: {
       ...storeEnv,
       AB_DISPATCHER_ORIGIN: serviceUrl,
@@ -766,6 +769,8 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       return new Date(clockBase + (boundedCalls > 3 ? 30_000 : 0))
     }) as Clock
     const boundedEndpoint = createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: {
         ...storeEnv,
         AB_DISPATCHER_ORIGIN: serviceUrl,

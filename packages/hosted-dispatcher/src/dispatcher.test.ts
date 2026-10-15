@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import type { DispatchOpts } from '@defrex/autobuild/cli'
 import { verifyToken } from '@defrex/autobuild/remote-store'
@@ -50,16 +51,16 @@ describe('parseHostedDispatcherEnv', () => {
       AB_DISPATCHER_REPOSITORIES: undefined,
       AB_WEB_REPOSITORIES: 'git@github.com:acme/web.git, https://github.com/acme/web',
     })
-    expect(config.repositories).toEqual(['https://github.com/acme/web'])
+    expect(config.repositories).toBeUndefined()
   })
 
   test('rejects an empty repository set, unsafe repositories, and a bad origin', () => {
     expect(() =>
       parseHostedDispatcherEnv({ ...baseEnv, AB_DISPATCHER_REPOSITORIES: '  ' }),
-    ).toThrow(/AB_WEB_REPOSITORIES/)
+    ).toThrow(/AB_DISPATCHER_REPOSITORIES/)
     expect(() =>
       parseHostedDispatcherEnv({ ...baseEnv, AB_DISPATCHER_REPOSITORIES: 'file:///etc/repo' }),
-    ).toThrow(/unsafe repository name/)
+    ).toThrow()
     expect(() =>
       parseHostedDispatcherEnv({ ...baseEnv, AB_DISPATCHER_ORIGIN: 'hosted.example.test' }),
     ).toThrow(/AB_DISPATCHER_ORIGIN must be an absolute/)
@@ -178,7 +179,14 @@ describe('createHostedDispatcher', () => {
       log: () => {},
       logError: () => {},
     }
-    return { calls, ...createHostedDispatcher(options) }
+    return {
+      calls,
+      ...createHostedDispatcher({
+        openProjectRegistry: async () =>
+          testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
+        ...options,
+      }),
+    }
   }
 
   test('ticks each repository sequentially with isolated kernel env, identity, and deadline', async () => {
@@ -233,6 +241,8 @@ describe('createHostedDispatcher', () => {
     }
     const { calls: dispatchCalls, dispatch } = recordingDispatch(['ok'])
     const summary = await createHostedDispatcher({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
       clock: advancingClock,
       log: () => {},
@@ -306,7 +316,14 @@ describe('createHostedDispatcher', () => {
 
 describe('createDispatcherEndpoint', () => {
   function endpoint(options: HostedDispatcherOptions = {}) {
-    return createDispatcherEndpoint({ clock, log: () => {}, logError: () => {}, ...options })
+    return createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
+      clock,
+      log: () => {},
+      logError: () => {},
+      ...options,
+    })
   }
   const url = 'https://hosted.example.test/api/dispatch'
   const authorized = { authorization: 'Bearer cron-secret' }
@@ -410,6 +427,8 @@ describe('hosted dispatcher runtime logging', () => {
   test('an authorized invocation logs the request, every repository outcome, and completion', async () => {
     const { lines, errors, log, logError } = sinks()
     const response = await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
       clock,
       log,
@@ -459,6 +478,8 @@ describe('hosted dispatcher runtime logging', () => {
     const { lines, log, logError } = sinks()
     const out: string[] = []
     await createHostedDispatcher({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
       clock,
       log,
@@ -475,6 +496,8 @@ describe('hosted dispatcher runtime logging', () => {
   test('a failed repository tick logs the kernel error with its stack at error level', async () => {
     const { lines, errors, log, logError } = sinks()
     await createHostedDispatcher({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: baseEnv,
       clock,
       log,
@@ -505,15 +528,22 @@ describe('hosted dispatcher runtime logging', () => {
   test('rejections and configuration failures are logged with their reason', async () => {
     const { errors, log, logError } = sinks()
     const endpoint = (env: Record<string, string | undefined>) =>
-      createDispatcherEndpoint({ env, clock, log, logError, dispatch: async () => {} })
+      createDispatcherEndpoint({
+        openProjectRegistry: async () =>
+          testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
+        env,
+        clock,
+        log,
+        logError,
+        dispatch: async () => {},
+      })
     await endpoint(baseEnv).fetch(new Request(url, { method: 'POST', body: '{}' }))
     await endpoint({ ...baseEnv, CRON_SECRET: undefined }).fetch(new Request(url))
     await endpoint(baseEnv).fetch(new Request(url))
     await endpoint(baseEnv).fetch(new Request(url, { headers: { authorization: 'Bearer nope' } }))
     await endpoint({
       ...baseEnv,
-      AB_WEB_REPOSITORIES: '/home/someone/checkout',
-      AB_DISPATCHER_REPOSITORIES: undefined,
+      AB_DISPATCHER_ORIGIN: 'invalid',
     }).fetch(new Request(url, { headers: authorized }))
     expect(errors).toEqual([
       expect.stringContaining('rejected 405 method-not-allowed'),
@@ -527,7 +557,7 @@ describe('hosted dispatcher runtime logging', () => {
         'rejected 401 unauthorized: dispatcher endpoint requires the cron bearer token (authorization header present but wrong)',
       ),
       expect.stringMatching(
-        /500 configuration invalid ms=\d+: Error: AB_WEB_REPOSITORIES contains an unsafe repository name: "\/home\/someone\/checkout"/,
+        /500 configuration invalid ms=\d+: Error: AB_DISPATCHER_ORIGIN must be an absolute/,
       ),
     ])
   })
@@ -537,6 +567,8 @@ describe('hosted dispatcher runtime logging', () => {
     const override = 'override-forge-token'
     const minted: string[] = []
     await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: {
         ...baseEnv,
         GITHUB_TOKEN: 'shared-forge-token',
@@ -552,9 +584,14 @@ describe('hosted dispatcher runtime logging', () => {
       },
     }).fetch(new Request(url, { headers: authorized }))
     // Also the wrong-bearer path: the presented header value is never echoed.
-    await createDispatcherEndpoint({ env: baseEnv, clock, log, logError }).fetch(
-      new Request(url, { headers: { authorization: 'Bearer attacker-guess' } }),
-    )
+    await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
+      env: baseEnv,
+      clock,
+      log,
+      logError,
+    }).fetch(new Request(url, { headers: { authorization: 'Bearer attacker-guess' } }))
     expect(minted.every((token) => token.length > 20)).toBe(true)
     const everything = [...lines, ...errors].join('\n')
     expect(everything.length).toBeGreaterThan(0)
@@ -593,7 +630,12 @@ describe('hosted dispatcher sandbox credentials', () => {
 
   test('the x-vercel-oidc-token request header becomes the kernel VERCEL_OIDC_TOKEN', async () => {
     const { envs, lines, errors, options } = capture()
-    const response = await createDispatcherEndpoint({ ...options, env: baseEnv }).fetch(
+    const response = await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
+      ...options,
+      env: baseEnv,
+    }).fetch(
       new Request(url, { headers: { ...authorized, 'x-vercel-oidc-token': ` ${headerToken} ` } }),
     )
     expect(response.status).toBe(200)
@@ -608,6 +650,8 @@ describe('hosted dispatcher sandbox credentials', () => {
   test('an environment VERCEL_OIDC_TOKEN keeps precedence over the header', async () => {
     const { envs, lines, options } = capture()
     await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       ...options,
       env: { ...baseEnv, VERCEL_OIDC_TOKEN: 'env.oidc.token' },
     }).fetch(new Request(url, { headers: { ...authorized, 'x-vercel-oidc-token': headerToken } }))
@@ -617,16 +661,91 @@ describe('hosted dispatcher sandbox credentials', () => {
 
   test('without a header or environment token the kernel env carries none and the log says so', async () => {
     const { envs, lines, options } = capture()
-    await createDispatcherEndpoint({ ...options, env: baseEnv }).fetch(
-      new Request(url, { headers: authorized }),
-    )
+    await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
+      ...options,
+      env: baseEnv,
+    }).fetch(new Request(url, { headers: authorized }))
     expect(envs[0]?.VERCEL_OIDC_TOKEN).toBeUndefined()
     expect(lines).toContainEqual(expect.stringContaining('sandboxAuth=none'))
     const { lines: durable, options: durableOptions } = capture()
     await createDispatcherEndpoint({
+      openProjectRegistry: async () =>
+        testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       ...durableOptions,
       env: { ...baseEnv, VERCEL_TOKEN: 't', VERCEL_TEAM_ID: 'team', VERCEL_PROJECT_ID: 'prj' },
     }).fetch(new Request(url, { headers: authorized }))
     expect(durable).toContainEqual(expect.stringContaining('sandboxAuth=token'))
   })
+})
+
+test('warm ticks discover current registration, explicit selection intersects in configured order', async () => {
+  const one = 'https://github.com/acme/one'
+  const two = 'https://github.com/acme/two'
+  const projects = testProjects([])
+  const calls: string[] = []
+  let opens = 0
+  const options = {
+    env: {
+      ...baseEnv,
+      AB_DISPATCHER_REPOSITORIES: undefined,
+      AB_DISPATCHER_GITHUB_TOKENS: JSON.stringify({ [one]: 'override' }),
+    },
+    openProjectRegistry: async () => {
+      opens++
+      return projects
+    },
+    dispatch: async (opts: DispatchOpts) => {
+      calls.push(opts.repository!)
+    },
+    log: () => {},
+    logError: () => {},
+    clock,
+  }
+  const dynamic = createHostedDispatcher(options)
+  expect((await dynamic.tick()).repositories).toEqual([])
+  await projects.add(one, 'Ada')
+  await dynamic.tick()
+  expect(calls).toEqual([one])
+  await projects.remove(one, 'Ada')
+  await projects.add(two, 'Ada')
+  await dynamic.tick()
+  expect(calls).toEqual([one, two])
+  expect(opens).toBe(1)
+  await projects.add(one, 'Ada')
+  calls.length = 0
+  const explicit = createHostedDispatcher({
+    ...options,
+    env: { ...baseEnv, AB_DISPATCHER_REPOSITORIES: `${two},${one}` },
+  })
+  await explicit.tick()
+  expect(calls).toEqual([two, one])
+  await projects.remove(two, 'Ada')
+  calls.length = 0
+  await explicit.tick()
+  expect(calls).toEqual([one])
+})
+
+test('unauthorized requests never open registry; failed initialization is retryable', async () => {
+  let opens = 0
+  const endpoint = createDispatcherEndpoint({
+    env: baseEnv,
+    log: () => {},
+    logError: () => {},
+    openProjectRegistry: async () => {
+      opens++
+      if (opens === 1) throw new Error('registry unavailable')
+      return testProjects([])
+    },
+  })
+  const request = (token?: string) =>
+    new Request('https://hosted.example.test/cron', {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    })
+  expect((await endpoint.fetch(request())).status).toBe(401)
+  expect(opens).toBe(0)
+  expect((await endpoint.fetch(request('cron-secret'))).status).toBe(500)
+  expect((await endpoint.fetch(request('cron-secret'))).status).toBe(200)
+  expect(opens).toBe(2)
 })

@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '@defrex/autobuild/testing'
 import { agentActor, DISPATCHER, KERNEL } from '@defrex/autobuild/testing'
@@ -89,7 +90,12 @@ async function runningStore(): Promise<MemoryBuildStore> {
 
 async function artifactRequest(store: MemoryBuildStore, rev?: string): Promise<Response> {
   const query = rev === undefined ? '' : `?rev=${encodeURIComponent(rev)}`
-  return createOperatorServer({ store, secret, clock }).fetch(
+  return createOperatorServer({
+    projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+    store,
+    secret,
+    clock,
+  }).fetch(
     new Request(
       `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/artifacts/notes${query}`,
       {
@@ -128,7 +134,12 @@ describe('operator HTTP API', () => {
 
   test('requires operator scope and attributes controls to its signed user', async () => {
     const store = await runningStore()
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const operatorToken = mintToken(secret, {
       operator: { user: 'Ada Lovelace' },
       exp: now.getTime() + 60_000,
@@ -172,7 +183,12 @@ describe('operator HTTP API', () => {
     await expect(raw.getBuild('demo')).rejects.toThrow('may not access build "demo"')
 
     await store.putArtifact('demo', { kind: 'notes/report', content: new Uint8Array([0, 1, 255]) })
-    const operatorServer = createOperatorServer({ store, secret, clock })
+    const operatorServer = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const client = new OperatorApiClient({
       url: 'http://operator.test',
       token,
@@ -242,7 +258,12 @@ describe('operator HTTP API', () => {
     const store = await runningStore()
     await publishConfig(store)
     await store.append('demo', { actor: KERNEL, type: 'build.aborted', payload: {} })
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const client = new OperatorApiClient({
       url: 'http://operator.test',
       token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
@@ -259,7 +280,14 @@ describe('operator HTTP API', () => {
     const client = new OperatorApiClient({
       url: 'http://operator.test',
       token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
-      fetchFn: fetchFor(createOperatorServer({ store, secret, clock })),
+      fetchFn: fetchFor(
+        createOperatorServer({
+          projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+          store,
+          secret,
+          clock,
+        }),
+      ),
     })
     for (const call of [
       () => client.getBuild('/another-repo', 'demo'),
@@ -272,19 +300,23 @@ describe('operator HTTP API', () => {
       expect((error as Error).message).toBe('unknown build "demo"')
     }
 
-    const response = await fetchFor(createOperatorServer({ store, secret, clock }))(
-      `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
-          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ resolution: 'retry', text: 'stray guidance' }),
+    const response = await fetchFor(
+      createOperatorServer({
+        projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+        store,
+        secret,
+        clock,
+      }),
+    )(`http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        'content-type': 'application/json',
       },
-    )
+      body: JSON.stringify({ resolution: 'retry', text: 'stray guidance' }),
+    })
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ kind: 'validation' })
   })
@@ -296,7 +328,12 @@ describe('operator HTTP API', () => {
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const skew = await server.fetch(
       new Request(`http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds`),
     )
@@ -345,7 +382,12 @@ describe('operator session routes', () => {
 
   test('requires an operator token; raw store and deployment tokens are 403', async () => {
     const store = await runningStore()
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     for (const token of [
       mintToken(secret, { build: '*', session: '*', exp: now.getTime() + 60_000 }),
       mintToken(secret, { operator: true, session: '*', exp: now.getTime() + 60_000 }),
@@ -365,7 +407,12 @@ describe('operator session routes', () => {
 
   test('session lifecycle: ownership, attribution, approval matching, archive, turn stream', async () => {
     const store = new MemoryBuildStore({ clock })
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const ada = operatorClient(server, 'Ada')
     const bob = operatorClient(server, 'Bob')
 
@@ -490,7 +537,12 @@ describe('operator session routes', () => {
 
   test('unknown sessions are 404 wherever they are addressed', async () => {
     const store = await runningStore()
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const ada = operatorClient(server, 'Ada')
     await expect(ada.getSession(repo, 'os_nope')).rejects.toMatchObject({ status: 404 })
     await expect(ada.postSessionMessage(repo, 'os_nope', { text: 'hi' })).rejects.toMatchObject({
@@ -521,6 +573,7 @@ describe('session-archive sandbox release hook (AUT-340)', () => {
       },
     }
     const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
       store,
       secret,
       clock,
@@ -541,7 +594,12 @@ describe('session-archive sandbox release hook (AUT-340)', () => {
 
   test('no backend → no release; release of a never-provisioned operator is a silent no-op', async () => {
     const store = new MemoryBuildStore({ clock })
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const ada = operatorClient(server, 'Ada')
     const session = await ada.createSession(repo, { title: 'x' })
     await ada.archiveSession(repo, session.id)
@@ -553,6 +611,7 @@ describe('session-archive sandbox release hook (AUT-340)', () => {
       release: async () => undefined,
     }
     const secondServer = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
       store,
       secret,
       clock,
@@ -588,7 +647,12 @@ describe('the generic tools route', () => {
 
   test('a token carrying via stamps it onto the executed registry writes', async () => {
     const store = await runningStore()
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const token = mintToken(secret, {
       operator: { user: 'Ada' },
       via,
@@ -613,7 +677,12 @@ describe('the generic tools route', () => {
 
   test('a via-less token leaves actors unmarked', async () => {
     const store = await runningStore()
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const token = mintToken(secret, {
       operator: { user: 'Ada' },
       exp: now.getTime() + 60_000,
@@ -627,7 +696,12 @@ describe('the generic tools route', () => {
 
   test('unknown tools, mismatched bodies, and refusals keep their failure shapes', async () => {
     const store = await runningStore()
-    const server = createOperatorServer({ store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
+      store,
+      secret,
+      clock,
+    })
     const token = mintToken(secret, {
       operator: { user: 'Ada' },
       exp: now.getTime() + 60_000,
@@ -779,6 +853,7 @@ model = "test/mock"
   function orchestratorServer(store: MemoryBuildStore, model = textModel()) {
     const backgrounds: Promise<void>[] = []
     const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
       store,
       secret,
       clock,
@@ -1060,6 +1135,7 @@ model = "test/mock"
     }> = []
     const backgrounds: Promise<void>[] = []
     const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
       store,
       secret,
       clock,
@@ -1176,6 +1252,7 @@ model = "test/mock"
       },
     }
     const server = createOperatorServer({
+      projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
       store,
       secret,
       clock,
@@ -1206,5 +1283,64 @@ model = "test/mock"
     await ada.archiveSession(disabledRepo, solo.id)
     expect(dynamicReleases).toEqual(['Ada'])
     expect(staticReleases).toEqual([])
+  })
+})
+
+describe('project registration boundary', () => {
+  test('every operator route refuses removed repositories before touching persistence', async () => {
+    const projects = testProjects([repo])
+    const store = new MemoryBuildStore({ clock })
+    const server = createOperatorServer({ store, secret, clock, projects })
+    const client = new OperatorApiClient({
+      url: 'http://operator.test',
+      fetchFn: fetchFor(server),
+      token: mintToken(secret, { operator: { user: 'Ada' }, exp: clock().getTime() + 60_000 }),
+    })
+    expect(await client.repositoryStatus(repo)).toMatchObject({ repo })
+    await projects.remove(repo, 'Ada')
+    // Any store access after removal would turn the response into a 500.
+    const unavailable = () => {
+      throw new Error('denied request reached persistence')
+    }
+    store.listBuilds = unavailable
+    store.getBuild = unavailable
+    store.getRepoEvents = unavailable
+    for (const user of ['Ada', 'Grace']) {
+      const headers = {
+        authorization: `Bearer ${mintToken(secret, { operator: { user }, exp: clock().getTime() + 60_000 })}`,
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        'content-type': 'application/json',
+      }
+      for (const [method, suffix] of [
+        ['GET', 'dashboard'],
+        ['GET', 'status'],
+        ['GET', 'builds'],
+        ['GET', 'builds/demo'],
+        ['GET', 'builds/demo/artifacts/notes'],
+        ['POST', 'builds/demo/control'],
+        ['PUT', 'settings/intake'],
+        ['POST', 'bulk-control'],
+        ['POST', 'harvest/control'],
+        ['GET', 'tickets'],
+        ['POST', 'tickets'],
+        ['GET', 'sessions'],
+        ['POST', 'sessions'],
+        ['POST', 'tools/repository.settings'],
+      ]) {
+        const response = await server.fetch(
+          new Request(
+            `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/${suffix}`,
+            {
+              method,
+              headers,
+              ...(['GET', 'HEAD'].includes(method!) ? {} : { body: '{}' }),
+            },
+          ),
+        )
+        expect(response.status).toBe(404)
+        expect(await response.json()).toMatchObject({ kind: 'not-found' })
+      }
+    }
   })
 })

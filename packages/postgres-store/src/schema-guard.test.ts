@@ -27,6 +27,8 @@ import {
   SCHEMA_V7_DDL,
   SCHEMA_V8_CHECKSUM,
   SCHEMA_V8_DDL,
+  SCHEMA_V9_DDL,
+  SCHEMA_V9_CHECKSUM,
   SCHEMA_VERSION,
   TICKET_SCHEMA_CHECKSUM,
   TICKET_SCHEMA_VERSION,
@@ -57,6 +59,7 @@ export const FROZEN: Record<'build' | 'ticket' | 'auth', Map<number, FrozenSchem
     [6, { ddl: SCHEMA_V6_DDL, checksum: SCHEMA_V6_CHECKSUM }],
     [7, { ddl: SCHEMA_V7_DDL, checksum: SCHEMA_V7_CHECKSUM }],
     [8, { ddl: SCHEMA_V8_DDL, checksum: SCHEMA_V8_CHECKSUM }],
+    [9, { ddl: SCHEMA_V9_DDL, checksum: SCHEMA_V9_CHECKSUM }],
   ]),
   ticket: new Map(),
   auth: new Map([
@@ -91,8 +94,8 @@ interface GuardedFamily {
  * four-step paragraph). */
 const PINNED: Record<'build' | 'ticket' | 'auth', { version: number; checksum: string }> = {
   build: {
-    version: 9,
-    checksum: '0d640709f5c86ac2fd1e393133f6419b244c83ec0a53c726d0d03243a204efcd',
+    version: 10,
+    checksum: '5a76278818c954e807d1cf1323b853bdc5900d0126232a14db62adc9addb9584',
   },
   ticket: {
     version: 1,
@@ -171,7 +174,7 @@ test('the guard failure message names the four-step rule and the checksum-only r
   const bumped: GuardedFamily = {
     marker: 'PostgreSQL BuildStore schema',
     ddlPrefix: 'SCHEMA',
-    version: 9,
+    version: 10,
     checksum: 'found-checksum',
     pin: { version: 8, checksum: 'pinned-checksum' },
     frozen: FROZEN.build,

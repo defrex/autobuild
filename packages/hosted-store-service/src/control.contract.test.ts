@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { abBuildControl } from '@defrex/autobuild/testing'
 import type { BuildControlAction } from '@defrex/autobuild/operator'
@@ -50,7 +51,9 @@ function api(store: BuildStore): OperatorApiClient {
       operator: { user: USER },
       exp: NOW.getTime() + 60_000,
     }),
-    fetchFn: fetchFor(createOperatorServer({ store, secret: SECRET, clock })),
+    fetchFn: fetchFor(
+      createOperatorServer({ projects: testProjects([REPO]), store, secret: SECRET, clock }),
+    ),
   })
 }
 

@@ -1,3 +1,8 @@
+import {
+  PostgresProjectRegistry,
+  openPostgresProjectRegistryFromEnv,
+} from '@defrex/autobuild-postgres-store/projects'
+import { openPostgresTicketDatabase } from '@defrex/autobuild-postgres-store'
 import { describe, expect, test } from 'bun:test'
 import { SQL } from 'bun'
 import {
@@ -289,3 +294,140 @@ steps = []
     })
   })
 }
+
+if (testUrl)
+  describe('durable hosted project registry', () => {
+    test('concurrent bootstrap, idempotent administration, restart and retention', async () => {
+      const database = await isolatedDatabase()
+      const a = new SQL(database.url)
+      const b = new SQL(database.url)
+      const first = new PostgresProjectRegistry(a)
+      const second = new PostgresProjectRegistry(b)
+      const repo = 'https://github.com/acme/registry'
+      try {
+        await first.initialize([])
+        expect(await first.list()).toEqual([])
+        await Promise.all([first.initialize([repo]), second.initialize([repo])])
+        const original = (await first.list())[0]!
+        expect(original.addedBy).toBe('system:AB_WEB_REPOSITORIES')
+        const duplicates = await Promise.all([first.add(repo, 'Ada'), second.add(repo, 'Grace')])
+        expect(duplicates).toEqual([original, original])
+        expect(Number((await a`SELECT count(*) AS count FROM project_journal`)[0].count)).toBe(1)
+
+        // Real build, event, artifact and ticket data share this database, but
+        // no registry deletion owns their lifetime.
+        const blobs = new MemoryBlobStore()
+        const store = await openPostgresBuildStore(database.url, blobs)
+        const tickets = await openPostgresTicketDatabase(database.url, {
+          triage: 'Triage',
+          ready: 'Ready',
+          doing: 'Doing',
+          done: 'Done',
+        })
+        try {
+          await store.createBuild({ slug: 'retained-project', repo })
+          await store.append('retained-project', {
+            actor: humanActor('Ada'),
+            type: 'build.pause-requested',
+            payload: {},
+          })
+          await store.putArtifact('retained-project', { kind: 'notes', content: 'retained' })
+          const source = tickets.source({ teamKey: repo })
+          const ticket = await source.create({ title: 'Retained ticket', body: 'Evidence' })
+          await first.remove(repo, 'Ada')
+          await second.remove(repo, 'Grace')
+          expect(await second.has(repo)).toBe(false)
+          await second.initialize([repo])
+          expect(await first.list()).toEqual([])
+          const restored = await second.add(repo, 'Grace')
+          expect(restored.addedBy).toBe('Grace')
+          expect(await store.getBuild('retained-project')).not.toBeNull()
+          expect(await store.getEvents('retained-project')).toHaveLength(1)
+          expect(await store.getArtifact('retained-project', 'notes')).not.toBeNull()
+          expect(await source.get(ticket.ref.id)).not.toBeNull()
+          // Timestamps may tie or go backwards; sequence is authoritative.
+          await a`UPDATE project_journal SET ts = '2000-01-01' WHERE action = 'added'`
+          expect(await first.has(repo)).toBe(true)
+        } finally {
+          await store.close()
+          await tickets.close()
+        }
+        const restarted = await openPostgresProjectRegistryFromEnv({
+          AB_POSTGRES_URL: database.url,
+          AB_WEB_REPOSITORIES: repo,
+        })
+        try {
+          expect(await restarted.has(repo)).toBe(true)
+        } finally {
+          await restarted.close()
+        }
+      } finally {
+        await a.close()
+        await b.close()
+        await database.cleanup()
+      }
+    })
+
+    test('concurrent first adds share metadata and bootstrap preserves preexisting attribution', async () => {
+      const database = await isolatedDatabase()
+      const a = new SQL(database.url)
+      const b = new SQL(database.url)
+      const first = new PostgresProjectRegistry(a)
+      const second = new PostgresProjectRegistry(b)
+      const repo = 'https://github.com/acme/first-add'
+      try {
+        const entries = await Promise.all([first.add(repo, 'Ada'), second.add(repo, 'Grace')])
+        expect(entries[0]).toEqual(entries[1])
+        expect(Number((await a`SELECT count(*) AS count FROM project_journal`)[0].count)).toBe(1)
+        await second.initialize([repo])
+        expect(await first.list()).toEqual([entries[0]!])
+        await first.remove(repo, 'Ada')
+        const ignoredEdit = await openPostgresProjectRegistryFromEnv({
+          AB_POSTGRES_URL: database.url,
+          AB_WEB_REPOSITORIES: '/invalid/deprecated/edit',
+        })
+        try {
+          expect(await ignoredEdit.list()).toEqual([])
+        } finally {
+          await ignoredEdit.close()
+        }
+        const reopened = await openPostgresProjectRegistryFromEnv({
+          AB_POSTGRES_URL: database.url,
+          AB_WEB_REPOSITORIES: repo,
+        })
+        try {
+          expect(await reopened.list()).toEqual([])
+        } finally {
+          await reopened.close()
+        }
+      } finally {
+        await a.close()
+        await b.close()
+        await database.cleanup()
+      }
+    })
+
+    test('failed import rolls back all additions and the bootstrap marker, then retries', async () => {
+      const database = await isolatedDatabase()
+      const sql = new SQL(database.url)
+      const registry = new PostgresProjectRegistry(sql)
+      const one = 'https://github.com/acme/one'
+      const two = 'https://github.com/acme/two'
+      try {
+        await sql.unsafe(
+          `ALTER TABLE project_journal ADD CONSTRAINT reject_second CHECK (repo <> '${two}')`,
+        )
+        await expect(registry.initialize([one, two])).rejects.toThrow()
+        expect(await registry.list()).toEqual([])
+        await sql.unsafe('ALTER TABLE project_journal DROP CONSTRAINT reject_second')
+        await registry.initialize([one, two])
+        expect((await registry.list()).map((entry) => entry.repo)).toEqual([one, two])
+        await registry.remove(one, 'Ada')
+        await registry.initialize([one, two])
+        expect(await registry.has(one)).toBe(false)
+      } finally {
+        await sql.close()
+        await database.cleanup()
+      }
+    })
+  })

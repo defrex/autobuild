@@ -110,8 +110,14 @@ the standard surface the endpoint serves.
   the default MCP resource's base.
 - `AB_WEB_ALLOWED_EMAILS`: the operator allowlist. Sign-in admission and every
   MCP tool call are checked against it.
-- `AB_WEB_REPOSITORIES`: the served repository identities (the
-  `repositories.list` payload and the per-call `repo` scope).
+- `AB_WEB_REPOSITORIES` (deprecated): optional once-per-database registry
+  bootstrap, never an ongoing allowlist. `repositories.list` queries current
+  active registrations on every call, and every tool checks current membership.
+
+Every allowlisted user sees every registered project. Database-authorized
+owners use the [project commands](setup.md#connected-projects) to add or remove
+projects without redeploying. Removal hides retained data until re-registration;
+registry failures never authorize a call.
 
 The endpoint requires no additional variables beyond the hosted service's
 existing web/auth set. Note that consent renders when the client sends

@@ -135,6 +135,7 @@ export function createDashboardRefresher(options: DashboardRefresherOptions): Da
       const snapshot = await fetchSnapshot(run.repo, run.controller.signal)
       if (run.generation === generation && !disposed) onSnapshot(snapshot)
     } catch (cause) {
+      if (run.generation !== generation || disposed) return
       if (run.controller.signal.aborted) {
         // Repository switches and disposal abort silently; a timeout reports.
         if (run.timedOut) onError(SNAPSHOT_TIMEOUT_MESSAGE)

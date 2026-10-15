@@ -1,3 +1,4 @@
+import { testProjects } from '../testing/projects'
 /**
  * End-to-end OAuth 2.1 + MCP over the hosted service (AUT-341): a single
  * Fetch router composes Better Auth's handler at /api/auth/* and the /mcp
@@ -93,8 +94,13 @@ function buildApp(
 } {
   const backing = new MemoryBuildStore()
   const config = parseWebAuthEnv(env)
-  const service = createHostedStoreService({ env, openStore: async () => backing })
+  const service = createHostedStoreService({
+    openProjectRegistry: async () => testProjects([REPO]),
+    env,
+    openStore: async () => backing,
+  })
   const endpoint = createMcpEndpoint({
+    projects: testProjects(['https://github.com/owner/repo']),
     config,
     auth,
     storeSecret: env.AB_STORE_SECRET!,

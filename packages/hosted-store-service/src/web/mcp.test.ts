@@ -1,3 +1,4 @@
+import { testProjects } from '../testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { memoryAdapter } from 'better-auth/adapters/memory'
 import { verifyToken } from '@defrex/autobuild/remote-store'
@@ -129,10 +130,12 @@ function endpoint(
   overrides: {
     delegate?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
     entries?: readonly ToolEntry[]
+    projects?: ReturnType<typeof testProjects>
     config?: typeof config
   } = {},
 ) {
   return createMcpEndpoint({
+    projects: overrides.projects ?? testProjects(['https://github.com/owner/repo']),
     config: overrides.config ?? config,
     auth,
     storeSecret: env.AB_STORE_SECRET,
@@ -724,4 +727,53 @@ describe('operator() — through a real better-auth adapter', () => {
       via: { kind: 'mcp', client: BLANK_CLIENT_ID },
     })
   })
+})
+
+test('repositories.list and tool gates query current registry for each allowed owner', async () => {
+  const repo = 'https://github.com/owner/repo'
+  const projects = testProjects([])
+  for (const email of ['ada@example.com', 'grace@example.com']) {
+    let delegated = 0
+    const service = endpoint(fakeAuth({ user: { ...USER, email } }), {
+      projects,
+      config: { ...config, allowedEmails: new Set(['ada@example.com', 'grace@example.com']) },
+      delegate: async () => {
+        delegated++
+        return Response.json({ ok: true })
+      },
+    })
+    const call = async (name: string, args = {}) => {
+      const response = await service.fetch(
+        new Request('https://operator.example/mcp', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            authorization: 'Bearer any',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 99,
+            method: 'tools/call',
+            params: { name, arguments: args },
+          }),
+        }),
+      )
+      return (await response.json()).result
+    }
+    expect(JSON.parse((await call('repositories.list')).content[0].text)).toEqual({
+      repositories: [],
+    })
+    await projects.add(repo, 'Ada')
+    expect(JSON.parse((await call('repositories.list')).content[0].text)).toEqual({
+      repositories: [repo],
+    })
+    expect((await call('builds.list', { repo })).isError).toBeUndefined()
+    await projects.remove(repo, 'Ada')
+    expect((await call('builds.list', { repo })).isError).toBe(true)
+    expect(JSON.parse((await call('repositories.list')).content[0].text)).toEqual({
+      repositories: [],
+    })
+    expect(delegated).toBe(1)
+  }
 })

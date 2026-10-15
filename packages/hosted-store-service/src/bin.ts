@@ -1,7 +1,15 @@
 #!/usr/bin/env bun
+import {
+  openPostgresProjectRegistryFromEnv,
+  normalizeProjectRepository,
+  type ProjectRegistry,
+} from '@defrex/autobuild-postgres-store/projects'
 import { mintToken } from '@defrex/autobuild/remote-store'
 
 const USAGE = `Usage:
+  ab-hosted-store projects list
+  ab-hosted-store projects add REPOSITORY --user IDENTITY
+  ab-hosted-store projects remove REPOSITORY --user IDENTITY
   ab-hosted-store mint operator (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint operator --user IDENTITY (--ttl-seconds N | --expires-at ISO-8601)
   ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)
@@ -103,6 +111,52 @@ export function runTokenCli(
   }
 }
 
+export async function runHostedCli(
+  args = process.argv.slice(2),
+  env: Env = process.env,
+  write: (text: string) => void = console.log,
+  writeError: (text: string) => void = console.error,
+  open: (env: Env) => Promise<ProjectRegistry> = openPostgresProjectRegistryFromEnv,
+): Promise<number> {
+  if (args[0] !== 'projects') return runTokenCli(args, env, write, writeError)
+  let registry: ProjectRegistry | undefined
+  let result = 0
+  try {
+    const command = args[1]
+    if (command === 'list') {
+      if (args.length !== 2) throw new Error('projects list takes no options')
+    } else if (command === 'add' || command === 'remove') {
+      if (
+        args.length !== 5 ||
+        args[3] !== '--user' ||
+        !args[4]?.trim() ||
+        args[4].startsWith('--')
+      ) {
+        throw new Error('projects add/remove requires REPOSITORY --user IDENTITY')
+      }
+      normalizeProjectRepository(args[2]!)
+    } else throw new Error('expected projects list, add, or remove')
+    registry = await open(env)
+    if (command === 'list') write(JSON.stringify(await registry.list()))
+    else if (command === 'add') write(JSON.stringify(await registry.add(args[2]!, args[4]!)))
+    else {
+      await registry.remove(args[2]!, args[4]!)
+      write(JSON.stringify({ repo: normalizeProjectRepository(args[2]!), removed: true }))
+    }
+  } catch (error) {
+    writeError(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`)
+    result = 2
+  } finally {
+    try {
+      await registry?.close()
+    } catch (error) {
+      writeError(error instanceof Error ? error.message : String(error))
+      result = 2
+    }
+  }
+  return result
+}
+
 if (import.meta.main) {
-  process.exitCode = runTokenCli(process.argv.slice(2))
+  process.exitCode = await runHostedCli(process.argv.slice(2))
 }

@@ -1,5 +1,4 @@
 import { resolvePostgresUrl } from '@defrex/autobuild-postgres-store/env'
-import { normalizeGitRemoteUrl } from '@defrex/autobuild/origin'
 
 export type WebAuthProvider = 'github'
 export type WebEnv = Record<string, string | undefined>
@@ -9,7 +8,6 @@ export interface WebAuthConfig {
   baseURL: string
   providers: readonly WebAuthProvider[]
   allowedEmails: ReadonlySet<string>
-  repositories: readonly string[]
   github: { clientId: string; clientSecret: string }
   postgresURL: string
   secureCookies: boolean
@@ -77,16 +75,6 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
   if (emails.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
     throw new Error('AB_WEB_ALLOWED_EMAILS contains an invalid email address')
   }
-  const repositories = csv(env, 'AB_WEB_REPOSITORIES').map((repo) => {
-    // Entries are repository identities — normalized https origins — so an
-    // operator-spelled `git@github.com:defrex/autobuild.git` still matches
-    // the Store's identity for this repository.
-    const normalized = normalizeGitRemoteUrl(repo)
-    if (!/^https:\/\/[^\s]+$/.test(normalized)) {
-      throw new Error('AB_WEB_REPOSITORIES contains an unsafe repository name')
-    }
-    return normalized
-  })
   const rawMcpResource = env.AB_WEB_MCP_RESOURCE?.trim()
   let mcpResource = `${url.origin}/mcp`
   if (rawMcpResource !== undefined && rawMcpResource !== '') {
@@ -113,7 +101,6 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
     baseURL: url.origin,
     providers: providers as WebAuthProvider[],
     allowedEmails: new Set(emails),
-    repositories,
     github: {
       clientId: required(env, 'GITHUB_CLIENT_ID'),
       clientSecret: required(env, 'GITHUB_CLIENT_SECRET'),
@@ -127,7 +114,6 @@ export function parseWebAuthEnv(env: WebEnv): WebAuthConfig {
 export function safeWebConfig(config: WebAuthConfig) {
   return {
     providers: [...config.providers],
-    repositories: [...config.repositories],
     mcpResource: config.mcpResource,
   }
 }
