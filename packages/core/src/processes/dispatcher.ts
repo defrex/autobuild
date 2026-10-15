@@ -36,6 +36,7 @@
  * validation and fallback remain here. The supervising kernel reserves each
  * execution lease before launch; the child renews that same-holder lease.
  */
+import { createHash } from 'node:crypto'
 import type { Config } from '../config/schema'
 import type { LanguageModel } from 'ai'
 import { runOrchestratorTickStep } from './orchestrator-tick'
@@ -304,7 +305,7 @@ export function validateSlugCandidate(candidate: string | null | undefined): str
 /** Counts per action, for observability and tests. An idempotent re-run of
  * `tick()` over unchanged state reports all zeroes — except invalid-record,
  * in-flight-creation, and dependency fields, which are standing queue reports rather than records of
- * action. They repeat on every ready scan by design, because that is the only
+ * action. They repeat between scans and refresh on completed scans, because that is the only
  * place the source problems are visible without provider inspection. */
 export interface TickReport {
   /** Janitor (§15.7): builds completed as merged. */
@@ -357,7 +358,7 @@ export interface TickReport {
   /** Standing queue depth: ready tickets still waiting after this tick —
    * excludes tickets already embodied by an active build, and ones that left
    * the queue this tick (dispatched, bounced, or claimed elsewhere). Like the
-   * invalid/dependency fields it re-reports on every ready scan. */
+   * invalid/dependency fields it repeats between completed scans. */
   queued: number
   /** Ready tickets withheld while Autobuild's own external creation is still
    * between durable reservation and settled blocker recording. */
@@ -732,6 +733,7 @@ export class Dispatcher {
       }
     }
     const report = emptyTickReport()
+    this.restoreScan(report)
     /** Builds already launched this tick — a janitor/startup re-attach must
      * not be doubled by the sweep, nor a fresh dispatch by anything. */
     const launched = new Set<string>()
@@ -913,12 +915,106 @@ export class Dispatcher {
         activeTicketIds.add(record.ticket.id)
       }
     }
-    const listing = await this.deps.tickets.listReady(readyCriteria(this.deps.config))
-    return {
-      queued: listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id)).length,
-      invalidTickets: listing.diagnostics.length,
-      ticketDiagnostics: [...listing.diagnostics],
+    const report = emptyTickReport()
+    this.restoreScan(report)
+    const checkpoint = await this.scanCheckpoint('observation')
+    if (checkpoint.due) {
+      await this.store.refreshJournal()
+      const listing = await this.deps.tickets.listReady(readyCriteria(this.deps.config))
+      await this.store.refreshJournal()
+      report.queued = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id)).length
+      report.invalidTickets = listing.diagnostics.length
+      report.ticketDiagnostics = [...listing.diagnostics]
+      report.dependencyBlocked = 0
+      report.dependencyDiagnostics = []
+      report.creationWithheld = 0
+      report.creationDiagnostics = []
+      await this.completeScan(checkpoint, report)
     }
+    return {
+      queued: report.queued,
+      invalidTickets: report.invalidTickets,
+      ticketDiagnostics: report.ticketDiagnostics,
+    }
+  }
+
+  private latestScan() {
+    return this.store
+      .recordedJournal()
+      .findLast(
+        (event): event is Extract<RepositoryEvent, { type: 'dispatcher.ticket-scan-completed' }> =>
+          event.type === 'dispatcher.ticket-scan-completed',
+      )?.payload
+  }
+
+  private restoreScan(report: TickReport): void {
+    const previous = this.latestScan()
+    if (previous === undefined) return
+    for (const key of [
+      'queued',
+      'invalidTickets',
+      'dependencyBlocked',
+      'creationWithheld',
+    ] as const)
+      report[key] = previous[key]
+    for (const key of [
+      'ticketDiagnostics',
+      'dependencyDiagnostics',
+      'creationDiagnostics',
+    ] as const)
+      report[key] = [...previous[key]]
+  }
+
+  private async scanCheckpoint(mode: 'admission' | 'observation') {
+    const digest = (await this.repoBuildDigests())
+      .filter(({ digest }) => digest.readinessChangeSeq !== undefined)
+      .map(({ record, digest }) => [record.slug, digest.readinessChangeSeq] as const)
+      .sort(([a], [b]) => a.localeCompare(b))
+    const hash = (value: unknown) =>
+      createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    const readinessFingerprint = hash(digest)
+    const criteriaFingerprint = hash(readyCriteria(this.deps.config))
+    const startedAt = this.deps.clock().toISOString()
+    const previous = this.latestScan()
+    const elapsed =
+      previous === undefined ? Infinity : Date.parse(startedAt) - Date.parse(previous.startedAt)
+    return {
+      startedAt,
+      mode,
+      readinessFingerprint,
+      criteriaFingerprint,
+      due:
+        previous === undefined ||
+        elapsed < 0 ||
+        elapsed >= this.deps.config.ticketScanIntervalSeconds * 1000 ||
+        previous.readinessFingerprint !== readinessFingerprint ||
+        previous.criteriaFingerprint !== criteriaFingerprint ||
+        (mode === 'admission' && previous.mode === 'observation'),
+    }
+  }
+
+  private async completeScan(
+    checkpoint: Awaited<ReturnType<Dispatcher['scanCheckpoint']>>,
+    report: TickReport,
+  ): Promise<void> {
+    await this.store.ensureRepo(this.deps.repo)
+    await this.store.appendRepo(this.deps.repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-scan-completed',
+      payload: {
+        startedAt: checkpoint.startedAt,
+        mode: checkpoint.mode,
+        readinessFingerprint: checkpoint.readinessFingerprint,
+        criteriaFingerprint: checkpoint.criteriaFingerprint,
+        queued: report.queued,
+        invalidTickets: report.invalidTickets,
+        ticketDiagnostics: report.ticketDiagnostics.slice(0, 1000),
+        dependencyBlocked: report.dependencyBlocked,
+        dependencyDiagnostics: report.dependencyDiagnostics.slice(0, 1000),
+        creationWithheld: report.creationWithheld,
+        creationDiagnostics: report.creationDiagnostics.slice(0, 1000),
+      },
+    })
   }
 
   /** Apply the newest durable `dispatcher.auto-merge-default-set` fact to every
@@ -2862,6 +2958,13 @@ export class Dispatcher {
   ): Promise<void> {
     const store = this.store
     const { tickets, config } = this.deps
+    const checkpoint = await this.scanCheckpoint('admission')
+    if (!checkpoint.due) return
+    // Clear only standing measurement fields; action counters belong to this tick.
+    report.queued = report.invalidTickets = report.dependencyBlocked = report.creationWithheld = 0
+    report.ticketDiagnostics = []
+    report.dependencyDiagnostics = []
+    report.creationDiagnostics = []
     // Blocked and paused builds still occupy a slot: their workspaces and
     // pending work are live, only waiting on a human. Capacity is per repo
     // (§16.1) — another repo's builds never consume this repo's slots.
@@ -2915,10 +3018,12 @@ export class Dispatcher {
     // still runs either way, so the standing queue-depth report stays honest —
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
-    if (capacity <= 0 || paused) return
-    // One dependency-node cache per tick: blockers are commonly shared across
-    // the ready set, and a blocker's resolution must be re-read every tick
-    // (never cached across them) so a completion lands on the next pass.
+    if (capacity <= 0 || paused) {
+      if (!this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
+      return
+    }
+    // One dependency-node cache per scan: blockers are commonly shared across
+    // the ready set. Never reuse ticket or dependency objects between scans.
     const nodes = new Map<string, DependencyState>(
       listing.tickets.map((ticket) => [
         ticket.ref.id,
@@ -2934,6 +3039,7 @@ export class Dispatcher {
     // Finish read-only evaluation before any intake claim: a later source
     // failure must leave the entire ready set unclaimed. Publish dependency
     // diagnostics only after the complete preflight succeeds.
+    let scanSuccessful = true
     const verdicts = new Map<string, DependencyVerdict>()
     for (const ticket of ready) {
       if (this.outOfBudget(opts)) return
@@ -2945,6 +3051,7 @@ export class Dispatcher {
         verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
       } catch (error) {
         if (error instanceof TicketSourceRateLimitError) throw error
+        scanSuccessful = false
         verdict = {
           unresolved: [ticket.ref.id],
           diagnostics: [
@@ -3042,6 +3149,7 @@ export class Dispatcher {
       // means the remote provisioning continuation owns the rest.
       if (outcome === 'completed' || outcome === 'deferred') report.dispatched += 1
     }
+    if (scanSuccessful && !this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
   }
 
   /**

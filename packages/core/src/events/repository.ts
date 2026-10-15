@@ -353,6 +353,20 @@ export const orchestratorSandboxEventPayloadSchemas = {
 } as const
 
 export const dispatcherStatusEventPayloadSchemas = {
+  /** Completed ticket-source measurement, independent of dispatcher runs. */
+  'dispatcher.ticket-scan-completed': z.strictObject({
+    startedAt: z.iso.datetime(),
+    readinessFingerprint: z.string().min(1),
+    criteriaFingerprint: z.string().min(1),
+    mode: z.enum(['admission', 'observation']),
+    queued: z.number().int().nonnegative(),
+    invalidTickets: z.number().int().nonnegative(),
+    ticketDiagnostics: boundedDiagnostics,
+    dependencyBlocked: z.number().int().nonnegative(),
+    dependencyDiagnostics: boundedDiagnostics,
+    creationWithheld: z.number().int().nonnegative(),
+    creationDiagnostics: boundedDiagnostics,
+  }),
   /** A terminal frontend follows exactly one run. The referenced artifact is
    * the composed Config the kernel is actually using, never an on-disk guess. */
   'dispatcher.run-started': z.strictObject({
@@ -545,6 +559,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.config-publication-failed': ['dispatcher'],
   'dispatcher.tick-started': ['dispatcher'],
   'dispatcher.tick-completed': ['dispatcher'],
+  'dispatcher.ticket-scan-completed': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],
   'dispatcher.runner-settled': ['dispatcher'],
   'dispatcher.harvest-runner-failed': ['dispatcher'],

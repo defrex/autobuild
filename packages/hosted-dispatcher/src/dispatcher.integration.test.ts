@@ -317,6 +317,12 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
 
   const backing = new MemoryBuildStore({ clock })
   const ticketBackend = new FakeTicketSource([readyTicket('T-1')])
+  let readyScans = 0
+  const listReady = ticketBackend.listReady.bind(ticketBackend)
+  ticketBackend.listReady = async (...args) => {
+    readyScans++
+    return listReady(...args)
+  }
   const service = createHostedStoreService({
     env: storeEnv,
     clock,
@@ -646,13 +652,19 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     const operator = new OperatorApiClient({ url: serviceUrl, token: operatorToken })
 
     // Intake OFF ⇒ the next GET claims nothing; ON ⇒ claims resume.
+    clock.advance(60_000)
     ticketBackend.add(readyTicket('T-3', { title: 'Add pagination' }))
     await operator.setIntake(REPO, false)
     expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
     expect(ticketBackend.claims).not.toContain('T-3')
+    const observedScans = readyScans
+    // A cold cron invocation reuses the durable observation; no ready listing.
+    expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
+    expect(readyScans).toBe(observedScans)
     await operator.setIntake(REPO, true)
     expect((await get({ authorization: 'Bearer cron-secret' })).status).toBe(200)
     expect(ticketBackend.claims).toContain('T-3')
+    expect(readyScans).toBe(observedScans + 1)
     {
       let b3Slug = ''
       await until(async () => {
@@ -672,6 +684,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     // invocation performs no launch work for it, and the resume control makes
     // a later invocation launch it to completion with auto-merge applied.
     await operator.setAutoMergeDefault(REPO, true)
+    clock.advance(60_000)
     ticketBackend.add(readyTicket('T-2', { title: 'Add request timeouts' }))
     holdImplement = new Promise<void>((resolve) => {
       releaseImplement = resolve

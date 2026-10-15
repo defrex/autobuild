@@ -607,21 +607,25 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           })
           expect(digests.get('dg-done')).toEqual({
             slug: 'dg-done',
+            readinessChangeSeq: 2,
             terminal: 'done',
             observations: [{ seq: 3, ts: tsOf('dg-done', 3) }],
           })
           expect(digests.get('dg-cleaning')).toEqual({
             slug: 'dg-cleaning',
+            readinessChangeSeq: 2,
             terminal: 'aborted',
             observations: [{ seq: 3, ts: tsOf('dg-cleaning', 3) }],
           })
           expect(digests.get('dg-abandoned')).toEqual({
             slug: 'dg-abandoned',
+            readinessChangeSeq: 3,
             terminal: 'done',
             observations: [],
           })
           expect(digests.get('dg-overwrite')).toEqual({
             slug: 'dg-overwrite',
+            readinessChangeSeq: 4,
             terminal: 'done',
             observations: [],
           })
@@ -684,6 +688,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           digest = (await store.getRepoBuildDigests(repo)).get('dg-paths')
           expect(digest).toEqual({
             slug: 'dg-paths',
+            readinessChangeSeq: 6,
             terminal: 'done',
             merged: secondMergeTs,
             observations: [
@@ -1201,6 +1206,68 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           harvestFailed: 0,
         }
       }
+
+      test('latest-only scans stay bounded across scans, runs and repositories', async () => {
+        await withStore(factory, undefined, async (store) => {
+          for (const repo of ['acme/scans', 'acme/foreign-scans']) await store.ensureRepo(repo)
+          const appendScan = (repo: string, queued: number) =>
+            store.appendRepo(repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.ticket-scan-completed',
+              payload: {
+                startedAt: '2026-10-14T00:00:00.000Z',
+                mode: 'admission',
+                readinessFingerprint: 'r',
+                criteriaFingerprint: 'c',
+                queued,
+                invalidTickets: 0,
+                ticketDiagnostics: [],
+                dependencyBlocked: 0,
+                dependencyDiagnostics: [],
+                creationWithheld: 0,
+                creationDiagnostics: [],
+              },
+            })
+          await store.appendRepo('acme/scans', {
+            actor: humanActor('op'),
+            type: 'dispatcher.intake-set',
+            payload: { enabled: true },
+          })
+          const check = async (expected: number, rows: number) => {
+            const all = await store.getRepoEvents('acme/scans')
+            const bounded = await store.getRepoStateEvents('acme/scans')
+            expect(bounded).toEqual(projectRepositoryStateEvents(all))
+            expect(bounded).toHaveLength(rows)
+            const scans = bounded.filter((e) => e.type === 'dispatcher.ticket-scan-completed')
+            expect(scans).toHaveLength(1)
+            expect(scans[0]!.payload).toMatchObject({ queued: expected })
+            expect(reduceDispatchSettings(bounded)).toEqual(reduceDispatchSettings(all))
+          }
+          for (let i = 0; i < 200; i++) await appendScan('acme/scans', i)
+          await check(199, 2)
+          for (let i = 200; i < 400; i++) {
+            await appendScan('acme/scans', i)
+            await appendScan('acme/foreign-scans', 999)
+          }
+          await check(399, 2)
+          for (let run = 0; run < 20; run++) {
+            for (const write of noopInvocation(`scan-run-${run}`))
+              await store.appendRepo('acme/scans', write)
+            await appendScan('acme/scans', run)
+          }
+          await check(19, 6)
+          for (const write of noopInvocation('scan-final'))
+            await store.appendRepo('acme/scans', write)
+          await check(19, 6) // latest scan is older than the run anchor
+          for (let i = 0; i < 100; i++) await appendScan('acme/scans', i)
+          await check(99, 6)
+          expect(
+            (await store.getRepoEvents('acme/scans')).filter(
+              (e) => e.type === 'dispatcher.ticket-scan-completed',
+            ),
+          ).toHaveLength(520)
+        })
+      })
 
       test('unknown repo rejects like getRepoEvents', async () => {
         await withStore(factory, undefined, async (store) => {

@@ -730,6 +730,7 @@ const configRootSchema = z.strictObject({
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */
   capacity: z.number().int().positive().default(1),
+  ticketScanIntervalSeconds: z.number().int().positive().default(60),
   /** Forge adapter selected from builtins and configured plugins. */
   forge: z
     .string()
@@ -769,7 +770,13 @@ const configRootSchema = z.strictObject({
 })
 
 /** Root metadata keeps strict error prose and documentation coverage honest. */
-export const TOP_LEVEL_SCALARS = ['baseBranch', 'capacity', 'forge', 'plugins'] as const
+export const TOP_LEVEL_SCALARS = [
+  'baseBranch',
+  'capacity',
+  'ticketScanIntervalSeconds',
+  'forge',
+  'plugins',
+] as const
 export const TOP_LEVEL_TABLES = Object.keys(configRootSchema.shape).filter(
   (key) => !(TOP_LEVEL_SCALARS as readonly string[]).includes(key),
 )

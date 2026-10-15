@@ -1177,12 +1177,13 @@ readyState = "Ready"
             payload: { instance: `runner-${slug}`, host: 'test' },
           })
         }
-        await store.claimLease(slug, `runner-${slug}`, 60_000)
+        await store.claimLease(slug, `runner-${slug}`, 600_000)
       },
     })
 
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
     current = configAt(3)
+    h.clock.advance(60_000)
     expect((await h.dispatcher.tick()).dispatched).toBe(2)
     expect(h.launches).toHaveLength(3)
 
@@ -1191,6 +1192,7 @@ readyState = "Ready"
       { title: 'Fourth feature', body: CONFORMING_BODY, labels: [] },
       { state: 'Ready' },
     )
+    h.clock.advance(60_000)
     const lowered = await h.dispatcher.tick()
     expect(lowered.dispatched).toBe(0)
     expect(lowered.queued).toBe(1)
@@ -2010,6 +2012,7 @@ describe('Dispatcher repository pause hold', () => {
     expect(await h.store.listBuilds()).toEqual([])
 
     await pauseRepo(h.store, false)
+    h.clock.advance(60_000)
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
     expect(h.tickets.claims).toEqual(['T-held'])
   })
@@ -2160,6 +2163,7 @@ describe('Dispatcher in-flight creation gate', () => {
     // The conservative current-scan hold is gone. A fresh source projection
     // now carries the blocker written by filing, so the ordinary dependency
     // gate — not the creation gate — explains why the ticket still waits.
+    h.clock.advance(60_000)
     const blocked = await h.dispatcher.tick()
     expect(blocked).toMatchObject({
       queued: 1,
@@ -2173,10 +2177,10 @@ describe('Dispatcher in-flight creation gate', () => {
     expect(h.tickets.claims).toEqual([])
 
     await h.tickets.transition('T-blocker', 'Done')
+    h.clock.advance(60_000)
     expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
     expect(h.tickets.claims).toEqual(['T-created'])
   })
-
   test('a held ticket spends no capacity and a later ready ticket dispatches', async () => {
     const creationKey = crypto.randomUUID()
     const h = harness({
@@ -2314,12 +2318,12 @@ describe('Dispatcher dependency gate', () => {
     expect((await h.dispatcher.tick()).dependencyBlocked).toBe(2)
     expect(h.tickets.dependencyQueries).toEqual([['missing']])
     await h.tickets.transition('B', 'Done')
+    h.clock.advance(60_000)
     const report = await h.dispatcher.tick()
     expect(report.dispatched).toBe(1)
     expect(report.dependencyDiagnostics).toEqual([])
     expect(h.tickets.dependencyQueries).toEqual([['missing'], ['B']])
   })
-
   test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
     const h = harness({
       tickets: [
@@ -2377,13 +2381,13 @@ describe('Dispatcher dependency gate', () => {
     // Native lifecycle only: the blocker reaches the source's done state.
     await h.tickets.transition('T-9', 'Done')
 
+    h.clock.advance(60_000)
     const second = await h.dispatcher.tick()
     expect(h.tickets.dependencyQueries).toEqual([['T-9'], ['T-9']])
     expect(second.dependencyBlocked).toBe(0)
     expect(second.dispatched).toBe(1)
     expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
   })
-
   test('two blockers: ineligible until BOTH resolve', async () => {
     const tickets = [
       readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-8', 'T-9'] }),
@@ -2395,15 +2399,16 @@ describe('Dispatcher dependency gate', () => {
     expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
 
     await h.tickets.transition('T-8', 'Done')
+    h.clock.advance(60_000)
     const second = await h.dispatcher.tick()
     expect(second.dependencyBlocked).toBe(1)
     expect(second.dispatched).toBe(0)
     expect(second.dependencyDiagnostics).toEqual(['ticket T-1 blocked by T-9 (not complete)'])
 
     await h.tickets.transition('T-9', 'Done')
+    h.clock.advance(60_000)
     expect((await h.dispatcher.tick()).dispatched).toBe(1)
   })
-
   test('a missing blocker keeps the ticket undispatched with an actionable diagnostic', async () => {
     const h = harness({
       tickets: [readyTicket('T-1', { title: 'Blocked work', blockedBy: ['T-404'] })],
@@ -6178,7 +6183,9 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     const report = await h.dispatcher.tick()
     const types = (await h.store.getRepoEvents(REPO)).map((event) => event.type)
     expect(types).toContain('orchestrator.sandbox.stopped')
-    const stopped = (await h.store.getRepoEvents(REPO)).at(-1)!
+    const stopped = (await h.store.getRepoEvents(REPO)).findLast(
+      (event) => event.type !== 'dispatcher.ticket-scan-completed',
+    )!
     expect(stopped.actor).toEqual({ kind: 'dispatcher' })
     expect(stopped.payload).toMatchObject({
       operator: 'ops',
@@ -6260,7 +6267,9 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     await seedLiveSandbox(h, { provider: 'other-provider' })
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
-    const last = (await h.store.getRepoEvents(REPO)).at(-1)!
+    const last = (await h.store.getRepoEvents(REPO)).findLast(
+      (event) => event.type !== 'dispatcher.ticket-scan-completed',
+    )!
     expect(last.type).toBe('orchestrator.sandbox.released')
     expect(last.actor).toEqual({ kind: 'dispatcher' })
     expect(last.payload).toMatchObject({
@@ -6312,7 +6321,9 @@ describe('dispatcher — operator sandbox idle settlement (AUT-340)', () => {
     })
     h.clock.advance(31 * 60 * 1000)
     const report = await h.dispatcher.tick()
-    const last = (await h.store.getRepoEvents(REPO)).at(-1)!
+    const last = (await h.store.getRepoEvents(REPO)).findLast(
+      (event) => event.type !== 'dispatcher.ticket-scan-completed',
+    )!
     expect(last.type).toBe('orchestrator.sandbox.released')
     expect(last.actor).toEqual({ kind: 'dispatcher' })
     expect(last.payload).toMatchObject({
@@ -6832,10 +6843,11 @@ describe('the dispatcher tick reads a bounded journal (AUT-489)', () => {
       measured.push(counting.journalRows())
       // The tick still recorded its own facts under the new run.
       const tail = await raw.getRepoEvents(REPO)
-      expect(tail.slice(-3).map((event) => event.type)).toEqual([
+      expect(tail.slice(-4).map((event) => event.type)).toEqual([
         'dispatcher.run-started',
         'dispatcher.tick-completed',
         'dispatcher.run-stopped',
+        'dispatcher.ticket-scan-completed',
       ])
     }
     // The bound does not depend on the invocation history length.
@@ -7725,5 +7737,237 @@ describe('provider-neutral intake rate limits', () => {
     await expect(h.dispatcher.tick()).rejects.toBe(error)
     expect(h.tickets.claims).toEqual([])
     expect(await h.store.listBuilds()).toEqual([])
+  })
+})
+
+describe('durable ticket scan cadence', () => {
+  function counted(options: Parameters<typeof harness>[0] = {}) {
+    let scans = 0
+    const h = harness({
+      ...options,
+      wrapTickets(source) {
+        const original = source.listReady.bind(source)
+        source.listReady = async (...args) => {
+          scans++
+          return original(...args)
+        }
+        return source
+      },
+    })
+    return { ...h, scans: () => scans }
+  }
+
+  test('first scan, exact boundary, full capacity, cached depth and per-tick actions', async () => {
+    let harvests = 0
+    const h = counted({
+      tickets: [readyTicket('one'), readyTicket('two')],
+      startHarvest: () => {
+        harvests++
+      },
+    })
+    expect((await h.dispatcher.tick()).queued).toBe(1)
+    for (let i = 1; i <= 5; i++) {
+      h.clock.advance(10_000)
+      const report = await h.dispatcher.tick()
+      expect(report.queued).toBe(1)
+      expect(report.dispatched).toBe(0)
+    }
+    expect(h.scans()).toBe(1)
+    expect(harvests).toBeGreaterThan(0)
+    h.clock.advance(10_000)
+    expect((await h.dispatcher.tick()).queued).toBe(1)
+    expect(h.scans()).toBe(2)
+    expect(h.tickets.claims).toEqual(['one'])
+  })
+
+  test('direct grooming waits for a fresh scheduled scan; cold reconstruction keeps depth', async () => {
+    const h = counted({ tickets: [readyTicket('one', { state: 'Triage' })] })
+    await h.dispatcher.tick()
+    await h.tickets.transition('one', 'Ready')
+    h.clock.advance(50_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(0)
+    h.clock.advance(10_000)
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    const cold = counted({ store: h.store })
+    cold.clock.set(h.clock().toISOString())
+    expect((await cold.dispatcher.tick({ acceptNewWork: false })).queued).toBe(0)
+    expect(cold.scans()).toBe(0)
+  })
+
+  for (const type of ['pr.merged', 'build.completed', 'build.aborted'] as const) {
+    test(`${type} forces a scan once, even with equal timestamps`, async () => {
+      const h = counted()
+      await seedBuild(h, { slug: 'signal' })
+      await h.dispatcher.tick()
+      await h.store.append('signal', {
+        actor: DISPATCHER,
+        type,
+        payload:
+          type === 'build.completed'
+            ? { outcome: 'merged' }
+            : type === 'pr.merged'
+              ? { sha: 'merged-sha' }
+              : {},
+      } as EventWrite)
+      await h.dispatcher.tick()
+      expect(h.scans()).toBe(2)
+      await h.dispatcher.tick()
+      expect(h.scans()).toBe(2)
+      if (type === 'build.aborted') {
+        await h.store.append('signal', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'abandoned' },
+        })
+        await h.dispatcher.tick()
+        expect(h.scans()).toBe(3)
+      }
+    })
+  }
+
+  test('observation shares cadence but never suppresses admission; cold reads retain nonzero depth', async () => {
+    const h = counted({ tickets: [readyTicket('one')] })
+    expect((await h.dispatcher.observeReady()).queued).toBe(1)
+    await h.dispatcher.observeReady()
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).queued).toBe(1)
+    expect(h.scans()).toBe(1)
+    const cold = counted({ store: h.store, tickets: [readyTicket('one')] })
+    expect((await cold.dispatcher.observeReady()).queued).toBe(1)
+    expect(cold.scans()).toBe(0)
+    expect((await cold.dispatcher.tick()).dispatched).toBe(1)
+    expect(cold.scans()).toBe(1)
+  })
+
+  test('config interval reload, tick floor, changed criteria and future measurement', async () => {
+    let config = parseConfig(withReadyState('ticketScanIntervalSeconds = 120'))
+    const h = counted({ getConfig: () => config })
+    await h.dispatcher.tick()
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(1)
+    config = { ...config, ticketScanIntervalSeconds: 60 }
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(2)
+    config = { ...config, ticketScanIntervalSeconds: 1 }
+    h.clock.advance(10_000)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(3)
+    config = { ...config, tickets: { ...config.tickets, readyState: 'Other' } }
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(4)
+    h.clock.advance(-1_000)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(5)
+  })
+
+  test('same-repository blocker resolution triggers a fresh dependency read and claim', async () => {
+    const h = counted({
+      toml: 'capacity = 2',
+      tickets: [
+        readyTicket('dependent', { blockedBy: ['blocker'] }),
+        readyTicket('blocker', { state: 'Doing' }),
+      ],
+    })
+    await seedBuild(h, { slug: 'blocker-build', ticketId: 'blocker' })
+    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
+    expect(h.tickets.dependencyQueries).toEqual([['blocker']])
+    await h.tickets.transition('blocker', 'Done')
+    await h.store.append('blocker-build', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.tickets.dependencyQueries).toEqual([['blocker'], ['blocker']])
+    expect(h.tickets.claims).toEqual(['dependent'])
+  })
+
+  test('foreign and irrelevant build facts do not force scans; facts during a listing remain pending', async () => {
+    const h = counted()
+    await seedBuild(h, { slug: 'local-signal' })
+    await seedBuild(h, { slug: 'foreign-signal', repo: '/other' })
+    await h.dispatcher.tick()
+    await h.store.append('foreign-signal', {
+      actor: DISPATCHER,
+      type: 'build.completed',
+      payload: { outcome: 'merged' },
+    })
+    await h.store.append('local-signal', { actor: KERNEL, type: 'build.paused', payload: {} })
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(1)
+    const list = h.tickets.listReady.bind(h.tickets)
+    let changed = false
+    h.tickets.listReady = async (...args) => {
+      if (!changed) {
+        changed = true
+        await h.store.append('local-signal', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+      }
+      return list(...args)
+    }
+    h.clock.advance(60_000)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(2)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(3)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(3)
+  })
+
+  test('janitor merge releases capacity and forces a scan within the same tick', async () => {
+    const h = counted({ tickets: [readyTicket('next')] })
+    await seedAwaitingPr(h)
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(1)
+    h.forge.setPrState(PR.number, { state: 'merged', sha: 'squash-1' })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.scans()).toBe(2)
+  })
+
+  test('dependency rate limits and mid-scan budget truncation do not acknowledge measurements', async () => {
+    const h = counted({ tickets: [readyTicket('dependent', { blockedBy: ['blocker'] })] })
+    await h.store.ensureRepo(REPO)
+    const dependencies = h.tickets.dependencyStates.bind(h.tickets)
+    h.tickets.dependencyStates = async () => {
+      throw new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow()
+    h.tickets.dependencyStates = async (...args) => {
+      h.clock.advance(2_000)
+      return dependencies(...args)
+    }
+    await h.dispatcher.tick({ deadlineAt: h.clock().getTime() + 1000 })
+    expect(
+      (await h.store.getRepoEvents(REPO)).filter(
+        (e) => e.type === 'dispatcher.ticket-scan-completed',
+      ),
+    ).toHaveLength(0)
+    h.tickets.dependencyStates = dependencies
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(3)
+  })
+
+  test('listing failure, deadline and scan append failure remain due', async () => {
+    const h = counted()
+    const list = h.tickets.listReady.bind(h.tickets)
+    h.tickets.listReady = async () => {
+      throw new Error('offline')
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('offline')
+    h.tickets.listReady = list
+    await h.dispatcher.tick({ deadlineAt: h.clock().getTime() })
+    expect(h.scans()).toBe(0)
+    const append = h.store.appendRepo.bind(h.store)
+    h.store.appendRepo = async (...args) => {
+      if (args[1].type === 'dispatcher.ticket-scan-completed') throw new Error('append failed')
+      return append(...args)
+    }
+    await expect(h.dispatcher.tick()).rejects.toThrow('append failed')
+    h.store.appendRepo = append
+    await h.dispatcher.tick()
+    expect(h.scans()).toBe(2)
   })
 })

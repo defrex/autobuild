@@ -414,6 +414,7 @@ exports[`reducer registry accumulator shapes 1`] = `
     "$.observations[].ts: string",
     "$.observations[]: object",
     "$.openInstance: null",
+    "$.readinessChangeSeq: number",
     "$.reclaimed: array",
     "$.terminal: string",
     "$: object",

@@ -168,7 +168,7 @@ the branch head never carried the file — the deposit records the source
 provenance declines to attribute them to any commit. **Deployment-owned** sections — `[roles]`
 (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and
 `[policy]` — keep flowing live. **Dispatcher-owned** sections (`baseBranch`,
-`capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
+`capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator`) configure the
 dispatcher itself and are never interpreted by the build runner.
 
 Consequently, an accepted base-branch reload re-deposits only the
@@ -195,6 +195,7 @@ These fields hot-reload:
 | Field or table | Boundary where a new value applies |
 |---|---|
 | `baseBranch` | Next dispatch or base fallback decision; existing `build.created` facts remain immutable. |
+| `ticketScanIntervalSeconds` | Next tick; evaluates elapsed time against the new interval. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
 | `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. A base-branch reload does not retarget an in-flight build. |
@@ -229,9 +230,23 @@ any table header.
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
 | `baseBranch` | `"main"` | nonempty string | Branch used to cut builds, target PRs, and merge during reconciliation. |
+| `ticketScanIntervalSeconds` | `60` | positive integer seconds | Ticket-source ready scan cadence; tick spacing is the effective minimum. |
 | `capacity` | `1` | positive integer | Maximum concurrent nonterminal builds for this repository. Paused and blocked builds still occupy capacity. |
 | `forge` | `"github"` | nonblank string | Forge adapter name. Shipped values are `github` and `local-git`; configured plugins may register other names. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded by dispatch, `ab ticket`, and scoped phase CLI processes. |
+
+Ticket-source ready scans run immediately when no completed measurement exists,
+then every
+`ticketScanIntervalSeconds` (default 60 seconds, a positive integer). Actual
+tick spacing is the floor when the configured interval is shorter. A
+same-repository `pr.merged`, `build.completed`, or `build.aborted` fact forces
+another scan on the next tick; changed ready criteria also force a scan.
+Housekeeping keeps its ordinary tick cadence. Between scans, queue depth and
+standing diagnostics repeat the last completed measurement, including across
+process restarts. Tickets groomed directly in the tracker are picked up within
+one scan interval plus one tick when capacity permits. Observation while intake
+is off shares the cadence; an observation measurement cannot suppress a fresh
+admission scan when intake is enabled.
 
 ### Plugin modules
 

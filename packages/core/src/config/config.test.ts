@@ -6,6 +6,7 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { ConfigError, loadConfig, parseConfig } from './load'
 import {
   BUILTIN_WORKSPACE_PROVIDER_CONFIG,
+  TOP_LEVEL_SCALARS,
   vercelSandboxConfigSchema,
   type WorkspaceProviderConfigDeclaration,
 } from './schema'
@@ -103,6 +104,7 @@ describe('parseConfig — complete flattened surface', () => {
     expect(parseConfig(COMPLETE_EXAMPLE)).toEqual({
       baseBranch: 'main',
       capacity: 3,
+      ticketScanIntervalSeconds: 60,
       forge: 'gitlab',
       plugins: ['./plugins/local.ts', '@acme/autobuild-plugin'],
       workspace: {
@@ -191,6 +193,7 @@ describe('parseConfig — defaults', () => {
     expect(parseConfig(READY)).toEqual({
       baseBranch: 'main',
       capacity: 1,
+      ticketScanIntervalSeconds: 60,
       forge: 'github',
       plugins: [],
       workspace: { provider: 'git-worktree', config: {} },
@@ -1318,4 +1321,19 @@ describe('parseConfig — [orchestrator] sandbox gate', () => {
       expect(error.message).toContain(name)
     }
   })
+})
+
+describe('ticketScanIntervalSeconds', () => {
+  test('defaults, override and root metadata', () => {
+    expect(TOP_LEVEL_SCALARS).toContain('ticketScanIntervalSeconds')
+    expect(parseConfig(READY).ticketScanIntervalSeconds).toBe(60)
+    expect(parseConfig(`ticketScanIntervalSeconds = 15\n${READY}`).ticketScanIntervalSeconds).toBe(
+      15,
+    )
+  })
+  for (const value of ['0', '-1', '0.5', 'inf', 'nan', '"60"']) {
+    test(`rejects ${value}`, () => {
+      expect(() => parseConfig(`ticketScanIntervalSeconds = ${value}\n${READY}`)).toThrow()
+    })
+  }
 })

@@ -233,6 +233,19 @@ Small, independently runnable, crash-safe:
 - **ingesters** — other outer-loop processes turning signals into proposals (§12).
 - **operator** — UI process(es); see §14.
 
+Ticket-source ready scans run immediately when no completed measurement exists,
+then every
+`ticketScanIntervalSeconds` (default 60 seconds, a positive integer). Actual
+tick spacing is the floor when the configured interval is shorter. A
+same-repository `pr.merged`, `build.completed`, or `build.aborted` fact forces
+another scan on the next tick; changed ready criteria also force a scan.
+Housekeeping keeps its ordinary tick cadence. Between scans, queue depth and
+standing diagnostics repeat the last completed measurement, including across
+process restarts. Tickets groomed directly in the tracker are picked up within
+one scan interval plus one tick when capacity permits. Observation while intake
+is off shares the cadence; an observation measurement cannot suppress a fresh
+admission scan when intake is enabled.
+
 ### 3.4 The event log spine
 
 Build processes append typed events to per-build logs; repository-scoped outer
@@ -2243,6 +2256,7 @@ ordinary boundary reload resumes.
 ```toml
 baseBranch = "main"
 capacity = 3                    # concurrent builds for this repo
+ticketScanIntervalSeconds = 60  # positive integer; ready scans, with tick spacing as floor
 forge = "github"                # builtin: github | local-git; or a plugin name
 plugins = ["./plugins/local.ts", "@acme/autobuild-plugin"]
 
@@ -2350,7 +2364,7 @@ decide where a build's effective configuration is composed from:
 |---|---|---|
 | Build-owned (pinned) | `[verify]` and `[verify.<step>]`, `[finalize]` and `[finalize.<step>]`, `[commands]`, `[workspace]` (provider and config, including `provisioning` and `runtimeProvisioning`) | The build's own branch: its branch head once it has published commits, otherwise the recorded base commit its workspace was cut from. The exact commit is recorded once per deposit in the effective-config artifact metadata — except in checkout mode when the worktree read cannot be attributed to the branch-head commit: because the worktree file has uncommitted edits, because the clean/dirty comparison could not be performed (non-git workspace or a transient git error), or because the branch head never carried the file. The deposit then records the source `worktree-dirty` and no commit, because no commit claims the worktree bytes (the build still runs them). |
 | Deployment-owned (live) | `[roles]` (runtime, model, args, alternates, per-role `sessionBudgetSeconds`) and `[policy]` (budgets, retry bounds, stall and harvest knobs) | The dispatcher's live snapshot; an accepted reload delivers these to active builds. |
-| Dispatcher-owned | `baseBranch`, `capacity`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator` | The dispatcher's live snapshot; the build runner never interprets them. |
+| Dispatcher-owned | `baseBranch`, `capacity`, `ticketScanIntervalSeconds`, `forge`, `plugins`, `pr`, `tickets`, `orchestrator` | The dispatcher's live snapshot; the build runner never interprets them. |
 
 A build's pipeline definition is therefore composed from the build's own
 branch: in origin mode the dispatcher reads `autobuild.toml` at the build's
