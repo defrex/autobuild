@@ -382,6 +382,15 @@ if (testUrl)
         await second.initialize([repo])
         expect(await first.list()).toEqual([entries[0]!])
         await first.remove(repo, 'Ada')
+        const ignoredEdit = await openPostgresProjectRegistryFromEnv({
+          AB_POSTGRES_URL: database.url,
+          AB_WEB_REPOSITORIES: '/invalid/deprecated/edit',
+        })
+        try {
+          expect(await ignoredEdit.list()).toEqual([])
+        } finally {
+          await ignoredEdit.close()
+        }
         const reopened = await openPostgresProjectRegistryFromEnv({
           AB_POSTGRES_URL: database.url,
           AB_WEB_REPOSITORIES: repo,

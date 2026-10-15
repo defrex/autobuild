@@ -90,12 +90,23 @@ export class PostgresProjectRegistry implements ProjectRegistry {
   }
 
   async initialize(repositories: readonly string[]): Promise<void> {
-    const normalized = repositories.map(normalizeProjectRepository)
-    if (normalized.length === 0) return
+    if (repositories.length === 0) return
+    await this.importOnce(() => repositories)
+  }
+
+  async initializeFromEnv(env: PostgresEnv): Promise<void> {
+    await this.importOnce(() => legacyProjectRepositories(env))
+  }
+
+  private async importOnce(source: () => readonly string[]): Promise<void> {
     await this.locked(async (tx) => {
       const [state] =
         await tx`SELECT legacy_imported FROM project_registry_state WHERE singleton = true`
       if (state.legacy_imported) return
+      // Once imported, the deprecated environment is no longer configuration:
+      // even a later malformed edit cannot replace or disable the registry.
+      const normalized = source().map(normalizeProjectRepository)
+      if (normalized.length === 0) return
       for (const repo of normalized) await this.addIn(tx, repo, 'system:AB_WEB_REPOSITORIES')
       await tx`UPDATE project_registry_state SET legacy_imported = true WHERE singleton = true`
     })
@@ -150,12 +161,11 @@ export class PostgresProjectRegistry implements ProjectRegistry {
 export async function openPostgresProjectRegistryFromEnv(
   env: PostgresEnv,
 ): Promise<ProjectRegistry> {
-  const repositories = legacyProjectRepositories(env)
   const sql = new SQL(resolvePostgresUrl(env))
   try {
     await assertSchema(sql)
     const registry = new PostgresProjectRegistry(sql, true)
-    await registry.initialize(repositories)
+    await registry.initializeFromEnv(env)
     return registry
   } catch (error) {
     await sql.close()
