@@ -23,6 +23,7 @@ import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { LinearTicketSource } from '../ports/tickets/linear'
 import { TicketSourceRateLimitError } from '../ports/types'
 import type { Ticket, WorkspaceProvider } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
@@ -2502,6 +2503,86 @@ describe('Dispatcher dependency gate', () => {
 
   /** The unchanged-behavior criterion, mechanically enforced: a ticket with
    * no dependencies never touches the dependency port at all. */
+  test('Linear listing with completed blockers dispatches without another dependency read', async () => {
+    const calls: string[] = []
+    const listingSource = new LinearTicketSource({
+      apiKey: 'test',
+      teamKey: 'ENG',
+      fetchFn: async (_url, init) => {
+        calls.push(JSON.parse(init.body).query)
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              issues: {
+                nodes: [
+                  {
+                    id: 'uuid-1',
+                    identifier: 'T-1',
+                    title: 'Add rate limiting',
+                    description: CONFORMING_BODY,
+                    url: 'https://linear.app/issue/T-1',
+                    state: { name: 'Ready', type: 'unstarted' },
+                    labels: { nodes: [{ name: 'autobuild' }] },
+                    inverseRelations: {
+                      nodes: [
+                        {
+                          type: 'blocks',
+                          issue: { identifier: 'T-9', state: { type: 'completed' } },
+                        },
+                      ],
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+        }
+      },
+    })
+    const h = harness({
+      tickets: [readyTicket('T-1')],
+      toml: CAPACITY_2,
+      wrapTickets: (source) => {
+        source.listReady = listingSource.listReady.bind(listingSource)
+        return source
+      },
+    })
+    expect((await h.dispatcher.tick()).dispatched).toBe(1)
+    expect(h.tickets.dependencyQueries).toEqual([])
+    expect(calls).toHaveLength(1)
+  })
+
+  test.each([true, false, undefined])(
+    'listing hint %s skips dependency reads only when true',
+    async (hint) => {
+      const h = harness({
+        tickets: [readyTicket('T-1', { blockedBy: ['T-9'] })],
+        toml: CAPACITY_2,
+        wrapTickets: (source) => {
+          const list = source.listReady.bind(source)
+          source.listReady = async (criteria) => {
+            const result = await list(criteria)
+            return {
+              ...result,
+              tickets: result.tickets.map((ticket) => ({
+                ...ticket,
+                ...(hint === undefined ? {} : { blockersResolved: hint }),
+              })),
+            }
+          }
+          return source
+        },
+      })
+      const report = await h.dispatcher.tick()
+      expect(report.dispatched).toBe(hint === true ? 1 : 0)
+      expect(h.tickets.dependencyQueries).toEqual(hint === true ? [] : [['T-9']])
+    },
+  )
+
   test('a dependency-free ticket dispatches with ZERO dependencyStates calls', async () => {
     const h = harness({ tickets: [readyTicket('T-1')], toml: CAPACITY_2 })
 
@@ -7572,14 +7653,25 @@ describe('provider-neutral intake rate limits', () => {
     const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
     const h = harness({
       tickets: [
-        readyTicket('T-1', { title: 'Free work' }),
+        readyTicket('T-1', { title: 'Resolved work', blockedBy: ['T-7'] }),
         readyTicket('T-2', { title: 'Blocked work', blockedBy: ['T-9'] }),
         readyTicket('T-3', { title: 'Limited work', blockedBy: ['T-8'] }),
       ],
       toml: CAPACITY_2,
       wrapTickets: (source) => {
+        const list = source.listReady.bind(source)
+        source.listReady = async (criteria) => {
+          const result = await list(criteria)
+          return {
+            ...result,
+            tickets: result.tickets.map((ticket) =>
+              ticket.ref.id === 'T-1' ? { ...ticket, blockersResolved: true } : ticket,
+            ),
+          }
+        }
         const original = source.dependencyStates.bind(source)
         source.dependencyStates = async (ids) => {
+          expect(ids).not.toContain('T-7')
           if (ids.includes('T-8') && limited) throw error
           return original(ids)
         }

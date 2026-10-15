@@ -1448,7 +1448,7 @@ readyAssignee = "${assignee}"
           ? { viewer: user }
           : query.includes('users(')
             ? { users: { nodes: user === null ? [] : [user] } }
-            : { issues: { nodes: [] } }
+            : { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
         return new Response(JSON.stringify({ data }), { status: 200 })
       }) as unknown as typeof fetch
     }
