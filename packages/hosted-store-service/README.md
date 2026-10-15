@@ -13,7 +13,8 @@ machine-service entrypoint for non-Next hosts.
 
 Use the package's `deployment/package.json` and `deployment/vercel.json` as a
 small Git repository, install with Bun, commit the lockfile, and import it into
-Vercel. The package build command stages the complete application, migrates
+Vercel. The template explicitly pins both this service and its required core
+peer to the same release. The package build command stages the complete application, migrates
 Postgres, then builds Next.js. No source checkout or patch is needed.
 
 Follow the [hosted service setup](https://github.com/defrex/autobuild/blob/main/docs/hosted-service.md)

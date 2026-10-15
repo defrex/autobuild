@@ -286,11 +286,7 @@ export function replacePackageVersion(manifestText: string, version: string): st
   const content = `${manifestText.slice(0, match.index)}${replacement}${manifestText.slice(match.index + match[0].length)}`
   const rendered = JSON.parse(content) as { version?: unknown }
   if (rendered.version !== version) throw new Error('rendered package.json has the wrong version')
-  // The hosted application requires the matching core release at build time.
-  return content.replace(
-    /("@defrex\/autobuild"\s*:\s*")\d+\.\d+\.\d+(?:-[^" ]+)?(")/g,
-    `$1${version}$2`,
-  )
+  return content
 }
 
 export function replaceHostedServicePins(text: string, version: string): string {

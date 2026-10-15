@@ -5,7 +5,7 @@ import { replaceHostedServicePins, replacePackageVersion } from './release'
 test('deployment templates and documentation have matching released pins', async () => {
   await checkDeploymentTemplates()
 })
-test('releases keep template pins and application core dependency aligned', () => {
+test('releases bump exact deployment pins without changing source peer floors', () => {
   const template = replaceHostedServicePins(
     JSON.stringify({
       dependencies: {
@@ -21,10 +21,12 @@ test('releases keep template pins and application core dependency aligned', () =
     '@defrex/autobuild-hosted-store-service': '0.12.0',
     next: '16.1.6',
   })
-  expect(
-    replacePackageVersion(
-      '{\n  "version": "0.11.0",\n  "dependencies": { "@defrex/autobuild": "0.11.0" }\n}\n',
-      '0.12.0',
-    ),
-  ).toContain('"@defrex/autobuild": "0.12.0"')
+  const service = {
+    version: '0.11.0',
+    peerDependencies: { '@defrex/autobuild': '>=0.11.0' },
+  }
+  expect(JSON.parse(replacePackageVersion(JSON.stringify(service, null, 2), '0.12.0'))).toEqual({
+    ...service,
+    version: '0.12.0',
+  })
 })
