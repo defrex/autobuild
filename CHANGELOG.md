@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#609](https://github.com/defrex/autobuild/pull/609) — Package the full hosted service for standalone Vercel deployments
 - [#606](https://github.com/defrex/autobuild/pull/606) — Make watch defaults report actionable operator conditions
 - [#605](https://github.com/defrex/autobuild/pull/605) — Bound persistent dispatch failures with a human retry budget
 ## v0.11.0 — 2026-10-15
