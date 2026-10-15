@@ -9,9 +9,26 @@ and the implementation passes the shared `BuildStore` contract exported by
 
 The transport, wire shapes, validation order, atomicity, lease behavior,
 persistence requirements, and conformance bar for the protocol shipped in this
-distribution are all defined here. A protocol implementation must target the
-same Autobuild package version used by its clients; protocol changes update this
-document and the package's executable contracts together.
+distribution are all defined here. Protocol implementations must retain contracts for every supported client line;
+protocol changes update this document and executable contracts together.
+
+A service accepts stable clients from its own `major.minor` release line and
+the two preceding minor lines in the same major. A major starts a new family:
+X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
+Patch versions are interchangeable in both directions and must never change
+the protocol. Upgrade the service first, then projects independently within
+its window. Supported release lines retain their wire handlers and known
+protocol identities; an unknown protocol is refused independently of version.
+Malformed, missing, and prerelease identities are refused with HTTP 409.
+A newer client is told to upgrade the service; a client below the window is
+told to upgrade the project's Autobuild. Diagnostics name the service version
+and supported range.
+
+Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
+`protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
+The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
+service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+headers, or available backend.
 
 ## 1. Transport and conventions
 
@@ -22,8 +39,8 @@ document and the package's executable contracts together.
   `X-Autobuild-Version` with the exact client package version and
   `X-Autobuild-Protocol-Version` with the remote protocol version (`3` in this
   distribution). Before authentication,
-  body parsing, or resource lookup, the server compares both exact strings.
-  Missing or different values receive `409 {"kind":"conflict","error":"…"}`;
+  body parsing, or resource lookup, the server validates the release-line window and known protocol identity.
+  Unsupported or missing values receive `409 {"kind":"conflict","error":"…"}`;
   the diagnostic names the client and server package and protocol versions.
 - Clients send `Content-Type: application/json` for requests with bodies. Every
   response, including errors and `null` artifact results, has
@@ -184,7 +201,7 @@ and section 7).
 
 Those event catalogs evolve with Autobuild's build lifecycle rather than with
 the storage transport. A server therefore must use or faithfully implement the
-catalog from the same Autobuild package version as its client. The public
+catalog behavior required by every supported client release line. The public
 `BuildStore` type (including its typed write methods), representative valid
 writes, and unchanged contract suite exported by `@defrex/autobuild/plugin-sdk` are the
 package-versioned compatibility surface. Wire validation remains mandatory even
@@ -451,7 +468,7 @@ reading every build's full history per evaluation. That is a breaking wire
 change, not an additive one: a server that predates it returns the old shape
 and would fail the client's schema parse mid-request, which is why the version
 moved — a stale peer is now rejected at the handshake (`409 conflict`) instead.
-This is the same discipline the transport's exact-match version rules promise:
+This is the same discipline the transport's supported-window rules promise:
 wire shapes that independently implemented servers must reproduce update this
 document and the protocol version together.
 
@@ -1103,7 +1120,8 @@ Four shipped behaviors do not add `BuildStore` routes:
   store lifecycle; there is no close endpoint.
 - `GET /health` is outside the `BuildStore` interface. It is always open and
   returns exactly `200 {"ok":true,"autobuildVersion":"<package>",
-  "protocolVersion":"3"}`. It reports HTTP-process availability and identity,
+  "protocolVersion":"3", "supportedClientRange":{"minVersion":"0.9.0",
+  "maxVersionExclusive":"0.12.0"}}`. It reports HTTP-process availability and identity,
   not a deeper backing-store transaction or migration check.
 
 There is no push/WebSocket subscription protocol, repository listing, artifact

@@ -631,7 +631,7 @@ no longer matches the identity the current system would deliver is refreshed
 by reinstalling the archive before reuse, so an upgraded dispatcher retrofits
 its persistent guests (see "Guest distribution version selection and delivery"
 in docs/setup.md for the release-and-upgrade delivery path and the hosted
-store's version-lockstep gate). Immediately
+store's supported client window). Immediately
 before every build-child launch, the adapter verifies the
 provisioned absolute Bun executable and every referenced runtime again. A
 failure names the runtime, selecting role/alternate, stage, and provisioning
@@ -1806,3 +1806,23 @@ progress is not shown. Harvest does not consume build capacity.
 - **Remote BuildStore:** confirm the effective `AB_STORE` URL and `AB_TOKEN`.
   A protected store reports 401 for a missing, invalid, or expired token and
   403 when the token is valid but scoped to another build/session.
+
+## Hosted service client compatibility
+
+A service accepts stable clients from its own `major.minor` release line and
+the two preceding minor lines in the same major. A major starts a new family:
+X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
+Patch versions are interchangeable in both directions and must never change
+the protocol. Upgrade the service first, then projects independently within
+its window. Supported release lines retain their wire handlers and known
+protocol identities; an unknown protocol is refused independently of version.
+Malformed, missing, and prerelease identities are refused with HTTP 409.
+A newer client is told to upgrade the service; a client below the window is
+told to upgrade the project's Autobuild. Diagnostics name the service version
+and supported range.
+
+Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
+`protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
+The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
+service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+headers, or available backend.

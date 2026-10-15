@@ -14,6 +14,10 @@ Release yourself.
 This is repo-local maintainer tooling. `tools/` does not ship in the package,
 so nothing here is product surface.
 
+A patch release must not change the protocol: patches on a release line are
+interchangeable in both directions. Protocol changes require a new major.minor
+line and retained handlers for every line still in the supported client window.
+
 ## Preconditions
 
 The command refuses to proceed unless all of these hold, so check them first

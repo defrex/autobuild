@@ -3,9 +3,8 @@ import { systemClock, type BuildStore, type Clock } from '@defrex/autobuild/plug
 import {
   tokenResource,
   verifyToken,
-  AUTOBUILD_VERSION,
+  clientIdentityError,
   AUTOBUILD_VERSION_HEADER,
-  REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
 import {
@@ -190,12 +189,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
   function identity(req: Request): void {
     const app = req.headers.get(AUTOBUILD_VERSION_HEADER)
     const protocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
-    if (app !== AUTOBUILD_VERSION || protocol !== REMOTE_STORE_PROTOCOL_VERSION) {
-      throw new HttpError(
-        409,
-        'conflict',
-        `remote store version mismatch: client Autobuild ${app ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}`,
-      )
+    const mismatch = clientIdentityError(app, protocol)
+    if (mismatch !== undefined) {
+      throw new HttpError(409, 'conflict', mismatch)
     }
   }
 

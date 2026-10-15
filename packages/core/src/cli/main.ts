@@ -53,6 +53,7 @@ import { abMcp, AB_MCP_USAGE } from './mcp'
 import type { StoreOpener } from './store-opening'
 import { done, escalate, verdict } from './terminals'
 import { abTicket, openTicketSource } from './ticket'
+import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
 import { abUpgrade, type ResolveConflict } from './upgrade'
 import { withUpgradeProgress } from './upgrade-progress'
 import {
@@ -186,6 +187,7 @@ export interface SessionlessCliDeps {
    * to the running module, independent of the current repository. */
   distributionRoot?: string
   /** Self-update seams keep release/package-manager orchestration testable. */
+  compatibilityFetch?: CompatibilityFetch
   selfUpdateCommand?: SelfUpdateCommand
   selfUpdate?: (options: SelfUpdateOptions) => Promise<SelfUpdateResult>
   /** Production supplies the tool-free upgrade agent; tests inject a fake.
@@ -515,6 +517,14 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
       }
       const targetRepo = parsed.positionals[0] ?? deps.workspacePath
       const noCommit = parsed.flags.has('no-commit')
+      const compatibilityWarnings = new Set<string>()
+      const upgradeStderr = (line: string): void => {
+        if (line.startsWith('warning:')) {
+          if (compatibilityWarnings.has(line)) return
+          compatibilityWarnings.add(line)
+        }
+        stderr(line)
+      }
       const handoff = deps.processEnv?.[SELF_UPDATE_HANDOFF_ENV] === '1'
       let commitContext: UpgradeCommitContext | undefined
       if (!noCommit) {
@@ -543,9 +553,10 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         if (!parsed.flags.has('no-self-update') && !handoff) {
           const update = await (deps.selfUpdate ?? selfUpdate)({
             targetRepo,
+            compatibilityFetch: deps.compatibilityFetch,
             stdout,
-            stderr,
-            env: deps.processEnv ?? {},
+            stderr: upgradeStderr,
+            env: deps.processEnv ?? process.env,
             noCommit: noCommit || commitContext === undefined,
             ...(commitContext === undefined
               ? {}
@@ -559,6 +570,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           if (update.kind === 'handoff') return update.exitCode
           if (update.kind === 'failed') return 1
         }
+        await checkUpgradeCompatibility({
+          targetRepo,
+          distRoot: deps.distributionRoot,
+          env: deps.processEnv,
+          stderr: upgradeStderr,
+          fetch: deps.compatibilityFetch,
+        })
         const resolverFactory = deps.upgradeResolverFactory
         let resolver: ResolveConflict | undefined
         const resolveConflict: ResolveConflict | undefined =

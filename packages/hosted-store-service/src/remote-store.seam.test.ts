@@ -12,6 +12,7 @@ import { BuildScopeError } from '@defrex/autobuild/plugin-sdk'
 import {
   EventValidationError,
   AUTOBUILD_VERSION,
+  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -655,6 +656,7 @@ describe('D8 scope enforcement over the wire', () => {
         ok: true,
         autobuildVersion: AUTOBUILD_VERSION,
         protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+        supportedClientRange: supportedClientRange(),
       })
     })
   })

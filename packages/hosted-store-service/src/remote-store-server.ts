@@ -73,6 +73,8 @@ import {
 } from '@defrex/autobuild/remote-store'
 import {
   AUTOBUILD_VERSION,
+  clientIdentityError,
+  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -207,12 +209,9 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   function validateIdentity(req: Request): void {
     const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
     const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
-    if (clientAutobuild !== AUTOBUILD_VERSION || clientProtocol !== REMOTE_STORE_PROTOCOL_VERSION) {
-      throw new RequestError(
-        409,
-        'conflict',
-        `remote store version mismatch: client Autobuild ${clientAutobuild ?? '(missing)'} protocol ${clientProtocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}`,
-      )
+    const mismatch = clientIdentityError(clientAutobuild, clientProtocol)
+    if (mismatch !== undefined) {
+      throw new RequestError(409, 'conflict', mismatch)
     }
   }
 
@@ -1075,9 +1074,10 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         ok: true,
         autobuildVersion: AUTOBUILD_VERSION,
         protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+        supportedClientRange: supportedClientRange(),
       })
     }
-    if (segments[0] === 'repos' || segments[0] === 'builds' || segments[0] === 'streams') {
+    if (['repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
       validateIdentity(req)
     }
     if (segments[0] === 'streams') {
