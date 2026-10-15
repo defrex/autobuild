@@ -1,3 +1,7 @@
+import { configuredStore } from '../../cli/configured-store'
+import { projectToken } from '../../cli/project-credentials'
+import { resolveRepoOrigin } from '../../cli/repo-state'
+import { spawnExec } from '../workspace/git-worktree'
 /**
  * TicketSource factory (SPEC §3.2, §13): construct the builtin or plugin source
  * named by [tickets]. Plugin credentials, like LINEAR_API_KEY, come only from
@@ -28,7 +32,7 @@ export async function createTicketSource(
   plugins: PluginRegistry = createPluginRegistry(),
 ): Promise<TicketSource> {
   if (config.source === 'hosted') {
-    const rawUrl = env.AB_STORE?.trim()
+    const rawUrl = env.AB_STORE?.trim() || configuredStore(targetRepo)
     if (!rawUrl) {
       throw new Error(
         'AB_STORE is not set — required when [tickets].source = "hosted"; set it to the hosted service HTTP(S) URL',
@@ -43,10 +47,14 @@ export async function createTicketSource(
     if (serviceUrl.protocol !== 'http:' && serviceUrl.protocol !== 'https:') {
       throw new Error('AB_STORE must be an HTTP(S) URL when [tickets].source = "hosted"')
     }
-    const token = env.AB_TOKEN?.trim()
+    const token = projectToken(
+      rawUrl,
+      (await resolveRepoOrigin(targetRepo, spawnExec)) ?? targetRepo,
+      env,
+    )
     if (!token) {
       throw new Error(
-        'AB_TOKEN is not set — an operator-scope token is required when [tickets].source = "hosted"',
+        'No project credential; run ab connect (or set AB_TOKEN) — a project credential is required when [tickets].source = "hosted"',
       )
     }
     if (config.teamKey === undefined) {

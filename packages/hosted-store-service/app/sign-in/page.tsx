@@ -6,9 +6,9 @@ export const dynamic = 'force-dynamic'
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>
+  searchParams: Promise<{ error?: string; returnTo?: string }>
 }) {
   const safe = safeWebConfig(parseWebAuthEnv(process.env))
   const query = await searchParams
-  return <SignIn providers={safe.providers} error={query.error} />
+  return <SignIn providers={safe.providers} error={query.error} returnTo={query.returnTo} />
 }

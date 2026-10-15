@@ -5,6 +5,8 @@ import { isSessionlessInvocation, runCli } from './main'
 const COMMANDS = [
   'help',
   'init',
+  'connect',
+  'disconnect',
   'upgrade',
   'dispatch',
   'ticket',
@@ -141,6 +143,8 @@ describe('layered CLI help catalog', () => {
 
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
+      connect: ['ab connect [url]', 'approval', 'credential'],
+      disconnect: ['ab disconnect', 'Revokes', 'locally'],
       help: ['ab help <command>', 'requires no', 'AB_*'],
       init: [
         'ab init [target] [--force]',

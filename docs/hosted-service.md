@@ -53,6 +53,46 @@ configured database, then builds Next into the root `.next/`. Missing database
 configuration, incompatible schema, or a failed migration stops the build.
 Provide database access from the build environment as well as runtime.
 
+## Connect a project
+
+From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
+The CLI prints a verification URL and short code and attempts to open a browser.
+Sign in as an allowed owner, check the full repository identity and code, and
+approve or deny. Another device can open the printed URL, or visit `/connect`
+and enter the code. Approval requires the web-enabled service origin; a
+standalone machine-only listener cannot present browser consent. Requests
+expire after ten minutes. Denial and timeout leave local configuration unchanged.
+
+On approval the service registers the project and issues a project credential.
+The CLI keeps it in `$XDG_CONFIG_HOME/autobuild/credentials` (or
+`~/.config/autobuild/credentials`), keyed by normalized service and origin,
+with directory mode 0700 and file mode 0600. Credentials never belong in the
+repository. It adds the non-secret `[store] url` to `autobuild.toml` when
+absent; review and commit that change yourself. An existing different URL
+must be changed explicitly before connecting. Reconnecting replaces the saved
+credential only after approval and revokes the previous credential.
+
+All worktrees share the main checkout's configuration and the user's saved
+credential. A service manager running as that user uses the same HOME and
+XDG_CONFIG_HOME, with no AB_STORE or AB_TOKEN exports. A fresh clone with
+committed store configuration but no saved credential fails with `ab connect`
+guidance; it never silently creates local state. Run connect on each host/user.
+
+`ab connect` without a URL reports service, project, and credential status:
+accepted, rejected, missing, or unreachable. `ab disconnect` revokes the saved
+credential remotely before removing it locally, keeping the project registered,
+its data, and store configuration. A network/server failure retains the local
+entry for retry; an already revoked credential can be removed. If saving a new
+connection fails, the CLI cancels/revokes it and retains the previous entry.
+If remote cleanup cannot be confirmed, check the printed credential id with
+the owner's administrative tools before retrying.
+
+Store selection is `--store` > nonblank `AB_STORE` > `[store] url` > the
+main checkout's `.autobuild/`. `AB_TOKEN` overrides the exact service/project's
+saved credential for CI and other non-interactive hosts. A service override
+never borrows another service's credential. Build and harvest sessions keep
+their explicit scoped authority.
+
 ## Environment
 
 Set these server-side variables in every Vercel environment you deploy:

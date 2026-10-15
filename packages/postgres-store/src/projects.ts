@@ -1,5 +1,5 @@
 import { SQL } from 'bun'
-import { normalizeGitRemoteUrl } from '@defrex/autobuild/origin'
+import { normalizeConnectionRepository as normalizeProjectRepository } from '@defrex/autobuild/connection'
 import { resolvePostgresUrl, type PostgresEnv } from './env'
 import { assertSchema, PROJECT_SCHEMA_DDL } from './schema'
 
@@ -19,45 +19,7 @@ export interface ProjectRegistry extends ProjectRegistryReader {
 }
 
 /** Repository identities use the same normalization as checkout origins. */
-export function normalizeProjectRepository(raw: string): string {
-  const value = raw.trim()
-  // SSH's conventional git user is transport syntax; URL passwords and HTTPS
-  // userinfo are never part of an identity (normalization would discard them).
-  if (/[\s\\?#]/.test(value) || !value || (/^[^/]*:[^/]*@/.test(value) && !value.includes('://')))
-    throw new Error('invalid repository identity')
-  if (value.includes('://')) {
-    let input: URL
-    try {
-      input = new URL(value)
-    } catch {
-      throw new Error('invalid repository identity')
-    }
-    if (input.password || (input.username && !['ssh:', 'git+ssh:'].includes(input.protocol))) {
-      throw new Error('repository identity must not contain credentials')
-    }
-    if (input.search || input.hash) throw new Error('invalid repository identity')
-  }
-  const normalized = normalizeGitRemoteUrl(value)
-  let url: URL
-  try {
-    url = new URL(normalized)
-  } catch {
-    throw new Error('invalid repository identity')
-  }
-  if (
-    url.protocol !== 'https:' ||
-    !url.hostname ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname === '/' ||
-    /%|\\/.test(url.pathname)
-  ) {
-    throw new Error('repository identity must be a normalized HTTPS repository origin')
-  }
-  return normalized
-}
+export { normalizeConnectionRepository as normalizeProjectRepository } from '@defrex/autobuild/connection'
 
 export function legacyProjectRepositories(env: PostgresEnv): string[] {
   const raw = env.AB_WEB_REPOSITORIES?.trim()

@@ -1,3 +1,5 @@
+import { openPostgresConnectionStoreFromEnv } from '@defrex/autobuild-postgres-store/connections'
+import { createConnectionHandler } from './connections'
 import {
   openPostgresCredentialStoreFromEnv,
   type CredentialReader,
@@ -381,6 +383,7 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
 export function createHostedStoreService(options: HostedStoreServiceOptions = {}): {
   fetch(req: Request): Promise<Response>
   projects: ProjectRegistryReader
+  machineAuth: () => import('./machine-auth').MachineAuth
 } {
   const env = options.env ?? process.env
   const diagnostic = retiredTicketDiagnostic(env)
@@ -730,10 +733,28 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     return ticketHandlerPromise
   }
 
+  let connections: ReturnType<typeof openPostgresConnectionStoreFromEnv> | undefined
+  let connectionCredentials: ReturnType<typeof openPostgresCredentialStoreFromEnv> | undefined
+  const connectionHandler = createConnectionHandler({
+    store: () =>
+      (connections ??= openPostgresConnectionStoreFromEnv(env).catch((error) => {
+        connections = undefined
+        throw error
+      })),
+    credentials: () =>
+      (connectionCredentials ??= openPostgresCredentialStoreFromEnv(env).catch((error) => {
+        connectionCredentials = undefined
+        throw error
+      })),
+    machineAuth,
+    baseURL: hostedPublicOrigin(env) ?? '',
+  })
   return {
     projects,
+    machineAuth,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url)
+      if (url.pathname.startsWith('/connect/v1/')) return connectionHandler(req)
       if (req.method === 'GET' && url.pathname === '/health') {
         return Response.json({
           ok: true,

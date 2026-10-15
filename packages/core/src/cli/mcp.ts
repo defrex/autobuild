@@ -201,6 +201,11 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
   try {
     const backend = await buildMcpTicketBackend({
       ...opts,
+      env: {
+        ...opts.env,
+        AB_STORE: context.storeRef,
+        ...(context.token !== undefined ? { AB_TOKEN: context.token } : {}),
+      },
       checkout: context.checkout,
       localStateRoot: context.localStateRoot,
     })

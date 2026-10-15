@@ -2,12 +2,16 @@
 version: 1
 slug: "app-dashboard-dashboardclient-tsx"
 primary_target: "app/dashboard/DashboardClient.tsx"
-related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/layout.tsx","app/globals.css"]
+related_targets: ["app/dashboard/BuildsView.tsx","app/sign-in/SignIn.tsx","app/sign-in/page.tsx","app/connect/Connection.tsx","app/connect/page.tsx","app/layout.tsx","app/globals.css"]
 ---
 
 # Operator web app
 
 Scope: the whole operator web app (shell, Builds, sign-in). Mode: Operate.
+
+Connection consent extends the existing sign-in frame, masthead, centered card,
+buttons, notices, and fields to project authorization. Sign-in preserves the
+connection return path. This extension adds no visual rules or design decisions.
 
 Audience and job: the operator, glancing from a second monitor or a phone, sometimes with a teammate. One question: does anything need me? Signals in priority order: BLOCKED on a human, FAILED or unhealthy, PR READY or MERGED. Then act on one row, answer an escalation, or inspect a trail.
 

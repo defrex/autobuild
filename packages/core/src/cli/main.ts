@@ -1,3 +1,4 @@
+import { abConnect, abDisconnect } from './connect'
 /**
  * `ab` — the only channel between agents and the store, and the enforcement
  * point of the entire ontology (SPEC §8). This module is pure routing: every
@@ -16,7 +17,7 @@ import type { Clock } from '../store/types'
 import type { BuildStore } from '../store/types'
 import { textContent } from '../store/types'
 import type { Forge } from '../ports/types'
-import type { Exec } from '../ports/workspace/git-worktree'
+import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
 import type { IdSource } from '../ids'
 import { reduceBuild } from '../kernel/reducer'
 import { artifactDownload, artifactDownloadStream, artifactGet, artifactPut } from './artifact'
@@ -95,6 +96,8 @@ import {
  */
 export const SESSIONLESS_COMMANDS = new Set([
   'init',
+  'connect',
+  'disconnect',
   'upgrade',
   'update',
   'ticket',
@@ -445,6 +448,22 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
 
     // init and upgrade run OUTSIDE build sessions (§16.3): they operate on a
     // repo, not a build, so they route before any store/env requirement.
+    case 'connect':
+    case 'disconnect': {
+      const usage = command === 'connect' ? 'usage: ab connect [url]' : 'usage: ab disconnect'
+      const parsed = parseArgs(rest, {}, usage)
+      if (parsed.positionals.length > (command === 'connect' ? 1 : 0)) throw new Error(usage)
+      const options = {
+        cwd: deps.workspacePath,
+        env: deps.processEnv ?? process.env,
+        exec: deps.exec ?? spawnExec,
+        print: stdout,
+        ...(deps.signal ? { signal: deps.signal } : {}),
+      }
+      if (command === 'connect') await abConnect(parsed.positionals[0], options)
+      else await abDisconnect(options)
+      return 0
+    }
     case 'init': {
       const usage = 'usage: ab init [target] [--force | --validate] (§16.3)'
       const removed = [

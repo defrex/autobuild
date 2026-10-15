@@ -63,6 +63,7 @@ function escapeRegex(literal: string): string {
  * [verify]. `kind` is in both unions; one documented row satisfies it.
  */
 const TABLE_FIELDS: Record<string, string[]> = {
+  store: ['url'],
   pr: Object.keys(prSchema.shape),
   workspace: Object.keys(workspaceSchema.shape),
   // Open map: keys are user-chosen, so only the heading is required.

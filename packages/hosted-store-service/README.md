@@ -39,8 +39,9 @@ ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user ow
 ```
 
 Issue prints the secret once; list contains metadata only. Issue optionally
-accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
-`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. For administrative/non-interactive issuance, set the returned token as
+`AB_TOKEN`. Interactive project onboarding uses `ab connect <service-url>`;
+it saves the credential outside the repository and commits no secret. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
 retired: the service responds that the credential format changed and points
 to `credentials issue`. Supported old protocol shapes still work with a new
 credential; protocol compatibility does not restore retired authentication.
