@@ -74,6 +74,7 @@ describe('harvest blocker resolution', () => {
         title: 'Eight',
         body: 'body',
         state: 'Ready',
+        resolved: false,
         labels: [],
       },
       {
@@ -81,6 +82,7 @@ describe('harvest blocker resolution', () => {
         title: 'Nine',
         body: 'body',
         state: 'Done',
+        resolved: true,
         labels: [],
       },
     ])
@@ -137,6 +139,7 @@ describe('harvest blocker resolution', () => {
         title: 'Origin',
         body: 'body',
         state: 'Ready',
+        resolved: false,
         labels: [],
       },
     ])
@@ -171,6 +174,7 @@ describe('harvest blocker resolution', () => {
         title: 'Done origin',
         body: 'body',
         state: 'Done',
+        resolved: true,
         labels: [],
       },
     ])
@@ -677,6 +681,7 @@ describe('harvest deterministic scan and ledger', () => {
         title: 'Open',
         body: 'body',
         state: 'Doing',
+        resolved: false,
         labels: [],
       },
       {
@@ -684,6 +689,7 @@ describe('harvest deterministic scan and ledger', () => {
         title: 'Done',
         body: 'body',
         state: 'Done',
+        resolved: true,
         labels: [],
       },
     ])

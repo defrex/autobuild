@@ -202,7 +202,9 @@ function findCycle(
   nodes: Map<string, DependencyState>,
   explored: Set<string>,
 ): string[] | null {
-  for (const next of nodes.get(from)?.blockedBy ?? []) {
+  const node = nodes.get(from)
+  if (!node?.exists || node.resolved) return null
+  for (const next of node.blockedBy) {
     const seen = path.indexOf(next)
     if (seen !== -1) return [...path.slice(seen), next]
     if (explored.has(next)) continue
@@ -2917,7 +2919,17 @@ export class Dispatcher {
     // One dependency-node cache per tick: blockers are commonly shared across
     // the ready set, and a blocker's resolution must be re-read every tick
     // (never cached across them) so a completion lands on the next pass.
-    const nodes = new Map<string, DependencyState>()
+    const nodes = new Map<string, DependencyState>(
+      listing.tickets.map((ticket) => [
+        ticket.ref.id,
+        {
+          id: ticket.ref.id,
+          exists: true,
+          resolved: ticket.resolved,
+          blockedBy: [...(ticket.blockedBy ?? [])],
+        },
+      ]),
+    )
 
     // Finish read-only evaluation before any intake claim: a later source
     // failure must leave the entire ready set unclaimed. Publish dependency
@@ -3033,34 +3045,30 @@ export class Dispatcher {
   }
 
   /**
-   * Close `nodes` over everything reachable from `ticket`'s blockers, so the
-   * analyzer can both gate and name a cycle. Breadth-first, one port call per
-   * level, skipping ids already cached — the common case (a blocker or two,
-   * none of them blocked themselves) is a single call.
-   *
-   * INVARIANT: `nodes` contains only states actually returned by the source.
-   * The cache is shared across the tick's tickets, so a node this ticket
-   * invents is a node the *next* ticket will trust as a fact about its own
-   * blocker. Nothing is seeded here for that reason (f_8bc9ee0c); the
-   * analyzer takes the ticket's own blockers as an argument instead, and
-   * `findCycle` closes a cycle via its path rather than the map.
-   *
-   * A provider-side cycle terminates the walk: an id already in `nodes` is
-   * never re-queued, so every reachable node is fetched exactly once.
+   * Walk unresolved branches in provider order. Listing facts and dependency
+   * reads share a tick-local cache; traversal visits are local to this root.
    */
   private async loadDependencyGraph(
     ticket: Ticket,
     nodes: Map<string, DependencyState>,
     opts: TickOpts = {},
   ): Promise<boolean> {
-    let frontier = [...new Set(ticket.blockedBy ?? [])].filter((id) => !nodes.has(id))
+    const visited = new Set<string>()
+    let frontier = [...new Set(ticket.blockedBy ?? [])]
     while (frontier.length > 0) {
       if (this.outOfBudget(opts)) return false
-      const states = await this.deps.tickets.dependencyStates(frontier)
-      for (const state of states) nodes.set(state.id, state)
-      frontier = [...new Set(states.flatMap((state) => state.blockedBy))].filter(
-        (id) => !nodes.has(id),
-      )
+      const uncached = frontier.filter((id) => !nodes.has(id))
+      if (uncached.length > 0) {
+        const states = await this.deps.tickets.dependencyStates(uncached)
+        for (const state of states) nodes.set(state.id, state)
+      }
+      const next: string[] = []
+      for (const id of frontier) {
+        visited.add(id)
+        const node = nodes.get(id)
+        if (node?.exists && !node.resolved) next.push(...node.blockedBy)
+      }
+      frontier = [...new Set(next)].filter((id) => !visited.has(id))
     }
     return true
   }

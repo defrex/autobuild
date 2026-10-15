@@ -50,6 +50,7 @@ const seed = {
   title: 'Ticket',
   body: 'body\r\nwithout-final-newline',
   state: 'Backlog',
+  resolved: false,
   labels: ['autobuild'],
   blockedBy: ['AUT-2', 'AUT-404'],
 }
@@ -58,6 +59,7 @@ const blocker = {
   title: 'Done',
   body: 'done',
   state: 'Done',
+  resolved: true,
   labels: [],
 }
 

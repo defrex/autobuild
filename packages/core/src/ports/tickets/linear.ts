@@ -874,6 +874,7 @@ export class LinearTicketSource implements TicketSource {
       title: issue.title,
       body: issue.description ?? '',
       state: issue.state?.name,
+      resolved: RESOLVED_STATE_TYPES.has(issue.state?.type ?? ''),
       labels: issue.labels.nodes.map((label) => label.name),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
     }

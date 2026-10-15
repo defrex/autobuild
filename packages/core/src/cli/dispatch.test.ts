@@ -318,6 +318,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
     title,
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
+    resolved: over.resolved ?? over.state === 'Done',
     labels: over.labels ?? ['autobuild'],
     ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }

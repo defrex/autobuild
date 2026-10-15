@@ -93,6 +93,7 @@ const TICKET = ticketWireSchema.parse({
   title: 'Rate-limit auth',
   body: '# Spec\n\nToken bucket on /auth/*.',
   state: 'Ready',
+  resolved: false,
   labels: ['autobuild'],
   blockedBy: ['ENG-8'],
 })
@@ -233,6 +234,7 @@ describe('HostedTicketSource (client half)', () => {
       title: 'Rate-limit auth',
       body: '# Spec\n\nToken bucket on /auth/*.',
       state: 'Ready',
+      resolved: false,
       labels: ['autobuild'],
       blockedBy: ['ENG-8'],
     })
@@ -300,4 +302,11 @@ describe('HostedTicketSource (client half)', () => {
       'ticket service responded 504',
     )
   })
+})
+
+test('ticket wire requires a native completion boolean', () => {
+  const { resolved: _resolved, ...missing } = TICKET
+  expect(ticketWireSchema.safeParse(missing).success).toBe(false)
+  expect(ticketWireSchema.safeParse({ ...TICKET, resolved: 'false' }).success).toBe(false)
+  expect(ticketWireSchema.parse({ ...TICKET, resolved: true }).resolved).toBe(true)
 })

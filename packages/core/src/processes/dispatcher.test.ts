@@ -76,6 +76,7 @@ function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticke
     title,
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
+    resolved: over.resolved ?? over.state === 'Done',
     labels: over.labels ?? ['autobuild'],
     ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }
@@ -2218,6 +2219,106 @@ describe('Dispatcher dependency gate', () => {
     '\n',
   )
 
+  test('27-ticket milestone chain reads only the completed boundary', async () => {
+    const tickets = Array.from({ length: 27 }, (_, index) => {
+      const n = index + 1
+      return readyTicket(`T-${n}`, {
+        title: `Milestone number ${n}`,
+        state: n <= 7 ? 'Done' : 'Ready',
+        ...(n > 1 ? { blockedBy: [`T-${n - 1}`] } : {}),
+      })
+    })
+    const h = harness({ tickets, toml: CAPACITY_2 })
+    const report = await h.dispatcher.tick()
+    expect(h.tickets.dependencyQueries).toEqual([['T-7']])
+    expect(h.tickets.claims).toEqual(['T-8'])
+    expect(report.dispatched).toBe(1)
+    expect(report.dependencyBlocked).toBe(19)
+    expect(report.dependencyDiagnostics).toEqual(
+      Array.from(
+        { length: 19 },
+        (_, i) => `ticket T-${i + 9} blocked by T-${i + 8} (not complete)`,
+      ),
+    )
+  })
+
+  test('completed branches stop before missing and cycling history', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('A', { blockedBy: ['B'] }),
+        readyTicket('B', { state: 'Done', blockedBy: ['missing', 'C'] }),
+        readyTicket('C', { state: 'In Progress', blockedBy: ['C'] }),
+      ],
+      toml: CAPACITY_2,
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual([])
+    expect(h.tickets.dependencyQueries).toEqual([['B']])
+  })
+
+  test('mixed ready and non-ready cycles traverse listing facts', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('A', { blockedBy: ['B'] }),
+        readyTicket('B', { blockedBy: ['C'] }),
+        readyTicket('C', { state: 'In Progress', blockedBy: ['A'] }),
+      ],
+      toml: CAPACITY_2,
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dependencyDiagnostics).toEqual([
+      'ticket A: dependency cycle A → B → C → A',
+      'ticket B: dependency cycle B → C → A → B',
+    ])
+    expect(h.tickets.dependencyQueries).toEqual([['C']])
+  })
+
+  test('cached history cannot close a cycle through a completed node', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('C', { blockedBy: ['B'] }),
+        readyTicket('A', { blockedBy: ['C'] }),
+        readyTicket('B', { state: 'Done', blockedBy: ['C'] }),
+      ],
+      toml: CAPACITY_2,
+    })
+    const report = await h.dispatcher.tick()
+    expect(report.dependencyDiagnostics).toEqual(['ticket A blocked by C (not complete)'])
+    expect(h.tickets.dependencyQueries).toEqual([['B']])
+  })
+
+  test('active-build listing members remain dependency facts', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('A', { blockedBy: ['B'] }),
+        readyTicket('B', { title: 'Active prerequisite' }),
+      ],
+      toml: CAPACITY_2,
+    })
+    await seedBuild(h, { slug: 'active-prerequisite', ticketId: 'B' })
+    const report = await h.dispatcher.tick()
+    expect(report.dependencyDiagnostics).toEqual(['ticket A blocked by B (not complete)'])
+    expect(h.tickets.dependencyQueries).toEqual([])
+  })
+
+  test('ready listing facts refresh on the next tick', async () => {
+    const h = harness({
+      tickets: [
+        readyTicket('A', { blockedBy: ['B'] }),
+        readyTicket('B', { blockedBy: ['missing'] }),
+      ],
+      toml: CAPACITY_2,
+    })
+    expect((await h.dispatcher.tick()).dependencyBlocked).toBe(2)
+    expect(h.tickets.dependencyQueries).toEqual([['missing']])
+    await h.tickets.transition('B', 'Done')
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(1)
+    expect(report.dependencyDiagnostics).toEqual([])
+    expect(h.tickets.dependencyQueries).toEqual([['missing'], ['B']])
+  })
+
   test('an unresolved blocker: not claimed, no build, no workspace, no comment', async () => {
     const h = harness({
       tickets: [
@@ -2271,10 +2372,12 @@ describe('Dispatcher dependency gate', () => {
 
     expect((await h.dispatcher.tick()).dependencyBlocked).toBe(1)
 
+    expect(h.tickets.dependencyQueries).toEqual([['T-9']])
     // Native lifecycle only: the blocker reaches the source's done state.
     await h.tickets.transition('T-9', 'Done')
 
     const second = await h.dispatcher.tick()
+    expect(h.tickets.dependencyQueries).toEqual([['T-9'], ['T-9']])
     expect(second.dependencyBlocked).toBe(0)
     expect(second.dispatched).toBe(1)
     expect((await h.store.listBuilds()).map((b) => b.slug)).toContain('blocked-work')
@@ -2332,6 +2435,7 @@ describe('Dispatcher dependency gate', () => {
       'ticket T-1: dependency cycle T-1 → T-2 → T-1',
       'ticket T-2: dependency cycle T-2 → T-1 → T-2',
     ])
+    expect(h.tickets.dependencyQueries).toEqual([])
     expect(await h.store.listBuilds()).toEqual([])
   })
 
@@ -2469,7 +2573,8 @@ describe('Dispatcher dependency gate', () => {
 
     const report = await h.dispatcher.tick()
 
-    // T-2 is Done, so T-3 reaches claim. Every real state must be fetched.
+    expect(h.tickets.dependencyQueries).toEqual([])
+    // T-2 is Done, so T-3 reaches claim using native listing facts.
     // The source then refuses all three because claim never reopens terminal
     // work, so this dependency-cache regression creates no build.
     expect(report.dependencyDiagnostics).toEqual([])

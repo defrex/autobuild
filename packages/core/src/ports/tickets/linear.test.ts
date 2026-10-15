@@ -210,6 +210,7 @@ describe('LinearTicketSource', () => {
           title: 'Rate-limit auth',
           body: '# Spec\n\nToken bucket on /auth/*.',
           state: 'Ready',
+          resolved: false,
           labels: ['autobuild'],
         },
       ],
@@ -1686,4 +1687,29 @@ describe('Linear rate limiting', () => {
     expect(await rejectionOf(source.get('ENG-42'))).toBe(error)
     expect(calls).toBe(2)
   })
+})
+
+test('listing carries native completion without additional requests', async () => {
+  const states = [
+    { name: 'Shipped', type: 'completed' },
+    { name: 'Dropped', type: 'canceled' },
+    { name: 'Working', type: 'started' },
+    null,
+    { name: 'Unfamiliar', type: 'future-type' },
+  ]
+  const { fetchFn, calls } = fakeLinear([
+    {
+      body: { data: { issues: { nodes: states.map((state) => gqlIssue({ state })) } } },
+    },
+  ])
+  const listing = await makeSource(fetchFn).listReady({ state: 'Anything' })
+  expect(listing.tickets.map((ticket) => ticket.resolved)).toEqual([
+    true,
+    true,
+    false,
+    false,
+    false,
+  ])
+  expect(calls).toHaveLength(1)
+  expect(calls[0]?.query).toMatch(/state\s*\{\s*name\s+type\s*\}/)
 })
