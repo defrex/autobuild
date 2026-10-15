@@ -64,6 +64,7 @@ const tickCountersSchema = z.strictObject({
   /** Added in plugin/API-era 1.4; optional so historical tick facts replay. */
   creationWithheld: z.number().int().nonnegative().optional(),
   dependencyBlocked: z.number().int().nonnegative(),
+  dependencyCheckFailed: z.number().int().nonnegative().optional(),
   /** Foreign executions settled from durable facts plus provider liveness.
    * Added with durable supervision; optional so historical tick facts replay. */
   settled: z.number().int().nonnegative().optional(),
@@ -449,7 +450,29 @@ export const dispatcherSettingEventPayloadSchemas = {
   'dispatcher.auto-merge-default-set': dispatcherSetting,
 } as const
 
+const ticketSourceCondition = {
+  source: z.string().min(1),
+  operation: z.enum(['ready-scan', 'dependency-check']),
+  message: z.string().min(1),
+}
+export const ticketSourceHealthEventPayloadSchemas = {
+  'dispatcher.ticket-source-degraded': z.discriminatedUnion('cause', [
+    z.strictObject({
+      ...ticketSourceCondition,
+      cause: z.literal('rate-limited'),
+      resetAt: z.iso.datetime(),
+    }),
+    z.strictObject({ ...ticketSourceCondition, cause: z.literal('ready-scan-failed') }),
+  ]),
+  'dispatcher.ticket-source-recovered': z.strictObject({
+    source: z.string().min(1),
+    cause: z.enum(['rate-limited', 'ready-scan-failed']),
+    operation: z.enum(['ready-scan', 'dependency-check']),
+  }),
+} as const
+
 export const repositoryEventPayloadSchemas = {
+  ...ticketSourceHealthEventPayloadSchemas,
   ...harvestEventPayloadSchemas,
   ...orchestratorSandboxEventPayloadSchemas,
   ...dispatcherStatusEventPayloadSchemas,
@@ -461,11 +484,13 @@ export const REPOSITORY_EVENT_TYPES = Object.keys(
   repositoryEventPayloadSchemas,
 ) as RepositoryEventType[]
 
-/** The repository-journal attention set, followed only under `--repository`
- * by `ab watch` and scanned by the orchestrator wake pass. */
+/** Repository attention followed by `ab watch` with no slugs or explicit
+ * `--repository`, and scanned by the orchestrator wake pass. */
 export const REPOSITORY_ATTENTION_EVENTS = [
   'harvest.escalated',
   'harvest.failed',
+  'dispatcher.ticket-source-degraded',
+  'dispatcher.ticket-source-recovered',
   'dispatcher.tick-failed',
   'dispatcher.config-rejected',
   'dispatcher.harvest-runner-failed',
@@ -545,6 +570,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.config-publication-failed': ['dispatcher'],
   'dispatcher.tick-started': ['dispatcher'],
   'dispatcher.tick-completed': ['dispatcher'],
+  'dispatcher.ticket-source-degraded': ['dispatcher'],
+  'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],
   'dispatcher.runner-settled': ['dispatcher'],
   'dispatcher.harvest-runner-failed': ['dispatcher'],

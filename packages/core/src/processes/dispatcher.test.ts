@@ -2469,7 +2469,8 @@ describe('Dispatcher dependency gate', () => {
 
     const report = await h.dispatcher.tick()
 
-    expect(report.dependencyBlocked).toBe(1)
+    expect(report.dependencyBlocked).toBe(0)
+    expect(report.dependencyCheckFailed).toBe(1)
     expect(report.dependencyDiagnostics).toEqual([
       'ticket T-1: dependency check failed — provider exploded',
     ])
@@ -7595,6 +7596,112 @@ describe('provider-neutral intake rate limits', () => {
     const report = await h.dispatcher.tick()
     expect(report.dispatched).toBe(1)
     expect(report.dependencyBlocked).toBe(2)
+  })
+
+  test('dependency degradation deduplicates across restart and observation, then recovers once', async () => {
+    let mode = 'limited'
+    const store = new MemoryBuildStore()
+    const make = () =>
+      harness({
+        store,
+        tickets: [readyTicket('T-1', { blockedBy: ['T-9'] })],
+        wrapTickets: (source) => {
+          source.dependencyStates = async () => {
+            if (mode === 'limited') throw new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+            if (mode === 'broken') throw new Error('provider exploded')
+            return [{ id: 'T-9', exists: true, resolved: false, blockedBy: [] }]
+          }
+          return source
+        },
+      })
+    const first = make()
+    await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+    await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+    const restarted = make()
+    await restarted.dispatcher.observeReady()
+    await expect(restarted.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+    mode = 'broken'
+    expect((await restarted.dispatcher.tick()).dependencyCheckFailed).toBe(1)
+    const lifecycle = async () =>
+      (await store.getRepoEvents(REPO)).filter((event) =>
+        event.type.startsWith('dispatcher.ticket-source-'),
+      )
+    expect((await lifecycle()).map((event) => event.type)).toEqual([
+      'dispatcher.ticket-source-degraded',
+    ])
+    mode = 'healthy'
+    await restarted.dispatcher.tick()
+    await restarted.dispatcher.tick()
+    expect((await lifecycle()).map((event) => event.type)).toEqual([
+      'dispatcher.ticket-source-degraded',
+      'dispatcher.ticket-source-recovered',
+    ])
+    expect(restarted.tickets.claims).toEqual([])
+  })
+
+  test('a failed recovery append propagates and the next observation retries it once', async () => {
+    const backing = new MemoryBuildStore()
+    let rejectRecovery = true
+    const store = new Proxy(backing, {
+      get(target, key) {
+        if (key === 'appendRepo')
+          return async (...args: Parameters<MemoryBuildStore['appendRepo']>) => {
+            if (args[1].type === 'dispatcher.ticket-source-recovered' && rejectRecovery)
+              throw new Error('journal unavailable')
+            return target.appendRepo(...args)
+          }
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    let limited = true
+    const h = harness({
+      store,
+      wrapTickets: (source) => {
+        const original = source.listReady.bind(source)
+        source.listReady = async (criteria) => {
+          if (limited) throw new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+          return original(criteria)
+        }
+        return source
+      },
+    })
+    await expect(h.dispatcher.observeReady()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+    limited = false
+    await expect(h.dispatcher.observeReady()).rejects.toThrow('journal unavailable')
+    expect((await backing.getRepoEvents(REPO)).map((event) => event.type)).toEqual([
+      'dispatcher.ticket-source-degraded',
+    ])
+    rejectRecovery = false
+    await h.dispatcher.observeReady()
+    await h.dispatcher.observeReady()
+    expect((await backing.getRepoEvents(REPO)).map((event) => event.type)).toEqual([
+      'dispatcher.ticket-source-degraded',
+      'dispatcher.ticket-source-recovered',
+    ])
+  })
+
+  test('ordinary ready scan failure is durable and observation recovers it', async () => {
+    let broken = true
+    const h = harness({
+      wrapTickets: (source) => {
+        const original = source.listReady.bind(source)
+        source.listReady = async (criteria) => {
+          if (broken) throw new Error('source unavailable')
+          return original(criteria)
+        }
+        return source
+      },
+    })
+    await expect(h.dispatcher.observeReady()).rejects.toThrow('source unavailable')
+    await expect(h.dispatcher.observeReady()).rejects.toThrow('source unavailable')
+    broken = false
+    await h.dispatcher.observeReady()
+    await h.dispatcher.observeReady()
+    expect((await h.store.getRepoEvents(REPO)).map((event) => event.type)).toEqual([
+      'dispatcher.ticket-source-degraded',
+      'dispatcher.ticket-source-recovered',
+    ])
   })
 
   test('a preflight deadline stops graph traversal and leaves all claims for next tick', async () => {

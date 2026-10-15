@@ -35,7 +35,7 @@ records. Every record carries a `cursor`; a bounded watch ends with a trailing
 `{"cursor": …}` line. Resume with `--since <cursor>` and every event after it
 is delivered exactly once, including events that landed while nothing was
 watching. Name slugs to watch only those builds; with none, every active build
-(including ones created later) is watched. `--event <glob>` replaces the
+(including ones created later) and repository attention are watched. Named watches need `--repository` to also receive repository attention. `--event <glob>` replaces the
 default filter, `--timeout <dur>` bounds it (default 30 minutes, `0` is
 unbounded), `--count <n>` ends it after n records.
 
@@ -53,6 +53,21 @@ Run long watches and waits in whatever background or monitor facility your
 harness provides, so the session stays responsive and you are woken when they
 emit. Never block a foreground command for their whole duration.
 
+Ticket-source degradation records mean dispatch intake cannot evaluate the source;
+existing builds may still advance. Inspect `ab repository status --json` for the
+active cause, operation, message, and expected reset. Reset times are advisory;
+recovery means reads actually succeeded. Allow the existing cooldown and retry
+behavior, investigate persistent ready-scan failures or a condition still active
+after its reset estimate, and keep watching through recovery. Empty builds do
+not establish idle intake; repeatedly restarting dispatch does not clear it.
+
+Repository records have null build and state. Handle them with repository
+status rather than build commands, keep their cursor, and re-arm. A legacy
+cursor without a repository position baselines that stream at attachment and
+cannot recover its earlier interval: reconcile current repository status.
+`ab wait --for attention` remains build-only and does not replace a repository
+attention watch.
+
 ### Keep watching until the work is done
 
 Checking once is not shepherding. When you take responsibility for builds:
@@ -60,7 +75,7 @@ Checking once is not shepherding. When you take responsibility for builds:
 1. Record the set you are shepherding (`ab builds --all --json`, or the slugs
    you were given).
 2. Arm an event-only watch and keep its cursor:
-   `ab watch <slugs…> --json --since <cursor>` (omit `--since` the first
+   `ab watch --json --since <cursor>` (or named slugs with `--repository`) (omit `--since` the first
    time). Events are delivered exactly once, so a build that already finished
    is never replayed. Do not loop on `ab wait --for terminal|attention|…`:
    state conditions are satisfied at once by any build already in that state,
@@ -72,12 +87,14 @@ Checking once is not shepherding. When you take responsibility for builds:
    current position and does not emit what already happened, so a build that
    merged, or an escalation already open, before registration would otherwise
    never reach you. Run `ab build status <slug> --json` for every slug in the
-   set. Reading status after arming leaves no gap — anything earlier shows in
+   set, and `ab repository status --json` for source health, initially and after
+   every timeout or legacy-cursor attachment. Reading status after arming leaves no gap — anything earlier shows in
    the status, anything later arrives as an event. Treat a terminal status
    (merged, closed, aborted) as that build's outcome, and an open escalation
    or failed phase as attention to handle now.
 4. When a watch returns records, react: read the record, inspect the build,
-   answer or escalate, then re-arm from the last cursor. Keep your own
+   answer or escalate; for a repository record inspect repository status and act
+   on its condition without assuming a build slug. Then re-arm from the last cursor. Keep your own
    outcome table: mark a build done when you see `pr.merged`, `pr.closed`, or
    `build.aborted`, or when status shows it. A timeout (exit 3, or a watch
    that ends with only a `{"cursor": …}` line) is not completion — reconcile
