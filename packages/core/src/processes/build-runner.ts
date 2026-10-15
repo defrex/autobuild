@@ -1,3 +1,4 @@
+import { delegateCredential } from '../store/remote/credentials'
 import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
 /**
  * The build-runner process (SPEC §3.3): one per build, owns one pipeline
@@ -171,6 +172,7 @@ export interface BuildRunnerDeps {
   /** Extra AB_* the launcher wants in every session env (e.g. AB_TOKEN,
    * AB_STORE for a remote store) — D8. May override AB_STORE; never the
    * per-session identity keys (AB_BUILD/AB_PHASE/AB_SESSION). */
+  delegateCredential?: typeof delegateCredential
   sessionEnv?: Record<string, string>
   opts?: BuildRunnerOpts
 }
@@ -917,7 +919,7 @@ export class BuildRunner {
       forge: this.deps.forge,
       slug: this.deps.slug,
       workspacePath: this.deps.workspacePath,
-      storeRef: this.sessionEnvFor('finalize@1', '').AB_STORE ?? 'local',
+      storeRef: this.deps.sessionEnv?.AB_STORE ?? 'local',
       clock: this.deps.clock,
     })
   }
@@ -1429,7 +1431,7 @@ export class BuildRunner {
       const turn = await this.runBudgetedTurn(
         started.seq,
         resolved.sessionBudgetSeconds,
-        (signal) =>
+        async (signal) =>
           target.runner.start({
             skill,
             invocation: slug,
@@ -1437,7 +1439,7 @@ export class BuildRunner {
             workspacePath,
             ...(target.model !== undefined ? { model: target.model } : {}),
             ...(target.args !== undefined ? { args: target.args } : {}),
-            env: this.sessionEnvFor('finalize@1', session),
+            env: await this.sessionEnvFor('finalize@1', session),
             signal,
             ...(stream !== undefined ? { stream } : {}),
           }),
@@ -1569,7 +1571,7 @@ export class BuildRunner {
 
     let handle: AgentSessionHandle | undefined
     let failureNote: string | undefined
-    const turn = await this.runBudgetedTurn(started.seq, sessionBudgetSeconds, (signal) =>
+    const turn = await this.runBudgetedTurn(started.seq, sessionBudgetSeconds, async (signal) =>
       runner.start({
         skill,
         invocation: slug,
@@ -1577,7 +1579,7 @@ export class BuildRunner {
         workspacePath,
         ...(model !== undefined ? { model } : {}),
         ...(args !== undefined ? { args } : {}),
-        env: this.sessionEnvFor('finalize@1', session),
+        env: await this.sessionEnvFor('finalize@1', session),
         signal,
         ...(stream !== undefined ? { stream } : {}),
       }),
@@ -1953,26 +1955,29 @@ export class BuildRunner {
       let handle: AgentSessionHandle | undefined = live?.handle
       let result: AgentTurnResult | undefined
       let turnError: unknown
-      const turn = await this.runBudgetedTurn(preSeq, primary.sessionBudgetSeconds, (signal) =>
-        live !== undefined
-          ? live.runner
-              .continue(live.handle, continueMessage(spec), {
-                env: this.sessionEnvFor(spec.abPhase, session),
+      const turn = await this.runBudgetedTurn(
+        preSeq,
+        primary.sessionBudgetSeconds,
+        async (signal) =>
+          live !== undefined
+            ? live.runner
+                .continue(live.handle, continueMessage(spec), {
+                  env: await this.sessionEnvFor(spec.abPhase, session),
+                  signal,
+                  ...(stream !== undefined ? { stream } : {}),
+                })
+                .then((continued) => ({ session: live.handle, result: continued }))
+            : target.runner.start({
+                skill: spec.skill,
+                invocation: slug,
+                buildSlug: slug,
+                workspacePath,
+                ...(target.model !== undefined ? { model: target.model } : {}),
+                ...(target.args !== undefined ? { args: target.args } : {}),
+                env: await this.sessionEnvFor(spec.abPhase, session),
                 signal,
                 ...(stream !== undefined ? { stream } : {}),
-              })
-              .then((continued) => ({ session: live.handle, result: continued }))
-          : target.runner.start({
-              skill: spec.skill,
-              invocation: slug,
-              buildSlug: slug,
-              workspacePath,
-              ...(target.model !== undefined ? { model: target.model } : {}),
-              ...(target.args !== undefined ? { args: target.args } : {}),
-              env: this.sessionEnvFor(spec.abPhase, session),
-              signal,
-              ...(stream !== undefined ? { stream } : {}),
-            }),
+              }),
       )
       if (turn.settlement.kind === 'value') {
         handle = turn.settlement.value.session
@@ -2238,7 +2243,7 @@ export class BuildRunner {
     let handle: AgentSessionHandle | undefined = live?.handle
     let result: AgentTurnResult | undefined
     let turnError: unknown
-    const turn = await this.runBudgetedTurn(preSeq, sessionBudgetSeconds, (signal) => {
+    const turn = await this.runBudgetedTurn(preSeq, sessionBudgetSeconds, async (signal) => {
       if (live !== undefined) {
         // §10: the producer continues its session; the feedback message
         // points at the .ab/ inputs — `ab context` is the real carrier. The
@@ -2248,7 +2253,7 @@ export class BuildRunner {
         // 1's second terminal (§8.4 D5).
         return live.runner
           .continue(live.handle, continueMessage(spec), {
-            env: this.sessionEnvFor(spec.abPhase, session),
+            env: await this.sessionEnvFor(spec.abPhase, session),
             signal,
             ...(stream !== undefined ? { stream } : {}),
           })
@@ -2261,7 +2266,7 @@ export class BuildRunner {
         workspacePath,
         ...(model !== undefined ? { model } : {}),
         ...(args !== undefined ? { args } : {}),
-        env: this.sessionEnvFor(spec.abPhase, session),
+        env: await this.sessionEnvFor(spec.abPhase, session),
         signal,
         ...(stream !== undefined ? { stream } : {}),
       })
@@ -2606,10 +2611,20 @@ export class BuildRunner {
 
   /** D8 ambient auth: sessionEnv may override AB_STORE (remote stores) and
    * add AB_TOKEN, but never the per-session identity keys. */
-  private sessionEnvFor(abPhase: string, session: string): Record<string, string> {
+  private async sessionEnvFor(abPhase: string, session: string): Promise<Record<string, string>> {
+    const parent = this.deps.sessionEnv
+    const token =
+      parent?.AB_STORE && /^https?:/i.test(parent.AB_STORE)
+        ? await (this.deps.delegateCredential ?? delegateCredential)(
+            parent.AB_STORE,
+            parent.AB_TOKEN,
+            { kind: 'build-phase', id: this.deps.slug, session },
+          )
+        : undefined
     return {
       AB_STORE: 'local',
       ...this.deps.sessionEnv,
+      ...(token ? { AB_TOKEN: token } : {}),
       AB_BUILD: this.deps.slug,
       AB_PHASE: abPhase,
       AB_SESSION: session,

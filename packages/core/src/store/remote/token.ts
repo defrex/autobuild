@@ -1,4 +1,4 @@
-/** Signed service-internal owner delegation and explicit break-glass admin.
+/** Signed lifecycle-bound execution grants, internal owner delegation and admin.
  * Historical resource/deployment/operator scopes remain decodable for tests
  * and migration diagnostics; hosted machine gates reject those retired forms.
  * Project credentials are opaque stored secrets, not these stateless tokens.
@@ -58,7 +58,21 @@ export interface AdminTokenScope {
   ownerAdmin: { user: string }
   exp: number
 }
+export interface DelegatedTokenScope {
+  version: 2
+  delegation: {
+    repo: string
+    kind: 'build-runner' | 'build-phase' | 'harvest-runner' | 'harvest-phase'
+    id: string
+    anchor: number
+    session?: string
+    execution?: string
+    leaseHolder?: string
+  }
+}
+
 export type TokenScope =
+  | DelegatedTokenScope
   | InternalOperatorTokenScope
   | AdminTokenScope
   | LegacyBuildTokenScope
@@ -70,7 +84,27 @@ const commonScope = {
   session: z.string().min(1),
   exp: z.number().int(),
 }
+const exactIdentity = z
+  .string()
+  .min(1)
+  .refine((value) => value !== '*')
+const delegatedClaims = z
+  .strictObject({
+    repo: exactIdentity,
+    kind: z.enum(['build-runner', 'build-phase', 'harvest-runner', 'harvest-phase']),
+    id: exactIdentity,
+    anchor: z.number().int().positive(),
+    session: exactIdentity.optional(),
+    execution: exactIdentity.optional(),
+    leaseHolder: exactIdentity.optional(),
+  })
+  .refine(
+    (claims) =>
+      claims.kind.endsWith('-phase') === (claims.session !== undefined) &&
+      claims.kind.startsWith('harvest') === (claims.execution !== undefined),
+  )
 const tokenScopeSchema = z.union([
+  z.strictObject({ version: z.literal(2), delegation: delegatedClaims }),
   z.strictObject({
     version: z.literal(1),
     internalOperator: z.strictObject({ user: z.string().trim().min(1), repo: z.string().min(1) }),
@@ -103,6 +137,11 @@ export function tokenResource(scope: TokenScope): {
   kind: 'build' | 'repo' | 'session' | 'admin' | 'operator' | 'deployment'
   id: string
 } {
+  if ('delegation' in scope)
+    return {
+      kind: scope.delegation.kind.startsWith('build') ? 'build' : 'repo',
+      id: scope.delegation.kind.startsWith('build') ? scope.delegation.id : scope.delegation.repo,
+    }
   if ('ownerAdmin' in scope) return { kind: 'admin', id: '*' }
   if ('internalOperator' in scope) return { kind: 'operator', id: scope.internalOperator.user }
   if ('operator' in scope) {
@@ -128,7 +167,9 @@ export function mintToken(secret: string, scope: TokenScope): string {
 /**
  * Bad signature, malformed token, unparseable scope, or expired → null —
  * verification never explains itself to the caller (the server maps null to
- * 401). The signature compare is timing-safe via `crypto.timingSafeEqual`.
+ * 401). Version-2 grants deliberately have no fixed expiration: the service
+ * must additionally validate their registered project and durable lifecycle.
+ * The signature compare is timing-safe via `crypto.timingSafeEqual`.
  */
 export function verifyToken(secret: string, token: string, now: Date): TokenScope | null {
   const parts = token.split('.')
@@ -152,6 +193,6 @@ export function verifyToken(secret: string, token: string, now: Date): TokenScop
   }
   const scope = tokenScopeSchema.safeParse(raw)
   if (!scope.success) return null
-  if (scope.data.exp <= now.getTime()) return null
+  if ('exp' in scope.data && scope.data.exp <= now.getTime()) return null
   return scope.data
 }

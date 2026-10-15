@@ -1,3 +1,11 @@
+function scopedProvider(options: ConstructorParameters<typeof VercelSandboxProvider>[0]) {
+  const provider = new VercelSandboxProvider(options)
+  const start = provider.harvestExecution.start
+  provider.harvestExecution.start = (input, auth = { token: 'delegated-store-token' }) =>
+    start(input, auth)
+  return provider
+}
+
 import { describe, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -345,7 +353,7 @@ function harness(
     }
     throw new Error(`unexpected host command: ${cmd.join(' ')}`)
   }
-  const provider = new VercelSandboxProvider({
+  const provider = scopedProvider({
     config: {
       image: 'vercel/sandbox/universal:latest',
       vcpus: 4,
@@ -354,7 +362,7 @@ function harness(
         ? {}
         : { snapshotExpirationSeconds: options.snapshotExpirationSeconds }),
       failoverRegions: [],
-      environmentVariables: ['ANTHROPIC_API_KEY'],
+      environmentVariables: ['ANTHROPIC_API_KEY', 'AB_TOKEN'],
       provisioning: options.provisioning ?? [],
       ...(options.provisionRuntimes
         ? {
@@ -367,12 +375,14 @@ function harness(
     },
     env: {
       ANTHROPIC_API_KEY: 'runtime-secret',
+      AB_TOKEN: 'scoped-store-token',
       GITHUB_TOKEN: 'forge-secret',
       VERCEL_TOKEN: 'provider-secret',
       UNDECLARED_SECRET: 'never-copy',
     },
     storeRef: 'https://store.example.test',
     storeToken: 'scoped-store-token',
+    delegateCredential: async () => 'delegated-store-token',
     repo: '/repo',
     facade,
     exec,
@@ -1252,7 +1262,7 @@ describe('VercelSandboxProvider', () => {
         exitCode: 0,
       }
     }
-    const provider = new VercelSandboxProvider({
+    const provider = scopedProvider({
       config: {
         image: 'vercel/sandbox/universal:latest',
         vcpus: 4,
@@ -1263,6 +1273,7 @@ describe('VercelSandboxProvider', () => {
       env: { GITHUB_TOKEN: 'forge-secret' },
       storeRef: 'https://store.example.test',
       storeToken: 'scoped-store-token',
+      delegateCredential: async () => 'delegated-store-token',
       repo: '/repo',
       facade,
       exec,
@@ -1353,7 +1364,7 @@ describe('VercelSandboxProvider', () => {
     const incomplete = new FakeSandbox()
     const replacement = new FakeSandbox()
     let created = false
-    const provider = new VercelSandboxProvider({
+    const provider = scopedProvider({
       config: {
         image: 'vercel/sandbox/universal:latest',
         vcpus: 4,
@@ -1364,6 +1375,7 @@ describe('VercelSandboxProvider', () => {
       env: { GITHUB_TOKEN: 'forge-secret' },
       storeRef: 'https://store.example.test',
       storeToken: 'scoped-store-token',
+      delegateCredential: async () => 'delegated-store-token',
       repo: '/repo',
       facade: {
         get: async () => incomplete,
@@ -1614,7 +1626,10 @@ describe('VercelSandboxProvider', () => {
     expect(await handle.completion).toEqual({ exitCode: 0 })
     const env = launch.env as Record<string, string>
     expect(env.ANTHROPIC_API_KEY).toBe('runtime-secret')
-    expect(env.AB_TOKEN).toBe('scoped-store-token')
+    expect(env.AB_TOKEN).toBe('delegated-store-token')
+    expect(JSON.stringify(h.sandbox.commands)).not.toContain('scoped-store-token')
+    for (const file of h.sandbox.writes)
+      expect(Buffer.from(file.content).toString()).not.toContain('scoped-store-token')
     expect(env.GITHUB_TOKEN).toBeUndefined()
     expect(env.VERCEL_TOKEN).toBeUndefined()
     expect(env.UNDECLARED_SECRET).toBeUndefined()
@@ -2427,7 +2442,7 @@ describe('VercelSandboxProvider origin mode (no checkout)', () => {
     const throwingExec: Exec = async (cmd) => {
       throw new Error(`host exec must not run in origin mode: ${cmd.join(' ')}`)
     }
-    const provider = new VercelSandboxProvider({
+    const provider = scopedProvider({
       config: {
         image: 'vercel/sandbox/universal:latest',
         vcpus: 4,
@@ -2438,6 +2453,7 @@ describe('VercelSandboxProvider origin mode (no checkout)', () => {
       env: { GITHUB_TOKEN: 'forge-secret' },
       storeRef: 'https://store.example.test',
       storeToken: 'scoped-store-token',
+      delegateCredential: async () => 'delegated-store-token',
       repo: '/this/checkout/does/not/exist',
       facade,
       exec: throwingExec,
@@ -2584,7 +2600,7 @@ describe('VercelSandboxProvider harvestExecution', () => {
     expect(detached[0]!.cwd).toBe(VERCEL_WORKSPACE_PATH)
     const env = detached[0]!.env as Record<string, string>
     expect(env.AB_STORE).toBe('https://store.example.test')
-    expect(env.AB_TOKEN).toBe('scoped-store-token')
+    expect(env.AB_TOKEN).toBe('delegated-store-token')
     expect(env.ANTHROPIC_API_KEY).toBe('runtime-secret')
     expect(JSON.stringify(env)).not.toContain('forge-secret')
     expect(JSON.stringify(env)).not.toContain('never-copy')
@@ -3316,6 +3332,7 @@ describe('validateVercelSandbox execOrThrow failure semantics', () => {
     env: {},
     storeRef: 'https://store.example.test',
     storeToken: 'scoped-store-token',
+    delegateCredential: async () => 'delegated-store-token',
     repo: '/repo',
     baseBranch: 'main',
   }

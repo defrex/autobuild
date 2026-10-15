@@ -325,6 +325,7 @@ interface HarnessOptions {
   finalizeCommits?: string[]
   finalizeCommitParents?: Record<string, string[]>
   forge?: FakeForge
+  delegateCredential?: typeof import('../store/remote/credentials').delegateCredential
   sessionEnv?: Record<string, string>
   /** Optional nonconforming/runtime-specific seam; scripted journals remain on Harness.runner. */
   runtimeRunner?: AgentRunner
@@ -612,6 +613,7 @@ async function makeHarness(options: HarnessOptions = {}): Promise<Harness> {
     clock,
     instance: 'runner-1',
     host: 'sandbox-a',
+    ...(options.delegateCredential ? { delegateCredential: options.delegateCredential } : {}),
     ...(options.sessionEnv !== undefined ? { sessionEnv: options.sessionEnv } : {}),
     ...(options.runnerOpts !== undefined ? { opts: options.runnerOpts } : {}),
   })
@@ -1956,12 +1958,13 @@ describe('happy path (§15.6)', () => {
 
   test('sessionEnv spreads extra AB_* and may override AB_STORE, never the identity keys', async () => {
     const h = await makeHarness({
+      delegateCredential: async () => 'phase-token',
       sessionEnv: { AB_STORE: 'https://store.test', AB_TOKEN: 'tok_1', AB_SESSION: 'spoofed' },
     })
     await h.br.step() // plan
     const journal = [...h.runner.sessions.values()][0]!
     expect(journal.opts.env.AB_STORE).toBe('https://store.test')
-    expect(journal.opts.env.AB_TOKEN).toBe('tok_1')
+    expect(journal.opts.env.AB_TOKEN).toBe('phase-token')
     expect(journal.opts.env.AB_BUILD).toBe(SLUG)
     expect(journal.opts.env.AB_SESSION).not.toBe('spoofed')
   })

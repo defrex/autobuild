@@ -21,6 +21,7 @@ export function sessionEnv(
   for (const [key, value] of Object.entries(ambient)) {
     if (value !== undefined) env[key] = value
   }
+  delete env.AB_TOKEN
   Object.assign(env, scoped)
 
   const inheritedPath = env.PATH

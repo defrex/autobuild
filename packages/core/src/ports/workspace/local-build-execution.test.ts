@@ -236,3 +236,37 @@ while (Bun.file(${JSON.stringify(descendantFile)}).size === 0) await Bun.sleep(5
     }
   })
 })
+
+test('launch authority replaces the parent secret without putting it in serialized identity', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'ab-launch-authority-'))
+  try {
+    const entrypoint = join(tmp, 'record.ts')
+    const record = join(tmp, 'record.json')
+    await writeFile(
+      entrypoint,
+      `await Bun.write(process.env.RECORD!, JSON.stringify({ token: process.env.AB_TOKEN, identity: process.env.AB_BUILD_RUNNER_OPTIONS }))`,
+    )
+    const executor = new LocalBuildExecution({
+      entrypoint,
+      env: { AB_TOKEN: 'parent-project-canary', RECORD: record },
+    })
+    const input = {
+      slug: 'one',
+      storeRef: 'https://store.test',
+      instance: 'i',
+      workspaceRef: '/workspace',
+    }
+    await expect(executor.start(input)).rejects.toThrow('delegated authority')
+    const child = await executor.start(input, { token: 'scoped-runner-canary' })
+    expect((await child.completion).exitCode).toBe(0)
+    const bytes = await Bun.file(record).text()
+    expect(bytes).not.toContain('parent-project-canary')
+    expect(JSON.parse(bytes).token).toBe('scoped-runner-canary')
+    expect(JSON.parse(bytes).identity).not.toContain('canary')
+    const local = await executor.start({ ...input, storeRef: '/local-store' })
+    expect((await local.completion).exitCode).toBe(0)
+    expect(JSON.parse(await Bun.file(record).text()).token).toBeUndefined()
+  } finally {
+    await rm(tmp, { recursive: true, force: true })
+  }
+})

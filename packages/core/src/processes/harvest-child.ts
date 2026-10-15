@@ -97,6 +97,7 @@ export async function runHarvestChild(
       uuids: randomUuids(),
       clock: systemClock,
       instance: input.instance,
+      ...(input.preparedRun ? { preparedRun: input.preparedRun } : {}),
       // Adopted holder: the guest skips its own claim, heartbeats the owning
       // dispatch loop's repository lease, and never releases it.
       ...(input.leaseHolder !== undefined ? { leaseHolder: input.leaseHolder } : {}),

@@ -366,6 +366,7 @@ readyState = "ready"
       { provider: 'podman', config: {} },
       {
         ...opts,
+        env: { ...opts.env, AB_TOKEN: 'parent-project-canary' },
         storeRef: 'https://store.example.test',
         storeToken: 'scoped-token',
         runtimeReferences,
@@ -377,7 +378,9 @@ readyState = "ready"
     expect(contexts).toHaveLength(1)
     const context = contexts[0]!
     expect(context.storeRef).toBe('https://store.example.test')
-    expect(context.storeToken).toBe('scoped-token')
+    expect(context.storeToken).toBeUndefined()
+    expect(context.delegateCredential).toBeFunction()
+    expect(context.env.AB_TOKEN).toBeUndefined()
     // Seams are compared by captured reference, not toEqual: deep equality on
     // functions is brittle, and identity proves the host passes its own seam
     // through uncloned.
@@ -443,7 +446,8 @@ readyState = "ready"
     )
     expect(contexts).toHaveLength(1)
     expect(contexts[0]!.storeRef).toBe('https://store.example.test')
-    expect(contexts[0]!.storeToken).toBe('scoped-token')
+    expect(contexts[0]!.storeToken).toBeUndefined()
+    expect(contexts[0]!.delegateCredential).toBeFunction()
   })
 
   test('a plugin factory constructs the real VercelSandboxProvider from the context seams', async () => {
@@ -490,7 +494,7 @@ readyState = "ready"
               config: parsed.data as VercelSandboxConfig,
               env: ctx.env,
               storeRef: ctx.storeRef!,
-              storeToken: ctx.storeToken!,
+              delegateCredential: ctx.delegateCredential!,
               repo: resolve(ctx.repoRoot),
               runtimeReferences: ctx.runtimeReferences ?? [],
               origin: ctx.origin,
@@ -517,7 +521,8 @@ readyState = "ready"
     expect(provider.name).toBe('vercel-sandbox')
     const options = (provider as unknown as { options: VercelSandboxProviderOptions }).options
     expect(options.storeRef).toBe('https://store.example.test')
-    expect(options.storeToken).toBe('scoped-token')
+    expect(options.storeToken).toBeUndefined()
+    expect(options.delegateCredential).toBeFunction()
     expect(options.repo).toBe(resolve('./repo'))
     expect(options.runtimeReferences).toBe(runtimeReferences)
     expect(options.origin).toBe(origin)

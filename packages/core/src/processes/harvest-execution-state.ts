@@ -92,9 +92,26 @@ export function classifyHarvestOutcome(
   input: HarvestExecutionClassificationInput,
 ): HarvestRunnerResult {
   const state = reduceHarvest(events)
-  const latestRun = state.runs.at(-1)
+  const started = events.find(
+    (event) =>
+      event.type === 'harvest.execution.started' && event.seq === input.executionStartedSeq,
+  )
+  const authorization =
+    started?.type === 'harvest.execution.started'
+      ? events.find(
+          (event) =>
+            event.type === 'harvest.execution.authorized' &&
+            event.payload.execution === started.payload.execution,
+        )
+      : undefined
+  const selected =
+    authorization?.type === 'harvest.execution.authorized' ? authorization.payload : undefined
+  const latestRun = selected
+    ? state.runs.find((run) => run.run === selected.run)
+    : state.runs.at(-1)
   if (latestRun !== undefined) {
-    const launch = latestRun.startedSeq > input.executionStartedSeq ? 'started' : 'resumed'
+    const launch =
+      selected?.launch ?? (latestRun.startedSeq > input.executionStartedSeq ? 'started' : 'resumed')
     // Recency gate: a terminal outcome counts only if its fact — the run's
     // terminal fact, or for an unresolved failure the failure fact itself
     // (`failureSeq`), which also covers exhaustion via `terminalSeq` —

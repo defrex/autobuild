@@ -1,3 +1,4 @@
+import { createDelegationHandler } from './delegated-authority'
 import { randomBytes } from 'node:crypto'
 import {
   createMachineAuth,
@@ -422,18 +423,124 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   ): Promise<MachinePrincipal | null> {
     const value = await principal(req)
     if (!value) return null
-    if (value.kind === 'admin' || kind === 'admin') return value
+    if (value.kind === 'admin') return value
+    if (kind === 'admin') {
+      if (value.kind === 'delegated' && req.method !== 'GET')
+        throw new MachineAuthError(403, 'delegated credential cannot administer repositories')
+      return value
+    }
     let repo: string | undefined
     if (kind === 'repo') repo = id
     else if (kind === 'build') repo = (await store.getBuild(id))?.repo
     else repo = (await store.getSession(id))?.repo
     if (kind !== 'repo' && (repo === undefined || repo !== value.repo)) throw unavailable()
     requireProject(value, repo!)
+    if (value.kind === 'delegated' && req.method !== 'GET') {
+      const grant = value.delegation
+      if (kind === 'build') {
+        if (!grant.kind.startsWith('build') || grant.id !== id)
+          throw new MachineAuthError(403, 'write outside delegated build')
+      } else if (kind === 'repo' && grant.kind.startsWith('harvest')) {
+        await authorizeHarvestMutation(req, value)
+      } else throw new MachineAuthError(403, 'write outside delegated resource')
+    }
     return value
   }
 
-  // Machine project credentials retain runner-style actor/session authority.
-  // The phase CLI enforces ambient build/session scope on its own handle.
+  async function authorizeHarvestMutation(
+    req: Request,
+    principal: Extract<MachinePrincipal, { kind: 'delegated' }>,
+  ): Promise<void> {
+    const grant = principal.delegation
+    const path = new URL(req.url).pathname.split('/').filter(Boolean).map(decodeURIComponent)
+    const rest = path.slice(2).join('/')
+    const deny = () => {
+      throw new MachineAuthError(403, 'write outside delegated harvest run')
+    }
+    const ownsStreamLabel = (label: string) =>
+      grant.session
+        ? label === `harvest:${grant.id}:${grant.execution}:session:${grant.session}`
+        : label.startsWith(`harvest:${grant.id}:${grant.execution}:`)
+    const body = (await req.clone().json()) as Record<string, unknown>
+    if (rest === 'lease/heartbeat' || rest === 'lease/claim') {
+      if (grant.kind !== 'harvest-runner' || body.holder !== grant.leaseHolder) deny()
+      return
+    }
+    if (path[0] === 'streams') {
+      const stream = await store.getStream(path[1]!)
+      if (!stream || !ownsStreamLabel(stream.label)) deny()
+      return
+    }
+    if (rest.startsWith('streams')) {
+      // Run ownership is carried in the immutable label and checked on every addressed write.
+      if (path.length === 3) {
+        if (typeof body.label !== 'string' || !ownsStreamLabel(body.label)) deny()
+      } else {
+        const stream = await store.getStream(path[3]!)
+        if (!stream || !ownsStreamLabel(stream.label)) deny()
+      }
+      return
+    }
+    if (rest === 'artifacts') {
+      if (
+        (body.metadata as { run?: string } | undefined)?.run !== grant.id ||
+        typeof body.kind !== 'string' ||
+        !['harvest-proposals', 'harvest-review', 'harvest-report', 'harvest-transcript'].includes(
+          body.kind,
+        )
+      )
+        deny()
+      return
+    }
+    if (!['events', 'events/conditional', 'deposits'].includes(rest)) deny()
+    const event = (rest === 'events' ? body : body.event) as {
+      type?: string
+      payload?: { run?: string; session?: string }
+      actor?: unknown
+    }
+    if (
+      rest === 'events' &&
+      event?.type === 'harvest.execution.ended' &&
+      grant.kind === 'harvest-runner' &&
+      event.payload?.run === grant.id &&
+      (event.payload as { execution?: string }).execution === grant.execution
+    )
+      return
+    if (
+      !event?.type?.startsWith('harvest.') ||
+      event.payload?.run !== grant.id ||
+      [
+        'harvest.started',
+        'harvest.resumed',
+        'harvest.recovery-requested',
+        'harvest.recovery-exhausted',
+        'harvest.execution.started',
+        'harvest.execution.released',
+        'harvest.execution.authorized',
+        'harvest.execution.ended',
+      ].includes(event.type)
+    )
+      deny()
+    if (grant.session && event.payload?.session && event.payload.session !== grant.session) deny()
+    enforceVia(principal, event.actor)
+    if (rest === 'deposits') {
+      for (const artifact of body.artifacts as Array<{
+        kind: string
+        metadata?: { run?: string }
+      }>) {
+        if (
+          artifact.metadata?.run !== grant.id ||
+          !['harvest-proposals', 'harvest-review', 'harvest-report', 'harvest-transcript'].includes(
+            artifact.kind,
+          )
+        )
+          deny()
+      }
+    }
+  }
+
+  // Project credentials retain runner authority; delegated phase claims also
+  // constrain agent attribution on the wire, independently of CLI handles.
 
   /**
    * Delegated-write attribution (§15.1) on every event-bearing write, applied
@@ -449,6 +556,11 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    */
   function enforceVia(scope: MachinePrincipal | null, actor: unknown): unknown {
     if (scope === null) return actor
+    if (scope.kind === 'delegated' && scope.delegation.session) {
+      const attributed = actor as { kind?: string; session?: string }
+      if (attributed?.kind === 'agent' && attributed.session !== scope.delegation.session)
+        throw new MachineAuthError(403, 'wrong delegated session')
+    }
     const tokenVia: Via | undefined = 'via' in scope ? scope.via : undefined
     const candidate = actor as { kind?: unknown; via?: Via } | null
     if (typeof candidate !== 'object' || candidate === null || candidate.kind !== 'human') {
@@ -476,6 +588,8 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
 
   async function adminRoute(req: Request): Promise<Response> {
     const owner = await principal(req)
+    if (owner?.kind === 'delegated' && req.method !== 'GET')
+      throw new MachineAuthError(403, 'delegated credential cannot create builds')
     if (req.method === 'POST') {
       const body = await readBody(req, newBuildBodySchema)
       if (owner && owner.kind !== 'admin') {
@@ -1090,8 +1204,12 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
         supportedClientRange: supportedClientRange(),
       })
     }
-    if (['repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
+    if (['credentials', 'repos', 'builds', 'streams', 'sessions'].includes(segments[0] ?? '')) {
       validateIdentity(req)
+    }
+    if (segments.join('/') === 'credentials/delegate' && req.method === 'POST') {
+      if (!auth || !opts.secret) return fail(404, 'not-found', 'credential issuance unavailable')
+      return createDelegationHandler({ store, auth, secret: opts.secret, clock })(req)
     }
     if (segments[0] === 'streams') {
       return globalStreamRoute(req, url, segments)

@@ -999,7 +999,7 @@ AB_STORE     # store URL or local path
 AB_BUILD     # build slug
 AB_PHASE     # current phase (+ round)
 AB_SESSION   # session id
-AB_TOKEN     # opaque credential for the runner's registered project (remote store)
+AB_TOKEN     # signed credential for this exact phase session (remote store)
 ```
 
 A harvest session instead carries `AB_REPO`, `AB_HARVEST`, and an `AB_PHASE`
@@ -1008,8 +1008,11 @@ opaque: a build skill receives its slug; a harvest skill receives its run id.
 The CLI resolves identity from ambient auth. Every build process holds an
 interface-enforced build-scoped Store handle. At the phase CLI opening boundary,
 both local and remote handles are wrapped with authority over exactly
-`AB_BUILD` or `AB_REPO`. The remote handle forwards the project credential
-unchanged; the service separately enforces its project boundary. Build and
+`AB_BUILD` or `AB_REPO`. Before launch, the dispatcher exchanges its project credential with the service
+for a build or prepared harvest-execution grant. After recording a session start,
+the runner exchanges that grant for an exact phase-session grant. The remote
+handle forwards only this delegated credential; the service enforces its project,
+resource and session boundaries on the wire. Build and
 repository resources cannot cross, and naming another resource to a Store
 operation cannot widen either handle. Event-bearing writes attributed to an
 agent must name the ambient `AB_SESSION`; non-agent writes remain allowed so the
@@ -1024,7 +1027,7 @@ If any build or Harvest identity marker is present, the corresponding
 partial, empty, malformed, shared-only, or mixed identity fails before Store
 access rather than falling back to operator authority. `AB_STORE` and
 `AB_TOKEN` alone remain operator selection and credentials, not identity.
-Remote machine authority is an opaque, revocable credential for exactly one
+Dispatcher machine authority is an opaque, revocable credential for exactly one
 registered project. The service keeps only a digest of its random secret and
 credential metadata (creator, creation, last use, expiry and revocation), and
 checks both credential status and project registration on each request. It
@@ -1040,11 +1043,33 @@ break-glass admin is the sole machine cross-project exception. Internal signed
 owner delegation is short-lived, repository-bound and operator-only. The hosted
 dispatcher issues stored credentials with immutable dispatcher purpose (raw
 store and tickets only) per invocation and keeps them valid through configured
-expiry so spawned builds continue. Owner-issued project credentials attribute
-operator writes to their recorded creator. Build and phase authority narrowing
-remains interface-enforced; agents still receive the dispatcher's project
-credential pending the separate build credential work. Ticket admission uses
-the credential project. Hosted tickets, comments, blockers, creation-key
+expiry. Already issued delegated grants do not depend on that parent expiry.
+Owner-issued project credentials attribute operator writes to their recorded
+creator. Agents never receive the dispatcher's project credential. Delegated
+reads retain access to same-project repository state; build mutations target only
+that build, and harvest mutations target only the prepared run and execution,
+its artifacts and streams, with heartbeat authority for its adopted lease holder.
+Phase grants also enforce agent session attribution. They cannot create builds or
+operator sessions, administer repositories, invoke operator routes, or delegate.
+A runner can delegate only to a recorded session within its own authority.
+
+Delegated grants have no fixed wall-clock expiry. The service checks signed
+bindings against authoritative durable lifecycle facts on every request and
+fails closed if those reads fail. Active, paused and escalated builds may outlive
+a dispatcher restart or a week-long parent credential. Build termination,
+harvest execution/run termination, or the phase's own session end retires the
+corresponding grant after a 60-second evidence grace window. A durable ending
+permanently closes that grant; recovered harvest executions use fresh durable
+authorizations and fresh grants. Project removal denies all its grants immediately.
+Local-store projects require no exchange.
+
+Hosted ticket operations are gated by grant kind: build-runner and build-phase
+grants have no access; harvest-phase grants can only list-ready, get and read
+dependency-states; harvest-runner grants can also create proposals. All other
+ticket mutations require project or admin authority. Refusals name the grant
+kind and operation.
+
+Ticket admission uses the credential project. Hosted tickets, comments, blockers, creation-key
 deduplication and assets are partitioned by registered repository, never team.
 Lifecycle comes from that project's latest durable effective configuration
 (triage Backlog, claim Doing, completion Done by default; configurable

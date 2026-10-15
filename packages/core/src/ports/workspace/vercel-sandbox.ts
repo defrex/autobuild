@@ -1,3 +1,5 @@
+import { delegateCredential } from '../../store/remote/credentials'
+import type { ExecutionLaunchAuth } from './build-execution'
 import { createHash } from 'node:crypto'
 import { Sandbox, Snapshot, type NetworkPolicy, type SandboxRegion } from '@vercel/sandbox'
 import { displayName, tomlKey, type RuntimeReferenceGroup } from '../../config/roles'
@@ -638,7 +640,9 @@ function runtimeEnvironment(
   env: Record<string, string | undefined>,
 ): Record<string, string> {
   return Object.fromEntries(
-    config.environmentVariables.map((name) => [name, requireVercelEnvironmentValue(env, name)]),
+    config.environmentVariables
+      .filter((name) => name !== 'AB_TOKEN')
+      .map((name) => [name, requireVercelEnvironmentValue(env, name)]),
   )
 }
 
@@ -942,10 +946,9 @@ export async function validateVercelSandbox(
         env: Object.fromEntries([
           ['AB_STORE', options.storeRef],
           ['AB_TOKEN', options.storeToken],
-          ...config.environmentVariables.map((name) => [
-            name,
-            requireVercelEnvironmentValue(options.env, name),
-          ]),
+          ...config.environmentVariables
+            .filter((name) => name !== 'AB_TOKEN')
+            .map((name) => [name, requireVercelEnvironmentValue(options.env, name)]),
         ]),
       }),
     )
@@ -1106,10 +1109,11 @@ async function effectiveArchive(
 }
 
 export interface VercelSandboxProviderOptions {
+  delegateCredential?: typeof delegateCredential
   config: VercelSandboxConfig
   env: Record<string, string | undefined>
   storeRef: string
-  storeToken: string
+  storeToken?: string
   /** Dispatcher-local main checkout, used only for origin discovery and verification.
    * With the injected `origin`/`remoteBranchHead` seams (checkout-less origin
    * mode) it is never touched on the host. */
@@ -1188,18 +1192,21 @@ export class VercelSandboxProvider implements WorkspaceProvider {
   }
 
   constructor(private readonly options: VercelSandboxProviderOptions) {
-    if (!/^https:\/\//i.test(options.storeRef) || options.storeToken === '') {
+    if (
+      !/^https:\/\//i.test(options.storeRef) ||
+      (!options.storeToken && !options.delegateCredential)
+    ) {
       throw new Error('vercel-sandbox requires an HTTPS BuildStore and scoped AB_TOKEN authority')
     }
     this.facade = options.facade ?? createVercelSdkFacade(options.env)
     this.exec = options.exec ?? spawnExec
     this.observeWaitMs = options.observeWaitMs ?? VERCEL_OBSERVE_WAIT_MS
     this.buildExecution = {
-      start: (input) => this.start(input),
+      start: (input, auth) => this.start(input, auth),
       observe: (identity) => this.observeExecution(identity),
     }
     this.harvestExecution = {
-      start: (input) => this.startHarvestExecution(input),
+      start: (input, auth) => this.startHarvestExecution(input, auth),
       observe: (identity) => this.observeExecution(identity),
     }
     this.orchestratorSandbox = {
@@ -1244,6 +1251,11 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     revision?: string
     generation?: number
   }): Promise<WorkspaceProvisionResult> {
+    const scopedToken = await (this.options.delegateCredential ?? delegateCredential)(
+      this.options.storeRef,
+      this.options.storeToken,
+      { kind: 'build-runner', id: opts.branch.replace(/^ab\//, '') },
+    )
     const rawOrigin = await this.origin()
     const origin = cleanGithubOrigin(rawOrigin)
     const name = sandboxName(origin.url, opts.branch, opts.generation)
@@ -1385,7 +1397,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          runtimeEnvironment(this.options.config, this.options.env),
+          { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1521,7 +1533,17 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
   }
 
-  private async start(input: BuildExecutionStart): Promise<BuildExecutionHandle> {
+  private async start(
+    input: BuildExecutionStart,
+    auth?: ExecutionLaunchAuth,
+  ): Promise<BuildExecutionHandle> {
+    const scopedToken =
+      auth?.token ??
+      (await (this.options.delegateCredential ?? delegateCredential)(
+        this.options.storeRef,
+        this.options.storeToken,
+        { kind: 'build-runner', id: input.slug },
+      ))
     const ref = input.workspaceRef
     if (this.active.has(ref)) throw new Error(`sandbox ${ref} already has a live execution`)
     const sandbox = this.sessions.get(ref) ?? (await this.facade.get(ref, this.operationSignal()))
@@ -1566,21 +1588,21 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      runtimeEnvironment(this.options.config, this.options.env),
+      { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
     this.sessions.set(ref, sandbox)
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,
-      AB_TOKEN: this.options.storeToken,
+      AB_TOKEN: scopedToken,
       [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
         ...input,
         supervision: { kind: 'environment' },
       }),
     }
     for (const name of this.options.config.environmentVariables)
-      env[name] = requireVercelEnvironmentValue(this.options.env, name)
+      if (name !== 'AB_TOKEN') env[name] = requireVercelEnvironmentValue(this.options.env, name)
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [
@@ -1696,7 +1718,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
    * build execution. Provisioning reuses the module-local build chain so a
    * harvest guest is identical to a build guest; release is the provider's
    * existing reap path (stop, snapshot purge, delete). */
-  private async startHarvestExecution(input: HarvestExecutionStart): Promise<BuildExecutionHandle> {
+  private async startHarvestExecution(
+    input: HarvestExecutionStart,
+    auth?: ExecutionLaunchAuth,
+  ): Promise<BuildExecutionHandle> {
+    if (!auth) throw new Error('harvest launch requires delegated authority')
+    const scopedToken = auth.token
     const origin = cleanGithubOrigin(await this.origin())
     const name = harvestSandboxName(origin.url)
     if (this.active.has(name)) throw new Error(`sandbox ${name} already has a live execution`)
@@ -1824,7 +1851,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
         await bootstrapRuntimes(
           sandbox,
           this.options.config,
-          runtimeEnvironment(this.options.config, this.options.env),
+          { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
           currentRuntimeReferences(this.options.runtimeReferences),
           true,
         )
@@ -1861,7 +1888,7 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     await bootstrapRuntimes(
       sandbox,
       this.options.config,
-      runtimeEnvironment(this.options.config, this.options.env),
+      { ...runtimeEnvironment(this.options.config, this.options.env), AB_TOKEN: scopedToken },
       currentRuntimeReferences(this.options.runtimeReferences),
       false,
     )
@@ -1878,11 +1905,12 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     }
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,
-      AB_TOKEN: this.options.storeToken,
+      AB_TOKEN: scopedToken,
       [HARVEST_RUNNER_OPTIONS_ENV]: JSON.stringify(envelope),
     }
     for (const envName of this.options.config.environmentVariables)
-      env[envName] = requireVercelEnvironmentValue(this.options.env, envName)
+      if (envName !== 'AB_TOKEN')
+        env[envName] = requireVercelEnvironmentValue(this.options.env, envName)
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [

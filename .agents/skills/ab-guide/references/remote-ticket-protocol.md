@@ -154,3 +154,19 @@ Legacy 0.9.x and 0.10.x ticket responses omit `resolved` and `blockersResolved`
 because those clients use strict decoders without these fields. This projection
 applies to list-ready, get, and create responses. Current clients retain the
 current required resolution fields; domain and storage types are unchanged.
+
+## Delegated execution credentials
+
+Build and harvest runners exchange project authority for signed, project-bound
+execution and phase credentials through `/credentials/delegate` (see the remote
+store protocol). Build-runner and build-phase credentials cannot call any ticket
+operation. Harvest-phase credentials permit only list-ready, get and
+dependency-states. Harvest-runner credentials permit those reads plus create
+for filing proposals. Claim, comment, transition, update, add-blocker and
+remove-blocker require project or admin authority; their access is unchanged.
+Denied delegated calls return 403 with an error naming the grant kind and
+operation before body parsing or source construction. Lifecycle retirement and
+project removal are also checked before parsing or source construction.
+
+Ticket admission and assets use the authenticated project, including for
+delegated harvest grants.

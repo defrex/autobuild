@@ -160,15 +160,15 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   expect(
     requests
       .filter((entry) => entry.path !== '/health')
-      .every(
-        (entry) =>
-          entry.authorization ===
-          `Bearer ${entry.path.startsWith('/tickets/') ? ticketToken : serviceToken}`,
-      ),
+      .every((entry) => entry.authorization?.startsWith('Bearer ')),
   ).toBe(true)
   for (const journal of h.agents.sessions.values()) {
     expect(journal.opts.env.AB_STORE).toBe(serviceUrl)
-    expect(journal.opts.env.AB_TOKEN).toBe(serviceToken)
+    expect(journal.opts.env.AB_TOKEN).not.toBe(serviceToken)
+    const claims = JSON.parse(
+      Buffer.from(journal.opts.env.AB_TOKEN!.split('.')[0]!, 'base64url').toString(),
+    )
+    expect(claims.delegation.kind).toBe('build-phase')
   }
   expect(existsSync(join(h.origin, '.autobuild'))).toBe(false)
 

@@ -58,5 +58,9 @@ export {
   type SkillHandlers,
 } from '../integration/harness'
 
+// Harvest lifecycle and CLI seams for delegated-credential integration tests.
+export { HarvestRunner } from '../processes/harvest-runner'
+export { resolveHarvestCliEnv } from '../cli/env'
+export { buildHarvestContext, submitHarvestProposals, submitHarvestVerdict } from '../cli/harvest'
 export { abConnect, abDisconnect } from '../cli/connect'
 export { ProjectCredentials } from '../cli/project-credentials'

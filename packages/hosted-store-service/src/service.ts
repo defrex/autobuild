@@ -316,6 +316,8 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     return undefined
   }
 
+  if (segments.join('/') === 'credentials/delegate' && req.method === 'POST') return 'store'
+
   const root = segments[0]
   if (root !== 'builds' && root !== 'repos' && root !== 'sessions') return undefined
   if (root === 'sessions') {
@@ -417,26 +419,28 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       return (await credentialPromise).authenticate(token, now)
     },
   }
+  let delegationStore: Promise<BuildStore> | undefined
+  const authorityStore = () => {
+    if (!delegationStore) {
+      const attempt = opener(env, options.clock === undefined ? {} : { clock: options.clock })
+      delegationStore = attempt
+      void attempt.catch(() => {
+        if (delegationStore === attempt) delegationStore = undefined
+      })
+    }
+    return delegationStore
+  }
   const machineAuth = () =>
     createMachineAuth({
       secret: parseHostedStoreEnv(env).secret,
       projects,
       credentials,
+      store: authorityStore,
       ...(options.clock ? { clock: options.clock } : {}),
     })
 
   const opener = options.openStore ?? openPostgresBuildStoreFromEnv
-  let ticketStorePromise: Promise<BuildStore> | undefined
-  const openTicketStore = () => {
-    if (!ticketStorePromise) {
-      const attempt = opener(env, options.clock === undefined ? {} : { clock: options.clock })
-      ticketStorePromise = attempt
-      void attempt.catch(() => {
-        if (ticketStorePromise === attempt) ticketStorePromise = undefined
-      })
-    }
-    return ticketStorePromise
-  }
+  const openTicketStore = authorityStore
   const ticketOpener = options.openTicketDatabase ?? openPostgresTicketDatabase
   const reporter =
     options.reportInternalError ??
@@ -539,7 +543,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     if (storeHandlerPromise === undefined) {
       const attempt = (async () => {
         const config = parseHostedStoreEnv(env)
-        const store = await openTicketStore()
+        const store = await authorityStore()
         const shared = options.clock === undefined ? {} : { clock: options.clock }
         const clock = options.clock ?? systemClock
         // The hosted operator-sandbox backend (AUT-584): composed per runner
@@ -708,7 +712,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           const repo =
             context.repo !== undefined
               ? normalizeProjectRepository(context.repo)
-              : principal.kind === 'project'
+              : principal.kind === 'project' || principal.kind === 'delegated'
                 ? principal.repo
                 : undefined
           if (!repo)

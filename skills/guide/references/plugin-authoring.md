@@ -40,7 +40,7 @@ should declare an API range containing `^1.5.0`.
 
 Plugin API 1.7 extends the workspace-provider factory context with the
 host-derived seams a store-requiring remote provider needs. Workspace-provider
-factories additionally receive `storeRef` and `storeToken` (guaranteed present
+factories additionally receive `storeRef` and `delegateCredential` (guaranteed present
 when the registration declares `capabilities.storeRequirements`),
 `runtimeReferences` (the host's effective runtime routes; absent at call sites
 that reference no runtimes), and the checkout-less `origin` and
@@ -125,7 +125,7 @@ Every module must default-export one strict `AutobuildPluginManifest`:
   `[tickets]` fields, workspace providers receive `[workspace.config]`, and
   runtime and forge factories currently receive an empty `config` object.
   Workspace providers additionally receive the host-derived seams (API 1.7):
-  `storeRef` and `storeToken` — guaranteed strings when the registration
+  `storeRef` and `delegateCredential` — guaranteed URL and exchange callback when the registration
   declares `capabilities.storeRequirements` — plus `runtimeReferences`,
   `origin`, and `remoteBranchHead`. Each seam is optional and absent when the
   host call site supplies no such value; absent `origin`/`remoteBranchHead`
@@ -369,3 +369,11 @@ policy says otherwise.
 Official npm references: [`package.json` fields](https://docs.npmjs.com/cli/v11/configuring-npm/package-json),
 [`npm pack`](https://docs.npmjs.com/cli/v11/commands/npm-pack), and
 [`npm publish`](https://docs.npmjs.com/cli/v11/commands/npm-publish).
+
+Remote workspace factories must use `delegateCredential(storeRef, undefined,
+target)` to obtain per-resource grants before provisioning or launching guests.
+The callback keeps parent authority in host composition. `storeToken` is retired
+and is never supplied; factory environments also exclude `AB_TOKEN`. Launch
+credentials travel through the separate transient execution-auth argument, never
+through serialized execution identity. Existing plugins that forwarded
+`storeToken` must migrate to this callback and fail closed if it is unavailable.

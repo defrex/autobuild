@@ -155,6 +155,16 @@ export const harvestEventPayloadSchemas = {
    * command supervising the guest runner. Written as soon as the launch
    * succeeds so a later process can re-observe the execution without
    * process memory. */
+  'harvest.execution.authorized': z.strictObject({
+    execution: z.string().min(1),
+    run: z.string().min(1),
+    launch: z.enum(['started', 'resumed']),
+    leaseHolder: z.string().min(1),
+  }),
+  'harvest.execution.ended': z.strictObject({
+    execution: z.string().min(1),
+    run: z.string().min(1),
+  }),
   'harvest.execution.started': z.strictObject({
     execution: z.string().min(1),
     provider: z.string().min(1),
@@ -558,6 +568,8 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'harvest.recovery-requested': ['kernel'],
   'harvest.recovery-exhausted': ['kernel'],
   'harvest.started': ['dispatcher', 'kernel'],
+  'harvest.execution.authorized': ['dispatcher'],
+  'harvest.execution.ended': ['dispatcher'],
   'harvest.execution.started': ['dispatcher'],
   'harvest.execution.released': ['dispatcher'],
   'harvest.step.started': ['kernel'],

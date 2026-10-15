@@ -872,8 +872,76 @@ credentials also use their recorded creator for operator writes. Dispatcher
 credentials have an immutable server-side purpose: raw store and tickets only,
 never human operator controls. The hosted dispatcher issues one per project
 invocation, expiring at its configured TTL, and does not revoke at tick return
-because launched builds may still need it. Shared content-addressed blobs
+for dispatcher plumbing. Spawned builds receive independent delegated grants. Shared content-addressed blobs
 remain deduplicated; this is resource authorization, not blob partitioning.
+
+
+### Delegated build and harvest credentials
+
+`POST /credentials/delegate` uses the standard identity headers and Bearer
+machine authentication. Its strict target is one of:
+
+- `{kind: "build-runner", id}` for an existing build;
+- `{kind: "build-phase", id, session}` after its `session.started` fact;
+- `{kind: "harvest-runner", repo, id, execution, leaseHolder}` after trusted
+  preparation has atomically claimed the scan and recorded
+  `harvest.execution.authorized` for that run/execution and adopted holder;
+- `{kind: "harvest-phase", repo, id, session}` from its runner, after the
+  matching `harvest.session.started` fact.
+
+The response is `{token}` only. Project credentials can issue only within their
+registered project. A runner grant may issue only an exact phase grant within
+its own lifecycle binding; phase grants cannot delegate. Unknown targets are
+refused. Tokens and parent secrets never become artifacts, launch envelopes or
+execution facts. Local-store execution requires no exchange; remote execution
+fails closed when issuance fails.
+
+The signed strict shape is `{version: 2, delegation: {repo, kind, id, anchor,
+session?, execution?, leaseHolder?}}`. `anchor` is the authoritative event
+sequence; harvest grants additionally bind the authorized execution. Session
+claims exist only on phase grants. No fixed `exp` applies to this shape:
+signature/schema verification precedes registered-project and lifecycle checks
+on every request, with no authorization cache. Failure to read lifecycle state
+fails closed. Parent credential expiry does not expire an already-issued grant.
+Project removal refuses all its grants immediately.
+
+Build grants live until 60 seconds after durable build termination. Phase grants
+also retire 60 seconds after their own session ends, whichever comes first.
+Harvest grants retire 60 seconds after their run stops or their authorized
+execution ends/releases; harvest phases additionally retire on session end.
+The boundary is exclusive: at `end + 60_000ms` the credential is refused. This
+window permits final transcripts, diagnostics, deposits and stream closure.
+Pause/escalation of a build and lease expiry do not end authority. Active grants
+survive hours-long turns, parent expiry and dispatcher/service reconstruction.
+A durable ending never resurrects: recovered harvest work gets a new
+`harvest.execution.authorized` identity and token.
+
+Delegated same-project reads remain available, including journals, artifacts,
+digests, bounded state, pinned assets and collections. Writes by a build grant
+are confined to its build's events/deposits/artifacts, snapshots, leases and
+streams. Phase grants also reject agent actors naming another session, while
+preserving the CLI's trusted kernel terminals. Delegated credentials cannot
+create builds/operator sessions, change ticket assets or repository controls,
+or invoke operator APIs. Harvest writes require the exact run in event payloads
+and artifact metadata; artifacts use the harvest kinds. Every artifact in an
+atomic deposit is checked before writing. Harvest streams have an immutable
+`harvest:<run>:<execution>:` label namespace. Addressed streams resolve their actual owner;
+a guessed ID cannot bypass the boundary. Only the runner can heartbeat or re-acquire its exact
+adopted repository lease holder; another current holder still fences it. Recovery acknowledgements remain dispatcher-side.
+
+Hosted ticket access is gated by grant kind. Build-runner and build-phase grants
+cannot call ticket routes. Harvest-phase grants may call only list-ready, get
+and dependency-states; harvest-runner grants may additionally create proposals.
+Other ticket mutations require project or admin authority. A denied operation
+returns 403 naming the grant kind and operation before parsing or source construction.
+Ticket admission and repository-keyed assets use the authenticated project;
+delegated harvest grants retain that same project boundary.
+
+Workspace plugin factories receive a host-only `delegateCredential` callback
+instead of a project token; their environment excludes `AB_TOKEN`. Provisioning
+and launch must obtain per-resource authority before running guest code and pass
+launch tokens separately from durable execution identity. Remote providers must
+not serialize parent credentials or fall back to forwarding them.
 
 ## 8. Atomic deposits
 

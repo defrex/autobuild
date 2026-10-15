@@ -1,3 +1,5 @@
+import { RemoteBuildStore } from '../store/remote/client'
+import { delegateCredential } from '../store/remote/credentials'
 import { isRemoteStoreRef } from './repo-state'
 import { projectToken } from './project-credentials'
 import { settleSummaryRequests } from './pr-summary-publication'
@@ -203,7 +205,7 @@ export function slugNamingPrompt(spec: string): string {
 function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const defined: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined) defined[key] = value
+    if (value !== undefined && key !== 'AB_TOKEN') defined[key] = value
   }
   return defined
 }
@@ -255,6 +257,7 @@ interface ResumePrompt {
 /** The real adapters the loop drives — resolved by `wire` (default: the
  * production ports; tests inject fakes). */
 export interface DispatchWiring {
+  credentialIssuer?: typeof delegateCredential
   store: BuildStore
   tickets: TicketSource
   forge: Forge
@@ -273,7 +276,7 @@ export interface DispatchWiring {
    * same store as `store`, so an agent's `ab` commands write where the
    * dispatcher reads. */
   storeRef: string
-  /** Scoped token for a remote store (D8, `AB_TOKEN`); passed to sessions. */
+  /** Private parent authority for remote exchange; never passed to execution. */
   token?: string
   ids: IdSource
   uuids: UuidSource
@@ -2222,7 +2225,7 @@ class DispatchLoop {
     }
 
     const { store, tickets, runtimes, ids, uuids, clock, storeRef, token } = this.wiring
-    const runner = new HarvestRunner({
+    const harvestDeps = {
       store,
       tickets,
       config: this.currentConfig().config,
@@ -2237,16 +2240,66 @@ class DispatchLoop {
       ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
       sessionEnv: {
         AB_STORE: storeRef,
-        ...(token !== undefined ? { AB_TOKEN: token } : {}),
       },
       opts: {
         maxRecoveryAttempts: this.maxHarvestRecoveryAttempts,
       },
-    })
+    }
 
     let tracked: Promise<void>
-    tracked = runner
-      .run()
+    tracked = (async () => {
+      if (!/^https?:/i.test(storeRef)) return new HarvestRunner(harvestDeps).run()
+      const prepared = await new HarvestRunner(harvestDeps).run(true)
+      if (prepared.outcome !== 'prepared') return prepared
+      await this.repoView.appendRepo(this.repoIdentity, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.authorized',
+        payload: {
+          execution: harvestDeps.instance,
+          run: prepared.run,
+          launch: prepared.launch,
+          leaseHolder: this.repoLeaseHolder ?? harvestDeps.instance,
+        },
+      })
+      const scoped = await (this.wiring.credentialIssuer ?? delegateCredential)(storeRef, token, {
+        kind: 'harvest-runner',
+        execution: harvestDeps.instance,
+        repo: this.repoIdentity,
+        id: prepared.run,
+        leaseHolder: this.repoLeaseHolder ?? harvestDeps.instance,
+      })
+      const runnerStore = new RemoteBuildStore({ url: storeRef, token: scoped })
+      try {
+        const runnerTickets =
+          harvestDeps.config.tickets.source === 'hosted'
+            ? await createTicketSource(
+                harvestDeps.config.tickets,
+                { ...this.opts.env, AB_STORE: storeRef, AB_TOKEN: scoped },
+                this.opts.targetRepo,
+                resolveRepoStatePaths({
+                  repo: this.repoIdentity,
+                  checkout: this.opts.targetRepo,
+                  storeRef,
+                }).localStateRoot,
+                this.wiring.plugins,
+              )
+            : harvestDeps.tickets
+        return await new HarvestRunner({
+          ...harvestDeps,
+          store: runnerStore,
+          tickets: runnerTickets,
+          preparedRun: { run: prepared.run },
+          sessionEnv: { AB_STORE: storeRef, AB_TOKEN: scoped },
+        }).run()
+      } finally {
+        await runnerStore.appendRepo(this.repoIdentity, {
+          actor: DISPATCHER,
+          type: 'harvest.execution.ended',
+          payload: { execution: harvestDeps.instance, run: prepared.run },
+        })
+        await runnerStore.close()
+      }
+    })()
       .then((result) => {
         this.recordHarvestResult(result)
         if (
@@ -2290,6 +2343,24 @@ class DispatchLoop {
    * contract: provisioning takes minutes and must never stall a tick; the
    * single-flight guard covers the whole span. Every failure is contained
    * and retried on a later threshold tick. */
+  private async prepareHarvest(instance: string): Promise<HarvestRunnerResult> {
+    return new HarvestRunner({
+      store: this.wiring.store,
+      tickets: this.wiring.tickets,
+      config: this.currentConfig().config,
+      getConfig: () => this.currentConfig().config,
+      runtimes: this.wiring.runtimes,
+      repo: this.repoIdentity,
+      workspacePath: this.opts.targetRepo,
+      ids: this.wiring.ids,
+      uuids: this.wiring.uuids,
+      clock: this.wiring.clock,
+      instance,
+      ...(this.repoLeaseHolder ? { leaseHolder: this.repoLeaseHolder } : {}),
+      opts: { maxRecoveryAttempts: this.maxHarvestRecoveryAttempts },
+    }).run(true)
+  }
+
   private async launchHostedHarvest(
     harvestExecution: HarvestExecution,
     execution: string,
@@ -2340,13 +2411,44 @@ class DispatchLoop {
         if (pressure.trigger === undefined) return
       }
 
-      handle = await harvestExecution.start({
-        storeRef,
-        repo,
-        instance: execution,
-        baseBranch: this.currentConfig().config.baseBranch,
-        ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
+      const prepared = await this.prepareHarvest(execution)
+      if (prepared.outcome !== 'prepared') return
+      await this.repoView.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'harvest.execution.authorized',
+        payload: {
+          execution,
+          run: prepared.run,
+          launch: prepared.launch,
+          leaseHolder: this.repoLeaseHolder ?? execution,
+        },
       })
+      const launchAuth = /^https?:/i.test(storeRef)
+        ? {
+            token: await (this.wiring.credentialIssuer ?? delegateCredential)(
+              storeRef,
+              this.wiring.token,
+              {
+                kind: 'harvest-runner',
+                execution,
+                repo,
+                id: prepared.run,
+                leaseHolder: this.repoLeaseHolder ?? execution,
+              },
+            ),
+          }
+        : undefined
+      handle = await harvestExecution.start(
+        {
+          preparedRun: { run: prepared.run },
+          storeRef,
+          repo,
+          instance: execution,
+          baseBranch: this.currentConfig().config.baseBranch,
+          ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
+        },
+        launchAuth,
+      )
       const identity = handle.identity
       if (
         identity === undefined ||
@@ -2738,12 +2840,24 @@ class DispatchLoop {
       // reached the durable branch. Reconcile that fact before a replacement
       // runner can rerun the phase and create a non-fast-forward successor.
       await this.settlePendingPublication(slug, instance)
-      const handle = await owning.execution.start({
-        slug,
-        storeRef: this.wiring.storeRef,
-        instance,
-        workspaceRef,
-      })
+      const launchAuth = /^https?:/i.test(this.wiring.storeRef)
+        ? {
+            token: await (this.wiring.credentialIssuer ?? delegateCredential)(
+              this.wiring.storeRef,
+              this.wiring.token,
+              { kind: 'build-runner', id: slug },
+            ),
+          }
+        : undefined
+      const handle = await owning.execution.start(
+        {
+          slug,
+          storeRef: this.wiring.storeRef,
+          instance,
+          workspaceRef,
+        },
+        launchAuth,
+      )
       active.handle = handle
       const identity = handle.identity ?? {
         provider: owning.name,

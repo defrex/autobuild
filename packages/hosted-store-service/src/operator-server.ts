@@ -279,6 +279,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
   async function route(req: Request): Promise<Response> {
     identity(req)
     const scope = await auth.authenticate(req)
+    if (scope.kind === 'delegated')
+      throw new HttpError(403, 'auth', 'delegated credentials may not access operator operations')
     if (scope.kind === 'project' && scope.credential.purpose === 'dispatcher')
       throw new HttpError(403, 'auth', 'dispatcher credential may not access operator operations')
     const user = scope.user

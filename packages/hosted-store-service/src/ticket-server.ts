@@ -77,10 +77,25 @@ export function createTicketServer(options: TicketServerOptions): {
       credentials: { authenticate: async () => null },
       projects: { has: async () => false, list: async () => [] },
     })
-  async function authorize(req: Request): Promise<MachinePrincipal> {
+  async function authorize(
+    req: Request,
+    operation: HostedTicketOperation,
+  ): Promise<MachinePrincipal> {
     const principal = await auth.authenticate(req)
     requireMachineAccess(principal)
-    return principal
+    if (principal.kind !== 'delegated') return principal
+    const kind = principal.delegation.kind
+    const read =
+      operation === 'get' || operation === 'list-ready' || operation === 'dependency-states'
+    if (
+      ((kind === 'harvest-runner' || kind === 'harvest-phase') && read) ||
+      (kind === 'harvest-runner' && operation === 'create')
+    )
+      return principal
+    throw new MachineAuthError(
+      403,
+      `delegated ${kind} credential cannot perform ticket operation ${operation}`,
+    )
   }
 
   async function body(req: Request): Promise<unknown> {
@@ -192,11 +207,11 @@ export function createTicketServer(options: TicketServerOptions): {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
         }
         identify(req)
-        const principal = await authorize(req)
         const operation = url.pathname.slice('/tickets/'.length) as HostedTicketOperation
         if (!Object.hasOwn(hostedTicketRequestSchemas, operation)) {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
         }
+        const principal = await authorize(req, operation)
         return await route(req, operation, principal)
       } catch (error) {
         if (error instanceof OperatorQueryError) return failure(409, 'conflict', error.message)

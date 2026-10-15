@@ -1,0 +1,764 @@
+import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { createTicketServer } from './ticket-server'
+import { expect, test } from 'bun:test'
+import { MemoryBuildStore, sampleBuildInput, sampleEventWrite } from '@defrex/autobuild/plugin-sdk'
+import { mintToken, verifyToken, type DelegatedTokenScope } from '@defrex/autobuild/remote-store'
+import { createMachineAuth } from './machine-auth'
+import { createDelegationHandler, delegationActive } from './delegated-authority'
+import { createStoreServer } from './remote-store-server'
+import { testCredentials } from './testing/credentials'
+import { testProjects } from './testing/projects'
+import {
+  AUTOBUILD_VERSION,
+  AUTOBUILD_VERSION_HEADER,
+  REMOTE_STORE_PROTOCOL_VERSION,
+  REMOTE_STORE_PROTOCOL_VERSION_HEADER,
+} from '@defrex/autobuild/remote-store'
+
+const A = 'https://github.com/acme/a'
+const B = 'https://github.com/acme/b'
+const secret = 'delegation-test'
+function request(path: string, token: string, body?: unknown, method?: string) {
+  return new Request(`http://store${path}`, {
+    method: method ?? (body === undefined ? 'GET' : 'POST'),
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+      [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+}
+async function fixture() {
+  let time = Date.parse('2026-01-01T00:00:00Z')
+  const clock = () => new Date(time)
+  const projects = testProjects([A, B])
+  const { store: credentials } = testCredentials(projects, secret, clock)
+  const project = await credentials.issue(A, 'owner', { expiresAt: new Date(time + 7 * 86400000) })
+  const store = new MemoryBuildStore({ clock })
+  for (const [slug, repo] of [
+    ['one', A],
+    ['two', A],
+    ['foreign', B],
+  ]) {
+    await store.createBuild(sampleBuildInput(slug!, { repo: repo! }))
+    await store.append(slug!, sampleEventWrite())
+  }
+  await store.ensureRepo(A)
+  await store.ensureRepo(B)
+  const auth = createMachineAuth({ secret, credentials, projects, store, clock })
+  const delegate = createDelegationHandler({ store, auth, secret, clock })
+  const issue = async (token: string, target: unknown) =>
+    delegate(request('/credentials/delegate', token, target))
+  const response = await issue(project.token, { kind: 'build-runner', id: 'one' })
+  expect(response.status).toBe(200)
+  const token = (await response.json()).token as string
+  return {
+    clock,
+    projects,
+    credentials,
+    project,
+    store,
+    auth,
+    issue,
+    token,
+    server: createStoreServer({ store, auth, clock }),
+    advance: (ms: number) => {
+      time += ms
+    },
+  }
+}
+
+test('delegation is strict, signed and has no fixed expiration; retired tokens retain expiration', () => {
+  const scope: DelegatedTokenScope = {
+    version: 2,
+    delegation: { repo: A, kind: 'build-runner', id: 'one', anchor: 1 },
+  }
+  const token = mintToken(secret, scope)
+  expect(verifyToken(secret, token, new Date('2050-01-01'))).toEqual(scope)
+  expect(verifyToken('other', token, new Date())).toBeNull()
+  for (const delegation of [
+    { ...scope.delegation, id: '*' },
+    { ...scope.delegation, session: 's' },
+    { ...scope.delegation, anchor: 0 },
+  ])
+    expect(
+      verifyToken(secret, mintToken(secret, { version: 2, delegation }), new Date()),
+    ).toBeNull()
+  expect(
+    verifyToken(secret, mintToken(secret, { build: 'one', session: 's', exp: 0 }), new Date()),
+  ).toBeNull()
+})
+
+test('raw HTTP reads stay project-wide, while every mutation targets the granted build', async () => {
+  const f = await fixture()
+  const write = sampleEventWrite()
+  for (const path of [
+    '/builds/two',
+    '/builds/two/events',
+    `/repos/${encodeURIComponent(A)}/events`,
+    '/builds',
+  ])
+    expect((await f.server.fetch(request(path, f.token))).status).toBe(200)
+  for (const [path, body, method] of [
+    ['/builds/two/events', write],
+    ['/builds/two/events/conditional', { expectedSeq: 1, event: write }],
+    ['/builds/two/deposits', { event: write, artifacts: [{ kind: 'x', contentBase64: '' }] }],
+    ['/builds/two/artifacts', { kind: 'x', contentBase64: '' }],
+    ['/builds/two/lease/claim', { holder: 'h', ttlMs: 60000 }],
+    ['/builds/two/snapshots/test', {}, 'PUT'],
+    ['/builds', sampleBuildInput('untrusted', { repo: A })],
+    [`/repos/${encodeURIComponent(A)}/sessions`, { operator: 'owner' }],
+    [`/repos/${encodeURIComponent(A)}/events`, {}],
+  ] as const)
+    expect((await f.server.fetch(request(path, f.token, body, method))).status).toBe(403)
+  expect(await f.store.listArtifacts('two')).toEqual([])
+  for (const path of ['/builds/foreign', '/builds/foreign/events'])
+    expect((await f.server.fetch(request(path, f.token))).status).toBe(404)
+  expect(
+    (await f.server.fetch(request(`/repos/${encodeURIComponent(B)}/events`, f.token))).status,
+  ).toBe(403)
+  expect((await f.server.fetch(request('/builds/one/events', f.token, write))).status).toBe(201)
+  const stream = await f.store.createStream({ kind: 'build', build: 'two' }, 'other')
+  expect(
+    (
+      await f.server.fetch(
+        request(`/streams/${stream.id}/close`, f.token, { outcome: 'completed' }),
+      )
+    ).status,
+  ).toBe(404)
+  expect((await f.issue(f.project.token, { kind: 'build-runner', id: 'foreign' })).status).toBe(403)
+  expect((await f.issue(f.token, { kind: 'build-runner', id: 'two' })).status).toBe(403)
+})
+
+test('active grants survive parent expiry and service reconstruction, then retire at exactly 60 seconds', async () => {
+  const f = await fixture()
+  f.advance(10 * 86400000)
+  expect((await f.auth.authenticate(request('/builds/one', f.token))).kind).toBe('delegated')
+  const reconstructed = createMachineAuth({
+    secret,
+    credentials: f.credentials,
+    projects: f.projects,
+    store: f.store,
+    clock: f.clock,
+  })
+  expect((await reconstructed.authenticate(request('/builds/one', f.token))).kind).toBe('delegated')
+  await f.store.append('one', { actor: { kind: 'kernel' }, type: 'build.aborted', payload: {} })
+  f.advance(59999)
+  expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(200)
+  f.advance(1)
+  expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(401)
+})
+
+test('project removal and failed state reads fail closed', async () => {
+  const f = await fixture()
+  const claims = verifyToken(secret, f.token, f.clock()) as DelegatedTokenScope
+  await expect(
+    delegationActive(
+      {
+        ...f.store,
+        getBuild: async () => {
+          throw new Error('offline')
+        },
+      } as never,
+      claims.delegation,
+      f.clock(),
+    ),
+  ).rejects.toThrow('offline')
+  await f.projects.remove(A, 'owner')
+  expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(403)
+})
+
+test('runner attenuation requires its own recorded session; phase grants cannot delegate or attribute another session', async () => {
+  const f = await fixture()
+  const target = { kind: 'build-phase', id: 'one', session: 'phase-one' }
+  expect((await f.issue(f.token, target)).status).toBe(404)
+  await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.started',
+    payload: {
+      session: 'phase-one',
+      role: 'implement',
+      runner: 'fake',
+      phase: 'implement',
+      round: 1,
+    },
+  })
+  const response = await f.issue(f.token, target)
+  expect(response.status).toBe(200)
+  const phase = (await response.json()).token
+  expect((await f.issue(phase, target)).status).toBe(403)
+  expect((await f.issue(f.token, { ...target, id: 'two' })).status).toBe(403)
+  const write = sampleEventWrite()
+  expect((await f.server.fetch(request('/builds/one/events', phase, write))).status).toBe(403)
+  expect(
+    (
+      await f.server.fetch(
+        request('/builds/one/events', phase, {
+          ...write,
+          actor: { kind: 'agent', role: 'implement', session: 'phase-one' },
+        }),
+      )
+    ).status,
+  ).toBe(201)
+  expect(
+    (
+      await f.server.fetch(
+        request('/builds/one/events', phase, {
+          actor: { kind: 'kernel' },
+          type: 'build.paused',
+          payload: {},
+        }),
+      )
+    ).status,
+  ).toBe(201)
+  f.advance(8 * 86400000)
+  expect((await f.server.fetch(request('/builds/one', phase))).status).toBe(200)
+  await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.ended',
+    payload: {
+      session: 'phase-one',
+      outcome: 'reclaimed',
+      reclaimedBy: { instance: 'replacement', resumedFromSeq: 1 },
+    },
+  })
+  f.advance(60000)
+  expect((await f.server.fetch(request('/builds/one', phase))).status).toBe(401)
+  expect((await f.server.fetch(request('/builds/one', f.token))).status).toBe(200)
+})
+
+test('harvest grant binds run artifacts, atomic deposits, streams and adopted lease holder; recovery cannot resurrect the original grant', async () => {
+  const f = await fixture()
+  await f.store.claimRepoLease(A, 'dispatcher', 60000)
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.started',
+    payload: {
+      run: 'run-one',
+      observations: [{ build: 'one', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'harvest.execution.authorized',
+    payload: {
+      execution: 'execution-one',
+      run: 'run-one',
+      launch: 'started',
+      leaseHolder: 'dispatcher',
+    },
+  })
+  const target = {
+    kind: 'harvest-runner',
+    execution: 'execution-one',
+    repo: A,
+    id: 'run-one',
+    leaseHolder: 'dispatcher',
+  }
+  const issued = await f.issue(f.project.token, target)
+  expect(issued.status).toBe(200)
+  const token = (await issued.json()).token
+  const base = `/repos/${encodeURIComponent(A)}`
+  const artifact = { kind: 'harvest-proposals', contentBase64: '', metadata: { run: 'run-one' } }
+  expect((await f.server.fetch(request(`${base}/artifacts`, token, artifact))).status).toBe(201)
+  expect(
+    (
+      await f.server.fetch(
+        request(`${base}/artifacts`, token, { ...artifact, metadata: { run: 'other' } }),
+      )
+    ).status,
+  ).toBe(403)
+  expect(
+    (await f.server.fetch(request(`${base}/lease/heartbeat`, token, { holder: 'foreign' }))).status,
+  ).toBe(403)
+  expect(
+    (await f.server.fetch(request(`${base}/lease/heartbeat`, token, { holder: 'dispatcher' })))
+      .status,
+  ).toBe(200)
+  expect(
+    (
+      await f.server.fetch(
+        request(`${base}/lease/claim`, token, { holder: 'foreign', ttlMs: 60000 }),
+      )
+    ).status,
+  ).toBe(403)
+  await f.store.releaseRepoLease(A, 'dispatcher')
+  const reclaimed = await f.server.fetch(
+    request(`${base}/lease/claim`, token, { holder: 'dispatcher', ttlMs: 60000 }),
+  )
+  expect(reclaimed.status).toBe(200)
+  expect(await reclaimed.json()).toEqual({ ok: true })
+  expect(
+    (
+      await f.server.fetch(
+        request(`${base}/events`, token, {
+          actor: { kind: 'kernel' },
+          type: 'harvest.resumed',
+          payload: {},
+        }),
+      )
+    ).status,
+  ).toBe(403)
+  const rejected = await f.server.fetch(
+    request(`${base}/deposits`, token, {
+      artifacts: [{ ...artifact, metadata: { run: 'other' } }],
+      event: {
+        actor: { kind: 'kernel' },
+        type: 'harvest.proposals.submitted',
+        payload: { run: 'run-one', round: 1, artifact: { kind: 'harvest-proposals', rev: -1 } },
+      },
+    }),
+  )
+  expect(rejected.status).toBe(403)
+  expect(
+    (
+      await f.server.fetch(
+        request(`${base}/deposits`, token, {
+          artifacts: [{ ...artifact, metadata: { run: 'other' } }],
+          event: {
+            actor: { kind: 'dispatcher' },
+            type: 'harvest.execution.ended',
+            payload: { run: 'run-one', execution: 'execution-one' },
+          },
+        }),
+      )
+    ).status,
+  ).toBe(403)
+  expect(await f.store.listRepoArtifacts(A, 'harvest-proposals')).toHaveLength(1)
+  const streamResponse = await f.server.fetch(
+    request(`${base}/streams`, token, { label: 'harvest:run-one:execution-one:session:test' }),
+  )
+  expect(streamResponse.status).toBe(201)
+  const stream = await streamResponse.json()
+  expect(
+    (
+      await f.server.fetch(
+        request(`/streams/${stream.id}/chunks`, token, { parts: [{ type: 'start' }] }),
+      )
+    ).status,
+  ).toBe(201)
+  expect(
+    (await f.server.fetch(request(`/streams/${stream.id}/close`, token, { outcome: 'completed' })))
+      .status,
+  ).toBe(200)
+  const other = await f.store.createStream({ kind: 'repo', repo: A }, 'harvest:other:session:test')
+  expect(
+    (await f.server.fetch(request(`/streams/${other.id}/close`, token, { outcome: 'completed' })))
+      .status,
+  ).toBe(404)
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.failed',
+    payload: {
+      run: 'run-one',
+      step: 'synthesize',
+      round: 1,
+      attempt: 1,
+      error: 'interrupted',
+      willRetry: false,
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'human', user: 'owner' },
+    type: 'harvest.resume-requested',
+    payload: {},
+  })
+  await f.store.appendRepo(A, { actor: { kind: 'kernel' }, type: 'harvest.resumed', payload: {} })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'harvest.execution.authorized',
+    payload: {
+      execution: 'execution-two',
+      run: 'run-one',
+      launch: 'resumed',
+      leaseHolder: 'dispatcher',
+    },
+  })
+  const fresh = await f.issue(f.project.token, { ...target, execution: 'execution-two' })
+  expect(fresh.status).toBe(200)
+  const replacement = (await fresh.json()).token
+  expect(replacement).not.toBe(token)
+  f.advance(60000)
+  expect((await f.server.fetch(request(`${base}/events`, token))).status).toBe(401)
+  expect((await f.server.fetch(request(`${base}/events`, replacement))).status).toBe(200)
+})
+
+test('ticket operation matrix enforces every delegated grant kind before parsing or source construction', async () => {
+  const f = await fixture()
+  await f.store.append('one', {
+    actor: { kind: 'kernel' },
+    type: 'session.started',
+    payload: { session: 'phase', role: 'implement', runner: 'fake', phase: 'implement', round: 1 },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.started',
+    payload: {
+      run: 'run',
+      observations: [{ build: 'one', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'harvest.execution.authorized',
+    payload: { execution: 'execution', run: 'run', launch: 'started', leaseHolder: 'dispatcher' },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.session.started',
+    payload: {
+      run: 'run',
+      session: 'harvest-phase',
+      role: 'harvest',
+      runner: 'fake',
+      args: [],
+      step: 'synthesize',
+      round: 1,
+    },
+  })
+  await f.store.claimRepoLease(A, 'dispatcher', 60000)
+  const targets = [
+    { kind: 'build-runner', id: 'one' },
+    { kind: 'build-phase', id: 'one', session: 'phase' },
+    {
+      kind: 'harvest-runner',
+      repo: A,
+      id: 'run',
+      execution: 'execution',
+      leaseHolder: 'dispatcher',
+    },
+    { kind: 'harvest-phase', repo: A, id: 'run', session: 'harvest-phase' },
+  ]
+  const inputs = {
+    'list-ready': {},
+    get: { id: 'unknown' },
+    'dependency-states': { ids: ['unknown'] },
+    create: { draft: { title: 'Proposal', body: 'Spec' } },
+    claim: { id: 'unknown' },
+    comment: { id: 'unknown', body: 'hello' },
+    transition: { id: 'unknown', state: 'Ready' },
+    update: { id: 'unknown', patch: { title: 'Updated' } },
+    'add-blocker': { id: 'unknown', blockerId: 'other' },
+    'remove-blocker': { id: 'unknown', blockerId: 'other' },
+  }
+  let harvestToken = ''
+  for (const target of targets) {
+    const issued = await f.issue(
+      target.kind === 'harvest-phase' ? harvestToken : f.project.token,
+      target,
+    )
+    expect(issued.status).toBe(200)
+    const token = (await issued.json()).token
+    if (target.kind === 'harvest-runner') harvestToken = token
+    for (const [operation, input] of Object.entries(inputs)) {
+      let opened = false
+      const server = createTicketServer({
+        secret,
+        auth: f.auth,
+        sourceFor: () => {
+          opened = true
+          return new FakeTicketSource([])
+        },
+      })
+      const allowed =
+        target.kind.startsWith('harvest') &&
+        (['list-ready', 'get', 'dependency-states'].includes(operation) ||
+          (target.kind === 'harvest-runner' && operation === 'create'))
+      const response = await server.fetch(
+        request(`/tickets/${operation}`, token, {
+          context: { teamKey: 'TEAM' },
+          input,
+        }),
+      )
+      expect(response.status).toBe(allowed ? (operation === 'create' ? 201 : 200) : 403)
+      expect(opened).toBe(allowed)
+      if (!allowed) {
+        expect((await response.json()).error).toBe(
+          `delegated ${target.kind} credential cannot perform ticket operation ${operation}`,
+        )
+        const malformed = await server.fetch(request(`/tickets/${operation}`, token, {}))
+        expect(malformed.status).toBe(403)
+      }
+    }
+  }
+})
+
+test('project and admin credentials retain every hosted ticket operation', async () => {
+  const f = await fixture()
+  const admin = mintToken(secret, {
+    version: 1,
+    ownerAdmin: { user: 'owner' },
+    exp: f.clock().getTime() + 60000,
+  })
+  for (const token of [f.project.token, admin]) {
+    const backend = new FakeTicketSource([])
+    const server = createTicketServer({ secret, auth: f.auth, sourceFor: () => backend })
+    const invoke = (operation: string, input: unknown) =>
+      server.fetch(request(`/tickets/${operation}`, token, { context: { teamKey: 'TEAM' }, input }))
+    const created = await invoke('create', { draft: { title: 'Ticket', body: 'Spec' } })
+    expect(created.status).toBe(201)
+    const {
+      ref: { id },
+    } = await created.json()
+    const blocker = await backend.create({ title: 'Blocker', body: 'Spec' })
+    for (const [operation, input] of [
+      ['list-ready', {}],
+      ['get', { id }],
+      ['dependency-states', { ids: [id] }],
+      ['claim', { id }],
+      ['comment', { id, body: 'Comment' }],
+      ['transition', { id, state: 'Ready' }],
+      ['update', { id, patch: { title: 'New' } }],
+      ['add-blocker', { id, blockerId: blocker.ref.id }],
+      ['remove-blocker', { id, blockerId: blocker.ref.id }],
+    ] as const)
+      expect((await invoke(operation, input)).status).toBe(200)
+  }
+})
+
+test('a prepared harvest reads hosted tickets and files proposals using delegated credentials end to end', async () => {
+  const { ScriptedAgentRunner, defaultTurnResult } = await import('@defrex/autobuild/plugin-sdk')
+  const { HostedTicketSource } = await import('@defrex/autobuild/hosted-tickets')
+  const { RemoteBuildStore } = await import('@defrex/autobuild/remote-store')
+  const {
+    HarvestRunner,
+    parseConfig,
+    sequentialIds,
+    randomUuids,
+    buildHarvestContext,
+    submitHarvestProposals,
+    submitHarvestVerdict,
+    resolveHarvestCliEnv,
+  } = await import('@defrex/autobuild/testing')
+  const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const f = await fixture()
+  const workspace = await mkdtemp(join(tmpdir(), 'ab-delegated-harvest-'))
+  const backend = new FakeTicketSource([])
+  const tickets = createTicketServer({ secret, auth: f.auth, sourceFor: () => backend })
+  const calls: Array<{ kind: string; operation: string }> = []
+  const http = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: async (req) => {
+      const path = new URL(req.url).pathname
+      if (path === '/credentials/delegate') {
+        return createDelegationHandler({ store: f.store, auth: f.auth, secret, clock: f.clock })(
+          req,
+        )
+      }
+      if (path.startsWith('/tickets/')) {
+        const principal = await f.auth.authenticate(req)
+        calls.push({
+          kind: principal.kind === 'delegated' ? principal.delegation.kind : principal.kind,
+          operation: path.slice('/tickets/'.length),
+        })
+        return tickets.fetch(req)
+      }
+      return f.server.fetch(req)
+    },
+  })
+  try {
+    const url = `http://127.0.0.1:${http.port}`
+    await f.store.append('one', {
+      actor: { kind: 'agent', role: 'implement', session: 'origin' },
+      type: 'observation.recorded',
+      payload: { id: 'obs', kind: 'latent-bug', summary: 'A concrete defect' },
+    })
+    await f.store.claimRepoLease(A, 'dispatcher', 60000)
+    const config = parseConfig(
+      '[tickets]\nsource = "hosted"\nteamKey = "TEAM"\nreadyState = "Ready"\n[roles.default]\nruntime = "scripted"\n[policy]\nharvestThreshold = 1',
+    )
+    const ids = sequentialIds()
+    const scripted = new ScriptedAgentRunner({
+      script: async ({ opts }) => {
+        const env = resolveHarvestCliEnv(opts.env)
+        const store = new RemoteBuildStore({ url, token: opts.env!.AB_TOKEN! })
+        const deps = { store, env, workspacePath: workspace, ids }
+        await buildHarvestContext(deps)
+        const phaseTickets = new HostedTicketSource({
+          url,
+          token: opts.env!.AB_TOKEN!,
+          teamKey: 'TEAM',
+        })
+        await phaseTickets.get('unknown')
+        if (opts.skill === 'ab-harvest') {
+          const observations = JSON.parse(
+            await readFile(join(workspace, '.ab/observations.json'), 'utf8'),
+          )
+          const file = join(workspace, 'proposals.json')
+          await writeFile(
+            file,
+            JSON.stringify({
+              proposals: [
+                {
+                  action: 'create',
+                  title: 'Fix the observed defect',
+                  whatWhy: 'The recorded defect needs correcting.',
+                  acceptanceCriteria: ['The defect no longer occurs.'],
+                  outOfScope: ['Unrelated cleanup.'],
+                  observations: observations.map(
+                    (item: { occurrence: { build: string; seq: number } }) => item.occurrence,
+                  ),
+                },
+              ],
+            }),
+          )
+          await submitHarvestProposals(deps, file)
+        } else {
+          const notes = join(workspace, 'review.md')
+          await writeFile(notes, 'Approved')
+          await submitHarvestVerdict(deps, { verdict: 'approve', notes })
+        }
+        return defaultTurnResult('done')
+      },
+    })
+    const common = {
+      config,
+      runtimes: { scripted: { runner: scripted, servesModels: [''] } },
+      repo: A,
+      workspacePath: workspace,
+      ids,
+      uuids: randomUuids(),
+      clock: f.clock,
+      instance: 'execution',
+      leaseHolder: 'dispatcher',
+      opts: { heartbeatMs: 100000 },
+    }
+    const prepared = await new HarvestRunner({ ...common, store: f.store, tickets: backend }).run(
+      true,
+    )
+    expect(prepared.outcome).toBe('prepared')
+    if (prepared.outcome !== 'prepared') throw new Error('harvest not prepared')
+    await f.store.appendRepo(A, {
+      actor: { kind: 'dispatcher' },
+      type: 'harvest.execution.authorized',
+      payload: {
+        execution: 'execution',
+        run: prepared.run,
+        launch: prepared.launch,
+        leaseHolder: 'dispatcher',
+      },
+    })
+    const issued = await f.issue(f.project.token, {
+      kind: 'harvest-runner',
+      repo: A,
+      id: prepared.run,
+      execution: 'execution',
+      leaseHolder: 'dispatcher',
+    })
+    expect(issued.status).toBe(200)
+    const token = (await issued.json()).token
+    const result = await new HarvestRunner({
+      ...common,
+      preparedRun: { run: prepared.run },
+      store: new RemoteBuildStore({ url, token }),
+      tickets: new HostedTicketSource({ url, token, teamKey: 'TEAM' }),
+      sessionEnv: { AB_STORE: url, AB_TOKEN: token },
+    }).run()
+    expect(result.outcome).toBe('completed')
+    expect(calls).toContainEqual({ kind: 'harvest-phase', operation: 'get' })
+    expect(calls).toContainEqual({ kind: 'harvest-runner', operation: 'create' })
+    expect((await backend.listReady({})).tickets).toHaveLength(1)
+  } finally {
+    http.stop(true)
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+test('composed ticket routing binds delegated harvest access to its authenticated project', async () => {
+  const { createHostedStoreService } = await import('./service')
+  const { parseConfig } = await import('@defrex/autobuild/testing')
+  const f = await fixture()
+  const config = parseConfig('[tickets]\nsource = "hosted"\nteamKey = "TEAM"\nreadyState = "Ready"')
+  const artifact = await f.store.putRepoArtifact(A, {
+    kind: 'dispatcher-effective-config',
+    content: JSON.stringify({
+      ...config,
+      verify: { steps: config.verify.steps },
+      finalize: { steps: config.finalize.steps },
+    }),
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'dispatch',
+      pid: 1,
+      effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+      roleWarnings: [],
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.started',
+    payload: {
+      run: 'run',
+      observations: [{ build: 'one', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'harvest.execution.authorized',
+    payload: { execution: 'execution', run: 'run', launch: 'started', leaseHolder: 'dispatcher' },
+  })
+  await f.store.claimRepoLease(A, 'dispatcher', 60000)
+  const opened: string[] = []
+  const service = createHostedStoreService({
+    env: {
+      AB_STORE_SECRET: secret,
+      AB_POSTGRES_URL: 'postgres://injected/test',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'unused',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    clock: f.clock,
+    openStore: async () => f.store,
+    openProjectRegistry: async () => f.projects,
+    openCredentials: async () => f.credentials,
+    sourceFor: (context) => {
+      opened.push(context.repo)
+      return new FakeTicketSource([])
+    },
+  })
+  const issued = await service.fetch(
+    request('/credentials/delegate', f.project.token, {
+      kind: 'harvest-runner',
+      repo: A,
+      id: 'run',
+      execution: 'execution',
+      leaseHolder: 'dispatcher',
+    }),
+  )
+  expect(issued.status).toBe(200)
+  const token = (await issued.json()).token
+  expect(
+    (
+      await service.fetch(
+        request('/tickets/list-ready', token, { context: { teamKey: 'FORGED' }, input: {} }),
+      )
+    ).status,
+  ).toBe(200)
+  expect(opened).toEqual([A])
+  expect(
+    (
+      await service.fetch(
+        request('/tickets/list-ready', token, {
+          context: { repo: B, teamKey: 'FORGED' },
+          input: {},
+        }),
+      )
+    ).status,
+  ).toBe(403)
+  expect((await service.fetch(request('/tickets/claim', token, {}))).status).toBe(403)
+  expect((await service.fetch(request('/tickets/list-ready', f.token, {}))).status).toBe(403)
+  expect(opened).toEqual([A])
+})

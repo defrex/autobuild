@@ -5,6 +5,7 @@
  */
 export type * from '../ports/types'
 export type * from '../ports/workspace/build-execution'
+export type * from '../ports/workspace/harvest-execution'
 export type * from '../store/types'
 export * from '../store/session-reducer'
 export type {

@@ -2,6 +2,7 @@ import type {
   BuildExecutionHandle,
   BuildExecutionIdentity,
   ExecutionObservation,
+  ExecutionLaunchAuth,
 } from './build-execution'
 
 /** Guest environment variable carrying the serialized harvest launch
@@ -23,6 +24,7 @@ export interface HarvestExecutionEnvironment {
  * advisory. Run state, config, and outcomes are obtained only through the
  * repository journal in the Store. */
 export interface HarvestExecutionStart {
+  preparedRun?: { run: string }
   storeRef: string
   /** Repository identity (normalized origin) the guest serves. */
   repo: string
@@ -101,7 +103,7 @@ export function parseHarvestRunnerLaunch(value: unknown): HarvestRunnerLaunch | 
  * observation types so supervision semantics (long-poll wait, teardown
  * outcome, provider liveness) are identical to builds. */
 export interface HarvestExecution {
-  start(input: HarvestExecutionStart): Promise<BuildExecutionHandle>
+  start(input: HarvestExecutionStart, auth?: ExecutionLaunchAuth): Promise<BuildExecutionHandle>
   /** Optional liveness observation of a previously recorded execution, from
    * provider state alone. Absent = this provider cannot observe; callers
    * supervise exactly as before ("cannot observe" never means "act"). */

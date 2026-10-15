@@ -323,6 +323,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
       env: { GITHUB_TOKEN: 'publication-secret' },
       storeRef: 'https://store.example.test',
       storeToken: 'scoped-token',
+      delegateCredential: async () => 'delegated-token',
       repo,
       facade,
       exec,
@@ -334,6 +335,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
       script: async () => defaultTurnResult('unused local runtime'),
     })
     const wiring: DispatchWiring = {
+      credentialIssuer: async () => 'delegated-token',
       store,
       tickets,
       forge,
@@ -644,6 +646,7 @@ test('a guest that exits after the launching invocation detached is settled by t
         env: { GITHUB_TOKEN: 'publication-secret' },
         storeRef: 'https://store.example.test',
         storeToken: 'scoped-token',
+        delegateCredential: async () => 'delegated-token',
         repo,
         facade,
         exec,
@@ -653,6 +656,7 @@ test('a guest that exits after the launching invocation detached is settled by t
         packageArchive: async () => new Uint8Array([1]),
       })
       return {
+        credentialIssuer: async () => 'delegated-token',
         store,
         tickets,
         forge,

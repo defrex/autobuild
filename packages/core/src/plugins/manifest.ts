@@ -1,3 +1,4 @@
+import type { delegateCredential } from '../store/remote/credentials'
 import semver from 'semver'
 import { z } from 'zod'
 import { openMap } from '../open-map'
@@ -51,9 +52,10 @@ export interface WorkspaceProviderPluginFactoryContext<Config = Record<string, u
    * `createWorkspaceProvider` refuses construction before the factory runs
    * when either store seam is missing. */
   storeRef?: string
-  /** Scoped store token (`AB_TOKEN`). Guaranteed present under
-   * `capabilities.storeRequirements` for the same reason. */
-  storeToken?: string
+  /** @deprecated Project credentials are never delivered to plugin factories. */
+  storeToken?: never
+  /** Host-only exchange; pass the returned per-resource token at launch. */
+  delegateCredential?: typeof delegateCredential
   /** Host-derived effective runtime routes (the referenced runtimes and their
    * selection provenance). Absent at call sites that reference no runtimes
    * (for example the MCP server), which never construct a workspace. */
