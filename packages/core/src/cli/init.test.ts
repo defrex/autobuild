@@ -201,7 +201,7 @@ describe('agent-driven ab init', () => {
 
     const config = parseConfig(cargoSource)
     expect(config.commands).toEqual({})
-    expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(config.verify).toEqual({ afterReconcile: true, steps: [], stepConfigs: {} })
     expect(config.finalize).toEqual({ steps: [], stepConfigs: {} })
     expect(config.roles.default).toEqual({ runtime: 'claude' })
     expect(config.policy.sessionBudgetSeconds).toBe(3600)

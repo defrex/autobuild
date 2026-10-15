@@ -822,6 +822,26 @@ export class BuildRunner {
     const events = await store.getEvents(slug)
     const decision = decideNext(events, config)
     switch (decision.kind) {
+      case 'capture-reconcile-policy':
+        await store.append(slug, {
+          actor: KERNEL,
+          type: 'verify.reconcile-policy-captured',
+          payload: {
+            reconcileSeq: decision.reconcileSeq,
+            steps: config.verify.steps.map((step) => {
+              const override = config.verify.stepConfigs[step]?.afterReconcile
+              return {
+                step,
+                enabled: override ?? config.verify.afterReconcile,
+                source:
+                  override === undefined
+                    ? 'verify.afterReconcile'
+                    : `verify.${step}.afterReconcile`,
+              }
+            }),
+          },
+        })
+        return decision
       case 'wait':
         return decision
       case 'acknowledge':
@@ -1168,6 +1188,7 @@ export class BuildRunner {
         attempt: decision.attempt,
         outcome: 'skipped',
         reason: decision.reason,
+        ...(decision.skipCause !== undefined ? { skipCause: decision.skipCause } : {}),
       },
     } satisfies EventWrite<'verify.completed'>)
   }

@@ -1359,6 +1359,7 @@ describe('step', () => {
     // checks first, at a FRESH attempt number (§15.6-A: the mainline cycle
     // already used attempt 1; reusing it would collide the reducer's
     // current-cycle projection and the D5 keys `verify:<step>` round=attempt).
+    expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
     expect(await h.br.step()).toEqual({
       kind: 'run-check',
       step: 'types',
@@ -5414,6 +5415,7 @@ describe('coalesced summary boundaries', () => {
         await h.br.attach()
         await h.br.step() // progress check
         await h.br.step() // reconcile
+        await h.br.step() // capture policy
         await h.br.step() // types
         const previous = summaryBoundary(await h.store.getEvents(SLUG))!
         if (remote) {
@@ -5487,4 +5489,87 @@ describe('coalesced summary boundaries', () => {
         }
       })
     }
+})
+
+describe('frozen post-reconcile verification policy', () => {
+  test('captures live config once, recovers crashes, skips check and agent without execution, then refreshes next reconcile', async () => {
+    const disabled = parseConfig(
+      CONFIG_TOML.replace('[verify]\n', '[verify]\nafterReconcile = false\n'),
+    )
+    const enabledConfig = parseConfig(CONFIG_TOML)
+    enabledConfig.roles.default = { runtime: 'scripted' }
+    disabled.roles.default = { runtime: 'scripted' }
+    let current = enabledConfig
+    current.roles.default = { runtime: 'scripted' }
+    const h = await makeHarness({ getConfig: () => current })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'base-2' },
+    })
+    await h.br.step() // reconcile under original config
+    current = disabled // next action sees the newly disabled policy
+    h.store.faultAfterNext('verify.reconcile-policy-captured')
+    await expect(h.br.step()).rejects.toThrow('injected crash')
+    current = enabledConfig // must not replace the durable snapshot on recovery
+    const sessions = h.runner.sessions.size
+    const execs = h.execCalls.length
+    h.store.faultAfterNext('verify.started')
+    await expect(h.br.step()).rejects.toThrow('injected crash')
+    for (const step of ['types', 'unit', 'e2e']) {
+      expect(await h.br.step()).toMatchObject({
+        kind: 'skip-verify',
+        step,
+        skipCause: 'post-reconcile-policy',
+      })
+    }
+    expect(h.runner.sessions.size).toBe(sessions)
+    expect(h.execCalls.length).toBe(execs)
+    expect(await h.br.step()).toEqual({ kind: 'wait', reason: 'awaiting-pr' })
+    const events = await h.store.getEvents(SLUG)
+    expect(ofType(events, 'verify.reconcile-policy-captured')).toHaveLength(1)
+    expect(
+      reduceBuild(events)
+        .verify.results.slice(-3)
+        .map((r) => r.outcome),
+    ).toEqual(['skipped', 'skipped', 'skipped'])
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'base-3' },
+    })
+    await h.br.step() // progress observation
+    await h.br.step() // reconcile
+    expect(await h.br.step()).toMatchObject({ kind: 'capture-reconcile-policy' })
+    expect(await h.br.step()).toMatchObject({ kind: 'run-check', step: 'types' })
+  })
+
+  test.each([true, false])('step override takes precedence over repository %s', async (enabled) => {
+    const current = parseConfig(
+      CONFIG_TOML.replace('[verify]\n', `[verify]\nafterReconcile = ${enabled}\n`).replace(
+        '[verify.types]\n',
+        `[verify.types]\nafterReconcile = ${!enabled}\nalways = true\npaths = ["missing/**"]\n`,
+      ),
+    )
+    current.roles.default = { runtime: 'scripted' }
+    const h = await makeHarness({ getConfig: () => current })
+    await seedFinalized(h.store)
+    await h.store.append(SLUG, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'base-2' },
+    })
+    await h.br.step()
+    await h.br.step()
+    expect(await h.br.step()).toMatchObject(
+      !enabled
+        ? { kind: 'run-check', step: 'types' }
+        : {
+            kind: 'skip-verify',
+            step: 'types',
+            reason: 'skipped by post-reconcile policy: verify.types.afterReconcile = false',
+          },
+    )
+  })
 })

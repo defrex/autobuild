@@ -161,6 +161,14 @@ export const WEBSITE_HERO_COLUMNS = 133
 
 export const FRAME_SPECS: readonly FrameSpec[] = [
   {
+    id: 'post-reconcile-policy',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 60,
+    detail: { slug: 'complete-dashboard-evidence', scroll: 0 },
+    requires: ['skipped by post-reconcile policy'],
+  },
+  {
     id: 'headline-happy-wide',
     scenario: 'happy',
     columns: 140,
@@ -431,6 +439,43 @@ export async function prepareScenario(): Promise<E2eHarness> {
       }
       await launched.runner.run()
     }
+
+    // Seed a completed reconcile cycle with explicit policy evidence on the open PR.
+    const slug = 'complete-dashboard-evidence'
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'reconcile.started',
+      payload: { attempt: 1, baseSha: 'capture-base' },
+    })
+    const completion = await harness.store.append(slug, {
+      actor: agentActor('reconcile', 'capture-reconcile'),
+      type: 'reconcile.completed',
+      payload: { mergeCommit: 'capture-merge', artifact: { kind: 'reconcile-notes', rev: 0 } },
+    })
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.reconcile-policy-captured',
+      payload: {
+        reconcileSeq: completion.seq,
+        steps: [{ step: 'unit', enabled: false, source: 'verify.afterReconcile' }],
+      },
+    })
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'unit', attempt: 2 },
+    })
+    await harness.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: {
+        step: 'unit',
+        attempt: 2,
+        outcome: 'skipped',
+        skipCause: 'post-reconcile-policy',
+        reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+      },
+    })
 
     // The fourth ticket's first workspace provision failed through the real
     // dispatcher, leaving a durable queued build. Once the three launched
@@ -907,7 +952,10 @@ function validateCapturedFrame(spec: FrameSpec, lines: string[] | undefined): st
           ? ['Session', spec.session.slug]
           : spec.detail === undefined
             ? ['CAP-PLAN', 'CAP-IMPLEMENT', 'CAP-COMPLETE', 'BLOCKED', 'Harvest', 'PAUSED']
-            : ['Build  plan-blocked-dashboard', 'BLOCKED']
+            : [
+                `Build  ${spec.detail.slug}`,
+                ...(spec.detail.slug === 'plan-blocked-dashboard' ? ['BLOCKED'] : []),
+              ]
   for (const required of commonEvidence) {
     if (!text.includes(required)) {
       throw new Error(

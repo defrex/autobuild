@@ -80,6 +80,18 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
+  {
+    id: 'builds-post-reconcile-policy-wide',
+    width: 1440,
+    height: 2200,
+    requires: ['skipped by post-reconcile policy'],
+  },
+  {
+    id: 'builds-post-reconcile-policy-narrow',
+    width: 390,
+    height: 2400,
+    requires: ['skipped by post-reconcile policy'],
+  },
   ...['wide', 'narrow'].flatMap((size) =>
     ['code', 'approval', 'error', 'approved', 'denied', 'expired'].map((state) => ({
       id: `connect-${state}-${size}`,
@@ -598,6 +610,15 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
         { model },
       )
     }
+    case 'builds-post-reconcile-policy-wide':
+    case 'builds-post-reconcile-policy-narrow':
+      return shell(
+        builds(models.mixed, {
+          selection: { kind: 'build', slug: 'complete-dashboard-evidence' },
+          detailOpen: true,
+        }),
+        { model: models.mixed },
+      )
     case 'builds-mixed-detail-wide':
     case 'builds-mixed-detail-narrow':
       return shell(

@@ -1425,6 +1425,34 @@ describe('f_23e76d34: the verify cycle boundary', () => {
     expect(stateOf(build, 'verify:test')).toBe('pending')
   })
 
+  test('policy skips use shared vocabulary only in their current cycle', () => {
+    const writes = [
+      ...throughCodeReview(),
+      ev('verify.completed', {
+        step: 'lint',
+        attempt: 1,
+        outcome: 'skipped',
+        reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+        skipCause: 'post-reconcile-policy',
+      }),
+    ]
+    const build = project(toLog(writes))
+    expect(stepFor(build, 'verify:lint')?.qualifier).toBe('skipped')
+    expect(stepFor(build, 'verify:lint')?.reason).toContain('skipped by post-reconcile policy')
+    expect(stateOf(build, 'verify:lint')).toBe('done')
+    const later = project(
+      toLog([
+        ...writes,
+        ev('reconcile.completed', {
+          mergeCommit: 'merge2',
+          artifact: { kind: 'reconcile-notes', rev: 1 },
+        }),
+      ]),
+    )
+    expect(stepFor(later, 'verify:lint')?.qualifier).toBeUndefined()
+    expect(stepFor(later, 'verify:lint')?.reason).toBeUndefined()
+  })
+
   test('a skipped step is satisfied but remains textually distinct from a pass', () => {
     const log = toLog([
       ...throughCodeReview(),

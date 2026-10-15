@@ -16,6 +16,7 @@ import { mkdir, mkdtemp, realpath, rename, rm, unlink, writeFile } from 'node:fs
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { configSchema } from '../config/schema'
 import { resolveCliEnv } from './env'
 import { runCli } from './main'
 import { abDispatch, type DispatchOpts, type DispatchWiring } from './dispatch'
@@ -10882,3 +10883,34 @@ test('dispatcher settles remote summary-only boundaries before launch and after 
     await fx.cleanup()
   }
 }, 30_000)
+
+test('dispatch repository config deposits preserve the post-reconcile opt-out across invocations', async () => {
+  const fx = await makeFixture(
+    [],
+    happyHandlers(),
+    DISPATCH_CONFIG_TOML.replace('[verify]\n', '[verify]\nafterReconcile = false\n'),
+  )
+  try {
+    for (let invocation = 0; invocation < 2; invocation++) {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        once: true,
+        plain: true,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        wire: fx.wire,
+      })
+      const artifact = await fx.store.getRepoArtifact(fx.origin, 'dispatcher-effective-config')
+      expect(artifact).not.toBeNull()
+      expect(
+        configSchema.parse(JSON.parse(new TextDecoder().decode(artifact!.content))).verify
+          .afterReconcile,
+      ).toBe(false)
+    }
+    expect(fx.err).toEqual([])
+  } finally {
+    await fx.cleanup()
+  }
+})

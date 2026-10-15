@@ -2022,7 +2022,7 @@ with illustrative members:
 | Spec | `spec.imported`, `spec.authored`, `spec.revised` (optionally carrying `assets`, a re-pin of the ticket's assets, §6.3) |
 | Sessions | `session.started`; `session.ended` with transcript ref and usage (ordinary completion — the analysis corpus), or `session.ended {outcome: reclaimed, reclaimedBy: {instance, resumedFromSeq}}` (explicit transcriptless takeover) |
 | Plan/code loops | `plan.started` … `plan-review.verdict`; `implement.started` … `code-review.verdict` |
-| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
+| Verify/finalize | `verify.started {step, attempt, feedback?}`, `verify.completed {step, outcome, skipCause?}`, `verify.reconcile-policy-captured {reconcileSeq, steps}`, `finalize.completed {pr}`, `finalize.step-started {step}`, `finalize.step-completed {step, ok, headSha?}` |
 | PR summary | Kernel-authored `pr-summary.requested {occurrence, boundary}`, `pr-summary.attempted {occurrence, boundary, pr}`, `pr-summary.result {attempt, outcome, eligibleAfter?}`, `pr-summary.settled {request, disposition}`; sequence identities correlate durable starts, completed boundaries, attempts, and handoffs (§7.5) |
 | PR attachments | `pr-attachment.designated`, `pr-attachment.hosted`, `pr-attachment.reclaimed`, `pr-attachment.reclaim-failed` |
 | Post-PR [D1] | `pr.merged`, `pr.conflicted`, `reconcile.progress-checked`, `reconcile.started`, `reconcile.completed` |
@@ -2344,7 +2344,8 @@ fresh from `origin`, and records the resolved SHA on `reconcile.started` — kno
 used (§15.3). The agent merges that base into the branch guided by the spec,
 plan, and implement-notes, with the explicit charge to regress against
 neither; the resolution lands as a merge commit, and because reconciliation
-changed code, **`verify:*` re-runs in full**. A resolution the agent judges
+changed code, **`verify:*` starts a fresh cycle**, subject to the captured
+post-reconcile policy (default: re-run all applicable steps). A resolution the agent judges
 risky — semantic conflicts, spec-relevant choices — escalates rather than
 guesses. Reconcile skips `code-review` by default (escalation covers the
 judgment cases; policy can force it).
@@ -2549,9 +2550,12 @@ artifact deposited on reload changes only those sections. In-flight
 environments are never re-provisioned; a fresh build from the new base is the
 path for a changed provisioning definition.
 
-Two configurable narrowing mechanisms govern which verify steps run, both
+Three configurable narrowing mechanisms govern which verify steps run, all
 resolving to the ordinary `skipped` outcome so exclusions stay queryable:
 
+- **Post-reconcile policy.** The cycle snapshot resolves repository and step
+  `afterReconcile` settings before any plan or path exclusions, including for
+  `always` steps. It applies only after a completed reconcile.
 - **Plan selection.** An approved plan may declare the complete subset of
   optional verify steps warranted by the spec, in strict front matter
   validated at deposit. The selection paired with the approving review
@@ -2564,6 +2568,30 @@ resolving to the ordinary `skipped` outcome so exclusions stay queryable:
   reconcile, so upstream-merged work is not attributed to the build). No
   match skips without launching anything; a Git failure is infrastructure and
   fails closed, never a synthetic skip.
+
+
+#### Post-reconcile verification policy
+
+Post-reconcile verification defaults to enabled: `[verify].afterReconcile = true`.
+Set it to `false` to retain pre-reconcile verification and skip all steps after
+reconciliation. An optional boolean `[verify.<step>].afterReconcile` overrides
+the repository setting in either direction; overrides require a configured step.
+For example, set `afterReconcile = false` in `[verify]` and
+`afterReconcile = true` in `[verify.types]` to keep only that step re-running.
+
+The kernel freezes the resolved ordered policy in
+`verify.reconcile-policy-captured` at the next engine action after reconcile
+completion. Live configuration changes apply at that boundary; a cycle already
+started keeps its policy through recovery. Historical cycles already started
+without a captured policy retain the rerun-all behavior. Initial verification
+and verification after subsequent code review always use ordinary applicability.
+Policy exclusion precedes plan selection and paths, including `always = true`.
+Enabled steps still follow plan selection and path rules. Excluded steps record
+`verify.completed` with outcome `skipped`, `skipCause = "post-reconcile-policy"`,
+and a reason naming the setting. Dashboards and PR summaries call this
+"skipped by post-reconcile policy"; it is never a pass. Forge-side required
+checks and branch protections still gate merge. For excluded steps, merged code
+is not re-verified, so breakage that only exists in the combination can land.
 
 ### 16.3 Skill installation: vendored, namespaced, editable [D11]
 

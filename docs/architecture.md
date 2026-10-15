@@ -333,7 +333,19 @@ head is a no-op; Git/Forge failures stay failure-tolerant observations.
 **Verify gating.** `packages/core/src/ontology.ts` owns the canonical
 `pass | fail | skipped` outcome (only `fail` routes back to implement or
 consumes attempts; a skip satisfies one step without being passing
-evidence). Two kernel-authored skip sources narrow the configured universe:
+evidence). Three kernel-authored skip sources narrow the configured universe:
+post-reconcile policy, approved plan selection, and changed paths.
+The engine captures the ordered effective `afterReconcile` policy in
+`verify.reconcile-policy-captured` at the action after reconciliation completes,
+before verification starts. Log-index replay keeps it scoped to that completion;
+subsequent config changes cannot replace it mid-cycle. Historical already-started
+cycles without a snapshot retain rerun-all behavior. A later code-review approval
+restores ordinary verification. Policy exclusions precede plan/path applicability
+and carry `skipCause: "post-reconcile-policy"` plus a setting-specific reason.
+The shared dashboard model renders that reason, as does the PR summary.
+Excluded steps do not re-verify merged code, so combination-only breakage can
+land; forge requirements and reconcile budgets remain independent.
+For enabled steps,
 `packages/core/src/kernel/plan-verify-selection.ts` resolves an approved plan's front-matter
 selection (applied at the planner's `ab done` in `packages/core/src/cli/terminals.ts`,
 snapshotted by the engine at approval), and
@@ -341,7 +353,7 @@ snapshotted by the engine at approval), and
 selectors, resolved by the build runner via `git diff` against the initial
 branch-cut base (or the refreshed base promoted by a completed reconcile).
 This verify-only base is deliberately independent from implementation's
-focused review range. Both narrowing mechanisms produce the ordinary
+focused review range. All narrowing mechanisms produce the ordinary
 queryable skipped outcome; Git failure is infrastructure and fails closed,
 never a synthetic skip. Verify escalation routing is also explicit in the
 engine: guidance answering an agent verifier's own `ab escalate` returns to the

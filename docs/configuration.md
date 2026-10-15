@@ -770,6 +770,28 @@ as written.
 
 ## `[verify]` and `[verify.<step>]`
 
+Post-reconcile verification defaults to enabled: `[verify].afterReconcile = true`.
+Set it to `false` to retain pre-reconcile verification and skip all steps after
+reconciliation. An optional boolean `[verify.<step>].afterReconcile` overrides
+the repository setting in either direction; overrides require a configured step.
+For example, set `afterReconcile = false` in `[verify]` and
+`afterReconcile = true` in `[verify.types]` to keep only that step re-running.
+
+The kernel freezes the resolved ordered policy in
+`verify.reconcile-policy-captured` at the next engine action after reconcile
+completion. Live configuration changes apply at that boundary; a cycle already
+started keeps its policy through recovery. Historical cycles already started
+without a captured policy retain the rerun-all behavior. Initial verification
+and verification after subsequent code review always use ordinary applicability.
+Policy exclusion precedes plan selection and paths, including `always = true`.
+Enabled steps still follow plan selection and path rules. Excluded steps record
+`verify.completed` with outcome `skipped`, `skipCause = "post-reconcile-policy"`,
+and a reason naming the setting. Dashboards and PR summaries call this
+"skipped by post-reconcile policy"; it is never a pass. Forge-side required
+checks and branch protections still gate merge. For excluded steps, merged code
+is not re-verified, so breakage that only exists in the combination can land.
+
+
 `[verify].steps` defines the configured universe and execution order. It is
 optional and defaults to no verify phases. Every listed name needs one matching
 subtable, and every named subtable must be listed; a defined-but-unlisted step
@@ -789,6 +811,7 @@ There are two strict step variants:
 | `command` | — | required for check; nonempty key in `[commands]` | Deterministic shell verb to run. Forbidden for agent steps. |
 | `skill` | — | required for agent; nonempty string | Exact installed verifier skill. Forbidden for check steps. |
 | `paths` | omitted (unconditional) | optional nonempty array of positive repository-relative globs | Apply only when at least one changed path matches. Available to both variants. |
+| `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
 | `always` | omitted (`false`) | optional boolean | `true` makes the step mandatory in plan selection and bypasses path gating. Available to both variants. |
 
 <!-- config-fragment:verify -->

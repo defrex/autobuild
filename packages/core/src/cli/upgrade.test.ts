@@ -166,7 +166,7 @@ describe('upgrade distribution fixture', () => {
 
     const config = parseConfig(await readFile(join(target, 'autobuild.toml'), 'utf8'))
     expect(config.commands).toEqual({})
-    expect(config.verify).toEqual({ steps: [], stepConfigs: {} })
+    expect(config.verify).toEqual({ afterReconcile: true, steps: [], stepConfigs: {} })
   })
 })
 

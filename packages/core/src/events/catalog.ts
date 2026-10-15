@@ -93,6 +93,7 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'code-review.started': ['kernel'],
   'code-review.verdict': ['agent'],
 
+  'verify.reconcile-policy-captured': ['kernel'],
   'verify.started': ['kernel'],
   'verify.completed': ['kernel', 'agent'],
   'finalize.started': ['kernel'],

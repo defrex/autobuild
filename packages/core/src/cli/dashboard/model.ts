@@ -116,11 +116,9 @@ export interface PipelineStep {
   /** Absent ⇒ the step has never run in the current spec scope ⇒ no time is
    * shown (AC 6). The renderer composes the elapsed segment from this. */
   timing?: StepTiming
-  /** Display-only, like `qualifier`, and never consulted for routing: the
-   * parked merge step's no-consent explanation — why nothing will happen
-   * without operator action, and which control unblocks it. Attached when the
-   * build is current at merge with effective auto-merge off; the terminal
-   * row/detail and the web row/detail render the same words. */
+  /** Display-only policy skip reason or parked merge explanation. The shared
+   * row/detail renderers use this wrapping prose segment for longer reasons;
+   * it is never consulted for routing. */
   reason?: string
 }
 
@@ -752,6 +750,7 @@ export function projectBuildFromFacts(
           : stepResults.some((r) => r.outcome === 'skipped')
             ? 'skipped'
             : undefined,
+        reason: stepResults.find((r) => r.skipCause === 'post-reconcile-policy')?.reason,
         count,
         timing: timingFor(intervals, phase, cycleSince, frozenNow),
       }),

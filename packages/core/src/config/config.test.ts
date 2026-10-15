@@ -126,6 +126,7 @@ describe('parseConfig — complete flattened surface', () => {
         publish: 'bun run publish',
       },
       verify: {
+        afterReconcile: true,
         steps: ['types', 'unit', 'e2e'],
         stepConfigs: {
           types: { kind: 'check', command: 'typecheck' },
@@ -199,7 +200,7 @@ describe('parseConfig — defaults', () => {
       plugins: [],
       workspace: { provider: 'git-worktree', config: {} },
       commands: {},
-      verify: { steps: [], stepConfigs: {} },
+      verify: { afterReconcile: true, steps: [], stepConfigs: {} },
       finalize: { steps: [], stepConfigs: {} },
       roles: {},
       policy: {
@@ -1352,6 +1353,35 @@ describe('ticketScanIntervalSeconds', () => {
       expect(() => parseConfig(`ticketScanIntervalSeconds = ${value}\n${READY}`)).toThrow()
     })
   }
+})
+
+describe('post-reconcile verification policy', () => {
+  const tables = '\n[commands]\ntest = "bun test"\n[verify]\nsteps = ["unit"]\n'
+  const unit = '\n[verify.unit]\nkind = "check"\ncommand = "test"\n'
+  test('defaults on and preserves unspecified overrides', () => {
+    const config = parseConfig(READY + tables + unit)
+    expect(config.verify.afterReconcile).toBe(true)
+    expect(config.verify.stepConfigs.unit?.afterReconcile).toBeUndefined()
+  })
+  test.each([true, false])('step overrides repository %s in either direction', (enabled) => {
+    const config = parseConfig(
+      `${READY + tables}afterReconcile = ${enabled}${unit}afterReconcile = ${!enabled}`,
+    )
+    expect(config.verify.afterReconcile).toBe(enabled)
+    expect(config.verify.stepConfigs.unit?.afterReconcile).toBe(!enabled)
+  })
+  test('rejects invalid booleans, unknown steps, and finalize policy', () => {
+    for (const raw of [
+      `${READY + tables}afterReconcile = "false"${unit}`,
+      `${READY + tables + unit}afterReconcile = 0`,
+      READY +
+        tables +
+        unit +
+        '\n[verify.unknown]\nkind = "check"\ncommand = "test"\nafterReconcile = false',
+      `${READY}\n[finalize]\nafterReconcile = false`,
+    ])
+      expect(() => parseConfig(raw)).toThrow()
+  })
 })
 
 test('hosted lifecycle roles may overlap and doneState must be nonblank', () => {
