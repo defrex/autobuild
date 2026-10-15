@@ -306,6 +306,11 @@ report it, adapt, and carry on.
 
 ### The attention set
 
+A wake turn's first message carries the configured event record and the
+build's reduced state as JSON. Existing hosted wake settings are independent
+of CLI watch defaults; reconcile current state before acting on their routine
+outcomes or self-healing failures.
+
 Treat every default-watch record as a call to act:
 
 - `escalation.raised`: inspect the question and evidence, then resolve it using
