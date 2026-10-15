@@ -62,6 +62,9 @@ export interface Ticket {
   /** Native completion fact, identical to DependencyState.resolved. */
   resolved: boolean
   labels: string[]
+  /** Listing-time source fact that all declared blockers are resolved. Only
+   * true permits skipping dependency reads; consumers fall back when absent. */
+  blockersResolved?: boolean
   /** Source-local ids of tickets declared as blockers. Absent ≡ none. */
   blockedBy?: string[]
 }

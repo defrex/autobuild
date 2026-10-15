@@ -82,7 +82,24 @@ export type LinearFetch = (
 interface GqlIssueRelation {
   id?: string
   type: string
-  issue: { id?: string; identifier: string } | null
+  issue: { id?: string; identifier: string; state?: { type: string } | null } | null
+}
+
+interface PageInfo {
+  hasNextPage: boolean
+  endCursor: string | null
+}
+interface RelationOwner {
+  inverseRelations?: { nodes: GqlIssueRelation[]; pageInfo?: PageInfo }
+}
+interface DependencyIssue extends RelationOwner {
+  id?: string
+  identifier: string
+  state: { type: string } | null
+}
+interface Connection<T> {
+  nodes: T[]
+  pageInfo: PageInfo
 }
 
 interface GqlIssue {
@@ -97,7 +114,7 @@ interface GqlIssue {
    * `{issue: A, relatedIssue: B, type: "blocks"}` reads "A blocks B", so an
    * issue's blockers are its inverse `blocks` relations, and the blocker is
    * each relation's `issue`. Relation ids are required by the delete API. */
-  inverseRelations?: { nodes: GqlIssueRelation[] }
+  inverseRelations?: { nodes: GqlIssueRelation[]; pageInfo?: PageInfo }
 }
 
 /**
@@ -111,14 +128,14 @@ interface GqlIssue {
 const RESOLVED_STATE_TYPES = new Set(['completed', 'canceled'])
 
 /** Native inverse `blocks` relations for one blocked issue. */
-function blockerRelationsOf(issue: GqlIssue): GqlIssueRelation[] {
+function blockerRelationsOf(issue: RelationOwner): GqlIssueRelation[] {
   return (issue.inverseRelations?.nodes ?? []).filter(
     (relation) => relation.type === 'blocks' && relation.issue !== null,
   )
 }
 
 /** The identifiers blocking `issue`; unrelated relation kinds are ignored. */
-function blockersOf(issue: GqlIssue): string[] {
+function blockersOf(issue: RelationOwner): string[] {
   return [...new Set(blockerRelationsOf(issue).map((relation) => relation.issue!.identifier))]
 }
 
@@ -181,16 +198,45 @@ interface LinearTeamInfo {
   labelIds: Map<string, string>
 }
 
-/** Autobuild blocker sets are intentionally small, but Linear's implicit
- * connection default is only 50. Make the practical bound explicit so reads,
- * idempotency preflight, and deletion all see the same relation window. */
+/** Direct issue reads and grooming retain the existing 250-relation window.
+ * Dependency graph reads accumulate that window in smaller pages; ready
+ * listings exhaust relations so they can safely report blocker completion. */
 export const LINEAR_RELATION_PAGE_SIZE = 250
 
 const ISSUE_FIELDS =
   'id identifier title description url state { name type } labels { nodes { name } } ' +
   `inverseRelations(first: ${LINEAR_RELATION_PAGE_SIZE}) { nodes { id type issue { id identifier } } }`
 
-const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!) { issues(filter: $filter) { nodes { ${ISSUE_FIELDS} } } }`
+// Linear computes complexity from requested bounds, not returned counts:
+// https://linear.app/developers/rate-limiting. Scalars cost .1, objects 1.
+// Dependency: 25 * (1.2 + 1.1 + 100 * 2.2 + 1.2) + wrappers < 5,600.
+// Ready: 10 * (10 + 50 * 1.1 + 100 * 3.5 + 1.2) + wrappers < 4,200.
+// Continuations: <=25 * (2 + 100 * 2.2 + 1.2) < 5,600, or
+// <=10 * (2 + 100 * 3.5 + 1.2) < 3,600. Every shape stays below 8,000.
+const DEPENDENCY_PAGE_SIZE = 25
+const READY_PAGE_SIZE = 10
+const RELATION_PAGE_SIZE = 100
+const READY_LABEL_PAGE_SIZE = 50
+const PAGE_INFO = 'pageInfo { hasNextPage endCursor }'
+const DEPENDENCY_RELATIONS = 'type issue { identifier }'
+const READY_RELATIONS = 'id type issue { id identifier state { type } }'
+const relationFields = (ready: boolean) => (ready ? READY_RELATIONS : DEPENDENCY_RELATIONS)
+const dependencyFields = `id identifier state { type } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${DEPENDENCY_RELATIONS} } ${PAGE_INFO} }`
+const DEPENDENCY_QUERY = `query Dependencies($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after, includeArchived: true) { nodes { ${dependencyFields} } ${PAGE_INFO} } }`
+const DEPENDENCY_FALLBACK_QUERY = `query Dependency($id: String!) { issue(id: $id) { ${dependencyFields} } }`
+const READY_FIELDS = `id identifier title description url state { name type } labels(first: ${READY_LABEL_PAGE_SIZE}) { nodes { name } } inverseRelations(first: ${RELATION_PAGE_SIZE}) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} }`
+const LIST_READY_QUERY = `query ListReady($filter: IssueFilter!, $first: Int!, $after: String) { issues(filter: $filter, first: $first, after: $after) { nodes { ${READY_FIELDS} } ${PAGE_INFO} } }`
+
+/** Refuse partial success and cursor loops on every connection independently. */
+function nextCursor(info: PageInfo | undefined, seen: Set<string>): string | null {
+  if (!info || typeof info.hasNextPage !== 'boolean') throw new Error('linear: missing pageInfo')
+  if (!info.hasNextPage) return null
+  const cursor = info.endCursor
+  if (!cursor || seen.has(cursor)) throw new Error('linear: invalid or repeated pagination cursor')
+  seen.add(cursor)
+  return cursor
+}
+
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
 const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name type } } }`
@@ -293,13 +339,31 @@ export class LinearTicketSource implements TicketSource {
         labels: { some: { name: { eq: label } } },
       }))
     }
-    const data = await this.gql<{ issues: { nodes: GqlIssue[] } }>('listReady', LIST_READY_QUERY, {
-      filter,
-    })
-    return {
-      tickets: data.issues.nodes.map((issue) => this.toTicket(issue)),
-      diagnostics: [],
-    }
+    const tickets: Ticket[] = []
+    const seen = new Set<string>()
+    let after: string | null = null
+    do {
+      const data: { issues: Connection<GqlIssue> } = await this.gql('listReady', LIST_READY_QUERY, {
+        filter,
+        first: READY_PAGE_SIZE,
+        after,
+      })
+      await this.completeRelations(data.issues.nodes, true)
+      for (const issue of data.issues.nodes) {
+        const relations = issue.inverseRelations!.nodes
+        tickets.push({
+          ...this.toTicket(issue),
+          blockersResolved: relations.every(
+            (relation) =>
+              relation.type !== 'blocks' ||
+              (!!relation.issue?.identifier &&
+                RESOLVED_STATE_TYPES.has(relation.issue.state?.type ?? '')),
+          ),
+        })
+      }
+      after = nextCursor(data.issues.pageInfo, seen)
+    } while (after !== null)
+    return { tickets, diagnostics: [] }
   }
 
   async get(id: string): Promise<Ticket | null> {
@@ -516,43 +580,132 @@ export class LinearTicketSource implements TicketSource {
     }
   }
 
-  /**
-   * Dependency nodes (§13). One query per id — Linear's `IssueFilter` has no
-   * identifier-`in` filter, and the id sets here are small (the ready set's
-   * blockers). Deliberately uncached: a blocker completing between ticks must
-   * be visible on the very next pass, so only the identifier→UUID map (which
-   * never changes) is cached.
-   */
+  /** One request per team/UUID group per issue page, plus batched relation
+   * continuation pages. No cache: workflow changes are visible next tick.
+   * Filter schema: https://github.com/linear/linear/blob/master/packages/sdk/src/schema.graphql */
   async dependencyStates(ids: string[]): Promise<DependencyState[]> {
-    const states: DependencyState[] = []
+    const groups = new Map<
+      string,
+      { filter: Record<string, unknown>; values: Set<string | number> }
+    >()
+    const lookups = new Map<string, string>()
+    const fallback = new Set<string>()
     for (const id of ids) {
-      let data: { issue: GqlIssue | null }
-      try {
-        data = await this.gql<{ issue: GqlIssue | null }>('dependencyStates', GET_ISSUE_QUERY, {
-          id,
-        })
-      } catch (error) {
-        // An unknown identifier is a MISSING dependency, not a failed check:
-        // the dispatcher must be able to say "AUT-99 does not exist" rather
-        // than bailing out of the ticket's whole dependency evaluation.
-        if (isEntityNotFound(error)) {
-          states.push({ id, exists: false, resolved: false, blockedBy: [] })
-          continue
-        }
-        throw error
-      }
-      if (!data.issue) {
-        states.push({ id, exists: false, resolved: false, blockedBy: [] })
+      const match = /^([A-Z][A-Z0-9-]*)-([1-9][0-9]*)$/.exec(id)
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+      const number = match ? Number(match[2]) : 0
+      if (!uuid && !(match && Number.isSafeInteger(number))) {
+        fallback.add(id)
+        lookups.set(id, id)
         continue
       }
-      states.push({
+      const key = uuid ? 'uuid' : match![1]!
+      const group = groups.get(key) ?? {
+        filter: uuid ? {} : { team: { key: { eq: key } } },
+        values: new Set<string | number>(),
+      }
+      group.values.add(uuid ? id.toLowerCase() : number)
+      groups.set(key, group)
+      lookups.set(id, uuid ? id.toLowerCase() : id)
+    }
+    const found = new Map<string, DependencyIssue>()
+    for (const [key, group] of groups) {
+      const filter = {
+        ...group.filter,
+        [key === 'uuid' ? 'id' : 'number']: { in: [...group.values] },
+      }
+      const seen = new Set<string>()
+      let after: string | null = null
+      do {
+        const data: { issues: Connection<DependencyIssue> } = await this.gql(
+          'dependencyStates',
+          DEPENDENCY_QUERY,
+          {
+            filter,
+            first: DEPENDENCY_PAGE_SIZE,
+            after,
+          },
+        )
+        await this.completeRelations(data.issues.nodes, false)
+        for (const issue of data.issues.nodes) {
+          found.set(issue.identifier, issue)
+          if (issue.id) found.set(issue.id.toLowerCase(), issue)
+        }
+        after = nextCursor(data.issues.pageInfo, seen)
+      } while (after !== null)
+    }
+    for (const id of fallback) {
+      let data: { issue: DependencyIssue | null }
+      try {
+        data = await this.gql('dependencyStates', DEPENDENCY_FALLBACK_QUERY, { id })
+      } catch (error) {
+        if (isEntityNotFound(error)) continue
+        throw error
+      }
+      if (data.issue) {
+        await this.completeRelations([data.issue], false)
+        found.set(id, data.issue)
+      }
+    }
+    return ids.map((id) => {
+      const issue = found.get(lookups.get(id)!)
+      return {
         id,
-        exists: true,
-        resolved: RESOLVED_STATE_TYPES.has(data.issue.state?.type ?? ''),
-        blockedBy: blockersOf(data.issue),
+        exists: !!issue,
+        resolved: !!issue && RESOLVED_STATE_TYPES.has(issue.state?.type ?? ''),
+        blockedBy: issue ? blockersOf(issue) : [],
+      }
+    })
+  }
+
+  /** Each alias owns a cursor. Graph reads retain the historic first 250
+   * relations; listing reads exhaust relations, including blockers after 250. */
+  private async completeRelations(issues: DependencyIssue[], ready: boolean): Promise<void> {
+    const pending = issues.map((issue) => ({
+      issue,
+      seen: new Set<string>(),
+      after: null as string | null,
+    }))
+    for (const item of pending)
+      item.after = nextCursor(item.issue.inverseRelations?.pageInfo, item.seen)
+    for (;;) {
+      const batch = pending.filter(
+        (item) =>
+          item.after !== null &&
+          (ready || item.issue.inverseRelations!.nodes.length < LINEAR_RELATION_PAGE_SIZE),
+      )
+      if (batch.length === 0) return
+      const definitions: string[] = []
+      const selections: string[] = []
+      const variables: Record<string, unknown> = {}
+      batch.forEach((item, n) => {
+        if (!item.issue.id) throw new Error('linear: relation continuation requires issue id')
+        definitions.push(`$id${n}: String!, $first${n}: Int!, $after${n}: String!`)
+        selections.push(
+          `r${n}: issue(id: $id${n}) { inverseRelations(first: $first${n}, after: $after${n}) { nodes { ${relationFields(ready)} } ${PAGE_INFO} } }`,
+        )
+        variables[`id${n}`] = item.issue.id
+        variables[`first${n}`] = ready
+          ? RELATION_PAGE_SIZE
+          : Math.min(
+              RELATION_PAGE_SIZE,
+              LINEAR_RELATION_PAGE_SIZE - item.issue.inverseRelations!.nodes.length,
+            )
+        variables[`after${n}`] = item.after
+      })
+      const data = await this.gql<Record<string, RelationOwner | null>>(
+        'relations',
+        `query Relations(${definitions.join(', ')}) { ${selections.join(' ')} }`,
+        variables,
+      )
+      batch.forEach((item, n) => {
+        const connection = data[`r${n}`]?.inverseRelations
+        const after = nextCursor(connection?.pageInfo, item.seen)
+        if (!connection) throw new Error('linear: missing relation continuation')
+        item.issue.inverseRelations!.nodes.push(...connection.nodes)
+        item.after = after
       })
     }
-    return states
   }
 
   // ── Plumbing ───────────────────────────────────────────────────────────────

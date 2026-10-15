@@ -2938,7 +2938,7 @@ export class Dispatcher {
     for (const ticket of ready) {
       if (this.outOfBudget(opts)) return
       if (withheld.has(ticket.ref.id)) continue
-      if ((ticket.blockedBy ?? []).length === 0) continue
+      if (ticket.blockersResolved === true || (ticket.blockedBy ?? []).length === 0) continue
       let verdict: DependencyVerdict
       try {
         if (!(await this.loadDependencyGraph(ticket, nodes, opts))) return

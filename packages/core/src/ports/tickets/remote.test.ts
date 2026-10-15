@@ -310,3 +310,14 @@ test('ticket wire requires a native completion boolean', () => {
   expect(ticketWireSchema.safeParse({ ...TICKET, resolved: 'false' }).success).toBe(false)
   expect(ticketWireSchema.parse({ ...TICKET, resolved: true }).resolved).toBe(true)
 })
+
+test.each([true, false, undefined])(
+  'hosted wire preserves optional blockersResolved %s',
+  async (hint) => {
+    const ticket = { ...TICKET, ...(hint === undefined ? {} : { blockersResolved: hint }) }
+    const { source } = makeSource([{ body: { tickets: [ticket], diagnostics: [] } }])
+    const result = (await source.listReady({})).tickets[0]!
+    expect(result.blockersResolved).toBe(hint)
+    expect(Object.hasOwn(result, 'blockersResolved')).toBe(hint !== undefined)
+  },
+)
