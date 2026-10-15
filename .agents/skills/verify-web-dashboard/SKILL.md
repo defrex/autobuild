@@ -54,8 +54,6 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:builds-loading-narrow:png .ab/web-dashboard-frames/builds-loading-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-happy-wide:png .ab/web-dashboard-frames/builds-happy-wide.png --attach
    ab artifact put web-dashboard-frame:builds-happy-narrow:png .ab/web-dashboard-frames/builds-happy-narrow.png --attach
-   ab artifact put web-dashboard-frame:builds-no-projects-wide:png .ab/web-dashboard-frames/builds-no-projects-wide.png --attach
-   ab artifact put web-dashboard-frame:builds-no-projects-narrow:png .ab/web-dashboard-frames/builds-no-projects-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-empty-wide:png .ab/web-dashboard-frames/builds-empty-wide.png --attach
    ab artifact put web-dashboard-frame:builds-empty-narrow:png .ab/web-dashboard-frames/builds-empty-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-harvest-wide:png .ab/web-dashboard-frames/builds-harvest-wide.png --attach
