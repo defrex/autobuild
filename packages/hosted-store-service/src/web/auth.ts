@@ -49,7 +49,7 @@ function mcpPluginOptions(
 export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuthOptions) {
   const config = parseWebAuthEnv(env)
   const database = options?.database ?? new Pool({ connectionString: config.postgresURL, max: 5 })
-  return betterAuth({
+  const auth = betterAuth({
     database,
     secret: config.secret,
     baseURL: config.baseURL,
@@ -75,9 +75,7 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       // plugin-schema extension point, merged in by getAuthTables — restores
       // it, and pairs with the auth-schema v3 column so Postgres DCR
       // round-trips the field. That drift is separate from the
-      // provider-metadata one and is deliberately worked around here rather
-      // than folded into patches/better-auth@1.4.18.patch, which only fixes
-      // the getMCPProviderMetadata read path.
+      // provider-metadata one, corrected at the HTTP boundary below.
       {
         id: 'oauth-application-authentication-scheme',
         schema: {
@@ -121,18 +119,8 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
       } satisfies BetterAuthPlugin,
       // The MCP plugin turns this app into an OAuth 2.1 authorization server
       // and protected resource for /mcp; the jwt companion signs its tokens
-      // and serves /api/auth/jwks. The pinned 1.4.18 plugin hardcodes the
-      // nonexistent <baseURL>/mcp/jwks as jwks_uri in the provider metadata
-      // (getMCPProviderMetadata, backing /.well-known/oauth-authorization-server);
-      // under patches/better-auth@1.4.18.patch its call site instead passes
-      // options?.oidcConfig — the channel the function's declared
-      // (ctx, options?: OIDCOptions) signature already expects — so the single
-      // declared oidcConfig.metadata field feeds BOTH documents: the
-      // authorization-server one and getMCPProtectedResourceMetadata's
-      // protected-resource one. The override is keyed to the exact plugin
-      // version and must be re-derived or dropped on upgrade; if it goes
-      // missing, the auth.test.ts regression test fails loudly instead of
-      // silently re-advertising /mcp/jwks.
+      // and serves /api/auth/jwks. The HTTP adapter below corrects the pinned
+      // plugin's authorization-server metadata to advertise this endpoint.
       jwt(),
       mcp(mcpPluginOptions(config, options)),
     ],
@@ -156,6 +144,14 @@ export function createWebAuth(env: WebEnv = process.env, options?: CreateWebAuth
     },
     onAPIError: { errorURL: '/sign-in?error=access_denied' },
   })
+  return {
+    ...auth,
+    handler: authHTTPHandler(
+      auth.handler,
+      mcpPluginOptions(config, options)?.oidcConfig?.metadata?.jwks_uri ??
+        `${config.baseURL}/api/auth/jwks`,
+    ),
+  }
 }
 
 export type WebAuth = ReturnType<typeof createWebAuth>
@@ -164,4 +160,33 @@ let singleton: WebAuth | undefined
 export function webAuth(): WebAuth {
   singleton ??= createWebAuth(process.env)
   return singleton
+}
+
+/** Adapt public discovery rewrites and the pinned MCP metadata bug in the
+ * published package, so every production HTTP caller gets the same contract. */
+export function authHTTPHandler(
+  handler: (request: Request) => Promise<Response>,
+  jwksURI: string,
+): (request: Request) => Promise<Response> {
+  return async (request) => {
+    const url = new URL(request.url)
+    const discovery =
+      url.pathname === '/.well-known/oauth-authorization-server' ||
+      url.pathname === '/.well-known/oauth-protected-resource'
+    if (discovery) {
+      url.pathname = `/api/auth${url.pathname}`
+      request = new Request(url, request.clone())
+    }
+    const response = await handler(request)
+    if (url.pathname !== '/api/auth/.well-known/oauth-authorization-server' || !response.ok)
+      return response
+    const metadata = await response.json()
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return new Response(JSON.stringify({ ...metadata, jwks_uri: jwksURI }), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  }
 }

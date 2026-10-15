@@ -50,6 +50,7 @@ test('local rollout preserves this repository pipeline and Linear integration', 
   })
   const testPostgres = config.commands['test-postgres']
   expect(testPostgres).toContain('AB_POSTGRES_TEST_URL')
+  expect(testPostgres).toContain('bun tools/hosted-service-packaging.ts')
   expect(testPostgres).toContain('packages/postgres-store/src/store.live.test.ts')
   expect(testPostgres).toContain('packages/postgres-store/src/migrate.test.ts')
   expect(config.verify.steps).toEqual([

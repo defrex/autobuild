@@ -31,25 +31,10 @@ import { readWorkspaceManifests } from './workspace-manifest-check'
  *
  * The three sub-package rulings and the root ruling carry their rulings' pinned prose:
  *
- * - AUT-463 — `@defrex/autobuild-hosted-store-service` ships exactly
- *   `package.json`, `README.md`, and `src/**` — with the AUT-490 exception that
- *   every `*.test.ts`, `*.test.tsx`, `*.spec.ts`, and `*.spec.tsx` file under `src/` (written
- *   as the negations `!src/**` + `*.test.ts`, `*.test.tsx`, `*.spec.ts`, and `*.spec.tsx` in
- *   the manifest; the within-segment `*` also covers the `*.live.test.*`
- *   suites) does not publish. The ruling exists because
- *   AUT-409's move of the operator web app into the service package silently
- *   added `app/`, `server.ts`, `next.config.ts`, `vercel.json`,
- *   `tsconfig.json`, `next-env.d.ts`, and the internal
- *   `.impeccable/surfaces/` design brief to the published npm tarball: the
- *   manifest declared no `files` field, so npm's default
- *   (everything-not-ignored) packed the whole package directory. Every npm
- *   consumption path goes through the manifest's `exports` map and `bin`, all
- *   of which live under `src/`; the app and config files are
- *   release-checkout/Vercel surface read from the repository at deploy time,
- *   never from node_modules, and the Impeccable surface brief is internal.
- *   The allowlist is the durable fix: deny-by-default, so a file added to the
- *   package later stays out of the tarball unless deliberately allowlisted —
- *   the exact failure mode the move created.
+ * - Hosted service packaging ships src/**, app/**, server.ts, Next config,
+ *   a standalone deployment tsconfig, next-env.d.ts and the deployment template.
+ *   Tests in src and app, internal design briefs, caches and generated files
+ *   remain excluded. The manifest remains the bounded allowlist authority.
  * - AUT-473 — `@defrex/autobuild-postgres-store` declares the same shape
  *   (`files: ["src", "README.md"]`) so its tarball ships exactly
  *   `package.json`, `README.md`, and `src/**` — again with the AUT-490
