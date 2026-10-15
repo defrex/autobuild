@@ -581,9 +581,8 @@ registry already exposes bounded repository reads). Each source's cursor
 advances only through a recorded trigger naming that source, so a crash
 between scan and start cannot skip or duplicate a wake, and other builds' —
 and the journal's — matching events re-trigger on later ticks. Sessions with
-empty wake settings are never woken. The default wake settings span both
-halves of the attention set: the build events `ab watch` filters on by
-default plus the repository-journal events `ab watch --repository` follows.
+empty wake settings are never woken. The legacy hosted wake settings retain their event defaults independently of
+the actionable CLI watch projection.
 
 **Crash recovery.** A turn invocation that dies without an outcome leaves the
 session `running` with a silent open stream; the tick's reaper fails such a

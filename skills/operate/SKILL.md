@@ -81,15 +81,26 @@ the same resolved working directory.
 
 ### Watch for attention events
 
-`ab watch --json` streams the attention set (escalations, failures, finalize,
-PR conflicted/merged/closed, build completed/aborted) as newline-delimited
-records. Every record carries a `cursor`; a bounded watch ends with a trailing
-`{"cursor": …}` line. Resume with `--since <cursor>` and every event after it
-is delivered exactly once, including events that landed while nothing was
-watching. Name slugs to watch only those builds; with none, every active build
-(including ones created later) and repository attention are watched. Named watches need `--repository` to also receive repository attention. `--event <glob>` replaces the
-default filter, `--timeout <dur>` bounds it (default 30 minutes, `0` is
-unbounded), `--count <n>` ends it after n records.
+`ab watch --json` is the standing monitor. Keep its default filter: every
+record calls for action. It reports build escalations and merge decisions,
+harvest escalations/recovery exhaustion, rejected configuration, reloads needing
+restart, abnormal dispatcher stops/loss, degradation past reset (15 minutes
+without reset), and five minutes of continuous tick failures. Advertised resets
+wait for a post-reset tick to finish before requiring action; ordinary recovery
+on that retry stays silent. Source grace and cooldown-driven failures do not
+start the tick-failure clock. Routine outcomes and self-healing failures stay silent.
+
+Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
+line. Resume with `--since <cursor>`. Named watches end when all named builds
+are terminal; add `--repository` for repository attention. With no slugs all
+active builds and repository attention are included. Reconcile status after
+arming because historical build attention is silently baselined.
+
+Add an extra monitor only for an identified need, such as an operator asking
+to hear when a particular build merges or an outcome triggering follow-up work.
+Scope it to named slugs and explicit `--event` globs (for example,
+`ab watch my-build --event pr.merged --json`), and retire it when that need ends.
+An extra monitor supplements the default standing watch.
 
 `ab wait [<slug>...] (--for <condition> | --event <glob>) [--since <cursor>] [--json]`
 blocks until a condition holds and prints one record. `--for` state conditions
@@ -148,7 +159,7 @@ Checking once is not shepherding. When you take responsibility for builds:
 
 1. Record the set you are shepherding (`ab builds --all --json`, or the slugs
    you were given).
-2. Arm an event-only watch and keep its cursor:
+2. Arm the default standing watch and keep its cursor:
    `ab watch --json --since <cursor>` (or named slugs with `--repository`) (omit `--since` the first
    time). Events are delivered exactly once, so a build that already finished
    is never replayed. Do not loop on `ab wait --for terminal|attention|…`:
@@ -165,12 +176,12 @@ Checking once is not shepherding. When you take responsibility for builds:
    every timeout or legacy-cursor attachment. Reading status after arming leaves no gap — anything earlier shows in
    the status, anything later arrives as an event. Treat a terminal status
    (merged, closed, aborted) as that build's outcome, and an open escalation
-   or failed phase as attention to handle now.
+   or merge decision as attention to handle now.
 4. When a watch returns records, react: read the record, inspect the build,
    resolve attention using the shared rules; for a repository record inspect repository status and act
    on its condition without assuming a build slug. Then re-arm from the last cursor. Keep your own
-   outcome table: mark a build done when you see `pr.merged`, `pr.closed`, or
-   `build.aborted`, or when status shows it. A timeout (exit 3, or a watch
+   outcome table from status reconciliation after named-watch exit and bounded
+   watch timeouts. Default watches do not emit routine merge/completion records. A timeout (exit 3, or a watch
    that ends with only a `{"cursor": …}` line) is not completion — reconcile
    as in step 3, then re-arm from that cursor.
 5. Stop only when every build in the set has an outcome in your table.
@@ -297,19 +308,24 @@ report it, adapt, and carry on.
 
 ### The attention set
 
-When the session has wake settings, the dispatcher wakes you when a build
-event matching them lands. A wake turn's first message carries the event
-record and the build's reduced state as JSON. Typical wakes and what to do:
+A wake turn's first message carries the configured event record and the
+build's reduced state as JSON. Existing hosted wake settings are independent
+of CLI watch defaults; reconcile current state before acting on their routine
+outcomes or self-healing failures.
 
-- `escalation.raised` / `phase.failed` / `infrastructure.failed` — read the
-  escalation, spec, code, artifacts, recent events, and applicable operator
-  notes or conversation. Resolve it using the shared rules; ask the operator
-  only when a listed exception requires it.
-- `finalize.completed` / `build.completed` / `pr.merged` / `pr.closed` /
-  `pr.conflicted` / `build.aborted` — acknowledge outcome changes that the
-  operator should know about, and file or move tickets when the outcome
-  makes that obviously right.
-- Anything else matching the wake settings — read the event, then decide.
+Treat every default-watch record as a call to act:
+
+- `escalation.raised`: inspect the question and evidence, then resolve it using
+  the shared rules.
+- `build.merge-decision`: inspect the PR and current merge gate, then apply
+  the operator's merge policy or request the decision that is missing.
+- Harvest escalation or recovery exhaustion: inspect harvest status and resolve
+  the reported blocker.
+- Dispatcher loss, abnormal stop, restart-required reload, rejected config, or
+  persistent tick failure: diagnose through repository status and report the
+  condition to the operator. Never start or run a dispatcher.
+- Persistent source degradation: inspect the source cause and reset evidence,
+  diagnose and report the continuing intake problem.
 
 Do not re-derive history the build's events already tell you; read events
 with a cursor and keep it short.
