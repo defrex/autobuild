@@ -1,3 +1,4 @@
+import { findSummaryMarker } from './summary-marker'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -590,9 +591,16 @@ export class LocalGitForge implements Forge {
   }
 
   async commentOnPr(workspacePath: string, number: number, body: string): Promise<void> {
-    await this.updateRecord(workspacePath, number, (record) => ({
-      ...record,
-      comments: record.comments.includes(body) ? record.comments : [...record.comments, body],
-    }))
+    const marker = findSummaryMarker(body)
+    await this.updateRecord(workspacePath, number, (record) => {
+      const index =
+        marker === undefined
+          ? -1
+          : record.comments.findIndex((comment) => findSummaryMarker(comment) === marker)
+      const comments = [...record.comments]
+      if (index >= 0) comments[index] = body
+      else if (!comments.includes(body)) comments.push(body)
+      return { ...record, comments }
+    })
   }
 }

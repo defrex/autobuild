@@ -1,3 +1,4 @@
+import { summaryMarker } from '../ports/forge/summary-marker'
 import type { AbEvent } from '../events/catalog'
 import {
   currentPrAttachments,
@@ -106,6 +107,7 @@ export function renderPrSummary(env: CliEnv, events: readonly AbEvent[]): string
   }
 
   return [
+    summaryMarker(env.build),
     `## Autobuild: ${html(env.build)}`,
     '',
     '### Verdict history',

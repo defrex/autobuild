@@ -51,6 +51,11 @@ export const allowedActorKinds: Record<EventType, readonly ActorKind[]> = {
   'execution.ended': ['dispatcher'],
   'infrastructure.failed': ['dispatcher'],
   'infrastructure.cleanup-attempted': ['dispatcher'],
+  'pr-summary.requested': ['kernel'],
+  'pr-summary.attempted': ['kernel'],
+  'pr-summary.result': ['kernel'],
+  'pr-summary.settled': ['kernel'],
+  'finalize.step-started': ['kernel'],
   'publication.requested': ['agent', 'kernel'],
   // Only the dispatcher releases workspaces and settles publications (§15.7);
   // the kernel never destroys one, so it never records a loss.

@@ -1,3 +1,4 @@
+import { refreshSummaryBoundary } from '../cli/pr-summary-publication'
 /**
  * The build-runner process (SPEC §3.3): one per build, owns one pipeline
  * execution end to end. The kernel's job reduced to a loop (§8): read the
@@ -866,12 +867,15 @@ export class BuildRunner {
       }
     }
     try {
+      if (await this.refreshSummary())
+        return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
       if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) {
         return reduceBuild(await this.deps.store.getEvents(this.deps.slug))
       }
       for (;;) {
         await this.ensureLease()
         const decision = await this.step()
+        if (await this.refreshSummary()) break
         if (decision.kind === 'wait') break
         if (publicationPending(await this.deps.store.getEvents(this.deps.slug))) break
       }
@@ -880,6 +884,22 @@ export class BuildRunner {
       this.stopHeartbeat()
       await this.closeProducerSessions()
     }
+  }
+
+  private async refreshSummary(): Promise<boolean> {
+    try {
+      await this.ensureLease()
+    } catch {
+      return false
+    }
+    return refreshSummaryBoundary({
+      store: this.deps.store,
+      forge: this.deps.forge,
+      slug: this.deps.slug,
+      workspacePath: this.deps.workspacePath,
+      storeRef: this.sessionEnvFor('finalize@1', '').AB_STORE ?? 'local',
+      clock: this.deps.clock,
+    })
   }
 
   /**
@@ -1254,6 +1274,11 @@ export class BuildRunner {
     events: AbEvent[],
   ): Promise<void> {
     const { step, action } = decision
+    await this.deps.store.append(this.deps.slug, {
+      actor: KERNEL,
+      type: 'finalize.step-started',
+      payload: { step },
+    })
     let actor: Actor = KERNEL
     let durableHead: string | undefined
     let failureNote: string | undefined

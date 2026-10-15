@@ -336,6 +336,26 @@ export const eventPayloadSchemas = {
       })
       .optional(),
   }),
+  /** Optional summary publication identities and durable write budgets. */
+  'pr-summary.requested': z.strictObject({
+    occurrence: z.number().int().positive(),
+    boundary: z.number().int().positive(),
+  }),
+  'pr-summary.attempted': z.strictObject({
+    occurrence: z.number().int().positive(),
+    boundary: z.number().int().positive(),
+    pr: z.number().int().positive(),
+  }),
+  'pr-summary.result': z.strictObject({
+    attempt: z.number().int().positive(),
+    outcome: z.enum(['success', 'failure', 'rate-limited']),
+    eligibleAfter: z.string().datetime().optional(),
+  }),
+  'pr-summary.settled': z.strictObject({
+    request: z.number().int().positive(),
+    disposition: z.enum(['attempted', 'skipped', 'deferred']),
+  }),
+  'finalize.step-started': z.strictObject({ step: z.string().min(1) }),
   /** Remote phases deposit their output and park before trusted publication.
    * The dispatcher settles the request only after the VM session and execution
    * lease are gone, then appends the ordinary phase completion fact. */

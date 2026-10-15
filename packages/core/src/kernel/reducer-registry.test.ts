@@ -134,6 +134,8 @@ describe('reducer registry', () => {
         "sandboxStates": 1,
         "session": 1,
         "setupStreak": 1,
+        "summaryBoundary": 1,
+        "summaryRequests": 1,
         "ticketSourceHealth": 2,
         "verifyDiffBase": 1,
       }

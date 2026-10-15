@@ -44,7 +44,6 @@ import { recognizeHelpRequest, renderCommandHelp, renderTopLevelHelp } from './h
 import { observe } from './observe'
 import { abPlugin, type PluginContractSubprocess } from './plugin'
 import { preparePrAttachments } from './pr-attachments'
-import { renderPrSummary } from './pr-summary'
 import { abBuildAssetGet, abBuilds, abBuildStatus } from './status'
 import { abRepositoryStatus } from './repository-status'
 import { abWatch, WATCH_USAGE } from './watch'
@@ -1332,7 +1331,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         const meta = await artifactPut(session, kind, file, { attach })
 
         // A designation made after the PR exists (verify after reconcile or a
-        // finalize post-step) republishes the same complete projection. Every
+        // finalize post-step) prepares hosted attachments. Every
         // external side effect is best-effort after the atomic designation.
         if (attach) {
           try {
@@ -1345,16 +1344,6 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
                 // A post-upload hosted-fact failure records the exact public
                 // asset identity before throwing. Keep going so its hosting
                 // failure cannot suppress the complete text projection.
-              }
-              try {
-                await session.forge.commentOnPr(
-                  session.workspacePath,
-                  pr.number,
-                  renderPrSummary(session.env, await session.store.getEvents(session.env.build)),
-                )
-              } catch {
-                // The exact artifact and designation are already durable. A
-                // comment refresh cannot turn the agent's deposit into failure.
               }
             }
           } catch {
