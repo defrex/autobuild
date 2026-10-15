@@ -684,6 +684,7 @@ describe('D8 scope enforcement over the wire', () => {
       expect([...digests.keys()]).toEqual(['dg-a', 'dg-b'])
       expect(digests.get('dg-a')).toEqual({
         slug: 'dg-a',
+        readinessChangeSeq: 2,
         terminal: 'done',
         observations: [{ seq: 1, ts: CONTRACT_T0 }],
       })

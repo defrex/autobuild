@@ -104,15 +104,28 @@ describe('reduceBuildDigest', () => {
       )
     }
     // Explicit shape pins for the nontrivial orderings.
-    expect(reduceBuildDigest(logs[0]!)).toEqual({ observations: [], terminal: 'done' })
-    expect(reduceBuildDigest(logs[1]!)).toEqual({ observations: [], terminal: 'done' })
-    expect(reduceBuildDigest(logs[2]!)).toEqual({ observations: [], terminal: 'aborted' })
+    expect(reduceBuildDigest(logs[0]!)).toEqual({
+      observations: [],
+      terminal: 'done',
+      readinessChangeSeq: 3,
+    })
+    expect(reduceBuildDigest(logs[1]!)).toEqual({
+      observations: [],
+      terminal: 'done',
+      readinessChangeSeq: 2,
+    })
+    expect(reduceBuildDigest(logs[2]!)).toEqual({
+      observations: [],
+      terminal: 'aborted',
+      readinessChangeSeq: 2,
+    })
     expect(reduceBuildDigest(logs[5]!)).toEqual({
       observations: [
         { seq: 2, ts: event('observation.recorded', 2).ts },
         { seq: 4, ts: event('observation.recorded', 4).ts },
       ],
       terminal: 'done',
+      readinessChangeSeq: 3,
     })
   })
 
@@ -127,6 +140,7 @@ describe('reduceBuildDigest', () => {
         { seq: 9, ts: third.ts },
       ],
       terminal: 'done',
+      readinessChangeSeq: 4,
     })
   })
 
@@ -134,6 +148,7 @@ describe('reduceBuildDigest', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
       observations: [],
       terminal: 'done',
+      readinessChangeSeq: 1,
     })
     const first = event('pr.merged', 2, '2026-07-15T12:00:01.000Z')
     const second = event('pr.merged', 5, '2026-07-15T12:00:05.000Z')
@@ -142,9 +157,14 @@ describe('reduceBuildDigest', () => {
     expect(reduceBuildDigest([event('observation.recorded', 1), first, second])).toEqual({
       observations: [{ seq: 1, ts: event('observation.recorded', 1).ts }],
       merged: second.ts,
+      readinessChangeSeq: 5,
     })
     // A single merge carries its own ts.
-    expect(reduceBuildDigest([first])).toEqual({ observations: [], merged: first.ts })
+    expect(reduceBuildDigest([first])).toEqual({
+      observations: [],
+      merged: first.ts,
+      readinessChangeSeq: 2,
+    })
     // Interleaved with terminal facts, both overwrite independently.
     expect(
       reduceBuildDigest([
@@ -157,6 +177,7 @@ describe('reduceBuildDigest', () => {
       observations: [],
       merged: '2026-07-15T12:00:03.000Z',
       terminal: 'done',
+      readinessChangeSeq: 4,
     })
   })
 })
@@ -265,6 +286,7 @@ describe('reduceBuildDigest pending-work flags', () => {
     expect(reduceBuildDigest([event('build.completed', 1)])).toEqual({
       observations: [],
       terminal: 'done',
+      readinessChangeSeq: 1,
     })
   })
 })

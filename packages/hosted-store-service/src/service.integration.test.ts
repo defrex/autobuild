@@ -126,6 +126,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   // comment on, and ultimately complete the target through the same service.
   if (hostedTickets === undefined) throw new Error('hosted ticket source was not constructed')
   await hostedTickets.transition('T-blocker', 'Done')
+  h.clock.advance(60_000)
   await dispatch()
   const events = await h.events('add-rate-limiting')
   expect(h.cliErrors).toEqual([])
@@ -137,6 +138,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   // A second ready ticket with an invalid spec exercises the dispatcher's
   // hosted comment + handback transition path without launching another build.
   ticketBackend.add(readyTicket('T-handback', { body: 'not a conforming spec' }))
+  h.clock.advance(60_000)
   await dispatch()
   expect(ticketBackend.comments.some((comment) => comment.id === 'T-handback')).toBe(true)
   expect(ticketBackend.transitions).toContainEqual({ id: 'T-handback', state: 'Backlog' })

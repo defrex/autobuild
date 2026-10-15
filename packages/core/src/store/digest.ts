@@ -45,6 +45,7 @@ export type DigestEvent = DigestEventRow
 
 /** The carried accumulator for `reduceBuildDigest`. */
 export interface DigestAcc {
+  readinessChangeSeq?: number
   terminal?: BuildDigest['terminal']
   merged?: string
   observations: { seq: number; ts: string }[]
@@ -57,7 +58,7 @@ export interface DigestAcc {
 }
 
 /** Bump when `DigestAcc`'s shape or fold semantics change. */
-export const BUILD_DIGEST_REDUCER_VERSION = 2
+export const BUILD_DIGEST_REDUCER_VERSION = 3
 
 export const buildDigestReducer: IncrementalReducer<
   DigestAcc,
@@ -68,6 +69,8 @@ export const buildDigestReducer: IncrementalReducer<
   initial: (): DigestAcc => ({ observations: [], hosted: [], reclaimed: [], openInstance: null }),
   fold(acc, events) {
     for (const event of events) {
+      if (['pr.merged', 'build.completed', 'build.aborted'].includes(event.type))
+        acc.readinessChangeSeq = event.seq
       if (event.type === 'build.completed') acc.terminal = 'done'
       else if (event.type === 'build.aborted') acc.terminal = 'aborted'
       else if (event.type === 'pr.merged') acc.merged = event.ts
@@ -84,11 +87,20 @@ export const buildDigestReducer: IncrementalReducer<
       }
     }
   },
-  finish: ({ terminal, merged, observations, hosted, reclaimed, openInstance }) => {
+  finish: ({
+    readinessChangeSeq,
+    terminal,
+    merged,
+    observations,
+    hosted,
+    reclaimed,
+    openInstance,
+  }) => {
     const reclaimedSet = new Set(reclaimed)
     const reclaimPending = hosted.some((seq) => !reclaimedSet.has(seq))
     return {
       observations: [...observations],
+      ...(readinessChangeSeq !== undefined ? { readinessChangeSeq } : {}),
       ...(merged !== undefined ? { merged } : {}),
       ...(terminal !== undefined ? { terminal } : {}),
       ...(reclaimPending ? { reclaimPending: true as const } : {}),

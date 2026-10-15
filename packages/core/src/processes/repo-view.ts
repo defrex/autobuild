@@ -32,7 +32,8 @@
  * What is held:
  *
  * - the bounded repository journal (`getRepoStateEvents`' subset), pruned on
- *   arrival by the same keep rule — durable types plus the tail from the latest
+ *   arrival by the same keep rule — durable facts, latest-only measurements,
+ *   and the tail (excluding latest-only types) from the latest
  *   `dispatcher.run-started` — which is exact for seq-ordered input;
  * - for *work* builds (nonterminal, aborted, reclaim-pending, execution-open),
  *   the full event array. Settled terminal builds hold only the discovery

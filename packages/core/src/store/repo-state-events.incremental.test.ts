@@ -26,10 +26,21 @@ function ev(seq: number, type: string): RepositoryEvent {
 function oracle(events: readonly RepositoryEvent[]): RepositoryEvent[] {
   let anchor: number | undefined
   for (const e of events) if (e.type === 'dispatcher.run-started') anchor = e.seq
-  return events.filter((e) => STATE.has(e.type) || (anchor !== undefined && e.seq >= anchor))
+  const latestSeq = Math.max(
+    -1,
+    ...events.filter((e) => e.type === 'dispatcher.ticket-scan-completed').map((e) => e.seq),
+  )
+  return events
+    .filter((e) =>
+      e.type === 'dispatcher.ticket-scan-completed'
+        ? e.seq === latestSeq
+        : STATE.has(e.type) || (anchor !== undefined && e.seq >= anchor),
+    )
+    .sort((a, b) => a.seq - b.seq)
 }
 
 const TYPES = [
+  'dispatcher.ticket-scan-completed',
   'harvest.started',
   'orchestrator.sandbox.provisioned',
   'dispatcher.intake-set',
@@ -75,8 +86,8 @@ const fixtures: Record<string, RepositoryEvent[]> = {
 }
 
 describe('repositoryStateEventsReducer', () => {
-  test('version invalidates pre-health journal projections', () => {
-    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(3)
+  test('version includes latest-only scan semantics', () => {
+    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(4)
   })
 
   for (const [name, log] of Object.entries(fixtures)) {
@@ -108,7 +119,7 @@ describe('repositoryStateEventsReducer', () => {
       ev(5, 'dispatcher.run-started'),
       ev(1, 'dispatcher.run-started'),
     ]
-    expect(projectRepositoryStateEvents(log).map((e) => e.seq)).toEqual([2, 5, 1])
+    expect(projectRepositoryStateEvents(log).map((e) => e.seq)).toEqual([1, 2, 5])
     checkIncremental(repositoryStateEventsReducer, log)
   })
 })

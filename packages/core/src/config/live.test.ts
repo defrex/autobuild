@@ -283,3 +283,14 @@ command = "lint"
     expect(live.current().resolver.resolve('implement').model).toBe('gpt-old')
   })
 })
+
+test('ticket scan cadence reloads and belongs to the deployment configuration', async () => {
+  const startup = parseConfig(base)
+  const candidateText = `ticketScanIntervalSeconds = 23\n${base}`
+  const candidate = parseConfig(candidateText)
+  expect(composeReloadedConfig(startup, candidate).ticketScanIntervalSeconds).toBe(23)
+  expect(composeBuildConfig(startup, candidate).ticketScanIntervalSeconds).toBe(23)
+  const live = new LiveConfig('autobuild.toml', startup, base, runtimes, async () => {})
+  expect((await live.refresh(candidateText)).kind).toBe('adopted')
+  expect(live.current().config.ticketScanIntervalSeconds).toBe(23)
+})

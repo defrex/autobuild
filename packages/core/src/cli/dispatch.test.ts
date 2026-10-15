@@ -1666,10 +1666,12 @@ describe('dispatcher run identity without a kernelRunId', () => {
 
 describe('abDispatch long-running view (AUT-647)', () => {
   test('repository controls written by another handle between ticks reach the next tick', async () => {
+    const scanClock = manualClock()
     const fx = await makeFixture(
       readyTicket('T-first', { title: 'First' }),
       happyHandlers(),
       DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 3'),
+      scanClock,
     )
     const stop = new AbortController()
     try {
@@ -1684,6 +1686,7 @@ describe('abDispatch long-running view (AUT-647)', () => {
         signal: stop.signal,
         intervalMs: 1,
         sleep: async () => {
+          scanClock.advance(60_000)
           sleeps += 1
           claimsAtSleep.push([...fx.tickets.claims])
           if (sleeps === 1) {
@@ -3698,7 +3701,8 @@ describe('abDispatch watch build-runner coordination', () => {
   }, 10_000)
 
   test('retains the accepted config across deletion and reloads after restoration', async () => {
-    const fx = await makeFixture([], happyHandlers())
+    const scanClock = manualClock()
+    const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, scanClock)
     const stop = new AbortController()
     const out: string[] = []
     const restored = DISPATCH_CONFIG_TOML.replace('readyState = "Ready"', 'readyState = "Queued"')
@@ -3716,6 +3720,7 @@ describe('abDispatch watch build-runner coordination', () => {
         signal: stop.signal,
         intervalMs: 1,
         sleep: async () => {
+          scanClock.advance(60_000)
           sleeps += 1
           if (sleeps === 1) {
             await unlink(join(fx.checkout, 'autobuild.toml'))
@@ -6525,10 +6530,12 @@ describe('abDispatch interactive keyboard controls', () => {
   }, 30_000)
 
   test('global default fans out onto in-flight builds, seeds later claims, and a per-build cancel stands until the default moves again', async () => {
+    const scanClock = manualClock()
     const fx = await makeFixture(
       readyTicket('T-existing-default', { title: 'Existing work' }),
       happyHandlers(),
       DISPATCH_CONFIG_TOML.replace('capacity = 1', 'capacity = 3'),
+      scanClock,
     )
     let run: Promise<void> | undefined
     const input = fakeInput()
@@ -6557,6 +6564,7 @@ describe('abDispatch interactive keyboard controls', () => {
         stderr: (line) => fx.err.push(line),
         intervalMs: 1,
         sleep: async () => {
+          scanClock.advance(60_000)
           sleeps += 1
           if (sleeps === 1) {
             input.press('auto-merge')
@@ -6894,13 +6902,20 @@ describe('abDispatch interactive keyboard controls', () => {
       let added = (await fx.store.getRepoEvents(fx.origin)).slice(before)
       // The unconditional run boundary and the tick facts precede the human
       // control write (this invocation holds the repository lease and ticks).
-      expect(added.map((event) => event.type)).toEqual([
+      expect(
+        added
+          .filter((event) => event.type !== 'dispatcher.ticket-scan-completed')
+          .map((event) => event.type),
+      ).toEqual([
         'dispatcher.run-started',
         'dispatcher.tick-started',
         'dispatcher.tick-completed',
         'harvest.resume-requested',
       ])
-      expect(added[3]?.actor).toEqual({ kind: 'human', user: 'error-op' })
+      expect(added.find((event) => event.type === 'harvest.resume-requested')?.actor).toEqual({
+        kind: 'human',
+        user: 'error-op',
+      })
       expect(added.some((event) => event.type === 'harvest.pause-requested')).toBe(false)
 
       // A second p while the request is pending is a no-op. The queued Up is
@@ -6908,8 +6923,8 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('pause')
       input.press('up')
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
-      // Run boundary, the two tick facts, and the one human control write.
-      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + 4)
+      // No additional facts after the completed tick and human control write.
+      expect(await fx.store.getRepoEvents(fx.origin)).toHaveLength(before + added.length)
       expect(stripAnsi(term.all())).not.toContain('harvest run: resume acknowledgement pending')
 
       await fx.store.appendRepo(fx.origin, {
@@ -7052,11 +7067,12 @@ describe('abDispatch interactive keyboard controls', () => {
       // The selection move is serialized after the no-op run action. The run
       // boundary is the invocation's only durable write up to this point.
       await waitFor(() => /^ > Autobuild/m.test(latestDashboardFrame(term)))
-      expect((await fx.store.getRepoEvents(fx.origin)).slice(before).map((e) => e.type)).toEqual([
-        'dispatcher.run-started',
-        'dispatcher.tick-started',
-        'dispatcher.tick-completed',
-      ])
+      expect(
+        (await fx.store.getRepoEvents(fx.origin))
+          .slice(before)
+          .filter((e) => e.type !== 'dispatcher.ticket-scan-completed')
+          .map((e) => e.type),
+      ).toEqual(['dispatcher.run-started', 'dispatcher.tick-started', 'dispatcher.tick-completed'])
       expect(stripAnsi(term.all())).not.toContain(
         'harvest run action unavailable while harvest is OFF',
       )
@@ -9364,7 +9380,13 @@ describe('abDispatch interactive keyboard controls', () => {
   }, 30_000)
 
   test('explicit intake and global i persist, a no-flag restart reuses them, and d stays inert on global', async () => {
-    const fx = await makeFixture(readyTicket('T-intake-off', { body: 'not a conforming spec' }), {})
+    const scanClock = manualClock()
+    const fx = await makeFixture(
+      readyTicket('T-intake-off', { body: 'not a conforming spec' }),
+      {},
+      DISPATCH_CONFIG_TOML,
+      scanClock,
+    )
     try {
       const input = fakeInput()
       const term = fakeTerminal()
@@ -9378,6 +9400,7 @@ describe('abDispatch interactive keyboard controls', () => {
         intake: false,
         intervalMs: 1,
         sleep: async () => {
+          scanClock.advance(60_000)
           sleeps += 1
           if (sleeps === 1) {
             expect(fx.tickets.claims).toEqual([])
@@ -9410,6 +9433,7 @@ describe('abDispatch interactive keyboard controls', () => {
 
       // A new DispatchLoop samples the toggled ON value. A newly ready ticket
       // is claimed on its first tick without another operator toggle.
+      scanClock.advance(60_000)
       fx.tickets.add(readyTicket('T-fresh', { body: 'still nonconforming' }))
       const freshInput = fakeInput()
       await abDispatch({
@@ -10499,4 +10523,52 @@ describe('dispatch rate-limit journaling', () => {
       await fx.cleanup()
     }
   }, 30_000)
+})
+
+test('cold dispatch invocations retain queue measurements and publish scan configuration', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture(
+    { ...readyTicket('waiting'), blockedBy: ['missing'] },
+    {},
+    DISPATCH_CONFIG_TOML,
+    clock,
+  )
+  let scans = 0
+  const list = fx.tickets.listReady.bind(fx.tickets)
+  fx.tickets.listReady = async (...args) => {
+    scans++
+    return list(...args)
+  }
+  try {
+    const invoke = () =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        once: true,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        wire: fx.wire,
+      })
+    await invoke()
+    clock.advance(30_000)
+    await invoke()
+    expect(scans).toBe(1)
+    const ticks = (await fx.store.getRepoEvents(fx.origin)).filter(
+      (e) => e.type === 'dispatcher.tick-completed',
+    )
+    expect(ticks.map((e) => e.payload.queued)).toEqual([1, 1])
+    expect(ticks.map((e) => e.payload.dependencyDiagnostics)).toEqual([
+      ['ticket waiting blocked by missing, which does not exist in this ticket source'],
+      ['ticket waiting blocked by missing, which does not exist in this ticket source'],
+    ])
+    const config = await fx.store.getRepoArtifact(fx.origin, 'dispatcher-effective-config')
+    expect(JSON.parse(new TextDecoder().decode(config!.content)).ticketScanIntervalSeconds).toBe(60)
+    clock.advance(30_000)
+    await invoke()
+    expect(scans).toBe(2)
+    expect(fx.tickets.claims).toEqual([])
+  } finally {
+    await fx.cleanup()
+  }
 })
