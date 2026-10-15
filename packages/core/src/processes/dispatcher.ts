@@ -666,7 +666,15 @@ export class Dispatcher {
     return this.repoOrigin
   }
   private readonly leaseTtlMs: number
-  private readonly doneState: string
+  private get doneState(): string {
+    return (
+      this.deps.opts?.doneState ??
+      (this.deps.config.tickets.source === 'hosted'
+        ? this.deps.config.tickets.doneState
+        : undefined) ??
+      'Done'
+    )
+  }
   private readonly slugNamingTimeoutMs: number
   private readonly maxHarvestRecoveryAttempts: number
   private readonly provisionStaleMs: number
@@ -696,7 +704,6 @@ export class Dispatcher {
         ? deps.store
         : new RepoViewStore(deps.store, { repo: deps.repo })
     this.leaseTtlMs = deps.opts?.leaseTtlMs ?? 0
-    this.doneState = deps.opts?.doneState ?? 'Done'
     this.slugNamingTimeoutMs = deps.opts?.slugNamingTimeoutMs ?? DEFAULT_SLUG_NAMING_TIMEOUT_MS
     this.maxHarvestRecoveryAttempts =
       deps.opts?.maxHarvestRecoveryAttempts ?? DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS

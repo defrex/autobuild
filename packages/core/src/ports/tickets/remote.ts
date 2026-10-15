@@ -49,6 +49,7 @@ export class HostedTicketSource implements TicketSource {
     this.fetchFn = options.fetchFn ?? fetch
     this.context = {
       teamKey: options.teamKey,
+      ...(options.repo !== undefined ? { repo: options.repo } : {}),
       ...(options.claimedState !== undefined ? { claimedState: options.claimedState } : {}),
       ...(options.createState !== undefined ? { createState: options.createState } : {}),
     }

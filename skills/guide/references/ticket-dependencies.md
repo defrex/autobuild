@@ -2,7 +2,7 @@
 
 `ab ticket create --blocked-by` validates prerequisite ids and records blocking
 relationships, but a single CLI command is **not an atomic publication guarantee**.
-In particular, direct Linear and hosted Linear create the issue first and add
+In particular, direct Linear creates the issue first and adds
 its blocker relationships in separate requests. If the issue is already in the
 ready state, a dispatcher can see it before those relationships exist. A
 successful create response containing every blocker does not prove that no build

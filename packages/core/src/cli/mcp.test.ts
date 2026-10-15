@@ -278,3 +278,22 @@ test('with [orchestrator] enabled the seven sandbox tools advertise and one roun
     await client.close()
   }
 })
+
+import { buildMcpTicketBackend } from './mcp'
+import { parseConfig } from '../config/load'
+
+test('local MCP keeps file tickets usable without a team key', async () => {
+  const config = parseConfig(await Bun.file(join(tmp, 'autobuild.toml')).text())
+  const backend = await buildMcpTicketBackend({
+    targetRepo: tmp,
+    checkout: tmp,
+    localStateRoot: storeDir,
+    env: {},
+    exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    stdout: () => {},
+    stderr: () => {},
+  })
+  const source = await backend.sourceFor({ repo: tmp, tickets: config.tickets, teamKey: '' })
+  const created = await source.create({ title: 'Local ticket', body: 'Spec' })
+  expect((await source.get(created.ref.id))?.title).toBe('Local ticket')
+})

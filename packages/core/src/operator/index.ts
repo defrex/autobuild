@@ -125,3 +125,10 @@ export type { HarvestStatusView } from '../cli/harvest'
 export type { RepositoryStatus } from '../cli/repository-status'
 export type { BuildSummary } from '../cli/status'
 export type { SessionRecord } from '../store/types'
+
+export {
+  effectiveConfig,
+  selectEffectiveConfig,
+  findEffectiveConfigRef,
+  decodeEffectiveConfig,
+} from './query'

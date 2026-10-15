@@ -1044,7 +1044,16 @@ expiry so spawned builds continue. Owner-issued project credentials attribute
 operator writes to their recorded creator. Build and phase authority narrowing
 remains interface-enforced; agents still receive the dispatcher's project
 credential pending the separate build credential work. Ticket admission uses
-the credential project; shared Linear/team ticket tenancy is explicitly deferred.
+the credential project. Hosted tickets, comments, blockers, creation-key
+deduplication and assets are partitioned by registered repository, never team.
+Lifecycle comes from that project's latest durable effective configuration
+(triage Backlog, claim Doing, completion Done by default; configurable
+`doneState`). Owner admin ticket requests explicitly select a registered
+repository. The service has no Linear ticket backend: external tracker and
+file sources remain dispatcher-side, and service ticket surfaces refuse those
+projects with actionable source feedback. Legacy team queues migrate atomically
+to their sole configured claimant; conflicts stop unchanged for an owner
+assignment and rerun. See the hosted service migration procedure.
 See the remote store, remote ticket and operator protocol references for wire
 and revocation details. Least privilege comes from code, not prompt instructions.
 
@@ -1723,6 +1732,18 @@ event-level mechanics live in the repository catalog and reducer tests):
   them — a bounce filed into Ready is claimed and bounced again forever.
 
 ## 13. Ticket source policy
+
+**Hosted tickets are project-scoped.** A project credential selects one registered
+repository; an owner selects a registered repository explicitly. Team and state
+fields from clients convey no authority or lifecycle policy. Tickets, comments,
+blockers, creation-key deduplication and assets are isolated by repository.
+The project's latest effective configuration supplies hosted lifecycle names:
+triage Backlog, claimed Doing, completion Done (`doneState`) and create/proposal
+equal to triage by default; `readyState` is required. Configured roles may overlap.
+The service has no Linear backend and never relays external ticket sources.
+Projects using Linear, files or plugins keep their direct dispatcher connection;
+service ticket surfaces refuse with project/source feedback instead of empty data.
+
 
 The TicketSource **initiates and receives projections; it is never consulted
 mid-build and never used as artifact storage.** Dispatch reads the ticket

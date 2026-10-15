@@ -42,3 +42,6 @@ export { VercelBlobStore } from './vercel'
 export type { VercelBlobStoreOptions } from './vercel'
 export * from './projects'
 export * from './credentials'
+
+export { openPostgresBlobsFromEnv, migratePostgresFromEnv } from './config'
+export * from './ticket-assignments'

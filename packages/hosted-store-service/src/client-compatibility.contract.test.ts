@@ -1,3 +1,4 @@
+import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 import { expect, test } from 'bun:test'
@@ -48,6 +49,29 @@ for (const version of ['0.9.0', '0.10.0', '0.11.0', '0.11.999', '0.8.99', '0.12.
   test(`all gates negotiate ${version} before backend effects`, async () => {
     const supported = ['0.9.0', '0.10.0', '0.11.0', '0.11.999'].includes(version)
     const store = new MemoryBuildStore()
+    await store.ensureRepo('https://github.com/acme/compat')
+    const config = parseConfig(
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
+    )
+    const { verify, finalize, ...root } = config
+    const artifact = await store.putRepoArtifact('https://github.com/acme/compat', {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps },
+        finalize: { steps: finalize.steps },
+      }),
+    })
+    await store.appendRepo('https://github.com/acme/compat', {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'compat',
+        pid: 1,
+        effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+        roleWarnings: [],
+      },
+    })
     const standalone = createStoreServer({ store, secret })
     let ticketCalls = 0
     const tickets = createTicketServer({
@@ -60,7 +84,7 @@ for (const version of ['0.9.0', '0.10.0', '0.11.0', '0.11.999', '0.8.99', '0.12.
     const operators = createOperatorServer({ store, secret, projects: testProjects(['repo']) })
     let opens = 0
     const composed = createHostedStoreService({
-      openProjectRegistry: async () => testProjects(['repo']),
+      openProjectRegistry: async () => testProjects(['repo', 'https://github.com/acme/compat']),
       env: {
         AB_STORE_SECRET: secret,
         AB_POSTGRES_URL: 'postgres://unused/test',
@@ -106,7 +130,7 @@ for (const version of ['0.9.0', '0.10.0', '0.11.0', '0.11.999', '0.8.99', '0.12.
           request(
             '/tickets/list-ready',
             version,
-            { context: { teamKey: 'ENG' }, input: {} },
+            { context: { teamKey: 'ENG', repo: 'https://github.com/acme/compat' }, input: {} },
             token,
           ),
         )

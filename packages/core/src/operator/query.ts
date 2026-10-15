@@ -38,7 +38,7 @@ export type BuildListScope = 'active' | 'queued' | 'all'
 
 export class OperatorQueryError extends Error {
   constructor(
-    readonly code: 'not-found' | 'effective-config-unavailable',
+    readonly code: 'not-found' | 'effective-config-unavailable' | 'external-ticket-source',
     message: string,
   ) {
     super(message)
@@ -121,24 +121,8 @@ export async function effectiveConfig(
   status: ReturnType<typeof reduceDispatchStatus>
 }> {
   const repositoryEvents = journal ?? (await readRepoEventsIfRecorded(store, repo))
-  let latestRun: string | undefined
-  for (const event of repositoryEvents) {
-    if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
-  }
-  if (latestRun === undefined) {
-    throw new OperatorQueryError(
-      'effective-config-unavailable',
-      `effective config unavailable for repository "${repo}": no dispatcher run is recorded`,
-    )
-  }
-  const status = reduceDispatchStatus(repositoryEvents, latestRun)
-  const ref = status.effectiveConfig
-  if (ref === undefined) {
-    throw new OperatorQueryError(
-      'effective-config-unavailable',
-      `effective config unavailable for repository "${repo}"`,
-    )
-  }
+  const status = selectEffectiveConfig(repositoryEvents, repo)
+  const ref = status.effectiveConfig!
   const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
   if (artifact === null) {
     throw new OperatorQueryError(
@@ -146,23 +130,61 @@ export async function effectiveConfig(
       `effective config ${ref.kind}@${ref.rev} is not retrievable`,
     )
   }
+  return {
+    config: decodeEffectiveConfig(artifact.content, `${ref.kind}@${ref.rev}`),
+    repositoryEvents,
+    status,
+  }
+}
+
+function latestDispatchConfigStatus(repositoryEvents: RepositoryEvent[]) {
+  let latestRun: string | undefined
+  for (const event of repositoryEvents) {
+    if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
+  }
+  return latestRun === undefined ? undefined : reduceDispatchStatus(repositoryEvents, latestRun)
+}
+
+/** Absence is distinct from a selected reference whose bytes cannot be read. */
+export function findEffectiveConfigRef(repositoryEvents: RepositoryEvent[]) {
+  return latestDispatchConfigStatus(repositoryEvents)?.effectiveConfig
+}
+
+export function selectEffectiveConfig(repositoryEvents: RepositoryEvent[], repo: string) {
+  const status = latestDispatchConfigStatus(repositoryEvents)
+  if (status === undefined) {
+    throw new OperatorQueryError(
+      'effective-config-unavailable',
+      `effective config unavailable for repository "${repo}": no dispatcher run is recorded`,
+    )
+  }
+  if (status.effectiveConfig === undefined) {
+    throw new OperatorQueryError(
+      'effective-config-unavailable',
+      `effective config unavailable for repository "${repo}"`,
+    )
+  }
+  return status
+}
+
+export function decodeEffectiveConfig(content: Uint8Array, label: string): Config {
   let raw: unknown
   try {
-    raw = JSON.parse(new TextDecoder().decode(artifact.content))
+    raw = JSON.parse(new TextDecoder().decode(content))
   } catch {
     throw new OperatorQueryError(
       'effective-config-unavailable',
-      `effective config ${ref.kind}@${ref.rev} is not valid JSON`,
+      `effective config ${label} is not valid JSON`,
     )
   }
   const parsed = configSchema.safeParse(raw)
   if (!parsed.success) {
     throw new OperatorQueryError(
       'effective-config-unavailable',
-      `effective config ${ref.kind}@${ref.rev} is invalid: ${parsed.error.message}`,
+      `effective config ${label} is invalid: ${parsed.error.message}`,
     )
   }
-  return { config: parsed.data, repositoryEvents, status }
+  return parsed.data
 }
 
 export interface OperatorBuildView {

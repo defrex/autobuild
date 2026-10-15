@@ -576,15 +576,33 @@ export const ticketsSchema = z.strictObject({
   /** Backend team key (e.g. "ENG") — required for linear and hosted. */
   teamKey: z.string().min(1).optional(),
   /** Workflow state claim() moves an issue to (§12); Linear and hosted. */
-  claimedState: z.string().min(1).optional(),
+  claimedState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
+  /** Hosted project completion state; defaults to Done. */
+  doneState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
   /** State create() files new tickets into. Absent = the provider's default
    * (Linear: the team's default state, e.g. Backlog; file: Triage). */
-  createState: z.string().min(1).optional(),
+  createState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
   /** State the dispatcher hands tickets back to for human triage — spec-gate
    * bounces (§6.3), aborted builds, closed-unmerged PRs. Absent = the
    * provider's default (Linear: Backlog; file: Triage) — resolved by
    * defaultTriageState in src/processes/dispatcher.ts. */
-  triageState: z.string().min(1).optional(),
+  triageState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
   /** State harvest files its synthesized proposals into (§12). Absent = the
    * triage state, which keeps the constitutional grooming gate: a proposal
    * waits for a human before it can be dispatched. Setting it to readyState
@@ -593,7 +611,11 @@ export const ticketsSchema = z.strictObject({
    * does not also redirect spec-gate bounces, aborts, and closed-unmerged PRs
    * into the ready state, where a bounce would re-dispatch itself. Resolved by
    * defaultProposalState in src/processes/dispatcher.ts. */
-  proposalState: z.string().min(1).optional(),
+  proposalState: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'state must be nonblank')
+    .optional(),
   /** Directory of state dirs (`triage/ ready/ doing/ done/`) holding `<id>.md`
    * ticket files; optional — defaults to `.autobuild/tickets`, resolved
    * relative to the repo. Kept schema-optional (not `.default()`) so the
