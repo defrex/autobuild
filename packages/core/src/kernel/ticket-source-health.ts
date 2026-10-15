@@ -7,11 +7,17 @@ export const ticketSourceHealthReducer = defineReducer<
   RepositoryEvent,
   TicketSourceDegradation | undefined
 >({
-  version: 1,
+  version: 2,
   initial: () => ({}),
   fold(acc, events) {
     for (const event of events) {
       if (event.type === 'dispatcher.ticket-source-degraded') acc.active = event.payload
+      if (
+        event.type === 'dispatcher.ticket-source-dependency-limited' &&
+        acc.active?.cause === 'rate-limited' &&
+        acc.active.source === event.payload.source
+      )
+        acc.active = { ...acc.active, operation: 'dependency-check' }
       if (event.type === 'dispatcher.ticket-source-recovered') delete acc.active
     }
   },

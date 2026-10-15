@@ -136,7 +136,7 @@ export interface RepositoryStateEventsAcc {
 }
 
 /** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 2
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 3
 
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
   STATE_TYPES.has(event.type) || (anchor !== undefined && event.seq >= anchor)
@@ -169,7 +169,7 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 2
+export const JOURNAL_VIEW_REDUCER_VERSION = 3
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {

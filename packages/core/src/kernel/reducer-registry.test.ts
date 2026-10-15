@@ -113,7 +113,7 @@ describe('reducer registry', () => {
         "harvest": 1,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
-        "journalView": 2,
+        "journalView": 3,
         "lastExecutionOutcome": 1,
         "logIndex": 1,
         "openBuildWorkspace": 1,
@@ -129,11 +129,11 @@ describe('reducer registry', () => {
         "publishedBranchHead": 1,
         "recordedBaseSha": 1,
         "recoveryCheckpoint": 1,
-        "repositoryStateEvents": 2,
+        "repositoryStateEvents": 3,
         "sandboxStates": 1,
         "session": 1,
         "setupStreak": 1,
-        "ticketSourceHealth": 1,
+        "ticketSourceHealth": 2,
         "verifyDiffBase": 1,
       }
     `)

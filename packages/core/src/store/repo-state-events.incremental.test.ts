@@ -76,7 +76,7 @@ const fixtures: Record<string, RepositoryEvent[]> = {
 
 describe('repositoryStateEventsReducer', () => {
   test('version invalidates pre-health journal projections', () => {
-    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(2)
+    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(3)
   })
 
   for (const [name, log] of Object.entries(fixtures)) {

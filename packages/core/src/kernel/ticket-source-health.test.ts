@@ -45,3 +45,36 @@ test('degradation survives bounded replay across dispatcher runs and recovery cl
     projectRepositoryStatus('repo', await store.getRepoStateEvents('repo')).ticketSourceDegradation,
   ).toBeUndefined()
 })
+
+test('dependency evidence strengthens a listing episode durably without another onset', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo('repo')
+  await store.appendRepo('repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-source-degraded',
+    payload: {
+      source: 'fake',
+      cause: 'rate-limited',
+      operation: 'ready-scan',
+      message: 'quota exhausted',
+      resetAt: '2026-10-14T12:00:00.000Z',
+    },
+  })
+  await store.appendRepo('repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-source-dependency-limited',
+    payload: { source: 'other' },
+  })
+  expect(reduceTicketSourceHealth(await store.getRepoEvents('repo'))?.operation).toBe('ready-scan')
+  await store.appendRepo('repo', {
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-source-dependency-limited',
+    payload: { source: 'fake' },
+  })
+  const events = await store.getRepoEvents('repo')
+  checkIncremental(ticketSourceHealthReducer, events)
+  expect(reduceTicketSourceHealth(events)?.operation).toBe('dependency-check')
+  expect(reduceTicketSourceHealth(await store.getRepoStateEvents('repo'))).toEqual(
+    reduceTicketSourceHealth(events),
+  )
+})

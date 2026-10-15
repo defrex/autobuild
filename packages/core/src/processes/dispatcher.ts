@@ -909,13 +909,20 @@ export class Dispatcher {
   ): Promise<void> {
     await this.store.refreshJournal()
     const current = reduceTicketSourceHealth(this.store.recordedJournal())
-    if (
-      next !== undefined &&
-      current?.cause === next.cause &&
-      current.operation === next.operation &&
-      current.source === next.source
-    )
+    if (next !== undefined && current?.cause === next.cause && current.source === next.source) {
+      if (
+        next.cause === 'rate-limited' &&
+        next.operation === 'dependency-check' &&
+        current.operation !== 'dependency-check'
+      ) {
+        await this.store.appendRepo(this.deps.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.ticket-source-dependency-limited',
+          payload: { source: current.source },
+        })
+      }
       return
+    }
     if (
       next === undefined &&
       current?.operation === 'dependency-check' &&

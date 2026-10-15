@@ -7598,6 +7598,63 @@ describe('provider-neutral intake rate limits', () => {
     expect(report.dependencyBlocked).toBe(2)
   })
 
+  for (const firstOperation of ['dependency', 'listing']) {
+    test(`alternating cooldown failures retain one episode starting at ${firstOperation}`, async () => {
+      const store = new MemoryBuildStore()
+      let mode = firstOperation
+      const make = () =>
+        harness({
+          store,
+          tickets: [readyTicket('T-1', { blockedBy: ['T-9'] })],
+          wrapTickets: (source) => {
+            const list = source.listReady.bind(source)
+            source.listReady = async (criteria) => {
+              if (mode === 'listing')
+                throw new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+              return list(criteria)
+            }
+            source.dependencyStates = async () => {
+              if (mode === 'dependency')
+                throw new TicketSourceRateLimitError('fake', 1_800_000_180_000)
+              return [{ id: 'T-9', exists: true, resolved: false, blockedBy: [] }]
+            }
+            return source
+          },
+        })
+      const first = make()
+      await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+      for (const next of ['dependency', 'listing', 'dependency', 'listing']) {
+        mode = next
+        await expect(first.dispatcher.tick()).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+      }
+      const episodes = async () =>
+        (await store.getRepoEvents(REPO)).filter(
+          (event) =>
+            event.type === 'dispatcher.ticket-source-degraded' ||
+            event.type === 'dispatcher.ticket-source-recovered',
+        )
+      expect((await episodes()).map((event) => event.type)).toEqual([
+        'dispatcher.ticket-source-degraded',
+      ])
+      // Replaying the journal must retain the strictest observed recovery
+      // requirement, including when the episode began at the ready listing.
+      const restarted = make()
+      mode = 'healthy'
+      await restarted.dispatcher.observeReady()
+      expect((await episodes()).map((event) => event.type)).toEqual([
+        'dispatcher.ticket-source-degraded',
+      ])
+      await restarted.dispatcher.tick()
+      await restarted.dispatcher.tick()
+      expect((await episodes()).map((event) => event.type)).toEqual([
+        'dispatcher.ticket-source-degraded',
+        'dispatcher.ticket-source-recovered',
+      ])
+      expect(first.tickets.claims).toEqual([])
+      expect(restarted.tickets.claims).toEqual([])
+    })
+  }
+
   test('dependency degradation deduplicates across restart and observation, then recovers once', async () => {
     let mode = 'limited'
     const store = new MemoryBuildStore()

@@ -456,6 +456,9 @@ const ticketSourceCondition = {
   message: z.string().min(1),
 }
 export const ticketSourceHealthEventPayloadSchemas = {
+  /** An existing listing-limit episode also encountered a limited dependency
+   * read. Strengthens recovery evidence without closing or reopening it. */
+  'dispatcher.ticket-source-dependency-limited': z.strictObject({ source: z.string().min(1) }),
   'dispatcher.ticket-source-degraded': z.discriminatedUnion('cause', [
     z.strictObject({
       ...ticketSourceCondition,
@@ -570,6 +573,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'dispatcher.config-publication-failed': ['dispatcher'],
   'dispatcher.tick-started': ['dispatcher'],
   'dispatcher.tick-completed': ['dispatcher'],
+  'dispatcher.ticket-source-dependency-limited': ['dispatcher'],
   'dispatcher.ticket-source-degraded': ['dispatcher'],
   'dispatcher.ticket-source-recovered': ['dispatcher'],
   'dispatcher.tick-failed': ['dispatcher'],
