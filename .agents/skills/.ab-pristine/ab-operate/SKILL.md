@@ -24,8 +24,60 @@ after them apply to both.
 
 ## Running locally with the `ab` CLI
 
-Run the commands below from the repository root. Each acts with the operator's
-authority, so say what you are doing before you do anything destructive.
+Each command acts with the operator's authority, so say what you are doing
+before you do anything destructive.
+
+### Resolve the local invocation first
+
+Before your first Autobuild command, read the repository's package manifests
+and package-manager evidence. A direct `@defrex/autobuild` declaration in
+`dependencies` or `devDependencies` requires the repository's installed
+version. The manifest's own `name` and a transitive dependency are not declarations.
+
+Determine the package manager from `packageManager` and the lockfile:
+`bun.lock` / `bun.lockb`, `package-lock.json` / `npm-shrinkwrap.json`,
+`pnpm-lock.yaml`, or `yarn.lock`. Resolve workspace context from the manifest
+declaring the dependency and the repository's package-manager configuration.
+If evidence conflicts or cannot establish the manager, diagnose and tell the
+operator instead of guessing.
+
+Verify that the dependency is already installed and that its installed package
+exposes the `ab` binary you will execute. For node_modules installs, verify
+that `./node_modules/.bin/ab` resolves to that installed
+`@defrex/autobuild` package, not another package or a global binary. For Yarn
+PnP, use Yarn's installed dependency and binary evidence to establish ownership.
+Run from the resolved repository/workspace directory:
+
+| Package manager | Local-only invocation |
+| --- | --- |
+| Bun | `bun run ./node_modules/.bin/ab …` |
+| npm | `npm exec --offline --no --call './node_modules/.bin/ab …'` |
+| pnpm | `pnpm exec ./node_modules/.bin/ab …` |
+| Modern Yarn | `yarn run --binaries-only ab …` |
+| Yarn Classic | `yarn run ab …` |
+
+Replace the ellipsis with CLI arguments; for npm they go inside the quoted
+call, with appropriate shell quoting. Do not add `--package` or an inferred
+package name. The explicit path prevents global PATH fallback, and npm's
+offline/no flags prevent registry installation. Modern Yarn's binary-only
+selection supports installed PnP dependencies without assuming node_modules.
+Before using Yarn Classic, verify its installed local binary and check that
+`scripts.ab`, `scripts.preab`, and `scripts.postab` cannot intercept the
+command. Report a script conflict instead of executing it.
+
+These forms execute an already-installed dependency. A missing dependency,
+unavailable binary, or failed local execution must be reported to the operator;
+never hide it with global fallback or install dependencies automatically.
+Never use bare `bunx ab`, `npx ab`, `dlx`, or other registry-fetching
+variants: the registry package named `ab` is not Autobuild. Offline cache
+availability alone does not prove a local installation.
+
+Only when no local declaration exists may you use global `ab`. In either
+case run the resolved invocation with `--version` and report the invocation,
+working directory, and actual version when you start orchestrating.
+
+Every `ab …` example in this skill means this resolved invocation, run from
+the same resolved working directory.
 
 ### Watch for attention events
 
@@ -51,7 +103,10 @@ bare `{"cursor": …}` to resume from.
 
 Run long watches and waits in whatever background or monitor facility your
 harness provides, so the session stays responsive and you are woken when they
-emit. Never block a foreground command for their whole duration.
+emit. Use precisely the same resolved invocation and working directory as
+foreground commands, including inside background shells and harness monitors.
+Do not rely on a shell alias or function that those facilities may lose.
+Never block a foreground command for their whole duration.
 
 Ticket-source degradation records mean dispatch intake cannot evaluate the source;
 existing builds may still advance. Inspect `ab repository status --json` for the
@@ -59,7 +114,7 @@ active cause, operation, message, and expected reset. Reset times are advisory;
 recovery means reads actually succeeded. Allow the existing cooldown and retry
 behavior, investigate persistent ready-scan failures or a condition still active
 after its reset estimate, and keep watching through recovery. Empty builds do
-not establish idle intake; repeatedly restarting dispatch does not clear it.
+not establish idle intake; diagnose persistent trouble and report it to the operator.
 
 Repository records have null build and state. Handle them with repository
 status rather than build commands, keep their cursor, and re-arm. A legacy
@@ -69,8 +124,8 @@ cannot recover its earlier interval: reconcile current repository status.
 attention watch.
 
 
-Check dispatcher liveness with `ab repository status --json` before starting another
-`ab dispatch`, and after a watch timeout or `dispatcher.lost` observation. Do not
+Check dispatcher liveness with `ab repository status --json` after a watch
+timeout or `dispatcher.lost` observation, or when dispatch appears unhealthy. Do not
 use process lists to decide whether a dispatcher owns this repository. The
 `dispatcher` projection distinguishes `held` (an unexpired lease), `lost`
 (expired ownership without a recorded stop), `stopped`, and `absent`. Its holder
@@ -84,7 +139,8 @@ read-only observation: `{repo, build:null, state:null, observation:{type:
 "dispatcher.lost", run, observedAt, leaseExpiresAt, ...identity}, cursor}`.
 It has no durable event envelope. Keep its cursor just as for event records;
 resuming it suppresses repeated loss reports for that run. Inspect repository
-status before deciding how to recover; watch never restarts a dispatcher.
+status to diagnose the condition and report dispatcher trouble to the operator.
+Neither a loss observation nor a later retry authorizes dispatcher intervention.
 
 ### Keep watching until the work is done
 
@@ -111,7 +167,7 @@ Checking once is not shepherding. When you take responsibility for builds:
    (merged, closed, aborted) as that build's outcome, and an open escalation
    or failed phase as attention to handle now.
 4. When a watch returns records, react: read the record, inspect the build,
-   answer or escalate; for a repository record inspect repository status and act
+   resolve attention using the shared rules; for a repository record inspect repository status and act
    on its condition without assuming a build slug. Then re-arm from the last cursor. Keep your own
    outcome table: mark a build done when you see `pr.merged`, `pr.closed`, or
    `build.aborted`, or when status shows it. A timeout (exit 3, or a watch
@@ -246,9 +302,9 @@ event matching them lands. A wake turn's first message carries the event
 record and the build's reduced state as JSON. Typical wakes and what to do:
 
 - `escalation.raised` / `phase.failed` / `infrastructure.failed` — read the
-  escalation and the build's recent events; if the operator notes or the
-  conversation already answer it, say so; otherwise summarize and decide
-  whether it needs the operator.
+  escalation, spec, code, artifacts, recent events, and applicable operator
+  notes or conversation. Resolve it using the shared rules; ask the operator
+  only when a listed exception requires it.
 - `finalize.completed` / `build.completed` / `pr.merged` / `pr.closed` /
   `pr.conflicted` / `build.aborted` — acknowledge outcome changes that the
   operator should know about, and file or move tickets when the outcome
@@ -262,6 +318,16 @@ with a cursor and keep it short.
 
 These apply in both settings. Where the text below says "plain streamed text", a local session means plain text to the human in the session.
 
+### Resolve attention by default
+
+Make a best effort to resolve attention without operator input. Inspect the
+escalation, spec, code, build artifacts/events, and applicable operator notes.
+Answer questions supported by that evidence, retry when the evidence warrants
+it, and file or move tickets where that is clearly right, within the existing
+ready-state authorization boundary. Investigate before asking; the exceptions
+below govern when the evidence or available tools cannot resolve the issue,
+or a human decision is required.
+
 ### When to escalate instead of act
 
 Stop and ask the operator — in plain streamed text — whenever:
@@ -273,10 +339,18 @@ Stop and ask the operator — in plain streamed text — whenever:
 - A tool refusal repeats and you cannot resolve it with the tools you have.
 - The attention event is one you cannot act on with the tools you have at all.
 
-Filing a ticket IS acting — do it when the request is concrete. Asking is
-not a failure; an unasked destructive action is.
+Filing a ticket is acting — do it when the request is concrete. Default to
+resolving attention yourself within these boundaries; ask the operator only
+for the exceptions above.
 
 ### Boundaries
+
+- Never start, restart, or stop a dispatcher: no `ab dispatch` in any mode,
+  and no dispatcher process-management commands. This applies when the
+  dispatcher is lost, stopped, absent, or failing repeatedly. Its lease,
+  process, and configuration management belong to the operator. Diagnose
+  through repository status and report trouble to the operator; reporting
+  does not authorize process intervention, including on a later retry.
 
 - You never claim to have done anything outside the tools you have. If you cannot
   observe it with a tool, say you cannot observe it.
