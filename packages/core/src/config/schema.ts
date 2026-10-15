@@ -501,6 +501,7 @@ export const policySchema = z.strictObject({
   stallRounds: z.number().int().positive().default(3),
   maxVerifyAttempts: z.number().int().positive().default(3),
   /** Consecutive workspace setup failures before human intervention is required. */
+  maxDispatchAttempts: z.number().int().positive().default(3),
   maxSetupAttempts: z.number().int().positive().default(3),
   /** Consecutive provider lifecycle failures before recovery requires a human retry. */
   maxInfrastructureAttempts: z.number().int().positive().default(3),

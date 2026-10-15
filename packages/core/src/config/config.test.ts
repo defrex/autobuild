@@ -152,6 +152,7 @@ describe('parseConfig — complete flattened surface', () => {
         sessionBudgetSeconds: 1800,
         stallRounds: 3,
         maxVerifyAttempts: 3,
+        maxDispatchAttempts: 3,
         maxSetupAttempts: 3,
         maxInfrastructureAttempts: 3,
         maxReconcileAttempts: 3,
@@ -205,6 +206,7 @@ describe('parseConfig — defaults', () => {
         sessionBudgetSeconds: 3600,
         stallRounds: 3,
         maxVerifyAttempts: 3,
+        maxDispatchAttempts: 3,
         maxSetupAttempts: 3,
         maxInfrastructureAttempts: 3,
         maxReconcileAttempts: 3,
@@ -684,6 +686,19 @@ harvestThreshold = 2
     }
   })
 
+  test('dispatch attempts default to three and accept only positive integer overrides', () => {
+    expect(parseConfig(READY).policy.maxDispatchAttempts).toBe(3)
+    expect(
+      parseConfig(`${READY}[policy]\nmaxDispatchAttempts = 7\n`).policy.maxDispatchAttempts,
+    ).toBe(7)
+    for (const value of ['0', '-1', '1.5', '"three"']) {
+      expect(() => parseConfig(`${READY}[policy]\nmaxDispatchAttempts = ${value}\n`)).toThrow(
+        /policy\.maxDispatchAttempts/,
+      )
+    }
+    expect(() => parseConfig(`${READY}[policy]\nmaxDispatchAttempt = 3\n`)).toThrow()
+  })
+
   test('root and policy numeric values must be positive integers', () => {
     for (const [field, value] of [
       ['capacity', '0'],
@@ -723,6 +738,7 @@ skill = "ab-verify-e2e"
       sessionBudgetSeconds: 3600,
       stallRounds: 7,
       maxVerifyAttempts: 3,
+      maxDispatchAttempts: 3,
       maxSetupAttempts: 3,
       maxInfrastructureAttempts: 3,
       maxReconcileAttempts: 3,

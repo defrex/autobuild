@@ -291,7 +291,20 @@ describe('remote infrastructure lifecycle protocol', () => {
     ).toBe('infrastructure.cleanup-attempted')
   })
 
-  test('permits only the infrastructure policy cause from a dispatcher', () => {
+  test('permits only infrastructure and dispatch policy causes from a dispatcher', () => {
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-dispatch',
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'dispatch-failure-limit',
+          question: 'retry dispatch?',
+        },
+      }),
+    ).toMatchObject({ type: 'escalation.raised' })
     expect(
       validateEventWrite({
         actor: DISPATCHER,

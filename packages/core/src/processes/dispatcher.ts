@@ -1,3 +1,4 @@
+import { ensureDispatchBudget } from './dispatch-failure-budget'
 import {
   reduceTicketSourceHealth,
   type TicketSourceDegradation,
@@ -1542,6 +1543,7 @@ export class Dispatcher {
     const slug = entry.slug
     let leaseClaimed = false
     let heartbeat: ReturnType<typeof setInterval> | undefined
+    let tailStarted = false
     const stage: EventPayload<'dispatch.failed'>['stage'] = 'workspace'
     try {
       if (entry.controller.signal.aborted) {
@@ -1608,10 +1610,13 @@ export class Dispatcher {
       if (entry.controller.signal.aborted) return
       const record = await store.getBuild(slug)
       if (record === null) return
-      await (input.tail === 'dispatch'
+      tailStarted = true
+      const queued = reduceBuild(await store.getEvents(slug)).status === 'queued'
+      await (input.tail === 'dispatch' || queued
         ? this.completeDispatchBoundaries(record, input.seed)
         : this.deps.launchRunner(slug))
     } catch (error) {
+      if (tailStarted) throw error
       const events = await store.getEvents(slug)
       if (workspaces.recovery !== undefined) {
         const open = openWorkspace(events)
@@ -2485,6 +2490,16 @@ export class Dispatcher {
     return sha
   }
 
+  private dispatchBudget(slug: string): Promise<boolean> {
+    return ensureDispatchBudget(
+      this.store,
+      this.deps.ids,
+      slug,
+      this.deps.config.policy.maxDispatchAttempts,
+      this.deps.workspaces.recovery !== undefined,
+    )
+  }
+
   // ── b. Interrupted dispatch recovery ───────────────────────────────────────
 
   /** The claim-time `build.created` payload. Assets are omitted when the ticket
@@ -2539,6 +2554,7 @@ export class Dispatcher {
   ): Promise<DispatchOutcome> {
     const store = this.store
     const { config } = this.deps
+    if (!(await this.dispatchBudget(record.slug))) return 'parked'
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'create'
     try {
       let events = await store.getEvents(record.slug)
@@ -2628,8 +2644,6 @@ export class Dispatcher {
         } satisfies EventWrite<'workspace.provisioned'>)
         events = await store.getEvents(record.slug)
       }
-
-      return await this.completeDispatchBoundaries(record, seed, report, launched)
     } catch (error) {
       const events = await store.getEvents(record.slug)
       if (stage === 'workspace' && this.deps.workspaces.recovery !== undefined) {
@@ -2654,8 +2668,10 @@ export class Dispatcher {
         },
       })
       report.dispatchFailed += 1
+      await this.dispatchBudget(record.slug)
       return 'failed'
     }
+    return this.completeDispatchBoundaries(record, seed, report, launched)
   }
 
   /** The post-workspace dispatch boundaries — spec, comment, launch — shared
@@ -2676,10 +2692,13 @@ export class Dispatcher {
   ): Promise<Exclude<DispatchOutcome, 'deferred'>> {
     const store = this.store
 
+    if (!(await this.dispatchBudget(record.slug))) return 'parked'
     let stage: EventPayload<'dispatch.failed'>['stage'] = 'spec'
     let authored = false
     try {
       const events = await store.getEvents(record.slug)
+      const state = reduceBuild(events)
+      if (state.status !== 'queued' || state.discardRequest !== undefined) return 'parked'
       if (
         !events.some((event) => event.type === 'spec.imported' || event.type === 'spec.authored')
       ) {
@@ -2779,6 +2798,7 @@ export class Dispatcher {
         },
       })
       if (report !== undefined) report.dispatchFailed += 1
+      await this.dispatchBudget(record.slug)
       return 'failed'
     }
   }
@@ -2810,9 +2830,11 @@ export class Dispatcher {
       // Queued itself means runner attachment is still missing. Always enter
       // the fact-driven helper: it skips every completed boundary and retries
       // only the final launch when setup is already durable.
-      if ((await this.attemptDispatchCompletion(record, launched, report)) === 'completed') {
-        report.recovered += 1
-      }
+      const outcome = await this.attemptDispatchCompletion(record, launched, report)
+      if (outcome === 'completed') report.recovered += 1
+      // A failed boundary owns this tick's attempt; startup and lease recovery
+      // must not bypass the unfinished dispatch boundary later in the tick.
+      if (outcome === 'failed') launched.add(record.slug)
     }
   }
 
@@ -2853,6 +2875,12 @@ export class Dispatcher {
         continue
       }
 
+      if (
+        state.status === 'queued' &&
+        !state.pendingCommands.some((command) => command.command === 'abort') &&
+        !(await this.dispatchBudget(record.slug))
+      )
+        continue
       const decision = decideNextFromFacts(state, facts.log, config)
       if (decision.kind === 'wait') {
         if (decision.reason === 'blocked' && state.openEscalations.length > 0) {
@@ -2923,6 +2951,12 @@ export class Dispatcher {
       ) {
         continue
       }
+      if (
+        state.status === 'queued' &&
+        !state.pendingCommands.some((command) => command.command === 'abort') &&
+        !(await this.dispatchBudget(record.slug))
+      )
+        continue
       const decision = decideNextFromFacts(state, facts.log, this.deps.config)
       if (state.status === 'done' || state.status === 'aborted') continue
       // Raw history, read at most once and only by a branch that acts on it.

@@ -1975,8 +1975,18 @@ ordinary dispatcher tick provisions the workspace, atomically imports the spec,
 posts the ticket notice once, and launches the runner. Claim-time auto-merge
 attribution retained by `build.created` is materialized as the ordinary
 human-authored request before launch. A failed boundary appends `dispatch.failed
-{stage,attempt,error}` and stays queued for another tick. A discard request is
-honored only while the build remains queued; one that races with runner
+{stage,attempt,error}` and stays queued for another tick until its budget is
+exhausted. Dispatch failures share a `[policy].maxDispatchAttempts` budget
+(default 3) across
+create, workspace, spec, comment, and launch stages. Exhaustion raises one
+`dispatch-failure-limit` policy escalation naming the latest stage and error,
+and parks dispatch until answered. Both bare `ab answer <slug>` retries and
+text guidance grant a fresh budget; abort does not. Confirmed runner attachment
+clears the streak. Recovery-provider workspace failures belong exclusively to
+the infrastructure budget. Exhaustion is repaired from durable facts on restart
+before further dispatch work.
+
+A discard request is honored only while the build remains queued; one that races with runner
 attachment is inert and cannot tear down live work. A human discard waits out
 any unexpired execution lease, then releases a partial workspace and stale
 lease, returns the ticket to Ready, and appends `build.completed {outcome:
@@ -2314,6 +2324,7 @@ sessionBudgetSeconds = 7200       # optional role override
 sessionBudgetSeconds = 3600       # non-infinite default for build agent sessions
 stallRounds = 3
 maxVerifyAttempts = 3
+maxDispatchAttempts = 3
 maxSetupAttempts = 3
 maxInfrastructureAttempts = 3
 maxReconcileAttempts = 3

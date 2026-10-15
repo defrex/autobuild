@@ -1,3 +1,4 @@
+import { dispatchFailureBudgetReducer } from '../processes/dispatch-failure-budget'
 import { ticketSourceHealthReducer } from './ticket-source-health'
 /**
  * Every incremental reducer, with its published version and the whole-array
@@ -97,6 +98,10 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
     covers: ['openHarvestExecutions'],
   },
   openTick: { reducer: openTickReducer('run-a'), covers: ['hasOpenTick'] },
+  dispatchFailureBudget: {
+    reducer: dispatchFailureBudgetReducer(false),
+    covers: ['dispatchFailureBudget'],
+  },
   infrastructureFailureReset: {
     reducer: infrastructureFailureResetReducer,
     covers: ['infrastructureFailureResetSeq'],
