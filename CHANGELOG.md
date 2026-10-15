@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#598](https://github.com/defrex/autobuild/pull/598) — Handle Linear rate limits without claiming ready tickets
 ## v0.10.1 — 2026-10-14
 
 This release makes the ab-operate skill model-invocable, so an agent can load it on its own when it takes on the orchestrator role. That works the same way for local orchestration through the ab CLI and for hosted orchestration through the MCP connector. Any agent that drives Autobuild now finds its operating guidance automatically, with no manual setup step.
