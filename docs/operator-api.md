@@ -213,11 +213,15 @@ The default watch reports actionable conditions only:
   `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
   `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
 - `dispatcher.ticket-source-persistent`: degradation past its advertised
-  reset time, or 15 minutes after onset without a reset. Repeated evidence
-  never postpones the deadline; recovery ends the episode.
+  reset time, once a tick started at or after reset has completed or failed
+  with the episode still open; crossing reset alone is silent. Without a reset,
+  the deadline is 15 minutes after onset. Repeated evidence never postpones
+  the deadline; recovery ends the episode.
 - `dispatcher.tick-failure-persistent`: continuously failing completed ticks
   for five minutes in one run. A successful tick, new run, or matching stop
-  ends the episode. Each persistence episode is reported once.
+  ends the episode. Source grace and cooldown-driven failures do not start
+  this clock; after grace, the first qualifying failure starts a new five-minute
+  interval. Each persistence episode is reported once.
 
 Repository conditions are included with no slugs or with `--repository`.
 Routine outcomes and self-healing failures are silent. Repeatable

@@ -265,6 +265,8 @@ describe('layered CLI help catalog', () => {
         'verify:<step>',
         'attention',
         'kubectl wait',
+        '--event conditions match only events appended after the command started',
+        'cursor-resumed backlog after --since',
         'exit 0',
         'exit 1',
         'exit 2',

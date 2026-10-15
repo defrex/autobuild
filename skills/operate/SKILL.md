@@ -85,8 +85,10 @@ the same resolved working directory.
 record calls for action. It reports build escalations and merge decisions,
 harvest escalations/recovery exhaustion, rejected configuration, reloads needing
 restart, abnormal dispatcher stops/loss, degradation past reset (15 minutes
-without reset), and five minutes of continuous tick failures. Routine outcomes
-and self-healing failures stay silent.
+without reset), and five minutes of continuous tick failures. Advertised resets
+wait for a post-reset tick to finish before requiring action; ordinary recovery
+on that retry stays silent. Source grace and cooldown-driven failures do not
+start the tick-failure clock. Routine outcomes and self-healing failures stay silent.
 
 Every record carries a cursor; bounded watches end with a bare `{"cursor": …}`
 line. Resume with `--since <cursor>`. Named watches end when all named builds
