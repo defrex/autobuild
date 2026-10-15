@@ -572,3 +572,45 @@ function pinnedBundleVersion(): number {
       .reduce((a, b) => a + b, 0)
   )
 }
+
+test('journal deltas and cold snapshots retain one latest scan across run turnover', async () => {
+  const store = new CountingStore()
+  await store.ensureRepo(REPO)
+  const scan = (queued: number): RepositoryEventWrite => ({
+    actor: DISPATCHER,
+    type: 'dispatcher.ticket-scan-completed',
+    payload: {
+      startedAt: '2026-10-14T00:00:00.000Z',
+      mode: 'admission',
+      queued,
+      readinessFingerprint: 'r',
+      criteriaFingerprint: 'c',
+      invalidTickets: 0,
+      ticketDiagnostics: [],
+      dependencyBlocked: 0,
+      dependencyDiagnostics: [],
+      creationWithheld: 0,
+      creationDiagnostics: [],
+    },
+  })
+  await store.appendRepo(REPO, scan(1))
+  const view = fresh(store)
+  await view.refresh()
+  for (let i = 2; i <= 20; i++) {
+    await store.appendRepo(REPO, scan(i))
+    await view.refreshJournal()
+    expect(view.recordedJournal()).toHaveLength(1)
+  }
+  await store.appendRepo(REPO, runStarted('new-run'))
+  await view.refreshJournal()
+  expect(view.recordedJournal()).toHaveLength(2)
+  await view.persistSnapshots({ force: true })
+  const cold = fresh(store)
+  await cold.refresh()
+  expect(cold.recordedJournal()).toEqual(view.recordedJournal())
+  expect(cold.recordedJournal()[0]?.payload).toMatchObject({ queued: 20 })
+  store.snapshotsOn = false
+  const rebuilt = fresh(store)
+  await rebuilt.refresh()
+  expect(rebuilt.recordedJournal()).toEqual(view.recordedJournal())
+})

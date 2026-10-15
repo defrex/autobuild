@@ -733,6 +733,43 @@ describe('operator sandbox facts (AUT-340)', () => {
   })
 })
 
+test('ticket scan measurements validate counters and dispatcher ownership', () => {
+  const payload = {
+    startedAt: '2026-10-14T00:00:00.000Z',
+    mode: 'admission' as const,
+    queued: 4,
+    readinessFingerprint: 'r',
+    criteriaFingerprint: 'c',
+    invalidTickets: 0,
+    ticketDiagnostics: [],
+    dependencyBlocked: 0,
+    dependencyDiagnostics: [],
+    creationWithheld: 0,
+    creationDiagnostics: [],
+  }
+  expect(
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-scan-completed',
+      payload,
+    }).payload,
+  ).toEqual(payload)
+  expect(() =>
+    validateRepositoryEventWrite({
+      actor: KERNEL,
+      type: 'dispatcher.ticket-scan-completed',
+      payload,
+    }),
+  ).toThrow()
+  expect(() =>
+    validateRepositoryEventWrite({
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-scan-completed',
+      payload: { ...payload, queued: -1 },
+    }),
+  ).toThrow()
+})
+
 test('source degradation requires strict cause-specific reset evidence', () => {
   const payload = {
     source: 'fake',

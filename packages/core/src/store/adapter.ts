@@ -48,6 +48,7 @@ export {
   REPOSITORY_RUN_SCOPED_EVENT_TYPES,
   REPOSITORY_STATE_EVENT_TYPES,
   readRepoStateEventsWithAnchorRecheck,
+  REPOSITORY_LATEST_EVENT_TYPES,
 } from './repo-state-events'
 export {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,

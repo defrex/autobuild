@@ -285,6 +285,7 @@ export const buildDigestWireSchema = z.object({
     }),
   ),
   merged: z.string().min(1).optional(),
+  readinessChangeSeq: z.number().int().positive().optional(),
   reclaimPending: z.literal(true).optional(),
   executionOpen: z.literal(true).optional(),
 })

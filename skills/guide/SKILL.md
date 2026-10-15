@@ -234,6 +234,19 @@ Every other known table is closed to unknown keys. The removed `[dashboardFrames
 `[dispatcher]`, `[harvest]`, and `[outer]` tables have no aliases or migration
 shims; they fail as ordinary unknown top-level keys.
 
+Ticket-source ready scans run immediately when no completed measurement exists,
+then every
+`ticketScanIntervalSeconds` (default 60 seconds, a positive integer). Actual
+tick spacing is the floor when the configured interval is shorter. A
+same-repository `pr.merged`, `build.completed`, or `build.aborted` fact forces
+another scan on the next tick; changed ready criteria also force a scan.
+Housekeeping keeps its ordinary tick cadence. Between scans, queue depth and
+standing diagnostics repeat the last completed measurement, including across
+process restarts. Tickets groomed directly in the tracker are picked up within
+one scan interval plus one tick when capacity permits. Observation while intake
+is off shares the cadence; an observation measurement cannot suppress a fresh
+admission scan when intake is enabled.
+
 ### Root scalars
 
 Root scalars must appear before the first TOML table; TOML otherwise nests them
@@ -242,6 +255,7 @@ under the preceding table.
 | Field | Default | Allowed / constraints | Effect |
 |---|---|---|---|
 | `baseBranch` | `"main"` | nonempty string | The branch builds branch from and target with their PR; what `reconcile` merges into the build branch. |
+| `ticketScanIntervalSeconds` | `60` | positive integer seconds | Hot-reloaded ready scan cadence; tick spacing is the floor, and same-repository merge/completion/abort forces an early scan. |
 | `capacity` | `1` | positive integer | Maximum concurrent builds for this repository. |
 | `forge` | `"github"` | nonblank string | Selects shipped `github` or `local-git`, or a plugin-registered Forge adapter. `github` authenticates with `GITHUB_TOKEN`, then `GH_TOKEN`, then the gh CLI's stored login. |
 | `plugins` | `[]` | array of unique nonblank module specifiers | Trusted Bun plugin modules loaded before dispatch, `ab ticket`, and scoped phase wiring. |

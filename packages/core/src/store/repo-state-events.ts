@@ -1,50 +1,7 @@
-/**
- * The bounded repository-journal read (AUT-489): a pure subset derivation
- * that stateless full-state readers can fetch instead of the whole journal
- * without changing what their reducers report.
- *
- * The hosted dispatcher appends ~4 journal events per invocation (run-started,
- * tick-started, tick-completed/tick-yielded, run-stopped) whether or not it
- * did anything, so the journal grows forever with wall-clock time while the
- * durable signal stays small. Every repository-state consumer reduces the
- * journal through one of four pure reducers whose event-type dependencies
- * partition the catalog:
- *
- * - `reduceDispatchSettings` — only the three dispatcher setting types
- *   (latest-wins by seq).
- * - `reduceDispatchStatus(events, latestRun)` — only run-correlated
- *   dispatcher facts, and it skips every event whose `payload.run` is not the
- *   latest run. A run's facts are appended under its own run id, which is
- *   minted at `dispatcher.run-started`, so all facts the reducer keeps live at
- *   or after the latest run-started.
- * - `reduceHarvest` (and everything built on it) — only `harvest.*` events
- *   plus the three setting types, which it explicitly ignores.
- * - `sandboxStates` — only `orchestrator.sandbox.*` events.
- *
- * So the bounded subset is: **every event of a durable (slow-growing) type —
- * all `harvest.*`, all `orchestrator.sandbox.*`, and the three dispatcher
- * setting types — plus, when the journal contains at least one
- * `dispatcher.run-started`, the tail from that latest run-started to the end
- * of the journal.** For a hosted repository with N no-op invocations this
- * subset's size is a constant (one invocation's ~4 facts plus the durable
- * signal), independent of N.
- *
- * INVARIANT FOR AUTHORS OF NEW REPOSITORY EVENT TYPES: a new type must either
- * (a) join `REPOSITORY_STATE_EVENT_TYPES` — it is durable, slow-growing state
- * some reducer depends on at full replay depth — or (b) join
- * `REPOSITORY_RUN_SCOPED_EVENT_TYPES` — it is run-correlated and its only
- * consumers reduce it for the latest run, so the tail from the latest
- * `dispatcher.run-started` covers it. `tests/store/repo-state-events.test.ts`
- * asserts the two sets exactly partition `REPOSITORY_EVENT_TYPES`; adding a
- * type to neither fails the build until the author makes the call. A type in
- * neither set would be silently dropped from bounded reads.
- *
- * Reducing this subset with the state readers yields exactly what a full
- * replay yields: `reduceDispatchSettings`, `reduceHarvest`, `sandboxStates`
- * see identical event lists, and `reduceDispatchStatus` sees every event it
- * keeps (the rest are skipped by the `payload.run !== latestRun` guard). The
- * journal itself stays append-only; no event is deleted, rewritten, or
- * re-ordered, and a replay from the start is untouched.
+/** Bounded journal state has three disjoint, exhaustive categories:
+ * durable facts retain all history; run-scoped facts retain the latest run
+ * tail; latest-only facts retain exactly the greatest sequence per type,
+ * including before any run anchor. The full journal remains append-only.
  */
 import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import { defineReducer, type IncrementalReducer } from '../kernel/incremental'
@@ -73,11 +30,19 @@ export const REPOSITORY_STATE_EVENT_TYPES: readonly RepositoryEventType[] = [
   ),
 ] as RepositoryEventType[]
 
+/** Latest-only measurements survive run turnover without retaining scan history. */
+export const REPOSITORY_LATEST_EVENT_TYPES: readonly RepositoryEventType[] = [
+  'dispatcher.ticket-scan-completed',
+]
+const LATEST_TYPES = new Set<string>(REPOSITORY_LATEST_EVENT_TYPES)
+
 /** Run-correlated repository event types: facts whose only state consumers
  * reduce them for the latest dispatcher run, so the tail from the latest
  * `dispatcher.run-started` contains everything those consumers keep. */
 export const REPOSITORY_RUN_SCOPED_EVENT_TYPES: readonly RepositoryEventType[] = [
-  ...Object.keys(dispatcherStatusEventPayloadSchemas),
+  ...Object.keys(dispatcherStatusEventPayloadSchemas).filter(
+    (type) => !REPOSITORY_LATEST_EVENT_TYPES.includes(type as RepositoryEventType),
+  ),
   'dispatcher.config-reloaded',
 ] as RepositoryEventType[]
 
@@ -124,8 +89,8 @@ export async function readRepoStateEventsWithAnchorRecheck(
 }
 
 /** Carried state for the bounded read: the latest run-started seq (the last
- * in array order, as the whole-array pass overwrites it) and every event seen,
- * in array order. Nothing is pruned: a later run-started may carry a lower seq
+ * in array order, as the whole-array pass overwrites it) and every ordinary event seen,
+ * in array order, plus one latest-only fact per type. Ordinary history is retained: a later run-started may carry a lower seq
  * than an earlier one and restore events below the earlier anchor, so only
  * `finish` can apply the filter exactly. Pruning below a monotone anchor is
  * valid only for seq-ordered input and belongs with the cached-state
@@ -136,10 +101,11 @@ export interface RepositoryStateEventsAcc {
 }
 
 /** Bump when `RepositoryStateEventsAcc` or its fold changes. */
-export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 3
+export const REPOSITORY_STATE_EVENTS_REDUCER_VERSION = 4
 
 const keeps = (event: RepositoryEvent, anchor: number | undefined): boolean =>
-  STATE_TYPES.has(event.type) || (anchor !== undefined && event.seq >= anchor)
+  STATE_TYPES.has(event.type) ||
+  (!LATEST_TYPES.has(event.type) && anchor !== undefined && event.seq >= anchor)
 
 export const repositoryStateEventsReducer: IncrementalReducer<
   RepositoryStateEventsAcc,
@@ -151,10 +117,24 @@ export const repositoryStateEventsReducer: IncrementalReducer<
   fold(acc, events) {
     for (const event of events) {
       if (event.type === RUN_STARTED) acc.anchor = event.seq
+      if (LATEST_TYPES.has(event.type)) {
+        const held = acc.retained.find((held) => held.type === event.type)
+        if (held !== undefined && held.seq >= event.seq) continue
+        acc.retained = acc.retained.filter((held) => held.type !== event.type)
+      }
       acc.retained.push(event)
     }
   },
-  finish: (acc) => acc.retained.filter((event) => keeps(event, acc.anchor)),
+  finish: (acc) => {
+    const latest = new Map<string, RepositoryEvent>()
+    for (const event of acc.retained) {
+      if (LATEST_TYPES.has(event.type) && event.seq > (latest.get(event.type)?.seq ?? -1))
+        latest.set(event.type, event)
+    }
+    return [...acc.retained.filter((event) => keeps(event, acc.anchor)), ...latest.values()].sort(
+      (a, b) => a.seq - b.seq,
+    )
+  },
 })
 
 /** Carried state for the pruned journal view: the latest run-started seq and
@@ -169,16 +149,23 @@ export interface JournalViewAcc {
 }
 
 /** Bump when `JournalViewAcc` or its fold changes. */
-export const JOURNAL_VIEW_REDUCER_VERSION = 3
+export const JOURNAL_VIEW_REDUCER_VERSION = 4
 
 /** Fold seq-ordered events into a journal view in place. */
 export function foldJournalView(acc: JournalViewAcc, events: readonly RepositoryEvent[]): void {
   for (const event of events) {
     if (event.type === RUN_STARTED) {
       acc.anchor = event.seq
-      acc.retained = acc.retained.filter((held) => STATE_TYPES.has(held.type))
+      acc.retained = acc.retained.filter(
+        (held) => STATE_TYPES.has(held.type) || LATEST_TYPES.has(held.type),
+      )
     }
-    if (STATE_TYPES.has(event.type) || acc.anchor !== undefined) acc.retained.push(event)
+    if (LATEST_TYPES.has(event.type)) {
+      const held = acc.retained.find((held) => held.type === event.type)
+      if (held !== undefined && held.seq >= event.seq) continue
+      acc.retained = acc.retained.filter((held) => held.type !== event.type)
+      acc.retained.push(event)
+    } else if (STATE_TYPES.has(event.type) || acc.anchor !== undefined) acc.retained.push(event)
   }
 }
 
@@ -195,9 +182,10 @@ export const journalViewReducer: IncrementalReducer<
 
 /** The normative subset derivation every adapter implements and the contract
  * tests use as the oracle: durable types across the whole journal, plus —
- * only when the journal has one — every event from the latest
- * `dispatcher.run-started` onward, ordered by seq. A journal with no
- * run-started has **no tail at all** (durable types only); the anchor is
+ * only when the journal has one — every non-latest-only event from the latest
+ * `dispatcher.run-started` onward, plus the maximum-sequence fact of each
+ * latest-only type across the whole journal, ordered by seq. A journal with no
+ * run-started has **no tail at all** (durable and latest-only facts only); the anchor is
  * never defaulted to 0, which would make a `seq >= anchor` clause select the
  * whole journal and defeat the bound. */
 export function projectRepositoryStateEvents(

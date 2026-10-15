@@ -105,6 +105,8 @@ export interface ArtifactMeta {
  * the event log on each call, so the log stays the sole authority and the
  * digest can always be discarded and rebuilt. */
 export interface BuildDigest {
+  /** Latest merge, completion or abort fact sequence. */
+  readinessChangeSeq?: number
   slug: string
   terminal?: 'done' | 'aborted'
   /** Ascending-seq `{seq, ts}` pairs for every `observation.recorded` in the
@@ -368,7 +370,9 @@ export interface BuildStore {
   ): Promise<RepositoryEvent[]>
   /** Bounded repository-journal read for stateless full-state readers
    * (AUT-489): every durable fact (REPOSITORY_STATE_EVENT_TYPES) plus — when
-   * the journal has one — the tail from the latest `dispatcher.run-started`.
+   * the journal has one — the tail from the latest `dispatcher.run-started`,
+   * excluding latest-only types; plus exactly the maximum-sequence fact for
+   * each REPOSITORY_LATEST_EVENT_TYPES type across the whole journal.
    * Reducing this subset with the state readers yields exactly what a full
    * replay yields (`projectRepositoryStateEvents` is the normative oracle).
    * Unknown repo rejects like `getRepoEvents`. */

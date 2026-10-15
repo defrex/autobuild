@@ -286,6 +286,7 @@ dir = "tickets"
     const forge = new FakeForge()
     const ids = sequentialIds()
     const launched: string[] = []
+    const scanClock = steppingClock()
     const dispatcher = new Dispatcher({
       store,
       tickets,
@@ -304,7 +305,7 @@ dir = "tickets"
         return 'scheduled'
       },
       ids,
-      clock: steppingClock(),
+      clock: scanClock,
     })
 
     const transient = await tickets.create({
@@ -343,6 +344,7 @@ dir = "tickets"
       body: CONFORMING_BODY,
       labels: [],
     })
+    scanClock.advance(60_000)
     workspaces.setFailure('provision', new Error('permanent workspace outage'))
     expect(await dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatchFailed: 1 })
     await controlBuild({
@@ -1911,6 +1913,7 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
     await source.transition(blocker.ref.id, 'Done')
 
     // Tick 2: eligible now, with no intervening manual synchronization.
+    h.clock.advance(60_000)
     const second = await h.dispatcher.tick()
     expect(second.dependencyBlocked).toBe(0)
     expect(second.dispatched).toBe(1)
@@ -1923,6 +1926,7 @@ test('d2. a file-source ticket blocked by another dispatches only once its block
 /** Relationships added after creation flow through the same native file
  * projection and dispatcher gate, and removing one makes the next tick
  * eligible even while the former blocker remains unresolved. */
+
 test('d3. post-create blocker writes immediately govern file-source dispatch (§13)', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-file-ticket-edits-'))
   try {
@@ -1955,6 +1959,7 @@ test('d3. post-create blocker writes immediately govern file-source dispatch (§
     expect(unblockedFile).not.toContain('blockedBy')
     expect((await source.get(blocker.ref.id))?.state).toBe('doing')
 
+    h.clock.advance(60_000)
     const released = await h.dispatcher.tick()
     expect(released.dependencyBlocked).toBe(0)
     expect(released.dispatched).toBe(1)
@@ -1969,6 +1974,7 @@ test('d3. post-create blocker writes immediately govern file-source dispatch (§
 /** The unsafe Harvest interleaving is controlled across the real file source
  * and repository journal: reservation, externally visible ready ticket,
  * dispatcher scan, then blocker recording and filing completion. */
+
 test('d4. dispatch withholds a ready ticket while its Autobuild creation is in flight', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ab-e2e-inflight-ticket-'))
   try {
@@ -2046,6 +2052,7 @@ test('d4. dispatch withholds a ready ticket while its Autobuild creation is in f
 
     releaseBlockerWrite()
     await filing
+    h.clock.advance(60_000)
     const afterFiling = await h.dispatcher.tick()
     expect(afterFiling).toMatchObject({
       queued: 1,
@@ -2058,6 +2065,7 @@ test('d4. dispatch withholds a ready ticket while its Autobuild creation is in f
     ])
 
     await source.transition(blocker.ref.id, 'Done')
+    h.clock.advance(60_000)
     const released = await h.dispatcher.tick()
     expect(released.dispatched).toBe(1)
     expect((await h.store.listBuilds()).map((build) => build.ticket?.id)).toEqual([dependentId])
@@ -2812,6 +2820,7 @@ test('h3. unresolved observation origin holds and then releases a ready proposal
   expect(h.tickets.claims).not.toContain('fake-1')
 
   await h.tickets.transition('ORIGIN-1', 'Done')
+  h.clock.advance(60_000)
   expect(await h.dispatcher.tick()).toMatchObject({ dispatched: 1, dependencyBlocked: 0 })
   expect(h.tickets.claims).toContain('fake-1')
   expect((await h.store.listBuilds()).some((build) => build.ticket?.id === 'fake-1')).toBe(true)

@@ -14,6 +14,7 @@ export const DISPATCHER_CONFIG_ARTIFACT = 'dispatcher-config'
 export const CONFIG_RELOAD_CLASSIFICATION = {
   baseBranch: 'hot',
   capacity: 'hot',
+  ticketScanIntervalSeconds: 'hot',
   forge: 'restart',
   plugins: 'restart',
   pr: 'hot',

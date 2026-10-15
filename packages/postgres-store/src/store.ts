@@ -77,6 +77,7 @@ import {
   DIGEST_EVENT_TYPES,
   type DigestEventRow,
   REPOSITORY_STATE_EVENT_TYPES,
+  REPOSITORY_LATEST_EVENT_TYPES,
   readRepoStateEventsWithAnchorRecheck,
   reduceBuildDigest,
 } from '@defrex/autobuild/store-adapter'
@@ -1091,10 +1092,6 @@ export class PostgresBuildStore implements BuildStore {
     // select; an append after the final re-probe is an ordinary post-read
     // concurrent append, not this race.
     const durableList = [...REPOSITORY_STATE_EVENT_TYPES]
-    // `repo` is $1; the anchored select also spends $2 on the anchor, so the
-    // type list's placeholders start at the right offset per branch.
-    const placeholders = (start: number) =>
-      durableList.map((_, index) => `$${index + start}`).join(', ')
     return readRepoStateEventsWithAnchorRecheck(
       async () => {
         // The probe below is an aggregate: MAX() always returns exactly one row —
@@ -1115,16 +1112,26 @@ export class PostgresBuildStore implements BuildStore {
         return probe?.no_anchor ? undefined : num(probe?.seq)
       },
       async (anchor) => {
-        const rows: Row[] = await this.run((q) =>
+        const bindings: (string | number)[] = [repo]
+        const bind = (value: string | number) => {
+          bindings.push(value)
+          return `$${bindings.length}`
+        }
+        const durable = `type IN (${durableList.map(bind).join(', ')})`
+        const latestTypes = REPOSITORY_LATEST_EVENT_TYPES.map(bind)
+        const latest = latestTypes.map(
+          (type) =>
+            `(type = ${type} AND seq = (SELECT seq FROM repo_events WHERE repo = $1 AND type = ${type} ORDER BY seq DESC LIMIT 1))`,
+        )
+        const tail =
           anchor === undefined
-            ? q.unsafe(
-                `SELECT * FROM repo_events WHERE repo = $1 AND type IN (${placeholders(2)}) ORDER BY seq`,
-                [repo, ...durableList],
-              )
-            : q.unsafe(
-                `SELECT * FROM repo_events WHERE repo = $1 AND (seq >= $2 OR type IN (${placeholders(3)})) ORDER BY seq`,
-                [repo, anchor, ...durableList],
-              ),
+            ? []
+            : [`(seq >= ${bind(anchor)} AND type NOT IN (${latestTypes.join(', ')}))`]
+        const rows: Row[] = await this.run((q) =>
+          q.unsafe(
+            `SELECT * FROM repo_events WHERE repo = $1 AND (${[durable, ...tail, ...latest].join(' OR ')}) ORDER BY seq`,
+            bindings,
+          ),
         )
         return rows.map((row) => ({
           repo: String(row.repo),

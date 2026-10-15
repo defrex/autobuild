@@ -46,6 +46,7 @@ import { createSessionScopedStore } from '../session-handle'
 import { DIGEST_EVENT_TYPES, type DigestEventRow, reduceBuildDigest } from '../digest'
 import {
   REPOSITORY_STATE_EVENT_TYPES,
+  REPOSITORY_LATEST_EVENT_TYPES,
   readRepoStateEventsWithAnchorRecheck,
 } from '../repo-state-events'
 import {
@@ -1188,14 +1189,26 @@ export class SqliteBuildStore implements BuildStore {
       },
       async (anchor) => {
         const durable = inArray(repoEvents.type, [...REPOSITORY_STATE_EVENT_TYPES])
+        const latest = REPOSITORY_LATEST_EVENT_TYPES.map((type) =>
+          and(
+            eq(repoEvents.type, type),
+            sql`${repoEvents.seq} = (SELECT seq FROM repo_events WHERE repo = ${repo} AND type = ${type} ORDER BY seq DESC LIMIT 1)`,
+          ),
+        )
+        const tail =
+          anchor === undefined
+            ? undefined
+            : and(
+                gte(repoEvents.seq, anchor),
+                sql`${repoEvents.type} NOT IN (${sql.join(
+                  REPOSITORY_LATEST_EVENT_TYPES.map((type) => sql`${type}`),
+                  sql`, `,
+                )})`,
+              )
         const rows = this.db
           .select()
           .from(repoEvents)
-          .where(
-            anchor === undefined
-              ? and(eq(repoEvents.repo, repo), durable)
-              : and(eq(repoEvents.repo, repo), or(gte(repoEvents.seq, anchor), durable)),
-          )
+          .where(and(eq(repoEvents.repo, repo), or(durable, tail, ...latest)))
           .orderBy(asc(repoEvents.seq))
           .all()
         return rows.map(

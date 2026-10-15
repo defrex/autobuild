@@ -12,6 +12,7 @@ import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
 import { REPOSITORY_EVENT_TYPES } from '../events/repository'
 import {
   REPOSITORY_RUN_SCOPED_EVENT_TYPES,
+  REPOSITORY_LATEST_EVENT_TYPES,
   REPOSITORY_STATE_EVENT_TYPES,
   projectRepositoryStateEvents,
   readRepoStateEventsWithAnchorRecheck,
@@ -60,6 +61,20 @@ function event(type: RepositoryEventType, overrides: EventOverrides = {}): Repos
  * of these fails loudly here rather than silently in production. */
 function payloadShape(type: RepositoryEventType): Record<string, unknown> {
   switch (type) {
+    case 'dispatcher.ticket-scan-completed':
+      return {
+        startedAt: '2026-10-14T00:00:00.000Z',
+        readinessFingerprint: 'r',
+        criteriaFingerprint: 'c',
+        mode: 'admission',
+        queued: 2,
+        invalidTickets: 0,
+        ticketDiagnostics: [],
+        dependencyBlocked: 0,
+        dependencyDiagnostics: [],
+        creationWithheld: 0,
+        creationDiagnostics: [],
+      }
     case 'harvest.started':
       return {
         run: '',
@@ -210,19 +225,35 @@ describe('readRepoStateEventsWithAnchorRecheck', () => {
 })
 
 describe('REPOSITORY_STATE_EVENT_TYPES partition', () => {
-  test('durable and run-scoped types exactly partition the repository catalog, disjointly', () => {
+  test('durable, run-scoped and latest-only types partition the catalog disjointly', () => {
     const durable = new Set<string>(REPOSITORY_STATE_EVENT_TYPES)
     const runScoped = new Set<string>(REPOSITORY_RUN_SCOPED_EVENT_TYPES)
     const catalog = new Set<string>(REPOSITORY_EVENT_TYPES)
-    expect(durable.size + runScoped.size).toBe(catalog.size)
+    const latest = new Set<string>(REPOSITORY_LATEST_EVENT_TYPES)
+    expect(durable.size + runScoped.size + latest.size).toBe(catalog.size)
+    for (const type of latest) {
+      expect(durable.has(type)).toBe(false)
+      expect(runScoped.has(type)).toBe(false)
+    }
     for (const type of durable) expect(runScoped.has(type)).toBe(false)
     for (const type of catalog) {
-      expect(durable.has(type) || runScoped.has(type)).toBe(true)
+      expect(durable.has(type) || runScoped.has(type) || latest.has(type)).toBe(true)
     }
   })
 })
 
 describe('projectRepositoryStateEvents', () => {
+  test('latest scan is chosen by sequence, before anchors and across equal timestamps', () => {
+    const older = event('dispatcher.ticket-scan-completed', { seq: 2, payload: { queued: 1 } })
+    const newer = {
+      ...event('dispatcher.ticket-scan-completed', { seq: 5, payload: { queued: 3 } }),
+      ts: older.ts,
+    }
+    expect(projectRepositoryStateEvents([newer, older])).toEqual([newer])
+    const anchor = event('dispatcher.run-started', { seq: 6 })
+    expect(projectRepositoryStateEvents([newer, anchor, older])).toEqual([newer, anchor])
+  })
+
   test('an empty journal derives an empty subset', () => {
     expect(projectRepositoryStateEvents([])).toEqual([])
   })
