@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { Artifact } from '../store/types'
-import { buildOwnedSectionsDiffer, parseBuildConfigMetadata } from './build-execution-state'
+import {
+  buildOwnedSectionsDiffer,
+  effectiveBuildConfigContent,
+  parseEffectiveBuildConfig,
+  parseBuildConfigMetadata,
+} from './build-execution-state'
 
 function artifact(metadata: Record<string, unknown>): Artifact {
   return {
@@ -84,5 +89,40 @@ stallRounds = 9
 `)
     expect(buildOwnedSectionsDiffer(base, pipelineChanged)).toBe(true)
     expect(buildOwnedSectionsDiffer(base, deploymentChanged)).toBe(false)
+  })
+})
+
+describe('effective build config verification policy', () => {
+  test.each([true, false])(
+    'preserves repository %s and opposite step override across deposits',
+    (enabled) => {
+      const config = parseConfig(
+        BASE.replace('[verify]\n', `[verify]\nafterReconcile = ${enabled}\n`) +
+          `afterReconcile = ${!enabled}\n`,
+      )
+      let current = config
+      for (let deposit = 0; deposit < 2; deposit++) {
+        const content = effectiveBuildConfigContent(current)
+        expect(JSON.parse(content).verify.afterReconcile).toBe(enabled)
+        current = parseEffectiveBuildConfig({
+          ...artifact({}),
+          content: new TextEncoder().encode(content),
+        })
+        expect(current).toEqual(config)
+        expect(current.verify.afterReconcile).toBe(enabled)
+        expect(current.verify.stepConfigs.unit?.afterReconcile).toBe(!enabled)
+      }
+    },
+  )
+
+  test('historical deposits without the scalar keep the default enabled policy', () => {
+    const content = JSON.parse(effectiveBuildConfigContent(parseConfig(BASE)))
+    delete content.verify.afterReconcile
+    expect(
+      parseEffectiveBuildConfig({
+        ...artifact({}),
+        content: new TextEncoder().encode(JSON.stringify(content)),
+      }).verify.afterReconcile,
+    ).toBe(true)
   })
 })

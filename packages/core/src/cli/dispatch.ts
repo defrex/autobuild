@@ -185,18 +185,6 @@ export { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT } from '../store/retention'
 // Local uses within this module.
 import { DISPATCHER_EFFECTIVE_CONFIG_ARTIFACT as _effectiveConfigKind } from '../store/retention'
 
-/** JSON encoding in the config schema's declarative input shape. Parsed Config
- * has normalized `{steps, stepConfigs}` sections; flattening named step tables
- * lets the frontend validate the artifact with the same strict configSchema. */
-function effectiveConfigContent(config: Config): string {
-  const { verify, finalize, ...root } = config
-  return JSON.stringify({
-    ...root,
-    verify: { steps: verify.steps, ...verify.stepConfigs },
-    finalize: { steps: finalize.steps, ...finalize.stepConfigs },
-  })
-}
-
 /** The pre-build naming prompt. Its output is only a proposal: dispatcher.ts
  * owns strict validation, timeout/failure fallback, and store-wide uniqueness. */
 export function slugNamingPrompt(spec: string): string {
@@ -3970,7 +3958,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
           },
           {
             kind: _effectiveConfigKind,
-            content: effectiveConfigContent(effectiveConfig),
+            content: effectiveBuildConfigContent(effectiveConfig),
             metadata: { run: runId, effectiveChanged },
           },
         ],
@@ -4035,7 +4023,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
     [
       {
         kind: _effectiveConfigKind,
-        content: effectiveConfigContent(config),
+        content: effectiveBuildConfigContent(config),
         metadata: { run: runId, revision: 0 },
       },
     ],

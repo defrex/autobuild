@@ -172,6 +172,7 @@ const verifyCompletedPayloadSchema = z.union([
     z.strictObject({
       ...verifyCompletionBase,
       outcome: z.literal('skipped'),
+      skipCause: z.literal('post-reconcile-policy').optional(),
       reason: z.string().trim().min(1, 'a skipped verification requires a non-blank reason'),
     }),
   ]),
@@ -535,6 +536,27 @@ export const eventPayloadSchemas = {
      * starts. */
     feedback: feedbackSchema.optional(),
   }),
+  'verify.reconcile-policy-captured': z.strictObject({
+    reconcileSeq: z.number().int().positive(),
+    steps: z
+      .array(
+        z.strictObject({
+          step: z.string().min(1),
+          enabled: z.boolean(),
+          source: z.string().min(1),
+        }),
+      )
+      .superRefine((steps, ctx) => {
+        if (new Set(steps.map((s) => s.step)).size !== steps.length)
+          ctx.addIssue({ code: 'custom', message: 'duplicate policy step' })
+        for (const s of steps)
+          if (
+            s.source !== 'verify.afterReconcile' &&
+            s.source !== `verify.${s.step}.afterReconcile`
+          )
+            ctx.addIssue({ code: 'custom', message: 'invalid policy source' })
+      }),
+  }),
   'verify.completed': verifyCompletedPayloadSchema,
   'finalize.started': empty,
   'finalize.completed': z.strictObject({
@@ -650,6 +672,7 @@ export interface NormalizedVerifyCompletion {
   outcome: VerifyOutcome
   report?: ArtifactRef
   reason?: string
+  skipCause?: 'post-reconcile-policy'
 }
 
 /**
@@ -673,6 +696,7 @@ export function normalizeVerifyCompletion(
       attempt: payload.attempt,
       outcome: 'skipped',
       reason: payload.reason,
+      ...(payload.skipCause !== undefined ? { skipCause: payload.skipCause } : {}),
     }
   }
   return {

@@ -62,6 +62,8 @@ inspect the diff and not to decide applicability again.
    ab artifact put web-dashboard-frame:connect-approved-narrow:png .ab/web-dashboard-frames/connect-approved-narrow.png --attach
    ab artifact put web-dashboard-frame:connect-denied-narrow:png .ab/web-dashboard-frames/connect-denied-narrow.png --attach
    ab artifact put web-dashboard-frame:connect-expired-narrow:png .ab/web-dashboard-frames/connect-expired-narrow.png --attach
+   ab artifact put web-dashboard-frame:builds-post-reconcile-policy-wide:png .ab/web-dashboard-frames/builds-post-reconcile-policy-wide.png --attach
+   ab artifact put web-dashboard-frame:builds-post-reconcile-policy-narrow:png .ab/web-dashboard-frames/builds-post-reconcile-policy-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-loading-wide:png .ab/web-dashboard-frames/builds-loading-wide.png --attach
    ab artifact put web-dashboard-frame:builds-loading-narrow:png .ab/web-dashboard-frames/builds-loading-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-happy-wide:png .ab/web-dashboard-frames/builds-happy-wide.png --attach

@@ -22,7 +22,7 @@ export function effectiveBuildConfigContent(config: Config): string {
   const { verify, finalize, ...root } = config
   return JSON.stringify({
     ...root,
-    verify: { steps: verify.steps, ...verify.stepConfigs },
+    verify: { steps: verify.steps, afterReconcile: verify.afterReconcile, ...verify.stepConfigs },
     finalize: { steps: finalize.steps, ...finalize.stepConfigs },
   })
 }

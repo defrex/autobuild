@@ -79,7 +79,15 @@ function models(): WebFixtureModels {
         slug: 'complete-dashboard-evidence',
         ticketId: 'CAP-COMPLETE',
         status: 'pausing',
-        steps: HAPPY_STEPS,
+        steps: [
+          ...HAPPY_STEPS,
+          {
+            label: 'verify:unit',
+            state: 'done',
+            qualifier: 'skipped',
+            reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+          },
+        ],
         pr: { url: 'https://forge.example/pr/2', state: 'open' },
       }),
       build({

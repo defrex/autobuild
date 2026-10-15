@@ -1149,6 +1149,149 @@ test('a2. reconcile merges the current base when main advances after conflict de
   expect(ofType(final, 'escalation.raised')).toEqual([])
 }, 30_000)
 
+test.each([false, true])(
+  'post-reconcile policy with enabled override %s preserves forge gates',
+  async (keepUnit) => {
+    let suppliedBase: string | undefined
+    let mergeCommit: string | undefined
+    const handlers = happyHandlers()
+    handlers.reconcile = async (cli) => {
+      await cli.run(['context'])
+      const context = JSON.parse(await readFile(join(cli.ws, '.ab', 'context.json'), 'utf8')) as {
+        conflict?: { baseSha: string }
+      }
+      suppliedBase = context.conflict?.baseSha
+      if (suppliedBase === undefined) {
+        throw new Error('reconcile context omitted conflict.baseSha')
+      }
+
+      // The advanced base and feature both added rate-limit.txt, so real Git
+      // must stop for a resolution. The scripted agent preserves both sides and
+      // finishes through the real `ab done` reconcile terminal.
+      const merge = await spawnExec(['git', ...GIT_ID, 'merge', '--no-edit', suppliedBase], {
+        cwd: cli.ws,
+      })
+      expect(merge.exitCode).not.toBe(0)
+      expect(`${merge.stdout}\n${merge.stderr}`).toContain('CONFLICT')
+      await writeFileIn(
+        cli.ws,
+        'rate-limit.txt',
+        'base audit behavior preserved\nfeature throttle after 5 preserved\n',
+      )
+      mergeCommit = await commitAll(cli.ws, 'reconcile: merge current main')
+      const notes = await writeFileIn(
+        cli.ws,
+        '.ab/reconcile-notes.md',
+        'Resolved the add/add rate-limit.txt conflict by preserving both behaviors.\n',
+      )
+      await cli.run(['done', '--notes', notes])
+    }
+
+    const configToml =
+      CONFIG_TOML.replace('[verify]\n', '[verify]\nafterReconcile = false\n')
+        .replace('steps = ["unit"]', 'steps = ["unit", "extra"]')
+        .replace('[verify.unit]\n', `[verify.unit]\nafterReconcile = ${keepUnit}\n`) +
+      '\n[verify.extra]\nkind = "check"\ncommand = "test"\n'
+    const h = await track(makeHarness({ handlers, configToml, tickets: [readyTicket('T-1')] }))
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), dispatched: 1 })
+    expect((await h.runLatest()).prState).toBe('open')
+
+    const initialEvents = await h.events(SLUG)
+    const ws = ofType(initialEvents, 'workspace.provisioned')[0]!.payload.ref
+    const detectedBase = await git(['rev-parse', 'main'], h.origin)
+    const featureBeforeReconcile = await git(['rev-parse', 'HEAD'], ws)
+    // This is the original failure shape: the SHA captured at detection is
+    // already in the feature branch, so merging that snapshot would be a no-op.
+    expect(
+      await git(['merge-base', '--is-ancestor', detectedBase, featureBeforeReconcile], ws),
+    ).toBe('')
+
+    // Let the parked runner lease expire, then have the janitor observe a
+    // conflict while main is still at the old (already-merged) SHA.
+    h.clock.advance(3_600_001)
+    h.forge.setPrState(1, { state: 'open', mergeable: false })
+    expect(await h.dispatcher.tick()).toEqual({
+      ...emptyTickReport(),
+      conflicted: 1,
+      // FakeTicketSource keeps its claimed ticket in Ready until completion;
+      // the ready scan dedupes it against its active build, so no re-claim.
+    })
+    const detected = ofType(await h.events(SLUG), 'pr.conflicted')[0]!
+    expect(detected.payload.baseSha).toBe(detectedBase)
+    expect(h.launched).toHaveLength(2)
+
+    // Main advances only after conflict detection and before the launched
+    // reconcile runner executes. Push it to the real bare origin: phase startup
+    // must fetch this remote-only tip rather than forwarding the old fact.
+    await writeFileIn(h.origin, 'rate-limit.txt', 'base audit behavior\n')
+    const currentBase = await commitAll(h.origin, 'base: add audit behavior')
+    await git(['push', '-q', 'origin', 'main'], h.origin)
+    expect(currentBase).not.toBe(detectedBase)
+
+    const reconciled = await h.runLatest()
+    expect(reconciled.status).toBe('running')
+    expect(reconciled.prState).toBe('open')
+    expect(suppliedBase).toBe(currentBase)
+
+    const events = await h.events(SLUG)
+    expect(ofType(events, 'pr.conflicted')[0]!.payload.baseSha).toBe(detectedBase)
+    expect(ofType(events, 'reconcile.started')[0]!.payload).toEqual({
+      attempt: 1,
+      baseSha: currentBase,
+    })
+    expect(ofType(events, 'escalation.raised')).toEqual([])
+    expect(ofType(events, 'verify.completed').map((event) => event.payload)).toEqual([
+      { step: 'unit', attempt: 1, outcome: 'pass' },
+      { step: 'extra', attempt: 1, outcome: 'pass' },
+      keepUnit
+        ? { step: 'unit', attempt: 2, outcome: 'pass' }
+        : {
+            step: 'unit',
+            attempt: 2,
+            outcome: 'skipped',
+            skipCause: 'post-reconcile-policy',
+            reason: 'skipped by post-reconcile policy: verify.unit.afterReconcile = false',
+          },
+      {
+        step: 'extra',
+        attempt: 2,
+        outcome: 'skipped',
+        skipCause: 'post-reconcile-policy',
+        reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+      },
+    ])
+
+    if (mergeCommit === undefined) {
+      throw new Error('reconcile handler did not create a merge commit')
+    }
+    const parents = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'], ws)).split(/\s+/)
+    expect(parents).toEqual([mergeCommit, featureBeforeReconcile, currentBase])
+    expect(ofType(events, 'reconcile.completed')[0]!.payload.mergeCommit).toBe(mergeCommit)
+    expect(h.forge.pushes.at(-1)).toEqual({ workspacePath: ws, branch: BRANCH })
+    expect(h.cliErrors).toEqual([])
+
+    expect(h.forge.comments.at(-1)?.body).toContain('skipped by post-reconcile policy')
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    await h.store.append(SLUG, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    await h.dispatcher.tick()
+    expect(reduceBuild(await h.events(SLUG)).outcome).toBeUndefined()
+    expect(h.forge.squashMergeCalls).toEqual([])
+    expect(h.forge.isAutoMergeEnabled(1)).toBe(true)
+    // With the stale-base obstacle gone, the ordinary janitor can observe the
+    // PR merged and finish the build without any human intervention.
+    h.forge.setPrState(1, { state: 'merged', sha: 'reconciled-squash' })
+    expect(await h.dispatcher.tick()).toEqual({ ...emptyTickReport(), merged: 1 })
+    const final = await h.events(SLUG)
+    expect(reduceBuild(final).outcome).toBe('merged')
+    expect(ofType(final, 'escalation.raised')).toEqual([])
+  },
+  30_000,
+)
+
 test('a2b. legacy tracked phase scratch stays parent-inherited through reconcile and merge', async () => {
   const handlers = happyHandlers()
   const artifactNotes = 'artifact-only implement notes\n'

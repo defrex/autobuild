@@ -21,7 +21,7 @@ import type { CorePhase, Feedback, Finding } from '../ontology'
 import { steppingClock } from '../testing/fixed'
 import { decideNext, decideNextFromFacts, type Decision, type WaitReason } from './engine'
 import { randomBuildLog } from './generators/build-log'
-import { reduceBuild } from './reducer'
+import { buildReducer, reduceBuild } from './reducer'
 import { checkIncremental } from './incremental-contract'
 import { logIndexReducer } from './log-index'
 
@@ -2248,6 +2248,12 @@ paths = ["web/**"]
         artifact: { kind: 'reconcile-notes', rev: 0 },
       }),
     ]
+    afterReconcile.push(
+      ev('verify.reconcile-policy-captured', {
+        reconcileSeq: afterReconcile.length,
+        steps: [{ step: 'dashboard', enabled: true, source: 'verify.afterReconcile' }],
+      }),
+    )
     expect(decideNext(toLog(afterReconcile), conditional)).toEqual({
       ...conditionalDecision,
       attempt: 2,
@@ -2666,7 +2672,70 @@ describe('decideNext: rule 9 — post-PR epilogue (§15.7)', () => {
           artifact: { kind: 'reconcile-notes', rev: 0 },
         }),
       ]),
-    ).toEqual({ kind: 'run-check', step: 'types', command: 'bun tsc --noEmit', attempt: 2 })
+    ).toEqual({ kind: 'capture-reconcile-policy', reconcileSeq: throughFinalize.length + 3 })
+  })
+
+  test('captured exclusions survive incremental replay, historical starts rerun, and later code review clears policy', () => {
+    const reconciled = [
+      ...throughFinalize,
+      ev('reconcile.completed', {
+        mergeCommit: 'merged-policy',
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }),
+    ]
+    const boundary = reconciled.length
+    const captured = [
+      ...reconciled,
+      ev('verify.reconcile-policy-captured', {
+        reconcileSeq: boundary,
+        steps: config.verify.steps.map((step) => ({
+          step,
+          enabled: false,
+          source: 'verify.afterReconcile',
+        })),
+      }),
+    ]
+    expect(decide(captured)).toMatchObject({
+      kind: 'skip-verify',
+      step: 'types',
+      attempt: 2,
+      skipCause: 'post-reconcile-policy',
+    })
+    const skipped = [
+      ...captured,
+      ev('verify.started', { step: 'types', attempt: 2 }),
+      ev('verify.completed', {
+        step: 'types',
+        attempt: 2,
+        outcome: 'skipped',
+        skipCause: 'post-reconcile-policy',
+        reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+      }),
+    ]
+    const log = toLog(skipped) // validates writes and checks incremental log-index replay
+    checkIncremental(buildReducer, log)
+    expect(decideNext(log, config)).toMatchObject({ kind: 'skip-verify', step: 'unit' })
+    expect(reduceBuild(log).verify.results.at(-1)?.skipCause).toBe('post-reconcile-policy')
+    expect(
+      decide([...reconciled, ev('verify.started', { step: 'types', attempt: 2 })]),
+    ).toMatchObject({ kind: 'run-check', step: 'types', attempt: 2 })
+    expect(
+      decide([...skipped, ...implementRound(2, 'repaired'), ...codeReview(2, 'approve')]),
+    ).toMatchObject({ kind: 'run-check', step: 'types', attempt: 3 })
+    const disabled = parseConfig(
+      CONFIG_TOML.replace('[verify]\n', '[verify]\nafterReconcile = false\n'),
+    )
+    expect(
+      decideNext(
+        toLog([
+          ...prelude(),
+          ...planApproved(),
+          ...implementRound(1, 'initial'),
+          ...codeReview(1, 'approve'),
+        ]),
+        disabled,
+      ),
+    ).toMatchObject({ kind: 'run-check', step: 'types', attempt: 1 })
   })
 
   test('a verify failure after reconcile re-enters the code loop as usual (§15.7)', () => {

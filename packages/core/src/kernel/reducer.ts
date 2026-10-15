@@ -113,6 +113,8 @@ export interface VerifyResult {
   attempt: number
   outcome: VerifyOutcome
   report?: ArtifactRef
+  /** Optional classification on kernel policy skips; historical skips omit it. */
+  skipCause?: 'post-reconcile-policy'
   /** Present exactly when `outcome === "skipped"`. */
   reason?: string
   /** seq of the `verify.completed` event — what `cycleSince` is compared to. */
@@ -694,6 +696,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
           outcome: result.outcome,
           report: result.report,
           ...(result.reason !== undefined ? { reason: result.reason } : {}),
+          ...(result.skipCause !== undefined ? { skipCause: result.skipCause } : {}),
           seq: event.seq,
         })
         if (verify.currentStep === result.step) {

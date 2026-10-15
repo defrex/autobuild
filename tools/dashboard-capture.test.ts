@@ -65,6 +65,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(second.status).toBe('')
   expect(first.result.outputDir).toEndWith('.ab/dashboard-frames')
   expect(first.result.frames.map((frame) => frame.id)).toEqual([
+    'post-reconcile-policy',
     'headline-happy-wide',
     'website-hero',
     'mixed-wide',
@@ -105,6 +106,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('AUT-134')
       expect(frame.text).toContain('AUT-136')
       expect(frame.text).not.toContain('BLOCKED')
+    } else if (frame.id === 'post-reconcile-policy') {
+      expect(frame.text).toContain('skipped by post-reconcile policy')
+      expect(frame.text).toContain('verify.afterReconcile = false')
     } else if (frame.id.startsWith('mixed-')) {
       expect(frame.text).toContain('CAP-PLAN')
       expect(frame.text).toContain('CAP-IMPLEMENT')
@@ -137,6 +141,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('Agent: naïve — “日本語” ☕️ 🇺🇸 👨‍👩‍👧‍👦')
     }
     if (
+      frame.id !== 'post-reconcile-policy' &&
       frame.id !== 'unicode-transcript' &&
       frame.id !== 'headline-happy-wide' &&
       frame.id !== 'website-hero' &&
