@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#605](https://github.com/defrex/autobuild/pull/605) — Bound persistent dispatch failures with a human retry budget
 ## v0.11.0 — 2026-10-15
 
 This release makes dispatching more resilient and much lighter on Linear's API quota. Dispatch now skips redundant dependency reads, batches the rest, and paginates ready listings. When Linear rate-limits a request, ready tickets are no longer claimed by mistake. Ticket-source scans now run separately from dispatcher ticks, degradation and recovery are recorded durably and shown to operators, and both the operator surfaces and terminal dashboards show which dispatcher owns the work, including persistent standby ownership and reports of lost dispatchers.
