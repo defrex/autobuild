@@ -835,7 +835,7 @@ changing it requires a dispatcher restart.
 | `model` | — (required when `enabled = true`) | nonblank provider-qualified string, same vocabulary as `[roles]` | The turn runner's model, resolved through the deployment's gateway credential; a leading `vercel-ai-gateway/` prefix is accepted and stripped. |
 | `invocationBudgetSeconds` | `240` | positive integer, clamped to 300 | Wall-clock budget for one turn invocation. A larger value is clamped — not rejected — to the 300-second hosted function limit the runner executes under. |
 | `approvals` | `["builds.control:abort", "builds.control:discard", "builds.answer:revise-spec", "sandbox.publish", "tickets.move:ready"]` | array of `tool` or `tool:qualifier` strings | Registry tool calls that suspend a turn until the operator answers. Empty (`[]`) means none — autonomous operation. An entry naming an absent or unknown tool is **inert by design**, never an error. A qualified entry applies to one discriminator value only (`tickets.move:ready` approves moving a ticket to `ready`); for a tool without a discriminator, only the bare form matches. |
-| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the default attention set (the events `ab watch` filters on by default); an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
+| `wake` | inherits the default | array of event-type globs | The attention events a **new** session wakes for. Absent inherits the legacy hosted wake event set, independent of CLI watch defaults; an explicit `[]` means never wake — message-only. Each glob must match at least one build event type. Existing sessions never retroactively inherit; an explicit wake update always wins. |
 | `sandbox` | — | strict subtable | The sandbox behavior knobs; absence reads as the defaults below. |
 
 `[orchestrator.sandbox]` fields:
@@ -1642,19 +1642,47 @@ streams matching events as they land instead of answering once. With no slug it
 follows every nonterminal build in the repository — a build created while the
 watch runs joins it without a restart — and naming one or more slugs watches
 exactly those builds, ending the watch when all of them reach a terminal status.
-`--repository` additionally follows the repository journal; without it,
-repository events are never emitted.
+With no slugs the repository journal is included; named watches add it with
+`--repository`.
 
-The default filter is the attention set — the events something must wake up
-for. For builds that is exactly: `escalation.raised`, `phase.failed`,
-`infrastructure.failed`, `runner.setup-failed`, `dispatch.failed`,
-`publication.lost`, `finalize.completed`, `pr.conflicted`, `pr.merged`,
-`pr.closed`, `build.completed`, `build.aborted`. For the repository journal:
-`harvest.escalated`, `harvest.failed`, `dispatcher.tick-failed`,
-`dispatcher.config-rejected`, `dispatcher.harvest-runner-failed`. A repeatable
-`--event <glob>` (`escalation.*`, `pr.*`, `*` — `*` matches any run of
-characters, `?` one) replaces that filter, and every glob must match at least
-one known event type or the command fails before reading the store.
+The default watch reports actionable conditions only:
+
+- Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
+  with auto-merge off or a current actionable merge-gate deferral. Armed consent
+  awaiting application is silent. One merge decision is reported per build/PR.
+- Repository `harvest.escalated`, `harvest.recovery-exhausted`,
+  `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
+  `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+- `dispatcher.ticket-source-persistent`: degradation past its advertised
+  reset time, or 15 minutes after onset without a reset. Repeated evidence
+  never postpones the deadline; recovery ends the episode.
+- `dispatcher.tick-failure-persistent`: continuously failing completed ticks
+  for five minutes in one run. A successful tick, new run, or matching stop
+  ends the episode. Each persistence episode is reported once.
+
+Repository conditions are included with no slugs or with `--repository`.
+Routine outcomes and self-healing failures are silent. Repeatable
+`--event <glob>` replaces the default and selects exactly matching catalog
+events (plus the existing `dispatcher.lost` observation); use explicit globs
+to opt into failures, finalize, merge, or completion events.
+
+Derived records use `observation` instead of `event`, without inventing a
+durable sequence or actor. Merge observations carry `type`, `pr`, `reason`,
+and `observedAt`, plus the build slug and normal reduced state. Persistence
+observations carry source/cause/message/resetAt when advertised (or
+run/firstFailure/error), `episodeSeq`, and `observedAt`; repository records
+have `repo` and null build/state. Source observations also report
+`dependencyLimited`.
+
+Every record carries a cursor, including timer-only records. Resuming suppresses
+delivered merge decisions and persistence episodes even when stream positions
+did not advance. Old v1 cursors remain valid: historical eligible merge
+decisions are treated as consumed; active overdue repository episodes may
+report because old watches had no persistence notification. Fresh attachment
+silently baselines historical direct events and merge decisions, but retains
+active repository timers. Reconcile existing conditions through status after
+arming the watch. Named watches still end when every named build is terminal;
+learn their outcomes from status reconciliation at exit.
 
 With `--json`, stdout is newline-delimited JSON — exactly one object per
 matching event, flushed as soon as it is written — with fields `build` (slug,
@@ -1751,7 +1779,7 @@ vocabulary is closed: `blocked`, `paused`, `running`, `done`, `aborted`,
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,
 `implement`, `code-review`, `finalize`, `reconcile` — or `verify:<step>`), and
-`attention` (any event in the `ab watch` attention set). Repeatable `--event`
+`attention` (an open escalation or a build waiting for a merge decision). Repeatable `--event`
 globs follow the `ab watch` rules. Multiple values are alternatives: the first
 one satisfied ends the wait — all `--for` values in supply order, then all
 globs in supply order — and the record names what matched.
@@ -1762,8 +1790,11 @@ means an open escalation exactly as everywhere else. In the manner of `kubectl
 wait`, a condition that already holds when the command starts returns
 immediately with that build's latest event (`--since` does not suppress this);
 otherwise the first later event whose reduction produces it ends the wait.
-`attention` and `--event` conditions fire only on events appended after the
-command started, or on a cursor-resumed backlog after `--since`.
+`attention` is also a current-state condition: an already open escalation or
+merge decision returns immediately, including with `--since`. Merge matches
+use the same observation as watch. During replay, only new escalation events
+or undelivered eligible merge decisions satisfy attention. `--event` conditions
+fire only on new events or a cursor-resumed backlog.
 
 The record is the `ab watch` record plus a `condition` field naming the
 satisfied `--for` value or `--event` glob. Unlike `ab watch`, there is no

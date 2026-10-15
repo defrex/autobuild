@@ -162,3 +162,51 @@ streaming is not provided. Delegated bearer tokens remain server-side.
 
 The API does not expose phase-session commands, runner startup, live streaming,
 or a generic event-append operation.
+
+### CLI attention monitoring
+
+The default watch reports actionable conditions only:
+
+- Build `escalation.raised`, or `build.merge-decision`: a finalized open PR
+  with auto-merge off or a current actionable merge-gate deferral. Armed consent
+  awaiting application is silent. One merge decision is reported per build/PR.
+- Repository `harvest.escalated`, `harvest.recovery-exhausted`,
+  `dispatcher.config-rejected`, `dispatcher.config-reloaded` with nonempty
+  `restartRequired`, abnormal `dispatcher.run-stopped`, and `dispatcher.lost`.
+- `dispatcher.ticket-source-persistent`: degradation past its advertised
+  reset time, or 15 minutes after onset without a reset. Repeated evidence
+  never postpones the deadline; recovery ends the episode.
+- `dispatcher.tick-failure-persistent`: continuously failing completed ticks
+  for five minutes in one run. A successful tick, new run, or matching stop
+  ends the episode. Each persistence episode is reported once.
+
+Repository conditions are included with no slugs or with `--repository`.
+Routine outcomes and self-healing failures are silent. Repeatable
+`--event <glob>` replaces the default and selects exactly matching catalog
+events (plus the existing `dispatcher.lost` observation); use explicit globs
+to opt into failures, finalize, merge, or completion events.
+
+Derived records use `observation` instead of `event`, without inventing a
+durable sequence or actor. Merge observations carry `type`, `pr`, `reason`,
+and `observedAt`, plus the build slug and normal reduced state. Persistence
+observations carry source/cause/message/resetAt when advertised (or
+run/firstFailure/error), `episodeSeq`, and `observedAt`; repository records
+have `repo` and null build/state. Source observations also report
+`dependencyLimited`.
+
+Every record carries a cursor, including timer-only records. Resuming suppresses
+delivered merge decisions and persistence episodes even when stream positions
+did not advance. Old v1 cursors remain valid: historical eligible merge
+decisions are treated as consumed; active overdue repository episodes may
+report because old watches had no persistence notification. Fresh attachment
+silently baselines historical direct events and merge decisions, but retains
+active repository timers. Reconcile existing conditions through status after
+arming the watch. Named watches still end when every named build is terminal;
+learn their outcomes from status reconciliation at exit.
+
+`ab wait --for attention` is build-only and uses the same build conditions:
+an open escalation or a merge decision. Existing conditions return immediately,
+even with `--since`; live and backlog matches ignore routine outcomes and
+self-healing failures. A merge match uses the watch observation with
+`condition: "attention"`. Explicit `--event` globs remain event-only.
+Watch and wait preserve each other's cursor notification metadata.
