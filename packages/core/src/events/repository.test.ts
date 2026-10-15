@@ -732,3 +732,31 @@ describe('operator sandbox facts (AUT-340)', () => {
     ).toThrow(/may not emit/)
   })
 })
+
+test('source degradation requires strict cause-specific reset evidence', () => {
+  const payload = {
+    source: 'fake',
+    cause: 'rate-limited',
+    operation: 'ready-scan',
+    message: 'quota exhausted',
+    resetAt: '2026-10-14T12:00:00.000Z',
+  }
+  const write = { actor: DISPATCHER, type: 'dispatcher.ticket-source-degraded', payload }
+  expect(() => validateRepositoryEventWrite(write)).not.toThrow()
+  for (const patch of [
+    { resetAt: undefined },
+    { resetAt: 'tomorrow' },
+    { source: '' },
+    { message: '' },
+    { operation: 'claim' },
+    { extra: true },
+  ]) {
+    expect(() =>
+      validateRepositoryEventWrite({ ...write, payload: { ...payload, ...patch } }),
+    ).toThrow()
+  }
+  const { resetAt: _, ...generic } = payload
+  expect(() =>
+    validateRepositoryEventWrite({ ...write, payload: { ...generic, cause: 'ready-scan-failed' } }),
+  ).not.toThrow()
+})

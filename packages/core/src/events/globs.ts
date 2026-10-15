@@ -10,8 +10,8 @@ import { EVENT_TYPES } from './payloads'
 import { REPOSITORY_EVENT_TYPES } from './repository'
 
 export interface CompileEventGlobsOptions {
-  /** Also accept matches in the repository-journal catalog (the `--repository`
-   * behavior of `ab watch`/`ab wait`). */
+  /** Also accept matches in the repository-journal catalog (the no-slug or
+   * explicit `--repository` behavior of `ab watch`; wait remains build-only). */
   repository?: boolean
   usage: string
 }
