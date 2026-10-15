@@ -1,3 +1,4 @@
+import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
 import { readFile, writeFile } from 'node:fs/promises'
 import semver from 'semver'
 import type { ExecResult } from '../ports/workspace/git-worktree'
@@ -71,6 +72,7 @@ export function registryVersion(response: { status: number; body: string }): str
 
 export interface SelfUpdateOptions {
   targetRepo: string
+  compatibilityFetch?: CompatibilityFetch
   version?: string
   distRoot?: string
   env?: Record<string, string | undefined>
@@ -392,6 +394,14 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
     )
     return { kind: 'continue' }
   }
+
+  await checkUpgradeCompatibility({
+    targetRepo: options.targetRepo,
+    version: resolved,
+    env: options.env,
+    stderr: options.stderr,
+    fetch: options.compatibilityFetch,
+  })
 
   const dependency = updateDependency(install, resolved)
   let updateCommand: string[]

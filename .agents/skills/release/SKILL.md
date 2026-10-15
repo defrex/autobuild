@@ -14,6 +14,20 @@ Release yourself.
 This is repo-local maintainer tooling. `tools/` does not ship in the package,
 so nothing here is product surface.
 
+A patch release must not change the protocol: patches on a release line are
+interchangeable in both directions. Protocol changes require a new major.minor
+line and retained handlers for every line still in the supported client window.
+
+Before a new minor or major release, review `RELEASE_LINE_PROTOCOLS` in
+`packages/core/src/store/remote/compatibility.ts` against the target version's
+supported window. Record the outgoing line's protocol identity before it
+becomes historical, retain every older identity and wire handler still in the
+window, and review the frozen contracts in
+`packages/hosted-store-service/src/compatibility-fixtures/` to add or retire
+fixtures deliberately. The new service's own line uses its current protocol
+automatically. Check every advertised line through `clientIdentityError` for
+the target version; the release command's gates run before the version bump.
+
 ## Preconditions
 
 The command refuses to proceed unless all of these hold, so check them first

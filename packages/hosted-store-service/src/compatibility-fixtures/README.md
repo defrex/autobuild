@@ -1,0 +1,29 @@
+These decoders are frozen from v0.9.0 (commit
+58268333ad4e2ea4b37f86a9086ec1324417623f). Runtime schema dependencies are
+frozen too; the store's type-only artifact metadata imports have no decoding
+behavior. Only import paths and formatting differ from the tagged files.
+
+Sources: `packages/core/src/store/remote/protocol.ts`,
+`ports/tickets/remote-protocol.ts`, `operator/protocol.ts`, and the actor and
+ticket-reference schemas in `events/envelope.ts` and `ontology.ts`.
+
+Compared with v0.10.0 (a405f25aafcbb04e98be9e2d5296e4259c5c9e75): ticket and
+operator schemas and the hosted operator client's request methods are unchanged.
+The store adds optional snapshot/high-water routes; its pre-existing schemas
+and requests are unchanged. The contract suite runs both historical identities
+through the common frozen baseline. It sends the requests used by the tagged
+remote store/ticket clients (JSON envelopes, query parameters, bearer token and
+protocol 3 headers) and decodes actual responses. Historical operator clients
+cast successful JSON without runtime validation; their strict error decoder and
+control request schemas are frozen here.
+
+The current store adds optional digest fields, ignored by the historical loose
+object decoder. Current ticket responses add `resolved` and `blockersResolved`,
+which both historical strict decoders reject; the server projects those fields
+away for both lines. Operator success responses do not use that strict ticket
+decoder and need no projection.
+
+Retain these contracts while these lines are in the published service window.
+When adding or retiring a line, deliberately review the tag differences and
+update fixtures, the protocol identity table, and boundary projections together.
+Tests do not fetch tags or packages at runtime.

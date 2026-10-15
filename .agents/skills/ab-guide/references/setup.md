@@ -208,17 +208,34 @@ sources agree with the running system by construction:
   **running dispatcher's version** (read from the deployed distribution's
   `package.json`), so the guest runs the dispatcher's own release.
 
-The hosted remote store enforces exact **version lockstep**: every client
-request must carry an `x-autobuild-version` equal to the server's, and any
-mismatch — a guest older *or* newer than the store — is rejected with a 409
-`remote store version mismatch`. Guest, store, and dispatcher versions
-therefore cannot be mixed: a distribution fix reaches guests only after
-`tools/release.ts` cuts a release (credential-gated; requires GitHub
-credentials — a documented delivery dependency, not an automatic propagation)
-**and** the hosted store and dispatcher are upgraded to that release in the
-same lockstep window. If the release is cut but the store upgrade lags, guests
-carrying the new distribution fail loudly against the old store (409) rather
-than running silently stale.
+A service accepts stable clients from its own `major.minor` release line and
+the two preceding minor lines in the same major. A major starts a new family:
+X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
+Patch versions are interchangeable in both directions and must never change
+the protocol. Upgrade the service first, then projects independently within
+its window. Supported release lines retain their wire handlers and known
+protocol identities; an unknown protocol is refused independently of version.
+Malformed, missing, and prerelease identities are refused with HTTP 409.
+A newer client is told to upgrade the service; a client below the window is
+told to upgrade the project's Autobuild. Diagnostics name the service version
+and supported range.
+
+Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
+`protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
+The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
+service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+headers, or available backend.
+
+`ab upgrade` probes this public range before installation or project changes.
+It warns and continues when the target is outside the range, naming the
+required service upgrade for a newer target or a compatible project range for
+an older one. An unavailable or malformed probe warns that connectivity may
+fail after upgrade. Legacy health without a range means exact-version matching;
+upgrade that service to the compatibility-window release first.
+
+A distribution fix reaches origin-mode guests after a release is cut and the
+dispatcher is upgraded. Guests continue to run the dispatcher's own version;
+the hosted service must support that release line.
 
 Provisioning records the installed distribution's identity — package version
 and remote-store protocol version — in the guest's
@@ -229,10 +246,10 @@ against the identity the current system would deliver and, when they disagree
 (which includes every guest provisioned before the marker existed), refreshes
 it in place (archive re-fetched, extracted, and production-installed) first,
 so an upgraded dispatcher retrofits its existing guests instead of resuming a
-stale distribution the hosted store would reject. A refresh failure deletes
+stale distribution. A refresh failure deletes
 the sandbox so the next provisioning pass rematerializes it from scratch.
 
-After a lockstep upgrade, confirm a fix-bearing guest from the guest
+After a dispatcher upgrade, confirm a fix-bearing guest from the guest
 perspective:
 
 1. `ab build status <slug> --json` with the ambient build identity for a

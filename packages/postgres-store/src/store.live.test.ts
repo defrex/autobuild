@@ -12,7 +12,7 @@ import {
   type StreamPart,
 } from '@defrex/autobuild/plugin-sdk'
 import { migratePostgres } from './schema'
-import { EVENT_WAIT_POLL_MS, openPostgresBuildStore } from './store'
+import { EVENT_WAIT_POLL_MS, openPostgresBuildStore, PostgresBuildStore } from './store'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
 
@@ -78,12 +78,17 @@ if (testUrl) {
   describe('PostgreSQL durability and concurrency', () => {
     test('concurrent repository ensures create one absent row and return the winning record', async () => {
       const database = await isolatedDatabase()
-      const stores = await Promise.all(
-        Array.from({ length: 8 }, () =>
-          openPostgresBuildStore(database.url, new MemoryBlobStore()),
-        ),
+      // Eight independent connections exercise the race without eight default
+      // pools exhausting a shared verification database during schema checks.
+      // isolatedDatabase already migrated and validated this schema.
+      const stores = Array.from(
+        { length: 8 },
+        () =>
+          new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
+            blobs: new MemoryBlobStore(),
+          }),
       )
-      const assertionSql = new SQL(database.url)
+      const assertionSql = new SQL(database.url, { max: 1 })
       try {
         const records = await Promise.all(stores.map((store) => store.ensureRepo('acme/new-repo')))
         expect(records).toHaveLength(stores.length)
@@ -115,12 +120,17 @@ if (testUrl) {
 
     test('concurrent creation of one absent build has one winner and normalized losers', async () => {
       const database = await isolatedDatabase()
-      const stores = await Promise.all(
-        Array.from({ length: 8 }, () =>
-          openPostgresBuildStore(database.url, new MemoryBlobStore()),
-        ),
+      // Eight independent connections exercise the race without eight default
+      // pools exhausting a shared verification database during schema checks.
+      // isolatedDatabase already migrated and validated this schema.
+      const stores = Array.from(
+        { length: 8 },
+        () =>
+          new PostgresBuildStore(new SQL(database.url, { max: 1 }), {
+            blobs: new MemoryBlobStore(),
+          }),
       )
-      const assertionSql = new SQL(database.url)
+      const assertionSql = new SQL(database.url, { max: 1 })
       try {
         const results = await Promise.allSettled(
           stores.map((store) => store.createBuild(sampleBuildInput('new-shared-build'))),
