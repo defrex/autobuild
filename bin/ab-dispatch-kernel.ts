@@ -23,7 +23,7 @@ try {
 }
 
 const stop = new AbortController()
-const requestStop = (): void => stop.abort()
+const requestStop = (signal?: string): void => stop.abort(signal)
 // Keep both handlers installed through the complete graceful drain. The first
 // targeted SIGINT comes from the supervisor; later foreground-group signals
 // must not regain their default disposition inside an open claim tick.

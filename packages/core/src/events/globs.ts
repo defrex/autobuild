@@ -12,6 +12,7 @@ import { REPOSITORY_EVENT_TYPES } from './repository'
 export interface CompileEventGlobsOptions {
   /** Also accept matches in the repository-journal catalog (the no-slug or
    * explicit `--repository` behavior of `ab watch`; wait remains build-only). */
+  additionalCatalog?: readonly string[]
   repository?: boolean
   usage: string
 }
@@ -35,7 +36,11 @@ export function compileEventGlobs(
     const inBuildCatalog = EVENT_TYPES.some((type) => regex.test(type))
     const inRepositoryCatalog =
       opts.repository === true && REPOSITORY_EVENT_TYPES.some((type) => regex.test(type))
-    if (!inBuildCatalog && !inRepositoryCatalog) {
+    if (
+      !inBuildCatalog &&
+      !inRepositoryCatalog &&
+      !opts.additionalCatalog?.some((type) => regex.test(type))
+    ) {
       throw new Error(
         `--event "${glob}" matches no known event type${
           opts.repository ? ' in the build or repository catalogs' : ' in the build event catalog'

@@ -191,7 +191,15 @@ function countingStore(store: BuildStore): { store: BuildStore; journalRows: () 
           const events = await (
             t.getRepoEvents as (...a: unknown[]) => Promise<RepositoryEvent[]>
           ).call(t, ...args)
-          rows += events.length
+          // Liveness alone may recover an earlier stop hidden by a later run.
+          // Ordinary snapshot delta reads always supply a sequence argument.
+          if (args.length > 1) rows += events.length
+          else {
+            const bounded = await store.getRepoStateEvents(args[0] as string)
+            expect(bounded.some((e) => e.type === 'dispatcher.run-started')).toBe(true)
+            expect(bounded.some((e) => e.type === 'dispatcher.run-stopped')).toBe(false)
+            expect(events.some((e) => e.type === 'dispatcher.run-stopped')).toBe(true)
+          }
           return events
         }
       }
@@ -232,7 +240,7 @@ describe('bounded repository reads (AUT-489)', () => {
       await seed(store, invocations, 'operator-warning')
 
       const counting = countingStore(store)
-      const repositoryStatus = await getRepositoryStatus(counting.store, REPO)
+      const repositoryStatus = await getRepositoryStatus(counting.store, REPO, clock())
       const harvestStatus = await getHarvestStatus(counting.store, REPO)
       const dashboard = await getOperatorDashboard({ store: counting.store, repo: REPO, clock })
       const config0 = await effectiveConfig(counting.store, REPO)
@@ -240,7 +248,7 @@ describe('bounded repository reads (AUT-489)', () => {
 
       // Every output equals the full-replay output over the same journal.
       const full = fullReplayStore(store)
-      expect(repositoryStatus).toEqual(await getRepositoryStatus(full, REPO))
+      expect(repositoryStatus).toEqual(await getRepositoryStatus(full, REPO, clock()))
       expect(harvestStatus).toEqual(await getHarvestStatus(full, REPO))
       expect(dashboard).toEqual(await getOperatorDashboard({ store: full, repo: REPO, clock }))
       expect(config0.config).toEqual((await effectiveConfig(full, REPO)).config)

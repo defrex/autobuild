@@ -1,4 +1,10 @@
 import {
+  formatDispatcherIdentity,
+  projectDispatcherLiveness,
+  type DispatcherLiveness,
+} from '../kernel/dispatcher-liveness'
+import { readDispatcherLiveness } from './dispatcher-liveness'
+import {
   reduceTicketSourceHealth,
   type TicketSourceDegradation,
 } from '../kernel/ticket-source-health'
@@ -11,6 +17,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
+  dispatcher: DispatcherLiveness
   ticketSourceDegradation?: TicketSourceDegradation
   /** Live operator sandboxes (AUT-340); released environments are omitted. */
   sandboxes: Array<{
@@ -43,10 +50,15 @@ export interface RepositoryStatusOpts {
   json?: boolean
   /** Explicit --store reference; precedence is owned by repo-state.ts. */
   storeRef?: string
+  now?: () => Date
   openStore?: StoreOpener
 }
 
-export function projectRepositoryStatus(repo: string, events: RepositoryEvent[]): RepositoryStatus {
+export function projectRepositoryStatus(
+  repo: string,
+  events: RepositoryEvent[],
+  dispatcher = projectDispatcherLiveness(null, [], new Date()),
+): RepositoryStatus {
   const publications: RepositoryStatus['publications'] = []
   for (const event of events) {
     if (event.type !== 'orchestrator.sandbox.published') continue
@@ -72,6 +84,7 @@ export function projectRepositoryStatus(repo: string, events: RepositoryEvent[])
   return {
     ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
+    dispatcher,
     ...reduceDispatchSettings(events),
     sandboxes: sandboxStates(events)
       .filter((state) => state.state !== 'released')
@@ -96,6 +109,22 @@ export function renderRepositoryStatus(status: RepositoryStatus): string[] {
           `ticket source ${active.source}: ${active.cause} (${active.operation}) — ${active.message}${'resetAt' in active ? `; reset ${active.resetAt}` : ''}`,
         ]),
     `repository: ${status.repo}`,
+    `dispatcher: ${status.dispatcher.state}${status.dispatcher.holder ? ` — ${formatDispatcherIdentity(status.dispatcher.holder)}` : ' — no dispatcher holds the repository'}`,
+    ...(status.dispatcher.expiredHolder
+      ? [`expired dispatcher: ${formatDispatcherIdentity(status.dispatcher.expiredHolder)}`]
+      : []),
+    ...[status.dispatcher.holder ?? status.dispatcher.expiredHolder].flatMap((run) =>
+      run
+        ? [
+            `last tick: ${run.lastTickAt ?? 'unknown'} (${run.lastTickAgeMs ?? 'unknown'}ms ago); ${JSON.stringify(run.lastTick)}`,
+          ]
+        : [],
+    ),
+    ...(status.dispatcher.latestStoppedRun
+      ? [
+          `last dispatcher stop: ${status.dispatcher.latestStoppedRun.stoppedAt}; ${status.dispatcher.latestStoppedRun.stop?.outcome}; signal ${status.dispatcher.latestStoppedRun.stop?.signal ?? 'none'}`,
+        ]
+      : []),
     `intake: ${setting(status.intake)}`,
     `repository pause: ${setting(status.paused)}`,
     `default auto-merge: ${setting(status.defaultAutoMerge)}`,
@@ -118,10 +147,8 @@ export async function abRepositoryStatus(opts: RepositoryStatusOpts): Promise<vo
   await withSessionlessStore(opts, async ({ store, repo }) => {
     // A fresh store has no repository row. Do not call ensureRepo: this query's
     // empty-stream defaults must remain a genuinely read-only operation.
-    const record = await store.getRepo(repo)
-    // Bounded read (AUT-489): projectRepositoryStatus reduces durable types only.
-    const events = record === null ? [] : await store.getRepoStateEvents(repo)
-    const status = projectRepositoryStatus(repo, events)
+    const { events, dispatcher } = await readDispatcherLiveness(store, repo, opts.now?.())
+    const status = projectRepositoryStatus(repo, events, dispatcher)
     if (opts.json === true) {
       opts.stdout(JSON.stringify(status, null, 2))
       return

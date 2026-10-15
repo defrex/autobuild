@@ -173,6 +173,13 @@ describe('hosted store service', () => {
     })
     expect(await client.repositoryStatus('acme/repo')).toEqual({
       repo: 'acme/repo',
+      dispatcher: {
+        state: 'absent',
+        holder: null,
+        expiredHolder: null,
+        latestRun: null,
+        latestStoppedRun: null,
+      },
       intake: true,
       paused: false,
       defaultAutoMerge: false,

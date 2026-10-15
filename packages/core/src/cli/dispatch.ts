@@ -1,3 +1,5 @@
+import { readDispatcherLiveness } from './dispatcher-liveness'
+import { formatDispatcherIdentity } from '../kernel/dispatcher-liveness'
 /**
  * `ab dispatch` — the operator's entry into the outer loop (SPEC §3.3, §12).
  * Runs OUTSIDE build sessions like init/upgrade/ticket (§16.3): it takes a
@@ -3476,7 +3478,12 @@ class DispatchLoop {
       await this.recordTickYielded()
       const peer = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))?.lease
         ?.holder
-      const message = `tick yielded: repository held by ${peer ?? 'another invocation'}`
+      const liveness = await readDispatcherLiveness(
+        this.wiring.store,
+        this.repoIdentity,
+        this.wiring.clock(),
+      ).catch(() => null)
+      const message = `tick yielded: repository held by ${liveness?.dispatcher.holder ? formatDispatcherIdentity(liveness.dispatcher.holder) : (peer ?? 'another invocation')}`
       this.warn(message)
       if (this.opts.once === true) return
       // Watch mode stays alive and retries the claim at every tick.
@@ -3973,6 +3980,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         payload: {
           run: runId,
           pid: process.pid,
+          host: hostname(),
           effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
           roleWarnings: roleKeyWarnings(config),
         },
@@ -3983,6 +3991,17 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const loop = new DispatchLoop(liveConfig, wiring, resolvedOpts, view)
   try {
     await loop.run()
+    const stopRequest = (
+      resolvedOpts.kernelRunId && resolvedOpts.signal?.aborted
+        ? await wiring.store.getRepoEvents(state.repo)
+        : []
+    ).find((event) => event.type === 'dispatcher.stop-requested' && event.payload.run === runId)
+    const stoppedSignal =
+      stopRequest?.type === 'dispatcher.stop-requested'
+        ? stopRequest.payload.signal
+        : typeof resolvedOpts.signal?.reason === 'string'
+          ? resolvedOpts.signal.reason
+          : undefined
     await view.appendRepo(state.repo, {
       actor: DISPATCHER,
       type: 'dispatcher.run-stopped',
@@ -3990,6 +4009,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
         run: runId,
         outcome: 'normal',
         exitCode: 0,
+        ...(stoppedSignal === undefined ? {} : { signal: stoppedSignal }),
         ...(loop.supersededByPeer ? { reason: 'superseded' as const } : {}),
       },
     })

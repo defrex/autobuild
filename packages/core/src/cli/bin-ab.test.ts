@@ -637,6 +637,13 @@ test('repository status reads paused and unpaused stores without changing either
     intake: true,
     paused: false,
     defaultAutoMerge: false,
+    dispatcher: {
+      state: 'absent',
+      holder: null,
+      expiredHolder: null,
+      latestRun: null,
+      latestStoppedRun: null,
+    },
     sandboxes: [],
     publications: [],
   })
@@ -646,6 +653,13 @@ test('repository status reads paused and unpaused stores without changing either
     intake: false,
     paused: true,
     defaultAutoMerge: true,
+    dispatcher: {
+      state: 'absent',
+      holder: null,
+      expiredHolder: null,
+      latestRun: null,
+      latestStoppedRun: null,
+    },
     sandboxes: [],
     publications: [],
   })
