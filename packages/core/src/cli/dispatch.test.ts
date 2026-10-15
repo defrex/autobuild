@@ -6314,6 +6314,7 @@ describe('abDispatch interactive keyboard controls', () => {
           payload: {
             run: expect.stringMatching(/-dispatch-/),
             pid: expect.any(Number),
+            host: expect.any(String),
             effectiveConfig: { kind: 'dispatcher-effective-config', rev: expect.any(Number) },
             roleWarnings: [],
           },
@@ -6390,6 +6391,7 @@ describe('abDispatch interactive keyboard controls', () => {
           payload: {
             run: expect.stringMatching(/-dispatch-/),
             pid: expect.any(Number),
+            host: expect.any(String),
             effectiveConfig: { kind: 'dispatcher-effective-config', rev: expect.any(Number) },
             roleWarnings: [],
           },
@@ -10499,4 +10501,55 @@ describe('dispatch rate-limit journaling', () => {
       await fx.cleanup()
     }
   }, 30_000)
+})
+
+test('a yielding dispatcher resolves holder identity and rejects a predecessor heartbeat', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+  try {
+    await fx.store.ensureRepo(fx.origin)
+    const start = async (run: string) =>
+      fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run,
+          pid: 123,
+          host: 'holder-host',
+          effectiveConfig: { kind: 'config', rev: 0 },
+          roleWarnings: [],
+        },
+      })
+    await start('predecessor')
+    await fx.store.claimRepoLease(fx.origin, 'predecessor', 60000)
+    await fx.store.heartbeatRepo(fx.origin, 'predecessor')
+    await fx.store.releaseRepoLease(fx.origin, 'predecessor')
+    clock.advance(2000)
+    await start('owner')
+    await fx.store.claimRepoLease(fx.origin, 'owner', 60000)
+    const messages: string[] = []
+    const dispatch = () =>
+      abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: (line) => messages.push(line),
+        stderr: (line) => messages.push(line),
+        once: true,
+        plain: true,
+        wire: fx.wire,
+      })
+    await dispatch()
+    expect(messages.join('\n')).toContain('owner; pid 123; host holder-host; started ')
+    expect(messages.join('\n')).toContain('heartbeat unknown (no renewal attributable to this run)')
+    expect(fx.tickets.claims).toEqual([])
+    await fx.store.heartbeatRepo(fx.origin, 'owner')
+    clock.advance(500)
+    messages.length = 0
+    await dispatch()
+    expect(messages.join('\n')).toContain('heartbeat 500ms ago')
+    expect(fx.tickets.claims).toEqual([])
+  } finally {
+    await fx.cleanup()
+  }
 })

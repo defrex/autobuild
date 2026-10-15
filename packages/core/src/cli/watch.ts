@@ -1,3 +1,6 @@
+import { readDispatcherLiveness } from './dispatcher-liveness'
+import { projectDispatcherLiveness } from '../kernel/dispatcher-liveness'
+import type { RepositoryRecord } from '../store/types'
 /**
  * `ab watch` — the sessionless, read-only streaming half of the status family
  * (§8.2, §7.2). It follows the event logs of one, several, or all active
@@ -133,6 +136,7 @@ interface CursorPayload {
   /** The repository identity (normalized origin or checkout path). */
   repo: string
   /** Per-stream watch position: build slug → seq, `#repo` → seq. */
+  lostRuns?: string[]
   streams: Record<string, number>
 }
 
@@ -169,7 +173,13 @@ export function decodeCursor(
     throw malformed()
   }
   if (typeof payload !== 'object' || payload === null) throw malformed()
-  const { v, store, repo, streams } = payload as Record<string, unknown>
+  const { v, store, repo, streams, lostRuns } = payload as Record<string, unknown>
+  if (
+    lostRuns !== undefined &&
+    (!Array.isArray(lostRuns) ||
+      lostRuns.some((run) => typeof run !== 'string' || run.length === 0))
+  )
+    throw malformed()
   if (v !== 1 || typeof store !== 'string' || typeof repo !== 'string') throw malformed()
   if (typeof streams !== 'object' || streams === null || Array.isArray(streams)) throw malformed()
   for (const seq of Object.values(streams)) {
@@ -187,7 +197,13 @@ export function decodeCursor(
         `repository "${expected.repo}" — run from the repository the cursor came from`,
     )
   }
-  return { v: 1, store, repo, streams: streams as Record<string, number> }
+  return {
+    v: 1,
+    store,
+    repo,
+    streams: streams as Record<string, number>,
+    ...(lostRuns === undefined ? {} : { lostRuns: lostRuns as string[] }),
+  }
 }
 
 // ── Durations and cadence ────────────────────────────────────────────────────
@@ -235,6 +251,25 @@ export interface WatchRecordState {
   pr: { number: number; url: string; headSha: string } | null
   prState: PrLifecycle | null
   outcome: BuildOutcome | null
+}
+
+/** Lease-expiry evidence is an observation, never a fabricated journal event. */
+export interface WatchObservationRecord {
+  repo: string
+  build: null
+  state: null
+  observation: {
+    type: 'dispatcher.lost'
+    run: string
+    observedAt: string
+    leaseExpiresAt: string
+    pid?: number | null
+    host?: string | null
+    startedAt?: string | null
+    heartbeatAt?: string | null
+    heartbeatAgeMs?: number | null
+  }
+  cursor: string
 }
 
 export interface WatchRecord {
@@ -472,6 +507,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
   // Glob validation needs only the catalogs — before any store access.
   const filters = compileEventGlobs(opts.events ?? [], {
     repository: followRepository,
+    additionalCatalog: followRepository ? ['dispatcher.lost'] : [],
     usage: WATCH_USAGE,
   })
 
@@ -505,6 +541,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         record.repo === identity ||
         (record.repoOrigin !== undefined && normalizeGitRemoteUrl(record.repoOrigin) === identity)
 
+      const lostRuns = new Set(
+        opts.since ? (decodeCursor(opts.since, { store: storeRef, repo }).lostRuns ?? []) : [],
+      )
+      let livenessEvents: RepositoryEvent[] = []
+      let livenessSeq = 0
+      let livenessInitialized = false
+      const observedOwners = new Map<string, RepositoryRecord>()
       const streams = new Map<string, Stream>()
       // Every stream's position — matching or not, delivered or baselined —
       // lives here, so a resume never rescans or redelivers a filtered event.
@@ -522,7 +565,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       }
 
       const encodeCurrent = (): string =>
-        encodeCursor({ v: 1, store: storeRef, repo, streams: { ...positions } })
+        encodeCursor({
+          v: 1,
+          store: storeRef,
+          repo,
+          streams: { ...positions },
+          lostRuns: [...lostRuns],
+        })
 
       /** One record, flushed the moment it is projected. `cursor` is the watch
        * position AFTER this event. */
@@ -539,6 +588,73 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           // unprocessed: the next run resumes from THIS record's cursor.
           countCursor = cursor
           requestStop()
+        }
+      }
+
+      const checkLiveness = async (): Promise<void> => {
+        if (!followRepository || stop) return
+        if (!livenessInitialized) {
+          const input = await readDispatcherLiveness(store, repo, now())
+          livenessEvents = input.events
+          livenessSeq = input.events.at(-1)?.seq ?? 0
+          livenessInitialized = true
+        }
+        if ((await store.getRepo(repo)) === null) return
+        const fresh = await store.getRepoEvents(repo, livenessSeq)
+        livenessEvents.push(...fresh)
+        livenessSeq = fresh.at(-1)?.seq ?? livenessSeq
+        // Sample metadata after the journal. Recheck both immediately before
+        // reporting: a failed read is infrastructure, never evidence of death.
+        const record = await store.getRepo(repo)
+        if (record?.lease) observedOwners.set(record.lease.holder, record)
+        for (const [id, owner] of observedOwners) {
+          if (
+            stop ||
+            lostRuns.has(id) ||
+            !owner.lease ||
+            Date.parse(owner.lease.expiresAt) > now().getTime()
+          )
+            continue
+          const delta = await store.getRepoEvents(repo, livenessSeq)
+          livenessEvents.push(...delta)
+          livenessSeq = delta.at(-1)?.seq ?? livenessSeq
+          const current = await store.getRepo(repo)
+          if (current?.lease?.holder === id) {
+            observedOwners.set(id, current)
+            if (Date.parse(current.lease.expiresAt) > now().getTime()) continue
+          }
+          const evidence = projectDispatcherLiveness(
+            current?.lease?.holder === id ? current : owner,
+            livenessEvents,
+            now(),
+          )
+          if (
+            livenessEvents.some((e) => e.type === 'dispatcher.run-stopped' && e.payload.run === id)
+          ) {
+            observedOwners.delete(id)
+            continue
+          }
+          if (!(filters.length ? filters.some((f) => f.test('dispatcher.lost')) : true)) continue
+          if (stop) return
+          lostRuns.add(id)
+          const cursor = encodeCurrent()
+          const observation = {
+            ...evidence.expiredHolder,
+            type: 'dispatcher.lost',
+            run: id,
+            observedAt: now().toISOString(),
+            leaseExpiresAt: (current?.lease?.holder === id ? current : owner).lease!.expiresAt,
+          }
+          opts.stdout(
+            opts.json
+              ? JSON.stringify({ repo, build: null, state: null, observation, cursor })
+              : `dispatcher.lost ${id} — lease expired ${observation.leaseExpiresAt}`,
+          )
+          emitted += 1
+          if (opts.count !== undefined && emitted >= opts.count) {
+            countCursor = cursor
+            requestStop()
+          }
         }
       }
 
@@ -686,6 +802,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
               const tail = await store.getRepoEvents(repo, last)
               last = tail.at(-1)?.seq ?? last
             }
+            const input = await readDispatcherLiveness(store, repo, now(), subset)
+            livenessEvents = input.events
+            livenessSeq = Math.max(last, input.events.at(-1)?.seq ?? 0)
+            livenessInitialized = true
+            if (input.record?.lease) observedOwners.set(input.record.lease.holder, input.record)
             stream.lastSeq = last
             positions[REPO_STREAM_KEY] = last
           }
@@ -760,7 +881,14 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             tickStreak.onFailure(error)
           }
         }
-        if (allReadsOk) tickStreak.onSuccess()
+        if (allReadsOk) {
+          try {
+            await checkLiveness()
+            tickStreak.onSuccess()
+          } catch (error) {
+            tickStreak.onFailure(error)
+          }
+        }
       }
 
       // ── Initial scan ──
@@ -804,6 +932,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
       }
 
+      if (followRepository && !stop) {
+        try {
+          await checkLiveness()
+        } catch (error) {
+          tickStreak.onFailure(error)
+        }
+      }
       // ── The poll loop ──
       const deadline = timeoutMs === 0 ? Number.POSITIVE_INFINITY : now().getTime() + timeoutMs
       const aborted = (): boolean => opts.signal?.aborted === true
@@ -884,10 +1019,11 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
 
         for (const stream of streams.values()) if (!shouldStop) launch(stream)
 
-        if (slugs.length === 0 && !shouldStop) {
+        if ((slugs.length === 0 || followRepository) && !shouldStop) {
           void remoteRunner.runDiscovery({
             step: async (): Promise<void> => {
-              await discoverBuilds()
+              if (slugs.length === 0) await discoverBuilds()
+              await checkLiveness()
             },
             // Unconditional, after the catch — exactly where the inline
             // launch loop ran: streams registered before a mid-discovery

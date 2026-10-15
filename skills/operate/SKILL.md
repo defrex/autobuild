@@ -68,6 +68,24 @@ cannot recover its earlier interval: reconcile current repository status.
 `ab wait --for attention` remains build-only and does not replace a repository
 attention watch.
 
+
+Check dispatcher liveness with `ab repository status --json` before starting another
+`ab dispatch`, and after a watch timeout or `dispatcher.lost` observation. Do not
+use process lists to decide whether a dispatcher owns this repository. The
+`dispatcher` projection distinguishes `held` (an unexpired lease), `lost`
+(expired ownership without a recorded stop), `stopped`, and `absent`. Its holder
+identity resolves a yield message to run, pid, host, start time, and heartbeat
+age. Historical identity and a new holder's heartbeat may be unknown until its
+first attributable renewal. Source degradation or an old tick alone does not
+establish loss: a healthy lease can accompany a slow tick.
+
+An unscoped watch, or a named watch with `--repository`, reports loss as a
+read-only observation: `{repo, build:null, state:null, observation:{type:
+"dispatcher.lost", run, observedAt, leaseExpiresAt, ...identity}, cursor}`.
+It has no durable event envelope. Keep its cursor just as for event records;
+resuming it suppresses repeated loss reports for that run. Inspect repository
+status before deciding how to recover; watch never restarts a dispatcher.
+
 ### Keep watching until the work is done
 
 Checking once is not shepherding. When you take responsibility for builds:

@@ -76,6 +76,13 @@ describe('ab repository status', () => {
       intake: true,
       paused: false,
       defaultAutoMerge: false,
+      dispatcher: {
+        state: 'absent',
+        holder: null,
+        expiredHolder: null,
+        latestRun: null,
+        latestStoppedRun: null,
+      },
       sandboxes: [],
       publications: [],
     })
@@ -101,6 +108,13 @@ describe('ab repository status', () => {
         intake: false,
         paused,
         defaultAutoMerge: true,
+        dispatcher: {
+          state: 'absent',
+          holder: null,
+          expiredHolder: null,
+          latestRun: null,
+          latestStoppedRun: null,
+        },
         sandboxes: [],
         publications: [],
       })
@@ -112,6 +126,7 @@ describe('ab repository status', () => {
     const status = projectRepositoryStatus(REPO, [])
     expect(renderRepositoryStatus(status)).toEqual([
       `repository: ${REPO}`,
+      'dispatcher: absent — no dispatcher holds the repository',
       'intake: ON',
       'repository pause: OFF',
       'default auto-merge: OFF',
@@ -278,4 +293,59 @@ describeStoreOpeningContract('ab repository status', {
   run: (opts) => abRepositoryStatus({ ...opts, json: true }),
   canonicalMarker: (stdout) => (JSON.parse(stdout.join('\n')) as { repo?: string }).repo,
   expectedCanonicalMarker: REPO,
+})
+
+test('status and operator queries resolve a hidden holder with live heartbeat attribution', async () => {
+  const { DISPATCHER } = await import('../events/envelope')
+  const { manualClock } = await import('../testing/fixed')
+  const { getRepositoryStatus } = await import('../operator/query')
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  const start = async (run: string) =>
+    store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        pid: 42,
+        host: 'host',
+        effectiveConfig: { kind: 'config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+  await start('old')
+  await store.claimRepoLease(REPO, 'old', 1000)
+  await store.heartbeatRepo(REPO, 'old')
+  await store.releaseRepoLease(REPO, 'old')
+  clock.advance(2000)
+  await start('owner')
+  await store.claimRepoLease(REPO, 'owner', 60000)
+  await start('yielding')
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'yielding', outcome: 'normal' },
+  })
+  const opts = options(store, { json: true, now: clock })
+  await abRepositoryStatus(opts)
+  const status = JSON.parse(opts.output.join('\n'))
+  expect(status.dispatcher.holder).toMatchObject({
+    run: 'owner',
+    pid: 42,
+    host: 'host',
+    heartbeatAt: null,
+    heartbeatAgeMs: null,
+  })
+  expect(await getRepositoryStatus(store, REPO, clock())).toEqual(status)
+  const human = options(store, { now: clock })
+  await abRepositoryStatus(human)
+  expect(human.output.join('\n')).toContain(
+    'heartbeat unknown (no renewal attributable to this run)',
+  )
+  await store.heartbeatRepo(REPO, 'owner')
+  clock.advance(500)
+  expect((await getRepositoryStatus(store, REPO, clock())).dispatcher.holder?.heartbeatAgeMs).toBe(
+    500,
+  )
 })

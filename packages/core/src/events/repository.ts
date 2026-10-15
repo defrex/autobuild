@@ -359,9 +359,11 @@ export const dispatcherStatusEventPayloadSchemas = {
   'dispatcher.run-started': z.strictObject({
     run: dispatchRun,
     pid: z.number().int().positive(),
+    host: z.string().trim().min(1).optional(),
     effectiveConfig: artifactRefSchema,
     roleWarnings: boundedDiagnostics,
   }),
+  'dispatcher.stop-requested': z.strictObject({ run: dispatchRun, signal: z.string().min(1) }),
   'dispatcher.run-stopped': z.strictObject({
     run: dispatchRun,
     outcome: z.enum(['normal', 'abnormal', 'forced']),
@@ -567,6 +569,7 @@ const allowedActorKinds: Record<RepositoryEventType, readonly ActorKind[]> = {
   'orchestrator.sandbox.published': ['human'],
   'orchestrator.sandbox.publish-failed': ['human'],
   'dispatcher.run-started': ['dispatcher'],
+  'dispatcher.stop-requested': ['dispatcher'],
   'dispatcher.run-stopped': ['dispatcher'],
   'dispatcher.tick-yielded': ['dispatcher'],
   'dispatcher.config-rejected': ['dispatcher'],

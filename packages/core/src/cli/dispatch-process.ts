@@ -25,7 +25,7 @@ export interface DispatchChildResult {
 
 export interface DispatchChildHandle {
   completed: Promise<DispatchChildResult>
-  stop(): Promise<void>
+  stop(signal?: string): Promise<void>
 }
 
 export interface DispatchSubprocess {
@@ -57,16 +57,20 @@ export interface DispatchKernelSignalBoundary {
  * one-shot handlers would expose the child to the default disposition on a
  * repeated Ctrl-C while it is still crossing an unsafe claim boundary. */
 export function installDispatchKernelSignalHandlers(
-  onStop: () => void,
+  onStop: (signal: DispatchKernelSignal) => void,
   boundary: DispatchKernelSignalBoundary = process,
 ): DispatchProcessHook {
-  for (const signal of DISPATCH_KERNEL_SIGNALS) boundary.on(signal, onStop)
+  const listeners = DISPATCH_KERNEL_SIGNALS.map((signal) => ({
+    signal,
+    listener: () => onStop(signal),
+  }))
+  for (const { signal, listener } of listeners) boundary.on(signal, listener)
   let closed = false
   return {
     close(): void {
       if (closed) return
       closed = true
-      for (const signal of DISPATCH_KERNEL_SIGNALS) boundary.removeListener(signal, onStop)
+      for (const { signal, listener } of listeners) boundary.removeListener(signal, listener)
     },
   }
 }
@@ -156,13 +160,14 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
   env[DISPATCH_CHILD_OPTIONS_ENV] = JSON.stringify(deps.options)
   const child = (deps.spawn ?? defaultSpawn)({ entrypoint, cwd: deps.cwd ?? deps.repo, env })
 
+  let requestedSignal: string | undefined
   let stopping = false
   let forced = false
   let stopPromise: Promise<void> | undefined
   // This is the sole supervisor writer of a missing stop fact. `stop()` only
   // chooses/awaits process termination, avoiding check-then-append races.
   const completed = child.exited.then(async (exitCode): Promise<DispatchChildResult> => {
-    const processSignal = child.signalCode === null ? undefined : String(child.signalCode)
+    const processSignal = child.signalCode === null ? requestedSignal : String(child.signalCode)
     const events = await deps.store.getRepoEvents(deps.repo)
     const recorded = events.findLast(
       (event) => event.type === 'dispatcher.run-stopped' && event.payload.run === deps.run,
@@ -179,7 +184,7 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
 
     const outcome: DispatchChildOutcome = forced
       ? 'forced'
-      : stopping && exitCode === 0 && processSignal === undefined
+      : stopping && exitCode === 0 && child.signalCode === null
         ? 'normal'
         : 'abnormal'
     const error =
@@ -209,11 +214,18 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
 
   return {
     completed,
-    stop(): Promise<void> {
+    stop(signal?: string): Promise<void> {
       if (stopPromise !== undefined) return stopPromise
       stopPromise = (async () => {
         if (child.exitCode !== null) return
         stopping = true
+        requestedSignal = signal
+        if (signal !== undefined)
+          await deps.store.appendRepo(deps.repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.stop-requested',
+            payload: { run: deps.run, signal },
+          })
         child.kill('SIGINT')
         const timeout = deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
         const stopped = await Promise.race([

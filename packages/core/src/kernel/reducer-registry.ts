@@ -136,6 +136,8 @@ export const REDUCERS: Record<string, RegisteredReducer> = {
 /** Event-array functions that are deliberately not reducers, each with the
  * concrete reason. */
 export const EXCLUDED: Record<string, string> = {
+  projectDispatcherLiveness:
+    'combines mutable repository lease metadata and an explicit clock with correlated facts; cannot be restored from an event-only snapshot',
   decideNext: 'a decision function over config; returns a Decision, not a state',
   harvestCreationsDuringReadyScan:
     'a derived query over two reduceHarvest states (before/after), which is already incremental',

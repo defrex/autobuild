@@ -1,3 +1,4 @@
+import { readDispatcherLiveness } from '../cli/dispatcher-liveness'
 import { composeBuildConfig } from '../config/live'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { configSchema, type Config } from '../config/schema'
@@ -255,10 +256,12 @@ export async function getOperatorBuild(opts: {
 export async function getRepositoryStatus(
   store: BuildStore,
   repo: string,
+  now = new Date(),
 ): Promise<RepositoryStatus> {
-  return withOperatorView(store, repo, 'journal', async (view) =>
-    projectRepositoryStatus(repo, view.recordedJournal()),
-  )
+  return withOperatorView(store, repo, 'journal', async (view) => {
+    const { dispatcher } = await readDispatcherLiveness(store, repo, now, view.recordedJournal())
+    return projectRepositoryStatus(repo, view.recordedJournal(), dispatcher)
+  })
 }
 
 export async function getHarvestStatus(

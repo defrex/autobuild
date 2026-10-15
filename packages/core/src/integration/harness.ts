@@ -370,7 +370,7 @@ export async function assertSnapshotEquivalence(store: BuildStore, repo: string)
       dashboard: await attempt(() =>
         getOperatorDashboard({ store: target, repo, clock: () => at }),
       ),
-      status: await attempt(() => getRepositoryStatus(target, repo)),
+      status: await attempt(() => getRepositoryStatus(target, repo, at)),
       harvest: await attempt(() => getHarvestStatus(target, repo)),
       lists: await Promise.all(
         (['active', 'queued', 'all'] as const).map((scope) =>

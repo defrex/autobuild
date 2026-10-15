@@ -184,3 +184,20 @@ The API does not expose phase-session commands, runner startup, a push or
 long-poll streaming transport, or a generic event-append operation; event
 streaming is composed client-side by `ab watch`, which polls the store's
 event reads.
+
+
+Dispatcher liveness is also visible through `ab repository status --json`:
+`dispatcher.holder` identifies the unexpired repository lease owner, independently
+of `latestRun`. Heartbeat age measures attributable renewals; tick age measures
+durable progress. Missing historical evidence is null. The liveness query uses
+bounded repository facts first, with a full-history fallback when a later
+invocation hides the holder start or the latest stop. Other state reads retain
+their bounded semantics.
+
+Repository-following `ab watch` additionally emits a read-only `dispatcher.lost`
+observation when an observed lease expires without a matching stop. JSON carries
+`observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
+identity, plus the usual repo/build/state/cursor fields. It invents no durable
+sequence or actor. Retain the cursor to avoid repeat reports across invocations.
+No lease alone is not evidence of death. SIGINT, SIGHUP and SIGTERM drain dispatch,
+record the first signal in the stop fact, and release its lease before exit.

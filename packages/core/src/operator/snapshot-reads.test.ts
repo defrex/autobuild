@@ -59,6 +59,13 @@ async function seed(store: MemoryBuildStore, journalRuns = 40): Promise<void> {
       type: 'dispatcher.tick-yielded',
       payload: { run: `run_${run}`, holder: 'other' },
     })
+    // Completed invocations exercise the normal bounded/snapshot path. Hidden
+    // stop evidence has a dedicated historical-fallback test.
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-stopped',
+      payload: { run: `run_${run}`, outcome: 'normal' },
+    })
   }
   await store.createBuild({ slug: 'queued', repo: REPO })
   for (const slug of ['running', 'aborted', 'done']) {
@@ -155,7 +162,7 @@ const SCOPES: BuildListScope[] = ['active', 'queued', 'all']
 async function pollAll(store: BuildStore) {
   return {
     dashboard: await getOperatorDashboard({ store, repo: REPO, clock }),
-    status: await getRepositoryStatus(store, REPO),
+    status: await getRepositoryStatus(store, REPO, now),
     harvest: await getHarvestStatus(store, REPO),
     lists: await Promise.all(
       SCOPES.map((scope) => listOperatorBuilds({ store, repo: REPO, scope, now })),
@@ -194,7 +201,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
       process.reset()
       const routes = {
         dashboard: () => getOperatorDashboard({ store: process.store, repo: REPO, clock }),
-        status: () => getRepositoryStatus(process.store, REPO),
+        status: () => getRepositoryStatus(process.store, REPO, now),
         harvest: () => getHarvestStatus(process.store, REPO),
         list: () => listOperatorBuilds({ store: process.store, repo: REPO, scope: 'all', now }),
       }
@@ -234,7 +241,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     while (process.lookups() === 0) await new Promise((resolve) => setTimeout(resolve, 1))
     const parked = process.lookups()
     const joiners = [
-      getRepositoryStatus(process.store, REPO),
+      getRepositoryStatus(process.store, REPO, now),
       getHarvestStatus(process.store, REPO),
       getOperatorDashboard({ store: process.store, repo: REPO, clock }),
       listOperatorBuilds({ store: process.store, repo: REPO, scope: 'active', now }),

@@ -1812,3 +1812,124 @@ for (const json of [true, false]) {
     }
   })
 }
+
+for (const json of [true, false]) {
+  test(`expired dispatcher is a read-only observation and cursor suppresses replay (json=${json})`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'lost-run',
+        pid: 42,
+        host: 'host',
+        effectiveConfig: { kind: 'config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+    await store.claimRepoLease(REPO, 'lost-run', 1000)
+    const before = await store.getRepoEvents(REPO)
+    const h = harness(store, {
+      json,
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+      },
+    })
+    await abWatch({ ...h.base, repository: true, count: 1, timeout: '3' })
+    expect(h.err).toEqual([])
+    if (json) {
+      const record = JSON.parse(h.out[0]!)
+      expect(record.observation.type).toBe('dispatcher.lost')
+      expect(record.observation.run).toBe('lost-run')
+      expect(record.event).toBeUndefined()
+      const resumed = harness(store, {
+        now: clock,
+        delay: async () => {
+          clock.advance(1000)
+        },
+      })
+      await abWatch({ ...resumed.base, repository: true, since: record.cursor, timeout: '1' })
+      expect(resumed.out).toHaveLength(1)
+    } else expect(h.out[0]).toContain('dispatcher.lost lost-run')
+    expect(await store.getRepoEvents(REPO)).toEqual(before)
+  })
+}
+
+test('clean stop suppresses loss, and no lease is not death', async () => {
+  const store = makeStore()
+  await store.ensureRepo(REPO)
+  const h = harness(store)
+  await abWatch({ ...h.base, repository: true, events: ['dispatcher.lost'], timeout: '2' })
+  expect(h.out).toHaveLength(1)
+  expect(() =>
+    decodeCursor(
+      encodeCursor({
+        v: 1,
+        store: 's',
+        repo: 'r',
+        streams: {},
+        lostRuns: [42] as unknown as string[],
+      }),
+      { store: 's', repo: 'r' },
+    ),
+  ).toThrow('malformed')
+})
+
+for (const named of [false, true]) {
+  test(`remote periodic discovery observes quiet expiry (named=${named})`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    if (named) await seedRunningBuild(store, 'live')
+    await store.claimRepoLease(REPO, 'quiet-owner', 1000)
+    const h = harness(store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+        await Promise.resolve()
+      },
+    })
+    await abWatch({
+      ...h.base,
+      storeRef: 'https://store.example.test',
+      repository: true,
+      slugs: named ? ['live'] : [],
+      events: ['dispatcher.lost'],
+      count: 1,
+      timeout: '10',
+    })
+    const records = h.out.map((line) => JSON.parse(line))
+    expect(records.filter((r) => r.observation)).toHaveLength(1)
+    expect(records[0].observation.run).toBe('quiet-owner')
+    expect(h.err).toEqual([])
+  })
+}
+
+test('a clean stop suppresses expired ownership while replacement loss names the new run', async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  await store.claimRepoLease(REPO, 'clean', 1000)
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'clean', outcome: 'normal', signal: 'SIGHUP' },
+  })
+  let replaced = false
+  const h = harness(store, {
+    now: clock,
+    delay: async () => {
+      clock.advance(1000)
+      if (!replaced) {
+        replaced = true
+        await store.claimRepoLease(REPO, 'replacement', 1000)
+      }
+    },
+  })
+  await abWatch({ ...h.base, repository: true, timeout: '3' })
+  const observations = h.out.map((line) => JSON.parse(line)).filter((r) => r.observation)
+  expect(observations.map((r) => r.observation.run)).toEqual(['replacement'])
+})

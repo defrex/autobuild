@@ -977,7 +977,9 @@ export class DispatchFrontend {
   private requestOperatorStop(): void {
     this.operatorStopRequested = true
     this.restorePresentationForStop()
-    void this.child?.stop()
+    void this.child?.stop(
+      typeof this.opts.signal?.reason === 'string' ? this.opts.signal.reason : undefined,
+    )
   }
 
   /** Stop terminal ownership synchronously before awaiting a kernel that may

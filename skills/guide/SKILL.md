@@ -1650,6 +1650,23 @@ matching event after that cursor is delivered exactly once, in per-stream
 sequence order — including events that landed while no watch was running. A
 cursor from a different repository or store is rejected.
 
+
+Dispatcher liveness is also visible through `ab repository status --json`:
+`dispatcher.holder` identifies the unexpired repository lease owner, independently
+of `latestRun`. Heartbeat age measures attributable renewals; tick age measures
+durable progress. Missing historical evidence is null. The liveness query uses
+bounded repository facts first, with a full-history fallback when a later
+invocation hides the holder start or the latest stop. Other state reads retain
+their bounded semantics.
+
+Repository-following `ab watch` additionally emits a read-only `dispatcher.lost`
+observation when an observed lease expires without a matching stop. JSON carries
+`observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
+identity, plus the usual repo/build/state/cursor fields. It invents no durable
+sequence or actor. Retain the cursor to avoid repeat reports across invocations.
+No lease alone is not evidence of death. SIGINT, SIGHUP and SIGTERM drain dispatch,
+record the first signal in the stop fact, and release its lease before exit.
+
 The watch ends with exit 0 when `--timeout` elapses (30 minutes by default;
 `0` unbounded), after `--count <n>` records, or when named builds have all
 gone terminal; with no slugs named, an empty set of active builds does not end

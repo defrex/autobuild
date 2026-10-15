@@ -292,6 +292,13 @@ describe('operator query wiring', () => {
       intake: true,
       paused: false,
       defaultAutoMerge: false,
+      dispatcher: {
+        state: 'absent',
+        holder: null,
+        expiredHolder: null,
+        latestRun: null,
+        latestStoppedRun: null,
+      },
       sandboxes: [],
       publications: [],
     })

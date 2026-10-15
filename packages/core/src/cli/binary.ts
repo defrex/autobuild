@@ -53,7 +53,7 @@ export async function withDispatchTerminalRestore<T>(
   terminal: TerminalOut,
   run: () => Promise<T>,
   boundary: TerminalRestoreProcess = process as unknown as TerminalRestoreProcess,
-  requestStop: () => void = () => {},
+  requestStop: (signal: NodeJS.Signals) => void = () => {},
 ): Promise<T> {
   const hook =
     command === 'dispatch'
@@ -96,7 +96,7 @@ export async function runBinary(
     // cleanly at the next tick boundary (§15.6-C: in-flight leases expire and
     // a future dispatch re-attaches).
     const controller = new AbortController()
-    const onSigint = (): void => controller.abort()
+    const onSigint = (): void => controller.abort('SIGINT')
     const ownsSigint = usesGenericSessionlessSigintHandler(command)
     const terminal = processTerminal(process.stdout)
     const removeSigint = installSessionlessSigintHandler(command, onSigint)
@@ -119,7 +119,7 @@ export async function runBinary(
             ...(resolveDashboardRenderer !== undefined ? { resolveDashboardRenderer } : {}),
           }),
         process as unknown as TerminalRestoreProcess,
-        onSigint,
+        (signal) => controller.abort(signal),
       )
     } finally {
       removeSigint()
