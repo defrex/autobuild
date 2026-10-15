@@ -8,7 +8,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -787,7 +787,18 @@ CREATE TABLE IF NOT EXISTS project_registry_state (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   legacy_imported boolean NOT NULL
 );`.trim()
-export const SCHEMA_DDL = `${SCHEMA_V9_DDL}\n${PROJECT_SCHEMA_DDL}`
+export const SCHEMA_V10_DDL = `${SCHEMA_V9_DDL}\n${PROJECT_SCHEMA_DDL}`
+export const SCHEMA_V10_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V10_DDL)
+  .digest('hex')
+export const CREDENTIAL_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS project_credentials (
+  id text PRIMARY KEY, digest text NOT NULL, repo text NOT NULL,
+  created_at timestamptz NOT NULL, created_by text NOT NULL,
+  last_used_at timestamptz, revoked_at timestamptz, expires_at timestamptz,
+  purpose text NOT NULL CHECK (purpose IN ('project-owner','dispatcher'))
+);`.trim()
+export const SCHEMA_DDL = `${SCHEMA_V10_DDL}\n${CREDENTIAL_SCHEMA_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -840,6 +851,17 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  project_credentials: [
+    ['id', 'text', true],
+    ['digest', 'text', true],
+    ['repo', 'text', true],
+    ['created_at', 'timestamp with time zone', true],
+    ['created_by', 'text', true],
+    ['last_used_at', 'timestamp with time zone', false],
+    ['revoked_at', 'timestamp with time zone', false],
+    ['expires_at', 'timestamp with time zone', false],
+    ['purpose', 'text', true],
+  ],
   project_journal: [
     ['seq', 'bigint', true],
     ['repo', 'text', true],
@@ -984,6 +1006,8 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_credentials|p|id||||',
+  'project_credentials|c|||||',
   'project_journal|p|seq||||',
   'project_journal|c|||||',
   'project_journal|c|||||',
@@ -1458,6 +1482,10 @@ export async function migratePostgres(url: string): Promise<void> {
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 10 && marker.checksum === SCHEMA_V10_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations
+            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 9 && marker.checksum === SCHEMA_V9_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},

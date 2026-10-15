@@ -26,6 +26,10 @@
     "./projects": {
       "types": "./src/projects.ts",
       "import": "./src/projects.ts"
+    },
+    "./credentials": {
+      "types": "./src/credentials.ts",
+      "import": "./src/credentials.ts"
     }
   },
   "bin": {
