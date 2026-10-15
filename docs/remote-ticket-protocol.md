@@ -140,10 +140,14 @@ current required resolution fields; domain and storage types are unchanged.
 
 Build and harvest runners exchange project authority for signed, project-bound
 execution and phase credentials through `/credentials/delegate` (see the remote
-store protocol). Delegated credentials retain exactly their project credential's
-ticket access, including harvest reads and filing. Hosted tickets currently
-remain team-scoped by request context; this is the documented exception to
-project resource isolation until AUT-689 makes tickets project-owned. The signed
-project binding needs no delegation change for that boundary. Ticket assets
-already use repository keys and remain project-isolated. Lifecycle retirement
-and project removal are checked before ticket parsing or source construction.
+store protocol). Build-runner and build-phase credentials cannot call any ticket
+operation. Harvest-phase credentials permit only list-ready, get and
+dependency-states. Harvest-runner credentials permit those reads plus create
+for filing proposals. Claim, comment, transition, update, add-blocker and
+remove-blocker require project or admin authority; their access is unchanged.
+Denied delegated calls return 403 with an error naming the grant kind and
+operation before body parsing or source construction. Lifecycle retirement and
+project removal are also checked before parsing or source construction.
+
+Tickets remain team-scoped by request context until AUT-689 introduces project
+tenancy. Ticket assets already use repository keys and remain project-isolated.

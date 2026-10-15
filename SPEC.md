@@ -1063,10 +1063,12 @@ permanently closes that grant; recovered harvest executions use fresh durable
 authorizations and fresh grants. Project removal denies all its grants immediately.
 Local-store projects require no exchange.
 
-Hosted tickets are temporarily team-scoped by request context. Delegated
-credentials have exactly their project credential's ticket access, including
-filing; their project binding is retained for project-owned tickets in AUT-689.
-This is the explicit exception to project resource isolation until that change.
+Hosted ticket operations are gated by grant kind: build-runner and build-phase
+grants have no access; harvest-phase grants can only list-ready, get and read
+dependency-states; harvest-runner grants can also create proposals. All other
+ticket mutations require project or admin authority. Refusals name the grant
+kind and operation. Tickets remain team-scoped by request context until AUT-689;
+repository-keyed ticket assets retain project isolation.
 See the remote store, remote ticket and operator protocol references for wire
 and revocation details. Least privilege comes from code, not prompt instructions.
 

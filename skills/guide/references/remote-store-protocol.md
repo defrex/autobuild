@@ -928,10 +928,13 @@ atomic deposit is checked before writing. Harvest streams have an immutable
 a guessed ID cannot bypass the boundary. Only the runner can heartbeat or re-acquire its exact
 adopted repository lease holder; another current holder still fences it. Recovery acknowledgements remain dispatcher-side.
 
-Hosted tickets are the temporary exception: they remain team-scoped by request
-context, and a delegated credential has exactly its project's ticket access,
-including filing. The signed project binding is already present for AUT-689's
-project-owned tickets. Repository-keyed ticket assets retain project isolation.
+Hosted ticket access is gated by grant kind. Build-runner and build-phase grants
+cannot call ticket routes. Harvest-phase grants may call only list-ready, get
+and dependency-states; harvest-runner grants may additionally create proposals.
+Other ticket mutations require project or admin authority. A denied operation
+returns 403 naming the grant kind and operation before parsing or source construction.
+Tickets remain team-scoped by request context until AUT-689 introduces project
+tenancy. Repository-keyed ticket assets retain project isolation.
 
 Workspace plugin factories receive a host-only `delegateCredential` callback
 instead of a project token; their environment excludes `AB_TOKEN`. Provisioning
