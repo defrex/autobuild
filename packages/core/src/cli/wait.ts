@@ -31,6 +31,7 @@
  * Read-only: it appends no event, claims or renews no lease, and creates no
  * build or repository record. Output carries no ANSI, ever, in either form.
  */
+import { buildNeedsAttention, mergeDecision, mergeIdentity } from './attention'
 import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
@@ -54,6 +55,8 @@ import {
   encodeCursor,
   parseDurationMs,
   projectRecord,
+  projectAttentionRecord,
+  renderAttentionLine,
   renderWatchLine,
   watchSelection,
 } from './watch'
@@ -153,8 +156,8 @@ export function parseConditions(
   return { conditions, globs }
 }
 
-/** Does one condition body hold over a reduction? Attention is event-only. */
-function stateSatisfies(cond: ConditionBody, state: BuildState): boolean {
+/** Does one condition body hold over a reduction? Attention includes current escalation and merge state. */
+function stateSatisfies(cond: ConditionBody, state: BuildState, events: AbEvent[] = []): boolean {
   switch (cond.kind) {
     case 'status':
       return state.status === cond.status
@@ -165,7 +168,7 @@ function stateSatisfies(cond: ConditionBody, state: BuildState): boolean {
     case 'phase':
       return (state.phase ?? null) === cond.phase
     case 'attention':
-      return false
+      return buildNeedsAttention(events, state)
   }
 }
 
@@ -174,9 +177,13 @@ function stateSatisfies(cond: ConditionBody, state: BuildState): boolean {
  * the start-of-command and start-of-registration checks — never during a
  * backlog replay, where only event conditions may fire.
  */
-export function matchState(conditions: readonly WaitCondition[], state: BuildState): string | null {
+export function matchState(
+  conditions: readonly WaitCondition[],
+  state: BuildState,
+  events: AbEvent[] = [],
+): string | null {
   for (const { text, cond } of conditions) {
-    if (stateSatisfies(cond, state)) return text
+    if (stateSatisfies(cond, state, events)) return text
   }
   return null
 }
@@ -188,9 +195,15 @@ export function matchEvent(
   event: Pick<AbEvent, 'type'>,
   conditions: readonly WaitCondition[],
   globs: readonly EventGlob[],
+  events: AbEvent[] = [],
 ): string | null {
   for (const { text, cond } of conditions) {
-    if (cond.kind === 'attention' && isAttentionEvent(event.type)) return text
+    if (
+      cond.kind === 'attention' &&
+      (isAttentionEvent(event.type) ||
+        (events.length > 0 && mergeDecision(events, new Date(0)) !== null))
+    )
+      return text
   }
   for (const { regex, text } of globs) {
     if (regex.test(event.type)) return text
@@ -209,10 +222,16 @@ function matchFirst(
   state: BuildState,
   conditions: readonly WaitCondition[],
   globs: readonly EventGlob[],
+  events: AbEvent[] = [],
 ): string | null {
   for (const { text, cond } of conditions) {
-    if (stateSatisfies(cond, state)) return text
-    if (cond.kind === 'attention' && isAttentionEvent(event.type)) return text
+    if (stateSatisfies(cond, state, events)) return text
+    if (
+      cond.kind === 'attention' &&
+      (isAttentionEvent(event.type) ||
+        (events.length > 0 && mergeDecision(events, new Date(0)) !== null))
+    )
+      return text
   }
   for (const { regex, text } of globs) {
     if (regex.test(event.type)) return text
@@ -305,11 +324,12 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       const interval = intervalMs ?? watchSelection(storeRef).intervalMs
 
       // Decode --since before any read: a foreign cursor is rejected outright.
-      const sinceStreams =
+      const resumedCursor =
         opts.since !== undefined
           ? decodeCursor(opts.since, { store: storeRef, repo }, { verb: 'wait', usage: WAIT_USAGE })
-              .streams
-          : {}
+          : undefined
+      const sinceStreams = resumedCursor?.streams ?? {}
+      const deliveredAttention = new Set(resumedCursor?.deliveredAttention ?? [])
 
       const identity = normalizeGitRemoteUrl(repo)
       const mine = (record: BuildRecord): boolean =>
@@ -322,17 +342,40 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       const positions: Record<string, number> = { ...sinceStreams }
 
       const encodeCurrent = (): string =>
-        encodeCursor({ v: 1, store: storeRef, repo, streams: { ...positions } })
+        encodeCursor({
+          v: 1,
+          store: storeRef,
+          repo,
+          streams: { ...positions },
+          ...(resumedCursor?.lostRuns ? { lostRuns: resumedCursor.lostRuns } : {}),
+          deliveredAttention: [...deliveredAttention],
+        })
 
       /** The one success/terminal record. Exit 0 is contractually tied to
        * exactly one condition-satisfying record; the exit-2 record carries
        * `condition` null so the caller can see how the build ended. */
       const finish = (condition: string | null, event: AbEvent, state: BuildState): number => {
-        const record = { ...projectRecord(event, state, encodeCurrent()), condition }
+        const observation =
+          condition === 'attention' && event.type !== 'escalation.raised'
+            ? mergeDecision(
+                streams.get(event.build)?.events.filter((e) => e.seq <= event.seq) ?? [],
+                now(),
+                state,
+              )
+            : null
+        if (observation) deliveredAttention.add(mergeIdentity(event.build, observation.pr.number))
+        const record = {
+          ...(observation
+            ? projectAttentionRecord(observation, state, encodeCurrent(), { build: event.build })
+            : projectRecord(event, state, encodeCurrent())),
+          condition,
+        }
         if (json) {
           opts.stdout(JSON.stringify(record))
         } else {
-          const line = renderWatchLine(event, state)
+          const line = observation
+            ? renderAttentionLine(observation, event.build)
+            : renderWatchLine(event, state)
           opts.stdout(condition === null ? line : `${line} (${condition})`)
         }
         return condition === null ? 2 : 0
@@ -349,6 +392,15 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       /** Record the first match only: whichever condition wins, wins. */
       const match = (event: AbEvent, state: BuildState, condition: string): void => {
         if (satisfied === null) satisfied = { event, state, condition }
+      }
+
+      const eventConditions = (event: AbEvent, prefix: AbEvent[]): readonly WaitCondition[] => {
+        if (event.type === 'escalation.raised') return conditions
+        const observation = mergeDecision(prefix, now())
+        return observation &&
+          !deliveredAttention.has(mergeIdentity(event.build, observation.pr.number))
+          ? conditions
+          : conditions.filter(({ cond }) => cond.kind !== 'attention')
       }
 
       const registerStream = (slug: string, events: AbEvent[], named: boolean): WaitStream => {
@@ -370,7 +422,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
        * latest event. Not cursor-relative — `--since` does not suppress it. */
       const checkRegistrationState = (stream: WaitStream): void => {
         const state = reduceBuild(stream.events)
-        const condition = matchState(conditions, state)
+        const condition = matchState(conditions, state, stream.events)
         if (condition !== null && stream.events.length > 0) {
           match(stream.events.at(-1)!, state, condition)
         }
@@ -401,12 +453,20 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           // the reduction of the prefix ENDING at that event, never the
           // reduction of the full loaded prefix.
           const replay: AbEvent[] = events.filter((event) => event.seq <= resumeSeq)
+          if (resumedCursor?.deliveredAttention === undefined) {
+            const historical: AbEvent[] = []
+            for (const event of replay) {
+              historical.push(event)
+              const observation = mergeDecision(historical, now())
+              if (observation) deliveredAttention.add(mergeIdentity(slug, observation.pr.number))
+            }
+          }
           for (const event of events) {
             if (event.seq <= resumeSeq) continue
             replay.push(event)
             stream.lastSeq = event.seq
             positions[slug] = event.seq
-            const condition = matchEvent(event, conditions, globs)
+            const condition = matchEvent(event, eventConditions(event, replay), globs, replay)
             if (condition !== null) {
               match(event, reduceBuild(replay), condition)
               break
@@ -470,7 +530,13 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
           positions[stream.slug] = event.seq
           const state = reduceBuild(stream.events)
           stream.status = state.status
-          const condition = matchFirst(event, state, conditions, globs)
+          const condition = matchFirst(
+            event,
+            state,
+            eventConditions(event, stream.events),
+            globs,
+            stream.events,
+          )
           if (condition !== null) {
             match(event, state, condition)
             return
@@ -564,6 +630,7 @@ export async function abWait(opts: AbWaitOpts): Promise<number> {
       // Cursor streams that are no longer named resume anyway: finishing
       // their backlog is what makes a resumed wait lossless.
       for (const key of Object.keys(sinceStreams)) {
+        if (key === '#repo') continue
         await trackBuild(key, sinceStreams[key])
         if (hasMatch()) return finishSatisfied()
       }

@@ -226,10 +226,7 @@ describe('watch attention-set defaults', () => {
           cursor: string
         },
     )
-    expect(records.map((record) => record.event.type)).toEqual([
-      'escalation.raised',
-      'build.completed',
-    ])
+    expect(records.map((record) => record.event.type)).toEqual(['escalation.raised'])
     expect(records[0]).toMatchObject({
       build: 'b1',
       state: {
@@ -242,7 +239,10 @@ describe('watch attention-set defaults', () => {
         outcome: null,
       },
     })
-    expect(records[1]).toMatchObject({ state: { status: 'done', outcome: 'merged' } })
+    expect(
+      decodeCursor(JSON.parse(h.out.at(-1)!).cursor, { store: `${REPO}/.autobuild`, repo: REPO })
+        .streams.b1,
+    ).toBe(4)
     // The envelope is complete and passed through unchanged.
     expect(records[0]!.event).toMatchObject({ seq: 2, payload: { ...ESCALATION } })
   })
@@ -267,14 +267,14 @@ describe('watch attention-set defaults', () => {
       onTick: async () => {
         await seeded.appendRepo(REPO, {
           actor: DISPATCHER,
-          type: 'dispatcher.tick-failed',
+          type: 'dispatcher.config-rejected',
           payload: { run: 'r1', error: 'boom' },
         })
       },
     })
     await abWatch({ ...quiet.base, timeout: '1' })
     expect(quiet.out.slice(0, -1).map((line) => JSON.parse(line).event.type)).toEqual([
-      'dispatcher.tick-failed',
+      'dispatcher.config-rejected',
     ])
 
     // With --repository: attention events from after the baseline are emitted.
@@ -282,7 +282,7 @@ describe('watch attention-set defaults', () => {
       onTick: async () => {
         await seeded.appendRepo(REPO, {
           actor: DISPATCHER,
-          type: 'dispatcher.tick-failed',
+          type: 'dispatcher.config-rejected',
           payload: { run: 'r2', error: 'boom again' },
         })
       },
@@ -299,7 +299,7 @@ describe('watch attention-set defaults', () => {
     )
     // The pre-existing harvest.escalated stays history; the mid-watch tick
     // failure is the one attention event.
-    expect(records.map((record) => record.event.type)).toEqual(['dispatcher.tick-failed'])
+    expect(records.map((record) => record.event.type)).toEqual(['dispatcher.config-rejected'])
     expect(records[0]).toMatchObject({ build: null, repo: REPO, state: null })
   })
 })
@@ -324,7 +324,7 @@ describe('watch dynamic membership', () => {
         }
       },
     })
-    await abWatch({ ...h.base, timeout: '3' })
+    await abWatch({ ...h.base, events: ['*'], timeout: '3' })
 
     const records = h.out.slice(0, -1).map(
       (line) =>
@@ -479,7 +479,12 @@ describe('watch cursor resume', () => {
         if (calls === 1) await appendEscalation(store, 'b1')
       },
     })
-    await abWatch({ ...first.base, slugs: ['b1'], count: 1 })
+    await abWatch({
+      ...first.base,
+      events: ['escalation.raised', 'phase.failed', 'build.completed'],
+      slugs: ['b1'],
+      count: 1,
+    })
     const records1 = first.out
       .slice(0, -1)
       .map((line) => JSON.parse(line) as { event: { seq: number } })
@@ -501,7 +506,12 @@ describe('watch cursor resume', () => {
 
     // Run 2: the backlog is delivered exactly once, in seq order.
     const second = harness(store, { signal: alreadyAborted() })
-    await abWatch({ ...second.base, slugs: ['b1'], since: cursor1 })
+    await abWatch({
+      ...second.base,
+      events: ['escalation.raised', 'phase.failed', 'build.completed'],
+      slugs: ['b1'],
+      since: cursor1,
+    })
     const records2 = second.out
       .slice(0, -1)
       .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
@@ -511,7 +521,12 @@ describe('watch cursor resume', () => {
     // Run 3: the cursor from run 2's final position now delivers nothing new.
     const cursor2 = (JSON.parse(second.out.at(-1)!) as { cursor: string }).cursor
     const third = harness(store, { signal: alreadyAborted() })
-    await abWatch({ ...third.base, slugs: ['b1'], since: cursor2 })
+    await abWatch({
+      ...third.base,
+      events: ['escalation.raised', 'phase.failed', 'build.completed'],
+      slugs: ['b1'],
+      since: cursor2,
+    })
     expect(third.out.slice(0, -1)).toEqual([])
   })
 
@@ -540,7 +555,12 @@ describe('watch cursor resume', () => {
       streams: { b1: 1 },
     })
     const h = harness(store, { signal: alreadyAborted() })
-    await abWatch({ ...h.base, slugs: ['b1'], since: cursor })
+    await abWatch({
+      ...h.base,
+      events: ['escalation.raised', 'phase.failed', 'build.completed'],
+      slugs: ['b1'],
+      since: cursor,
+    })
     const records = h.out.slice(0, -1).map(
       (line) =>
         JSON.parse(line) as {
@@ -587,7 +607,7 @@ describe('watch cursor resume', () => {
         }
       },
     })
-    await abWatch({ ...h.base, slugs: ['b1'], count: 1 })
+    await abWatch({ ...h.base, events: ['*'], slugs: ['b1'], count: 1 })
     const cursor = (JSON.parse(h.out.at(-1)!) as { cursor: string }).cursor
     expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
       b1: 2,
@@ -595,7 +615,7 @@ describe('watch cursor resume', () => {
 
     // The phase.failed read in the same tick is redelivered, not skipped.
     const resume = harness(store, { signal: alreadyAborted() })
-    await abWatch({ ...resume.base, slugs: ['b1'], since: cursor })
+    await abWatch({ ...resume.base, events: ['*'], slugs: ['b1'], since: cursor })
     const records = resume.out
       .slice(0, -1)
       .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
@@ -649,7 +669,7 @@ describe('watch cursor resume', () => {
     // Run 1: a fresh --repository watch emits nothing, and its final cursor
     // carries the journal baseline (seq 1), not 0.
     const first = harness(store)
-    await abWatch({ ...first.base, repository: true, timeout: '1' })
+    await abWatch({ ...first.base, events: ['*'], repository: true, timeout: '1' })
     expect(first.out.slice(0, -1)).toEqual([])
     const cursor = (JSON.parse(first.out.at(-1)!) as { cursor: string }).cursor
     expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
@@ -658,7 +678,7 @@ describe('watch cursor resume', () => {
 
     // Run 2: resuming from that cursor delivers no pre-watch history.
     const second = harness(store)
-    await abWatch({ ...second.base, repository: true, since: cursor, timeout: '1' })
+    await abWatch({ ...second.base, events: ['*'], repository: true, since: cursor, timeout: '1' })
     expect(second.out.slice(0, -1)).toEqual([])
 
     // Run 3: a journal event appended after the baseline is delivered exactly once.
@@ -668,7 +688,7 @@ describe('watch cursor resume', () => {
       payload: { run: 'r1', error: 'boom' },
     })
     const third = harness(store)
-    await abWatch({ ...third.base, repository: true, since: cursor, timeout: '1' })
+    await abWatch({ ...third.base, events: ['*'], repository: true, since: cursor, timeout: '1' })
     const records = third.out
       .slice(0, -1)
       .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
@@ -711,7 +731,7 @@ describe('watch exit conditions', () => {
     const types = h.out
       .slice(0, -1)
       .map((line) => (JSON.parse(line) as { event: { type: string } }).event.type)
-    expect(types).toEqual(['build.completed'])
+    expect(types).toEqual([])
     // Only one tick was needed: the terminal rule ended the watch before any
     // further sleep.
     expect(calls).toBe(1)
@@ -737,7 +757,7 @@ describe('watch exit conditions', () => {
         delayCalls += 1
       },
     })
-    await abWatch({ ...h.base, slugs: ['b1'], since: cursor })
+    await abWatch({ ...h.base, events: ['*'], slugs: ['b1'], since: cursor })
     const types = h.out
       .slice(0, -1)
       .map((line) => (JSON.parse(line) as { event: { type: string } }).event.type)
@@ -764,7 +784,7 @@ describe('watch record emission', () => {
         }
       },
     })
-    await abWatch({ ...h.base, slugs: ['b1'], timeout: '2' })
+    await abWatch({ ...h.base, events: ['*'], slugs: ['b1'], timeout: '2' })
     expect(h.out).toHaveLength(3)
     for (const line of h.out.slice(0, -1)) {
       const record = JSON.parse(line) as Record<string, unknown>
@@ -1475,14 +1495,21 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
       }
     })
     const h = harness(store, { openStore: () => fake })
-    await abWatch({ ...h.base, storeRef: REMOTE_REF, slugs: ['b1'], since, timeout: '30' })
+    await abWatch({
+      ...h.base,
+      events: ['*'],
+      storeRef: REMOTE_REF,
+      slugs: ['b1'],
+      since,
+      timeout: '30',
+    })
     const types = h.out
       .slice(0, -1)
       .map((line) => (JSON.parse(line) as { event: { type: string } }).event.type)
     // b1's terminal record, then b2's batch cut off after its first event:
     // the second escalation stays undelivered (the final cursor records the
     // position for the next run instead).
-    expect(types).toEqual(['build.completed', 'escalation.raised'])
+    expect(types).toEqual(['build.completed'])
     expect(h.err).toEqual([])
   })
 
@@ -1662,7 +1689,7 @@ function repoReadProbe(backing: MemoryBuildStore) {
   return { store, calls }
 }
 
-test('an anchored journal baselines with one bounded read and no full journal read (AUT-534)', async () => {
+test('attention bootstrap reads full history once, then incremental journal reads', async () => {
   const backing = makeStore()
   const journalEnd = await seedNoopInvocations(backing, 20)
   expect(journalEnd).toBe(60)
@@ -1676,11 +1703,11 @@ test('an anchored journal baselines with one bounded read and no full journal re
   // Exactly one bounded baseline read; the end-recovery read is skipped
   // because the subset contains a `dispatcher.run-started`, and every
   // subsequent journal read is a delta poll at or past the journal end.
-  expect(probe.calls[0]).toEqual({ method: 'getRepoStateEvents' })
+  expect(probe.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
   expect(probe.calls.filter((call) => call.method === 'getRepoStateEvents')).toHaveLength(1)
   const journalReads = probe.calls.filter((call) => call.method === 'getRepoEvents')
   expect(journalReads.length).toBeGreaterThan(0)
-  expect(journalReads.every((call) => (call.sinceSeq ?? 0) >= journalEnd)).toBe(true)
+  expect(journalReads.slice(1).every((call) => (call.sinceSeq ?? 0) >= journalEnd)).toBe(true)
 
   // The recorded cursor equals the journal end — the full read's answer.
   const cursor = (JSON.parse(h.out.at(-1)!) as { cursor: string }).cursor
@@ -1704,7 +1731,7 @@ test('events appended after a bounded baseline are delivered exactly once (AUT-5
       })
     },
   })
-  await abWatch({ ...h.base, repository: true, timeout: '2' })
+  await abWatch({ ...h.base, events: ['*'], repository: true, timeout: '2' })
   const records = h.out
     .slice(0, -1)
     .map((line) => JSON.parse(line) as { event: { type: string; seq: number } })
@@ -1730,16 +1757,16 @@ test('an anchor-less journal recovers the true end and baselines silently (AUT-5
   })
   const probe = repoReadProbe(backing)
   const h = harness(backing, { openStore: () => probe.store })
-  await abWatch({ ...h.base, repository: true, timeout: '1' })
+  await abWatch({ ...h.base, events: ['*'], repository: true, timeout: '1' })
   expect(h.out.slice(0, -1)).toEqual([])
 
   // The recovery read fired: bounded read first, then the delta read from the
   // subset's (empty) end — the true journal end here — and every later read
   // polls from the recovered cursor.
-  expect(probe.calls[0]).toEqual({ method: 'getRepoStateEvents' })
-  expect(probe.calls[1]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
+  expect(probe.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
+  expect(probe.calls[1]).toEqual({ method: 'getRepoStateEvents' })
   expect(
-    probe.calls.slice(2).every((call) => call.method !== 'getRepoEvents' || call.sinceSeq === 1),
+    probe.calls.slice(3).every((call) => call.method !== 'getRepoEvents' || call.sinceSeq === 1),
   ).toBe(true)
   const cursor = (JSON.parse(h.out.at(-1)!) as { cursor: string }).cursor
   expect(decodeCursor(cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams).toEqual({
@@ -1759,12 +1786,12 @@ test('an anchor-less journal recovers the true end and baselines silently (AUT-5
   const h2 = harness(filteredBacking, { openStore: () => filtered.store })
   await abWatch({ ...h2.base, repository: true, events: ['dispatcher.*'], timeout: '1' })
   expect(h2.out.slice(0, -1)).toEqual([])
-  expect(filtered.calls[0]).toEqual({ method: 'getRepoStateEvents' })
-  expect(filtered.calls[1]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
+  expect(filtered.calls[0]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
+  expect(filtered.calls[1]).toEqual({ method: 'getRepoStateEvents' })
 })
 
 for (const json of [true, false]) {
-  test(`default watch delivers source lifecycle without active builds (json=${json})`, async () => {
+  test(`explicit watch delivers source lifecycle without active builds (json=${json})`, async () => {
     const store = makeStore()
     let tick = 0
     const h = harness(store, {
@@ -1791,7 +1818,13 @@ for (const json of [true, false]) {
           })
       },
     })
-    await abWatch({ ...h.base, json, count: 2, timeout: '5' })
+    await abWatch({
+      ...h.base,
+      events: ['dispatcher.ticket-source-*'],
+      json,
+      count: 2,
+      timeout: '5',
+    })
     if (json) {
       const records = h.out.slice(0, -1).map((line) => JSON.parse(line))
       expect(records.map((record) => record.event.type)).toEqual([
@@ -1932,4 +1965,230 @@ test('a clean stop suppresses expired ownership while replacement loss names the
   await abWatch({ ...h.base, repository: true, timeout: '3' })
   const observations = h.out.map((line) => JSON.parse(line)).filter((r) => r.observation)
   expect(observations.map((r) => r.observation.run)).toEqual(['replacement'])
+})
+
+for (const remote of [false, true]) {
+  test(`persistent source matures on a quiet stream and cursor resumes once (remote=${remote})`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-source-degraded',
+      payload: {
+        source: 'linear',
+        operation: 'ready-scan',
+        cause: 'rate-limited',
+        message: 'quota',
+        resetAt: new Date(clock().getTime() + 2000).toISOString(),
+      },
+    })
+    // A later run anchor must not hide the episode's true start/reset.
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run: 'new',
+        pid: 1,
+        effectiveConfig: { kind: 'effective-config', rev: 0 },
+        roleWarnings: [],
+      },
+    })
+    const storeRef = remote ? 'https://stores.example.com/ab' : `${REPO}/.autobuild`
+    const h = harness(store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+      },
+    })
+    await abWatch({ ...h.base, storeRef, count: 1, timeout: '10' })
+    const record = JSON.parse(h.out[0]!)
+    expect(record).toMatchObject({
+      build: null,
+      state: null,
+      repo: REPO,
+      observation: { type: 'dispatcher.ticket-source-persistent', episodeSeq: 1, source: 'linear' },
+    })
+    expect(record.event).toBeUndefined()
+    const decoded = decodeCursor(record.cursor, { store: storeRef, repo: REPO })
+    expect(decoded.deliveredAttention).toContain('source:1')
+    const resume = harness(store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+      },
+    })
+    await abWatch({ ...resume.base, storeRef, since: record.cursor, timeout: '2' })
+    expect(resume.out).toHaveLength(1)
+    expect(
+      decodeCursor(JSON.parse(resume.out[0]!).cursor, { store: storeRef, repo: REPO }).streams,
+    ).toEqual(decoded.streams)
+  })
+}
+
+test('old cursor reconstructs overdue episodes, but recovery in backlog suppresses a stale timer', async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-failed',
+    payload: { run: 'r', error: 'broken' },
+  })
+  const since = encodeCursor({
+    v: 1,
+    store: `${REPO}/.autobuild`,
+    repo: REPO,
+    streams: { '#repo': 1 },
+  })
+  clock.advance(300_000)
+  const h = harness(store, {
+    now: clock,
+    delay: async () => {
+      clock.advance(1000)
+    },
+  })
+  await abWatch({ ...h.base, since, count: 1, timeout: '1' })
+  expect(JSON.parse(h.out[0]!).observation.type).toBe('dispatcher.tick-failure-persistent')
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-stopped',
+    payload: { run: 'r', outcome: 'normal' },
+  })
+  const recovered = harness(store, {
+    now: clock,
+    delay: async () => {
+      clock.advance(1000)
+    },
+  })
+  await abWatch({ ...recovered.base, since, timeout: '1' })
+  expect(recovered.out).toHaveLength(1)
+})
+
+test('merge decisions dedupe per PR across consent changes and new cursor resumes', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  const finalize = () =>
+    store.append('b1', {
+      actor: KERNEL,
+      type: 'finalize.completed',
+      payload: { pr: { number: 7, url: 'https://example.com/pr/7', headSha: 'abc' } },
+    })
+  let ticks = 0
+  const h = harness(store, {
+    onTick: async () => {
+      if (++ticks === 1) await finalize()
+    },
+  })
+  await abWatch({ ...h.base, slugs: ['b1'], count: 1, timeout: '2' })
+  const first = JSON.parse(h.out[0]!)
+  expect(first).toMatchObject({
+    build: 'b1',
+    state: { prState: 'open' },
+    observation: { type: 'build.merge-decision', pr: { number: 7 } },
+  })
+  await store.append('b1', {
+    actor: humanActor('op'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  await store.append('b1', {
+    actor: humanActor('op'),
+    type: 'build.auto-merge-cancelled',
+    payload: {},
+  })
+  await finalize()
+  const resume = harness(store)
+  await abWatch({ ...resume.base, slugs: ['b1'], since: first.cursor, timeout: '1' })
+  expect(resume.out).toHaveLength(1)
+  // A genuine old cursor at finalize infers the already consumed decision.
+  const old = encodeCursor({ v: 1, store: `${REPO}/.autobuild`, repo: REPO, streams: { b1: 2 } })
+  const upgrade = harness(store)
+  await abWatch({ ...upgrade.base, slugs: ['b1'], since: old, timeout: '1' })
+  expect(upgrade.out).toHaveLength(1)
+})
+
+test('malformed attention cursor metadata is rejected', () => {
+  for (const deliveredAttention of [null, ['bad'], ['source:0'], [['b1', 7]], [12]]) {
+    const cursor =
+      'v1.' +
+      Buffer.from(
+        JSON.stringify({ v: 1, store: 's', repo: 'r', streams: {}, deliveredAttention }),
+      ).toString('base64url')
+    expect(() => decodeCursor(cursor, { store: 's', repo: 'r' })).toThrow('malformed')
+  }
+})
+
+test('count stops between simultaneous timer observations without advancing the stream', async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  for (const source of ['a', 'b'])
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-source-degraded',
+      payload: { source, operation: 'ready-scan', cause: 'ready-scan-failed', message: 'offline' },
+    })
+  clock.advance(900_000)
+  const run = async (since?: string) => {
+    const h = harness(store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+      },
+    })
+    await abWatch({ ...h.base, count: 1, timeout: '1', ...(since ? { since } : {}) })
+    return h.out.map((line) => JSON.parse(line))
+  }
+  const first = await run()
+  const second = await run(first[0].cursor)
+  expect(first[0].observation.source).toBe('a')
+  expect(second[0].observation.source).toBe('b')
+  const expected = { store: `${REPO}/.autobuild`, repo: REPO }
+  expect(decodeCursor(first[0].cursor, expected).streams).toEqual(
+    decodeCursor(second[0].cursor, expected).streams,
+  )
+  expect(await run(second[0].cursor)).toHaveLength(1)
+})
+
+test('a failed repository catch-up cannot report an obsolete persistence condition', async () => {
+  const clock = manualClock()
+  const store = new MemoryBuildStore({ clock })
+  await store.ensureRepo(REPO)
+  await store.appendRepo(REPO, {
+    actor: DISPATCHER,
+    type: 'dispatcher.tick-failed',
+    payload: { run: 'r', error: 'offline' },
+  })
+  let fail = false
+  const proxy = new Proxy(store, {
+    get(target, property) {
+      if (property === 'getRepoEvents')
+        return async (repo: string, since?: number) => {
+          if (fail) throw new Error('unavailable')
+          return target.getRepoEvents(repo, since)
+        }
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  let ticks = 0
+  const h = harness(store, {
+    openStore: () => proxy,
+    now: clock,
+    delay: async () => {
+      clock.advance(300_000)
+      if (++ticks === 1) {
+        await store.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-stopped',
+          payload: { run: 'r', outcome: 'normal' },
+        })
+        fail = true
+      } else fail = false
+    },
+  })
+  await abWatch({ ...h.base, timeout: '601' })
+  expect(h.out).toHaveLength(1)
+  expect(h.err[0]).toContain('unavailable')
 })

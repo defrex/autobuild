@@ -42,8 +42,15 @@ import type { RepositoryRecord } from '../store/types'
  */
 import type { AbEvent } from '../events/catalog'
 import type { EventType } from '../events/payloads'
-import type { RepositoryEvent, RepositoryEventType } from '../events/repository'
-import { REPOSITORY_ATTENTION_EVENTS } from '../events/repository'
+import type { RepositoryEvent } from '../events/repository'
+import {
+  mergeDecision,
+  mergeIdentity,
+  RepositoryAttention,
+  repositoryNeedsAttention,
+  type MergeDecision,
+  type PersistenceObservation,
+} from './attention'
 import type { BuildState, PrLifecycle } from '../kernel/reducer'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildOutcome, BuildStatus, Phase } from '../ontology'
@@ -84,20 +91,7 @@ const TERMINAL_STATUSES: readonly BuildStatus[] = ['done', 'aborted']
  * a watch emits exactly these — deciding what to do about a blocker or a
  * merge stays with the caller's skill.
  */
-export const BUILD_ATTENTION_EVENTS = [
-  'escalation.raised',
-  'phase.failed',
-  'infrastructure.failed',
-  'runner.setup-failed',
-  'dispatch.failed',
-  'publication.lost',
-  'finalize.completed',
-  'pr.conflicted',
-  'pr.merged',
-  'pr.closed',
-  'build.completed',
-  'build.aborted',
-] as const satisfies readonly EventType[]
+export const BUILD_ATTENTION_EVENTS = ['escalation.raised'] as const satisfies readonly EventType[]
 
 // ── Glob compilation and matching ────────────────────────────────────────────
 
@@ -121,12 +115,6 @@ function matchesBuildFilter(type: EventType, filters: readonly RegExp[]): boolea
     : (BUILD_ATTENTION_EVENTS as readonly string[]).includes(type)
 }
 
-function matchesRepositoryFilter(type: RepositoryEventType, filters: readonly RegExp[]): boolean {
-  return filters.length > 0
-    ? filters.some((regex) => regex.test(type))
-    : (REPOSITORY_ATTENTION_EVENTS as readonly string[]).includes(type)
-}
-
 // ── The cursor ───────────────────────────────────────────────────────────────
 
 interface CursorPayload {
@@ -136,8 +124,27 @@ interface CursorPayload {
   /** The repository identity (normalized origin or checkout path). */
   repo: string
   /** Per-stream watch position: build slug → seq, `#repo` → seq. */
+  deliveredAttention?: string[]
   lostRuns?: string[]
   streams: Record<string, number>
+}
+
+function validAttentionIdentity(id: unknown): boolean {
+  if (typeof id !== 'string') return false
+  if (/^(source|tick):[1-9][0-9]*$/.test(id)) return true
+  try {
+    const value: unknown = JSON.parse(id)
+    return (
+      Array.isArray(value) &&
+      value.length === 2 &&
+      typeof value[0] === 'string' &&
+      value[0].length > 0 &&
+      Number.isSafeInteger(value[1]) &&
+      value[1] > 0
+    )
+  } catch {
+    return false
+  }
 }
 
 const CURSOR_PREFIX = 'v1.'
@@ -173,11 +180,20 @@ export function decodeCursor(
     throw malformed()
   }
   if (typeof payload !== 'object' || payload === null) throw malformed()
-  const { v, store, repo, streams, lostRuns } = payload as Record<string, unknown>
+  const { v, store, repo, streams, lostRuns, deliveredAttention } = payload as Record<
+    string,
+    unknown
+  >
   if (
     lostRuns !== undefined &&
     (!Array.isArray(lostRuns) ||
       lostRuns.some((run) => typeof run !== 'string' || run.length === 0))
+  )
+    throw malformed()
+  if (
+    deliveredAttention !== undefined &&
+    (!Array.isArray(deliveredAttention) ||
+      deliveredAttention.some((id) => !validAttentionIdentity(id)))
   )
     throw malformed()
   if (v !== 1 || typeof store !== 'string' || typeof repo !== 'string') throw malformed()
@@ -202,6 +218,9 @@ export function decodeCursor(
     store,
     repo,
     streams: streams as Record<string, number>,
+    ...(deliveredAttention === undefined
+      ? {}
+      : { deliveredAttention: deliveredAttention as string[] }),
     ...(lostRuns === undefined ? {} : { lostRuns: lostRuns as string[] }),
   }
 }
@@ -270,6 +289,36 @@ export interface WatchObservationRecord {
     heartbeatAgeMs?: number | null
   }
   cursor: string
+}
+
+export interface AttentionObservationRecord {
+  repo?: string
+  build: string | null
+  state: WatchRecordState | null
+  observation: MergeDecision | PersistenceObservation
+  cursor: string
+}
+
+export function projectAttentionRecord(
+  observation: MergeDecision | PersistenceObservation,
+  state: BuildState | null,
+  cursor: string,
+  scope: { build: string } | { repo: string },
+): AttentionObservationRecord {
+  return {
+    ...scope,
+    build: 'build' in scope ? scope.build : null,
+    state: state ? projectState(state) : null,
+    observation,
+    cursor,
+  }
+}
+
+export function renderAttentionLine(
+  observation: MergeDecision | PersistenceObservation,
+  label: string,
+): string {
+  return `${observation.observedAt}  ${singleLine(label)}  ${observation.type}  ${singleLine(JSON.stringify(observation))}`
 }
 
 export interface WatchRecord {
@@ -544,6 +593,12 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       const lostRuns = new Set(
         opts.since ? (decodeCursor(opts.since, { store: storeRef, repo }).lostRuns ?? []) : [],
       )
+      const resumedCursor = opts.since
+        ? decodeCursor(opts.since, { store: storeRef, repo })
+        : undefined
+      const deliveredAttention = new Set(resumedCursor?.deliveredAttention ?? [])
+      const repositoryAttention = new RepositoryAttention()
+      let attentionInitialized = false
       let livenessEvents: RepositoryEvent[] = []
       let livenessSeq = 0
       let livenessInitialized = false
@@ -571,6 +626,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           repo,
           streams: { ...positions },
           lostRuns: [...lostRuns],
+          deliveredAttention: [...deliveredAttention],
         })
 
       /** One record, flushed the moment it is projected. `cursor` is the watch
@@ -588,6 +644,44 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           // unprocessed: the next run resumes from THIS record's cursor.
           countCursor = cursor
           requestStop()
+        }
+      }
+
+      const emitObservation = (
+        observation: MergeDecision | PersistenceObservation,
+        state: BuildState | null,
+        scope: { build: string } | { repo: string },
+        identity: string,
+      ): void => {
+        if (stop || deliveredAttention.has(identity)) return
+        deliveredAttention.add(identity)
+        const cursor = encodeCurrent()
+        opts.stdout(
+          opts.json
+            ? JSON.stringify(projectAttentionRecord(observation, state, cursor, scope))
+            : renderAttentionLine(observation, 'build' in scope ? scope.build : '(repository)'),
+        )
+        emitted += 1
+        if (opts.count !== undefined && emitted >= opts.count) {
+          countCursor = cursor
+          requestStop()
+        }
+      }
+      const checkPersistence = (): void => {
+        if (filters.length || !attentionInitialized || stop) return
+        for (const { identity, observation } of repositoryAttention.pending(now())) {
+          emitObservation(observation, null, { repo }, identity)
+          if (stop) return
+        }
+      }
+      const baselineMerge = (slug: string, events: AbEvent[]): void => {
+        // Old cursors already consumed finalize attention. Infer every eligible
+        // historical prefix, even if consent was subsequently armed again.
+        const prefix: AbEvent[] = []
+        for (const event of events) {
+          prefix.push(event)
+          const observation = mergeDecision(prefix, now())
+          if (observation) deliveredAttention.add(mergeIdentity(slug, observation.pr.number))
         }
       }
 
@@ -665,17 +759,34 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
        * into a scratch prefix so a resumed record never leaks state from
        * events that landed after it. */
       const processBuildEvent = (stream: BuildStream, event: AbEvent, prefix: AbEvent[]): void => {
+        if (stop) return
         stream.lastSeq = event.seq
         positions[stream.slug] = event.seq
-        if (!matchesBuildFilter(event.type, filters)) return
-        emit(event, reduceBuild(prefix))
+        const state = reduceBuild(prefix)
+        if (matchesBuildFilter(event.type, filters)) emit(event, state)
+        if (!filters.length && !stop) {
+          const observation = mergeDecision(prefix, now(), state)
+          if (observation)
+            emitObservation(
+              observation,
+              state,
+              { build: stream.slug },
+              mergeIdentity(stream.slug, observation.pr.number),
+            )
+        }
       }
 
       const processRepositoryEvent = (stream: RepositoryStream, event: RepositoryEvent): void => {
+        if (stop) return
         stream.lastSeq = event.seq
         positions[REPO_STREAM_KEY] = event.seq
-        if (!matchesRepositoryFilter(event.type, filters)) return
-        emit(event, null)
+        repositoryAttention.fold(event)
+        if (
+          filters.length
+            ? filters.some((regex) => regex.test(event.type))
+            : repositoryNeedsAttention(event)
+        )
+          emit(event, null)
       }
 
       /**
@@ -705,7 +816,16 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         }
         streams.set(slug, stream)
         positions[slug] = stream.lastSeq
-        if (resumeSeq === undefined) return true
+        if (resumeSeq === undefined) {
+          baselineMerge(slug, events)
+          return true
+        }
+        positions[slug] = resumeSeq
+        if (resumedCursor?.deliveredAttention === undefined)
+          baselineMerge(
+            slug,
+            events.filter((event) => event.seq <= resumeSeq),
+          )
         stream.lastSeq = resumeSeq
         // Replay the backlog into a scratch prefix: each record's state is
         // the reduction of the prefix ENDING at that event, never the
@@ -771,6 +891,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
             status,
           }
           streams.set(record.slug, stream)
+          baselineMerge(record.slug, events)
           positions[record.slug] = stream.lastSeq
         }
       }
@@ -781,35 +902,22 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         streams.set(REPO_STREAM_KEY, stream)
         positions[REPO_STREAM_KEY] = stream.lastSeq
         try {
-          // A fresh store has no repository row; do not create one.
-          if (resumeSeq === undefined && (await store.getRepo(repo)) !== null) {
-            // Bounded baseline (AUT-534): the baseline needs only the
-            // journal's end position, and AUT-489's bounded read answers that
-            // whenever the journal contains a `dispatcher.run-started` — the
-            // tail from the latest anchor runs to the journal end, so the
-            // subset's max seq equals the journal's max seq.
-            const subset = await store.getRepoStateEvents(repo)
-            let last = subset.at(-1)?.seq ?? 0
-            if (!subset.some((event) => event.type === 'dispatcher.run-started')) {
-              // Anchor-less journal: the subset may have dropped run-scoped
-              // facts appended before any anchor, so one bounded delta read
-              // recovers the true end; its events are baselined silently,
-              // exactly as the full read baselines them. The skip condition
-              // is exact: a run-started is its own anchor or lies in a later
-              // anchor's tail, so "no run-started in the subset" means "no
-              // run-started in the journal" — the only case where the subset
-              // can trail.
-              const tail = await store.getRepoEvents(repo, last)
-              last = tail.at(-1)?.seq ?? last
+          if ((await store.getRepo(repo)) !== null) {
+            // Full bootstrap is intentional: degradation can predate run anchors.
+            const history = await store.getRepoEvents(repo)
+            const baseline = resumeSeq ?? history.at(-1)?.seq ?? 0
+            for (const event of history) {
+              if (event.seq <= baseline) repositoryAttention.fold(event)
             }
-            const input = await readDispatcherLiveness(store, repo, now(), subset)
-            livenessEvents = input.events
-            livenessSeq = Math.max(last, input.events.at(-1)?.seq ?? 0)
-            livenessInitialized = true
-            if (input.record?.lease) observedOwners.set(input.record.lease.holder, input.record)
-            stream.lastSeq = last
-            positions[REPO_STREAM_KEY] = last
-          }
+            attentionInitialized = true
+            stream.lastSeq = baseline
+            positions[REPO_STREAM_KEY] = baseline
+            for (const event of history) {
+              if (event.seq <= baseline || stop) continue
+              processRepositoryEvent(stream, event)
+            }
+            if (!stop) checkPersistence()
+          } else attentionInitialized = true
           return true
         } catch {
           return false
@@ -822,6 +930,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       ): Promise<boolean> => {
         const fresh = await store.getEvents(stream.slug, stream.lastSeq, readOpts)
         for (const event of fresh) {
+          if (stop) break
           stream.events.push(event)
           processBuildEvent(stream, event, stream.events)
           if (stop) break
@@ -832,17 +941,43 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         return true
       }
 
+      let repositoryQueue = Promise.resolve()
+      let repositoryInitialization: Promise<void> | undefined
       const pollRepository = async (
         stream: RepositoryStream,
         readOpts?: RemotePollReadOpts,
       ): Promise<boolean> => {
         // A repository row may be created mid-watch by the first dispatch.
         if ((await store.getRepo(repo)) === null) return true
-        const fresh = await store.getRepoEvents(repo, stream.lastSeq, readOpts)
-        for (const event of fresh) {
-          processRepositoryEvent(stream, event)
-          if (stop) break
+        if (!attentionInitialized) {
+          repositoryInitialization ??= (async () => {
+            const history = await store.getRepoEvents(repo)
+            const baseline = sinceStreams[REPO_STREAM_KEY] ?? history.at(-1)?.seq ?? 0
+            for (const event of history) {
+              if (event.seq <= baseline) repositoryAttention.fold(event)
+            }
+            stream.lastSeq = baseline
+            positions[REPO_STREAM_KEY] = baseline
+            attentionInitialized = true
+          })()
+          try {
+            await repositoryInitialization
+          } catch (error) {
+            repositoryInitialization = undefined
+            throw error
+          }
         }
+        const fresh = await store.getRepoEvents(repo, stream.lastSeq, readOpts)
+        const apply = repositoryQueue.then(() => {
+          for (const event of fresh) {
+            if (stop) break
+            if (event.seq <= stream.lastSeq) continue
+            processRepositoryEvent(stream, event)
+          }
+          if (!stop) checkPersistence()
+        })
+        repositoryQueue = apply.catch(() => {})
+        await apply
         return true
       }
 
@@ -1023,6 +1158,8 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
           void remoteRunner.runDiscovery({
             step: async (): Promise<void> => {
               if (slugs.length === 0) await discoverBuilds()
+              const repositoryStream = streams.get(REPO_STREAM_KEY)
+              if (repositoryStream?.kind === 'repo' && !stop) await pollRepository(repositoryStream)
               await checkLiveness()
             },
             // Unconditional, after the catch — exactly where the inline
