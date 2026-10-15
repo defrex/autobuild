@@ -1,3 +1,4 @@
+import { renderPrSummary } from './pr-summary'
 import { describe, expect, test } from 'bun:test'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
 import { agentActor, DISPATCHER, humanActor, KERNEL } from '../events/envelope'
@@ -324,7 +325,7 @@ describe('settlePendingPublication', () => {
     })
   })
 
-  test('finalize hosts attachments, applies auto-merge intent, and posts the durable summary', async () => {
+  test('finalize hosts attachments, applies auto-merge intent, and leaves the durable summary to outer settlement', async () => {
     const h = await seed({ attachments: true })
     h.forge.setHeadSha(SHA)
     const image = await h.store.putArtifact(SLUG, {
@@ -373,9 +374,19 @@ describe('settlePendingPublication', () => {
     ])
     expect(h.forge.prAttachmentUploads).toHaveLength(1)
     expect(h.forge.autoMergeCalls).toHaveLength(1)
-    expect(h.forge.comments).toHaveLength(1)
-    expect(h.forge.comments[0]!.body).toContain(`Autobuild: ${SLUG}`)
-    expect(h.forge.comments[0]!.body).toContain('result.png')
+    expect(h.forge.comments).toHaveLength(0)
+    expect(
+      renderPrSummary(
+        { build: SLUG, store: h.deps.storeRef, phase: 'finalize', round: 1, session: '' },
+        await h.store.getEvents(SLUG),
+      ),
+    ).toContain(`Autobuild: ${SLUG}`)
+    expect(
+      renderPrSummary(
+        { build: SLUG, store: h.deps.storeRef, phase: 'finalize', round: 1, session: '' },
+        await h.store.getEvents(SLUG),
+      ),
+    ).toContain('result.png')
     expect(
       (await h.store.getEvents(SLUG)).filter((event) => event.type === 'finalize.completed'),
     ).toHaveLength(1)

@@ -10743,3 +10743,142 @@ test('plain watch retains the single startup yield warning without retry output'
     await fx.cleanup()
   }
 })
+
+test('dispatcher settles remote summary-only boundaries before launch and after guest completion', async () => {
+  const fx = await makeFixture([], happyHandlers())
+  const slug = 'remote-summaries'
+  const branch = `ab/${slug}`
+  const ticket = { source: 'fake', id: 'SUMMARY', title: 'Summary boundaries' }
+  try {
+    await fx.store.createBuild({ slug, repo: fx.origin, branch, ticket })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'build.created',
+      payload: { ticket, repo: fx.origin, baseBranch: 'main' },
+    })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.provisioned',
+      payload: {
+        provider: 'git-worktree',
+        remote: true,
+        ref: 'summary-workspace',
+        path: '/guest',
+        branch,
+        base: { source: 'existing', sha: 'base' },
+      },
+    })
+    const spec = await fx.store.putArtifact(slug, { kind: 'spec', content: CONFORMING_BODY })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'spec.imported',
+      payload: { ticket, artifact: { kind: spec.kind, rev: spec.revision } },
+    })
+    await fx.store.append(slug, { actor: DISPATCHER, type: 'dispatch.comment-posted', payload: {} })
+    const pr = await fx.forge.openPr({
+      workspacePath: fx.checkout,
+      head: branch,
+      base: 'main',
+      title: 'Summary',
+      body: '',
+    })
+    await fx.store.append(slug, { actor: KERNEL, type: 'finalize.completed', payload: { pr } })
+    const prior = await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.started',
+      payload: { step: 'prior', attempt: 1 },
+    })
+    const completed = await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'verify.completed',
+      payload: { step: 'prior', attempt: 1, outcome: 'pass' },
+    })
+    await fx.store.append(slug, {
+      actor: KERNEL,
+      type: 'pr-summary.requested',
+      payload: { occurrence: prior.seq, boundary: completed.seq },
+    })
+    fx.forge.setPrState(pr.number, { state: 'open', mergeable: false })
+    await fx.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'pr.conflicted',
+      payload: { baseSha: 'upstream' },
+    })
+    let starts = 0
+    const execution: BuildExecution = {
+      async start(input) {
+        starts++
+        // A replacement may start only after the credentialed host has settled.
+        expect(fx.forge.comments).toHaveLength(1)
+        expect(fx.forge.comments[0]!.body).toContain('<code>prior</code>')
+        expect((await fx.store.getBuild(slug))!.lease?.holder).toBe(input.instance)
+        const occurrence = await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'verify.started',
+          payload: { step: 'screens', attempt: 1 },
+        })
+        for (let i = 0; i < 300; i++) {
+          await fx.store.appendWithArtifacts(
+            slug,
+            [{ kind: `frame:${i}`, content: 'pixels' }],
+            (metas) => ({
+              actor: agentActor('verify:screens', 'guest'),
+              type: 'pr-attachment.designated',
+              payload: {
+                artifact: { kind: metas[0]!.kind, rev: metas[0]!.revision },
+                filename: `frame-${i}.png`,
+                mediaType: 'image/png',
+              },
+            }),
+          )
+        }
+        const boundary = await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'verify.completed',
+          payload: { step: 'screens', attempt: 1, outcome: 'pass' },
+        })
+        await fx.store.append(slug, {
+          actor: KERNEL,
+          type: 'pr-summary.requested',
+          payload: { occurrence: occurrence.seq, boundary: boundary.seq },
+        })
+        expect(
+          (await fx.store.getEvents(slug)).filter((event) => event.type === 'pr-summary.attempted'),
+        ).toHaveLength(1)
+        return {
+          supervision: 'local-parent',
+          identity: { provider: 'git-worktree', workspaceRef: 'summary-workspace' },
+          completion: Promise.resolve({ exitCode: 0 }),
+          stop: async () => ({ outcome: 'confirmed' }),
+          detach: async () => {},
+        }
+      },
+    }
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: (line) => fx.err.push(line),
+      stderr: (line) => fx.err.push(line),
+      once: true,
+      plain: true,
+      wire: () => ({ ...fx.wire(), buildExecution: execution }),
+    })
+    expect(
+      starts,
+      JSON.stringify(
+        (await fx.store.getEvents(slug)).filter((event) => event.type === 'dispatch.failed'),
+      ),
+    ).toBe(1)
+    expect(
+      (await fx.store.getEvents(slug)).filter((event) => event.type === 'pr-summary.attempted'),
+    ).toHaveLength(2)
+    expect(fx.forge.comments).toHaveLength(1)
+    const full = textContent((await fx.store.getArtifact(slug, 'pr-summary', 0))!)
+    expect(full).toContain('frame-299.png')
+    expect(full).toContain('<code>screens</code> (attempt 1): pass')
+    expect((await fx.store.getBuild(slug))!.lease).toBeUndefined()
+  } finally {
+    await fx.cleanup()
+  }
+}, 30_000)
