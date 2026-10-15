@@ -18,6 +18,15 @@ have no attributed operator authority. Human-operator tokens have no raw
 `/builds`, `/repos`, `/sessions`, or `/tickets` authority. Encode repository,
 build, session, and artifact kind as separate URL path segments.
 
+Every repository path is checked against the durable connected-project
+registry after authentication and before any route or generic tool executes.
+An unregistered or removed project returns `404 not-found` for every operator
+credential. Every allowlisted user owns all active projects. Removal preserves
+history; adding the same normalized origin restores access. Registry failures
+fail closed. Owners manage registration with database credentials through
+`ab-hosted-store projects list|add|remove`; see the
+[owner workflow](setup.md#connected-projects).
+
 ## Operator sessions
 
 Operator sessions are the signed-in operator's durable orchestrator

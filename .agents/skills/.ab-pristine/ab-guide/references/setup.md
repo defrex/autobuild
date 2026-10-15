@@ -250,13 +250,61 @@ apart from the identity change, `ab dispatch` behaves as it did.
 A hosted-store deployment configures its web/auth variables once — see the
 hosted service README and the complete environment reference in the pinned
 distribution checkout: `BETTER_AUTH_URL`, `AB_WEB_ALLOWED_EMAILS`,
-`AB_WEB_REPOSITORIES`, and the optional `AB_WEB_MCP_RESOURCE` — the protected
+and the optional `AB_WEB_MCP_RESOURCE` — the protected
 resource the hosted MCP server (docs/mcp.md) binds its OAuth tokens to,
 defaulting to `<BETTER_AUTH_URL>/mcp`. Set it only when a proxy or custom
 domain fronts the deployment under a different public URL than
 `BETTER_AUTH_URL`; the value must be an absolute http(s) URL (https in
 production) or every MCP client's discovery binds tokens to the wrong
 resource.
+
+
+## Connected projects
+
+Migrate PostgreSQL from the pinned release before deploying (`bun run
+postgres:migrate`). The service keeps an independent, durable project registry;
+existing build or ticket data does not register a project. An administrator
+with deployment database credentials manages it without redeploying:
+
+```sh
+ab-hosted-store projects list
+ab-hosted-store projects add https://github.com/owner/project --user owner@example.com
+ab-hosted-store projects remove https://github.com/owner/project --user owner@example.com
+```
+
+From a source checkout, substitute `bun packages/hosted-store-service/src/bin.ts`
+for `ab-hosted-store`. Configure `AB_POSTGRES_URL` or `DATABASE_URL` in that
+process. Database possession grants administration; `--user` is declared audit
+attribution, not a verified login. Ordinary project/store tokens cannot manage
+registrations. Each entry records the normalized origin URL, addition time,
+and adding identity. SSH git spellings normalize to HTTPS; local paths and
+credential-bearing HTTPS URLs are rejected. Duplicate adds preserve metadata;
+remove is idempotent, and re-adding records a fresh addition.
+
+Every allowlisted signed-in user owns every registered project. The dashboard,
+MCP discovery and calls, and every operator API route consult current
+registration. Removal hides a project from all these surfaces and subsequent
+hosted dispatcher invocations; builds, events, artifacts and tickets remain,
+and re-registration restores access. Already-started work is not cancelled.
+Machine BuildStore and ticket credentials retain their existing authority;
+project-bound credentials are a separate feature.
+
+Link directly to `/?repo=<URL-encoded normalized origin>`. The page selects the
+first registered origin when the requested one is missing or removed, and an
+empty registry shows no project data or controls. Registry errors fail closed;
+there is no environment fallback on database failure.
+
+`AB_WEB_REPOSITORIES` is deprecated. A nonempty CSV is imported exactly once per
+database, on the first registry initialization with that variable configured,
+with actor `system:AB_WEB_REPOSITORIES`. The import and durable marker commit
+atomically across concurrent starts. An absent variable does not consume the
+marker. Later restarts or edits to the variable never re-add removed projects;
+use the owner commands for subsequent administration.
+
+The hosted dispatcher queries current registrations on every authorized
+invocation. With `AB_DISPATCHER_REPOSITORIES` unset, it serves all registered
+projects; an explicit list preserves its order and is intersected with current
+registration. An empty registry is a successful zero-project invocation.
 
 ## Authoring an agent verifier
 

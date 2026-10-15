@@ -733,6 +733,43 @@ longer grows with the number of past dispatcher invocations. The journal
 itself stays append-only: full replay remains the normative truth, and
 `ab watch` still sees every recorded fact.
 
+#### Hosted connected projects
+
+The product's hosted service keeps a durable PostgreSQL project registry,
+independent of BuildStore repository journals and ticket data. Entries record
+normalized repository origin, addition timestamp and adding identity. An
+append-only journal records additions/removals; latest sequence determines
+membership. Removal never deletes build, event, artifact or ticket history;
+re-registration restores access and records fresh addition metadata.
+
+Database-authorized owners administer it without redeploying through
+`ab-hosted-store projects list`, `projects add REPOSITORY --user IDENTITY`, and
+`projects remove REPOSITORY --user IDENTITY`. Attribution is declared by the
+administrator; ordinary store/project tokens cannot administer registration.
+All allowlisted signed-in users own every registered project (single-owner
+model). Per-project memberships and machine credential boundaries are deferred.
+
+Dashboard discovery, MCP `repositories.list` and every repository tool call,
+and all operator API routes for every operator credential consult current
+membership. Unregistered operator paths return not-found before execution.
+Registry failures fail closed and transient initialization can retry.
+The dashboard selection lives at `/?repo=<URL-encoded normalized origin>`;
+missing/invalid selections canonicalize to the first active entry, and an
+empty registry issues no project data/control requests.
+
+The hosted dispatcher queries the registry each authorized invocation when
+`AB_DISPATCHER_REPOSITORIES` is unset. An explicit list is intersected with
+current registration in its configured order. Empty registration is a
+successful zero-project tick. Removal stops later invocations, without
+cancelling already-started work or changing machine-route token authority.
+
+`AB_WEB_REPOSITORIES` is deprecated: the first initialization with a nonempty
+CSV imports absent projects once per database as `system:AB_WEB_REPOSITORIES`.
+The import and durable marker share one transaction and mutation lock across
+processes. Absence does not consume the marker. Restarts or later variable
+edits cannot resurrect removals. Deployments migrate the pinned schema before
+starting services; runtime initialization never runs DDL.
+
 ### 7.3 Persistence granularity
 
 Required phase outputs persist at **phase/round boundaries**; a killed phase
