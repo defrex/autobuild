@@ -55,17 +55,9 @@ describe('advertised jwks_uri resolves (AUT-369)', () => {
   })
 
   test('the authorization-server metadata advertises the JWKS endpoint that exists', async () => {
-    // Regression canary: the pinned 1.4.18 MCP plugin hardcodes
-    // `<baseURL>/mcp/jwks` (an endpoint that 404s) in getMCPProviderMetadata
-    // because its call site passes the whole MCPOptions while the function
-    // spreads TOP-LEVEL options?.metadata. patches/better-auth@1.4.18.patch
-    // fixes the call site to pass options?.oidcConfig — the channel the
-    // function's declared (ctx, options?: OIDCOptions) signature already
-    // expects — so the override flows from the declared oidcConfig.metadata
-    // alone. If the patch goes missing or a plugin upgrade drops it, this
-    // fails loudly instead of re-advertising a dead jwks_uri.
+    // This runs against the unpatched published dependency through our HTTP adapter.
     const response = await auth.handler(
-      new Request(`${ORIGIN}/api/auth/.well-known/oauth-authorization-server`),
+      new Request(`${ORIGIN}/.well-known/oauth-authorization-server`),
     )
     expect(response.status).toBe(200)
     const metadata = (await response.json()) as { jwks_uri: string }
@@ -74,7 +66,7 @@ describe('advertised jwks_uri resolves (AUT-369)', () => {
 
   test('the protected-resource metadata advertises the same jwks_uri', async () => {
     const response = await auth.handler(
-      new Request(`${ORIGIN}/api/auth/.well-known/oauth-protected-resource`),
+      new Request(`${ORIGIN}/.well-known/oauth-protected-resource`),
     )
     expect(response.status).toBe(200)
     const metadata = (await response.json()) as { jwks_uri: string }
@@ -162,5 +154,60 @@ describe('DCR client-name policy (AUT-399)', () => {
     expect(response.status).toBe(201)
     const registered = (await response.json()) as { client_name?: string }
     expect(registered.client_name).toBeUndefined()
+  })
+})
+
+describe('discovery HTTP adapter', () => {
+  test('preserves request body, query, headers and ordinary request identity', async () => {
+    const { authHTTPHandler } = await import('./auth')
+    const ordinary = new Request(`${ORIGIN}/api/auth/mcp/register`, {
+      method: 'POST',
+      body: 'body',
+    })
+    let received: Request | undefined
+    const handler = authHTTPHandler(async (request) => {
+      received = request
+      return new Response('unchanged', { status: 400 })
+    }, `${ORIGIN}/api/auth/jwks`)
+    await handler(ordinary)
+    expect(received).toBe(ordinary)
+    const request = new Request(`${ORIGIN}/.well-known/oauth-protected-resource?q=1`, {
+      method: 'POST',
+      headers: { 'x-canary': 'yes' },
+      body: 'payload',
+    })
+    await handler(request)
+    expect(received?.url).toBe(`${ORIGIN}/api/auth/.well-known/oauth-protected-resource?q=1`)
+    expect(received?.method).toBe('POST')
+    expect(received?.headers.get('x-canary')).toBe('yes')
+    expect(await received?.text()).toBe('payload')
+    expect(await request.text()).toBe('payload')
+    const near = new Request(`${ORIGIN}/.well-known/oauth-protected-resource/extra`)
+    await handler(near)
+    expect(received).toBe(near)
+  })
+
+  test('corrects only successful provider metadata, preserves headers and propagates failures', async () => {
+    const { authHTTPHandler } = await import('./auth')
+    const request = new Request(`${ORIGIN}/.well-known/oauth-authorization-server`)
+    const handler = authHTTPHandler(
+      async () =>
+        new Response('{"issuer":"issuer","jwks_uri":"bad"}', {
+          status: 200,
+          headers: { 'content-type': 'application/json', 'content-length': '1', 'x-canary': 'yes' },
+        }),
+      'good',
+    )
+    const response = await handler(request)
+    expect(response.headers.get('content-length')).toBeNull()
+    expect(response.headers.get('x-canary')).toBe('yes')
+    expect(await response.json()).toEqual({ issuer: 'issuer', jwks_uri: 'good' })
+    const failed = new Response('failure', { status: 500 })
+    expect(await authHTTPHandler(async () => failed, 'good')(request)).toBe(failed)
+    await expect(
+      authHTTPHandler(async () => {
+        throw new Error('upstream')
+      }, 'good')(request),
+    ).rejects.toThrow('upstream')
   })
 })

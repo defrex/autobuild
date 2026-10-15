@@ -14,6 +14,10 @@ it once a minute by default), so builds no longer depend on a maintainer's
 machine. A deployment that does not install the package serves the hosted
 store, ticket, operator, and web endpoints and never attempts a dispatch tick.
 
+The [minimal hosted service deployment](hosted-service.md) defaults to store-only
+mode and supplies no cron. The source-checkout deployment below retains the
+opt-in dispatcher packing and shipping pipeline.
+
 ## Enabling the schedule
 
 1. Deploy the hosted service with the dispatcher package installed and the

@@ -1028,3 +1028,87 @@ describe('npm publication', () => {
     ).toContain('refs/tags/v2.0.1')
   })
 })
+
+test('hosted release frozen installs succeed before the new core version is published', async () => {
+  const service = JSON.parse(
+    await readFile(join(repoRoot, 'packages/hosted-store-service/package.json'), 'utf8'),
+  ) as { dependencies: Record<string, string>; peerDependencies?: Record<string, string> }
+  // Retain the real core requirement. An exact source dependency would be
+  // rewritten to the unpublished version by the former release transform.
+  const core = '@defrex/autobuild'
+  const serviceManifest = {
+    name: '@defrex/autobuild-hosted-store-service',
+    version: '2.0.0',
+    dependencies: service.dependencies[core] ? { [core]: service.dependencies[core] } : {},
+    peerDependencies: service.peerDependencies?.[core]
+      ? { [core]: service.peerDependencies[core] }
+      : {},
+  }
+  const fixture = await createFixture({
+    extraPackages: [
+      {
+        path: 'packages/hosted-store-service/package.json',
+        text: `${JSON.stringify(serviceManifest, null, 2)}\n`,
+      },
+    ],
+  })
+  const rootManifest = JSON.parse(await readFile(join(fixture.root, 'package.json'), 'utf8'))
+  rootManifest.name = core
+  await writeFile(join(fixture.root, 'package.json'), `${JSON.stringify(rootManifest, null, 2)}\n`)
+  const template = await readFile(join(repoRoot, 'templates/hosted-service/package.json'), 'utf8')
+  for (const directory of [
+    'templates/hosted-service',
+    'packages/hosted-store-service/deployment',
+  ]) {
+    await mkdir(join(fixture.root, directory), { recursive: true })
+    await writeFile(join(fixture.root, directory, 'package.json'), template)
+  }
+  await writeFile(join(fixture.root, '.gitignore'), 'node_modules/\n')
+  await command(fixture.root, 'bun', ['install', '--ignore-scripts'])
+  await command(fixture.root, 'git', ['add', '.'])
+  await command(fixture.root, 'git', [
+    'commit',
+    '-m',
+    'add real hosted service core requirement and lockfile',
+  ])
+  await command(fixture.root, 'git', ['push', 'origin', 'main'])
+
+  const testHarness = harness()
+  const releaseVersion = '9876.0.0'
+  let installs = 0
+  let publications = 0
+  const run: CommandRunner = async (request) => {
+    if (request.command === 'bun' && request.args[0] === 'install') {
+      expect(publications).toBe(0)
+      expect(request.args).toEqual(['install', '--frozen-lockfile'])
+      installs++
+      // Exercise the actual tagged checkout and committed lockfile. The normal
+      // release harness stubs this command, which hid the publication-order bug.
+      return spawnCommand(request)
+    }
+    if (request.command === 'bun' && request.args[0] === 'publish') {
+      expect(installs).toBe(2)
+      for (const directory of [
+        'templates/hosted-service',
+        'packages/hosted-store-service/deployment',
+      ]) {
+        const pinned = JSON.parse(
+          await readFile(join(fixture.root, directory, 'package.json'), 'utf8'),
+        )
+        expect(pinned.dependencies[core]).toBe(releaseVersion)
+        expect(pinned.dependencies['@defrex/autobuild-hosted-store-service']).toBe(releaseVersion)
+      }
+      publications++
+    }
+    return testHarness.run(request)
+  }
+  await runRelease(['--version', releaseVersion], fixture.root, {
+    run,
+    output: testHarness.output,
+    repositoryUrl: fixture.remote,
+    packageArchive: async () => new Uint8Array([1, 2, 3]),
+  })
+  expect(installs).toBe(2)
+  expect(publications).toBe(3)
+  expect((await command(fixture.root, 'git', ['status', '--porcelain'])).stdout).toBe('')
+}, 30_000)
