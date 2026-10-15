@@ -114,8 +114,12 @@ export type ExecutionObservation =
  * provider may implement this by starting the fixed build process beside its
  * checkout; the kernel need not know where that is. Every provider owns full
  * teardown of the environment and descendants it starts before completion. */
+export interface ExecutionLaunchAuth {
+  token: string
+}
+
 export interface BuildExecution {
-  start(input: BuildExecutionStart): Promise<BuildExecutionHandle>
+  start(input: BuildExecutionStart, auth?: ExecutionLaunchAuth): Promise<BuildExecutionHandle>
   /** Optional liveness observation of a previously recorded execution, from
    * provider state alone. Absent = this provider cannot observe; callers
    * supervise exactly as before ("cannot observe" never means "act"). */

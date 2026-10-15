@@ -506,3 +506,109 @@ test.skipIf(!testUrl)(
     }
   },
 )
+
+test.skipIf(!testUrl)(
+  'delegated wire authority survives parent expiry and service reconstruction over Postgres, then retires',
+  async () => {
+    const { PostgresCredentialStore } = await import('@defrex/autobuild-postgres-store/credentials')
+    const { delegateCredential } = await import('@defrex/autobuild/remote-store')
+    const { sampleEventWrite } = await import('@defrex/autobuild/plugin-sdk')
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const projects = new PostgresProjectRegistry(sql)
+    const credentials = new PostgresCredentialStore(sql, projects)
+    let time = Date.now()
+    const clock = () => new Date(time)
+    const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), { clock })
+    const a = 'https://github.com/acme/delegated-a'
+    const b = 'https://github.com/acme/delegated-b'
+    const compose = () =>
+      createHostedStoreService({
+        env: {
+          AB_STORE_SECRET: 'delegated-live',
+          AB_POSTGRES_URL: database.url,
+          AB_BLOB_BACKEND: 's3',
+          AB_S3_BUCKET: 'unused',
+          AB_S3_REGION: 'unused',
+          AB_S3_ACCESS_KEY_ID: 'unused',
+          AB_S3_SECRET_ACCESS_KEY: 'unused',
+        },
+        clock,
+        openStore: async () => backing,
+        openProjectRegistry: async () => projects,
+        openCredentials: async () => credentials,
+      })
+    let service = compose()
+    const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: (req) => service.fetch(req) })
+    const url = `http://127.0.0.1:${server.port}`
+    try {
+      await projects.add(a, 'owner')
+      await projects.add(b, 'owner')
+      const parent = await credentials.issue(a, 'owner', {
+        purpose: 'dispatcher',
+        expiresAt: new Date(time + 7 * 86400000),
+      })
+      for (const [slug, repo] of [
+        ['own', a],
+        ['other', a],
+        ['foreign', b],
+      ]) {
+        await backing.createBuild(sampleBuildInput(slug!, { repo: repo! }))
+        await backing.append(slug!, sampleEventWrite())
+      }
+      const token = await delegateCredential(url, parent.token, { kind: 'build-runner', id: 'own' })
+      expect(token).not.toBe(parent.token)
+      const runner = new RemoteBuildStore({ url, token })
+      await expect(
+        runner.putArtifact('other', { kind: 'notes', content: 'forbidden' }),
+      ).rejects.toBeInstanceOf(AuthError)
+      expect(await backing.listArtifacts('other')).toEqual([])
+      expect(await runner.getBuild('foreign')).toBeNull()
+      expect((await runner.getBuild('other'))?.repo).toBe(a)
+      time += 10 * 86400000
+      service = compose()
+      await runner.putArtifact('own', { kind: 'notes', content: 'still active' })
+      await runner.append('own', {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 'phase',
+          role: 'implement',
+          runner: 'test',
+          phase: 'implement',
+          round: 1,
+        },
+      })
+      const phaseToken = await delegateCredential(url, token, {
+        kind: 'build-phase',
+        id: 'own',
+        session: 'phase',
+      })
+      const phase = new RemoteBuildStore({ url, token: phaseToken })
+      await phase.append('own', {
+        ...sampleEventWrite(),
+        actor: { kind: 'agent', role: 'implement', session: 'phase' },
+      })
+      await runner.append('own', {
+        actor: KERNEL,
+        type: 'session.ended',
+        payload: {
+          session: 'phase',
+          outcome: 'reclaimed',
+          reclaimedBy: { instance: 'replacement', resumedFromSeq: 1 },
+        },
+      })
+      time += 60000
+      await expect(phase.getBuild('own')).rejects.toBeInstanceOf(AuthError)
+      expect((await runner.getBuild('own'))?.repo).toBe(a)
+      await runner.append('own', { actor: KERNEL, type: 'build.aborted', payload: {} })
+      time += 60000
+      await expect(runner.getBuild('own')).rejects.toBeInstanceOf(AuthError)
+    } finally {
+      await server.stop(true)
+      await backing.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  },
+)

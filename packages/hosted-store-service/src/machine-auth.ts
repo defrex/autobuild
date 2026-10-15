@@ -4,9 +4,12 @@ import {
   type CredentialReader,
   type CredentialMetadata,
 } from '@defrex/autobuild-postgres-store/credentials'
+import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
+import { delegationActive, type Delegation } from './delegated-authority'
 import { verifyToken, type Via } from '@defrex/autobuild/remote-store'
 
 export type MachinePrincipal =
+  | { kind: 'delegated'; repo: string; user: string; delegation: Delegation }
   | { kind: 'project'; repo: string; user: string; credential: CredentialMetadata }
   | { kind: 'internal'; repo: string; user: string; via?: Via }
   | { kind: 'admin'; user: string }
@@ -36,6 +39,7 @@ export function createMachineAuth(options: {
   secret: string
   credentials: CredentialReader
   projects: ProjectRegistryReader
+  store?: BuildStore | (() => Promise<BuildStore>)
   clock?: () => Date
 }): MachineAuth {
   return {
@@ -59,6 +63,15 @@ export function createMachineAuth(options: {
         return { kind: 'project', repo: credential.repo, user: credential.createdBy, credential }
       }
       const scope = verifyToken(options.secret, token, now)
+      if (scope && 'delegation' in scope) {
+        const claims = scope.delegation
+        if (!(await options.projects.has(claims.repo)))
+          throw new MachineAuthError(403, 'project not registered')
+        const store = typeof options.store === 'function' ? await options.store() : options.store
+        if (!store || !(await delegationActive(store, claims, now)))
+          throw new MachineAuthError(401, 'delegated credential ended or unavailable')
+        return { kind: 'delegated', repo: claims.repo, user: 'delegated', delegation: claims }
+      }
       if (scope && 'ownerAdmin' in scope) return { kind: 'admin', user: scope.ownerAdmin.user }
       if (scope && 'internalOperator' in scope) {
         if (!(await options.projects.has(scope.internalOperator.repo)))

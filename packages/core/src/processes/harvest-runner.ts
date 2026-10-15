@@ -1,3 +1,4 @@
+import { delegateCredential } from '../store/remote/credentials'
 /**
  * Crash-safe repository-scoped harvest workflow:
  * scan -> synthesize <-> review -> file. It reuses `converge` for adversarial
@@ -100,11 +101,13 @@ export interface HarvestRunnerDeps {
    * executes in (hosted harvest). Stamped into the run's harvest.started
    * payload so the journal records where it ran; absent on local runs. */
   environment?: { provider: string; environmentId: string; sessionId?: string }
+  preparedRun?: { run: string }
   sessionEnv?: Record<string, string>
   opts?: HarvestRunnerOpts
 }
 
 export type HarvestRunnerResult =
+  | { outcome: 'prepared'; run: string; launch: 'started' | 'resumed' }
   | { outcome: 'idle' }
   | { outcome: 'held' }
   | { outcome: 'parked'; run?: string }
@@ -217,9 +220,9 @@ export class HarvestRunner {
     )
   }
 
-  async run(): Promise<HarvestRunnerResult> {
+  async run(preparationOnly = false): Promise<HarvestRunnerResult> {
     const { store, repo, instance } = this.deps
-    await store.ensureRepo(repo)
+    if (!this.deps.preparedRun) await store.ensureRepo(repo)
     if (
       this.deps.leaseHolder === undefined &&
       !(await store.claimRepoLease(repo, instance, this.leaseTtlMs))
@@ -233,101 +236,116 @@ export class HarvestRunner {
       await this.ensureLease()
       // Bounded read (AUT-489): reduceHarvest and the verdict/failure filters
       // below consume durable types only, so the subset is replay-equivalent.
-      let events = await store.getRepoStateEvents(repo)
-      let state = reduceHarvest(events)
-      run = actionableHarvestRun(state)
-
-      // Settle durable operator control before scanning or resuming work. The
-      // selected run comes from the full journal, so a shadowed failure or
-      // exhaustion barrier is recovered/reported before any later open run.
-      await this.controlBoundary(run?.run)
-      events = await store.getRepoStateEvents(repo)
-      state = reduceHarvest(events)
-      run = openHarvestRun(state)
-
-      if (!run) {
-        await this.controlBoundary()
-        // Flat-cost gate (AUT-521): the pressure trigger is evaluated from
-        // the journal and one repo-scoped digest batch read — no per-build
-        // history reads — so the idle evaluation no longer grows with
-        // accumulated finished builds. Only a tripped gate pays for the full
-        // unclaimed-observation scan, because the packet artifact needs the
-        // observation payloads no bounded source carries.
-        // Bounded read (AUT-489): the gate's journal input is consumed only
-        // through reduceHarvest, so the subset is replay-equivalent here too.
-        const [gateEvents, digests] = await Promise.all([
-          store.getRepoStateEvents(repo),
-          store.getRepoBuildDigests(repo),
-        ])
-        const pressure = evaluateHarvestPressureFromDigests({
-          digests,
-          harvestEvents: gateEvents,
-          policy: this.currentConfig().policy,
-        })
-        if (pressure.trigger === undefined) {
-          // Treat the read's completion as a boundary even when the gate did
-          // not trip, so a request arriving during the read is acknowledged
-          // before this runner returns idle.
-          await this.controlBoundary()
-          return { outcome: 'idle' }
-        }
-        await this.controlBoundary()
-        const scan = await scanUnclaimedObservations(store, repo)
-        // The trigger came from an earlier read than this scan, and a claim
-        // may have landed in the window. Re-confirm the gate against the
-        // fresh scan (pure, free): an emptied window returns idle exactly as
-        // if the gate had not tripped, so a packet is only ever built from a
-        // scan that itself triggered.
-        const confirmed = evaluateHarvestPressure(scan, this.currentConfig().policy)
-        if (confirmed.trigger === undefined) {
-          await this.controlBoundary()
-          return { outcome: 'idle' }
-        }
-        const runId = this.deps.ids('harvest')
-        const packet = await makeHarvestScanPacket({
-          store,
-          tickets: this.deps.tickets,
-          repo,
-          run: runId,
-          observations: scan.observations,
-          state: scan.state,
-        })
-        // Scan preparation is not a claim. Re-read operator control immediately
-        // before atomically committing the immutable snapshot.
-        await this.controlBoundary()
-        initial = 'started'
-        await store.appendRepoWithArtifacts(
-          repo,
-          [
-            {
-              kind: HARVEST_SCAN_ARTIFACT,
-              content: `${JSON.stringify(packet, null, 2)}\n`,
-              metadata: { run: runId, observations: packet.observations.length },
-            },
-          ],
-          (deposited) => ({
-            actor: KERNEL,
-            type: 'harvest.started',
-            payload: {
-              run: runId,
-              observations: packet.observations.map((item) => item.occurrence),
-              scan: artifactRef(deposited[0]!),
-              trigger: confirmed.trigger,
-              ...(this.deps.environment !== undefined
-                ? { environment: this.deps.environment }
-                : {}),
-            },
-          }),
+      if (this.deps.preparedRun) {
+        const events = await store.getRepoStateEvents(repo)
+        const authorization = events.find(
+          (event) =>
+            event.type === 'harvest.execution.authorized' &&
+            event.payload.execution === instance &&
+            event.payload.run === this.deps.preparedRun!.run,
         )
-        // Bounded read (AUT-489): reduceHarvest consumes durable types only.
-        events = await store.getRepoStateEvents(repo)
-        run = reduceHarvest(events).runs.find((candidate) => candidate.run === runId)
-        if (!run) throw new Error(`harvest.started did not reduce run "${runId}"`)
-        // A request racing the claim parks this exact run; its snapshot stays
-        // open and is resumed rather than scanned again.
-        await this.controlBoundary(run.run)
-      }
+        if (authorization?.type !== 'harvest.execution.authorized')
+          throw new Error('prepared harvest execution unavailable')
+        run = reduceHarvest(events).runs.find((run) => run.run === this.deps.preparedRun!.run)
+        initial = authorization.payload.launch
+      } else {
+        let events = await store.getRepoStateEvents(repo)
+        let state = reduceHarvest(events)
+        run = actionableHarvestRun(state)
 
+        // Settle durable operator control before scanning or resuming work. The
+        // selected run comes from the full journal, so a shadowed failure or
+        // exhaustion barrier is recovered/reported before any later open run.
+        await this.controlBoundary(run?.run)
+        events = await store.getRepoStateEvents(repo)
+        state = reduceHarvest(events)
+        run = openHarvestRun(state)
+
+        if (!run) {
+          await this.controlBoundary()
+          // Flat-cost gate (AUT-521): the pressure trigger is evaluated from
+          // the journal and one repo-scoped digest batch read — no per-build
+          // history reads — so the idle evaluation no longer grows with
+          // accumulated finished builds. Only a tripped gate pays for the full
+          // unclaimed-observation scan, because the packet artifact needs the
+          // observation payloads no bounded source carries.
+          // Bounded read (AUT-489): the gate's journal input is consumed only
+          // through reduceHarvest, so the subset is replay-equivalent here too.
+          const [gateEvents, digests] = await Promise.all([
+            store.getRepoStateEvents(repo),
+            store.getRepoBuildDigests(repo),
+          ])
+          const pressure = evaluateHarvestPressureFromDigests({
+            digests,
+            harvestEvents: gateEvents,
+            policy: this.currentConfig().policy,
+          })
+          if (pressure.trigger === undefined) {
+            // Treat the read's completion as a boundary even when the gate did
+            // not trip, so a request arriving during the read is acknowledged
+            // before this runner returns idle.
+            await this.controlBoundary()
+            return { outcome: 'idle' }
+          }
+          await this.controlBoundary()
+          const scan = await scanUnclaimedObservations(store, repo)
+          // The trigger came from an earlier read than this scan, and a claim
+          // may have landed in the window. Re-confirm the gate against the
+          // fresh scan (pure, free): an emptied window returns idle exactly as
+          // if the gate had not tripped, so a packet is only ever built from a
+          // scan that itself triggered.
+          const confirmed = evaluateHarvestPressure(scan, this.currentConfig().policy)
+          if (confirmed.trigger === undefined) {
+            await this.controlBoundary()
+            return { outcome: 'idle' }
+          }
+          const runId = this.deps.ids('harvest')
+          const packet = await makeHarvestScanPacket({
+            store,
+            tickets: this.deps.tickets,
+            repo,
+            run: runId,
+            observations: scan.observations,
+            state: scan.state,
+          })
+          // Scan preparation is not a claim. Re-read operator control immediately
+          // before atomically committing the immutable snapshot.
+          await this.controlBoundary()
+          initial = 'started'
+          await store.appendRepoWithArtifacts(
+            repo,
+            [
+              {
+                kind: HARVEST_SCAN_ARTIFACT,
+                content: `${JSON.stringify(packet, null, 2)}\n`,
+                metadata: { run: runId, observations: packet.observations.length },
+              },
+            ],
+            (deposited) => ({
+              actor: KERNEL,
+              type: 'harvest.started',
+              payload: {
+                run: runId,
+                observations: packet.observations.map((item) => item.occurrence),
+                scan: artifactRef(deposited[0]!),
+                trigger: confirmed.trigger,
+                ...(this.deps.environment !== undefined
+                  ? { environment: this.deps.environment }
+                  : {}),
+              },
+            }),
+          )
+          // Bounded read (AUT-489): reduceHarvest consumes durable types only.
+          events = await store.getRepoStateEvents(repo)
+          run = reduceHarvest(events).runs.find((candidate) => candidate.run === runId)
+          if (!run) throw new Error(`harvest.started did not reduce run "${runId}"`)
+          // A request racing the claim parks this exact run; its snapshot stays
+          // open and is resumed rather than scanned again.
+          await this.controlBoundary(run.run)
+        }
+      }
+      if (!run) throw new Error('prepared harvest run unavailable')
+      if (preparationOnly) return { outcome: 'prepared', run: run.run, launch: initial }
       try {
         await this.ensureScanStep(run)
         await this.controlBoundary(run.run)
@@ -691,7 +709,7 @@ export class HarvestRunner {
             live.handle,
             `Revise harvest proposals for round ${spec.round}: run ab harvest context, address .ab/findings.json, then submit.`,
             {
-              env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+              env: await this.sessionEnv(spec.run, spec.step, spec.round, session),
               ...(stream !== undefined ? { stream } : {}),
             },
           )
@@ -702,7 +720,7 @@ export class HarvestRunner {
             workspacePath,
             ...(target.model !== undefined ? { model: target.model } : {}),
             ...(target.args !== undefined ? { args: target.args } : {}),
-            env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+            env: await this.sessionEnv(spec.run, spec.step, spec.round, session),
             ...(stream !== undefined ? { stream } : {}),
           })
           handle = turn.session
@@ -941,7 +959,7 @@ export class HarvestRunner {
           live.handle,
           `Revise harvest proposals for round ${spec.round}: run ab harvest context, address .ab/findings.json, then submit.`,
           {
-            env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+            env: await this.sessionEnv(spec.run, spec.step, spec.round, session),
             ...(stream !== undefined ? { stream } : {}),
           },
         )
@@ -952,7 +970,7 @@ export class HarvestRunner {
           workspacePath,
           ...(resolved.model !== undefined ? { model: resolved.model } : {}),
           ...(resolved.args !== undefined ? { args: resolved.args } : {}),
-          env: this.sessionEnv(spec.run, spec.step, spec.round, session),
+          env: await this.sessionEnv(spec.run, spec.step, spec.round, session),
           ...(stream !== undefined ? { stream } : {}),
         })
         handle = turn.session
@@ -1391,6 +1409,7 @@ export class HarvestRunner {
    * give-up before returning. Initial/within-step failures do not spend this
    * outer budget and therefore remain recoverable. */
   private async settleRecoveryExhaustion(run: string): Promise<void> {
+    if (this.deps.preparedRun) return
     await this.ensureLease()
     // Bounded read (AUT-489): reduceHarvest consumes durable types only.
     const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
@@ -1459,6 +1478,7 @@ export class HarvestRunner {
       const state = reduceHarvest(await this.deps.store.getRepoStateEvents(this.deps.repo))
       const decision = decideHarvestControl(state, this.maxRecoveryAttempts)
       if (decision.kind === 'proceed') return
+      if (this.deps.preparedRun) throw new HarvestParkedSignal(run)
       if (decision.kind === 'park') {
         throw new HarvestParkedSignal(actionableHarvestRun(state)?.run ?? run)
       }
@@ -1602,15 +1622,26 @@ export class HarvestRunner {
     }
   }
 
-  private sessionEnv(
+  private async sessionEnv(
     run: string,
     step: 'synthesize' | 'review',
     round: number,
     session: string,
-  ): Record<string, string> {
+  ): Promise<Record<string, string>> {
+    const parent = this.deps.sessionEnv
+    const token =
+      parent?.AB_STORE && /^https?:/i.test(parent.AB_STORE)
+        ? await delegateCredential(parent.AB_STORE, parent.AB_TOKEN, {
+            kind: 'harvest-phase',
+            repo: this.deps.repo,
+            id: run,
+            session,
+          })
+        : undefined
     return {
       AB_STORE: 'local',
       ...this.deps.sessionEnv,
+      ...(token ? { AB_TOKEN: token } : {}),
       AB_REPO: this.deps.repo,
       AB_HARVEST: run,
       AB_PHASE: `${step}@${round}`,
@@ -1638,7 +1669,18 @@ export class HarvestRunner {
     const open = target.openSessionStream
     if (open === undefined) return undefined
     const sink = createSessionStreamSink({
-      store: this.deps.store,
+      store: {
+        ...this.deps.store,
+        createStream: (scope, label) =>
+          this.deps.store.createStream(
+            scope,
+            this.deps.preparedRun
+              ? `harvest:${this.deps.preparedRun.run}:${this.deps.instance}:${label}`
+              : label,
+          ),
+        appendStreamParts: (id, parts) => this.deps.store.appendStreamParts(id, parts),
+        closeStream: (id, outcome) => this.deps.store.closeStream(id, outcome),
+      },
       scope: { kind: 'repo', repo: this.deps.repo },
       onDiagnostic: this.onDiagnostic,
     })

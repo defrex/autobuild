@@ -8,6 +8,7 @@ import type {
   BuildExecutionExit,
   BuildExecutionHandle,
   BuildExecutionStart,
+  ExecutionLaunchAuth,
 } from './build-execution'
 
 export const BUILD_RUNNER_OPTIONS_ENV = 'AB_BUILD_RUNNER_OPTIONS'
@@ -34,10 +35,16 @@ export class LocalBuildExecution implements BuildExecution {
     this.spawn = opts.spawn ?? Bun.spawn
   }
 
-  async start(input: BuildExecutionStart): Promise<BuildExecutionHandle> {
+  async start(
+    input: BuildExecutionStart,
+    auth?: ExecutionLaunchAuth,
+  ): Promise<BuildExecutionHandle> {
+    if (/^https?:/i.test(input.storeRef) && !auth)
+      throw new Error('remote build launch requires delegated authority')
     const child = this.spawn([process.execPath, this.entrypoint], {
       env: {
         ...this.env,
+        AB_TOKEN: auth?.token,
         [BUILD_RUNNER_OPTIONS_ENV]: JSON.stringify({
           ...input,
           supervision: { kind: 'local-parent', parentPid: process.pid },

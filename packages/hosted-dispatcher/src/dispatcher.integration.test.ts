@@ -878,7 +878,11 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       expect(session.store).toBe(serviceUrl)
       const token = session.token
       expect(token).toBeDefined()
-      expect(mintedTokens).toContain(token!)
+      expect(mintedTokens).not.toContain(token!)
+      const claims = JSON.parse(Buffer.from(token!.split('.')[0]!, 'base64url').toString())
+      expect(claims.version).toBe(2)
+      expect(claims.delegation.kind).toBe('build-phase')
+      expect([REPO, 'https://github.com/acme/second-project']).toContain(claims.delegation.repo)
     }
     expect(kernelErrors.filter((line) => line.includes('cron-secret'))).toEqual([])
     expect(kernelErrors.filter((line) => line.includes('override-forge-token'))).toEqual([])

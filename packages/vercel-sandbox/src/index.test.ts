@@ -29,7 +29,7 @@ describe('@defrex/autobuild-vercel-sandbox', () => {
       env: {},
       repoRoot: '/repo',
       storeRef: 'https://store.example.test',
-      storeToken: 'scoped-token',
+      delegateCredential: async () => 'delegated-token',
       runtimeReferences: [],
       origin: async () => 'https://github.com/acme/app.git',
       remoteBranchHead: async () => undefined,

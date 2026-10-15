@@ -1,3 +1,4 @@
+import { delegateCredential } from '../../store/remote/credentials'
 import { resolve } from 'node:path'
 import { SANDBOX_FORBIDDEN_ENV } from './operator-sandbox'
 import type { WorkspaceConfig } from '../../config/schema'
@@ -131,10 +132,18 @@ export async function createWorkspaceProvider(
     // receives through `opts` reach the plugin factory through the context.
     return await factory({
       config: config.config,
-      env: opts.env,
+      env: Object.fromEntries(Object.entries(opts.env).filter(([key]) => key !== 'AB_TOKEN')),
       repoRoot: resolve(opts.repoRoot),
       ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
-      ...(opts.storeToken !== undefined ? { storeToken: opts.storeToken } : {}),
+      ...(opts.storeRef !== undefined && opts.storeToken !== undefined
+        ? {
+            delegateCredential: (
+              _ref: string,
+              _token: string | undefined,
+              target: Parameters<typeof delegateCredential>[2],
+            ) => delegateCredential(opts.storeRef!, opts.storeToken, target),
+          }
+        : {}),
       ...(opts.runtimeReferences !== undefined
         ? { runtimeReferences: opts.runtimeReferences }
         : {}),

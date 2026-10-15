@@ -316,6 +316,8 @@ function hostedBackend(req: Request, pathname: string): HostedBackend | undefine
     return undefined
   }
 
+  if (segments.join('/') === 'credentials/delegate' && req.method === 'POST') return 'store'
+
   const root = segments[0]
   if (root !== 'builds' && root !== 'repos' && root !== 'sessions') return undefined
   if (root === 'sessions') {
@@ -414,11 +416,23 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       return (await credentialPromise).authenticate(token, now)
     },
   }
+  let delegationStore: Promise<BuildStore> | undefined
+  const authorityStore = () => {
+    if (!delegationStore) {
+      const attempt = opener(env, options.clock === undefined ? {} : { clock: options.clock })
+      delegationStore = attempt
+      void attempt.catch(() => {
+        if (delegationStore === attempt) delegationStore = undefined
+      })
+    }
+    return delegationStore
+  }
   const machineAuth = () =>
     createMachineAuth({
       secret: parseHostedStoreEnv(env).secret,
       projects,
       credentials,
+      store: authorityStore,
       ...(options.clock ? { clock: options.clock } : {}),
     })
 
@@ -499,7 +513,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     if (storeHandlerPromise === undefined) {
       const attempt = (async () => {
         const config = parseHostedStoreEnv(env)
-        const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
+        const store = await authorityStore()
         const shared = options.clock === undefined ? {} : { clock: options.clock }
         const clock = options.clock ?? systemClock
         // The hosted operator-sandbox backend (AUT-584): composed per runner

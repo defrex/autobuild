@@ -450,3 +450,28 @@ export function substitutePlaceholderRefs(
   }
   return value
 }
+
+/** Issuance is an authentication operation, separate from the BuildStore port. */
+export const delegateCredentialBodySchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('build-runner'), id: z.string().min(1) }),
+  z.strictObject({
+    kind: z.literal('build-phase'),
+    id: z.string().min(1),
+    session: z.string().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal('harvest-runner'),
+    execution: z.string().min(1),
+    repo: z.string().min(1),
+    id: z.string().min(1),
+    leaseHolder: z.string().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal('harvest-phase'),
+    repo: z.string().min(1),
+    id: z.string().min(1),
+    session: z.string().min(1),
+  }),
+])
+export type DelegateCredentialTarget = z.infer<typeof delegateCredentialBodySchema>
+export const delegateCredentialResponseSchema = z.strictObject({ token: z.string().min(1) })

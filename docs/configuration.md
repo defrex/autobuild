@@ -357,7 +357,7 @@ manifest parse), and each `capabilities.requiredEnv` group must declare at
 least one of `dispatchMessage` / `validationMessage` — a group with neither is
 rejected at manifest parse, because the host would silently skip it at both
 enforcement sites. API 1.7 extends the workspace-provider factory context with
-the host-derived seams: `storeRef` and `storeToken` (guaranteed present under
+the host-derived seams: `storeRef` and `delegateCredential` (guaranteed present under
 `capabilities.storeRequirements`), `runtimeReferences`, and the checkout-less
 `origin` and `remoteBranchHead` readers, all optional and ignored by factories
 that do not read them. A plugin reading the new seams should require `^1.7.0`.
@@ -1838,3 +1838,11 @@ Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
 The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
 service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
 headers, or available backend.
+
+Remote workspace factories must use `delegateCredential(storeRef, undefined,
+target)` to obtain per-resource grants before provisioning or launching guests.
+The callback keeps parent authority in host composition. `storeToken` is retired
+and is never supplied; factory environments also exclude `AB_TOKEN`. Launch
+credentials travel through the separate transient execution-auth argument, never
+through serialized execution identity. Existing plugins that forwarded
+`storeToken` must migrate to this callback and fail closed if it is unavailable.

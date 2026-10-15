@@ -57,7 +57,7 @@ describe('materializePluginRuntimes', () => {
 
     const merged = await materializePluginRuntimes(base, plugins, {
       repoRoot: '/repo',
-      env,
+      env: { ...env, AB_TOKEN: 'parent-project-canary' },
     })
 
     expect(Object.keys(merged)).toEqual(['builtin', 'alpha', 'beta', 'gamma'])

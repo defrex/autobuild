@@ -9,6 +9,7 @@ export type {
   InternalOperatorTokenScope,
   AdminTokenScope,
   TokenScope,
+  DelegatedTokenScope,
 } from './token'
 export {
   AUTOBUILD_VERSION,
@@ -29,3 +30,8 @@ export { SNAPSHOT_REDUCER_NAME } from '../snapshots'
 export type { ReducerSnapshot, SnapshotScope } from '../snapshots'
 
 export * from './compatibility'
+
+export { delegateCredential } from './credentials'
+
+export { reduceBuild } from '../../kernel/reducer'
+export { reduceHarvest } from '../../kernel/harvest'

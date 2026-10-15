@@ -897,3 +897,26 @@ The service exposes one lazy live reader to the operator server, web gateway,
 MCP and server-rendered repository picker. Initialization failures clear the
 cached promise for retry. The dispatcher opens its own shared pool and queries
 membership each invocation. See [owner workflow](setup.md#connected-projects).
+
+## Delegated execution authority
+
+`store/remote/credentials.ts` owns the credential exchange client independently
+of the BuildStore persistence port. The hosted service's `delegated-authority.ts`
+validates issuance, durable lifecycle bindings and the 60-second terminal grace;
+`machine-auth.ts` authenticates these signed version-2 grants as delegated
+principals. `remote-store-server.ts` enforces resource mutations before deposits,
+including body-selected and addressed-stream resources. Operator routes reject
+these principals. Ticket routes intentionally retain project-credential parity
+while hosted tickets are team-scoped (AUT-689); ticket assets are repository-keyed.
+
+Dispatch prepares harvest claims using `HarvestRunner.run(true)` before issuing
+an execution grant. `harvest.execution.authorized` binds the selected run,
+execution and adopted lease holder; the guest resumes only that prepared run.
+Local completion records `harvest.execution.ended`; hosted completion retains
+its provider release fact. Recovery controls remain trusted dispatcher work.
+Execution launch auth is transient and separate from serialized identity. Runners
+request exact phase grants after session-start facts and before runtime calls.
+Workspace plugin factories receive an exchange callback and a scrubbed environment,
+while local children and sandbox bootstrap/launch replace inherited authority.
+Service requests reread durable state; detached executions need neither renewal
+secrets nor their original dispatcher. Local stores retain their existing path.
