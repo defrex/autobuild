@@ -84,6 +84,7 @@ export interface VerifyRecord {
   attempt: number
   outcome: VerifyOutcome
   report?: ArtifactRef
+  skipCause?: 'post-reconcile-policy'
   reason?: string
 }
 
@@ -111,6 +112,12 @@ export interface ReconcileProgressRecord {
 }
 
 export interface LogIndex {
+  /** Latest post-restart policy fact; authoritative only for its originating
+   * reconcile completion, never for a newer review or reconcile cycle. */
+  reconcilePolicy?: {
+    reconcileSeq: number
+    steps: { step: string; enabled: boolean; source: string }[]
+  }
   /** seq of the latest `spec.revised`, else 0 — the restart boundary (§6.3). */
   restartSeq: number
   plan: LoopIndex
@@ -195,6 +202,7 @@ export type LogIndexCandidate =
     }
   | { kind: 'implement-completed'; seq: number }
   | { kind: 'verify-started'; seq: number; attempt: number }
+  | { kind: 'reconcile-policy'; seq: number; policy: NonNullable<LogIndex['reconcilePolicy']> }
   | { kind: 'verify-completed'; record: VerifyRecord }
   | { kind: 'finalize-completed'; seq: number }
   | { kind: 'finalize-step'; seq: number; step: string }
@@ -362,6 +370,9 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
         }
         break
       }
+      case 'verify.reconcile-policy-captured':
+        acc.candidates.push({ kind: 'reconcile-policy', seq: event.seq, policy: event.payload })
+        break
       case 'verify.completed': {
         const result = normalizeVerifyCompletion(event.payload)
         acc.maxVerifyAttemptEver = Math.max(acc.maxVerifyAttemptEver, result.attempt)
@@ -374,6 +385,7 @@ function foldLogIndex(acc: LogIndexAcc, events: readonly AbEvent[]): void {
             outcome: result.outcome,
             ...(result.report !== undefined ? { report: result.report } : {}),
             ...(result.reason !== undefined ? { reason: result.reason } : {}),
+            ...(result.skipCause !== undefined ? { skipCause: result.skipCause } : {}),
           },
         })
         break
@@ -451,6 +463,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
   const verifyCompleted: VerifyRecord[] = []
   const verifyStarted: { seq: number; attempt: number }[] = []
   const finalizeStepsDone = new Set<string>()
+  let reconcilePolicy: LogIndex['reconcilePolicy']
   let lastReconcileCompletedSeq = 0
   let lastImplementCompletedSeq = 0
   let finalizeCompleted = false
@@ -520,6 +533,9 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
         break
       case 'verify-started':
         verifyStarted.push({ seq: candidate.seq, attempt: candidate.attempt })
+        break
+      case 'reconcile-policy':
+        reconcilePolicy = candidate.policy
         break
       case 'verify-completed':
         verifyCompleted.push({ ...candidate.record })
@@ -594,6 +610,7 @@ function finishLogIndex(acc: LogIndexAcc): LogIndex {
     verifyCompleted,
     verifyStarted,
     maxVerifyAttemptEver: acc.maxVerifyAttemptEver,
+    reconcilePolicy,
     lastReconcileCompletedSeq,
     lastImplementCompletedSeq,
     finalizeCompleted,

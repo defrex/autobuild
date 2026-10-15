@@ -1085,3 +1085,30 @@ describe('pinned ticket assets (SPEC §6.3)', () => {
     expect(parse([{ ...pin, name: '' }])).toBe(false)
   })
 })
+
+describe('post-reconcile policy facts', () => {
+  test('validates setting sources, unique steps, booleans and boundary', () => {
+    const schema = eventPayloadSchemas['verify.reconcile-policy-captured']
+    const step = { step: 'types', enabled: false, source: 'verify.types.afterReconcile' }
+    expect(schema.safeParse({ reconcileSeq: 42, steps: [step] }).success).toBe(true)
+    for (const payload of [
+      { reconcileSeq: 0, steps: [] },
+      { reconcileSeq: 42, steps: [step, step] },
+      { reconcileSeq: 42, steps: [{ ...step, enabled: 'false' }] },
+      { reconcileSeq: 42, steps: [{ ...step, source: 'verify.unit.afterReconcile' }] },
+      { reconcileSeq: 42, steps: [{ ...step, step: '' }] },
+    ])
+      expect(schema.safeParse(payload).success).toBe(false)
+  })
+  test('classification survives normalization and cannot be attached to a pass', () => {
+    const payload = {
+      step: 'types',
+      attempt: 2,
+      outcome: 'skipped',
+      reason: 'skipped by post-reconcile policy: verify.afterReconcile = false',
+      skipCause: 'post-reconcile-policy',
+    } as const
+    expect(normalizeVerifyCompletion(verify(payload).payload)).toEqual(payload)
+    expect(() => verify({ ...payload, outcome: 'pass' })).toThrow()
+  })
+})

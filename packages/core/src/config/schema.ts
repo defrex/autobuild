@@ -61,14 +61,22 @@ function stepSection<T, C>(
   label: string,
   stepsSchema: z.ZodType<string[]>,
   tableSchema: z.ZodType<T>,
-  compose: (steps: string[], stepConfigs: Record<string, T>) => C,
+  compose: (steps: string[], stepConfigs: Record<string, T>, afterReconcile: boolean) => C,
+  allowAfterReconcile = false,
 ) {
   return z
     .unknown()
     .transform((input, ctx): C => {
       const stepConfigs: Record<string, T> = Object.create(null)
       let steps: string[] = []
+      let afterReconcile = true
       for (const [key, raw] of ownEntries(input, label, ctx)) {
+        if (key === 'afterReconcile' && allowAfterReconcile) {
+          const parsed = z.boolean().safeParse(raw)
+          if (parsed.success) afterReconcile = parsed.data
+          else forwardIssues(parsed.error.issues, ctx, [key])
+          continue
+        }
         if (key === 'steps') {
           const parsed = stepsSchema.safeParse(raw)
           if (parsed.success) steps = parsed.data
@@ -78,7 +86,7 @@ function stepSection<T, C>(
         const table = parseEntry(tableSchema, raw, key, ctx)
         if (table.ok) defineEntry(stepConfigs, key, table.value)
       }
-      return compose(steps, stepConfigs)
+      return compose(steps, stepConfigs, afterReconcile)
     })
     .prefault({})
 }
@@ -368,6 +376,7 @@ export const verifyPathGlobSchema = z.string().superRefine((pattern, ctx) => {
 })
 
 const verifyApplicabilityShape = {
+  afterReconcile: z.boolean().optional(),
   /** Any-match positive path selectors; absent means unconditional. */
   paths: z
     .array(verifyPathGlobSchema)
@@ -400,6 +409,7 @@ export const verifyStepConfigSchema = z.discriminatedUnion('kind', [
 export type VerifyStepConfig = z.infer<typeof verifyStepConfigSchema>
 
 export interface VerifyConfig {
+  afterReconcile: boolean
   /** Step order — each entry names a `verify:<step>` phase (§15.2.1). */
   steps: string[]
   /** The [verify.<step>] tables, keyed by step name. */
@@ -407,8 +417,8 @@ export interface VerifyConfig {
 }
 
 /**
- * [verify] mixes one known key (`steps`) with an open set of per-step
- * subtables, so it cannot be a strictObject; instead every non-`steps` key is
+ * [verify] mixes known scalars (`steps`, `afterReconcile`) with per-step
+ * subtables, so it cannot be a strictObject; every other key is
  * validated as a step table — nothing passes through loosely, and no step name
  * is lost to the prototype chain (see `stepSection`).
  */
@@ -416,7 +426,8 @@ export const verifySectionSchema = stepSection(
   '[verify]',
   z.array(z.string().min(1)).default([]),
   verifyStepConfigSchema,
-  (steps, stepConfigs): VerifyConfig => ({ steps, stepConfigs }),
+  (steps, stepConfigs, afterReconcile): VerifyConfig => ({ steps, stepConfigs, afterReconcile }),
+  true,
 )
 
 // ── [finalize.<step>] ────────────────────────────────────────────────────────

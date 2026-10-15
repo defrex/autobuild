@@ -421,6 +421,28 @@ manager.
 
 ### `[verify]`
 
+Post-reconcile verification defaults to enabled: `[verify].afterReconcile = true`.
+Set it to `false` to retain pre-reconcile verification and skip all steps after
+reconciliation. An optional boolean `[verify.<step>].afterReconcile` overrides
+the repository setting in either direction; overrides require a configured step.
+For example, set `afterReconcile = false` in `[verify]` and
+`afterReconcile = true` in `[verify.types]` to keep only that step re-running.
+
+The kernel freezes the resolved ordered policy in
+`verify.reconcile-policy-captured` at the next engine action after reconcile
+completion. Live configuration changes apply at that boundary; a cycle already
+started keeps its policy through recovery. Historical cycles already started
+without a captured policy retain the rerun-all behavior. Initial verification
+and verification after subsequent code review always use ordinary applicability.
+Policy exclusion precedes plan selection and paths, including `always = true`.
+Enabled steps still follow plan selection and path rules. Excluded steps record
+`verify.completed` with outcome `skipped`, `skipCause = "post-reconcile-policy"`,
+and a reason naming the setting. Dashboards and PR summaries call this
+"skipped by post-reconcile policy"; it is never a pass. Forge-side required
+checks and branch protections still gate merge. For excluded steps, merged code
+is not re-verified, so breakage that only exists in the combination can land.
+
+
 `steps` orders the verify phases; each entry `"<step>"` becomes a
 `verify:<step>` phase and needs its own `[verify.<step>]` subtable. Those
 subtables are part of this section — their fields are listed here.
@@ -432,6 +454,7 @@ subtables are part of this section — their fields are listed here.
 | `command` | — | **required when `kind = "check"`**, nonempty string | Ref into `[commands]` — the key, not a shell string. Pass/fail is the command's exit status. |
 | `skill` | — | **required when `kind = "agent"`**, nonempty string | Installed skill name to run (e.g. a repository-authored `"verify-app-e2e"`). |
 | `paths` | — | optional nonempty array of positive repository-relative globs | Makes either step kind apply when any changed path matches any selector. Omitted means unconditional. |
+| `afterReconcile` | repository: `true`; step: inherited | boolean | Step override wins over `[verify].afterReconcile`; false skips this step after reconciliation only. |
 | `always` | — | optional boolean | `true` makes the step unconditional and mandatory (a plan cannot deselect it); `false` is equivalent to omission. |
 
 A plan may begin with strict TOML front matter selecting the complete set of
@@ -501,7 +524,7 @@ A selected step's `paths` are evaluated immediately before the step against
 current `HEAD`, relative to the initial branch-cut SHA or the refreshed base
 from the latest completed reconcile. It uses a NUL-delimited, no-rename Git diff, so
 adds/modifications/deletions and both rename sides participate. A reconcile
-starts a fresh cycle and evaluation repeats; upstream-only merged paths are
+starts a fresh cycle and evaluation repeats for policy-enabled steps; upstream-only merged paths are
 excluded while build-owned resolutions remain visible. A miss starts no
 command, agent, or session and records `skipped` with
 `excluded by [verify.<step>].paths: no changed path matched <JSON paths>`.
@@ -731,7 +754,7 @@ roundless no-progress answer. An already exhausted no-progress budget raises its
 matching cause separately before another reconcile. Cause-less historical
 raises retain their former round-shaped reset behavior, and roundless
 policy/reconcile raises retain their former no-progress meaning, on replay
-without migration. Post-reconcile verification still runs in full and remains
+without migration. Post-reconcile verification follows the captured policy and remains
 independently bounded by `maxVerifyAttempts`.
 
 `stallRounds` counts *persistence chains*, which reviewers mark and the kernel

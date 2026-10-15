@@ -55,6 +55,7 @@ export type VerifyAction =
 export type FinalizeAction = { kind: 'check'; command: string } | { kind: 'agent'; skill: string }
 
 export type Decision =
+  | { kind: 'capture-reconcile-policy'; reconcileSeq: number }
   | { kind: 'wait'; reason: WaitReason }
   | { kind: 'acknowledge'; command: 'pause' | 'resume' | 'abort' }
   | {
@@ -80,6 +81,7 @@ export type Decision =
       step: string
       attempt: number
       reason: string
+      skipCause?: 'post-reconcile-policy'
     }
   | { kind: 'run-finalize-step'; step: string; action: FinalizeAction }
   | {
@@ -313,6 +315,18 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
   const cycleAttempts = [...cycleResults, ...cycleStarted].map((v) => v.attempt)
   const attempt =
     cycleAttempts.length > 0 ? Math.max(...cycleAttempts) : log.maxVerifyAttemptEver + 1
+  // Freeze only a fresh reconcile cycle. A newer code-review approval restores
+  // ordinary verification. Already-started historical cycles have no snapshot:
+  // preserve their rerun-all policy, including after a crashed verify start.
+  const reconcileCycle =
+    log.lastReconcileCompletedSeq > Math.max(log.code.latestApproveSeq, log.restartSeq)
+  const policy =
+    reconcileCycle && log.reconcilePolicy?.reconcileSeq === cycleBoundary
+      ? log.reconcilePolicy
+      : undefined
+  if (reconcileCycle && policy === undefined && cycleAttempts.length === 0) {
+    return { kind: 'capture-reconcile-policy', reconcileSeq: cycleBoundary }
+  }
   const approvedPlan = log.plan.approvedPlan
   const approvedSelection =
     approvedPlan?.verifySteps === undefined
@@ -332,6 +346,16 @@ export function decideNextFromFacts(state: BuildState, log: LogIndex, config: Co
     }
     const stepConfig = config.verify.stepConfigs[step]
     if (stepConfig === undefined) continue // unreachable: configSchema cross-validates (§16.1)
+
+    const exclusion = policy?.steps.find((s) => s.step === step && !s.enabled)
+    if (exclusion !== undefined)
+      return {
+        kind: 'skip-verify',
+        step,
+        attempt,
+        skipCause: 'post-reconcile-policy',
+        reason: `skipped by post-reconcile policy: ${exclusion.source} = false`,
+      }
 
     // Missing selection data is the historical default-all behavior. For a
     // current explicit selection, exclusion precedes path evaluation and any
