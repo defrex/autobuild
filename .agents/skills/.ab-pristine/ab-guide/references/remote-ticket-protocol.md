@@ -59,12 +59,12 @@ credential; protocol compatibility does not restore retired authentication.
 break-glass credential. It can cross project boundaries. Keep it owner-only:
 never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
 
-Ticket admission is implicitly addressed to the credential's registered project.
-The strict context below has no `repo` field; client-supplied repository fields
-are rejected and `teamKey` cannot widen credential authority. This does not
-partition the deployment's existing shared Linear/team backend: two projects
-configured for the same team may access the same tickets. Ticket-record tenancy
-is deferred to the separate project-scoped hosted-ticket work.
+Hosted tickets, comments, blockers, creation-key deduplication and assets belong
+to exactly one registered project, even when projects use the same team key.
+Project credentials select that repository. An optional `context.repo` selector
+must match the credential's project; mismatches are 403. Owner admin requests
+require this selector and registration is checked before configuration is read.
+Internal operator credentials remain forbidden on machine ticket routes.
 
 The strict request envelope is:
 
@@ -79,12 +79,30 @@ The strict request envelope is:
 }
 ```
 
-`teamKey` is required. The state overrides are optional. They come from the
-requesting repository's `[tickets]` configuration and are applied only to that
-request; the service does not cache a team-bound adapter. `list-ready` also
-receives that repository's exact ready state and label criteria in `input`.
-Backend credentials, including `LINEAR_API_KEY`, are service environment only
-and never occur in this envelope or any response.
+`teamKey` remains required for older client compatibility. It and the optional
+`claimedState` / `createState` fields are ignored as policy inputs. The service
+loads the project's latest effective configuration from its repository journal
+and artifact bytes for every operation. Missing or invalid configuration returns
+an actionable 409; run the project's dispatcher to publish its configuration.
+There is no deployment-wide lifecycle fallback.
+
+Hosted lifecycle defaults are triage `Backlog`, claimed `Doing`, done `Done`,
+and create/proposal equal to triage. `readyState` is required. The allowed states
+are the distinct union of these configured roles, including custom create and
+proposal states; roles may overlap. Historical states remain readable unchanged.
+`tickets.doneState` controls completion and the dispatcher's merged transition.
+
+The service never contacts Linear or relays external trackers. If the project's
+source is Linear, file or another non-hosted source, machine HTTP, operator and
+MCP ticket surfaces refuse with a message naming that project and source: its
+tickets live in its own source, accessed directly by its dispatcher. This is a
+409 conflict, not an empty queue. The dispatcher's direct adapters are unchanged.
+
+`AB_TICKET_BACKEND` and `LINEAR_API_KEY` are removed service settings. Their
+presence (even blank or unknown values) is ignored and emits one startup removal
+message. `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
+`AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` are removed and ignored,
+including malformed values. These retired settings do not prevent startup.
 
 ## Operations
 
@@ -122,9 +140,9 @@ environment values, or credentials. Client 401/403 responses become
 `AuthError`; other backend messages remain actionable.
 
 The shared `TicketSource` contract is normative for the database adapter and
-the hosted client/server pair. External pass-through is tested with a fake
-source behind HTTP. The existing opt-in live Linear contract remains the proof
-of Linear's GraphQL behavior; the hosted service uses that adapter unchanged.
+the hosted client/server pair. PostgreSQL migration and isolation tests prove
+project partitions. The direct Linear client retains its separate opt-in
+GraphQL contract; no Linear adapter ships through the hosted ticket entry point.
 
 Every ticket returned by list, get, or create requires a boolean `resolved`,
 with the same source-native completion semantics as `DependencyState.resolved`.

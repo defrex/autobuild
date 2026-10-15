@@ -355,3 +355,41 @@ explanation, never a skip or silent pass. Use `skip` only when the complete step
 does not apply. If guidance still cannot make a verdict possible, escalate and
 explain what remains unresolved. Record out-of-scope work with `ab observe`;
 the verifier does not fix it.
+
+### Project-scoped hosted tickets
+
+Hosted ticket queues belong to the credential's registered repository, even
+when projects share a team key. The latest uploaded effective `[tickets]`
+configuration owns lifecycle: hosted defaults are Backlog / Doing / Done,
+`readyState` is required, `doneState` customizes completion, and create/proposal
+default to triage. The union of configured roles is allowed; roles may overlap.
+Owner admin requests require an explicit registered `context.repo`; project
+credentials cannot select another project. Missing effective configuration is
+an actionable refusal: run the project's dispatcher to publish it.
+
+The service never contacts Linear. Projects with external sources (including
+file and Linear) keep using those sources directly through their dispatcher;
+service ticket HTTP, operator and MCP surfaces refuse with project/source
+feedback rather than returning an empty queue. Removed `AB_TICKET_BACKEND` and
+`LINEAR_API_KEY` values are ignored with one startup removal message, including
+blank/unknown values. Removed `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
+`AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` values are ignored even when
+malformed. None of these retired settings prevents startup.
+
+Ticket schema v1 migration assigns each whole legacy team to its sole claimant
+among registered projects' latest effective configs, reading their actual blob
+bytes. Conflicts, missing configuration, unclaimed teams, blob failures and asset
+ownership mismatches stop unchanged. Resolve ownership locally, then rerun:
+
+```sh
+ab-hosted-store tickets assign-team TEAM https://github.com/acme/app --user owner@example.com
+ab-postgres-store migrate
+```
+
+The assignment journal works before v2 assertion, retains the actor, and grants
+no future cross-project access. Migration preserves ids, states, comments,
+blockers, timestamps and assets. Populated-v1 migration and deployment builds
+require the running service's blob backend, access mode, credentials and prefix
+(`AB_BLOB_PREFIX`), not just PostgreSQL access. `deploy:build` inherits this
+environment and migration failure stops Next build. Fresh databases, empty v1
+queues and v2 reruns stay SQL-only and do not initialize blob storage.
