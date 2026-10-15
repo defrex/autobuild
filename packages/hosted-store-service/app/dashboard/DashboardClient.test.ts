@@ -233,3 +233,22 @@ test('Harvest row actions select their run before dispatch', () => {
     value.events.indexOf('harvest:h-target'),
   )
 })
+
+import { projectLink, selectedProject } from './project-selection'
+
+const first = 'https://github.com/acme/one'
+const second = 'https://github.com/acme/two'
+test('deep links and reload select the named registered project', () => {
+  const link = projectLink(second, 'filter=blocked')
+  const url = new URL(link, 'https://operator.example')
+  expect(url.searchParams.get('filter')).toBe('blocked')
+  expect(selectedProject([first, second], url.searchParams.get('repo')!)).toBe(second)
+  expect(projectLink(first, url.search)).toContain('filter=blocked')
+})
+test('missing, invalid and removed selections fall back; empty registry has no selection', () => {
+  expect(selectedProject([first, second], undefined)).toBe(first)
+  expect(selectedProject([first], second)).toBe(first)
+  expect(selectedProject([first], 'invalid')).toBe(first)
+  expect(selectedProject([], second)).toBe('')
+  expect(projectLink('', 'repo=removed&filter=blocked')).toBe('/?filter=blocked')
+})

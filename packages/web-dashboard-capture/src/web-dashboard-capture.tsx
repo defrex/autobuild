@@ -107,6 +107,20 @@ export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
     forbids: ['BLOCKED', 'PAUSED', '(held)'],
   },
   {
+    id: 'builds-no-projects-wide',
+    width: 1440,
+    height: 1000,
+    requires: ['no repository configured'],
+    forbids: ['AUT-131', 'RUNNING', 'BLOCKED', 'intake'],
+  },
+  {
+    id: 'builds-no-projects-narrow',
+    width: 390,
+    height: 1000,
+    requires: ['no repository configured'],
+    forbids: ['AUT-131', 'RUNNING', 'BLOCKED', 'intake'],
+  },
+  {
     id: 'builds-empty-wide',
     width: 1440,
     height: 1000,
@@ -377,9 +391,9 @@ function shell(
       controls={
         opts.model ? (
           <DispatcherControls model={opts.model} onSetting={noop} onHarvest={noop} onBulk={noop} />
-        ) : (
+        ) : repo ? (
           <LoadingControls />
-        )
+        ) : null
       }
     >
       {children}
@@ -515,6 +529,9 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     case 'builds-happy-wide':
     case 'builds-happy-narrow':
       return shell(builds(models.happy), { model: models.happy })
+    case 'builds-no-projects-wide':
+    case 'builds-no-projects-narrow':
+      return shell(null, { repo: '', repositories: [], error: 'no repository configured' })
     case 'builds-empty-wide':
     case 'builds-empty-narrow': {
       const model = emptyModel(models.happy)
