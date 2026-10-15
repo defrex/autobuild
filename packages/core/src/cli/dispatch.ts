@@ -3498,7 +3498,17 @@ class DispatchLoop {
         // lease and any provisioning state are released for the next
         // invocation.
         if (this.pastDeadline()) return
-        const initial = await this.dispatcherTick(true)
+        const initial = await this.dispatcherTick(true).catch(async (error: unknown) => {
+          await this.appendStatus({
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-failed',
+            payload: {
+              run: this.runId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          })
+          throw error
+        })
         const initialPrinted = this.printReport(initial, false)
         await this.drainInFlight()
         const settledReports = await this.publishSettlementReports()

@@ -23,6 +23,7 @@ import { reduceBuild, type BuildState } from '../kernel/reducer'
 import type { WorkspaceBase } from '../ontology'
 import { FakeForge } from '../ports/forge/fake'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { TicketSourceRateLimitError } from '../ports/types'
 import type { Ticket, WorkspaceProvider } from '../ports/types'
 import type { BuildExecution } from '../ports/workspace/build-execution'
 import { FakeWorkspaceProvider } from '../ports/workspace/fake'
@@ -7455,5 +7456,77 @@ describe('Dispatcher over reducer snapshots', () => {
     third.clock.advance(1_000)
     await third.dispatcher.tick({ acceptNewWork: false })
     expect(store.rows).toBe(4)
+  })
+})
+
+describe('provider-neutral intake rate limits', () => {
+  const CAPACITY_2 = 'capacity = 2\n[tickets]\nsource = "file"\nreadyState = "Ready"'
+  test('a later dependency rate limit prevents all claims and recovers next tick', async () => {
+    let limited = true
+    const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+    const h = harness({
+      tickets: [
+        readyTicket('T-1', { title: 'Free work' }),
+        readyTicket('T-2', { title: 'Blocked work', blockedBy: ['T-9'] }),
+        readyTicket('T-3', { title: 'Limited work', blockedBy: ['T-8'] }),
+      ],
+      toml: CAPACITY_2,
+      wrapTickets: (source) => {
+        const original = source.dependencyStates.bind(source)
+        source.dependencyStates = async (ids) => {
+          if (ids.includes('T-8') && limited) throw error
+          return original(ids)
+        }
+        return source
+      },
+    })
+    await expect(h.dispatcher.tick()).rejects.toBe(error)
+    expect(h.tickets.claims).toEqual([])
+    expect(h.tickets.transitions).toEqual([])
+    expect(h.tickets.comments).toEqual([])
+    expect(h.launches).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
+    limited = false
+    const report = await h.dispatcher.tick()
+    expect(report.dispatched).toBe(1)
+    expect(report.dependencyBlocked).toBe(2)
+  })
+
+  test('a preflight deadline stops graph traversal and leaves all claims for next tick', async () => {
+    let h!: Harness
+    let reads = 0
+    h = harness({
+      tickets: [readyTicket('T-1'), readyTicket('T-2', { blockedBy: ['T-9'] })],
+      toml: CAPACITY_2,
+      wrapTickets: (source) => {
+        source.dependencyStates = async () => {
+          reads += 1
+          h.clock.advance(60_000)
+          return [{ id: 'T-9', exists: true, resolved: false, blockedBy: ['T-8'] }]
+        }
+        return source
+      },
+    })
+    const report = await h.dispatcher.tick({ deadlineAt: h.clock().getTime() + 1000 })
+    expect(reads).toBe(1)
+    expect(report.dispatched).toBe(0)
+    expect(report.dependencyBlocked).toBe(0)
+    expect(h.tickets.claims).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
+  test('a ready scan rate limit rejects without claiming anything', async () => {
+    const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+    const h = harness({
+      wrapTickets: (source) =>
+        Object.assign(source, {
+          listReady: async () => {
+            throw error
+          },
+        }),
+    })
+    await expect(h.dispatcher.tick()).rejects.toBe(error)
+    expect(h.tickets.claims).toEqual([])
+    expect(await h.store.listBuilds()).toEqual([])
   })
 })

@@ -1259,6 +1259,15 @@ triageState = "Backlog"
 Linear credentials do not belong in this table. Set `LINEAR_API_KEY` in the
 environment or local `.env` file described below.
 
+[Linear's request budget](https://linear.app/developers/rate-limiting) is shared
+by every dispatcher and `ab ticket` command using the API key, and by other keys
+belonging to the same authenticated user. A rate-limited ready scan or dependency
+read fails the evaluation tick without new intake claims or synthetic
+dependency-blocked counts. That source instance suppresses requests until the
+reported reset time; the next call then runs normally. Missing, invalid or expired
+reset headers use a conservative 60-second cooldown. Cooldowns are local to the
+instance: processes and restarts do not coordinate their budgets.
+
 For a hosted backend, repository policy remains local while credentials remain
 at the service:
 

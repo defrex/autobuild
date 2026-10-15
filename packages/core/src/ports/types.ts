@@ -131,6 +131,18 @@ export interface TicketStateInfo {
   about?: string
 }
 
+/** Source methods may reject with this failure; it is not a dependency verdict. */
+export class TicketSourceRateLimitError extends Error {
+  constructor(
+    readonly source: string,
+    /** UTC epoch milliseconds at which a caller may try again. */
+    readonly resetAt: number,
+  ) {
+    super(`${source}: rate limited until ${new Date(resetAt).toISOString()}`)
+    this.name = 'TicketSourceRateLimitError'
+  }
+}
+
 export interface TicketSource {
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus

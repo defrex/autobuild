@@ -44,6 +44,7 @@ import type { OneShotCompletionInput } from '../ports/runner/one-shot'
 import { defaultTurnResult, ScriptedAgentRunner, type ScriptContext } from '../ports/runner/fake'
 import { createTicketSource } from '../ports/tickets/create'
 import { FakeTicketSource } from '../ports/tickets/fake'
+import { TicketSourceRateLimitError } from '../ports/types'
 import type { Ticket, WorkspaceHandle, WorkspaceProvider } from '../ports/types'
 import {
   BUILD_EXECUTION_LEASE_TTL_MS,
@@ -10407,6 +10408,93 @@ describe('abDispatch hosted harvest execution', () => {
       expect(fake.reapCalls).toHaveLength(1)
       expect(fx.err).toEqual([])
     } finally {
+      await fx.cleanup()
+    }
+  }, 30_000)
+})
+
+describe('dispatch rate-limit journaling', () => {
+  for (const failure of ['ready', 'dependency', 'observe'] as const) {
+    test(`--once journals ${failure} failure once and releases its run`, async () => {
+      const fx = await makeFixture(
+        [readyTicket('T-1', { title: 'Free work' }), readyTicket('T-2', { blockedBy: ['T-9'] })],
+        happyHandlers(),
+      )
+      const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+      try {
+        if (failure === 'dependency')
+          fx.tickets.dependencyStates = async () => {
+            throw error
+          }
+        else
+          fx.tickets.listReady = async () => {
+            throw error
+          }
+        await expect(
+          abDispatch({
+            targetRepo: fx.checkout,
+            env: {},
+            exec: spawnExec,
+            stdout: () => {},
+            stderr: () => {},
+            once: true,
+            plain: true,
+            ...(failure === 'observe'
+              ? { intake: false, plain: false, terminal: fakeTerminal() }
+              : {}),
+            wire: fx.wire,
+          }),
+        ).rejects.toBe(error)
+        const events = await fx.store.getRepoEvents(fx.origin)
+        const failures = events.filter((event) => event.type === 'dispatcher.tick-failed')
+        expect(failures).toHaveLength(1)
+        expect(failures[0]).toMatchObject({ payload: { error: error.message } })
+        expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(false)
+        expect(events.some((event) => event.type === 'dispatcher.run-stopped')).toBe(true)
+        expect(fx.tickets.claims).toEqual([])
+        expect(await fx.store.listBuilds()).toEqual([])
+      } finally {
+        await fx.cleanup()
+      }
+    }, 30_000)
+  }
+
+  test('watch journals the limit and recovers on the next tick', async () => {
+    const fx = await makeFixture([], happyHandlers())
+    const stop = new AbortController()
+    const original = fx.tickets.listReady.bind(fx.tickets)
+    let reads = 0
+    let sleeps = 0
+    const error = new TicketSourceRateLimitError('fake', 1_800_000_120_000)
+    fx.tickets.listReady = async (...args) => {
+      reads += 1
+      if (reads === 1) throw error
+      return original(...args)
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        plain: true,
+        signal: stop.signal,
+        intervalMs: 1,
+        sleep: async () => {
+          if (++sleeps === 2) stop.abort()
+        },
+        wire: fx.wire,
+      })
+      const events = await fx.store.getRepoEvents(fx.origin)
+      expect(events.filter((event) => event.type === 'dispatcher.tick-failed')).toHaveLength(1)
+      expect(events.find((event) => event.type === 'dispatcher.tick-failed')).toMatchObject({
+        payload: { error: error.message },
+      })
+      expect(reads).toBe(2)
+      expect(events.some((event) => event.type === 'dispatcher.tick-completed')).toBe(true)
+    } finally {
+      stop.abort()
       await fx.cleanup()
     }
   }, 30_000)
