@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#613](https://github.com/defrex/autobuild/pull/613) — Scope hosted tickets to authenticated projects
 - [#611](https://github.com/defrex/autobuild/pull/611) — Enforce revocable project credentials across hosted machine routes
 - [#608](https://github.com/defrex/autobuild/pull/608) — Add a durable hosted project registry
 
