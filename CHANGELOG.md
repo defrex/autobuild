@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#601](https://github.com/defrex/autobuild/pull/601) — Separate ticket-source scans from dispatcher ticks
 - [#599](https://github.com/defrex/autobuild/pull/599) — Batch Linear dependency reads and paginate ready listings
 - [#598](https://github.com/defrex/autobuild/pull/598) — Handle Linear rate limits without claiming ready tickets
 - [#597](https://github.com/defrex/autobuild/pull/597) — Prune redundant dependency reads during dispatch
