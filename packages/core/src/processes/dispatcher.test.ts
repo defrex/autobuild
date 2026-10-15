@@ -2782,6 +2782,70 @@ describe('Dispatcher interrupted-dispatch recovery', () => {
     expect(h.launches).toEqual([])
   })
 
+  test('a detached dispatch exhaustion write failure is contained and repaired without workspace attribution', async () => {
+    const memory = new MemoryBuildStore()
+    let failRaise = true
+    const store = new Proxy(memory, {
+      get(target, key) {
+        if (key === 'appendIfCurrent')
+          return async (...args: Parameters<BuildStore['appendIfCurrent']>) => {
+            if (args[2].type === 'escalation.raised' && failRaise) {
+              failRaise = false
+              throw new Error('store unavailable')
+            }
+            return target.appendIfCurrent(...args)
+          }
+        const value = Reflect.get(target, key)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
+    const provider: WorkspaceProvider = {
+      name: local.name,
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      provision: (input) => local.provision(input),
+      release: (handle) => local.release(handle),
+    }
+    let comments = 0
+    const h = harness({
+      store,
+      tickets: [readyTicket('T-recover')],
+      workspaceProvider: provider,
+      toml: '[policy]\nmaxDispatchAttempts = 1',
+      wrapTickets: (source) => {
+        source.comment = async () => {
+          comments++
+          throw new Error('comment denied')
+        }
+        return source
+      },
+    })
+    await seedInterrupted(h)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    for (let i = 0; i < 100 && h.dispatcher.provisioningInFlight(); i++) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(h.dispatcher.provisioningInFlight()).toBe(false)
+    let events = await store.getEvents('interrupted-dispatch')
+    expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(1)
+    expect(events.filter((e) => e.type === 'infrastructure.failed')).toHaveLength(0)
+    expect(events.filter((e) => e.type === 'escalation.raised')).toHaveLength(0)
+    await h.dispatcher.tick({ acceptNewWork: false })
+    events = await store.getEvents('interrupted-dispatch')
+    expect(comments).toBe(1)
+    expect(events.filter((e) => e.type === 'dispatch.failed')).toHaveLength(1)
+    expect(
+      events.filter((e) => e.type === 'escalation.raised').map((e) => e.payload.policyCause),
+    ).toEqual(['dispatch-failure-limit'])
+    expect(h.launches).toEqual([])
+  })
+
   test('a failed escalation write is repaired after restart without another dispatch attempt', async () => {
     const memory = new MemoryBuildStore()
     let failRaise = true
@@ -5053,6 +5117,57 @@ describe('Dispatcher startup resume', () => {
 // ── Lease sweep (§15.6-C) ────────────────────────────────────────────────────
 
 describe('Dispatcher lease sweep', () => {
+  test('a detached replacement launch failure stays under the infrastructure budget without rejecting', async () => {
+    const local = new FakeWorkspaceProvider({ root: '/ws', mode: 'logical' })
+    const provider: WorkspaceProvider = {
+      name: local.name,
+      recovery: {
+        reap: async () => ({
+          outcome: 'confirmed',
+          snapshots: { outcome: 'confirmed', deleted: 0 },
+        }),
+      },
+      provision: (input) => local.provision(input),
+      release: (handle) => local.release(handle),
+    }
+    let starts = 0
+    const h = harness({
+      workspaceProvider: provider,
+      toml: '[policy]\nmaxInfrastructureAttempts = 1\nmaxDispatchAttempts = 1',
+      onLaunch: () => {
+        starts++
+        throw new Error('sandbox start failed')
+      },
+    })
+    const slug = await seedBuild(h)
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'workspace.released',
+      payload: {},
+    })
+    h.clock.advance(120_000)
+    expect((await h.dispatcher.tick({ acceptNewWork: false })).provisioning).toBe(1)
+    // Deliberately never drain: that would attach allSettled and hide the
+    // detached rejection that used to terminate the real dispatcher process.
+    for (let i = 0; i < 100 && h.dispatcher.provisioningInFlight(); i++) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(h.dispatcher.provisioningInFlight()).toBe(false)
+    expect(starts).toBe(1)
+    const events = await h.store.getEvents(slug)
+    expect(events.filter((e) => e.type === 'infrastructure.failed')).toHaveLength(1)
+    expect(events.filter((e) => e.type === 'dispatch.failed').at(-1)?.payload).toMatchObject({
+      stage: 'workspace',
+      error: 'sandbox start failed',
+    })
+    expect(
+      events.filter((e) => e.type === 'escalation.raised').map((e) => e.payload.policyCause),
+    ).toEqual(['infrastructure-failure-limit'])
+    await h.dispatcher.tick({ acceptNewWork: false })
+    expect(starts).toBe(1)
+  })
+
   test('a workspace from a retired provider is never handed to the configured remote provider', async () => {
     const operations: string[] = []
     const remote: WorkspaceProvider = {

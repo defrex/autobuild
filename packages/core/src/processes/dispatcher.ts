@@ -1509,6 +1509,10 @@ export class Dispatcher {
       generation,
       seed,
       tail,
+    }).catch(() => {
+      // Detached work must never reject into the dispatcher process. Failure
+      // recording can itself fail on a store outage; durable boundaries and
+      // lease expiry let the next tick repair or retry the unfinished work.
     })
     return 'kicked'
   }
@@ -1543,7 +1547,7 @@ export class Dispatcher {
     const slug = entry.slug
     let leaseClaimed = false
     let heartbeat: ReturnType<typeof setInterval> | undefined
-    let tailStarted = false
+    let boundary: 'workspace' | 'read' | 'dispatch' | 'launch' = 'workspace'
     const stage: EventPayload<'dispatch.failed'>['stage'] = 'workspace'
     try {
       if (entry.controller.signal.aborted) {
@@ -1608,15 +1612,19 @@ export class Dispatcher {
       await store.releaseLease(slug, entry.instance)
       leaseClaimed = false
       if (entry.controller.signal.aborted) return
+      boundary = 'read'
       const record = await store.getBuild(slug)
       if (record === null) return
-      tailStarted = true
       const queued = reduceBuild(await store.getEvents(slug)).status === 'queued'
-      await (input.tail === 'dispatch' || queued
-        ? this.completeDispatchBoundaries(record, input.seed)
-        : this.deps.launchRunner(slug))
+      boundary = input.tail === 'dispatch' || queued ? 'dispatch' : 'launch'
+      if (boundary === 'dispatch') await this.completeDispatchBoundaries(record, input.seed)
+      else await this.deps.launchRunner(slug)
     } catch (error) {
-      if (tailStarted) throw error
+      // Dispatch boundaries own their failure facts and exhaustion repair.
+      // A failed tail read/write leaves durable unfinished work for the next
+      // tick; it is not another provider workspace failure. Replacement
+      // runner launch errors retain the existing infrastructure-budget path.
+      if (boundary === 'read' || boundary === 'dispatch') return
       const events = await store.getEvents(slug)
       if (workspaces.recovery !== undefined) {
         const open = openWorkspace(events)

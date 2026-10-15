@@ -500,8 +500,9 @@ export const policySchema = z.strictObject({
   /** Same-finding survival threshold before auto-escalate (§10, §15.4). */
   stallRounds: z.number().int().positive().default(3),
   maxVerifyAttempts: z.number().int().positive().default(3),
-  /** Consecutive workspace setup failures before human intervention is required. */
+  /** Consecutive dispatch failures before human intervention is required. */
   maxDispatchAttempts: z.number().int().positive().default(3),
+  /** Consecutive workspace setup failures before human intervention is required. */
   maxSetupAttempts: z.number().int().positive().default(3),
   /** Consecutive provider lifecycle failures before recovery requires a human retry. */
   maxInfrastructureAttempts: z.number().int().positive().default(3),
