@@ -29,6 +29,7 @@ import {
   SCHEMA_V8_CHECKSUM,
   SCHEMA_V8_DDL,
   SCHEMA_VERSION,
+  assertSchema,
   migratePostgres,
 } from './schema'
 import { FROZEN } from './schema-guard.test.js'
@@ -313,6 +314,41 @@ if (testUrl) {
 
         // The upgrade is idempotent.
         await migratePostgres(harness.url)
+      } finally {
+        await sql.close()
+        await harness.cleanup()
+      }
+    })
+
+    test.each(['project_journal', 'project_registry_state'])(
+      'refuses missing registry table %s',
+      async (table) => {
+        const harness = await schemaHarness()
+        const sql = new SQL(harness.url)
+        try {
+          await migratePostgres(harness.url)
+          await sql.unsafe(`DROP TABLE ${table}`)
+          await expect(assertSchema(sql)).rejects.toThrow(`table ${table} is missing or mismatched`)
+          await migratePostgres(harness.url)
+          await assertSchema(sql)
+        } finally {
+          await sql.close()
+          await harness.cleanup()
+        }
+      },
+    )
+    test('refuses malformed registry columns and absent action constraints', async () => {
+      const harness = await schemaHarness()
+      const sql = new SQL(harness.url)
+      try {
+        await migratePostgres(harness.url)
+        await sql`ALTER TABLE project_journal ALTER COLUMN actor DROP NOT NULL`
+        await expect(assertSchema(sql)).rejects.toThrow(
+          'table project_journal is missing or mismatched',
+        )
+        await sql`ALTER TABLE project_journal ALTER COLUMN actor SET NOT NULL`
+        await sql`ALTER TABLE project_journal DROP CONSTRAINT project_journal_action_check`
+        await expect(assertSchema(sql)).rejects.toThrow('constraints are missing or mismatched')
       } finally {
         await sql.close()
         await harness.cleanup()

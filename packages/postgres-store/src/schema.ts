@@ -8,7 +8,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -666,7 +666,7 @@ CREATE INDEX IF NOT EXISTS events_type_build_seq ON events (type, build, seq);
 CREATE INDEX IF NOT EXISTS repo_events_type_repo_seq ON repo_events (repo, type, seq);`.trim()
 export const SCHEMA_V8_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V8_DDL).digest('hex')
 
-export const SCHEMA_DDL = `
+export const SCHEMA_V9_DDL = `
 CREATE TABLE IF NOT EXISTS ab_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   version integer NOT NULL,
@@ -773,6 +773,21 @@ CREATE TABLE IF NOT EXISTS ticket_assets (
   PRIMARY KEY (repo, ticket_id, kind, name, revision)
 );`.trim()
 
+export const SCHEMA_V9_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_V9_DDL).digest('hex')
+
+export const PROJECT_SCHEMA_DDL = `
+CREATE SEQUENCE IF NOT EXISTS project_journal_seq;
+CREATE TABLE IF NOT EXISTS project_journal (
+  seq bigint PRIMARY KEY, repo text NOT NULL,
+  action text NOT NULL CHECK (action IN ('added','removed')),
+  actor text NOT NULL CHECK (length(btrim(actor)) > 0),
+  ts timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_registry_state (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+  legacy_imported boolean NOT NULL
+);`.trim()
+export const SCHEMA_DDL = `${SCHEMA_V9_DDL}\n${PROJECT_SCHEMA_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -825,6 +840,17 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  project_journal: [
+    ['seq', 'bigint', true],
+    ['repo', 'text', true],
+    ['action', 'text', true],
+    ['actor', 'text', true],
+    ['ts', 'timestamp with time zone', true],
+  ],
+  project_registry_state: [
+    ['singleton', 'boolean', true, 'true'],
+    ['legacy_imported', 'boolean', true],
+  ],
   ab_schema_migrations: [
     ['singleton', 'boolean', true, 'true'],
     ['version', 'integer', true],
@@ -958,6 +984,11 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_journal|p|seq||||',
+  'project_journal|c|||||',
+  'project_journal|c|||||',
+  'project_registry_state|p|singleton||||',
+  'project_registry_state|c|||||',
   // CHECK constraints are compared by presence only (their pg_get_expr text
   // is version-sensitive); PK/FK rows compare fully.
   'ab_schema_migrations|c|||||',
@@ -1112,7 +1143,7 @@ async function assertCatalogShape(sql: SQL): Promise<void> {
           ].join('|'),
     )
     .sort()
-  if (JSON.stringify(actualConstraints) !== JSON.stringify(EXPECTED_CONSTRAINTS)) {
+  if (JSON.stringify(actualConstraints) !== JSON.stringify([...EXPECTED_CONSTRAINTS].sort())) {
     throw schemaError('constraints are missing or mismatched')
   }
 }
@@ -1423,6 +1454,11 @@ export async function migratePostgres(url: string): Promise<void> {
           // v7 → v9: the guarded repository-journal state-read index above
           // is the entire delta; every v7 table and column already exists.
           // Promote the marker in this transaction.
+          await tx`UPDATE ab_schema_migrations
+            SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+              applied_at = ${new Date().toISOString()}
+            WHERE singleton = true`
+        } else if (version === 9 && marker.checksum === SCHEMA_V9_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}

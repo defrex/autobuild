@@ -40,3 +40,4 @@ export {
 export type { PostgresTicketContext, PostgresTicketLifecycle } from './tickets'
 export { VercelBlobStore } from './vercel'
 export type { VercelBlobStoreOptions } from './vercel'
+export * from './projects'
