@@ -57,3 +57,6 @@ export {
   type E2eHarness,
   type SkillHandlers,
 } from '../integration/harness'
+
+export { abConnect, abDisconnect } from '../cli/connect'
+export { ProjectCredentials } from '../cli/project-credentials'

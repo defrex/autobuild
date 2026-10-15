@@ -55,6 +55,28 @@ function actor(user: string): string {
   if (!user.trim()) throw new Error('credential creator must be nonblank')
   return user.trim()
 }
+/** Insert a CLI-prepared digest using the caller's transaction, never a raw token. */
+export async function insertPreparedCredential(
+  sql: SQL,
+  input: {
+    id: string
+    digest: string
+    repo: string
+    user: string
+    now: Date
+    purpose?: CredentialMetadata['purpose']
+    expiresAt?: Date
+  },
+): Promise<CredentialMetadata> {
+  if (!/^[a-f0-9]{32}$/.test(input.id) || !/^[a-f0-9]{64}$/.test(input.digest))
+    throw new Error('invalid prepared credential')
+  const repo = normalizeProjectRepository(input.repo),
+    by = actor(input.user)
+  const [row] =
+    await sql`INSERT INTO project_credentials (id, digest, repo, created_at, created_by, purpose, expires_at)
+    VALUES (${input.id}, ${input.digest}, ${repo}, ${input.now.toISOString()}, ${by}, ${input.purpose ?? 'project-owner'}, ${input.expiresAt?.toISOString() ?? null}) RETURNING *`
+  return metadata(row)
+}
 export class PostgresCredentialStore implements CredentialStore {
   constructor(
     private readonly sql: SQL,
@@ -77,11 +99,17 @@ export class PostgresCredentialStore implements CredentialStore {
       throw new Error('credential expiry must be in the future')
     const id = randomBytes(16).toString('hex')
     const secret = randomBytes(32).toString('hex')
-    const [row] = await this
-      .sql`INSERT INTO project_credentials (id, digest, repo, created_at, created_by, purpose, expires_at)
-      VALUES (${id}, ${hash(secret).toString('hex')}, ${repo}, ${now.toISOString()}, ${by}, ${options.purpose ?? 'project-owner'}, ${options.expiresAt?.toISOString() ?? null}) RETURNING *`
-    return { token: `abp_1_${id}_${secret}`, credential: metadata(row) }
+    const credential = await insertPreparedCredential(this.sql, {
+      id,
+      digest: hash(secret).toString('hex'),
+      repo,
+      user: by,
+      now,
+      ...options,
+    })
+    return { token: `abp_1_${id}_${secret}`, credential }
   }
+
   async authenticate(token: string, now: Date): Promise<CredentialMetadata | null> {
     const parts = /^abp_1_([a-f0-9]{32})_([a-f0-9]{64})$/.exec(token)
     if (!parts) return null

@@ -1313,6 +1313,17 @@ be narrowed to the ambient build — and `--repo` constrains every call to one
 repository. Mutating tools attribute their writes to the sessionless operator
 identity, exactly as the other operator commands do.
 
+### 8.10 Hosted project connection
+
+`ab connect <service-url>` requests owner browser approval for the normalized
+origin, registers the project, and saves a project credential outside the
+checkout. `ab connect` reports its status; `ab disconnect` revokes and removes
+only that credential, retaining project data. Store precedence is `--store`,
+nonblank `AB_STORE`, `[store] url`, then local state. `AB_TOKEN` overrides saved
+credentials. Configured services without credentials fail closed. Connection
+commands require a network origin and are unavailable in phase sessions.
+
+
 ## 9. AgentRunner
 
 Session-based, because review loops need memory:

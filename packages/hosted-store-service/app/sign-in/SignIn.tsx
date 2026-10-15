@@ -1,10 +1,19 @@
 'use client'
 
 import { useState } from 'react'
+import { connectionReturnPath } from './return-path'
 
 const PROVIDER_NAMES: Record<string, string> = { github: 'GitHub' }
 
-export function SignIn({ providers, error }: { providers: readonly string[]; error?: string }) {
+export function SignIn({
+  providers,
+  error,
+  returnTo,
+}: {
+  providers: readonly string[]
+  error?: string
+  returnTo?: string
+}) {
   const [pending, setPending] = useState(false)
   async function signIn(provider: string) {
     setPending(true)
@@ -13,8 +22,8 @@ export function SignIn({ providers, error }: { providers: readonly string[]; err
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         provider,
-        callbackURL: '/',
-        errorCallbackURL: '/sign-in?error=access_denied',
+        callbackURL: connectionReturnPath(returnTo),
+        errorCallbackURL: `/sign-in?error=access_denied&returnTo=${encodeURIComponent(connectionReturnPath(returnTo))}`,
       }),
     })
     if (!response.ok) {

@@ -20,6 +20,7 @@
  * normalized against that checkout so the dispatcher and agents cannot
  * interpret a relative path from different working directories.
  */
+import { configuredStore } from './configured-store'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { BuildRecord } from '../store/types'
@@ -92,6 +93,8 @@ export async function resolveMainRepo(targetRepo: string, exec: Exec): Promise<s
 }
 
 export interface RepoStatePaths {
+  /** Validated repository setting used for this selection, when present. */
+  configStore?: string
   /** Repository identity in BuildStore records/journals: the checkout's
    * normalized origin URL, falling back to the resolved checkout path only
    * when the checkout has no origin remote. Opaque to the store schema. */
@@ -116,7 +119,7 @@ function nonBlank(value: string | undefined): string | undefined {
 
 /**
  * Select state with one precedence rule for every sessionless command:
- * non-blank explicit `--store` > non-blank `AB_STORE` > repository-local default.
+ * non-blank explicit `--store` > non-blank `AB_STORE` > `[store] url` > local default.
  *
  * A local selection relocates the whole local tree, including worktrees. A
  * remote store has no filesystem root, so its worktrees remain local beneath
@@ -130,14 +133,20 @@ export function resolveRepoStatePaths(opts: {
   checkout?: string
   storeRef?: string
   envStore?: string
+  configStore?: string
 }): RepoStatePaths {
   const checkout = resolve(opts.checkout ?? opts.repo)
   const defaultLocalRoot = join(checkout, LOCAL_STATE_DIR)
-  const selected = nonBlank(opts.storeRef) ?? nonBlank(opts.envStore) ?? defaultLocalRoot
+  const selected =
+    nonBlank(opts.storeRef) ??
+    nonBlank(opts.envStore) ??
+    nonBlank(opts.configStore) ??
+    defaultLocalRoot
   const remote = isRemoteStoreRef(selected)
   const storeRef = remote ? selected : resolve(checkout, selected)
   const localStateRoot = remote ? defaultLocalRoot : storeRef
   return {
+    ...(opts.configStore !== undefined ? { configStore: opts.configStore } : {}),
     repo: opts.repo,
     checkout,
     defaultLocalRoot,
@@ -223,10 +232,14 @@ export async function resolveRepoState(opts: {
   exec: Exec
   storeRef?: string
   envStore?: string
+  configStore?: string
 }): Promise<RepoStatePaths> {
   const checkout = await resolveMainRepo(opts.targetRepo, opts.exec)
   const origin = await resolveRepoOrigin(checkout, opts.exec)
   return resolveRepoStatePaths({
+    configStore:
+      opts.configStore ??
+      (nonBlank(opts.storeRef) || nonBlank(opts.envStore) ? undefined : configuredStore(checkout)),
     repo: origin ?? checkout,
     checkout,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),

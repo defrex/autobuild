@@ -6,6 +6,8 @@
  * joins those seams to the production remote adapter and owns finite-command
  * store lifecycle.
  */
+import { projectToken } from './project-credentials'
+import { isRemoteStoreRef } from './repo-state'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { RemoteBuildStore } from '../store/remote/client'
 import { scopeLocalStoreToPhaseSession } from '../store/phase-session'
@@ -72,6 +74,7 @@ export interface OpenedStoreContext extends RepoStatePaths {
 export interface OpenStoreForRepoStateOpts {
   env: Record<string, string | undefined>
   openStore?: StoreOpener
+  useProjectCredential?: boolean
 }
 
 /** Open from an already canonicalized state selection. Dispatch uses this form
@@ -80,7 +83,13 @@ export function openStoreForRepoState(
   state: RepoStatePaths,
   opts: OpenStoreForRepoStateOpts,
 ): OpenedStoreContext {
-  const token = optionalToken(opts.env.AB_TOKEN)
+  const token =
+    opts.useProjectCredential !== false && isRemoteStoreRef(state.storeRef)
+      ? projectToken(state.storeRef, state.repo, opts.env)
+      : optionalToken(opts.env.AB_TOKEN)
+  if (!token && isRemoteStoreRef(state.storeRef) && state.configStore === state.storeRef) {
+    throw new Error('No project credential for this service; run ab connect')
+  }
   const store = (opts.openStore ?? openProductionStore)(state.storeRef, token)
   return {
     ...state,
@@ -141,7 +150,10 @@ export async function openAmbientReadStore(
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
     ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
   })
-  const context = openStoreForRepoState(state, opts)
+  const context = openStoreForRepoState(state, {
+    ...opts,
+    useProjectCredential: ambient === undefined,
+  })
   if (ambient === undefined) return context
   return {
     ...context,

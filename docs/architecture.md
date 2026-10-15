@@ -579,7 +579,7 @@ slug routing. Upgrade performs the same composition lazily at its first merge
 conflict.
 
 `packages/core/src/cli/repo-state.ts` owns repository identity and store precedence
-(`--store` > `AB_STORE` > `.autobuild/`); `packages/core/src/cli/store-opening.ts` is the
+(`--store` > `AB_STORE` > `[store] url` > `.autobuild/`); `packages/core/src/cli/store-opening.ts` is the
 production store composition boundary shared by finite sessionless queries and
 phase sessions. Its shared scoping primitive preserves remote token composition
 and adds local ambient authority only for filesystem stores. The dedicated
@@ -897,3 +897,9 @@ The service exposes one lazy live reader to the operator server, web gateway,
 MCP and server-rendered repository picker. Initialization failures clear the
 cached promise for retry. The dispatcher opens its own shared pool and queries
 membership each invocation. See [owner workflow](setup.md#connected-projects).
+
+Project onboarding uses `cli/connect.ts`, user-level `cli/project-credentials.ts`,
+the shared `connection.ts` wire types, and Postgres `connections.ts`. Approval
+commits registry membership, a credential digest, and the outcome atomically.
+The web connection routes authenticate the existing Better Auth session and
+reuse the sign-in/consent layout; CLI polling uses a separate private capability.

@@ -283,6 +283,19 @@ through the strict versioned manifest and environment-only secrets, to the
 unchanged shared contract suite and optional npm publication—read
 [`references/plugin-authoring.md`](references/plugin-authoring.md).
 
+### `[store]`
+
+| Key | Required | Values / purpose |
+|---|---|---|
+| `url` | When `[store]` exists | Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized. |
+
+Selection is explicit `--store` > nonblank `AB_STORE` > `[store] url` > the main
+checkout's `.autobuild/`. A configured service without a user credential fails
+with `ab connect` guidance. `AB_TOKEN` overrides the saved service/project
+credential. See [repository setup](references/setup.md#connect-a-project).
+Changing the store requires restarting dispatch.
+
+
 ### `[pr]`
 
 Optional PR-projection settings. Omission leaves artifact attachments text-only.
@@ -1055,13 +1068,53 @@ There is no home-directory fallback: a repository with no state tree starts
 empty.
 
 Every command uses the same precedence: explicit `--store <ref>` > nonempty
-`AB_STORE` > `<main-repo>/.autobuild`. Relative local overrides are normalized
+`AB_STORE` > `[store] url` > `<main-repo>/.autobuild`. Relative local overrides are normalized
 against the main checkout. A local override relocates the whole state tree,
 including `worktrees/` and default file tickets; an explicit `[tickets].dir`
 remains repo-relative. An HTTP(S) URL still selects the remote store unchanged,
 while worktrees and default file tickets remain under the repository-default
 `.autobuild/` directory. The dispatcher passes its normalized selection to
 every agent session as `AB_STORE`.
+
+## Connect a project
+
+From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
+The CLI prints a verification URL and short code and attempts to open a browser.
+Sign in as an allowed owner, check the full repository identity and code, and
+approve or deny. Another device can open the printed URL, or visit `/connect`
+and enter the code. Approval requires the web-enabled service origin; a
+standalone machine-only listener cannot present browser consent. Requests
+expire after ten minutes. Denial and timeout leave local configuration unchanged.
+
+On approval the service registers the project and issues a project credential.
+The CLI keeps it in `$XDG_CONFIG_HOME/autobuild/credentials` (or
+`~/.config/autobuild/credentials`), keyed by normalized service and origin,
+with directory mode 0700 and file mode 0600. Credentials never belong in the
+repository. It adds the non-secret `[store] url` to `autobuild.toml` when
+absent; review and commit that change yourself. An existing different URL
+must be changed explicitly before connecting. Reconnecting replaces the saved
+credential only after approval and revokes the previous credential.
+
+All worktrees share the main checkout's configuration and the user's saved
+credential. A service manager running as that user uses the same HOME and
+XDG_CONFIG_HOME, with no AB_STORE or AB_TOKEN exports. A fresh clone with
+committed store configuration but no saved credential fails with `ab connect`
+guidance; it never silently creates local state. Run connect on each host/user.
+
+`ab connect` without a URL reports service, project, and credential status:
+accepted, rejected, missing, or unreachable. `ab disconnect` revokes the saved
+credential remotely before removing it locally, keeping the project registered,
+its data, and store configuration. A network/server failure retains the local
+entry for retry; an already revoked credential can be removed. If saving a new
+connection fails, the CLI cancels/revokes it and retains the previous entry.
+If remote cleanup cannot be confirmed, check the printed credential id with
+the owner's administrative tools before retrying.
+
+Store selection is `--store` > nonblank `AB_STORE` > `[store] url` > the
+main checkout's `.autobuild/`. `AB_TOKEN` overrides the exact service/project's
+saved credential for CI and other non-interactive hosts. A service override
+never borrows another service's credential. Build and harvest sessions keep
+their explicit scoped authority.
 
 ## Source-agnostic ticket operations
 
@@ -1179,7 +1232,7 @@ judge against it.
 is the read-only binary retrieval form. Operators need no session identity: it
 works after a build is terminal, writes exact bytes (creating parent
 directories), verifies that the build belongs to this repository, and uses the
-standard explicit `--store` > nonblank `AB_STORE` > repository-local selection.
+standard explicit `--store` > nonblank `AB_STORE` > `[store] url` > repository-local selection.
 Inside a phase, a complete ambient tuple permits only the ambient build; a
 foreign build or malformed/partial identity is rejected. Use the exact pinned
 `@rev` from a PR attachment command.
@@ -1513,7 +1566,7 @@ Every command requires the target to exist in this repository and be active
 `ab answer` additionally requires an open escalation. A stale, missing, done,
 aborted, or otherwise inapplicable target is an error and gets no new event. Attribution uses `USER`, then `USERNAME`, then the
 same stable fallback on both surfaces. All five commands run sessionless and
-accept `--store <ref>` with the usual explicit flag > `AB_STORE` > repository
+accept `--store <ref>` with the usual explicit flag > `AB_STORE` > `[store] url` > repository
 local precedence. If nonblank `AB_SESSION` and matching `AB_BUILD` identify the
 caller's own phase build, the command refuses it; a phase cannot pause, resume,
 auto-merge, answer, or abort itself. `ab pause --all` and `ab resume --all`
@@ -1559,7 +1612,7 @@ repository-wide pause (`paused`, default `false`), and the claim-time auto-merge
 default (`defaultAutoMerge`, default `false`). Those defaults also describe a
 repository with no journal row; the read does not create one. Human output is
 the default. `--json` emits one bare object with those exact fields plus the
-canonical `repo`, and `--store` follows the usual explicit flag > `AB_STORE` >
+canonical `repo`, and `--store` follows the usual explicit flag > `AB_STORE` > `[store] url` >
 repository-local precedence. The command uses the same reducer as the
 dispatcher and dashboard, writes no state, claims no ticket, attaches no runner,
 and starts no dispatcher work.

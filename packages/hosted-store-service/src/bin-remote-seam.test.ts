@@ -12,7 +12,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { abWatch, KERNEL, steppingClock, type Exec } from '@defrex/autobuild/testing'
+import { abWatch, DISPATCHER, KERNEL, steppingClock, type Exec } from '@defrex/autobuild/testing'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { mintToken, RemoteBuildStore } from '@defrex/autobuild/remote-store'
 import { startStoreServer } from './remote-store-server'
@@ -216,3 +216,146 @@ test('an abort mid-hold tears down a real held remote request promptly', async (
     await server.stop()
   }
 })
+
+test('saved project credential serves real CLI processes in the main checkout and linked worktree without AB_STORE/AB_TOKEN', async () => {
+  const { spawnExec } = await import('@defrex/autobuild/testing')
+  const { ProjectCredentials } = await import('@defrex/autobuild/testing')
+  const { abConnect } = await import('@defrex/autobuild/testing')
+  const { MachineAuthError } = await import('./machine-auth')
+  const repo = 'https://github.com/example/connected-project'
+  const configRoot = join(tmp, 'user-config'),
+    linked = join(tmp, 'linked')
+  async function git(args: string[]) {
+    const result = await spawnExec(['git', ...args], { cwd: tmp })
+    if (result.exitCode !== 0) throw new Error(result.stderr)
+  }
+  await git(['init', '-b', 'main'])
+  await git(['config', 'user.email', 'fixture@example.com'])
+  await git(['config', 'user.name', 'Fixture'])
+  await git(['remote', 'add', 'origin', repo])
+  await writeFile(
+    join(tmp, 'autobuild.toml'),
+    'forge="local-git"\n[tickets]\nsource="file"\nreadyState="Ready"\n[roles.default]\nruntime="codex"\nmodel="gpt-5.6"\n',
+  )
+  let acceptedToken: string | undefined
+  const seen: string[] = []
+  const backing = new MemoryBuildStore()
+  await backing.createBuild({ slug: 'connected-fixture', repo })
+  const server = startStoreServer({
+    store: backing,
+    secret: 'unused',
+    auth: {
+      authenticate: async (request) => {
+        const token = request.headers.get('authorization')?.replace(/^Bearer /, '')
+        if (!acceptedToken || token !== acceptedToken)
+          throw new MachineAuthError(401, 'unknown credential')
+        seen.push(token)
+        return {
+          kind: 'project',
+          repo,
+          user: 'fixture@example.com',
+          credential: {
+            id: 'a'.repeat(32),
+            repo,
+            createdAt: new Date().toISOString(),
+            createdBy: 'fixture@example.com',
+            purpose: 'project-owner',
+            revokedAt: null,
+            expiresAt: null,
+            lastUsedAt: null,
+          },
+        }
+      },
+    },
+  })
+  const service = server.url
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('AB_')),
+  ) as Record<string, string>
+  env.XDG_CONFIG_HOME = configRoot
+  let credentialId = ''
+  try {
+    await abConnect(service, {
+      cwd: tmp,
+      env,
+      exec: spawnExec,
+      print: () => {},
+      browser: async () => {},
+      sleep: async () => {},
+      fetch: async (url, init) => {
+        if (url.endsWith('/requests')) {
+          credentialId = JSON.parse(String(init?.body)).credentialId
+          return Response.json({
+            id: 'a'.repeat(32),
+            capability: 'b'.repeat(64),
+            code: '123456789A',
+            interval: 5,
+            expiresAt: new Date(Date.now() + 60000).toISOString(),
+          })
+        }
+        return Response.json({ repo, credentialId, status: 'approved' })
+      },
+    })
+    acceptedToken = new ProjectCredentials(env).load(service, repo)!.token
+    await git(['add', 'autobuild.toml'])
+    await git(['commit', '-m', 'Configure connected fixture'])
+    await git(['worktree', 'add', '-b', 'linked', linked])
+    for (const cwd of [tmp, linked]) {
+      const result = await collect(
+        Bun.spawn([process.execPath, BIN, 'builds', '--all', '--json'], {
+          cwd,
+          env,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }),
+      )
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('connected-fixture')
+      const ticket = await collect(
+        Bun.spawn([process.execPath, BIN, 'ticket', 'list'], {
+          cwd,
+          env,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }),
+      )
+      expect(ticket.code).toBe(0)
+    }
+    await backing.append('connected-fixture', { actor: DISPATCHER, type: 'pr.closed', payload: {} })
+    const dispatched = await collect(
+      Bun.spawn([process.execPath, BIN, 'dispatch', '--once', '--plain'], {
+        cwd: linked,
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    )
+    expect(dispatched.stderr).toBe('')
+    expect(dispatched.code).toBe(0)
+    expect(seen.length).toBeGreaterThan(0)
+    const override = await collect(
+      Bun.spawn([process.execPath, BIN, 'builds', '--all', '--json'], {
+        cwd: linked,
+        env: { ...env, AB_TOKEN: 'wrong-override' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    )
+    expect(override.code).toBe(1)
+    new ProjectCredentials(env).remove(service, repo)
+    const disconnected = await collect(
+      Bun.spawn([process.execPath, BIN, 'builds'], {
+        cwd: linked,
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    )
+    expect(disconnected.code).toBe(1)
+    expect(disconnected.stderr).toContain('ab connect')
+    expect(await Bun.file(join(tmp, '.autobuild', 'store.sqlite')).exists()).toBe(false)
+  } finally {
+    await server.stop()
+    await backing.close()
+  }
+}, 20000)
