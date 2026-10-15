@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.11.0 — 2026-10-15
+
+This release makes dispatching more resilient and much lighter on Linear's API quota. Dispatch now skips redundant dependency reads, batches the rest, and paginates ready listings. When Linear rate-limits a request, ready tickets are no longer claimed by mistake. Ticket-source scans now run separately from dispatcher ticks, degradation and recovery are recorded durably and shown to operators, and both the operator surfaces and terminal dashboards show which dispatcher owns the work, including persistent standby ownership and reports of lost dispatchers.
+
 - [#603](https://github.com/defrex/autobuild/pull/603) — Show persistent dispatcher standby ownership in terminal dashboards
 - [#602](https://github.com/defrex/autobuild/pull/602) — Expose dispatcher ownership and report lost dispatchers
 - [#601](https://github.com/defrex/autobuild/pull/601) — Separate ticket-source scans from dispatcher ticks
@@ -9,6 +13,7 @@
 - [#599](https://github.com/defrex/autobuild/pull/599) — Batch Linear dependency reads and paginate ready listings
 - [#598](https://github.com/defrex/autobuild/pull/598) — Handle Linear rate limits without claiming ready tickets
 - [#597](https://github.com/defrex/autobuild/pull/597) — Prune redundant dependency reads during dispatch
+
 ## v0.10.1 — 2026-10-14
 
 This release makes the ab-operate skill model-invocable, so an agent can load it on its own when it takes on the orchestrator role. That works the same way for local orchestration through the ab CLI and for hosted orchestration through the MCP connector. Any agent that drives Autobuild now finds its operating guidance automatically, with no manual setup step.
