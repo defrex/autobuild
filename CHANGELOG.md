@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#598](https://github.com/defrex/autobuild/pull/598) — Handle Linear rate limits without claiming ready tickets
 - [#597](https://github.com/defrex/autobuild/pull/597) — Prune redundant dependency reads during dispatch
 ## v0.10.1 — 2026-10-14
 

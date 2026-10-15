@@ -18,6 +18,7 @@ import type {
   TicketSource,
   TicketUpdate,
 } from '../types'
+import { TicketSourceRateLimitError } from '../types'
 import { validateTicketUpdate } from './update'
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql'
@@ -69,7 +70,12 @@ function isEntityNotFound(error: unknown): boolean {
 export type LinearFetch = (
   url: string,
   init: { method: 'POST'; headers: Record<string, string>; body: string },
-) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
+) => Promise<{
+  ok: boolean
+  status: number
+  headers?: { get(name: string): string | null }
+  json(): Promise<unknown>
+}>
 
 // ── Wire shapes (small structural types per operation) ───────────────────────
 
@@ -206,6 +212,8 @@ export class LinearTicketSource implements TicketSource {
   private readonly teamKey: string
   private readonly claimedState: string
   private readonly createState: string | undefined
+  private readonly now: () => number
+  private cooldown?: TicketSourceRateLimitError
   private readonly fetchFn: LinearFetch
 
   /** identifier → Linear UUID, cached per instance. */
@@ -220,12 +228,14 @@ export class LinearTicketSource implements TicketSource {
     apiKey: string
     teamKey: string
     fetchFn?: LinearFetch
+    now?: () => number
     /** Workflow state claim() moves the issue to (claim-before-launch, §12). */
     claimedState?: string
     /** Workflow state create() files new issues into; absent = Linear's team
      * default (whatever the team's default state is, e.g. Backlog). */
     createState?: string
   }) {
+    this.now = opts.now ?? Date.now
     this.apiKey = opts.apiKey
     this.teamKey = opts.teamKey
     this.claimedState = opts.claimedState ?? 'In Progress'
@@ -654,6 +664,7 @@ export class LinearTicketSource implements TicketSource {
     query: string,
     variables: Record<string, unknown>,
   ): Promise<T> {
+    if (this.cooldown && this.now() < this.cooldown.resetAt) throw this.cooldown
     const response = await this.fetchFn(LINEAR_API_URL, {
       method: 'POST',
       headers: {
@@ -662,20 +673,47 @@ export class LinearTicketSource implements TicketSource {
       },
       body: JSON.stringify({ query, variables }),
     })
-    if (!response.ok) {
-      throw new Error(`linear ${operation}: HTTP ${response.status}`)
+    const http = `linear ${operation}: HTTP ${response.status}`
+    let raw: unknown
+    try {
+      raw = await response.json()
+    } catch (error) {
+      if (!response.ok) throw new Error(http)
+      throw error
     }
-    const payload = (await response.json()) as {
+    const payload = (raw !== null && typeof raw === 'object' ? raw : {}) as {
       data?: T | null
       errors?: GqlError[]
     }
-    if (payload.errors && payload.errors.length > 0) {
-      const messages = payload.errors.map((e) => e.message).join('; ')
-      throw new LinearGqlError(`linear ${operation}: GraphQL errors — ${messages}`, payload.errors)
+    const errors = Array.isArray(payload.errors)
+      ? payload.errors.filter((e) => e !== null && typeof e === 'object')
+      : []
+    if (errors.some((e) => e.extensions?.code === 'RATELIMITED')) {
+      const now = this.now()
+      const reset = Number(response.headers?.get('x-ratelimit-requests-reset'))
+      // Missing, expired or unrepresentable provider dates get a bounded fallback.
+      const resetAt =
+        Number.isFinite(reset) && reset > now && reset > 0 && reset <= 8.64e15
+          ? reset
+          : now + 60_000
+      this.cooldown = new TicketSourceRateLimitError(this.name, resetAt)
+      throw this.cooldown
     }
+    if (errors.length > 0) {
+      const messages = errors
+        .map((e) => `${e.extensions?.code ? `${e.extensions.code}: ` : ''}${e.message}`)
+        .join('; ')
+      throw new LinearGqlError(
+        `${response.ok ? `linear ${operation}` : http}: GraphQL errors — ${messages}`,
+        errors,
+      )
+    }
+    if (!response.ok) throw new Error(http)
     if (payload.data === undefined || payload.data === null) {
       throw new Error(`linear ${operation}: response has no data`)
     }
+    // An older in-flight success must not cancel a still-active cooldown.
+    if (this.cooldown && this.now() >= this.cooldown.resetAt) this.cooldown = undefined
     return payload.data
   }
 

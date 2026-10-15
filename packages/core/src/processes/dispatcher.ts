@@ -74,6 +74,7 @@ import type {
   TicketSource,
   WorkspaceProvider,
 } from '../ports/types'
+import { TicketSourceRateLimitError } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
 import { samplePinnedAssets } from '../store/ticket-assets'
@@ -2930,49 +2931,42 @@ export class Dispatcher {
       ]),
     )
 
+    // Finish read-only evaluation before any intake claim: a later source
+    // failure must leave the entire ready set unclaimed. Publish dependency
+    // diagnostics only after the complete preflight succeeds.
+    const verdicts = new Map<string, DependencyVerdict>()
     for (const ticket of ready) {
-      if (capacity <= 0) break
-      // Budget gate before the dependency fetch / claim / createBuild: the
-      // first ready read above stays (it is the standing queue-depth report);
-      // once the budget is spent no additional transport call is started, so
-      // the remaining tickets are left un-attempted for the next invocation.
-      if (this.outOfBudget(opts)) break
-
-      // Autobuild's own in-flight create gate precedes even dependency reads:
-      // the ready projection may have been captured before blocker recording.
-      // It spends no capacity and leaves queue depth unchanged.
+      if (this.outOfBudget(opts)) return
       if (withheld.has(ticket.ref.id)) continue
-
-      // The dependency gate runs FIRST — before the claim, before the spec
-      // gate. A blocked ticket must not be claimed, must not be bounced, must
-      // create no build or workspace, and must not spend capacity; it is
-      // simply not this tick's work. Note this sits *above* [tickets]'s
-      // readyLabels / readyState gate: those criteria produced `ready`, and the
-      // gate subtracts from it — labels and state can make a ticket a
-      // candidate but can never override an unresolved blocker.
-      if ((ticket.blockedBy ?? []).length > 0) {
-        let verdict: DependencyVerdict
-        try {
-          await this.loadDependencyGraph(ticket, nodes)
-          verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
-        } catch (error) {
-          // A broken graph is this ticket's problem, not the tick's: skip it
-          // and let unrelated eligible tickets dispatch normally.
-          verdict = {
-            unresolved: [ticket.ref.id],
-            diagnostics: [
-              `ticket ${ticket.ref.id}: dependency check failed — ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            ],
-          }
-        }
-        if (verdict.unresolved.length > 0) {
-          report.dependencyBlocked += 1
-          report.dependencyDiagnostics.push(...verdict.diagnostics)
-          continue
+      if ((ticket.blockedBy ?? []).length === 0) continue
+      let verdict: DependencyVerdict
+      try {
+        if (!(await this.loadDependencyGraph(ticket, nodes, opts))) return
+        verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
+      } catch (error) {
+        if (error instanceof TicketSourceRateLimitError) throw error
+        verdict = {
+          unresolved: [ticket.ref.id],
+          diagnostics: [
+            `ticket ${ticket.ref.id}: dependency check failed — ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ],
         }
       }
+      verdicts.set(ticket.ref.id, verdict)
+    }
+    if (this.outOfBudget(opts)) return
+    for (const verdict of verdicts.values()) {
+      if (verdict.unresolved.length > 0) {
+        report.dependencyBlocked += 1
+        report.dependencyDiagnostics.push(...verdict.diagnostics)
+      }
+    }
+    for (const ticket of ready) {
+      if (capacity <= 0 || this.outOfBudget(opts)) break
+      if (withheld.has(ticket.ref.id)) continue
+      if ((verdicts.get(ticket.ref.id)?.unresolved.length ?? 0) > 0) continue
 
       // Claim-before-launch (§12): losing the claim means another dispatcher
       // (or an earlier tick) owns this ticket.
@@ -3057,10 +3051,12 @@ export class Dispatcher {
   private async loadDependencyGraph(
     ticket: Ticket,
     nodes: Map<string, DependencyState>,
-  ): Promise<void> {
+    opts: TickOpts = {},
+  ): Promise<boolean> {
     const visited = new Set<string>()
     let frontier = [...new Set(ticket.blockedBy ?? [])]
     while (frontier.length > 0) {
+      if (this.outOfBudget(opts)) return false
       const uncached = frontier.filter((id) => !nodes.has(id))
       if (uncached.length > 0) {
         const states = await this.deps.tickets.dependencyStates(uncached)
@@ -3074,6 +3070,7 @@ export class Dispatcher {
       }
       frontier = [...new Set(next)].filter((id) => !visited.has(id))
     }
+    return true
   }
 
   /** Bounce (§6.3): back to Triage with a comment citing the standard and
