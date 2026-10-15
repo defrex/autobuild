@@ -37,7 +37,10 @@ if (!testUrl) {
     const isolated = await isolatedDatabase()
     const database = await openPostgresTicketDatabase(isolated.url)
     return {
-      source: database.source({ teamKey: 'ENG', claimedState: 'Doing' }),
+      source: database.source({
+        repo: 'https://github.com/acme/one',
+        lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+      }),
       states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
       editableLabel: 'autobuild',
       cleanup: async () => {
@@ -47,3 +50,67 @@ if (!testUrl) {
     }
   })
 }
+
+import { expect } from 'bun:test'
+if (testUrl)
+  test('project sources isolate reused ids, creation keys, blockers, comments and lifecycle policy', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const one = database.source({
+      repo: 'https://github.com/acme/one',
+      lifecycle: { triage: 'Inbox', ready: 'Open', doing: 'Open', done: 'Complete' },
+      createState: 'Draft',
+      proposalState: 'Proposed',
+    })
+    const two = database.source({
+      repo: 'https://github.com/acme/two',
+      lifecycle: { triage: 'Backlog', ready: 'Todo', doing: 'Active', done: 'Shipped' },
+    })
+    try {
+      const a = await one.create({ title: 'One', body: 'Body' }, { idempotencyKey: 'same' })
+      const b = await two.create({ title: 'Two', body: 'Body' }, { idempotencyKey: 'same' })
+      expect(a.ref.id).not.toBe(b.ref.id)
+      expect(a.state).toBe('Draft')
+      expect(b.state).toBe('Backlog')
+      expect(await two.get(a.ref.id)).toBeNull()
+      expect(await two.claim(a.ref.id)).toBe(false)
+      for (const operation of [
+        () => two.comment(a.ref.id, 'foreign'),
+        () => two.update(a.ref.id, { body: 'foreign' }),
+        () => two.transition(a.ref.id, 'Todo'),
+        () => two.addBlocker(b.ref.id, a.ref.id),
+        () => two.removeBlocker(a.ref.id, b.ref.id),
+        () => two.create({ title: 'Foreign blocker', body: 'Body', blockedBy: [a.ref.id] }),
+      ])
+        await expect(operation()).rejects.toThrow('unknown ticket')
+      expect(await two.dependencyStates([a.ref.id])).toEqual([
+        { id: a.ref.id, exists: false, resolved: false, blockedBy: [] },
+      ])
+      // Reused historical ids must stay independent as well.
+      await database.sql`UPDATE ab_tickets SET id = ${a.ref.id} WHERE repo = 'https://github.com/acme/two' AND id = ${b.ref.id}`
+      await one.comment(a.ref.id, 'one comment')
+      await two.comment(a.ref.id, 'two comment')
+      await one.transition(a.ref.id, 'Complete')
+      await two.transition(a.ref.id, 'Shipped')
+      expect((await one.get(a.ref.id))?.resolved).toBe(true)
+      expect((await two.get(a.ref.id))?.resolved).toBe(true)
+      expect((await one.get(a.ref.id))?.title).toBe('One')
+      expect((await two.get(a.ref.id))?.title).toBe('Two')
+      const comments =
+        await database.sql`SELECT repo, seq, body FROM ab_ticket_comments ORDER BY repo`
+      expect(comments.map((row: { body: string }) => row.body)).toEqual([
+        'one comment',
+        'two comment',
+      ])
+      expect(comments.map((row: { seq: number }) => Number(row.seq))).toEqual([1, 1])
+      expect(
+        (await one.create({ title: 'ignored', body: 'ignored' }, { idempotencyKey: 'same' })).title,
+      ).toBe('One')
+      expect(
+        (await two.create({ title: 'ignored', body: 'ignored' }, { idempotencyKey: 'same' })).title,
+      ).toBe('Two')
+    } finally {
+      await database.close()
+      await isolated.cleanup()
+    }
+  })

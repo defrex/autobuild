@@ -20,31 +20,22 @@ describe('hosted store configuration', () => {
     const config = parseHostedStoreEnv(valid)
     expect(config.hostname).toBe('0.0.0.0')
     expect(config.port).toBe(3000)
-    expect(config.ticketBackend).toBe('database')
-    expect(config.ticketLifecycle).toEqual({
-      triage: 'Triage',
-      ready: 'Ready',
-      doing: 'Doing',
-      done: 'Done',
-    })
     expect(HOSTED_ARTIFACT_MAX_BYTES).toBe(1024 * 1024)
     expect(HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES).toBe(4 * 1024 * 1024)
   })
 
-  test('requires service-only Linear credentials and distinct configured states', () => {
-    expect(() => parseHostedStoreEnv({ ...valid, AB_TICKET_BACKEND: 'linear' })).toThrow(
-      'LINEAR_API_KEY',
-    )
-    expect(
-      parseHostedStoreEnv({ ...valid, AB_TICKET_BACKEND: 'linear', LINEAR_API_KEY: 'lin-key' })
-        .linearApiKey,
-    ).toBe('lin-key')
-    expect(() => parseHostedStoreEnv({ ...valid, AB_TICKET_READY_STATE: 'Done' })).toThrow(
-      'distinct',
-    )
-    expect(() => parseHostedStoreEnv({ ...valid, AB_TICKET_READY_STATE: ' ' })).toThrow(
-      'AB_TICKET_READY_STATE',
-    )
+  test('ignores all retired backend and lifecycle settings', () => {
+    for (const AB_TICKET_BACKEND of ['linear', 'database', 'unknown', '', undefined]) {
+      expect(
+        parseHostedStoreEnv({
+          ...valid,
+          AB_TICKET_BACKEND,
+          LINEAR_API_KEY: 'secret',
+          AB_TICKET_READY_STATE: ' ',
+          AB_TICKET_DONE_STATE: '',
+        }),
+      ).toEqual(parseHostedStoreEnv(valid))
+    }
   })
 
   test('rejects missing secret and malformed ports', () => {

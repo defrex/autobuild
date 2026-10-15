@@ -39,6 +39,7 @@ export function ticketBackendFromSource(options: {
         tickets.readyState,
         tickets.createState,
         tickets.claimedState,
+        tickets.doneState,
         tickets.proposalState ?? defaultTriageState(options.config),
       ].filter((state): state is string => typeof state === 'string' && state.trim().length > 0)
       return [...new Set(states)]

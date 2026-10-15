@@ -10,9 +10,11 @@ import {
 import type { DependencyState, Ticket, TicketSource, TicketUpdate } from '../ports/types'
 import type { BuildStore } from '../store/types'
 import { defaultTriageState } from '../processes/dispatcher'
-import { effectiveConfig, OperatorQueryError } from './query'
+import { effectiveConfig } from './query'
 
 export interface OperatorTicketContext {
+  repo: string
+  tickets: Config['tickets']
   teamKey: string
   claimedState?: string
   createState?: string
@@ -48,14 +50,10 @@ export interface OperatorTicketDetail {
 
 function contextFor(config: Config, repo: string): OperatorTicketContext {
   const tickets = config.tickets
-  if (tickets.teamKey === undefined) {
-    throw new OperatorQueryError(
-      'effective-config-unavailable',
-      `effective config unavailable for repository "${repo}": [tickets].teamKey is required for hosted ticket access`,
-    )
-  }
   return {
-    teamKey: tickets.teamKey,
+    repo,
+    tickets,
+    teamKey: tickets.teamKey ?? '',
     ...(tickets.claimedState !== undefined ? { claimedState: tickets.claimedState } : {}),
     ...(tickets.createState !== undefined ? { createState: tickets.createState } : {}),
   }

@@ -1,11 +1,11 @@
+import { ticketProject } from './testing/ticket-project'
 import { expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { abTicket } from '@defrex/autobuild/testing'
-import { FakeTicketSource, MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import type { TicketSourceFactory } from '@defrex/autobuild/testing'
-import { mintToken } from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from './service'
 
 interface ScenarioResult {
@@ -48,7 +48,9 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       sourceFactory = () => backend
     } else {
       const secret = 'cli-parity-secret'
+      const project = await ticketProject(repo, secret)
       const service = createHostedStoreService({
+        ...project,
         env: {
           AB_STORE_SECRET: secret,
           AB_POSTGRES_URL: 'postgres://unused/injected',
@@ -60,7 +62,7 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
         },
         sourceFor: () => backend,
         // `show` lists the ticket's assets through the store.
-        openStore: async () => new MemoryBuildStore(),
+        openStore: project.openStore,
       })
       server = Bun.serve({
         hostname: '127.0.0.1',
@@ -77,11 +79,7 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
         },
       })
       env.AB_STORE = `http://127.0.0.1:${server.port}`
-      env.AB_TOKEN = mintToken(secret, {
-        version: 1,
-        ownerAdmin: { user: 'owner:fixture' },
-        exp: Date.now() + 60_000,
-      })
+      env.AB_TOKEN = project.token
     }
 
     const output: unknown[] = []
@@ -161,7 +159,9 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     },
   ])
   const secret = 'cli-assets-secret'
+  const project = await ticketProject(repo, secret)
   const service = createHostedStoreService({
+    ...project,
     env: {
       AB_STORE_SECRET: secret,
       AB_POSTGRES_URL: 'postgres://unused/injected',
@@ -172,7 +172,7 @@ test('ticket assets attach, list, download and remove over the hosted store and 
       AB_S3_SECRET_ACCESS_KEY: 'unused',
     },
     sourceFor: () => backend,
-    openStore: async () => new MemoryBuildStore(),
+    openStore: project.openStore,
   })
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: (r) => service.fetch(r) })
   try {
@@ -182,11 +182,7 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     )
     const env = {
       AB_STORE: `http://127.0.0.1:${server.port}`,
-      AB_TOKEN: mintToken(secret, {
-        version: 1,
-        ownerAdmin: { user: 'owner:fixture' },
-        exp: Date.now() + 60_000,
-      }),
+      AB_TOKEN: project.token,
     }
     const run = async (argv: string[]): Promise<string> => {
       const lines: string[] = []

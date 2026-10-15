@@ -140,3 +140,13 @@ The hosted dispatcher queries current registrations on every authorized
 invocation. With `AB_DISPATCHER_REPOSITORIES` unset, it serves all registered
 projects; an explicit list preserves its order and is intersected with current
 registration. An empty registry is a successful zero-project invocation.
+
+Hosted tickets are scoped to the credential's registered project. Lifecycle
+comes from that project's effective configuration; projects using external
+trackers keep the connection in their dispatcher and receive source feedback
+from service ticket surfaces. This service has no Linear backend.
+`AB_TICKET_BACKEND` and `LINEAR_API_KEY` are ignored with one startup removal
+message, and all `AB_TICKET_*_STATE` lifecycle variables are removed and ignored.
+See [project ticket migration](../../docs/hosted-service.md#hosted-ticket-projects-and-v1-migration)
+for atomic v1 upgrades, owner `tickets assign-team` recovery, and the blob
+credentials/access/prefix required during populated-v1 deployment builds.

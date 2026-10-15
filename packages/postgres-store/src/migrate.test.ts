@@ -28,6 +28,8 @@ import {
   SCHEMA_V7_DDL,
   SCHEMA_V8_CHECKSUM,
   SCHEMA_V8_DDL,
+  SCHEMA_V9_DDL,
+  SCHEMA_V9_CHECKSUM,
   SCHEMA_VERSION,
   assertSchema,
   migratePostgres,
@@ -750,3 +752,725 @@ if (testUrl) {
     test.skip('set AB_POSTGRES_TEST_URL to run schema migration tests', () => {})
   })
 }
+
+// Project-ticket migration evidence uses real artifact bytes outside PostgreSQL.
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
+import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
+import { TICKET_SCHEMA_V1_DDL, TICKET_SCHEMA_V1_CHECKSUM, assertTicketSchema } from './schema'
+import { openPostgresTicketDatabase } from './tickets'
+
+async function legacyTickets() {
+  const database = await schemaHarness()
+  await migratePostgres(database.url)
+  const sql = new SQL(database.url)
+  await sql.unsafe(
+    'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+  )
+  await sql.unsafe(TICKET_SCHEMA_V1_DDL)
+  await sql`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${CONTRACT_T0})`
+  const directory = await mkdtemp(join(tmpdir(), 'ab-ticket-blobs-'))
+  const reads: string[] = []
+  const blobs: BlobStore = {
+    put: async (hash, bytes) => {
+      await writeFile(join(directory, hash), bytes)
+    },
+    get: async (hash) => {
+      reads.push(hash)
+      try {
+        return new Uint8Array(await readFile(join(directory, hash)))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      }
+    },
+  }
+  const store = await openPostgresBuildStore(database.url, blobs)
+  async function project(repo: string, team: string, reload = false) {
+    await sql`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${repo}, 'added', 'fixture', ${CONTRACT_T0})`
+    await store.ensureRepo(repo)
+    const config = parseConfig(
+      `[tickets]\nsource = "hosted"\nteamKey = "${team}"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []`,
+    )
+    const { verify, finalize, ...root } = config
+    const artifact = await store.putRepoArtifact(repo, {
+      kind: 'dispatcher-effective-config',
+      content: JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps },
+        finalize: { steps: finalize.steps },
+      }),
+    })
+    await store.appendRepo(
+      repo,
+      reload
+        ? {
+            actor: DISPATCHER,
+            type: 'dispatcher.config-reloaded',
+            payload: {
+              run: repo,
+              artifact: { kind: 'config', rev: 1 },
+              effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+              effectiveChanged: true,
+              restartRequired: [],
+            },
+          }
+        : {
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run: repo,
+              pid: 1,
+              effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+              roleWarnings: [],
+            },
+          },
+    )
+    return artifact
+  }
+  async function seed(team: string) {
+    await sql`INSERT INTO ab_tickets VALUES (${team}, 'old-1', 'creation-1', 'Title', 'Body', 'Historical', ARRAY['one'], ${CONTRACT_T0}, ${CONTRACT_T0}), (${team}, 'old-2', NULL, 'Blocker', 'Body', 'Done', ARRAY[]::text[], ${CONTRACT_T0}, ${CONTRACT_T0})`
+    await sql`INSERT INTO ab_ticket_comments VALUES (${team}, 'old-1', 7, 'Original comment', ${CONTRACT_T0})`
+    await sql`INSERT INTO ab_ticket_blockers VALUES (${team}, 'old-1', 'old-2')`
+  }
+  const snapshot = async () => ({
+    marker: await sql`SELECT * FROM ab_ticket_schema_migrations`,
+    tickets: await sql`SELECT * FROM ab_tickets ORDER BY team,id`,
+    comments: await sql`SELECT * FROM ab_ticket_comments ORDER BY team,ticket_id,seq`,
+    blockers: await sql`SELECT * FROM ab_ticket_blockers ORDER BY team,ticket_id`,
+  })
+  return {
+    ...database,
+    sql,
+    blobs,
+    reads,
+    store,
+    project,
+    seed,
+    snapshot,
+    cleanup: async () => {
+      await store.close()
+      await sql.close()
+      await rm(directory, { recursive: true, force: true })
+      await database.cleanup()
+    },
+  }
+}
+
+if (testUrl) {
+  test('v1 ticket migration reads the selected blob and preserves every ticket/comment/blocker value', async () => {
+    const world = await legacyTickets()
+    const one = 'https://github.com/acme/one',
+      two = 'https://github.com/acme/two'
+    try {
+      await world.project(one, 'OLD')
+      const selected = await world.project(one, 'ONE', true)
+      await world.project(two, 'TWO')
+      // A newer artifact without a selecting event must not change ownership.
+      await world.store.putRepoArtifact(one, {
+        kind: 'dispatcher-effective-config',
+        content: 'invalid unselected artifact',
+      })
+      await world.seed('ONE')
+      await world.seed('TWO')
+      const before = await world.snapshot()
+      await migratePostgres(world.url, { openBlobs: () => world.blobs })
+      await assertTicketSchema(world.sql)
+      expect(world.reads).toContain(selected.blobRef)
+      const tickets = await world.sql`SELECT * FROM ab_tickets ORDER BY repo,id`
+      expect(tickets).toEqual(
+        before.tickets.map(({ team, ...ticket }: Row) => ({
+          repo: team === 'ONE' ? one : two,
+          ...ticket,
+        })),
+      )
+      const comments = await world.sql`SELECT * FROM ab_ticket_comments ORDER BY repo,ticket_id,seq`
+      expect(comments).toEqual(
+        before.comments.map(({ team, ...comment }: Row) => ({
+          repo: team === 'ONE' ? one : two,
+          ...comment,
+        })),
+      )
+      const blockers = await world.sql`SELECT * FROM ab_ticket_blockers ORDER BY repo,ticket_id`
+      expect(blockers).toEqual(
+        before.blockers.map(({ team, ...blocker }: Row) => ({
+          repo: team === 'ONE' ? one : two,
+          ...blocker,
+        })),
+      )
+      await migratePostgres(world.url)
+      const database = await openPostgresTicketDatabase(world.url)
+      try {
+        const source = database.source({
+          repo: one,
+          lifecycle: { triage: 'Backlog', ready: 'Ready', doing: 'Doing', done: 'Done' },
+        })
+        expect((await source.get('old-1'))?.state).toBe('Historical')
+        expect((await source.get('old-1'))?.blockedBy).toEqual(['old-2'])
+      } finally {
+        await database.close()
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('ambiguous team migration rolls back; the exact owner command recovers before v2 assertion', async () => {
+    const world = await legacyTickets()
+    const one = 'https://github.com/acme/one',
+      two = 'https://github.com/acme/two'
+    try {
+      await world.project(one, 'SAME')
+      await world.project(two, 'SAME')
+      await world.seed('SAME')
+      const before = await world.snapshot()
+      await expect(migratePostgres(world.url, { openBlobs: () => world.blobs })).rejects.toThrow(
+        `conflicting projects: ${one}, ${two}`,
+      )
+      expect(await world.snapshot()).toEqual(before)
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          join(
+            dirname(Bun.resolveSync('@defrex/autobuild-hosted-store-service', import.meta.dir)),
+            'bin.ts',
+          ),
+          'tickets',
+          'assign-team',
+          'SAME',
+          one,
+          '--user',
+          'owner',
+        ],
+        { env: { ...process.env, AB_POSTGRES_URL: world.url }, stdout: 'pipe', stderr: 'pipe' },
+      )
+      expect(await child.exited).toBe(0)
+      expect(await new Response(child.stderr).text()).toBe('')
+      await migratePostgres(world.url, { openBlobs: () => world.blobs })
+      expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(one)
+      expect((await world.sql`SELECT actor FROM ticket_team_assignments`)[0].actor).toBe('owner')
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('missing blob dependency, missing/denied/malformed blob and unclaimed teams leave v1 unchanged', async () => {
+    const world = await legacyTickets()
+    try {
+      await world.project('https://github.com/acme/one', 'ONE')
+      await world.seed('UNCLAIMED')
+      const before = await world.snapshot()
+      for (const openBlobs of [
+        undefined,
+        () => ({ ...world.blobs, get: async () => null }),
+        () => ({
+          ...world.blobs,
+          get: async () => {
+            throw new Error('secret provider failure')
+          },
+        }),
+        () => ({ ...world.blobs, get: async () => new TextEncoder().encode('{broken') }),
+        () => world.blobs,
+      ]) {
+        await expect(migratePostgres(world.url, openBlobs ? { openBlobs } : {})).rejects.toThrow()
+        expect(await world.snapshot()).toEqual(before)
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })
+}
+
+if (testUrl)
+  test('environment-aware migration CLI reads populated v1 configs through the configured S3 adapter and prefix', async () => {
+    const world = await legacyTickets()
+    const requests: string[] = []
+    let denied = true
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname
+        requests.push(path)
+        if (denied) return new Response('Denied', { status: 403 })
+        const prefix = '/bucket/project-prefix/'
+        if (!path.startsWith(prefix)) return new Response('', { status: 404 })
+        const bytes = await world.blobs.get(path.slice(prefix.length))
+        return bytes === null
+          ? new Response('', { status: 404 })
+          : new Response(new Uint8Array(bytes))
+      },
+    })
+    try {
+      await world.project('https://github.com/acme/one', 'ONE')
+      await world.seed('ONE')
+      const before = await world.snapshot()
+      const env = {
+        ...process.env,
+        AB_POSTGRES_URL: world.url,
+        AB_BLOB_BACKEND: 's3',
+        AB_BLOB_PREFIX: 'project-prefix',
+        AB_S3_ENDPOINT: `http://127.0.0.1:${server.port}`,
+        AB_S3_FORCE_PATH_STYLE: 'true',
+        AB_S3_BUCKET: 'bucket',
+        AB_S3_REGION: 'us-east-1',
+        AB_S3_ACCESS_KEY_ID: 'test-key',
+        AB_S3_SECRET_ACCESS_KEY: 'never-print-me',
+      }
+      const run = async () => {
+        const child = Bun.spawn(
+          [process.execPath, new URL('./bin.ts', import.meta.url).pathname, 'migrate'],
+          { env, stdout: 'pipe', stderr: 'pipe' },
+        )
+        const [code, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ])
+        expect(stdout + stderr).not.toContain('never-print-me')
+        return { code, stdout, stderr }
+      }
+      expect((await run()).code).toBe(1)
+      expect(await world.snapshot()).toEqual(before)
+      denied = false
+      expect((await run()).code).toBe(0)
+      expect(requests.some((path) => path.startsWith('/bucket/project-prefix/'))).toBe(true)
+      await assertTicketSchema(world.sql)
+    } finally {
+      server.stop(true)
+      await world.cleanup()
+    }
+  })
+
+if (testUrl)
+  test('legacy asset ownership is preserved and incompatible ownership stops the whole migration', async () => {
+    const world = await legacyTickets()
+    const one = 'https://github.com/acme/one',
+      two = 'https://github.com/acme/two'
+    try {
+      await world.project(one, 'ONE')
+      await world.project(two, 'TWO')
+      await world.seed('ONE')
+      const asset = {
+        kind: 'reference',
+        name: 'proof.txt',
+        layout: 'file' as const,
+        entries: [
+          { type: 'file' as const, path: 'proof.txt', content: new TextEncoder().encode('proof') },
+        ],
+      }
+      await world.store.putTicketAsset(two, 'old-1', asset)
+      const before = await world.snapshot()
+      await expect(migratePostgres(world.url, { openBlobs: () => world.blobs })).rejects.toThrow(
+        'asset ownership mismatch',
+      )
+      expect(await world.snapshot()).toEqual(before)
+      await world.sql`UPDATE ticket_assets SET repo = ${one} WHERE repo = ${two}`
+      const rows = await world.sql`SELECT * FROM ticket_assets`
+      await migratePostgres(world.url, { openBlobs: () => world.blobs })
+      expect(await world.sql`SELECT * FROM ticket_assets`).toEqual(rows)
+      const loaded = await world.store.getTicketAsset(one, 'old-1', 'reference', 'proof.txt')
+      expect(loaded).not.toBeNull()
+      const entry = loaded!.entries[0]!
+      expect(entry.type).toBe('file')
+      if (entry.type === 'file') expect(new TextDecoder().decode(entry.content)).toBe('proof')
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+/** Build the released main-v9/ticket-v1 topology directly: no registry,
+ * credential table, or current-schema opener can accidentally prepare it. */
+async function releasedV9Tickets(repositories: string[]) {
+  const database = await schemaHarness()
+  const sql = new SQL(database.url, { prepare: false })
+  const directory = await mkdtemp(join(tmpdir(), 'ab-v9-ticket-blobs-'))
+  await sql.unsafe(SCHEMA_V9_DDL)
+  await sql`INSERT INTO ab_schema_migrations VALUES (true, 9, ${SCHEMA_V9_CHECKSUM}, ${CONTRACT_T0})`
+  await sql.unsafe(TICKET_SCHEMA_V1_DDL)
+  await sql`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${CONTRACT_T0})`
+  for (const repo of repositories) {
+    const { verify, finalize, ...root } = parseConfig(
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
+    )
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps },
+        finalize: { steps: finalize.steps },
+      }),
+    )
+    const hash = new Bun.CryptoHasher('sha256').update(bytes).digest('hex')
+    await writeFile(join(directory, hash), bytes)
+    await sql`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${repo},${CONTRACT_T0},${CONTRACT_T0})`
+    await sql`INSERT INTO repo_artifacts VALUES (${repo},'dispatcher-effective-config',1,${hash},'{}'::jsonb,${CONTRACT_T0})`
+    await sql`INSERT INTO repo_events VALUES (${repo},1,${CONTRACT_T0},${JSON.stringify(DISPATCHER)}::jsonb,'dispatcher.run-started',${JSON.stringify({ run: repo, pid: 1, effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 }, roleWarnings: [] })}::jsonb)`
+  }
+  await sql`INSERT INTO ab_tickets VALUES ('ENG','ENG-1','creation-1','Original','Body','Historical',ARRAY['label'],${CONTRACT_T0},${CONTRACT_T0}), ('ENG','ENG-2',NULL,'Blocker','Body','Done',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
+  await sql`INSERT INTO ab_ticket_comments VALUES ('ENG','ENG-1',7,'Comment',${CONTRACT_T0})`
+  await sql`INSERT INTO ab_ticket_blockers VALUES ('ENG','ENG-1','ENG-2')`
+  const requests: string[] = []
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname
+      requests.push(path)
+      if (!path.startsWith('/bucket/v9-prefix/')) return new Response('', { status: 404 })
+      try {
+        return new Response(
+          new Uint8Array(await readFile(join(directory, path.slice('/bucket/v9-prefix/'.length)))),
+        )
+      } catch {
+        return new Response('', { status: 404 })
+      }
+    },
+  })
+  const env = {
+    ...process.env,
+    AB_POSTGRES_URL: database.url,
+    AB_WEB_REPOSITORIES: repositories.join(','),
+    AB_BLOB_BACKEND: 's3',
+    AB_BLOB_PREFIX: 'v9-prefix',
+    AB_S3_ENDPOINT: `http://127.0.0.1:${server.port}`,
+    AB_S3_FORCE_PATH_STYLE: 'true',
+    AB_S3_BUCKET: 'bucket',
+    AB_S3_REGION: 'us-east-1',
+    AB_S3_ACCESS_KEY_ID: 'fixture',
+    AB_S3_SECRET_ACCESS_KEY: 'fixture-secret',
+  }
+  const run = async (owner: boolean, args: string[]) => {
+    const bin = owner
+      ? join(
+          dirname(Bun.resolveSync('@defrex/autobuild-hosted-store-service', import.meta.dir)),
+          'bin.ts',
+        )
+      : new URL('./bin.ts', import.meta.url).pathname
+    const child = Bun.spawn([process.execPath, bin, ...args], {
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    expect(stdout + stderr).not.toContain('fixture-secret')
+    return { code, stdout, stderr }
+  }
+  const snapshot = async () => ({
+    tickets: await sql`SELECT * FROM ab_tickets ORDER BY id`,
+    comments: await sql`SELECT * FROM ab_ticket_comments`,
+    blockers: await sql`SELECT * FROM ab_ticket_blockers`,
+  })
+  return {
+    sql,
+    env,
+    run,
+    snapshot,
+    requests,
+    cleanup: async () => {
+      server.stop(true)
+      await sql.close()
+      await rm(directory, { recursive: true, force: true })
+      await database.cleanup()
+    },
+  }
+}
+
+if (testUrl) {
+  test('released main-v9 + populated ticket-v1 migrates via the environment CLI with a one-time legacy registry import', async () => {
+    const repo = 'https://github.com/acme/released'
+    const world = await releasedV9Tickets([repo])
+    try {
+      const before = await world.snapshot()
+      expect(
+        (await world.sql`SELECT to_regclass('project_journal') AS table_name`)[0].table_name,
+      ).toBeNull()
+      const result = await world.run(false, ['migrate'])
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(
+        SCHEMA_VERSION,
+      )
+      await assertTicketSchema(world.sql)
+      const registry = await world.sql`SELECT repo,actor FROM project_journal`
+      expect(registry).toEqual([{ repo, actor: 'system:AB_WEB_REPOSITORIES' }])
+      expect(
+        (await world.sql`SELECT legacy_imported FROM project_registry_state`)[0].legacy_imported,
+      ).toBe(true)
+      const after = await world.snapshot()
+      for (const key of ['tickets', 'comments', 'blockers'] as const)
+        expect(after[key]).toEqual(
+          before[key].map(({ team: _team, ...row }: Row) => ({ repo, ...row })),
+        )
+      expect(world.requests.length).toBeGreaterThan(0)
+      // Subsequent malformed retired environment is not reinterpreted.
+      world.env.AB_WEB_REPOSITORIES = 'not-a-repository'
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      expect(await world.sql`SELECT repo,actor FROM project_journal`).toEqual(registry)
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('released v9 ambiguity rolls back main and ticket schemas; both owner recovery commands work before rerunning migration', async () => {
+    const repos = [
+      'https://github.com/acme/one',
+      'https://github.com/acme/two',
+      'https://github.com/acme/three',
+    ]
+    const world = await releasedV9Tickets(repos)
+    world.env.AB_WEB_REPOSITORIES = repos.slice(0, 2).join(',')
+    try {
+      const before = await world.snapshot()
+      const failed = await world.run(false, ['migrate'])
+      expect(failed.code).toBe(1)
+      expect(failed.stderr).toContain(`conflicting projects: ${repos[0]}, ${repos[1]}`)
+      expect(await world.snapshot()).toEqual(before)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(9)
+      expect(
+        Number((await world.sql`SELECT version FROM ab_ticket_schema_migrations`)[0].version),
+      ).toBe(1)
+      expect(
+        (await world.sql`SELECT to_regclass('project_journal') AS table_name`)[0].table_name,
+      ).toBeNull()
+      const assigned = await world.run(true, [
+        'tickets',
+        'assign-team',
+        'ENG',
+        repos[0]!,
+        '--user',
+        'owner',
+      ])
+      expect(assigned.stderr).toBe('')
+      expect(assigned.code).toBe(0)
+      const added = await world.run(true, ['projects', 'add', repos[2]!, '--user', 'owner'])
+      expect(added.stderr).toBe('')
+      expect(added.code).toBe(0)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(9)
+      expect(await world.snapshot()).toEqual(before)
+      expect(
+        (await world.sql`SELECT to_regclass('project_credentials') AS table_name`)[0].table_name,
+      ).toBeNull()
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      await assertSchema(world.sql)
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
+        { repo: repos[0] },
+      ])
+      expect((await world.sql`SELECT actor FROM ticket_team_assignments`)[0].actor).toBe('owner')
+    } finally {
+      await world.cleanup()
+    }
+  })
+}
+
+if (testUrl)
+  test('released v9 without legacy environment remains recoverable by explicit project registration and team assignment', async () => {
+    const repo = 'https://github.com/acme/recovery'
+    const world = await releasedV9Tickets([repo])
+    world.env.AB_WEB_REPOSITORIES = ''
+    try {
+      const before = await world.snapshot()
+      const failed = await world.run(false, ['migrate'])
+      expect(failed.code).toBe(1)
+      expect(failed.stderr).toContain('no project claims this team')
+      expect((await world.run(true, ['projects', 'add', repo, '--user', 'owner'])).code).toBe(0)
+      expect(
+        (await world.run(true, ['tickets', 'assign-team', 'ENG', repo, '--user', 'owner'])).code,
+      ).toBe(0)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(9)
+      expect(await world.snapshot()).toEqual(before)
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      await assertSchema(world.sql)
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([{ repo }])
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+import { openTicketAssignmentsFromEnv } from './ticket-assignments'
+
+if (testUrl) {
+  test('registered projects without a dispatcher run or effective-config reference make no team claim', async () => {
+    const world = await legacyTickets()
+    const owner = 'https://github.com/acme/owner'
+    const fresh = 'https://github.com/acme/fresh'
+    const unconfigured = 'https://github.com/acme/unconfigured'
+    try {
+      const artifact = await world.project(owner, 'ONE')
+      await world.seed('ONE')
+      for (const repo of [fresh, unconfigured]) {
+        await world.sql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'),${repo},'added','owner',${CONTRACT_T0})`
+      }
+      await world.store.ensureRepo(unconfigured)
+      // Historical run without a config ref: no claim, not an unreadable ref.
+      await world.sql`INSERT INTO repo_events (repo,seq,ts,actor,type,payload) VALUES (${unconfigured},1,${CONTRACT_T0},${DISPATCHER},'dispatcher.run-started',${{ run: 'unconfigured', pid: 1, roleWarnings: [] }})`
+      await migratePostgres(world.url, { openBlobs: () => world.blobs })
+      await assertTicketSchema(world.sql)
+      expect(world.reads).toEqual([artifact.blobRef])
+      expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(owner)
+      expect(
+        Number((await world.sql`SELECT count(*) AS count FROM project_journal`)[0].count),
+      ).toBe(3)
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('v9 legacy import tolerates a listed project that never ran a dispatcher', async () => {
+    const owner = 'https://github.com/acme/released'
+    const fresh = 'https://github.com/acme/fresh'
+    const world = await releasedV9Tickets([owner])
+    world.env.AB_WEB_REPOSITORIES = `${owner},${fresh}`
+    try {
+      const result = await world.run(false, ['migrate'])
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT repo FROM project_journal ORDER BY repo`)]).toEqual([
+        { repo: fresh },
+        { repo: owner },
+      ])
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
+        { repo: owner },
+      ])
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('a legacy team with no configured claimant fails closed and owner assignment recovers without removing the fresh project', async () => {
+    const fresh = 'https://github.com/acme/fresh'
+    const world = await releasedV9Tickets([])
+    world.env.AB_WEB_REPOSITORIES = fresh
+    try {
+      const before = await world.snapshot()
+      const result = await world.run(false, ['migrate'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('no project claims this team')
+      expect(result.stderr).toContain('assign-team')
+      expect(await world.snapshot()).toEqual(before)
+      expect(
+        (await world.run(true, ['tickets', 'assign-team', 'ENG', fresh, '--user', 'owner'])).code,
+      ).toBe(0)
+      world.requests.length = 0
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      expect(world.requests).toEqual([])
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
+        { repo: fresh },
+      ])
+      expect([...(await world.sql`SELECT repo FROM project_journal`)]).toEqual([{ repo: fresh }])
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('unreadable selected configs fail closed with actionable guidance and complete owner assignments unblock migration', async () => {
+    for (const failure of [
+      'missing-blob',
+      'denied-blob',
+      'invalid-json',
+      'invalid-config',
+      'missing-revision',
+    ]) {
+      const world = await legacyTickets()
+      const owner = 'https://github.com/acme/owner'
+      const unrelated = 'https://github.com/acme/unreadable'
+      try {
+        await world.project(owner, 'ONE')
+        const artifact = await world.project(unrelated, 'OTHER')
+        await world.seed('ONE')
+        if (failure === 'missing-revision')
+          await world.sql`DELETE FROM repo_artifacts WHERE repo = ${unrelated}`
+        const blobs: BlobStore = {
+          ...world.blobs,
+          get: async (hash) => {
+            if (hash !== artifact.blobRef) return world.blobs.get(hash)
+            if (failure === 'missing-blob') return null
+            if (failure === 'denied-blob') throw new Error('provider-secret-must-not-leak')
+            if (failure === 'invalid-json') return new TextEncoder().encode('{broken')
+            if (failure === 'invalid-config') return new TextEncoder().encode('{}')
+            return world.blobs.get(hash)
+          },
+        }
+        const before = await world.snapshot()
+        let failureMessage: string | undefined
+        try {
+          await migratePostgres(world.url, { openBlobs: () => blobs })
+        } catch (error) {
+          failureMessage = (error as Error).message
+        }
+        expect(failureMessage).toContain('Ticket migration stopped unchanged:')
+        expect(failureMessage).toContain('assign every remaining legacy team (ONE)')
+        expect(failureMessage).not.toContain('provider-secret-must-not-leak')
+        expect(await world.snapshot()).toEqual(before)
+        const assignments = await openTicketAssignmentsFromEnv({ AB_POSTGRES_URL: world.url })
+        try {
+          await assignments.assign('ONE', owner, 'owner')
+        } finally {
+          await assignments.close()
+        }
+        await migratePostgres(world.url, {
+          openBlobs: () => ({
+            ...blobs,
+            get: async () => {
+              throw new Error('config bytes must not be read after all ownership is explicit')
+            },
+          }),
+        })
+        await assertTicketSchema(world.sql)
+        expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(owner)
+        expect(
+          Number((await world.sql`SELECT count(*) AS count FROM project_journal`)[0].count),
+        ).toBe(2)
+      } finally {
+        await world.cleanup()
+      }
+    }
+  })
+}
+
+if (testUrl)
+  test('partial assignments do not suppress unreadable configuration when another legacy team still needs ownership', async () => {
+    const world = await legacyTickets()
+    const one = 'https://github.com/acme/one',
+      two = 'https://github.com/acme/two'
+    try {
+      await world.project(one, 'ONE')
+      const unreadable = await world.project(two, 'TWO')
+      await world.seed('ONE')
+      await world.seed('TWO')
+      const assignments = await openTicketAssignmentsFromEnv({ AB_POSTGRES_URL: world.url })
+      try {
+        await assignments.assign('ONE', one, 'owner')
+        const blobs = {
+          ...world.blobs,
+          get: async (hash: string) => (hash === unreadable.blobRef ? null : world.blobs.get(hash)),
+        }
+        const before = await world.snapshot()
+        await expect(migratePostgres(world.url, { openBlobs: () => blobs })).rejects.toThrow(
+          'assign every remaining legacy team (TWO)',
+        )
+        expect(await world.snapshot()).toEqual(before)
+        await assignments.assign('TWO', two, 'owner')
+        await migratePostgres(world.url, { openBlobs: () => blobs })
+        await assertTicketSchema(world.sql)
+        expect(
+          (await world.sql`SELECT repo FROM ab_tickets WHERE id = 'old-1' ORDER BY repo`).map(
+            (row: { repo: string }) => row.repo,
+          ),
+        ).toEqual([one, two])
+      } finally {
+        await assignments.close()
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })

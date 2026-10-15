@@ -299,12 +299,7 @@ if (testUrl)
         // no registry deletion owns their lifetime.
         const blobs = new MemoryBlobStore()
         const store = await openPostgresBuildStore(database.url, blobs)
-        const tickets = await openPostgresTicketDatabase(database.url, {
-          triage: 'Triage',
-          ready: 'Ready',
-          doing: 'Doing',
-          done: 'Done',
-        })
+        const tickets = await openPostgresTicketDatabase(database.url)
         try {
           await store.createBuild({ slug: 'retained-project', repo })
           await store.append('retained-project', {
@@ -313,7 +308,10 @@ if (testUrl)
             payload: {},
           })
           await store.putArtifact('retained-project', { kind: 'notes', content: 'retained' })
-          const source = tickets.source({ teamKey: repo })
+          const source = tickets.source({
+            repo,
+            lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+          })
           const ticket = await source.create({ title: 'Retained ticket', body: 'Evidence' })
           await first.remove(repo, 'Ada')
           await second.remove(repo, 'Grace')
@@ -506,3 +504,125 @@ test.skipIf(!testUrl)(
     }
   },
 )
+
+import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
+import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
+import { OperatorApiClient } from './operator-client'
+
+if (testUrl)
+  test('real hosted project credentials isolate same-team queues and assets with project lifecycle', async () => {
+    const database = await isolatedDatabase()
+    const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    const registry = await openPostgresProjectRegistryFromEnv({ AB_POSTGRES_URL: database.url })
+    const credentials = await openPostgresCredentialStoreFromEnv({ AB_POSTGRES_URL: database.url })
+    const tickets = await openPostgresTicketDatabase(database.url)
+    const repos = ['https://github.com/acme/one', 'https://github.com/acme/two']
+    const diagnostics: string[] = []
+    try {
+      const tokens: string[] = []
+      for (const [index, repo] of repos.entries()) {
+        await registry.add(repo, 'owner')
+        tokens.push((await credentials.issue(repo, 'owner')).token)
+        await backing.ensureRepo(repo)
+        const { verify, finalize, ...root } = parseConfig(
+          `[tickets]\nsource = "hosted"\nteamKey = "SAME"\nreadyState = "Ready"\nclaimedState = "Active${index}"\ndoneState = "Complete${index}"\ncreateState = "Draft${index}"\n[verify]\nsteps = []\n[finalize]\nsteps = []`,
+        )
+        const artifact = await backing.putRepoArtifact(repo, {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            ...root,
+            verify: { steps: verify.steps },
+            finalize: { steps: finalize.steps },
+          }),
+        })
+        await backing.appendRepo(repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: repo,
+            pid: 1,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: [],
+          },
+        })
+      }
+      const service = createHostedStoreService({
+        env: {
+          AB_STORE_SECRET: 'secret',
+          AB_POSTGRES_URL: database.url,
+          AB_BLOB_BACKEND: 's3',
+          AB_S3_BUCKET: 'unused',
+          AB_S3_REGION: 'us-east-1',
+          AB_S3_ACCESS_KEY_ID: 'unused',
+          AB_S3_SECRET_ACCESS_KEY: 'unused',
+          AB_TICKET_BACKEND: 'linear',
+          LINEAR_API_KEY: 'never-used',
+          AB_TICKET_DONE_STATE: ' ',
+        },
+        diagnostic: (message) => diagnostics.push(message),
+        openStore: async () => backing,
+        openProjectRegistry: async () => registry,
+        openCredentials: async () => credentials,
+        openTicketDatabase: async () => tickets,
+      })
+      expect(diagnostics).toHaveLength(1)
+      const fetchFn = async (input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(new Request(input, init))
+      const clients = tokens.map(
+        (token) =>
+          new HostedTicketSource({
+            url: 'http://test',
+            token,
+            teamKey: 'FORGED',
+            claimedState: 'FORGED',
+            createState: 'FORGED',
+            fetchFn,
+          }),
+      )
+      const one = clients[0]!,
+        two = clients[1]!
+      const a = await one.create({ title: 'One', body: 'Body' }, { idempotencyKey: 'same' })
+      const b = await two.create({ title: 'Two', body: 'Body' }, { idempotencyKey: 'same' })
+      expect(a.state).toBe('Draft0')
+      expect(b.state).toBe('Draft1')
+      expect(await two.get(a.ref.id)).toBeNull()
+      await expect(two.addBlocker(b.ref.id, a.ref.id)).rejects.toThrow('unknown ticket')
+      await one.claim(a.ref.id)
+      expect((await one.get(a.ref.id))?.state).toBe('Active0')
+      await one.transition(a.ref.id, 'Complete0')
+      expect((await one.get(a.ref.id))?.resolved).toBe(true)
+      expect((await two.listReady({})).tickets.map((ticket) => ticket.title)).toEqual(['Two'])
+      const operator = new OperatorApiClient({
+        url: 'http://test',
+        token: tokens[0]!,
+        fetchFn: fetchFn as typeof fetch,
+      })
+      expect(
+        (await operator.listTickets(repos[0]!, { state: 'Complete0' })).tickets.map(
+          (ticket) => ticket.title,
+        ),
+      ).toEqual(['One'])
+      await expect(operator.listTickets(repos[1]!)).rejects.toThrow('wrong project')
+      const stores = tokens.map(
+        (token) =>
+          new RemoteBuildStore({ url: 'http://test', token, fetchFn: fetchFn as typeof fetch }),
+      )
+      await stores[0]!.putTicketAsset(repos[0]!, a.ref.id, {
+        kind: 'reference',
+        name: 'proof.txt',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'proof.txt', content: new TextEncoder().encode('proof') }],
+      })
+      await expect(stores[1]!.listTicketAssets(repos[0]!, a.ref.id)).rejects.toThrow(
+        'wrong project',
+      )
+      expect(await stores[1]!.listTicketAssets(repos[1]!, a.ref.id)).toEqual([])
+      expect(diagnostics).toHaveLength(1)
+    } finally {
+      await tickets.close()
+      await credentials.close()
+      await registry.close()
+      await backing.close()
+      await database.cleanup()
+    }
+  })

@@ -1,7 +1,7 @@
+import { ticketProject } from './testing/ticket-project'
 import { expect, test } from 'bun:test'
 import { describeTicketSourceContract, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { HostedTicketSource } from './remote-tickets'
-import { mintToken } from '@defrex/autobuild/remote-store'
 import { createHostedStoreService } from './service'
 
 const now = new Date('2026-01-01T00:00:00.000Z')
@@ -18,16 +18,14 @@ const env = {
 
 describeTicketSourceContract('hosted service composition', async () => {
   const backend = new FakeTicketSource([], { doneState: 'Done' })
+  const project = await ticketProject('https://github.com/acme/tickets', secret, () => now)
   const service = createHostedStoreService({
+    ...project,
     env,
     clock: () => now,
     sourceFor: () => backend,
   })
-  const token = mintToken(secret, {
-    version: 1,
-    ownerAdmin: { user: 'owner:fixture' },
-    exp: now.getTime() + 60_000,
-  })
+  const token = project.token
   return {
     source: new HostedTicketSource({
       url: 'https://hosted.example',
@@ -61,12 +59,14 @@ test.each([true, undefined])('real hosted transport preserves listing hint %s', 
     ],
     diagnostics: [],
   })
-  const service = createHostedStoreService({ env, clock: () => now, sourceFor: () => backend })
-  const token = mintToken(secret, {
-    version: 1,
-    ownerAdmin: { user: 'owner:fixture' },
-    exp: now.getTime() + 60_000,
+  const project = await ticketProject('https://github.com/acme/tickets', secret, () => now)
+  const service = createHostedStoreService({
+    ...project,
+    env,
+    clock: () => now,
+    sourceFor: () => backend,
   })
+  const token = project.token
   const source = new HostedTicketSource({
     url: 'https://hosted.example',
     token,

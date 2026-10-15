@@ -1383,3 +1383,12 @@ describe('post-reconcile verification policy', () => {
       expect(() => parseConfig(raw)).toThrow()
   })
 })
+
+test('hosted lifecycle roles may overlap and doneState must be nonblank', () => {
+  const config =
+    '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Open"\nclaimedState = "Open"\ntriageState = "Inbox"\ncreateState = "Draft"\nproposalState = "Inbox"\ndoneState = "Shipped"\n'
+  expect(parseConfig(config).tickets.doneState).toBe('Shipped')
+  expect(() => parseConfig(config.replace('doneState = "Shipped"', 'doneState = " "'))).toThrow(
+    'doneState',
+  )
+})

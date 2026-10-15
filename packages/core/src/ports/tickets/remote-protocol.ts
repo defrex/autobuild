@@ -4,6 +4,7 @@ import { ticketRefSchema } from '../../ontology'
 /** Repository-owned policy sent with every hosted ticket operation. */
 export const hostedTicketContextSchema = z.strictObject({
   teamKey: z.string().min(1),
+  repo: z.string().min(1).optional(),
   claimedState: z.string().min(1).optional(),
   createState: z.string().min(1).optional(),
 })

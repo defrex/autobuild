@@ -1,3 +1,4 @@
+import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testProjects } from '../testing/projects'
 /**
  * End-to-end OAuth 2.1 + MCP over the hosted service (AUT-341): a single
@@ -426,6 +427,41 @@ describe('hosted MCP over OAuth (memory adapter)', () => {
       expect(JSON.parse((reads.content as { text: string }[])[0]!.text)).toEqual([])
     } finally {
       await mcpClient.close()
+    }
+  })
+
+  test('MCP ticket tools retain external-source refusal instead of returning an empty queue', async () => {
+    const client = await connectClient(app, adaTokens!, registered!)
+    try {
+      await backing.ensureRepo(REPO)
+      for (const source of ['linear', 'file']) {
+        const { verify, finalize, ...root } = parseConfig(
+          `[tickets]\nsource = "${source}"\n${source === 'linear' ? 'teamKey = "ENG"\n' : ''}readyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []`,
+        )
+        const artifact = await backing.putRepoArtifact(REPO, {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            ...root,
+            verify: { steps: verify.steps },
+            finalize: { steps: finalize.steps },
+          }),
+        })
+        await backing.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: `ticket-${source}`,
+            pid: 1,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: [],
+          },
+        })
+        const result = await client.callTool({ name: 'tickets.list', arguments: { repo: REPO } })
+        expect(result.isError).toBe(true)
+        expect((result.content as { text: string }[])[0]!.text).toContain(source)
+      }
+    } finally {
+      await client.close()
     }
   })
 

@@ -162,3 +162,45 @@ test('credential owner commands issue once, list redacted metadata, revoke idemp
   expect(await store.authenticate(issued.token, new Date())).toBeNull()
   expect(closes).toBe(4)
 })
+
+test('ticket team assignment validates arguments before opening its independent recovery store', async () => {
+  const calls: string[][] = []
+  let opens = 0,
+    closes = 0
+  const errors: string[] = []
+  const run = (args: string[]) =>
+    runHostedCli(
+      args,
+      {},
+      () => {},
+      (text) => errors.push(text),
+      undefined,
+      undefined,
+      async () => {
+        opens++
+        return {
+          assign: async (...input) => {
+            calls.push(input)
+          },
+          close: async () => {
+            closes++
+          },
+        }
+      },
+    )
+  for (const args of [
+    ['tickets', 'assign-team'],
+    ['tickets', 'assign-team', ' ', 'https://github.com/acme/app', '--user', 'owner'],
+    ['tickets', 'assign-team', 'ENG', '/tmp/repo', '--user', 'owner'],
+    ['tickets', 'assign-team', 'ENG', 'https://github.com/acme/app', '--user', ' '],
+    ['tickets', 'assign-team', 'ENG', 'https://github.com/acme/app', '--user', 'owner', '--extra'],
+  ])
+    expect(await run(args)).toBe(2)
+  expect(opens).toBe(0)
+  expect(
+    await run(['tickets', 'assign-team', 'ENG', 'git@github.com:acme/app.git', '--user', 'owner']),
+  ).toBe(0)
+  expect(calls).toEqual([['ENG', 'https://github.com/acme/app', 'owner']])
+  expect(opens).toBe(1)
+  expect(closes).toBe(1)
+})
