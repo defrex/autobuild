@@ -26,16 +26,45 @@ headers, or available backend.
 
 ## Authentication and context
 
-Every request is `POST /tickets/<operation>`, has `Content-Type:
-application/json`, and requires `Authorization: Bearer <token>`. Only a signed,
-unexpired **deployment operator** token (`{ "operator": true, … }`) is accepted.
-Attributed human-operator, legacy admin, build, repository, and session tokens
-remain valid for their own routes but are denied on `/tickets`. Mint a deployment
-operator token offline with:
+Every request is `POST /tickets/<operation>`, has `Content-Type: application/json`,
+and requires `Authorization: Bearer <project credential>`. Authentication and
+registration checks precede body parsing and source construction. Owner admin
+is the explicit cross-project exception; internal operator signatures have no
+ticket authority.
+
+Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
+registered normalized repository. The service stores only a SHA-256 digest of
+the random secret, plus project, creator, creation time, last use, expiry and
+revocation metadata. It checks credential status and project registration on
+every request. Revocation takes effect on the next request without affecting
+other credentials. Unknown, expired or revoked credentials receive `401 auth`;
+removed projects receive `403 auth` with `project not registered`.
+
+The deployment owner runs these commands locally with database access:
 
 ```sh
-AB_STORE_SECRET='…' ab-hosted-store mint operator --ttl-seconds 3600
+ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
+ab-hosted-store credentials list https://github.com/acme/app
+ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
 ```
+
+Issue prints the secret once; list contains metadata only. Issue optionally
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
+`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+retired: the service responds that the credential format changed and points
+to `credentials issue`. Supported old protocol shapes still work with a new
+credential; protocol compatibility does not restore retired authentication.
+
+`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
+break-glass credential. It can cross project boundaries. Keep it owner-only:
+never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
+
+Ticket admission is implicitly addressed to the credential's registered project.
+The strict context below has no `repo` field; client-supplied repository fields
+are rejected and `teamKey` cannot widen credential authority. This does not
+partition the deployment's existing shared Linear/team backend: two projects
+configured for the same team may access the same tickets. Ticket-record tenancy
+is deferred to the separate project-scoped hosted-ticket work.
 
 The strict request envelope is:
 

@@ -1313,8 +1313,8 @@ createState = "Triage"
 triageState = "Triage"
 ```
 
-Set `AB_STORE` to the service's HTTP(S) URL and `AB_TOKEN` to a deployment
-operator token (`mint operator` without `--user`). The same source-agnostic wiring powers dispatch, harvest, ticket-aware
+Set `AB_STORE` to the service's HTTP(S) URL and `AB_TOKEN` to a stored credential
+for that registered project (`credentials issue REPOSITORY --user IDENTITY`). The same source-agnostic wiring powers dispatch, harvest, ticket-aware
 skills, and all seven command families: `ab ticket create`, `update`, `block`,
 `unblock`, `list`, `show`, and `move`. See the
 [hosted ticket protocol](remote-ticket-protocol.md). In hosted Linear mode,
@@ -1666,7 +1666,7 @@ Secrets and store selection accompany the file through environment variables:
 |---|---|---|
 | `LINEAR_API_KEY` | Direct Linear ticket source | Required and nonempty when `tickets.source = "linear"`; in hosted Linear mode it is service-only. |
 | `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
-| `AB_TOKEN` | Protected remote BuildStore and hosted tickets | Bearer credential forwarded to the service. Hosted tickets require deployment operator scope (`mint operator` without `--user`). Empty means no token; nonempty token bytes are treated as opaque. |
+| `AB_TOKEN` | Protected remote BuildStore and hosted tickets | Bearer credential forwarded to the service. Hosted tickets require a stored credential for a registered project. Owner admin is an explicit break-glass exception. Empty means no token; nonempty token bytes are treated as opaque. |
 
 A local store selection relocates the state database, blobs, worktrees, and the
 default file-ticket directory together. With a remote store, Git worktrees and

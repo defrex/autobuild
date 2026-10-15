@@ -259,6 +259,11 @@ presents (`sandboxAuth=oidc-header`, `oidc-env`, `token`, or `none`); `none`
 means the project has OIDC federation disabled (Settings → Security). No
 long-lived `VERCEL_TOKEN` belongs on the service. Guests never receive a Vercel
 token or forge credential; they authenticate to the Store with the short-TTL
-deployment operator token the dispatcher mints for the tick
+stored project credential the dispatcher issues for each repository tick
 (`AB_DISPATCHER_TOKEN_TTL_SECONDS`, default 7 days — keep it longer than your
-largest `timeoutSeconds` guest lifetime).
+largest `timeoutSeconds` guest lifetime). Its immutable dispatcher purpose
+permits raw Store and hosted tickets only, never operator controls. The service
+checks registration and revocation on each request. Tick return does not revoke
+it; spawned builds may outlive the tick. Owner-issued project credentials and
+the owner-only break-glass admin are documented in the
+[remote Store protocol](remote-store-protocol.md#7-authentication-and-project-authority).

@@ -22,65 +22,36 @@ for the exact template, environment, checks, and upgrade procedure. Store-only
 mode is the default: without the optional dispatcher, `/api/dispatch` returns
 503 with “dispatch runs elsewhere for this deployment”, and no cron is supplied.
 
-The existing `ab-hosted-store` binary still mints machine tokens locally:
+Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
+registered normalized repository. The service stores only a SHA-256 digest of
+the random secret, plus project, creator, creation time, last use, expiry and
+revocation metadata. It checks credential status and project registration on
+every request. Revocation takes effect on the next request without affecting
+other credentials. Unknown, expired or revoked credentials receive `401 auth`;
+removed projects receive `403 auth` with `project not registered`.
+
+The deployment owner runs these commands locally with database access:
 
 ```sh
-AB_STORE_SECRET='…' bunx ab-hosted-store mint operator --ttl-seconds 3600
+ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
+ab-hosted-store credentials list https://github.com/acme/app
+ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
 ```
 
-Deployment operator tokens cover store and ticket operations, allowing one
-dispatcher credential. Legacy admin tokens still cover store administration but
-cannot access tickets.
+Issue prints the secret once; list contains metadata only. Issue optionally
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
+`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+retired: the service responds that the credential format changed and points
+to `credentials issue`. Supported old protocol shapes still work with a new
+credential; protocol compatibility does not restore retired authentication.
 
-The same deployment also serves the versioned [operator API](https://github.com/defrex/autobuild/blob/main/docs/operator-api.md).
-External agents connect to the [MCP server](https://github.com/defrex/autobuild/blob/main/docs/mcp.md) at `/mcp` — the
-same operator tool registry over Streamable HTTP with OAuth 2.1 through Better
-Auth — and every write is attributed to the person who authorized the client.
-Mint an attributed human-operator token with `--user`; unlike the deployment
-credential, it can use only the operator API and its signed identity is recorded
-on every control:
+`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
+break-glass credential. It can cross project boundaries. Keep it owner-only:
+never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
 
-```sh
-AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator \
-  --user 'Ada Lovelace' --ttl-seconds 3600
-```
-
-Mint a least-privilege build/session token with an explicit future expiry:
-
-```sh
-AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint build \
-  --build my-build --session implement --expires-at 2026-09-03T00:00:00Z
-```
-
-Minting is entirely local: the command reads only `AB_STORE_SECRET`, contacts no
-server, and prints only the token. Do not put the signing secret in a repository,
-browser, client host, command history, or logs; rotate it to revoke all tokens.
-
-A deployment has one ticket backend. `AB_TICKET_BACKEND` defaults to `database`,
-which stores team-scoped tickets, comments, and blockers in PostgreSQL with the
-`Triage`, `Ready`, `Doing`, and `Done` lifecycle. Override those distinct names
-with `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
-`AB_TICKET_DOING_STATE`, and `AB_TICKET_DONE_STATE`. Set the backend to `linear`
-and provide `LINEAR_API_KEY` on the service to pass every request to the
-existing Linear adapter. That key never belongs on dispatcher or browser
-hosts. Team and claim/create policy arrive per request from repository config. The signed-in web Tickets surface uses the same durable effective config, discovers lifecycle names from this configured backend, and polls every two seconds. Its create/edit/move/block operations are delegated through short-lived attributed operator tokens; provider credentials and bearer tokens never reach the browser.
-Run the migration before serving (the deployment build does so automatically); it adds separately versioned ticket and
-Better Auth schemas without changing an existing BuildStore v1 marker. Startup
-never creates or changes schema.
-
-Each artifact is content-by-value and limited to **1,048,576 decoded bytes (1
-MiB)**. Base64 and JSON make the HTTP body larger. A larger deposit receives a
-JSON 413 error naming that ceiling and does not mutate the store.
-
-Each event read also accepts a bounded wait (`?since=N&wait=S` on the build and
-repository event routes): when nothing newer than `since` exists, the server
-holds the request until such an event is appended or `S` seconds elapse, then
-answers. `wait` is one or more ASCII digits (whole seconds); any other form is a
-400 validation error, and a value above the hosted ceiling of **25 seconds** is
-clamped to 25, never rejected. The ceiling must stay under the machine routes'
-`maxDuration` of 60 s (`app/builds/[[...path]]/route.ts` and
-`app/repos/[[...path]]/route.ts` in this package's app tree), which exists to cover the hold; raise the
-two together if you change either.
+See [remote store authority](../../docs/remote-store-protocol.md#7-authentication-and-project-authority),
+[ticket admission](../../docs/remote-ticket-protocol.md) and
+[operator delegation](../../docs/operator-api.md).
 
 ### Web/auth variables
 
@@ -149,8 +120,8 @@ MCP discovery and calls, and every operator API route consult current
 registration. Removal hides a project from all these surfaces and subsequent
 hosted dispatcher invocations; builds, events, artifacts and tickets remain,
 and re-registration restores access. Already-started work is not cancelled.
-Machine BuildStore and ticket credentials retain their existing authority;
-project-bound credentials are a separate feature.
+Machine credentials are bound to one registered project; removal immediately
+refuses its credentials without deleting history.
 
 Link directly to `/?repo=<URL-encoded normalized origin>`. The page selects the
 first registered origin when the requested one is missing or removed, and an
