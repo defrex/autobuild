@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#599](https://github.com/defrex/autobuild/pull/599) — Batch Linear dependency reads and paginate ready listings
 - [#597](https://github.com/defrex/autobuild/pull/597) — Prune redundant dependency reads during dispatch
 ## v0.10.1 — 2026-10-14
 
