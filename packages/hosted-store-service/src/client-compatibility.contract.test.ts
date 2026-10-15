@@ -1,3 +1,4 @@
+import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 import { expect, test } from 'bun:test'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
@@ -15,9 +16,21 @@ import * as ticketWire from './compatibility-fixtures/tickets-v0.9'
 import * as operatorWire from './compatibility-fixtures/operator-v0.9'
 
 const secret = 'historical-contract'
-const token = mintToken(secret, { operator: true, session: '*', exp: Date.now() + 600_000 })
-const admin = mintToken(secret, { build: '*', session: '*', exp: Date.now() + 600_000 })
-const operator = mintToken(secret, { operator: { user: 'historical' }, exp: Date.now() + 600_000 })
+const token = mintToken(secret, {
+  version: 1,
+  ownerAdmin: { user: 'owner:fixture' },
+  exp: Date.now() + 600_000,
+})
+const admin = mintToken(secret, {
+  version: 1,
+  ownerAdmin: { user: 'owner:fixture' },
+  exp: Date.now() + 600_000,
+})
+const operator = mintToken(secret, {
+  version: 1,
+  internalOperator: { user: 'historical', repo: 'repo' },
+  exp: Date.now() + 600_000,
+})
 function request(path: string, version: string, body?: unknown, bearer = admin, protocol = '3') {
   return new Request(`https://test${path}`, {
     method: body === undefined ? 'GET' : 'POST',
@@ -283,7 +296,7 @@ for (const version of ['0.9.0', '0.10.0']) {
     const response = await server.fetch(new Request(controlRequest, { method: 'PUT' }))
     expect(response.status).toBe(200)
     const denied = await server.fetch(
-      request('/operator/v1/repos/repo/builds', version, undefined, admin),
+      request('/operator/v1/repos/repo/builds', version, undefined, ''),
     )
     operatorWire.operatorErrorSchema.parse(await denied.json())
     const tools = await server.fetch(
@@ -295,5 +308,49 @@ for (const version of ['0.9.0', '0.10.0']) {
       ),
     )
     expect(tools.status).toBe(200)
+  })
+}
+
+for (const version of ['0.9.0', '0.10.0']) {
+  test(`historical ${version} wire shapes accept opaque project credentials`, async () => {
+    const repo = 'https://github.com/acme/compatibility'
+    const projects = testProjects([repo])
+    const { store: credentials, auth } = testCredentials(projects, secret)
+    const { token } = await credentials.issue(repo, 'historical-owner')
+    const store = new MemoryBuildStore()
+    const server = createStoreServer({ store, secret, auth })
+    const created = await server.fetch(
+      request('/builds', version, { slug: 'fix-login', repo }, token),
+    )
+    expect(created.status).toBe(201)
+    const record = storeWire.buildRecordWireSchema.parse(await created.json())
+    expect(record.slug).toMatch(/^fix-login-/)
+    expect(record.branch).toBe(`ab/${record.slug}`)
+    const operators = createOperatorServer({ store, secret, projects, auth })
+    expect(
+      (
+        await operators.fetch(
+          request(
+            `/operator/v1/repos/${encodeURIComponent(repo)}/builds`,
+            version,
+            undefined,
+            token,
+          ),
+        )
+      ).status,
+    ).toBe(200)
+    const tickets = createTicketServer({ secret, auth, sourceFor: () => new FakeTicketSource() })
+    expect(
+      (
+        await tickets.fetch(
+          request(
+            '/tickets/list-ready',
+            version,
+            { context: { teamKey: 'ENG' }, input: {} },
+            token,
+          ),
+        )
+      ).status,
+    ).toBe(200)
   })
 }

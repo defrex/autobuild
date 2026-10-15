@@ -166,20 +166,6 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
       const resolved = await operator(request)
       if (resolved instanceof Response) return resolved
 
-      // One minted attributed operator token per request, executed by the
-      // operator server (delegated in-process — the signed-token path is
-      // genuinely exercised without a network hop).
-      const token = mintToken(options.storeSecret, {
-        operator: { user: resolved.email },
-        via: { kind: 'mcp', client: resolved.client },
-        exp: now().getTime() + 30_000,
-      })
-      const client = new OperatorApiClient({
-        url: config.baseURL,
-        token,
-        fetchFn: asFetch(options.delegate),
-      })
-
       const server = new McpServer(
         { name: 'autobuild', version: AUTOBUILD_VERSION },
         { instructions: MCP_SERVER_INSTRUCTIONS },
@@ -221,6 +207,17 @@ export function createMcpEndpoint(options: McpEndpointOptions): {
                   waitSeconds: Math.min(waitSeconds, MCP_MAX_WAIT_SECONDS),
                 }
               }
+              const token = mintToken(options.storeSecret, {
+                version: 1,
+                internalOperator: { user: resolved.email, repo: parsed.repo },
+                via: { kind: 'mcp', client: resolved.client },
+                exp: now().getTime() + 30_000,
+              })
+              const client = new OperatorApiClient({
+                url: config.baseURL,
+                token,
+                fetchFn: asFetch(options.delegate),
+              })
               const value = await client.callTool(parsed.repo, entry.name, input)
               return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
             } catch (error) {

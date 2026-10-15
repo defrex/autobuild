@@ -91,8 +91,8 @@ test('complete remote phase identity has the same query allow/deny matrix', asyn
     AB_PHASE: 'implement@1',
     AB_SESSION: 's_remote_read',
     AB_TOKEN: mintToken(secret, {
-      build: 'remote-own',
-      session: 's_remote_read',
+      version: 1,
+      ownerAdmin: { user: 'owner' },
       exp: Date.now() + 60_000,
     }),
   }
@@ -122,7 +122,7 @@ test('complete remote phase identity has the same query allow/deny matrix', asyn
     ]) {
       const denied = await runBin(argv, env)
       expect(denied.code).toBe(1)
-      expect(denied.stderr).toContain('token scoped to build "remote-own"')
+      expect(denied.stderr).toContain('phase-session store scoped to build "remote-own"')
     }
     expect(await Bun.file(join(tmp, 'downloads', 'remote-foreign.txt')).exists()).toBe(false)
   } finally {
@@ -137,8 +137,8 @@ test('the binary forwards a bearer token to remote HTTP and rejects missing or i
   const backing = new MemoryBuildStore({ clock: () => now })
   const server = startStoreServer({ store: backing, secret, clock: () => now })
   const token = mintToken(secret, {
-    build: '*',
-    session: '*',
+    version: 1,
+    ownerAdmin: { user: 'owner:fixture' },
     exp: now.getTime() + 60_000,
   })
   try {
@@ -146,10 +146,10 @@ test('the binary forwards a bearer token to remote HTTP and rejects missing or i
     expect(forwarded.code).toBe(0)
     const missing = await runBin(['builds'], { AB_STORE: server.url })
     expect(missing.code).toBe(1)
-    expect(missing.stderr).toContain('missing bearer token')
+    expect(missing.stderr).toContain('missing bearer credential')
     const invalid = await runBin(['builds'], { AB_STORE: server.url, AB_TOKEN: 'invalid-token' })
     expect(invalid.code).toBe(1)
-    expect(invalid.stderr).toContain('invalid or expired token')
+    expect(invalid.stderr).toContain('credential format changed')
   } finally {
     await server.stop()
     await backing.close()

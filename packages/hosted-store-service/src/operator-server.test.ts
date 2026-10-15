@@ -1,3 +1,4 @@
+import { createMachineAuth } from './machine-auth'
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '@defrex/autobuild/testing'
@@ -100,7 +101,7 @@ async function artifactRequest(store: MemoryBuildStore, rev?: string): Promise<R
       `http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/artifacts/notes${query}`,
       {
         headers: {
-          authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+          authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo: repo }, exp: now.getTime() + 60_000 })}`,
           [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
           [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
         },
@@ -119,14 +120,16 @@ async function storeWithArtifactRevisions(): Promise<MemoryBuildStore> {
 describe('operator HTTP API', () => {
   test('operator token claims are strict and identify a distinct resource', () => {
     const valid = mintToken(secret, {
-      operator: { user: 'Ada' },
+      version: 1,
+      internalOperator: { user: 'Ada', repo: repo },
       exp: now.getTime() + 60_000,
     })
     const scope = verifyToken(secret, valid, now)
     expect(scope).not.toBeNull()
     expect(tokenResource(scope!)).toEqual({ kind: 'operator', id: 'Ada' })
     const blank = mintToken(secret, {
-      operator: { user: '   ' },
+      version: 1,
+      internalOperator: { user: '   ', repo: repo },
       exp: now.getTime() + 60_000,
     })
     expect(verifyToken(secret, blank, now)).toBeNull()
@@ -141,7 +144,8 @@ describe('operator HTTP API', () => {
       clock,
     })
     const operatorToken = mintToken(secret, {
-      operator: { user: 'Ada Lovelace' },
+      version: 1,
+      internalOperator: { user: 'Ada Lovelace', repo: repo },
       exp: now.getTime() + 60_000,
     })
     const client = new OperatorApiClient({
@@ -165,22 +169,33 @@ describe('operator HTTP API', () => {
     })
     const error = await admin.listBuilds(repo).catch((caught) => caught)
     expect(error).toBeInstanceOf(OperatorApiError)
-    expect(error).toMatchObject({ status: 403, kind: 'auth' })
+    expect(error).toMatchObject({ status: 401, kind: 'auth' })
   })
 
   test('operator scope cannot use raw store authority and downloads binary artifacts', async () => {
     const store = await runningStore()
     const token = mintToken(secret, {
-      operator: { user: 'Grace' },
+      version: 1,
+      internalOperator: { user: 'Grace', repo: repo },
       exp: now.getTime() + 60_000,
     })
-    const storeServer = createStoreServer({ store, secret, clock })
+    const storeServer = createStoreServer({
+      store,
+      secret,
+      clock,
+      auth: createMachineAuth({
+        secret,
+        clock,
+        projects: testProjects([repo]),
+        credentials: { authenticate: async () => null },
+      }),
+    })
     const raw = new RemoteBuildStore({
       url: 'http://store.test',
       token,
       fetchFn: fetchFor(storeServer),
     })
-    await expect(raw.getBuild('demo')).rejects.toThrow('may not access build "demo"')
+    await expect(raw.getBuild('demo')).rejects.toThrow('internal operator credential')
 
     await store.putArtifact('demo', { kind: 'notes/report', content: new Uint8Array([0, 1, 255]) })
     const operatorServer = createOperatorServer({
@@ -266,7 +281,11 @@ describe('operator HTTP API', () => {
     })
     const client = new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user: 'Ada', repo: repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(server),
     })
     const build = await client.getBuild(repo, 'demo')
@@ -279,7 +298,11 @@ describe('operator HTTP API', () => {
     const store = await runningStore()
     const client = new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user: 'Ada', repo: repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(
         createOperatorServer({
           projects: testProjects([repo, '/another-repo', 'https://github.com/acme/disabled']),
@@ -296,8 +319,8 @@ describe('operator HTTP API', () => {
       () => client.downloadArtifact('/another-repo', 'demo', 'notes'),
     ]) {
       const error = await call().catch((caught) => caught)
-      expect(error).toMatchObject({ status: 404, kind: 'not-found' })
-      expect((error as Error).message).toBe('unknown build "demo"')
+      expect(error).toMatchObject({ status: 403, kind: 'auth' })
+      expect((error as Error).message).toBe('wrong project')
     }
 
     const response = await fetchFor(
@@ -310,7 +333,7 @@ describe('operator HTTP API', () => {
     )(`http://operator.test/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+        authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo: repo }, exp: now.getTime() + 60_000 })}`,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
         'content-type': 'application/json',
@@ -342,7 +365,11 @@ describe('operator HTTP API', () => {
 
     const client = new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user: 'Ada', repo: repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(server),
     })
     const error = await client
@@ -364,7 +391,11 @@ describe('operator session routes', () => {
   ): OperatorApiClient {
     return new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user, repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(server),
     })
   }
@@ -401,7 +432,7 @@ describe('operator session routes', () => {
           },
         }),
       )
-      expect(response.status).toBe(403)
+      expect(response.status).toBe(401)
     }
   })
 
@@ -559,7 +590,11 @@ describe('session-archive sandbox release hook (AUT-340)', () => {
   ): OperatorApiClient {
     return new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user, repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(server),
     })
   }
@@ -654,7 +689,8 @@ describe('the generic tools route', () => {
       clock,
     })
     const token = mintToken(secret, {
-      operator: { user: 'Ada' },
+      version: 1,
+      internalOperator: { user: 'Ada', repo: repo },
       via,
       exp: now.getTime() + 60_000,
     })
@@ -684,7 +720,8 @@ describe('the generic tools route', () => {
       clock,
     })
     const token = mintToken(secret, {
-      operator: { user: 'Ada' },
+      version: 1,
+      internalOperator: { user: 'Ada', repo: repo },
       exp: now.getTime() + 60_000,
     })
     const call = toolsFetch(server, token)
@@ -703,7 +740,8 @@ describe('the generic tools route', () => {
       clock,
     })
     const token = mintToken(secret, {
-      operator: { user: 'Ada' },
+      version: 1,
+      internalOperator: { user: 'Ada', repo: repo },
       exp: now.getTime() + 60_000,
     })
     const call = toolsFetch(server, token)
@@ -754,7 +792,11 @@ describe('operator session routes — embedded orchestrator (AUT-342)', () => {
   ): OperatorApiClient {
     return new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user, repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(server),
     })
   }
@@ -773,7 +815,7 @@ describe('operator session routes — embedded orchestrator (AUT-342)', () => {
         {
           method: 'POST',
           headers: {
-            authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+            authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo: repo }, exp: now.getTime() + 60_000 })}`,
             [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
             [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
             'content-type': 'application/json',
@@ -1074,7 +1116,11 @@ model = "test/mock"
   ): OperatorApiClient {
     return new OperatorApiClient({
       url: 'http://operator.test',
-      token: mintToken(secret, { operator: { user }, exp: now.getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user, repo },
+        exp: now.getTime() + 60_000,
+      }),
       fetchFn: fetchFor(server),
     })
   }
@@ -1095,7 +1141,7 @@ model = "test/mock"
         {
           method: 'POST',
           headers: {
-            authorization: `Bearer ${mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })}`,
+            authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user: 'Ada', repo: repo }, exp: now.getTime() + 60_000 })}`,
             [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
             [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
             'content-type': 'application/json',
@@ -1279,8 +1325,17 @@ model = "test/mock"
     // succeeds and releases nothing (the dispatcher's idle settlement stops
     // the environment later).
     const disabledRepo = 'https://github.com/acme/disabled'
-    const solo = await ada.createSession(disabledRepo, { title: 'x' })
-    await ada.archiveSession(disabledRepo, solo.id)
+    const disabled = new OperatorApiClient({
+      url: 'http://operator.test',
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user: 'Ada', repo: disabledRepo },
+        exp: now.getTime() + 60000,
+      }),
+      fetchFn: fetchFor(server),
+    })
+    const solo = await disabled.createSession(disabledRepo, { title: 'x' })
+    await disabled.archiveSession(disabledRepo, solo.id)
     expect(dynamicReleases).toEqual(['Ada'])
     expect(staticReleases).toEqual([])
   })
@@ -1294,7 +1349,11 @@ describe('project registration boundary', () => {
     const client = new OperatorApiClient({
       url: 'http://operator.test',
       fetchFn: fetchFor(server),
-      token: mintToken(secret, { operator: { user: 'Ada' }, exp: clock().getTime() + 60_000 }),
+      token: mintToken(secret, {
+        version: 1,
+        internalOperator: { user: 'Ada', repo: repo },
+        exp: clock().getTime() + 60_000,
+      }),
     })
     expect(await client.repositoryStatus(repo)).toMatchObject({ repo })
     await projects.remove(repo, 'Ada')
@@ -1307,7 +1366,7 @@ describe('project registration boundary', () => {
     store.getRepoEvents = unavailable
     for (const user of ['Ada', 'Grace']) {
       const headers = {
-        authorization: `Bearer ${mintToken(secret, { operator: { user }, exp: clock().getTime() + 60_000 })}`,
+        authorization: `Bearer ${mintToken(secret, { version: 1, internalOperator: { user, repo }, exp: clock().getTime() + 60_000 })}`,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
         'content-type': 'application/json',
@@ -1338,8 +1397,11 @@ describe('project registration boundary', () => {
             },
           ),
         )
-        expect(response.status).toBe(404)
-        expect(await response.json()).toMatchObject({ kind: 'not-found' })
+        expect(response.status).toBe(403)
+        expect(await response.json()).toMatchObject({
+          kind: 'auth',
+          error: 'project not registered',
+        })
       }
     }
   })

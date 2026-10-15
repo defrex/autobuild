@@ -7,7 +7,6 @@ import { FakeForge } from '../ports/forge/fake'
 import { spawnExec } from '../ports/workspace/git-worktree'
 import { openLocalStore } from '../store/local/store'
 import { MemoryBuildStore } from '../store/memory'
-import { RemoteBuildStore } from '../store/remote/client'
 import { PhaseSessionError } from '../store/phase-session'
 import { buildCreatedWrite, sampleEventWrite } from '../store/contract'
 import type { CliEnv, HarvestCliEnv } from './env'
@@ -131,7 +130,7 @@ describe('ambient-aware finite read opening', () => {
     }
   })
 
-  test('leaves remote handles unwrapped and forwards opaque token', async () => {
+  test('scopes remote handles and forwards opaque token', async () => {
     const root = tempRoot()
     const store = new MemoryBuildStore()
     await store.createBuild({ slug: 'build-a', repo: root })
@@ -154,7 +153,7 @@ describe('ambient-aware finite read opening', () => {
     })
     try {
       expect(opens).toEqual([{ ref: 'https://store.example.test', token: ' opaque ' }])
-      expect(await context.store.listBuilds()).toHaveLength(1)
+      expect(await caught(() => context.store.listBuilds())).toBeInstanceOf(PhaseSessionError)
     } finally {
       await context.store.close()
     }
@@ -307,7 +306,7 @@ describe('openProductionSessionStore', () => {
       ...buildEnv('https://store.example.test', 'build-a', 's_remote'),
       token: 'token-byte-for-byte',
     })
-    expect(remote).toBeInstanceOf(RemoteBuildStore)
+    expect(await caught(() => remote.listBuilds())).toBeInstanceOf(PhaseSessionError)
     await remote.close()
 
     const root = tempRoot()

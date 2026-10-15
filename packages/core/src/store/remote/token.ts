@@ -1,13 +1,7 @@
-/**
- * HMAC-scoped store tokens (SPEC §8.1 [D8]): "the token is scoped to this
- * build and session — an agent physically cannot append to another build's
- * log or read another build's artifacts". Least privilege comes from the
- * runner minting a narrow token, not from prompt instructions.
- *
- * A token is `base64url(JSON scope) + '.' + base64url(hmac-sha256(secret,
- * payload))`. The scope IS the token — the server keeps no session state;
- * it verifies the signature (timing-safe) and the expiry, then trusts the
- * embedded scope.
+/** Signed service-internal owner delegation and explicit break-glass admin.
+ * Historical resource/deployment/operator scopes remain decodable for tests
+ * and migration diagnostics; hosted machine gates reject those retired forms.
+ * Project credentials are opaque stored secrets, not these stateless tokens.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
@@ -52,8 +46,21 @@ export interface DeploymentTokenScope {
   exp: number
 }
 
-/** Legacy scopes remain valid on their existing routes. */
+/** Includes retired wire shapes for recognition, never server authorization. */
+export interface InternalOperatorTokenScope {
+  version: 1
+  internalOperator: { user: string; repo: string }
+  exp: number
+  via?: Via
+}
+export interface AdminTokenScope {
+  version: 1
+  ownerAdmin: { user: string }
+  exp: number
+}
 export type TokenScope =
+  | InternalOperatorTokenScope
+  | AdminTokenScope
   | LegacyBuildTokenScope
   | ResourceTokenScope
   | OperatorTokenScope
@@ -64,6 +71,17 @@ const commonScope = {
   exp: z.number().int(),
 }
 const tokenScopeSchema = z.union([
+  z.strictObject({
+    version: z.literal(1),
+    internalOperator: z.strictObject({ user: z.string().trim().min(1), repo: z.string().min(1) }),
+    exp: z.number().int(),
+    via: viaSchema.optional(),
+  }),
+  z.strictObject({
+    version: z.literal(1),
+    ownerAdmin: z.strictObject({ user: z.string().trim().min(1) }),
+    exp: z.number().int(),
+  }),
   z.strictObject({ build: z.string().min(1), ...commonScope }),
   z.strictObject({
     resource: z.strictObject({
@@ -85,6 +103,8 @@ export function tokenResource(scope: TokenScope): {
   kind: 'build' | 'repo' | 'session' | 'admin' | 'operator' | 'deployment'
   id: string
 } {
+  if ('ownerAdmin' in scope) return { kind: 'admin', id: '*' }
+  if ('internalOperator' in scope) return { kind: 'operator', id: scope.internalOperator.user }
   if ('operator' in scope) {
     return scope.operator === true
       ? { kind: 'deployment', id: '*' }

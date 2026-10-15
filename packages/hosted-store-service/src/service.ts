@@ -1,4 +1,9 @@
 import {
+  openPostgresCredentialStoreFromEnv,
+  type CredentialReader,
+} from '@defrex/autobuild-postgres-store/credentials'
+import { createMachineAuth } from './machine-auth'
+import {
   openPostgresProjectRegistryFromEnv,
   type ProjectRegistryReader,
 } from '@defrex/autobuild-postgres-store/projects'
@@ -23,7 +28,6 @@ import {
   type OperatorSandboxService,
 } from '@defrex/autobuild/operator'
 import { createHostedOperatorSandboxService } from '@defrex/autobuild/operator-sandbox-host'
-import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   createTicketServer,
   HOSTED_TICKET_OPERATIONS,
@@ -56,6 +60,8 @@ export interface HostedStoreErrorContext {
 }
 
 export interface HostedStoreServiceOptions {
+  issueDispatcherCredential?: (repo: string, creator: string, expiresAt: Date) => Promise<string>
+  openCredentials?: (env: HostedStoreEnv) => Promise<CredentialReader>
   openProjectRegistry?: (env: HostedStoreEnv) => Promise<ProjectRegistryReader>
   env?: HostedStoreEnv
   clock?: Clock
@@ -116,6 +122,7 @@ export function hostedPublicOrigin(env: HostedStoreEnv): string | undefined {
 }
 
 interface HostedSandboxDeps {
+  issueCredential(repo: string, creator: string, expiresAt: Date): Promise<string>
   store: BuildStore
   clock: Clock
   /** The enclosing HostedStoreConfig's signing secret — the store and
@@ -133,12 +140,12 @@ interface HostedSandboxDeps {
  * environment is always built from an empty record plus the configured
  * forwarded names. The token exists only to satisfy the provider's
  * construction authority precondition. */
-function sandboxStoreToken(deps: HostedSandboxDeps, repo: string): string {
-  return mintToken(deps.secret, {
-    resource: { kind: 'repo', id: repo },
-    session: 'hosted-operator-sandbox',
-    exp: deps.clock().getTime() + 3_600_000,
-  })
+function sandboxStoreToken(deps: HostedSandboxDeps, repo: string): Promise<string> {
+  return deps.issueCredential(
+    repo,
+    'system:hosted-operator-sandbox',
+    new Date(deps.clock().getTime() + 3_600_000),
+  )
 }
 
 /** Merge the request's OIDC token into the composition env under
@@ -173,7 +180,7 @@ async function hostedSandboxBackend(
     config,
     env: sandboxCompositionEnv(deps, credentials),
     storeRef: deps.origin,
-    storeToken: sandboxStoreToken(deps, repo),
+    storeToken: await sandboxStoreToken(deps, repo),
     clock: deps.clock,
   })
 }
@@ -394,6 +401,27 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     has: async (repo) => (await openProjects()).has(repo),
   }
 
+  let credentialPromise: Promise<CredentialReader> | undefined
+  const credentials: CredentialReader = {
+    authenticate: async (token, now) => {
+      if (!credentialPromise) {
+        const attempt = (options.openCredentials ?? openPostgresCredentialStoreFromEnv)(env)
+        credentialPromise = attempt
+        void attempt.catch(() => {
+          if (credentialPromise === attempt) credentialPromise = undefined
+        })
+      }
+      return (await credentialPromise).authenticate(token, now)
+    },
+  }
+  const machineAuth = () =>
+    createMachineAuth({
+      secret: parseHostedStoreEnv(env).secret,
+      projects,
+      credentials,
+      ...(options.clock ? { clock: options.clock } : {}),
+    })
+
   const opener = options.openStore ?? openPostgresBuildStoreFromEnv
   const ticketOpener = options.openTicketDatabase ?? openPostgresTicketDatabase
   const reporter =
@@ -486,6 +514,18 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             : {
                 store,
                 clock,
+                issueCredential:
+                  options.issueDispatcherCredential ??
+                  (async (repo, creator, expiresAt) => {
+                    const credentials = await openPostgresCredentialStoreFromEnv(env)
+                    try {
+                      return (
+                        await credentials.issue(repo, creator, { purpose: 'dispatcher', expiresAt })
+                      ).token
+                    } finally {
+                      await credentials.close()
+                    }
+                  }),
                 secret: config.secret,
                 env,
                 origin: sandboxOrigin,
@@ -495,6 +535,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         const storeServer = createStoreServer({
           store,
           secret: config.secret,
+          auth: machineAuth(),
           maxArtifactBytes: HOSTED_ARTIFACT_MAX_BYTES,
           maxTicketAssetRequestBytes: HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
           maxEventWaitSeconds: HOSTED_EVENT_WAIT_MAX_SECONDS,
@@ -502,6 +543,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           ...shared,
         })
         const operatorServer = createOperatorServer({
+          auth: machineAuth(),
           projects,
           store,
           secret: config.secret,
@@ -614,10 +656,10 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   const openTicketHandler = () => {
     ticketHandlerPromise ??= (async () => {
       const config = parseHostedStoreEnv(env)
-      const { sourceFor } = await openTicketBackend()
       return createTicketServer({
+        auth: machineAuth(),
         secret: config.secret,
-        sourceFor,
+        sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
         onInternalError: (error, req) => reportProtocolFailure(error, req, 'tickets'),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
       }).fetch

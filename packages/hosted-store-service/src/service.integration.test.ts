@@ -77,8 +77,8 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
       })
       serviceUrl = `http://127.0.0.1:${server.port}`
       serviceToken = mintToken(serviceSecret, {
-        operator: true,
-        session: '*',
+        version: 1,
+        ownerAdmin: { user: 'owner:fixture' },
         exp: Date.now() + 60 * 60 * 1000,
       })
       return {
@@ -213,7 +213,8 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   // Exercise the operator surface through the actual Bun listener, not only
   // the host-neutral in-process Fetch composition.
   const operatorToken = mintToken(serviceSecret, {
-    operator: { user: 'HTTP Operator' },
+    version: 1,
+    internalOperator: { user: 'HTTP Operator', repo: h.origin },
     exp: Date.now() + 60_000,
   })
   const operator = new OperatorApiClient({ url: serviceUrl, token: operatorToken })
@@ -291,7 +292,11 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   )
 
   const rejectedScopes = [
-    serviceToken,
+    mintToken(serviceSecret, {
+      operator: true,
+      session: '*',
+      exp: Date.now() + 60000,
+    }),
     mintToken(serviceSecret, {
       build: answerSlug,
       session: '*',
@@ -307,12 +312,12 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
     const error = await new OperatorApiClient({ url: serviceUrl, token })
       .repositoryStatus(h.origin)
       .catch((caught) => caught)
-    expect(error).toMatchObject({ status: 403, kind: 'auth' })
+    expect(error).toMatchObject({ status: 401, kind: 'auth' })
   }
 
   const badToken = mintToken('wrong-secret', {
-    build: '*',
-    session: '*',
+    version: 1,
+    ownerAdmin: { user: 'owner:fixture' },
     exp: Date.now() + 60_000,
   })
   await expect(
@@ -335,6 +340,6 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
       },
       input: { start: () => () => {} },
     }),
-  ).rejects.toThrow(/invalid or expired token/)
+  ).rejects.toThrow(/credential format changed/)
   expect(existsSync(join(h.origin, '.autobuild'))).toBe(false)
 }, 20_000)

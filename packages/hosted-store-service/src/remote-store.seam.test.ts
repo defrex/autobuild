@@ -8,19 +8,16 @@
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import type { EventWrite } from '@defrex/autobuild/plugin-sdk'
-import { BuildScopeError } from '@defrex/autobuild/plugin-sdk'
 import {
   EventValidationError,
   AUTOBUILD_VERSION,
-  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
-import { agentActor, DISPATCHER, KERNEL, humanActor, type Via } from '@defrex/autobuild/testing'
-import { manualClock, textContent } from '@defrex/autobuild/testing'
+import { agentActor, DISPATCHER, KERNEL, humanActor } from '@defrex/autobuild/testing'
+import { textContent } from '@defrex/autobuild/testing'
 import {
-  buildCreatedWrite,
   CONTRACT_T0,
   describeBuildStoreContract,
   MemoryBuildStore,
@@ -29,12 +26,11 @@ import {
   StreamBatchTooLargeError,
   StreamClosedError,
 } from '@defrex/autobuild/plugin-sdk'
-import { AuthError, RemoteBuildStore } from '@defrex/autobuild/remote-store'
-import { repositoryEventListSchema } from '@defrex/autobuild/remote-store'
+import { RemoteBuildStore } from '@defrex/autobuild/remote-store'
 import { createStoreServer, startStoreServer } from './remote-store-server'
 import { mintToken, verifyToken } from '@defrex/autobuild/remote-store'
 
-function noopTickCounters() {
+function _noopTickCounters() {
   return {
     merged: 0,
     closed: 0,
@@ -92,8 +88,8 @@ describeBuildStoreContract('remote (HTTP → MemoryBuildStore, via-less token)',
   const store = new RemoteBuildStore({
     url: server.url,
     token: mintToken(secret, {
-      build: '*',
-      session: '*',
+      version: 1,
+      ownerAdmin: { user: 'owner' },
       exp: Date.now() + 100 * 365 * 24 * 60 * 60 * 1000,
     }),
   })
@@ -162,567 +158,8 @@ describe('scoped tokens (D8)', () => {
 
 // ── D8 scope enforcement over the wire ───────────────────────────────────────
 
-describe('D8 scope enforcement over the wire', () => {
-  const SECRET = 'store-secret'
-  const EXP = Date.parse(CONTRACT_T0) + 3_600_000
-
-  interface SecureCtx {
-    url: string
-    clock: ReturnType<typeof manualClock>
-    backing: MemoryBuildStore
-    admin: RemoteBuildStore
-  }
-
-  async function withSecureStore(run: (ctx: SecureCtx) => Promise<void>): Promise<void> {
-    const clock = manualClock(CONTRACT_T0)
-    const backing = new MemoryBuildStore({ clock })
-    const server = startStoreServer({ store: backing, secret: SECRET, clock })
-    const admin = new RemoteBuildStore({
-      url: server.url,
-      token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
-    })
-    try {
-      await run({ url: server.url, clock, backing, admin })
-    } finally {
-      await server.stop()
-    }
-  }
-
-  // Session defaults to sampleEventWrite's actor session, so build-scope
-  // tests exercise the build dimension in isolation.
-  function scopedClient(url: string, build: string, session = 's_test'): RemoteBuildStore {
-    return new RemoteBuildStore({
-      url,
-      token: mintToken(SECRET, { build, session, exp: EXP }),
-    })
-  }
-
-  test('a build-scoped token can append to and read its own build', async () => {
-    await withSecureStore(async ({ url, admin }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      const clientA = scopedClient(url, 'build-a')
-      const envelope = await clientA.append('build-a', sampleEventWrite('mine'))
-      expect(envelope.seq).toBe(1)
-      expect((await clientA.getEvents('build-a')).length).toBe(1)
-      const meta = await clientA.putArtifact('build-a', { kind: 'plan', content: 'p' })
-      expect(meta.revision).toBe(0)
-      expect(textContent((await clientA.getArtifact('build-a', 'plan'))!)).toBe('p')
-    })
-  })
-
-  test('the same token against another build → 403 AuthError, log unchanged', async () => {
-    await withSecureStore(async ({ url, admin, backing }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      await admin.createBuild(sampleBuildInput('build-b'))
-      const clientA = scopedClient(url, 'build-a')
-
-      const writeErr = await clientA
-        .append('build-b', sampleEventWrite('sneaky'))
-        .catch((e: unknown) => e)
-      expect(writeErr).toBeInstanceOf(AuthError)
-      expect((writeErr as Error).message).toContain('scoped to build "build-a"')
-
-      const readErr = await clientA.getEvents('build-b').catch((e: unknown) => e)
-      expect(readErr).toBeInstanceOf(AuthError)
-
-      // B's log is physically untouched (checked on the backing store).
-      expect(await backing.getEvents('build-b')).toEqual([])
-    })
-  })
-
-  test('a session-scoped token only writes events attributed to its session (D8, §8.1)', async () => {
-    await withSecureStore(async ({ url, admin, backing }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      const client = scopedClient(url, 'build-a', 's_one')
-
-      // Its own session: allowed.
-      const mine = await client.append('build-a', {
-        ...sampleEventWrite('mine'),
-        actor: agentActor('implement', 's_one'),
-      })
-      expect(mine.seq).toBe(1)
-
-      const conditional = await client.appendIfCurrent('build-a', 1, {
-        ...sampleEventWrite('conditional mine'),
-        actor: agentActor('implement', 's_one'),
-      })
-      expect(conditional?.seq).toBe(2)
-
-      const conditionalForged = await client
-        .appendIfCurrent('build-a', 2, {
-          ...sampleEventWrite('conditional forged'),
-          actor: agentActor('implement', 's_two'),
-        })
-        .catch((error: unknown) => error)
-      expect(conditionalForged).toBeInstanceOf(AuthError)
-
-      // Another agent session → 403 AuthError, log unchanged.
-      const forged = await client
-        .append('build-a', {
-          ...sampleEventWrite('forged'),
-          actor: agentActor('implement', 's_two'),
-        })
-        .catch((e: unknown) => e)
-      expect(forged).toBeInstanceOf(AuthError)
-      expect((forged as Error).message).toContain('scoped to session "s_one"')
-
-      // A non-agent actor is not attributable to the session → 403 too.
-      const asDispatcher = await client
-        .append('build-a', buildCreatedWrite())
-        .catch((e: unknown) => e)
-      expect(asDispatcher).toBeInstanceOf(AuthError)
-
-      // Deposits carry an event → the same gate; nothing persists.
-      const deposit = await client
-        .appendWithArtifacts('build-a', [{ kind: 'plan', content: 'p' }], (deposited) => ({
-          actor: agentActor('plan', 's_two'),
-          type: 'plan.completed',
-          payload: {
-            round: 1,
-            artifact: { kind: 'plan', rev: deposited[0]!.revision },
-            verifySteps: ['types', 'unit'],
-          },
-        }))
-        .catch((e: unknown) => e)
-      expect(deposit).toBeInstanceOf(AuthError)
-      expect(await backing.getEvents('build-a')).toHaveLength(2)
-      expect(await backing.listArtifacts('build-a')).toEqual([])
-
-      // Reads stay gated by build scope alone.
-      expect((await client.getEvents('build-a')).length).toBe(2)
-
-      // The '*'-session admin token writes on behalf of any session.
-      const anySession = await admin.append('build-a', {
-        ...sampleEventWrite('admin write'),
-        actor: agentActor('implement', 's_two'),
-      })
-      expect(anySession.seq).toBe(3)
-    })
-  })
-
-  test('a repo/session token can use only its harvest journal and cannot read builds', async () => {
-    await withSecureStore(async ({ url, admin, backing }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      await admin.ensureRepo('acme/repo')
-      await admin.appendRepoWithArtifacts(
-        'acme/repo',
-        [{ kind: 'harvest-scan', content: '{}' }],
-        (deposited) => ({
-          actor: KERNEL,
-          type: 'harvest.started',
-          payload: {
-            run: 'h_1',
-            observations: [{ build: 'build-a', seq: 1 }],
-            scan: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-          },
-        }),
-      )
-      const client = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'repo', id: 'acme/repo' },
-          session: 'hs_one',
-          exp: EXP,
-        }),
-      })
-      await client.appendRepoWithArtifacts(
-        'acme/repo',
-        [{ kind: 'harvest-proposals', content: '{}' }],
-        (deposited) => ({
-          actor: agentActor('harvest', 'hs_one'),
-          type: 'harvest.proposals.submitted',
-          payload: {
-            run: 'h_1',
-            round: 1,
-            artifact: { kind: deposited[0]!.kind, rev: deposited[0]!.revision },
-          },
-        }),
-      )
-      expect(await client.getRepoEvents('acme/repo')).toHaveLength(2)
-      const wrongSession = await client
-        .appendRepo('acme/repo', {
-          actor: agentActor('harvest', 'hs_two'),
-          type: 'harvest.proposals.submitted',
-          payload: {
-            run: 'h_1',
-            round: 2,
-            artifact: { kind: 'harvest-proposals', rev: 0 },
-          },
-        })
-        .catch((error: unknown) => error)
-      expect(wrongSession).toBeInstanceOf(AuthError)
-      const spoofedHumanSetting = await client
-        .appendRepo('acme/repo', {
-          actor: humanActor('operator'),
-          type: 'dispatcher.intake-set',
-          payload: { enabled: false },
-        })
-        .catch((error: unknown) => error)
-      expect(spoofedHumanSetting).toBeInstanceOf(AuthError)
-      expect((spoofedHumanSetting as Error).message).toContain(
-        'may not write events attributed to a non-agent actor',
-      )
-      expect(await backing.getRepoEvents('acme/repo')).toHaveLength(2)
-      expect(await client.getEvents('build-a').catch((error: unknown) => error)).toBeInstanceOf(
-        AuthError,
-      )
-    })
-  })
-
-  test('the high-water route answers the journal tail for a repo token and rejects an unknown repo', async () => {
-    await withSecureStore(async ({ url, admin }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      await admin.ensureRepo('acme/repo')
-      expect(
-        await new RemoteBuildStore({
-          url,
-          token: mintToken(SECRET, {
-            resource: { kind: 'repo', id: 'acme/repo' },
-            session: 'hs_one',
-            exp: EXP,
-          }),
-        }).getRepoHighWater('acme/repo'),
-      ).toBe(0)
-      await admin.appendRepo('acme/repo', {
-        actor: DISPATCHER,
-        type: 'dispatcher.tick-started',
-        payload: { run: 'r_1' },
-      })
-      const wildcard = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
-      })
-      expect(await wildcard.getRepoHighWater('acme/repo')).toBe(1)
-      await expect(wildcard.getRepoHighWater('acme/never-seen')).rejects.toThrow()
-    })
-  })
-
-  test('the snapshot routes enforce token scope, answer null for unknown scopes, and bound the body', async () => {
-    await withSecureStore(async ({ url, admin }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      await admin.createBuild(sampleBuildInput('build-b'))
-      await admin.append('build-a', sampleEventWrite('one'))
-      await admin.ensureRepo('acme/repo')
-      const scope = { kind: 'build', slug: 'build-a' } as const
-      const own = scopedClient(url, 'build-a')
-      expect(
-        await own.putReducerSnapshot(scope, 'build', { version: 1, cursor: 1, state: { n: 1 } }),
-      ).toBe(true)
-      expect(await own.getReducerSnapshot(scope, 'build', 1)).toEqual({
-        version: 1,
-        cursor: 1,
-        state: { n: 1 },
-      })
-      // A lower cursor does not regress the stored row.
-      expect(
-        await own.putReducerSnapshot(scope, 'build', { version: 1, cursor: 0, state: {} }),
-      ).toBe(false)
-      expect(await own.getReducerSnapshot(scope, 'build', 2)).toBeNull()
-      // Another build's snapshots are out of scope for this token.
-      expect(
-        await own
-          .getReducerSnapshot({ kind: 'build', slug: 'build-b' }, 'build', 1)
-          .catch((error: unknown) => error),
-      ).toBeInstanceOf(AuthError)
-      expect(
-        await own
-          .putReducerSnapshot({ kind: 'build', slug: 'build-b' }, 'build', {
-            version: 1,
-            cursor: 0,
-            state: {},
-          })
-          .catch((error: unknown) => error),
-      ).toBeInstanceOf(AuthError)
-      // Unknown scopes read null and refuse the write; nothing is created.
-      expect(await admin.getReducerSnapshot({ kind: 'build', slug: 'nope' }, 'build', 1)).toBeNull()
-      expect(
-        await admin.putReducerSnapshot({ kind: 'build', slug: 'nope' }, 'build', {
-          version: 1,
-          cursor: 0,
-          state: {},
-        }),
-      ).toBe(false)
-      expect(
-        await admin.getReducerSnapshot({ kind: 'repo', repo: 'acme/nope' }, 'journalView', 1),
-      ).toBeNull()
-      expect(await admin.getBuild('nope')).toBeNull()
-      // A repo token reaches only its own repository's snapshots.
-      const repoClient = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'repo', id: 'acme/repo' },
-          session: 'hs_one',
-          exp: EXP,
-        }),
-      })
-      expect(
-        await repoClient.putReducerSnapshot({ kind: 'repo', repo: 'acme/repo' }, 'journalView', {
-          version: 1,
-          cursor: 0,
-          state: { retained: [] },
-        }),
-      ).toBe(true)
-      expect(
-        await repoClient
-          .getReducerSnapshot({ kind: 'build', slug: 'build-a' }, 'build', 1)
-          .catch((error: unknown) => error),
-      ).toBeInstanceOf(AuthError)
-      // Malformed and oversized writes are validation failures, not stored.
-      const admintoken = mintToken(SECRET, { build: '*', session: '*', exp: EXP })
-      const identity = {
-        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-      }
-      const raw = (body: string) =>
-        fetch(`${url}/builds/build-a/snapshots/build`, {
-          method: 'PUT',
-          headers: {
-            ...identity,
-            authorization: `Bearer ${admintoken}`,
-            'content-type': 'application/json',
-          },
-          body,
-        })
-      expect((await raw('not json')).status).toBe(400)
-      expect((await raw(JSON.stringify({ version: 0, cursor: 1, state: {} }))).status).toBe(400)
-      expect((await raw(JSON.stringify({ version: 1, cursor: 1.5, state: {} }))).status).toBe(400)
-      expect(
-        (await raw(JSON.stringify({ version: 1, cursor: 1, state: 'x'.repeat(17 * 1024 * 1024) })))
-          .status,
-      ).toBe(413)
-      const badName = await fetch(`${url}/builds/build-a/snapshots/bad%20name?version=1`, {
-        headers: { ...identity, authorization: `Bearer ${admintoken}` },
-      })
-      expect(badName.status).toBe(400)
-    })
-  })
-
-  test('a store that predates the snapshot routes reads as no snapshots, never an error', async () => {
-    const old = Bun.serve({
-      port: 0,
-      fetch: () =>
-        new Response(JSON.stringify({ error: 'no route', kind: 'not-found' }), { status: 404 }),
-    })
-    try {
-      const client = new RemoteBuildStore({ url: `http://localhost:${old.port}` })
-      expect(await client.getReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', 1)).toBeNull()
-      expect(
-        await client.putReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', {
-          version: 1,
-          cursor: 0,
-          state: {},
-        }),
-      ).toBe(false)
-    } finally {
-      old.stop(true)
-    }
-  })
-
-  test('the state-events route: repo-token scope, the repo-existence gate, and the bounded wire shape', async () => {
-    await withSecureStore(async ({ url, admin, backing }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      await admin.ensureRepo('acme/repo')
-      // A journal with dispatcher noise and a durable fact: the bounded read
-      // answers durable types plus the tail from the latest run-started.
-      await admin.appendRepo('acme/repo', {
-        actor: KERNEL,
-        type: 'harvest.started',
-        payload: {
-          run: 'h_1',
-          observations: [{ build: 'build-a', seq: 1 }],
-          scan: { kind: 'harvest-scan', rev: 0 },
-        },
-      })
-      await admin.appendRepo('acme/repo', {
-        actor: DISPATCHER,
-        type: 'dispatcher.run-started',
-        payload: {
-          run: 'r_1',
-          pid: 1,
-          effectiveConfig: { kind: 'effective-config', rev: 0 },
-          roleWarnings: [],
-        },
-      })
-      await admin.appendRepo('acme/repo', {
-        actor: DISPATCHER,
-        type: 'dispatcher.tick-completed',
-        payload: {
-          run: 'r_1',
-          queued: 0,
-          counters: noopTickCounters(),
-          janitorDiagnostics: [],
-          ticketDiagnostics: [],
-          dependencyDiagnostics: [],
-        },
-      })
-      const client = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'repo', id: 'acme/repo' },
-          session: 'hs_one',
-          exp: EXP,
-        }),
-      })
-      const subset = await client.getRepoStateEvents('acme/repo')
-      expect(subset.map((event) => [event.seq, event.type])).toEqual([
-        [1, 'harvest.started'],
-        [2, 'dispatcher.run-started'],
-        [3, 'dispatcher.tick-completed'],
-      ])
-      // The wire shape is the same repository-event list the client parses:
-      // the raw HTTP body parses through repositoryEventListSchema directly.
-      const response = await fetch(`${url}/repos/acme%2Frepo/state-events`, {
-        headers: {
-          authorization: `Bearer ${mintToken(SECRET, { resource: { kind: 'repo', id: 'acme/repo' }, session: 'hs_one', exp: EXP })}`,
-          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-        },
-      })
-      expect(response.status).toBe(200)
-      expect(repositoryEventListSchema.parse(await response.json())).toHaveLength(3)
-
-      // The repo-existence gate applies (unlike build-digests): with a
-      // wildcard token (no repo scope to reject first), an unknown repo
-      // answers the store server's own 404.
-      const wildcard = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
-      })
-      const unknown = await wildcard
-        .getRepoStateEvents('acme/never-seen')
-        .catch((error: unknown) => error)
-      expect((unknown as Error).message).toContain('unknown repo "acme/never-seen"')
-      expect(await backing.getRepo('acme/never-seen')).toBeNull()
-    })
-  })
-
-  test('an expired token → 401 AuthError', async () => {
-    await withSecureStore(async ({ url, admin, clock }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      const clientA = scopedClient(url, 'build-a')
-      expect((await clientA.getEvents('build-a')).length).toBe(0)
-      clock.advance(3_600_001) // server-side clock passes EXP
-      const err = await clientA.getEvents('build-a').catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(AuthError)
-      expect((err as Error).message).toContain('invalid or expired')
-    })
-  })
-
-  test('the admin "*" token lists and creates builds; a build token may not', async () => {
-    await withSecureStore(async ({ url, admin }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      expect((await admin.listBuilds()).map((b) => b.slug)).toEqual(['build-a'])
-
-      const clientA = scopedClient(url, 'build-a')
-      const listErr = await clientA.listBuilds().catch((e: unknown) => e)
-      expect(listErr).toBeInstanceOf(AuthError)
-      const createErr = await clientA
-        .createBuild(sampleBuildInput('build-c'))
-        .catch((e: unknown) => e)
-      expect(createErr).toBeInstanceOf(AuthError)
-    })
-  })
-
-  test('interface scope constrains even an admin-token remote client before transport', async () => {
-    await withSecureStore(async ({ admin }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      await admin.createBuild(sampleBuildInput('build-b'))
-      await admin.ensureRepo('acme/repo')
-      const scoped = admin.scopeBuild('build-a')
-      expect(await scoped.getEvents('build-a')).toEqual([])
-      expect(await scoped.getEvents('build-b').catch((error: unknown) => error)).toBeInstanceOf(
-        BuildScopeError,
-      )
-      expect(await scoped.listBuilds().catch((error: unknown) => error)).toBeInstanceOf(
-        BuildScopeError,
-      )
-      expect(
-        await scoped.getRepoEvents('acme/repo').catch((error: unknown) => error),
-      ).toBeInstanceOf(BuildScopeError)
-    })
-  })
-
-  test('no token → 401; /health stays open', async () => {
-    await withSecureStore(async ({ url, admin }) => {
-      await admin.createBuild(sampleBuildInput('build-a'))
-      const anon = new RemoteBuildStore({ url })
-      const err = await anon.getEvents('build-a').catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(AuthError)
-      expect((err as Error).message).toContain('missing bearer token')
-
-      const health = await fetch(`${url}/health`)
-      expect(health.status).toBe(200)
-      expect(await health.json()).toEqual({
-        ok: true,
-        autobuildVersion: AUTOBUILD_VERSION,
-        protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
-        supportedClientRange: supportedClientRange(),
-      })
-    })
-  })
-
-  test('the build-digest route: repo-token scope, no existence gate, wrong-repo 403 before lookup', async () => {
-    await withSecureStore(async ({ url, admin, backing }) => {
-      // A repo with builds but no journal record, and a repo the store has
-      // never seen, both answer 200 (the route is keyed to build records and
-      // sits before the repo-existence gate, like the session collection).
-      await admin.createBuild({ slug: 'dg-a', repo: 'acme/repo' })
-      await admin.createBuild({ slug: 'dg-b', repo: 'acme/repo' })
-      await admin.append('dg-a', sampleEventWrite('one'))
-      await admin.append('dg-a', {
-        actor: DISPATCHER,
-        type: 'build.completed',
-        payload: { outcome: 'merged' },
-      })
-      const repoToken = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'repo', id: 'acme/repo' },
-          session: 'hs_one',
-          exp: EXP,
-        }),
-      })
-      const digests = await repoToken.getRepoBuildDigests('acme/repo')
-      expect([...digests.keys()]).toEqual(['dg-a', 'dg-b'])
-      expect(digests.get('dg-a')).toEqual({
-        slug: 'dg-a',
-        readinessChangeSeq: 2,
-        terminal: 'done',
-        observations: [{ seq: 1, ts: CONTRACT_T0 }],
-      })
-      expect(digests.get('dg-b')).toEqual({ slug: 'dg-b', observations: [] })
-      expect(await backing.getRepo('acme/never-seen')).toBeNull()
-
-      // A wrong-repo token is 403 before any lookup — the no-existence-leak
-      // rule holds even though the route skips the journal-record check.
-      const otherToken = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'repo', id: 'acme/other' },
-          session: 'hs_two',
-          exp: EXP,
-        }),
-      })
-      const err = await otherToken.getRepoBuildDigests('acme/repo').catch((error: unknown) => error)
-      expect(err).toBeInstanceOf(AuthError)
-
-      // The wire shape parses through the same schema the client composes:
-      // an empty repo answers an empty array, and `terminal` is omitted when
-      // the build's log carries no terminal fact.
-      const response = await fetch(`${url}/repos/acme%2Fnever-seen/build-digests`, {
-        headers: {
-          authorization: `Bearer ${mintToken(SECRET, { build: '*', session: '*', exp: EXP })}`,
-          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-        },
-      })
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual([])
-    })
-  })
-})
-
-// ── Open-server harness for the D6 wire tests ────────────────────────────────
+// Retired signed resource scopes are decoded above for compatibility diagnosis.
+// Current authorization is exercised by the two-project matrix in machine-auth.test.ts.
 
 interface OpenCtx {
   store: RemoteBuildStore
@@ -1576,82 +1013,6 @@ describe('prompt teardown of held reads', () => {
 // addressing, and the typed error mappings (413 ceiling, 409 closed append).
 
 describe('stream wire specifics', () => {
-  const SECRET = 'stream-secret'
-  const EXP = Date.parse(CONTRACT_T0) + 3_600_000
-
-  test('token scope gates the stream routes like the events routes; cross-scope addressing is 404', async () => {
-    const clock = manualClock(CONTRACT_T0)
-    const backing = new MemoryBuildStore({ clock })
-    const server = startStoreServer({ store: backing, secret: SECRET, clock })
-    const admin = new RemoteBuildStore({
-      url: server.url,
-      token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
-    })
-    try {
-      await admin.createBuild(sampleBuildInput('wire-a'))
-      await admin.createBuild(sampleBuildInput('wire-b'))
-      await admin.ensureRepo('acme/wire')
-      const streamA = await admin.createStream({ kind: 'build', build: 'wire-a' }, 'a')
-      const repoStream = await admin.createStream({ kind: 'repo', repo: 'acme/wire' }, 'r')
-
-      // A build-scoped token uses its own streams end to end.
-      const clientA = new RemoteBuildStore({
-        url: server.url,
-        token: mintToken(SECRET, { build: 'wire-a', session: '*', exp: EXP }),
-      })
-      const chunk = await clientA.appendStreamParts(streamA.id, [
-        { type: 'text-delta', id: 't', delta: 'x' },
-      ])
-      expect(chunk.seq).toBe(1)
-      expect((await clientA.readStream(streamA.id)).chunks).toHaveLength(1)
-      expect(
-        (await clientA.listStreams({ kind: 'build', build: 'wire-a' })).map((r) => r.id),
-      ).toEqual([streamA.id])
-
-      // Another build's token: 403 AuthError on every shape.
-      const clientB = new RemoteBuildStore({
-        url: server.url,
-        token: mintToken(SECRET, { build: 'wire-b', session: '*', exp: EXP }),
-      })
-      for (const attempt of [
-        () => clientB.appendStreamParts(streamA.id, [{ type: 'text-delta', id: 't', delta: 'y' }]),
-        () => clientB.readStream(streamA.id),
-        () => clientB.closeStream(streamA.id, 'completed'),
-        () => clientB.getStream(streamA.id),
-        () => clientB.listStreams({ kind: 'build', build: 'wire-a' }),
-      ]) {
-        const err = await attempt().catch((e: unknown) => e)
-        expect(err).toBeInstanceOf(AuthError)
-      }
-
-      // A repo token cannot touch build streams and vice versa.
-      const repoClient = new RemoteBuildStore({
-        url: server.url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'repo', id: 'acme/wire' },
-          session: '*',
-          exp: EXP,
-        }),
-      })
-      const repoErr = await repoClient
-        .appendStreamParts(streamA.id, [{ type: 'text-delta', id: 't', delta: 'z' }])
-        .catch((e: unknown) => e)
-      expect(repoErr).toBeInstanceOf(AuthError)
-      const buildErr = await clientA
-        .appendStreamParts(repoStream.id, [{ type: 'text-delta', id: 't', delta: 'z' }])
-        .catch((e: unknown) => e)
-      expect(buildErr).toBeInstanceOf(AuthError)
-
-      // Unknown stream id → 404 → null (getStream), Error elsewhere.
-      expect(await clientA.getStream('st_nope')).toBeNull()
-      const unknownErr = await clientA.readStream('st_nope').catch((e: unknown) => e)
-      expect((unknownErr as Error).message).toContain('unknown stream')
-    } finally {
-      await admin.close()
-      await server.stop()
-    }
-  })
-
   test('the ceiling is 413 and a closed append is 409, with typed rehydration; family routes 404 on cross-scope addressing', async () => {
     const backing = new MemoryBuildStore()
     const server = startStoreServer({ store: backing })
@@ -1722,7 +1083,7 @@ describe('stream wire specifics', () => {
         expect(raw.status).toBe(404)
         const payload = (await raw.json()) as { kind: string; error: string }
         expect(payload.kind).toBe('not-found')
-        expect(payload.error).toContain('unknown stream')
+        expect(payload.error).toContain('resource unavailable')
       }
 
       // An oversized batch on the same unknown stream is also 404 — the
@@ -1733,7 +1094,7 @@ describe('stream wire specifics', () => {
         ])
         .catch((e: unknown) => e)
       expect(oversized).toBeInstanceOf(Error)
-      expect((oversized as Error).message).toContain('unknown stream')
+      expect((oversized as Error).message).toContain('resource unavailable')
       expect((oversized as Error).message).not.toContain('1048576')
 
       // Nothing was written on either side of the divergence.
@@ -1874,195 +1235,55 @@ describe('remote store internal diagnostics', () => {
 
 // ── Operator sessions over the wire: session-scoped tokens and via ──────────
 
-describe('session token scope and via attribution over the wire', () => {
-  const SECRET = 'session-secret'
-  const EXP = Date.parse(CONTRACT_T0) + 3_600_000
-
-  interface Ctx {
-    url: string
-    admin: RemoteBuildStore
-    backing: MemoryBuildStore
-  }
-
-  async function withServer(run: (ctx: Ctx) => Promise<void>): Promise<void> {
-    const backing = new MemoryBuildStore({ clock: manualClock(CONTRACT_T0) })
-    const server = startStoreServer({
-      store: backing,
-      secret: SECRET,
-      clock: manualClock(CONTRACT_T0),
-    })
-    const admin = new RemoteBuildStore({
-      url: server.url,
-      token: mintToken(SECRET, { build: '*', session: '*', exp: EXP }),
-    })
-    try {
-      await run({ url: server.url, admin, backing })
-    } finally {
-      await admin.close()
-      await server.stop()
-    }
-  }
-
-  function token(
-    scope:
-      | { resource: { kind: 'session' | 'repo'; id: string }; session: string; via?: unknown }
-      | { operator: { user: string }; via?: unknown },
-  ): string {
-    return 'via' in scope && scope.via !== undefined
-      ? mintToken(SECRET, {
-          ...(scope as { resource: { kind: 'session' | 'repo'; id: string }; session: string }),
-          exp: EXP,
-          via: scope.via as never,
-        })
-      : 'operator' in scope
-        ? mintToken(SECRET, {
-            operator: { user: (scope as { operator: { user: string } }).operator.user },
-            exp: EXP,
-          })
-        : mintToken(SECRET, {
-            ...(scope as { resource: { kind: 'session' | 'repo'; id: string }; session: string }),
-            exp: EXP,
-          })
-  }
-
-  test('a session resource token gates exactly its own session and cannot create or list', async () => {
-    await withServer(async ({ url, admin }) => {
-      await admin.ensureRepo('acme/sessions')
-      const mine = await admin.createSession({ repo: 'acme/sessions', operator: 'op' })
-      const other = await admin.createSession({ repo: 'acme/sessions', operator: 'op' })
-      const client = new RemoteBuildStore({
-        url,
-        token: token({ resource: { kind: 'session', id: mine.id }, session: '*' }),
-      })
-
-      // Own session: full family works.
-      expect(await client.getSession(mine.id)).not.toBeNull()
-      await client.appendSessionEvent(mine.id, {
-        actor: humanActor('op'),
-        type: 'message.posted',
-        payload: { text: 'mine' },
-      })
-      expect((await client.getSessionEvents(mine.id)).map((e) => e.seq)).toEqual([1, 2])
-      const stream = await client.createStream({ kind: 'session', session: mine.id }, 'turn')
-      await client.appendStreamParts(stream.id, [{ type: 'text-delta', id: 't', delta: 'x' }])
-      expect(
-        (await client.listStreams({ kind: 'session', session: mine.id })).map((r) => r.id),
-      ).toEqual([stream.id])
-
-      // Foreign session, create, and list: 403 AuthError.
-      for (const attempt of [
-        () => client.getSession(other.id),
-        () =>
-          client.appendSessionEvent(other.id, {
-            actor: humanActor('op'),
-            type: 'message.posted',
-            payload: { text: 'no' },
-          }),
-        () => client.listSessions('acme/sessions'),
-        () => client.createSession({ repo: 'acme/sessions', operator: 'op' }),
-      ]) {
-        const err = await attempt().catch((e: unknown) => e)
-        expect(err).toBeInstanceOf(AuthError)
-      }
-
-      // A repo token owns the collection routes but not a foreign session.
-      const repoClient = new RemoteBuildStore({
-        url,
-        token: token({ resource: { kind: 'repo', id: 'acme/sessions' }, session: '*' }),
-      })
-      expect((await repoClient.listSessions('acme/sessions')).map((s) => s.id)).toEqual([
-        mine.id,
-        other.id,
-      ])
-      const created = await repoClient.createSession({
-        repo: 'acme/sessions',
-        operator: 'op',
-        title: 'from repo token',
-      })
-      expect(created.id).toMatch(/^os_/)
-      const foreignErr = await repoClient.getSession(mine.id).catch((e: unknown) => e)
-      expect(foreignErr).toBeInstanceOf(AuthError)
-    })
+test('all retired resource scopes are refused before raw-store body processing', async () => {
+  const now = new Date(CONTRACT_T0)
+  const server = createStoreServer({
+    store: new MemoryBuildStore(),
+    secret: 'secret',
+    clock: () => now,
   })
+  for (const scope of [
+    { build: 'a', session: 's', exp: now.getTime() + 60000 },
+    { resource: { kind: 'repo' as const, id: 'a' }, session: '*', exp: now.getTime() + 60000 },
+    {
+      resource: { kind: 'session' as const, id: 'os_a' },
+      session: '*',
+      exp: now.getTime() + 60000,
+    },
+  ]) {
+    const response = await server.fetch(
+      new Request('http://store/builds', {
+        method: 'POST',
+        body: 'invalid',
+        headers: {
+          authorization: `Bearer ${mintToken('secret', scope)}`,
+          [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        },
+      }),
+    )
+    expect(response.status).toBe(401)
+    expect((await response.json()).error).toContain('credential format changed')
+  }
+})
 
-  test('via stamping and rejection follow the token, not the write', async () => {
-    await withServer(async ({ url, admin, backing }) => {
-      await admin.createBuild(sampleBuildInput('via-wire'))
-      const via: Via = { kind: 'session', id: 'os_delegate' }
-      const otherVia: Via = { kind: 'mcp', client: 'claude-code' }
-
-      // A via-carrying resource token stamps its via onto human writes.
-      const stamped = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'build', id: 'via-wire' },
-          session: '*',
-          exp: EXP,
-          via: via as never,
-        }),
-      })
-      const envelope = await stamped.append('via-wire', {
-        actor: humanActor('operator'),
-        type: 'build.pause-requested',
-        payload: {},
-      })
-      expect(envelope.actor).toEqual({ kind: 'human', user: 'operator', via })
-
-      // A human write claiming a via the token carries is accepted unchanged.
-      const claimed = await stamped.append('via-wire', {
-        actor: humanActor('operator', via as never),
-        type: 'build.resume-requested',
-        payload: {},
-      })
-      expect(claimed.actor).toEqual({ kind: 'human', user: 'operator', via })
-
-      // A human write claiming a different via → 403 AuthError.
-      const mismatch = await stamped
-        .append('via-wire', {
-          actor: humanActor('operator', otherVia as never),
-          type: 'build.pause-requested',
-          payload: {},
-        })
-        .catch((e: unknown) => e)
-      expect(mismatch).toBeInstanceOf(AuthError)
-
-      // A token without via rejects any write claiming one.
-      const unscoped = new RemoteBuildStore({
-        url,
-        token: token({ operator: { user: 'op' } }),
-      })
-      // Operator tokens never authorize raw store routes at all.
-      const operatorErr = await unscoped
-        .append('via-wire', {
-          actor: humanActor('operator'),
-          type: 'build.pause-requested',
-          payload: {},
-        })
-        .catch((e: unknown) => e)
-      expect(operatorErr).toBeInstanceOf(AuthError)
-
-      // A via-carrying resource token rejects a claim when the write carries
-      // one and the token does not.
-      const plainResource = new RemoteBuildStore({
-        url,
-        token: mintToken(SECRET, {
-          resource: { kind: 'build', id: 'via-wire' },
-          session: '*',
-          exp: EXP,
-        }),
-      })
-      const claimedErr = await plainResource
-        .append('via-wire', {
-          actor: humanActor('operator', via as never),
-          type: 'build.pause-requested',
-          payload: {},
-        })
-        .catch((e: unknown) => e)
-      expect(claimedErr).toBeInstanceOf(AuthError)
-
-      // The backing log holds exactly the stamped writes, in order.
-      const events = await backing.getEvents('via-wire')
-      expect(events.map((e) => (e.actor as { via?: unknown }).via ?? null)).toEqual([via, via])
-    })
+test('a store that predates the snapshot routes reads as no snapshots, never an error', async () => {
+  const old = Bun.serve({
+    port: 0,
+    fetch: () =>
+      new Response(JSON.stringify({ error: 'no route', kind: 'not-found' }), { status: 404 }),
   })
+  try {
+    const client = new RemoteBuildStore({ url: `http://localhost:${old.port}` })
+    expect(await client.getReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', 1)).toBeNull()
+    expect(
+      await client.putReducerSnapshot({ kind: 'build', slug: 'a' }, 'build', {
+        version: 1,
+        cursor: 0,
+        state: {},
+      }),
+    ).toBe(false)
+  } finally {
+    old.stop(true)
+  }
 })

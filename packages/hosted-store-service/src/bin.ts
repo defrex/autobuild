@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
 import {
+  openPostgresCredentialStoreFromEnv,
+  type CredentialStore,
+} from '@defrex/autobuild-postgres-store/credentials'
+import {
   openPostgresProjectRegistryFromEnv,
   normalizeProjectRepository,
   type ProjectRegistry,
@@ -7,13 +11,13 @@ import {
 import { mintToken } from '@defrex/autobuild/remote-store'
 
 const USAGE = `Usage:
+  ab-hosted-store credentials issue REPOSITORY --user IDENTITY [--ttl-seconds N | --expires-at ISO-8601]
+  ab-hosted-store credentials list REPOSITORY
+  ab-hosted-store credentials revoke REPOSITORY --id ID --user IDENTITY
   ab-hosted-store projects list
   ab-hosted-store projects add REPOSITORY --user IDENTITY
   ab-hosted-store projects remove REPOSITORY --user IDENTITY
-  ab-hosted-store mint operator (--ttl-seconds N | --expires-at ISO-8601)
-  ab-hosted-store mint operator --user IDENTITY (--ttl-seconds N | --expires-at ISO-8601)
-  ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)
-  ab-hosted-store mint build --build SLUG --session SESSION (--ttl-seconds N | --expires-at ISO-8601)`
+  ab-hosted-store mint admin (--ttl-seconds N | --expires-at ISO-8601)`
 
 type Env = Record<string, string | undefined>
 
@@ -58,6 +62,8 @@ export function mintTokenFromArgs(args: string[], env: Env, now = new Date()): s
   ) {
     throw new Error('expected "mint operator", "mint admin", or "mint build"')
   }
+  if (args[1] !== 'admin')
+    throw new Error('credential format changed; use credentials issue REPOSITORY --user IDENTITY')
   const secret = env.AB_STORE_SECRET?.trim()
   if (!secret) throw new Error('AB_STORE_SECRET is required and must be nonblank')
   const exp = expiry(args, now)
@@ -71,29 +77,9 @@ export function mintTokenFromArgs(args: string[], env: Env, now = new Date()): s
   ])
   if (args[1] === 'admin') {
     for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
-    return mintToken(secret, { build: '*', session: '*', exp })
+    return mintToken(secret, { version: 1, ownerAdmin: { user: 'owner:break-glass' }, exp })
   }
-  if (args[1] === 'operator') {
-    const rawUser = option(args, '--user')
-    const user = rawUser?.trim()
-    if (rawUser !== undefined && !user) throw new Error('--user must be nonblank')
-    if (rawUser !== undefined) allowed.add('--user').add(rawUser)
-    for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
-    return user
-      ? mintToken(secret, { operator: { user }, exp })
-      : mintToken(secret, { operator: true, session: '*', exp })
-  }
-  const build = option(args, '--build')?.trim()
-  const session = option(args, '--session')?.trim()
-  if (!build) throw new Error('--build is required and must be nonblank')
-  if (!session) throw new Error('--session is required and must be nonblank')
-  allowed
-    .add('--build')
-    .add(option(args, '--build'))
-    .add('--session')
-    .add(option(args, '--session'))
-  for (const arg of args) if (!allowed.has(arg)) throw new Error(`unknown argument: ${arg}`)
-  return mintToken(secret, { build, session, exp })
+  throw new Error('credential format changed; use credentials issue REPOSITORY --user IDENTITY')
 }
 
 export function runTokenCli(
@@ -117,7 +103,55 @@ export async function runHostedCli(
   write: (text: string) => void = console.log,
   writeError: (text: string) => void = console.error,
   open: (env: Env) => Promise<ProjectRegistry> = openPostgresProjectRegistryFromEnv,
+  openCredentials: (env: Env) => Promise<CredentialStore> = openPostgresCredentialStoreFromEnv,
 ): Promise<number> {
+  if (args[0] === 'credentials') {
+    let credentials: CredentialStore | undefined
+    let credentialResult = 0
+    try {
+      const command = args[1]
+      if (!['issue', 'list', 'revoke'].includes(command ?? '') || !args[2])
+        throw new Error('expected credentials issue/list/revoke REPOSITORY')
+      const repo = normalizeProjectRepository(args[2])
+      const names =
+        command === 'issue'
+          ? ['--user', '--ttl-seconds', '--expires-at']
+          : command === 'revoke'
+            ? ['--user', '--id']
+            : []
+      for (let index = 3; index < args.length; index += 2) {
+        if (!names.includes(args[index]!)) throw new Error(`unknown argument: ${args[index]}`)
+        option(args, args[index]!)
+      }
+      const user = option(args, '--user')?.trim()
+      if (command !== 'list' && !user) throw new Error('--user is required and must be nonblank')
+      const exp =
+        command === 'issue' && (args.includes('--ttl-seconds') || args.includes('--expires-at'))
+          ? new Date(expiry(args, new Date()))
+          : undefined
+      const id = option(args, '--id')
+      if (command === 'revoke' && !id) throw new Error('--id is required')
+      credentials = await openCredentials(env)
+      if (command === 'issue')
+        write(JSON.stringify(await credentials.issue(repo, user!, exp ? { expiresAt: exp } : {})))
+      else if (command === 'list') write(JSON.stringify(await credentials.list(repo)))
+      else {
+        await credentials.revoke(repo, id!, user!)
+        write(JSON.stringify({ repo, id, revoked: true }))
+      }
+    } catch (error) {
+      writeError(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`)
+      credentialResult = 2
+    } finally {
+      try {
+        await credentials?.close()
+      } catch (error) {
+        writeError(error instanceof Error ? error.message : String(error))
+        credentialResult = 2
+      }
+    }
+    return credentialResult
+  }
   if (args[0] !== 'projects') return runTokenCli(args, env, write, writeError)
   let registry: ProjectRegistry | undefined
   let result = 0

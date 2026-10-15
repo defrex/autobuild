@@ -1,9 +1,13 @@
+import {
+  createMachineAuth,
+  MachineAuthError,
+  requireProject,
+  type MachineAuth,
+} from './machine-auth'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import type { ZodType } from 'zod'
 import { systemClock, type BuildStore, type Clock } from '@defrex/autobuild/plugin-sdk'
 import {
-  tokenResource,
-  verifyToken,
   clientIdentityError,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -50,7 +54,6 @@ import {
   ticketUpdateRequestSchema,
   toggleHarvestGate,
   toggleRepositorySetting,
-  type Via,
 } from '@defrex/autobuild/operator'
 import {
   answerOperatorApproval,
@@ -103,6 +106,7 @@ export interface OperatorServerOptions {
   projects: ProjectRegistryReader
   store: BuildStore
   secret: string
+  auth?: MachineAuth
   clock?: Clock
   /** Hosted ticket capability. Omitted deployments retain build-only operator routes. */
   ticketBackend?: OperatorTicketBackend
@@ -197,21 +201,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     }
   }
 
-  function operator(req: Request): { user: string; via?: Via } {
-    const match = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') ?? '')
-    if (match === null) throw new HttpError(401, 'auth', 'missing bearer token')
-    const scope = verifyToken(opts.secret, match[1]!, clock())
-    if (scope === null) throw new HttpError(401, 'auth', 'invalid or expired token')
-    const resource = tokenResource(scope)
-    if (resource.kind !== 'operator' || !('operator' in scope) || scope.operator === true) {
-      throw new HttpError(
-        403,
-        'auth',
-        `token scoped to ${resource.kind} "${resource.id}" may not access operator operations`,
-      )
-    }
-    return { user: scope.operator.user, via: scope.via }
-  }
+  const auth =
+    opts.auth ??
+    createMachineAuth({
+      secret: opts.secret,
+      clock,
+      projects: opts.projects,
+      credentials: { authenticate: async () => null },
+    })
 
   async function requireRouteBuild(repo: string, slug: string): Promise<void> {
     const record = await opts.store.getBuild(slug)
@@ -281,7 +278,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
 
   async function route(req: Request): Promise<Response> {
     identity(req)
-    const scope = operator(req)
+    const scope = await auth.authenticate(req)
+    if (scope.kind === 'project' && scope.credential.purpose === 'dispatcher')
+      throw new HttpError(403, 'auth', 'dispatcher credential may not access operator operations')
     const user = scope.user
     const url = new URL(req.url)
     let parts: string[]
@@ -294,8 +293,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       throw new HttpError(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
     }
     const repo = parts[3]
-    if (!(await opts.projects.has(repo)))
-      throw new HttpError(404, 'not-found', 'unknown repository')
+    requireProject(scope, repo)
+    if (!(await opts.projects.has(repo))) throw new HttpError(403, 'auth', 'project not registered')
     const rest = parts.slice(4)
 
     // The registry's protocol face: one generic route for the whole closed
@@ -320,7 +319,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       try {
         const result = await registry.call(tool, input, {
           identity: user,
-          ...(scope.via !== undefined ? { via: scope.via } : {}),
+          ...(('via' in scope ? scope.via : undefined) !== undefined
+            ? { via: 'via' in scope ? scope.via : undefined }
+            : {}),
         })
         return json(200, result)
       } catch (error) {
@@ -701,6 +702,7 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       try {
         return await route(req)
       } catch (error) {
+        if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
         if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
         if (error instanceof TicketOperationError) {
           return failure(

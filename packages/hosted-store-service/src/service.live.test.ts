@@ -72,8 +72,8 @@ if (!testUrl) {
     })
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: service.fetch })
     const token = mintToken(secret, {
-      build: '*',
-      session: '*',
+      version: 1,
+      ownerAdmin: { user: 'owner:fixture' },
       exp: clock().getTime() + 100 * 365 * 24 * 60 * 60 * 1000,
     })
     return {
@@ -91,7 +91,7 @@ if (!testUrl) {
   })
 
   describe('delegated writes over the hosted stack (§15.1)', () => {
-    test('a via-carrying token stamps and gates delegated writes end-to-end', async () => {
+    test('retired delegation is refused and raw admin writes cannot forge via', async () => {
       const database = await isolatedDatabase()
       const backing = await openPostgresBuildStore(database.url, new MemoryBlobStore(), {
         clock: systemClock,
@@ -115,15 +115,13 @@ if (!testUrl) {
       const exp = systemClock().getTime() + 100 * 365 * 24 * 60 * 60 * 1000
       const admin = new RemoteBuildStore({
         url,
-        token: mintToken(secret, { build: '*', session: '*', exp }),
+        token: mintToken(secret, { version: 1, ownerAdmin: { user: 'owner:fixture' }, exp }),
       })
       try {
         await admin.createBuild(sampleBuildInput('via-live'))
         const via: Via = { kind: 'session', id: 'os_delegate' }
-        const otherVia: Via = { kind: 'mcp', client: 'claude-code' }
 
-        // A build-scoped resource token carrying a via stamps it onto a
-        // via-less human write (the token is authoritative).
+        // Retired delegated raw credentials cannot be replayed into the store.
         const delegated = new RemoteBuildStore({
           url,
           token: mintToken(secret, {
@@ -133,30 +131,13 @@ if (!testUrl) {
             via,
           }),
         })
-        const stamped = await delegated.append('via-live', {
-          actor: humanActor('operator'),
-          type: 'build.pause-requested',
-          payload: {},
-        })
-        expect(stamped.actor).toEqual({ kind: 'human', user: 'operator', via })
-
-        // A write claiming the token's own via is accepted unchanged.
-        const claimed = await delegated.append('via-live', {
-          actor: humanActor('operator', via),
-          type: 'build.resume-requested',
-          payload: {},
-        })
-        expect(claimed.actor).toEqual({ kind: 'human', user: 'operator', via })
-
-        // A write claiming a different via → 403 authority failure.
-        const mismatch = await delegated
-          .append('via-live', {
-            actor: humanActor('operator', otherVia),
+        await expect(
+          delegated.append('via-live', {
+            actor: humanActor('operator'),
             type: 'build.pause-requested',
             payload: {},
-          })
-          .catch((e: unknown) => e)
-        expect(mismatch).toBeInstanceOf(AuthError)
+          }),
+        ).rejects.toThrow('credential format changed')
 
         // The via-less admin token may not write delegated events at all —
         // the exact rejection the via contract pins for this posture.
@@ -182,7 +163,7 @@ if (!testUrl) {
 
         // The log holds the accepted delegated writes then the plain one.
         const events = await admin.getEvents('via-live')
-        expect(events.map((e) => (e.actor as { via?: Via }).via ?? null)).toEqual([via, via, null])
+        expect(events.map((e) => (e.actor as { via?: Via }).via ?? null)).toEqual([null])
       } finally {
         await admin.close()
         await server.stop(true)
@@ -431,3 +412,97 @@ if (testUrl)
       }
     })
   })
+
+test.skipIf(!testUrl)(
+  'stored project credentials: redaction, revocation, registration and warm service enforcement',
+  async () => {
+    const { PostgresCredentialStore } = await import('@defrex/autobuild-postgres-store/credentials')
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const projects = new PostgresProjectRegistry(sql)
+    const credentials = new PostgresCredentialStore(sql, projects)
+    const a = 'https://github.com/acme/credential-a'
+    const b = 'https://github.com/acme/credential-b'
+    try {
+      await projects.add(a, 'owner')
+      await projects.add(b, 'owner')
+      const first = await credentials.issue(a, 'owner')
+      const second = await credentials.issue(a, 'owner')
+      const other = await credentials.issue(b, 'owner', { purpose: 'dispatcher' })
+      expect(first.token).not.toBe(second.token)
+      const [stored] =
+        await sql`SELECT * FROM project_credentials WHERE id = ${first.credential.id}`
+      expect(JSON.stringify(stored)).not.toContain(first.token.split('_').at(-1)!)
+      expect(JSON.stringify(await credentials.list(a))).not.toContain('digest')
+      const now = new Date()
+      expect(await credentials.authenticate(first.token, now)).toMatchObject({
+        repo: a,
+        lastUsedAt: now.toISOString(),
+      })
+      expect(
+        await credentials.authenticate(
+          `${first.token.slice(0, -1)}${first.token.endsWith('0') ? '1' : '0'}`,
+          now,
+        ),
+      ).toBeNull()
+      expect(await credentials.authenticate('abp_1_unknown', now)).toBeNull()
+      // Exercise the real persisted reader through a warmed HTTP composition.
+      const service = createHostedStoreService({
+        env: {
+          AB_STORE_SECRET: 'live-secret',
+          AB_POSTGRES_URL: database.url,
+          AB_BLOB_BACKEND: 's3',
+          AB_S3_BUCKET: 'unused',
+          AB_S3_REGION: 'unused',
+          AB_S3_ACCESS_KEY_ID: 'unused',
+          AB_S3_SECRET_ACCESS_KEY: 'unused',
+        },
+        openStore: async () =>
+          new (await import('@defrex/autobuild/plugin-sdk')).MemoryBuildStore(),
+        openProjectRegistry: async () => projects,
+        openCredentials: async () => credentials,
+      })
+      const fetchFn = ((input: string | URL | Request, init?: RequestInit) =>
+        service.fetch(
+          input instanceof Request ? new Request(input, init) : new Request(String(input), init),
+        )) as typeof fetch
+      const client = (token: string) =>
+        new RemoteBuildStore({ url: 'http://store', token, fetchFn })
+      const firstClient = client(first.token)
+      const secondClient = client(second.token)
+      const otherClient = client(other.token)
+      const created = await firstClient.createBuild({ slug: 'fix-login', repo: a })
+      const foreign = await otherClient.createBuild({ slug: 'fix-login', repo: b })
+      expect(created.slug).not.toBe(foreign.slug)
+      expect(created.branch).toBe(`ab/${created.slug}`)
+      expect(await firstClient.getBuild(foreign.slug)).toBeNull()
+      expect(await firstClient.getBuild('missing')).toBeNull()
+      expect((await firstClient.listBuilds()).map((record) => record.slug)).toEqual([created.slug])
+      await credentials.revoke(b, first.credential.id, 'owner')
+      expect(await credentials.authenticate(first.token, now)).not.toBeNull()
+      await credentials.revoke(a, first.credential.id, 'owner')
+      await credentials.revoke(a, first.credential.id, 'owner')
+      expect(await credentials.authenticate(first.token, now)).toBeNull()
+      await expect(firstClient.listBuilds()).rejects.toThrow('unknown or revoked credential')
+      expect(await secondClient.getBuild(created.slug)).not.toBeNull()
+      expect(await otherClient.getBuild(foreign.slug)).not.toBeNull()
+      expect(await credentials.authenticate(second.token, now)).not.toBeNull()
+      expect(await credentials.authenticate(other.token, now)).not.toBeNull()
+      const expired = await credentials.issue(a, 'owner', {
+        expiresAt: new Date(Date.now() + 10000),
+      })
+      expect(await credentials.authenticate(expired.token, new Date(Date.now() + 20000))).toBeNull()
+      await migratePostgres(database.url)
+      expect(await credentials.authenticate(second.token, now)).not.toBeNull()
+      await projects.remove(a, 'owner')
+      await expect(credentials.authenticate(second.token, now)).rejects.toThrow(
+        'project not registered',
+      )
+      await expect(credentials.issue(a, 'owner')).rejects.toThrow('project not registered')
+      await expect(credentials.issue(b, ' ')).rejects.toThrow('nonblank')
+    } finally {
+      await sql.close()
+      await database.cleanup()
+    }
+  },
+)

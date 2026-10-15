@@ -1,3 +1,4 @@
+import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
 import {
   openPostgresProjectRegistryFromEnv,
   normalizeProjectRepository,
@@ -17,12 +18,11 @@ import {
  * kernelRunId. That id is the repository-lease holder and it tags every tick
  * report, run boundary, and deposited `dispatcher-effective-config` artifact,
  * so the web dashboard's repository journal shows hosted activity exactly as
- * it shows a local one. Guests authenticate with a short-TTL unattributed
- * deployment operator token (`operator: true`) signed with the deployment's
- * own store signing secret — the exact secret both the Store and ticket
- * servers verify tokens against — so one credential covers store, tickets, and
- * the guest session, and store identity still travels via the run id. The
- * secret and minted tokens never appear in logs, responses, or error messages.
+ * it shows a local one. Each project invocation issues an opaque stored
+ * credential with immutable dispatcher purpose and configured expiry. It
+ * grants that registered project's raw store and ticket access only. It stays
+ * valid after tick return for spawned builds. Credentials never enter logs,
+ * responses or errors.
  *
  * This surface is deliberately NOT routed through `createHostedStoreService`:
  * the machine routes gate on Autobuild version headers a bare cron request
@@ -34,7 +34,6 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Clock } from '@defrex/autobuild/plugin-sdk'
 import { spawnExec } from '@defrex/autobuild/git-worktree'
 import { abDispatch, type DispatchOpts } from '@defrex/autobuild/cli'
-import { mintToken } from '@defrex/autobuild/remote-store'
 import { parseHostedStoreEnv, type HostedStoreEnv } from '@defrex/autobuild-hosted-store-service'
 
 /** The service environment the dispatcher reads. Secrets are only ever taken
@@ -250,6 +249,7 @@ export interface HostedDispatcherTickSummary {
 }
 
 export interface HostedDispatcherOptions {
+  issueDispatcherCredential?: (repo: string, creator: string, expiresAt: Date) => Promise<string>
   openProjectRegistry?: (env: HostedDispatcherEnv) => Promise<ProjectRegistryReader>
   /** Service environment; defaults to `process.env`. */
   env?: HostedDispatcherEnv
@@ -373,15 +373,34 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
         const stderr = options.stderr ?? ((line: string) => logError(`${kernelPrefix} ${line}`))
         const startedAt = Date.now()
         log(`${LOG_PREFIX} ${invocation}: ${repository} tick run=${runId}`)
-        // Unattributed deployment operator credential: it covers store and
-        // ticket operations (attributed operator tokens are operator-API-only
-        // and cannot write store events). It names nothing because store
-        // identity travels via the run id. Never logged, never returned.
-        const token = mintToken(config.secret, {
-          operator: true,
-          session: '*',
-          exp: clock().getTime() + config.tokenTtlSeconds * 1000,
-        })
+        // Stored project authority outlives the tick for spawned builds.
+        // This issuer cannot request owner/operator purpose.
+        const issue =
+          options.issueDispatcherCredential ??
+          (async (repo: string, creator: string, expiresAt: Date) => {
+            const credentials = await openPostgresCredentialStoreFromEnv(env)
+            try {
+              return (await credentials.issue(repo, creator, { purpose: 'dispatcher', expiresAt }))
+                .token
+            } finally {
+              await credentials.close()
+            }
+          })
+        let token: string
+        try {
+          token = await issue(
+            repository,
+            `system:${runId}`,
+            new Date(clock().getTime() + config.tokenTtlSeconds * 1000),
+          )
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          repositories.push({ repository, outcome: 'failed', runId, error: message })
+          logError(
+            `${LOG_PREFIX} ${invocation}: ${repository} credential issuance failed: ${errorDetail(error)}`,
+          )
+          continue
+        }
         const childEnv: Record<string, string | undefined> = {
           ...env,
           AB_STORE: config.origin,

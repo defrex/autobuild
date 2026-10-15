@@ -1,0 +1,76 @@
+import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
+import {
+  ProjectNotRegisteredError,
+  type CredentialReader,
+  type CredentialMetadata,
+} from '@defrex/autobuild-postgres-store/credentials'
+import { verifyToken, type Via } from '@defrex/autobuild/remote-store'
+
+export type MachinePrincipal =
+  | { kind: 'project'; repo: string; user: string; credential: CredentialMetadata }
+  | { kind: 'internal'; repo: string; user: string; via?: Via }
+  | { kind: 'admin'; user: string }
+export class MachineAuthError extends Error {
+  readonly kind = 'auth'
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+export const RETIRED_CREDENTIAL_MESSAGE =
+  'credential format changed; obtain a project credential from the owner using ab-hosted-store credentials issue REPOSITORY --user IDENTITY'
+export interface MachineAuth {
+  authenticate(request: Request): Promise<MachinePrincipal>
+}
+export function requireProject(principal: MachinePrincipal, repo: string): void {
+  if (principal.kind !== 'admin' && principal.repo !== repo)
+    throw new MachineAuthError(403, 'wrong project')
+}
+export function requireMachineAccess(principal: MachinePrincipal): void {
+  if (principal.kind === 'internal')
+    throw new MachineAuthError(403, 'internal operator credential may only access operator routes')
+}
+export function createMachineAuth(options: {
+  secret: string
+  credentials: CredentialReader
+  projects: ProjectRegistryReader
+  clock?: () => Date
+}): MachineAuth {
+  return {
+    async authenticate(request) {
+      const match = /^Bearer\s+(.+)$/i.exec(request.headers.get('authorization') ?? '')
+      if (!match) throw new MachineAuthError(401, 'missing bearer credential')
+      const token = match[1]!
+      const now = (options.clock ?? (() => new Date()))()
+      if (token.startsWith('abp_')) {
+        let credential: CredentialMetadata | null
+        try {
+          credential = await options.credentials.authenticate(token, now)
+        } catch (error) {
+          if (error instanceof ProjectNotRegisteredError)
+            throw new MachineAuthError(403, 'project not registered')
+          throw error
+        }
+        if (!credential) throw new MachineAuthError(401, 'unknown or revoked credential')
+        if (!(await options.projects.has(credential.repo)))
+          throw new MachineAuthError(403, 'project not registered')
+        return { kind: 'project', repo: credential.repo, user: credential.createdBy, credential }
+      }
+      const scope = verifyToken(options.secret, token, now)
+      if (scope && 'ownerAdmin' in scope) return { kind: 'admin', user: scope.ownerAdmin.user }
+      if (scope && 'internalOperator' in scope) {
+        if (!(await options.projects.has(scope.internalOperator.repo)))
+          throw new MachineAuthError(403, 'project not registered')
+        return {
+          kind: 'internal',
+          repo: scope.internalOperator.repo,
+          user: scope.internalOperator.user,
+          ...(scope.via ? { via: scope.via } : {}),
+        }
+      }
+      throw new MachineAuthError(401, RETIRED_CREDENTIAL_MESSAGE)
+    },
+  }
+}

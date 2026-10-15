@@ -1,3 +1,12 @@
+import { randomBytes } from 'node:crypto'
+import {
+  createMachineAuth,
+  MachineAuthError,
+  requireMachineAccess,
+  requireProject,
+  type MachineAuth,
+  type MachinePrincipal,
+} from './machine-auth'
 /**
  * The remote BuildStore's HTTP face (SPEC §7.2 adapter 2): a small
  * self-hosted API over any backing BuildStore. Routes are REST and boring;
@@ -6,13 +15,11 @@
  * - D6: an `EventValidationError` from the backing store crosses the wire
  *   as 422 `{kind: 'validation'}` with the message intact — validation
  *   failures stay agent feedback, never opaque 500s.
- * - D8: when `secret` is set, every /builds route requires a Bearer token
- *   whose scope covers the addressed build (`'*'` = admin). Missing or
- *   expired token → 401; a token for another build → 403. No secret → open
- *   (local dev). `/health` is always open. The scope's session dimension
- *   (§8.1: "scoped to this build *and* session") gates event writes: a
- *   session-scoped token may only append events attributed to that agent
- *   session.
+ * - D8: the shared machine gate checks a stored project credential on each
+ *   request. Explicit repository paths must match; builds, sessions and
+ *   streams resolve their actual owning project before reads or writes. Only
+ *   the explicit owner admin can cross projects. No auth/secret keeps the
+ *   intentional open local-test mode; health is always public.
  *
  * Atomic deposits (POST …/deposits) implement the wire convention in
  * protocol.ts: the request payload embeds negative placeholder refs, and
@@ -78,15 +85,13 @@ import {
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
-  tokenResource,
-  verifyToken,
-  type TokenScope,
 } from '@defrex/autobuild/remote-store'
 
 export interface StoreServerOptions {
   store: BuildStore
   /** When set, all /builds routes require a scoped Bearer token (D8). */
   secret?: string
+  auth?: MachineAuth
   /** Time source for token expiry checks; defaults to the system clock. */
   clock?: Clock
   /** Maximum decoded size of each artifact. Unlimited when omitted. */
@@ -392,64 +397,43 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     return content
   }
 
-  function authorize(
+  const auth =
+    opts.auth ??
+    (opts.secret === undefined
+      ? undefined
+      : createMachineAuth({
+          secret: opts.secret,
+          clock,
+          credentials: { authenticate: async () => null },
+          projects: { has: async () => false, list: async () => [] },
+        }))
+  async function principal(req: Request): Promise<MachinePrincipal | null> {
+    if (!auth) return null
+    const value = await auth.authenticate(req)
+    requireMachineAccess(value)
+    return value
+  }
+  const unavailable = () =>
+    new RequestError(404, 'not-found', 'resource unavailable: unknown resource or wrong project')
+  async function authorize(
     req: Request,
     kind: 'build' | 'repo' | 'session' | 'admin',
     id: string,
-  ): TokenScope | null {
-    if (opts.secret === undefined) return null
-    const header = req.headers.get('authorization')
-    const match = header === null ? null : /^Bearer\s+(.+)$/i.exec(header)
-    if (!match) throw new RequestError(401, 'auth', 'missing bearer token')
-    const scope = verifyToken(opts.secret, match[1]!, clock())
-    if (scope === null) {
-      throw new RequestError(401, 'auth', 'invalid or expired token')
-    }
-    const resource = tokenResource(scope)
-    const allowed =
-      resource.kind === 'deployment' ||
-      resource.kind === 'admin' ||
-      (kind !== 'admin' && resource.kind === kind && resource.id === id)
-    if (!allowed) {
-      const target = kind === 'admin' ? 'admin operations' : `${kind} "${id}"`
-      throw new RequestError(
-        403,
-        'auth',
-        `token scoped to ${resource.kind} "${resource.id}" may not access ${target}`,
-      )
-    }
-    return scope
+  ): Promise<MachinePrincipal | null> {
+    const value = await principal(req)
+    if (!value) return null
+    if (value.kind === 'admin' || kind === 'admin') return value
+    let repo: string | undefined
+    if (kind === 'repo') repo = id
+    else if (kind === 'build') repo = (await store.getBuild(id))?.repo
+    else repo = (await store.getSession(id))?.repo
+    if (kind !== 'repo' && (repo === undefined || repo !== value.repo)) throw unavailable()
+    requireProject(value, repo!)
+    return value
   }
 
-  /** Loose agent-session extraction — full actor validation stays in the
-   * backing store so its D6 feedback survives the wire (protocol.ts keeps
-   * the event schema deliberately loose). */
-  function agentSession(actor: unknown): string | null {
-    if (typeof actor !== 'object' || actor === null) return null
-    const { kind, session } = actor as { kind?: unknown; session?: unknown }
-    return kind === 'agent' && typeof session === 'string' ? session : null
-  }
-
-  /**
-   * The session half of D8 (§8.1: the token is scoped to this build *and
-   * session*): a session-scoped token may only write events attributed to
-   * the agent session it was minted for. `'*'` (admin/runner tokens) is
-   * unrestricted, and reads are gated by build scope alone — the session
-   * dimension is write attribution.
-   */
-  function authorizeSession(scope: TokenScope | null, actor: unknown): void {
-    if (scope === null || !('session' in scope) || scope.session === '*') return
-    const session = agentSession(actor)
-    if (session !== scope.session) {
-      throw new RequestError(
-        403,
-        'auth',
-        `token scoped to session "${scope.session}" may not write events attributed to ${
-          session === null ? 'a non-agent actor' : `session "${session}"`
-        }`,
-      )
-    }
-  }
+  // Machine project credentials retain runner-style actor/session authority.
+  // The phase CLI enforces ambient build/session scope on its own handle.
 
   /**
    * Delegated-write attribution (§15.1) on every event-bearing write, applied
@@ -463,7 +447,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
    * authoritative); a non-human actor carrying via falls through to the
    * backing store's validation.
    */
-  function enforceVia(scope: TokenScope | null, actor: unknown): unknown {
+  function enforceVia(scope: MachinePrincipal | null, actor: unknown): unknown {
     if (scope === null) return actor
     const tokenVia: Via | undefined = 'via' in scope ? scope.via : undefined
     const candidate = actor as { kind?: unknown; via?: Via } | null
@@ -491,26 +475,53 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   async function adminRoute(req: Request): Promise<Response> {
-    authorize(req, 'admin', '*')
+    const owner = await principal(req)
     if (req.method === 'POST') {
       const body = await readBody(req, newBuildBodySchema)
+      if (owner && owner.kind !== 'admin') {
+        requireProject(owner, body.repo)
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const slug = `${body.slug.slice(0, 60)}-${randomBytes(12).toString('hex')}`
+          try {
+            return json(
+              201,
+              await store.createBuild({ ...body, slug, branch: `ab/${slug}` } as NewBuildInput),
+            )
+          } catch (error) {
+            const code = (error as { code?: string }).code
+            if (
+              code !== '23505' &&
+              !(error instanceof Error && /^build .*already exists/.test(error.message))
+            )
+              throw error
+          }
+        }
+        throw new Error('build identity allocation failed')
+      }
       if ((await store.getBuild(body.slug)) !== null) {
         return fail(409, 'conflict', `build "${body.slug}" already exists`)
       }
       return json(201, await store.createBuild(body as NewBuildInput))
     }
     if (req.method === 'GET') {
-      return json(200, await store.listBuilds())
+      return json(
+        200,
+        (await store.listBuilds()).filter(
+          (record) => !owner || owner.kind === 'admin' || record.repo === owner.repo,
+        ),
+      )
     }
     return fail(404, 'not-found', `no route: ${req.method} /builds`)
   }
 
   async function repoAdminRoute(req: Request): Promise<Response> {
-    authorize(req, 'admin', '*')
+    await authorize(req, 'admin', '*')
     if (req.method !== 'POST') {
       return fail(404, 'not-found', `no route: ${req.method} /repos`)
     }
     const body = await readBody(req, ensureRepoBodySchema)
+    const owner = await principal(req)
+    if (owner) requireProject(owner, body.repo)
     return json(200, await store.ensureRepo(body.repo))
   }
 
@@ -519,7 +530,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     url: URL,
     repo: string,
     rest: string,
-    scope: TokenScope | null,
+    scope: MachinePrincipal | null,
   ): Promise<Response> {
     const segments = rest.split('/')
     if (segments[0] === 'streams') {
@@ -531,7 +542,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     switch (`${req.method} ${rest}`) {
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
-        authorizeSession(scope, body.actor)
+
         const actor = enforceVia(scope, body.actor)
         return json(201, await store.appendRepo(repo, { ...body, actor } as RepositoryEventWrite))
       }
@@ -564,7 +575,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
-        authorizeSession(scope, body.event.actor)
+
         const actor = enforceVia(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
@@ -645,11 +656,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (req.method === 'POST') {
       const body = await readBody(req, newSessionBodySchema)
       if (body.repo !== repo) {
-        return fail(
-          400,
-          'validation',
-          `session body repo ${JSON.stringify(body.repo)} does not match the path`,
-        )
+        return fail(403, 'auth', 'wrong project')
       }
       return json(201, await store.createSession(body))
     }
@@ -815,7 +822,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     url: URL,
     slug: string,
     rest: string,
-    scope: TokenScope | null,
+    scope: MachinePrincipal | null,
   ): Promise<Response> {
     const segments = rest.split('/')
     if (segments[0] === 'streams') {
@@ -858,13 +865,13 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'POST events': {
         const body = await readBody(req, eventWriteWireSchema)
-        authorizeSession(scope, body.actor)
+
         const actor = enforceVia(scope, body.actor)
         return json(201, await store.append(slug, { ...body, actor } as EventWrite))
       }
       case 'POST events/conditional': {
         const body = await readBody(req, conditionalEventBodySchema)
-        authorizeSession(scope, body.event.actor)
+
         const actor = enforceVia(scope, body.event.actor)
         const event = await store.appendIfCurrent(slug, body.expectedSeq, {
           ...body.event,
@@ -889,7 +896,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
       }
       case 'POST deposits': {
         const body = await readBody(req, depositsBodySchema)
-        authorizeSession(scope, body.event.actor)
+
         const actor = enforceVia(scope, body.event.actor)
         const inputs = body.artifacts.map((artifact) => ({
           kind: artifact.kind,
@@ -982,7 +989,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
     const record = await store.getStream(streamId)
     if (record === null || !streamScopesEqual(record.scope, scope)) {
-      return fail(404, 'not-found', `unknown stream "${streamId}"`)
+      throw unavailable()
     }
     if (leaf === undefined || leaf === '') {
       if (req.method === 'GET') return json(200, record)
@@ -1045,15 +1052,21 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (streamId === undefined || streamId === '') {
       return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
     }
+    await principal(req)
     const record = await store.getStream(streamId)
-    if (record === null) return fail(404, 'not-found', `unknown stream "${streamId}"`)
+    if (record === null) throw unavailable()
     const scopeId =
       record.scope.kind === 'build'
         ? record.scope.build
         : record.scope.kind === 'repo'
           ? record.scope.repo
           : record.scope.session
-    authorize(req, record.scope.kind, scopeId)
+    try {
+      await authorize(req, record.scope.kind, scopeId)
+    } catch (error) {
+      if (error instanceof MachineAuthError && error.status === 403) throw unavailable()
+      throw error
+    }
     return streamRoute(req, url, record.scope, segments.slice(1))
   }
 
@@ -1085,7 +1098,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     }
     if (segments[0] === 'sessions' && segments.length >= 2) {
       const id = segments[1]!
-      authorize(req, 'session', id)
+      await authorize(req, 'session', id)
       if (segments.length === 2) {
         if (req.method === 'GET') return sessionRoute(req, url, id, 'record')
         return fail(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
@@ -1096,7 +1109,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments[0] === 'repos') {
       if (segments.length === 1) return repoAdminRoute(req)
       const repo = segments[1]!
-      const scope = authorize(req, 'repo', repo)
+      const scope = await authorize(req, 'repo', repo)
       if (segments.length === 3 && segments[2] === 'sessions') {
         return sessionCollectionRoute(req, repo)
       }
@@ -1135,7 +1148,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
     if (segments.length === 1) return adminRoute(req)
 
     const slug = segments[1]!
-    const scope = authorize(req, 'build', slug)
+    const scope = await authorize(req, 'build', slug)
     const record = await store.getBuild(slug)
     if (record === null) {
       return fail(404, 'not-found', `unknown build "${slug}"`)
@@ -1175,6 +1188,7 @@ export function createStoreServer(opts: StoreServerOptions): StoreServer {
   }
 
   function errorResponse(error: unknown): Response {
+    if (error instanceof MachineAuthError) return fail(error.status, 'auth', error.message)
     if (error instanceof RequestError) {
       return fail(error.status, error.kind, error.message)
     }

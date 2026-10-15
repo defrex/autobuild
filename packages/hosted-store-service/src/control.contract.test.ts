@@ -48,7 +48,8 @@ function api(store: BuildStore): OperatorApiClient {
   return new OperatorApiClient({
     url: 'http://operator.test',
     token: mintToken(SECRET, {
-      operator: { user: USER },
+      version: 1,
+      internalOperator: { user: USER, repo: REPO },
       exp: NOW.getTime() + 60_000,
     }),
     fetchFn: fetchFor(
