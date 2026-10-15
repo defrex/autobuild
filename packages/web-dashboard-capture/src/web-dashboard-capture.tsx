@@ -1,3 +1,5 @@
+import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
+import ConnectionPage from '../../hosted-store-service/app/connect/page'
 /**
  * Web dashboard capture: the operator web app's pure views rendered over the
  * same scripted dispatch models the terminal capture produces, then
@@ -78,6 +80,24 @@ export interface WebFrameSpec {
 
 /** The frames the verifier inspects, at the two viewports the design targets. */
 export const WEB_FRAME_SPECS: readonly WebFrameSpec[] = [
+  ...['wide', 'narrow'].flatMap((size) =>
+    ['code', 'approval', 'error', 'approved', 'denied', 'expired'].map((state) => ({
+      id: `connect-${state}-${size}`,
+      width: size === 'wide' ? 1440 : 390,
+      height: 900,
+      requires: [
+        'Autobuild operator',
+        'Connect project',
+        ...(state === 'approval'
+          ? ['https://github.com/example/project', 'Approve project', 'Deny']
+          : state === 'code'
+            ? ['Connection code', 'Review project']
+            : state === 'error'
+              ? ['Unknown connection code']
+              : [`Connection ${state}`]),
+      ],
+    })),
+  ),
   {
     id: 'builds-loading-wide',
     width: 1440,
@@ -618,6 +638,40 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     }
     case 'builds-longrepo-narrow':
       return shell(builds(models.mixed), { model: models.mixed, repo: LONG_FIXTURE_REPO })
+    case 'connect-code-wide':
+    case 'connect-code-narrow':
+      return await ConnectionPage({ searchParams: Promise.resolve({}) })
+    case 'connect-approval-wide':
+    case 'connect-approval-narrow':
+    case 'connect-error-wide':
+    case 'connect-error-narrow':
+    case 'connect-approved-wide':
+    case 'connect-approved-narrow':
+    case 'connect-denied-wide':
+    case 'connect-denied-narrow':
+    case 'connect-expired-wide':
+    case 'connect-expired-narrow': {
+      const state = spec.id.split('-')[1]!
+      return (
+        <ConnectionView
+          code="123456789A"
+          error={
+            state === 'error' ? 'Unknown connection code. Check the code in your CLI.' : undefined
+          }
+          connection={
+            state === 'error'
+              ? undefined
+              : {
+                  repo: 'https://github.com/example/project',
+                  credentialId: 'a'.repeat(32),
+                  code: '123456789A',
+                  status:
+                    state === 'approval' ? 'pending' : (state as 'approved' | 'denied' | 'expired'),
+                }
+          }
+        />
+      )
+    }
     case 'signin-wide':
       return <SignIn providers={['github']} />
     case 'signin-error-narrow':

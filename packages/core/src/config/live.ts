@@ -12,6 +12,7 @@ export const DISPATCHER_CONFIG_ARTIFACT = 'dispatcher-config'
  * behavior.
  */
 export const CONFIG_RELOAD_CLASSIFICATION = {
+  store: 'restart',
   baseBranch: 'hot',
   capacity: 'hot',
   ticketScanIntervalSeconds: 'hot',
@@ -49,6 +50,7 @@ export const CONFIG_RELOAD_CLASSIFICATION = {
 }
 
 export const RESTART_REQUIRED_CONFIG_PATHS = [
+  'store',
   'forge',
   'plugins',
   'workspace.provider',
@@ -118,6 +120,7 @@ export function composeBuildConfig(pipeline: Config, deployment: Config): Config
 export function composeReloadedConfig(startup: Config, candidate: Config): Config {
   return {
     ...candidate,
+    store: startup.store,
     forge: startup.forge,
     plugins: startup.plugins,
     workspace: startup.workspace,

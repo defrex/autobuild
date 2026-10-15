@@ -8,7 +8,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -798,7 +798,22 @@ CREATE TABLE IF NOT EXISTS project_credentials (
   last_used_at timestamptz, revoked_at timestamptz, expires_at timestamptz,
   purpose text NOT NULL CHECK (purpose IN ('project-owner','dispatcher'))
 );`.trim()
-export const SCHEMA_DDL = `${SCHEMA_V10_DDL}\n${CREDENTIAL_SCHEMA_DDL}`
+export const SCHEMA_V11_DDL = `${SCHEMA_V10_DDL}\n${CREDENTIAL_SCHEMA_DDL}`
+export const SCHEMA_V11_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V11_DDL)
+  .digest('hex')
+export const CONNECTION_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS project_connections (
+  id text PRIMARY KEY, repo text NOT NULL, credential_id text NOT NULL,
+  digest text NOT NULL, capability_hash text NOT NULL, code text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL, expires_at timestamptz NOT NULL,
+  status text NOT NULL CHECK (status IN ('pending','approved','denied','expired')),
+  approved_by text, polled_at timestamptz, poll_attempts integer NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS connection_lookup_limits (
+  actor text PRIMARY KEY, started_at timestamptz NOT NULL, attempts integer NOT NULL
+);`.trim()
+export const SCHEMA_DDL = `${SCHEMA_V11_DDL}\n${CONNECTION_SCHEMA_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -851,6 +866,25 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  project_connections: [
+    ['id', 'text', true],
+    ['repo', 'text', true],
+    ['credential_id', 'text', true],
+    ['digest', 'text', true],
+    ['capability_hash', 'text', true],
+    ['code', 'text', true],
+    ['created_at', 'timestamp with time zone', true],
+    ['expires_at', 'timestamp with time zone', true],
+    ['status', 'text', true],
+    ['approved_by', 'text', false],
+    ['polled_at', 'timestamp with time zone', false],
+    ['poll_attempts', 'integer', true, '0'],
+  ],
+  connection_lookup_limits: [
+    ['actor', 'text', true],
+    ['started_at', 'timestamp with time zone', true],
+    ['attempts', 'integer', true],
+  ],
   project_credentials: [
     ['id', 'text', true],
     ['digest', 'text', true],
@@ -1006,6 +1040,9 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_connections|p|id||||',
+  'project_connections|c|||||',
+  'connection_lookup_limits|p|actor||||',
   'project_credentials|p|id||||',
   'project_credentials|c|||||',
   'project_journal|p|seq||||',
@@ -1482,6 +1519,9 @@ export async function migratePostgres(url: string): Promise<void> {
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 11 && marker.checksum === SCHEMA_V11_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+            applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 10 && marker.checksum === SCHEMA_V10_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},

@@ -86,6 +86,10 @@
       "types": "./packages/core/src/operator/sandbox-host.ts",
       "import": "./packages/core/src/operator/sandbox-host.ts",
       "default": "./packages/core/src/operator/sandbox-host.ts"
+    },
+    "./connection": {
+      "types": "./packages/core/src/connection.ts",
+      "import": "./packages/core/src/connection.ts"
     }
   },
   "files": [

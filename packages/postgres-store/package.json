@@ -30,6 +30,10 @@
     "./credentials": {
       "types": "./src/credentials.ts",
       "import": "./src/credentials.ts"
+    },
+    "./connections": {
+      "types": "./src/connections.ts",
+      "import": "./src/connections.ts"
     }
   },
   "bin": {

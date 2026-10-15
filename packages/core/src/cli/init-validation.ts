@@ -1,3 +1,5 @@
+import { projectToken } from './project-credentials'
+import { resolveRepoOrigin } from './repo-state'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -390,7 +392,31 @@ export async function validateInitReadiness(opts: {
   const configPath = join(repo, 'autobuild.toml')
   const configBytes = await readFile(configPath, 'utf8')
   const config = await loadConfig(configPath)
-  const state = resolveRepoStatePaths({ repo, envStore: opts.env.AB_STORE })
+  hostPreflight(config, opts.env)
+  const selectedRemote = opts.env.AB_STORE?.trim() || config.store?.url
+  const identity =
+    selectedRemote && isRemoteStoreRef(selectedRemote) && !opts.env.AB_TOKEN
+      ? ((await resolveRepoOrigin(repo, exec)) ?? repo)
+      : repo
+  const state = resolveRepoStatePaths({
+    repo: identity,
+    checkout: repo,
+    envStore: opts.env.AB_STORE,
+    configStore: config.store?.url,
+  })
+  opts = {
+    ...opts,
+    env: {
+      ...opts.env,
+      AB_STORE: state.storeRef,
+      ...(isRemoteStoreRef(state.storeRef)
+        ? { AB_TOKEN: projectToken(state.storeRef, identity, opts.env) }
+        : {}),
+    },
+  }
+  if (config.store?.url === state.storeRef && !opts.env.AB_TOKEN) {
+    throw new Error('No project credential for this service; run ab connect')
+  }
   // Pre-registry parse and redaction come from the builtin capability table;
   // after plugin load the registration's own declarations take over (AUT-516).
   const builtinCaps = builtinWorkspaceProviderCapabilities(config.workspace.provider)
@@ -405,7 +431,6 @@ export async function validateInitReadiness(opts: {
   let caps: WorkspaceProviderCapabilities | undefined
   let assigneeLine: string | undefined
   try {
-    hostPreflight(config, opts.env)
     // Ticket acquisition is a host responsibility for both workspace providers.
     // Exercise its read surface before allocating disposable infrastructure.
     const hostPlugins = await loadPlugins(config.plugins, repo, { packageRoot: repo })

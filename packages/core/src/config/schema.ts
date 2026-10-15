@@ -12,6 +12,7 @@
  * validated.
  */
 import { z } from 'zod'
+import { normalizeServiceURL } from '../connection'
 import { prImageHostSchema } from '../ontology'
 import { SANDBOX_FORBIDDEN_ENV } from '../ports/workspace/operator-sandbox'
 import {
@@ -727,7 +728,18 @@ export type OrchestratorConfig = z.infer<typeof orchestratorSchema>
 
 // ── Whole file ───────────────────────────────────────────────────────────────
 
+export const storeSchema = z.strictObject({
+  url: z.string().transform((value, ctx) => {
+    try {
+      return normalizeServiceURL(value)
+    } catch (error) {
+      ctx.addIssue({ code: 'custom', message: (error as Error).message })
+      return z.NEVER
+    }
+  }),
+})
 const configRootSchema = z.strictObject({
+  store: storeSchema.optional(),
   /** Base branch builds cut from and target (§16.1). */
   baseBranch: z.string().min(1).default('main'),
   /** Concurrent builds for this repository (§16.1). */

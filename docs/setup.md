@@ -28,7 +28,7 @@ maintainer before selecting it:
 - a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`;
 - for a private repository, a separate read-only clone identity named by
   `gitUsernameEnv` and `gitPasswordEnv`;
-- an HTTPS hosted `AB_STORE` reachable from Vercel and a scoped `AB_TOKEN`;
+- an HTTPS hosted service reachable from Vercel, configured through `ab connect <url>`;
 - each selected role and alternate's runtime/model, its pinned
   `[workspace.config.runtimeProvisioning.<runtime>]` commands, and the API
   credential names it needs in `[workspace.config].environmentVariables`.
@@ -177,7 +177,7 @@ ab dispatch --repository https://github.com/owner/repository \\
 ```
 
 `--repository` (or `AB_REPOSITORY`) is the normalized origin. Origin mode
-requires an HTTPS `AB_STORE` plus `AB_TOKEN`, an exported `GITHUB_TOKEN` or
+requires an HTTPS service selected through `[store] url` or `AB_STORE`, a saved project credential or `AB_TOKEN`, an exported `GITHUB_TOKEN` or
 `GH_TOKEN`, and `forge = "github"`; the interactive dashboard is unavailable
 (`--plain` or no TTY). Origin mode never consults the gh CLI: a checkout-less
 host has no gh and no keyring, and the only workspace provider it can run,
@@ -276,6 +276,46 @@ production) or every MCP client's discovery binds tokens to the wrong
 resource.
 
 
+## Connect a project
+
+From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
+The CLI prints a verification URL and short code and attempts to open a browser.
+Sign in as an allowed owner, check the full repository identity and code, and
+approve or deny. Another device can open the printed URL, or visit `/connect`
+and enter the code. Approval requires the web-enabled service origin; a
+standalone machine-only listener cannot present browser consent. Requests
+expire after ten minutes. Denial and timeout leave local configuration unchanged.
+
+On approval the service registers the project and issues a project credential.
+The CLI keeps it in `$XDG_CONFIG_HOME/autobuild/credentials` (or
+`~/.config/autobuild/credentials`), keyed by normalized service and origin,
+with directory mode 0700 and file mode 0600. Credentials never belong in the
+repository. It adds the non-secret `[store] url` to `autobuild.toml` when
+absent; review and commit that change yourself. An existing different URL
+must be changed explicitly before connecting. Reconnecting replaces the saved
+credential only after approval and revokes the previous credential.
+
+All worktrees share the main checkout's configuration and the user's saved
+credential. A service manager running as that user uses the same HOME and
+XDG_CONFIG_HOME, with no AB_STORE or AB_TOKEN exports. A fresh clone with
+committed store configuration but no saved credential fails with `ab connect`
+guidance; it never silently creates local state. Run connect on each host/user.
+
+`ab connect` without a URL reports service, project, and credential status:
+accepted, rejected, missing, or unreachable. `ab disconnect` revokes the saved
+credential remotely before removing it locally, keeping the project registered,
+its data, and store configuration. A network/server failure retains the local
+entry for retry; an already revoked credential can be removed. If saving a new
+connection fails, the CLI cancels/revokes it and retains the previous entry.
+If remote cleanup cannot be confirmed, check the printed credential id with
+the owner's administrative tools before retrying.
+
+Store selection is `--store` > nonblank `AB_STORE` > `[store] url` > the
+main checkout's `.autobuild/`. `AB_TOKEN` overrides the exact service/project's
+saved credential for CI and other non-interactive hosts. A service override
+never borrows another service's credential. Build and harvest sessions keep
+their explicit scoped authority.
+
 ## Connected projects
 
 Migrate PostgreSQL from the pinned release before deploying (`bun run
@@ -303,8 +343,7 @@ MCP discovery and calls, and every operator API route consult current
 registration. Removal hides a project from all these surfaces and subsequent
 hosted dispatcher invocations; builds, events, artifacts and tickets remain,
 and re-registration restores access. Already-started work is not cancelled.
-Machine BuildStore and ticket credentials retain their existing authority;
-project-bound credentials are a separate feature.
+Project credentials issued by connect authorize only their registered project. Administrative credential issuance remains available for non-interactive hosts.
 
 Link directly to `/?repo=<URL-encoded normalized origin>`. The page selects the
 first registered origin when the requested one is missing or removed, and an

@@ -14,6 +14,18 @@ and sessionless `ab init --validate` readiness check. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
 example](#complete-example) is valid on its own.
 
+## `[store]`
+
+| Key | Required | Values / purpose |
+|---|---|---|
+| `url` | When `[store]` exists | Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized. |
+
+Selection is explicit `--store` > nonblank `AB_STORE` > `[store] url` > the main
+checkout's `.autobuild/`. A configured service without a user credential fails
+with `ab connect` guidance. `AB_TOKEN` overrides the saved service/project
+credential. See [connecting a project](hosted-service.md#connect-a-project).
+Changing the store requires restarting dispatch.
+
 ## Hosted service and PostgreSQL BuildStore environment
 
 The optional `@defrex/autobuild-hosted-store-service` and its
@@ -59,7 +71,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `AB_HOST` | Optional, ordinary Bun host | Bind hostname; defaults to `0.0.0.0`. Vercel supplies its own listener. |
 | `PORT` | Optional, ordinary Bun host | Integer 1–65535; defaults to `3000`. Vercel supplies its own listener. |
 | `AB_STORE` | Remote client | Hosted service base URL used by the kernel, phase commands, and dashboard. |
-| `AB_TOKEN` | Authenticated remote client | Offline-minted bearer token; this is not the signing secret. |
+| `AB_TOKEN` | Authenticated remote client | Explicit project bearer credential override for CI; otherwise use ab connect. This is not the signing secret. |
 | `BETTER_AUTH_SECRET` | Web dashboard | Independent server-only session secret with at least 32 high-entropy characters. |
 | `BETTER_AUTH_URL` | Web dashboard | Exact HTTP(S) origin, without credentials or a path; HTTPS is mandatory in production. |
 | `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
@@ -212,6 +224,7 @@ remain pinned to their startup values and are reported explicitly:
 
 | Restart-required field | Reason |
 |---|---|
+| `store` | Store selection and project authority are fixed when dispatch starts. |
 | `plugins` | Plugin modules and registration catalogs load before wiring. |
 | `forge` | Selects the constructed Forge adapter. |
 | `workspace.provider`, `workspace.config` | Select and configure the constructed workspace provider. |
@@ -1665,7 +1678,7 @@ Secrets and store selection accompany the file through environment variables:
 | Variable | Used for | Notes |
 |---|---|---|
 | `LINEAR_API_KEY` | Direct Linear ticket source | Required and nonempty when `tickets.source = "linear"`; in hosted Linear mode it is service-only. |
-| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
+| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then `[store] url`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
 | `AB_TOKEN` | Protected remote BuildStore and hosted tickets | Bearer credential forwarded to the service. Hosted tickets require a stored credential for a registered project. Owner admin is an explicit break-glass exception. Empty means no token; nonempty token bytes are treated as opaque. |
 
 A local store selection relocates the state database, blobs, worktrees, and the
