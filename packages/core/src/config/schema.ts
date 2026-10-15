@@ -644,7 +644,7 @@ const ORCHESTRATOR_APPROVAL_ENTRY = /^[a-z][a-z0-9_.]*(:[a-z0-9_-]+)?$/
 /** The attention set a new session's wake settings inherit when the
  * repository does not override `wake`: the build events an operator or agent
  * must wake up for (the same set `ab watch` filters on by default) plus the
- * repository-journal attention events (the same set `ab watch --repository`
+ * repository-journal attention events (the same set `ab watch`
  * follows), spelled as literal globs. Both halves of the attention set can
  * wake a session. */
 export const defaultOrchestratorWakeGlobs: readonly string[] = [

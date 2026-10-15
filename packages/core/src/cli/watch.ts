@@ -1,8 +1,8 @@
 /**
  * `ab watch` — the sessionless, read-only streaming half of the status family
  * (§8.2, §7.2). It follows the event logs of one, several, or all active
- * builds in the repository — optionally the repository journal — and emits one
- * record per matching event as it lands, each carrying the full durable
+ * builds in the repository, plus the repository journal by default with no
+ * slugs, and emits one record per matching event as it lands, carrying the durable
  * envelope, the build's reduced state after that event, and an opaque cursor
  * so a later `--since` invocation resumes exactly where this one stopped.
  *
@@ -102,8 +102,8 @@ export const BUILD_ATTENTION_EVENTS = [
  * Compile `--event` globs to anchored matchers: `*` matches any run of
  * characters, `?` exactly one, everything else verbatim (so the dots inside
  * event type names are escaped). Each glob must match at least one type in
- * the build catalog — or, when `--repository` is given, in the repository
- * catalog — otherwise a usage error naming the glob is thrown before any
+ * the build catalog, or the repository catalog with no slugs or explicit
+ * `--repository` — otherwise a usage error naming the glob is thrown before any
  * store read. Supplying any glob replaces the attention set entirely.
  *
  * The compiler itself lives in `events/globs.ts`, shared with the
@@ -340,6 +340,10 @@ export function summarizeEvent(event: AbEvent | RepositoryEvent, state: BuildSta
       return `harvest run ${event.payload.run} escalated: ${singleLine(event.payload.reason)}`
     case 'harvest.failed':
       return `harvest run ${event.payload.run} failed at ${event.payload.step} (attempt ${event.payload.attempt}): ${singleLine(event.payload.error)}`
+    case 'dispatcher.ticket-source-degraded':
+      return `ticket source ${event.payload.source} degraded: ${event.payload.cause} (${event.payload.operation}) — ${singleLine(event.payload.message)}${'resetAt' in event.payload ? `; reset ${event.payload.resetAt}` : ''}`
+    case 'dispatcher.ticket-source-recovered':
+      return `ticket source ${event.payload.source} recovered: ${event.payload.cause} (${event.payload.operation})`
     case 'dispatcher.tick-failed':
       return `dispatcher tick failed: ${singleLine(event.payload.error)}`
     case 'dispatcher.config-rejected':
@@ -451,6 +455,7 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
   const sleep = opts.delay ?? defaultDelay
   const slugs = [...(opts.slugs ?? [])]
   const repository = opts.repository === true
+  const followRepository = repository || slugs.length === 0
 
   const timeoutMs =
     opts.timeout !== undefined
@@ -462,10 +467,13 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
       : undefined
 
   // Ambient scope, before any store access.
-  assertReadScope(slugs, { repository, env: opts.env })
+  assertReadScope(slugs, { repository: followRepository, env: opts.env })
 
   // Glob validation needs only the catalogs — before any store access.
-  const filters = compileEventGlobs(opts.events ?? [], { repository, usage: WATCH_USAGE })
+  const filters = compileEventGlobs(opts.events ?? [], {
+    repository: followRepository,
+    usage: WATCH_USAGE,
+  })
 
   await withAmbientReadStore(
     {
@@ -778,13 +786,14 @@ export async function abWatch(opts: AbWatchOpts): Promise<void> {
         await trackBuild(key, sinceStreams[key])
         if (stop) break
       }
-      if (repository) {
+      if (followRepository) {
         if (!(await trackRepository())) {
           makeFailureStreak('watch', opts.stderr).onFailure(
             new Error(`could not read the repository journal for "${repo}"`),
           )
         }
-      } else if (slugs.length === 0) {
+      }
+      if (!repository && slugs.length === 0) {
         // Membership discovery also baselines the default watch; a failed
         // discovery here is fatal — nothing has started yet.
         try {

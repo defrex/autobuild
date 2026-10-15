@@ -247,7 +247,7 @@ describe('watch attention-set defaults', () => {
     expect(records[0]!.event).toMatchObject({ seq: 2, payload: { ...ESCALATION } })
   })
 
-  test('repository events are never emitted without --repository, attention ones only with it', async () => {
+  test('default and explicit repository watches emit repository attention', async () => {
     const seeded = makeStore()
     await seeded.createBuild({ slug: 'b1', repo: REPO })
     await seeded.ensureRepo(REPO)
@@ -273,7 +273,9 @@ describe('watch attention-set defaults', () => {
       },
     })
     await abWatch({ ...quiet.base, timeout: '1' })
-    expect(quiet.out.slice(0, -1)).toEqual([])
+    expect(quiet.out.slice(0, -1).map((line) => JSON.parse(line).event.type)).toEqual([
+      'dispatcher.tick-failed',
+    ])
 
     // With --repository: attention events from after the baseline are emitted.
     const loud = harness(seeded, {
@@ -338,7 +340,7 @@ describe('watch dynamic membership', () => {
     expect(records[0]).toMatchObject({ build: 'late', event: { seq: 3 } })
     expect(
       decodeCursor(records[0]!.cursor, { store: `${REPO}/.autobuild`, repo: REPO }).streams,
-    ).toEqual({ late: 3 })
+    ).toEqual({ late: 3, '#repo': 0 })
   })
 
   test('a legacy checkout-path-keyed record joins via its normalized repoOrigin', async () => {
@@ -1552,7 +1554,7 @@ describe('watch remote bounded-wait cadence (AUT-334)', () => {
         }
       },
     })
-    await abWatch({ ...h.base, storeRef: REMOTE_REF, timeout: '5' })
+    await abWatch({ ...h.base, storeRef: REMOTE_REF, timeout: '15' })
     // b2 was registered before the throw and its held read still ran: its
     // escalation is delivered even though discovery itself failed.
     const records = h.out
@@ -1760,3 +1762,53 @@ test('an anchor-less journal recovers the true end and baselines silently (AUT-5
   expect(filtered.calls[0]).toEqual({ method: 'getRepoStateEvents' })
   expect(filtered.calls[1]).toEqual({ method: 'getRepoEvents', sinceSeq: 0 })
 })
+
+for (const json of [true, false]) {
+  test(`default watch delivers source lifecycle without active builds (json=${json})`, async () => {
+    const store = makeStore()
+    let tick = 0
+    const h = harness(store, {
+      onTick: async () => {
+        tick += 1
+        await store.ensureRepo(REPO)
+        if (tick === 1)
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.ticket-source-degraded',
+            payload: {
+              source: 'fake',
+              cause: 'rate-limited',
+              operation: 'ready-scan',
+              message: 'quota exhausted',
+              resetAt: '2026-10-14T12:00:00.000Z',
+            },
+          })
+        if (tick === 2)
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.ticket-source-recovered',
+            payload: { source: 'fake', cause: 'rate-limited', operation: 'ready-scan' },
+          })
+      },
+    })
+    await abWatch({ ...h.base, json, count: 2, timeout: '5' })
+    if (json) {
+      const records = h.out.slice(0, -1).map((line) => JSON.parse(line))
+      expect(records.map((record) => record.event.type)).toEqual([
+        'dispatcher.ticket-source-degraded',
+        'dispatcher.ticket-source-recovered',
+      ])
+      expect(records.every((record) => record.build === null && record.state === null)).toBe(true)
+      const final = JSON.parse(h.out.at(-1)!).cursor
+      expect(
+        decodeCursor(final, { store: `${REPO}/.autobuild`, repo: REPO }).streams['#repo'],
+      ).toBe(2)
+    } else {
+      expect(h.out).toHaveLength(2)
+      expect(h.out.every((line) => line.includes('fake') && line.includes('rate-limited'))).toBe(
+        true,
+      )
+      expect(h.out[0]).toContain('2026-10-14T12:00:00.000Z')
+    }
+  })
+}

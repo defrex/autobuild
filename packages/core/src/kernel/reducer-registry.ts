@@ -1,3 +1,4 @@
+import { ticketSourceHealthReducer } from './ticket-source-health'
 /**
  * Every incremental reducer, with its published version and the whole-array
  * functions it backs. `reducer-registry.test.ts` snapshots the versions and
@@ -57,6 +58,7 @@ export interface RegisteredReducer {
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
 export const REDUCERS: Record<string, RegisteredReducer> = {
+  ticketSourceHealth: { reducer: ticketSourceHealthReducer, covers: ['reduceTicketSourceHealth'] },
   build: { reducer: buildReducer, covers: ['reduceBuild'] },
   harvest: { reducer: harvestReducer, covers: ['reduceHarvest'] },
   dispatchSettings: { reducer: dispatchSettingsReducer, covers: ['reduceDispatchSettings'] },

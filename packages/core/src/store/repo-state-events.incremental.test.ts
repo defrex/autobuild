@@ -87,7 +87,7 @@ const fixtures: Record<string, RepositoryEvent[]> = {
 
 describe('repositoryStateEventsReducer', () => {
   test('version includes latest-only scan semantics', () => {
-    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(2)
+    expect(REPOSITORY_STATE_EVENTS_REDUCER_VERSION).toBe(4)
   })
 
   for (const [name, log] of Object.entries(fixtures)) {

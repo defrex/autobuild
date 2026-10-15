@@ -32,6 +32,18 @@ const SEEDS = [1, 2, 3, 4, 5, 6]
  * the union of the shapes it reaches is fingerprinted. */
 function corpora(): unknown[][] {
   return [
+    [
+      {
+        type: 'dispatcher.ticket-source-degraded',
+        payload: {
+          source: 'fake',
+          cause: 'rate-limited',
+          operation: 'dependency-check',
+          message: 'limited',
+          resetAt: '2026-10-14T12:00:00.000Z',
+        },
+      },
+    ],
     ...SEEDS.map((seed) => randomBuildLog(seed, 150)),
     ...SEEDS.map((seed) => randomHarvestJournal(seed, 80)),
     ...SEEDS.map((seed) => randomSettingsJournal(seed, 30)),
@@ -101,7 +113,7 @@ describe('reducer registry', () => {
         "harvest": 1,
         "hostedPrAttachments": 1,
         "infrastructureFailureReset": 1,
-        "journalView": 2,
+        "journalView": 4,
         "lastExecutionOutcome": 1,
         "logIndex": 1,
         "openBuildWorkspace": 1,
@@ -117,10 +129,11 @@ describe('reducer registry', () => {
         "publishedBranchHead": 1,
         "recordedBaseSha": 1,
         "recoveryCheckpoint": 1,
-        "repositoryStateEvents": 2,
+        "repositoryStateEvents": 4,
         "sandboxStates": 1,
         "session": 1,
         "setupStreak": 1,
+        "ticketSourceHealth": 2,
         "verifyDiffBase": 1,
       }
     `)

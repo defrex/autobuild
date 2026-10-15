@@ -1,3 +1,7 @@
+import {
+  reduceTicketSourceHealth,
+  type TicketSourceDegradation,
+} from '../kernel/ticket-source-health'
 import type { RepositoryEvent } from '../events/repository'
 import { reduceDispatchSettings, type DispatchSettings } from '../kernel/dispatch-settings'
 import { sandboxStates } from '../processes/sandbox-state'
@@ -7,6 +11,7 @@ import { withSessionlessStore, type StoreOpener } from './store-opening'
 /** Script-facing projection returned by `ab repository status`. */
 export interface RepositoryStatus extends DispatchSettings {
   repo: string
+  ticketSourceDegradation?: TicketSourceDegradation
   /** Live operator sandboxes (AUT-340); released environments are omitted. */
   sandboxes: Array<{
     operator: string
@@ -63,7 +68,9 @@ export function projectRepositoryStatus(repo: string, events: RepositoryEvent[])
     })
   }
   publications.reverse()
+  const active = reduceTicketSourceHealth(events)
   return {
+    ...(active === undefined ? {} : { ticketSourceDegradation: active }),
     repo,
     ...reduceDispatchSettings(events),
     sandboxes: sandboxStates(events)
@@ -81,7 +88,13 @@ export function projectRepositoryStatus(repo: string, events: RepositoryEvent[])
 
 export function renderRepositoryStatus(status: RepositoryStatus): string[] {
   const setting = (enabled: boolean): string => (enabled ? 'ON' : 'OFF')
+  const active = status.ticketSourceDegradation
   return [
+    ...(active === undefined
+      ? []
+      : [
+          `ticket source ${active.source}: ${active.cause} (${active.operation}) — ${active.message}${'resetAt' in active ? `; reset ${active.resetAt}` : ''}`,
+        ]),
     `repository: ${status.repo}`,
     `intake: ${setting(status.intake)}`,
     `repository pause: ${setting(status.paused)}`,

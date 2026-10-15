@@ -1,3 +1,7 @@
+import {
+  reduceTicketSourceHealth,
+  type TicketSourceDegradation,
+} from '../kernel/ticket-source-health'
 /**
  * The dispatcher process (SPEC §3.3, §12): watches the TicketSource for
  * Ready tickets, claims, provisions a workspace, and launches build-runners
@@ -365,6 +369,8 @@ export interface TickReport {
   creationWithheld: number
   /** One line per creation hold, with Harvest run/proposal provenance. */
   creationDiagnostics: string[]
+  /** Ready tickets whose dependency reads failed rather than yielding a verdict. */
+  dependencyCheckFailed: number
   /** Dependency gate (§13): ready tickets held back by unresolved blockers. */
   dependencyBlocked: number
   /** One line per held ticket naming its unresolved blockers — the operator's
@@ -414,6 +420,7 @@ export function emptyTickReport(): TickReport {
     queued: 0,
     creationWithheld: 0,
     creationDiagnostics: [],
+    dependencyCheckFailed: 0,
     dependencyBlocked: 0,
     dependencyDiagnostics: [],
     harvestStarted: 0,
@@ -898,6 +905,81 @@ export class Dispatcher {
       .map(({ record }) => record)
   }
 
+  private async sourceCondition(
+    next?: TicketSourceDegradation,
+    successfulOperation?: 'ready-scan' | 'dependency-check',
+  ): Promise<void> {
+    await this.store.refreshJournal()
+    const current = reduceTicketSourceHealth(this.store.recordedJournal())
+    if (next !== undefined && current?.cause === next.cause && current.source === next.source) {
+      if (
+        next.cause === 'rate-limited' &&
+        next.operation === 'dependency-check' &&
+        current.operation !== 'dependency-check'
+      ) {
+        await this.store.appendRepo(this.deps.repo, {
+          actor: DISPATCHER,
+          type: 'dispatcher.ticket-source-dependency-limited',
+          payload: { source: current.source },
+        })
+      }
+      return
+    }
+    if (
+      next === undefined &&
+      current?.operation === 'dependency-check' &&
+      successfulOperation !== 'dependency-check'
+    )
+      return
+    if (current !== undefined) {
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.ticket-source-recovered',
+        payload: { source: current.source, cause: current.cause, operation: current.operation },
+      })
+    }
+    if (next !== undefined) {
+      await this.store.ensureRepo(this.deps.repo)
+      await this.store.appendRepo(this.deps.repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.ticket-source-degraded',
+        payload: next,
+      })
+    }
+  }
+
+  private async sourceFailure(
+    error: unknown,
+    operation: 'ready-scan' | 'dependency-check',
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error)
+    await this.sourceCondition(
+      error instanceof TicketSourceRateLimitError
+        ? {
+            source: error.source,
+            cause: 'rate-limited',
+            operation,
+            message,
+            resetAt: new Date(error.resetAt).toISOString(),
+          }
+        : {
+            source: this.deps.tickets.name,
+            cause: 'ready-scan-failed',
+            operation,
+            message: message || 'Ready scan failed',
+          },
+    )
+  }
+
+  private async listReady() {
+    try {
+      return await this.deps.tickets.listReady(readyCriteria(this.deps.config))
+    } catch (error) {
+      await this.sourceFailure(error, 'ready-scan')
+      throw error
+    }
+  }
+
   /** Observation-only ready listing for Store-backed frontends while intake is
    * disabled. It shares the active-ticket exclusion with dispatch but performs
    * no dependency fetch, claim, bounce, build, workspace, or launch side
@@ -920,7 +1002,7 @@ export class Dispatcher {
     const checkpoint = await this.scanCheckpoint('observation')
     if (checkpoint.due) {
       await this.store.refreshJournal()
-      const listing = await this.deps.tickets.listReady(readyCriteria(this.deps.config))
+      const listing = await this.listReady()
       await this.store.refreshJournal()
       report.queued = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id)).length
       report.invalidTickets = listing.diagnostics.length
@@ -929,6 +1011,7 @@ export class Dispatcher {
       report.dependencyDiagnostics = []
       report.creationWithheld = 0
       report.creationDiagnostics = []
+      await this.sourceCondition(undefined, 'ready-scan')
       await this.completeScan(checkpoint, report)
     }
     return {
@@ -2984,9 +3067,12 @@ export class Dispatcher {
     // ready state are deduped against the active builds embodying them.
     await this.store.refreshJournal()
     const journalBeforeReady = this.store.recordedJournal()
-    const listing = await tickets.listReady(readyCriteria(config))
+    const listing = await this.listReady()
     await this.store.refreshJournal()
     const journalAfterReady = this.store.recordedJournal()
+    if (reduceTicketSourceHealth(journalAfterReady)?.cause === 'ready-scan-failed') {
+      await this.sourceCondition(undefined, 'ready-scan')
+    }
     const creationHolds = new Map(
       harvestCreationsDuringReadyScan(journalBeforeReady, journalAfterReady).map((creation) => [
         creation.creationKey.toLowerCase(),
@@ -3019,6 +3105,7 @@ export class Dispatcher {
     // this only declines to claim a ticket into a build that would immediately
     // sit held.
     if (capacity <= 0 || paused) {
+      await this.sourceCondition(undefined, 'ready-scan')
       if (!this.outOfBudget(opts)) await this.completeScan(checkpoint, report)
       return
     }
@@ -3041,6 +3128,7 @@ export class Dispatcher {
     // diagnostics only after the complete preflight succeeds.
     let scanSuccessful = true
     const verdicts = new Map<string, DependencyVerdict>()
+    const failed = new Set<string>()
     for (const ticket of ready) {
       if (this.outOfBudget(opts)) return
       if (withheld.has(ticket.ref.id)) continue
@@ -3050,20 +3138,22 @@ export class Dispatcher {
         if (!(await this.loadDependencyGraph(ticket, nodes, opts))) return
         verdict = analyzeDependencies(ticket.ref.id, ticket.blockedBy ?? [], nodes)
       } catch (error) {
-        if (error instanceof TicketSourceRateLimitError) throw error
-        scanSuccessful = false
-        verdict = {
-          unresolved: [ticket.ref.id],
-          diagnostics: [
-            `ticket ${ticket.ref.id}: dependency check failed — ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          ],
+        if (error instanceof TicketSourceRateLimitError) {
+          await this.sourceFailure(error, 'dependency-check')
+          throw error
         }
+        scanSuccessful = false
+        failed.add(ticket.ref.id)
+        report.dependencyCheckFailed += 1
+        report.dependencyDiagnostics.push(
+          `ticket ${ticket.ref.id}: dependency check failed — ${error instanceof Error ? error.message : String(error)}`,
+        )
+        continue
       }
       verdicts.set(ticket.ref.id, verdict)
     }
     if (this.outOfBudget(opts)) return
+    if (failed.size === 0) await this.sourceCondition(undefined, 'dependency-check')
     for (const verdict of verdicts.values()) {
       if (verdict.unresolved.length > 0) {
         report.dependencyBlocked += 1
@@ -3073,6 +3163,7 @@ export class Dispatcher {
     for (const ticket of ready) {
       if (capacity <= 0 || this.outOfBudget(opts)) break
       if (withheld.has(ticket.ref.id)) continue
+      if (failed.has(ticket.ref.id)) continue
       if ((verdicts.get(ticket.ref.id)?.unresolved.length ?? 0) > 0) continue
 
       // Claim-before-launch (§12): losing the claim means another dispatcher

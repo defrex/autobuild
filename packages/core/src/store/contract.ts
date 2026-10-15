@@ -1181,6 +1181,48 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
         ]
       }
 
+      test('ticket-source health remains durable across newer runs', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const repo = 'acme/source-health'
+          await store.ensureRepo(repo)
+          const condition = {
+            source: 'fake',
+            cause: 'rate-limited' as const,
+            operation: 'ready-scan' as const,
+            message: 'quota exhausted',
+            resetAt: '2026-10-14T12:00:00.000Z',
+          }
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.ticket-source-degraded',
+            payload: condition,
+          })
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.ticket-source-dependency-limited',
+            payload: { source: 'fake' },
+          })
+          for (const write of noopInvocation('new-run')) await store.appendRepo(repo, write)
+          const bounded = await store.getRepoStateEvents(repo)
+          expect(bounded[0]?.type).toBe('dispatcher.ticket-source-degraded')
+          expect(bounded[1]?.type).toBe('dispatcher.ticket-source-dependency-limited')
+          await store.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.ticket-source-recovered',
+            payload: { source: 'fake', cause: 'rate-limited', operation: 'dependency-check' },
+          })
+          expect(
+            (await store.getRepoStateEvents(repo)).filter((event) =>
+              event.type.startsWith('dispatcher.ticket-source-'),
+            ),
+          ).toEqual(
+            (await store.getRepoEvents(repo)).filter((event) =>
+              event.type.startsWith('dispatcher.ticket-source-'),
+            ),
+          )
+        })
+      })
+
       function noopTickCounters() {
         return {
           merged: 0,
