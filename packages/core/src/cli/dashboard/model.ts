@@ -268,6 +268,8 @@ export interface DashboardModel {
   harvestPaused: boolean
   /** Stable row identity, never a row index. */
   selection?: DashboardSelection
+  /** Invocation-local standby identity, independent of notices and build rows. */
+  standby?: string
   /** Release courtesy, separate from transient and startup warnings so those
    * notices can never overwrite one another. Store-only frontends project it
    * from their correlated dispatcher run. */
@@ -1090,6 +1092,7 @@ interface DashboardFrameHeader {
   queued: number
   observationCount: number
   selection?: DashboardSelection
+  standby?: string
   availableUpgrade?: string
   warningLines?: readonly string[]
   resumeInput?: ResumeInputView
@@ -1125,6 +1128,7 @@ export function buildDashboardFromProjected(
     defaultAutoMerge: settings.defaultAutoMerge,
     harvestPaused: harvestProjection.harvestPaused,
     ...(header.selection !== undefined ? { selection: header.selection } : {}),
+    ...(header.standby !== undefined ? { standby: header.standby } : {}),
     ...(header.availableUpgrade !== undefined ? { availableUpgrade: header.availableUpgrade } : {}),
     ...(header.warningLines !== undefined && header.warningLines.length > 0
       ? { warningLines: header.warningLines }

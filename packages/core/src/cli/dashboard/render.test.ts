@@ -2876,3 +2876,112 @@ describe('renderDashboard: the read-only session view', () => {
     expect(head).not.toContain('waiting for output')
   })
 })
+
+test('standby is a dedicated yellow header with independent notices and no holder layout change', () => {
+  const base = model([build()])
+  const opts = { color: false, width: 200, height: 30 }
+  expect(rd(base, opts)).toEqual(rd({ ...base, standby: undefined }, opts))
+  const standby = {
+    ...base,
+    standby: 'peer; pid 123; host machine; heartbeat 500ms ago',
+    availableUpgrade: '9.1.0',
+    warningLines: ['transient warning', 'startup warning'],
+  }
+  const plain = rd(standby, opts)
+  expect(plain[2]).toContain(
+    'Dispatcher on standby: repository held by peer; pid 123; host machine; heartbeat 500ms ago',
+  )
+  expect(plain.join('\n')).toContain('transient warning')
+  expect(plain.join('\n')).toContain('startup warning')
+  expect(plain.join('\n')).toContain('run ab upgrade')
+  const colored = rd(standby, { ...opts, color: true })
+  expect(colored[2]).toContain('\x1b[33m')
+  expect(stripAnsi(colored[2]!)).toEqual(plain[2]!)
+})
+
+test('standby header obeys all view bounds and transcript tail geometry', () => {
+  const b = build()
+  const transcript = {
+    kind: 'raw' as const,
+    text: Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n'),
+  }
+  const session = {
+    kind: 'session' as const,
+    slug: b.slug,
+    sessionId: 's1',
+    stream: 'stdout',
+    status: 'closed' as const,
+    source: { kind: 'parts' as const, parts: [], lastSeq: 0 },
+    follow: false,
+    scroll: 0,
+  }
+  for (const width of [4, 20, 80, 180]) {
+    for (const height of [0, 1, 2, 3, 4, 5, 8, 15, 40]) {
+      const base = {
+        ...model([b]),
+        standby: 'peer 日本語 👨‍👩‍👧‍👦'.repeat(20),
+        availableUpgrade: '9.1.0',
+      }
+      const scroll = transcriptScrollLimit(transcript, width, height, true, true)
+      for (const view of [
+        undefined,
+        { kind: 'detail' as const, slug: b.slug, scroll: 0 },
+        { kind: 'transcript' as const, slug: b.slug, sessionId: 's1', transcript, scroll },
+        session,
+      ]) {
+        const lines = rd({ ...base, view }, { color: true, width, height })
+        expect(lines.length).toBeLessThanOrEqual(height)
+        for (const line of lines) expect(cellWidth(stripAnsi(line))).toBeLessThanOrEqual(width)
+        if (view?.kind === 'transcript' && width >= 20 && height >= 8)
+          expect(lines.join('\n')).toContain('line 29')
+      }
+    }
+  }
+  expect(transcriptScrollLimit(transcript, 80, 15, true, true)).toBe(
+    transcriptScrollLimit(transcript, 80, 15, true) + 1,
+  )
+  expect(sessionScrollLimit(session, 80, 4, false, true)).toBeGreaterThanOrEqual(0)
+})
+
+test('standby detail and session geometry leave the final body content reachable', () => {
+  const b = build({ blockers: Array.from({ length: 20 }, (_, i) => `blocker ${i}`) })
+  const base = {
+    ...model([b]),
+    standby: 'peer',
+    availableUpgrade: '9.1.0',
+    view: { kind: 'detail' as const, slug: b.slug, scroll: 0 },
+  }
+  const limit = detailScrollLimit(base, dashboardContentWidth(50), 12)
+  const detail = rd(
+    { ...base, view: { ...base.view, scroll: limit } },
+    { color: false, width: 50, height: 12 },
+  ).join('\n')
+  expect(detail).toContain('no agent sessions recorded')
+  const reachable = Array.from({ length: limit + 1 }, (_, scroll) =>
+    rd({ ...base, view: { ...base.view, scroll } }, { color: false, width: 50, height: 12 }).join(
+      '\n',
+    ),
+  ).join('\n')
+  expect(reachable).toContain('blocker 19')
+  expect(detail).toContain('Keys:')
+  const session = {
+    kind: 'session' as const,
+    slug: b.slug,
+    sessionId: 's1',
+    stream: 'stdout',
+    status: 'closed' as const,
+    source: { kind: 'parts' as const, parts: [], lastSeq: 0 },
+    error: Array.from({ length: 20 }, (_, i) => `output ${i}`).join('\n'),
+    follow: false,
+    scroll: 0,
+  }
+  const sessionLimit = sessionScrollLimit(session, 50, 12, true, true)
+  expect(sessionLimit).toBe(sessionScrollLimit(session, 50, 12, true) + 1)
+  expect(moveSessionScroll(session, 50, 12, sessionLimit - 1, 1, true, true)).toBe(sessionLimit)
+  const lines = rd(
+    { ...base, view: { ...session, scroll: sessionLimit } },
+    { color: false, width: 50, height: 12 },
+  ).join('\n')
+  expect(lines).toContain('output 19')
+  expect(lines).toContain('Keys:')
+})

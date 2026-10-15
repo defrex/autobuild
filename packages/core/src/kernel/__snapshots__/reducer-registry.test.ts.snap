@@ -614,6 +614,7 @@ exports[`reducer registry accumulator shapes 1`] = `
     "$.run: string",
     "$.warningNotice: string",
     "$.warningNotice: undefined",
+    "$.yieldedHolder: undefined",
     "$: object",
   ],
   "frozenPrImageHost": [

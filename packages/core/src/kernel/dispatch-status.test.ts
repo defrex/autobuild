@@ -270,3 +270,20 @@ describe('reduceDispatchStatus', () => {
     expect(status.warningNotice).toBeUndefined()
   })
 })
+
+test('yield evidence survives notices, isolates runs and clears on successful admission', () => {
+  const events = [
+    event(1, 'dispatcher.tick-yielded', { run: 'self', holder: 'first' }),
+    event(2, 'dispatcher.operator-reported', { run: 'self', level: 'warning', message: 'warning' }),
+    event(3, 'dispatcher.tick-started', { run: 'peer' }),
+    event(4, 'dispatcher.tick-failed', { run: 'self', error: 'failure' }),
+    event(5, 'dispatcher.tick-yielded', { run: 'self', holder: 'second' }),
+    event(6, 'dispatcher.tick-started', { run: 'self' }),
+  ]
+  let previous = reduceDispatchStatus([], 'self')
+  for (let i = 0; i < events.length; i++) {
+    previous = reduceDispatchStatus([events[i]!], 'self', previous)
+    expect(previous).toEqual(reduceDispatchStatus(events.slice(0, i + 1), 'self'))
+    expect(previous.yieldedHolder).toBe(i < 4 ? 'first' : i === 4 ? 'second' : undefined)
+  }
+})

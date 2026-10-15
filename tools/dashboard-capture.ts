@@ -67,6 +67,8 @@ export interface FrameSpec {
     parts: readonly StreamPart[]
     follow?: boolean
   }
+  standby?: string
+  availableUpgrade?: string
   /** Frame-specific evidence this capture exists to show. */
   requires?: readonly string[]
   /** Evidence that must never appear in this frame. */
@@ -263,6 +265,31 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       'The scripted plan scenario is intentionally blocked for dashboard capture.',
       'EXPANDED FINAL LINE: dashboard message preview complete.',
       UNICODE_EVIDENCE,
+    ],
+  },
+  {
+    id: 'standby-list',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 40,
+    standby: 'peer-run; pid 1234; host build-host; heartbeat 500ms ago',
+    availableUpgrade: '9.1.0',
+    requires: [
+      'Dispatcher on standby: repository held by peer-run',
+      'run ab upgrade',
+      'Unicode warning',
+    ],
+  },
+  {
+    id: 'standby-detail',
+    scenario: 'mixed',
+    columns: 140,
+    rows: 24,
+    standby: 'peer-run; pid 1234; host build-host; heartbeat 500ms ago',
+    detail: { slug: 'plan-blocked-dashboard', scroll: 0 },
+    requires: [
+      'Dispatcher on standby: repository held by peer-run',
+      'Build  plan-blocked-dashboard',
     ],
   },
 ]
@@ -971,6 +998,8 @@ async function capturePaint(
           : []
       const presented = {
         ...model,
+        ...(spec.standby !== undefined ? { standby: spec.standby } : {}),
+        ...(spec.availableUpgrade !== undefined ? { availableUpgrade: spec.availableUpgrade } : {}),
         ...(spec.scenario === 'happy'
           ? warningLines.length > 0
             ? { warningLines }

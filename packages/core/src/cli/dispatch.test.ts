@@ -10625,3 +10625,121 @@ test('cold dispatch invocations retain queue measurements and publish scan confi
     await fx.cleanup()
   }
 })
+
+test('interactive watch keeps standby across retry ticks, refreshes peers and clears on takeover without replaying history', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+  const terminal = fakeTerminal(true, { columns: 180 })
+  const controller = new AbortController()
+  const frames: DashboardModel[] = []
+  const originalEvents = fx.store.getRepoEvents.bind(fx.store)
+  let fullReads = 0
+  fx.store.getRepoEvents = async (repo, cursor = 0) => {
+    if (cursor === 0) fullReads++
+    return originalEvents(repo, cursor)
+  }
+  const start = (run: string, pid: number) =>
+    fx.store.appendRepo(fx.origin, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        pid,
+        host: `host-${run}`,
+        roleWarnings: [],
+        effectiveConfig: { kind: 'config', rev: 0 },
+      },
+    })
+  let step = 0
+  let baseline = 0
+  try {
+    await fx.store.ensureRepo(fx.origin)
+    await start('owner', 123)
+    await fx.store.claimRepoLease(fx.origin, 'owner', 60000)
+    await fx.store.heartbeatRepo(fx.origin, 'owner')
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      wire: fx.wire,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      terminal,
+      input: fakeInput(),
+      signal: controller.signal,
+      resolveDashboardRenderer: () => (model) => {
+        frames.push(model)
+        return ['frame']
+      },
+      sleep: async () => {
+        await waitFor(() => frames.length > 0)
+        const frame = frames.at(-1)!
+        if (step === 0) {
+          expect(frame.standby).toContain('owner; pid 123; host host-owner;')
+          baseline = fullReads
+          clock.advance(500)
+        } else if (step === 1) {
+          expect(frame.standby).toContain('heartbeat 500ms ago')
+          expect(fullReads).toBe(baseline)
+          await fx.store.releaseRepoLease(fx.origin, 'owner')
+          await start('peer', 456)
+          await fx.store.claimRepoLease(fx.origin, 'peer', 60000)
+        } else if (step === 2) {
+          expect(frame.standby).toContain('peer; pid 456; host host-peer;')
+          expect(fullReads).toBe(baseline)
+          await fx.store.releaseRepoLease(fx.origin, 'peer')
+          await fx.store.claimRepoLease(fx.origin, 'owner', 60000)
+        } else if (step === 3) {
+          expect(frame.standby).toContain('owner; pid 123;')
+          expect(fullReads).toBe(baseline)
+          await fx.store.releaseRepoLease(fx.origin, 'owner')
+        } else {
+          expect(frame).not.toHaveProperty('standby')
+          controller.abort()
+        }
+        step++
+      },
+    })
+    expect(step).toBe(5)
+    expect(fx.err.join('\n')).not.toContain('tick yielded:')
+    expect(frames.flatMap((frame) => frame.warningLines ?? []).join('\n')).not.toContain(
+      'tick yielded:',
+    )
+    expect(fx.tickets.claims).toEqual([])
+  } finally {
+    controller.abort()
+    await fx.cleanup()
+  }
+})
+
+test('plain watch retains the single startup yield warning without retry output', async () => {
+  const clock = manualClock()
+  const fx = await makeFixture([], happyHandlers(), DISPATCH_CONFIG_TOML, clock)
+  const stop = new AbortController()
+  let ticks = 0
+  const stdout: string[] = []
+  try {
+    await fx.store.ensureRepo(fx.origin)
+    await fx.store.claimRepoLease(fx.origin, 'another-run', 60000)
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      wire: fx.wire,
+      plain: true,
+      signal: stop.signal,
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => fx.err.push(line),
+      sleep: async () => {
+        if (++ticks === 3) stop.abort()
+      },
+    })
+    expect(fx.err).toEqual([
+      'tick yielded: repository held by another-run; pid unknown; host unknown; started unknown; heartbeat unknown (no renewal attributable to this run)',
+    ])
+    expect(stdout.join('\n')).not.toContain('standby')
+  } finally {
+    stop.abort()
+    await fx.cleanup()
+  }
+})
