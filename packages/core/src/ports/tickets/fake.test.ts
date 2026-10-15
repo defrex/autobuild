@@ -9,6 +9,7 @@ function ticket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
     title: over.title ?? `Ticket ${id}`,
     body: over.body ?? `Body of ${id}`,
     state: over.state ?? 'Ready',
+    resolved: over.resolved ?? over.state === 'Done',
     labels: over.labels ?? [],
     ...(over.blockedBy !== undefined ? { blockedBy: over.blockedBy } : {}),
   }
@@ -249,4 +250,16 @@ describe('FakeTicketSource', () => {
     const source = new FakeTicketSource()
     expect(await source.get('nope')).toBeNull()
   })
+})
+
+test('fake completion follows a custom lifecycle after transitions', async () => {
+  const source = new FakeTicketSource([ticket('custom', { state: 'Ready' })], {
+    doneState: 'Shipped',
+  })
+  expect((await source.get('custom'))?.resolved).toBe(false)
+  await source.transition('custom', 'Shipped')
+  expect((await source.get('custom'))?.resolved).toBe(true)
+  expect((await source.listReady({ state: 'Shipped' })).tickets[0]?.resolved).toBe(true)
+  await source.transition('custom', 'Ready')
+  expect((await source.get('custom'))?.resolved).toBe(false)
 })

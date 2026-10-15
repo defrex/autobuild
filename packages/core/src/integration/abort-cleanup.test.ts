@@ -63,6 +63,7 @@ test('abort cleanup removes a real worktree and exact local/remote refs while pr
       title: 'Real abort cleanup',
       body: '## Acceptance criteria\n- clean up\n\n## Out of scope\n- other refs',
       state: 'In Progress',
+      resolved: false,
       labels: ['keep'],
     }
     const tickets = new FakeTicketSource([ticket])

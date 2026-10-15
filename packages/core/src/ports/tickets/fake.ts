@@ -15,13 +15,14 @@ import type {
 } from '../types'
 import { validateTicketUpdate } from './update'
 
-function cloneTicket(ticket: Ticket): Ticket {
+function cloneTicket(ticket: Ticket, doneState: string): Ticket {
   return {
     ref: { ...ticket.ref },
     ...(ticket.creationKey !== undefined ? { creationKey: ticket.creationKey } : {}),
     title: ticket.title,
     body: ticket.body,
     state: ticket.state,
+    resolved: ticket.state === doneState,
     labels: [...ticket.labels],
     ...(ticket.blockedBy !== undefined ? { blockedBy: [...ticket.blockedBy] } : {}),
   }
@@ -61,14 +62,14 @@ export class FakeTicketSource implements TicketSource {
       doneState?: string
     } = {},
   ) {
+    this.doneState = opts.doneState ?? 'Done'
     for (const ticket of seed) {
-      this.tickets.set(ticket.ref.id, cloneTicket(ticket))
+      this.tickets.set(ticket.ref.id, cloneTicket(ticket, this.doneState))
       if (ticket.creationKey !== undefined) {
         this.idempotency.set(ticket.creationKey, ticket.ref.id)
       }
     }
     this.createState = opts.createState ?? 'Triage'
-    this.doneState = opts.doneState ?? 'Done'
   }
 
   /** Seed a ticket after construction — lets a test make one become Ready
@@ -76,7 +77,7 @@ export class FakeTicketSource implements TicketSource {
    * after its initial selection" (§12) gets a real oracle rather than a
    * vacuous one. */
   add(ticket: Ticket): void {
-    this.tickets.set(ticket.ref.id, cloneTicket(ticket))
+    this.tickets.set(ticket.ref.id, cloneTicket(ticket, this.doneState))
   }
 
   async listReady(criteria: {
@@ -92,14 +93,14 @@ export class FakeTicketSource implements TicketSource {
             (criteria.state === undefined || ticket.state === criteria.state) &&
             labels.every((label) => ticket.labels.includes(label)),
         )
-        .map(cloneTicket),
+        .map((ticket) => cloneTicket(ticket, this.doneState)),
       diagnostics: [],
     }
   }
 
   async get(id: string): Promise<Ticket | null> {
     const ticket = this.tickets.get(id)
-    return ticket ? cloneTicket(ticket) : null
+    return ticket ? cloneTicket(ticket, this.doneState) : null
   }
 
   /** Claim-before-launch: true once per nonterminal lifecycle stay. A later
@@ -128,7 +129,7 @@ export class FakeTicketSource implements TicketSource {
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
     if (opts.idempotencyKey !== undefined) {
       const adopted = this.idempotency.get(opts.idempotencyKey)
-      if (adopted !== undefined) return cloneTicket(this.require(adopted, 'create'))
+      if (adopted !== undefined) return cloneTicket(this.require(adopted, 'create'), this.doneState)
     }
     const id = `fake-${this.nextId++}`
     const ticket: Ticket = {
@@ -137,6 +138,7 @@ export class FakeTicketSource implements TicketSource {
       title: draft.title,
       body: draft.body,
       state: opts.state ?? this.createState,
+      resolved: (opts.state ?? this.createState) === this.doneState,
       labels: [...(draft.labels ?? [])],
       // Recorded verbatim, never discarded — the same contract the real
       // adapters owe (§13).
@@ -148,7 +150,7 @@ export class FakeTicketSource implements TicketSource {
     if (opts.idempotencyKey !== undefined) {
       this.idempotency.set(opts.idempotencyKey, id)
     }
-    return cloneTicket(ticket)
+    return cloneTicket(ticket, this.doneState)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {

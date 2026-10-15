@@ -308,6 +308,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
         title: 'Composed remote build',
         body: '## Problem\nRemote.\n## Acceptance criteria\n- Works.\n## Out of scope\n- None.\n',
         state: 'Ready',
+        resolved: false,
         labels: [],
       },
     ])
@@ -622,6 +623,7 @@ test('a guest that exits after the launching invocation detached is settled by t
         title: 'Detached guest settlement',
         body: '## Problem\nRemote.\n## Acceptance criteria\n- Works.\n## Out of scope\n- None.\n',
         state: 'Ready',
+        resolved: false,
         labels: [],
       },
     ])

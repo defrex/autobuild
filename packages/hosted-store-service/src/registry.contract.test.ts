@@ -84,6 +84,7 @@ async function seedWorld(): Promise<World> {
         title: 'Seeded ticket',
         body: 'seed body',
         state: 'Todo',
+        resolved: false,
         labels: ['web'],
       },
       {
@@ -91,6 +92,7 @@ async function seedWorld(): Promise<World> {
         title: 'Queued ticket',
         body: 'queued body',
         state: 'Backlog',
+        resolved: false,
         labels: [],
       },
     ],

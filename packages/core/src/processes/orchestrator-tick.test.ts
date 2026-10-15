@@ -622,6 +622,7 @@ describe('orchestrator tick step', () => {
         title: 'Fix the flake',
         body: 'It flakes.',
         state: 'Backlog',
+        resolved: false,
         labels: [],
       },
     ])

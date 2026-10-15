@@ -15,6 +15,7 @@ export const ticketWireSchema = z.strictObject({
   title: z.string(),
   body: z.string(),
   state: z.string().optional(),
+  resolved: z.boolean(),
   labels: z.array(z.string()),
   blockedBy: z.array(z.string()).optional(),
 })

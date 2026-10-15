@@ -141,6 +141,7 @@ export class PostgresTicketSource implements TicketSource {
       title,
       body: String(row.body),
       state: String(row.state),
+      resolved: String(row.state) === this.lifecycle.done,
       labels: strings(row.labels),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
     }
