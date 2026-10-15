@@ -1878,3 +1878,35 @@ describe('pinnedAssets (SPEC §6.3)', () => {
     expect(state.answeredEscalations[0]?.assets).toEqual([pin('b', 1)])
   })
 })
+
+test('dispatch exhaustion uses the ordinary blocked and answered projection', () => {
+  const writes = [
+    ev('build.created', {
+      repo: '/repo',
+      ticket: { source: 'file', id: 'T-1', title: 'dispatch' },
+      baseBranch: 'main',
+    }),
+    ev(
+      'escalation.raised',
+      {
+        id: 'dispatch-limit',
+        phase: 'setup',
+        source: 'policy',
+        policyCause: 'dispatch-failure-limit',
+        question: 'comment: offline',
+      },
+      DISPATCHER,
+    ),
+  ]
+  expect(reduceBuild(toLog(writes)).status).toBe('blocked')
+  writes.push(
+    ev('escalation.answered', {
+      id: 'dispatch-limit',
+      answer: 'try again',
+      resolution: 'guidance',
+    }),
+  )
+  const state = reduceBuild(toLog(writes))
+  expect(state.status).toBe('queued')
+  expect(state.openEscalations).toEqual([])
+})

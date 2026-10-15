@@ -1132,12 +1132,22 @@ Optional. Every field receives its own default. All are positive integers except
 | `sessionBudgetSeconds` | `3600` | positive integer | Wall-clock bound for each build agent session unless its logical role overrides it. |
 | `stallRounds` | `3` | positive integer | Escalate when the same review finding survives this many rounds. |
 | `maxVerifyAttempts` | `3` | positive integer | Bound failure-driven verify → implement retry cycles. |
+| `maxDispatchAttempts` | `3` | positive integer | Bound consecutive dispatch failures before human escalation. |
 | `maxSetupAttempts` | `3` | positive integer | Bound consecutive workspace setup failures before human escalation. |
 | `maxInfrastructureAttempts` | `3` | positive integer | Bound consecutive provision/start/wait/cleanup failures before a setup-targeted policy escalation; a human `retry` answer re-arms this budget. |
 | `maxReconcileAttempts` | `3` | positive integer | Bound completed reconciles that leave the PR conflicted against an unchanged authoritative base. Moving-base races do not consume the bound. |
 | `maxReviewRounds` | `6` | positive integer | Default bound for each plan/review and implement/review convergence loop. An operator may replace it for one parked build loop and current spec revision with `ab answer --review-round-ceiling`; other builds are unaffected. |
 | `harvestThreshold` | `5` | positive integer | New unclaimed observation occurrences needed to start one harvest run. |
 | `harvestMaxDrift` | `3` | nonnegative integer | Other builds merged after the oldest unclaimed observation needed to start a run; `0` disables drift. |
+
+Dispatch failures share a `[policy].maxDispatchAttempts` budget (default 3) across
+create, workspace, spec, comment, and launch stages. Exhaustion raises one
+`dispatch-failure-limit` policy escalation naming the latest stage and error,
+and parks dispatch until answered. Both bare `ab answer <slug>` retries and
+text guidance grant a fresh budget; abort does not. Confirmed runner attachment
+clears the streak. Recovery-provider workspace failures belong exclusively to
+the infrastructure budget. Exhaustion is repaired from durable facts on restart
+before further dispatch work.
 
 For each repeat conflict, Autobuild compares the base merged by the most recent
 completed reconcile with a fresh authoritative base snapshot. An advanced base
@@ -1494,6 +1504,7 @@ sessionBudgetSeconds = 7200
 sessionBudgetSeconds = 3600
 stallRounds = 3
 maxVerifyAttempts = 3
+maxDispatchAttempts = 3
 maxSetupAttempts = 3
 maxInfrastructureAttempts = 3
 maxReconcileAttempts = 3

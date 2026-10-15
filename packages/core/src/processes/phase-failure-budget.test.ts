@@ -23,6 +23,7 @@ describe('phase-failure budget reset semantics', () => {
     ['verify-failure-limit', 'all-phase-rounds'],
     ['reconcile-no-progress', 'none'],
     ['setup-failure-limit', 'none'],
+    ['dispatch-failure-limit', 'none'],
     ['phase-attempt-limit', 'matching-round'],
     ['non-retryable-phase-failure', 'matching-round'],
   ]
