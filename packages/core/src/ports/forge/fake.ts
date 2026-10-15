@@ -1,3 +1,4 @@
+import { findSummaryMarker } from './summary-marker'
 /**
  * FakeForge (SPEC §3.2): in-memory Forge for seam tests. Gate existence and
  * current PR merge state are independent inputs, matching GitHubForge's safety
@@ -514,6 +515,17 @@ export class FakeForge implements Forge {
 
   async commentOnPr(workspacePath: string, number: number, body: string): Promise<void> {
     this.assertPr(number)
-    this.comments.push({ workspacePath, number, body })
+    const marker = findSummaryMarker(body)
+    const existing =
+      marker === undefined
+        ? undefined
+        : this.comments.find(
+            (comment) =>
+              comment.number === number &&
+              comment.workspacePath === workspacePath &&
+              findSummaryMarker(comment.body) === marker,
+          )
+    if (existing !== undefined) existing.body = body
+    else this.comments.push({ workspacePath, number, body })
   }
 }

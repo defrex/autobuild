@@ -1,3 +1,4 @@
+import { renderPrSummary } from './pr-summary'
 /**
  * Terminal-command tests (SPEC §8.4 D5, §8.5 D6, §8.6 D7): second-terminal
  * discipline, per-phase preconditions, push-before-event ordering, verdict
@@ -909,7 +910,7 @@ describe('ab done — finalize', () => {
     expect(await eventTypes()).not.toContain('finalize.completed')
   })
 
-  test('opens the PR (title = first line sans #, body = rest), appends kernel-actor event, posts the summary', async () => {
+  test('opens the PR (title = first line sans #, body = rest), appends kernel-actor event, leaves summary publication to the runner', async () => {
     await store.putArtifact(BUILD, {
       kind: 'pr-description',
       content: '# Add auth rate limiting\n\nCloses ENG-42.\nDetails inside.\n',
@@ -937,9 +938,10 @@ describe('ab done — finalize', () => {
     })
 
     // §7.5: summary comment renders verdict history + verify results.
-    expect(deps.forge.comments).toHaveLength(1)
-    const comment = deps.forge.comments[0]!
-    expect(comment.number).toBe(1)
+    expect(deps.forge.comments).toHaveLength(0)
+    const comment = {
+      body: renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD)),
+    }
     expect(comment.body).toContain('code-review r1: revise (2 findings)')
     expect(comment.body).toContain('code-review r2: approve')
     expect(comment.body).toContain('<code>types</code> (attempt 1): pass')
@@ -994,7 +996,7 @@ describe('ab done — finalize', () => {
 
     await done(deps)
 
-    const comment = deps.forge.comments[0]!.body
+    const comment = renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD))
     expect(comment).toContain('### PR attachments')
     expect(comment).toContain('<code>visual:home@0</code>')
     expect(comment).toContain('<code>visual:trace@0</code>')
@@ -1055,7 +1057,7 @@ describe('ab done — finalize', () => {
       events.map((item) => item.type).indexOf('finalize.completed'),
     )
 
-    const comment = forge.comments[0]!.body
+    const comment = renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD))
     expect(comment).toContain(
       '<img src="https://fake.forge/pr-attachments/1/home.png?a=1&amp;b=2" alt="PR attachment home.png">',
     )
@@ -1103,7 +1105,9 @@ describe('ab done — finalize', () => {
     expect(event.type).toBe('finalize.completed')
     expect(forge.opened).toHaveLength(1)
     expect(forge.prAttachmentUploads).toHaveLength(1)
-    expect(forge.comments[0]!.body).toContain('<img ')
+    expect(renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD))).toContain(
+      '<img ',
+    )
   })
 
   test('hosting failures record kernel follow-ups and retain complete text projection', async () => {
@@ -1135,8 +1139,12 @@ describe('ab done — finalize', () => {
     expect(observation?.actor).toEqual(KERNEL)
     expect(observation?.payload.summary).toContain('release upload unavailable')
     expect(events.some((item) => item.type === 'pr-attachment.hosted')).toBe(false)
-    expect(forge.comments[0]!.body).toContain('<code>visual:failed@0</code>')
-    expect(forge.comments[0]!.body).not.toContain('<img ')
+    expect(renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD))).toContain(
+      '<code>visual:failed@0</code>',
+    )
+    expect(
+      renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD)),
+    ).not.toContain('<img ')
   })
 
   test('mixed upload success is projected independently and every text command remains', async () => {
@@ -1176,7 +1184,7 @@ describe('ab done — finalize', () => {
 
     const events = await store.getEvents(BUILD)
     expect(events.filter((event) => event.type === 'pr-attachment.hosted')).toHaveLength(1)
-    const comment = forge.comments[0]!.body
+    const comment = renderPrSummary(makeEnv({ phase: 'finalize' }), await store.getEvents(BUILD))
     expect(comment).toContain('<img ')
     expect(comment).toContain('<code>visual:first@0</code>')
     expect(comment).toContain('<code>visual:second@0</code>')

@@ -364,3 +364,87 @@ describe('createGitHubFetchTransport token resolution', () => {
     }
   })
 })
+
+test('summary cooldown recognizes documented rate limits but excludes permission denial', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-15T00:00:00Z')
+  for (const error of [
+    new GitHubApiError(429, 'slow down'),
+    new GitHubApiError(403, 'API rate limit exceeded'),
+    new GitHubApiError(403, 'secondary content creation rate limit'),
+    new GitHubApiError(403, 'limited', {}, { 'x-ratelimit-remaining': '0' }),
+  ]) {
+    expect(githubRateLimitUntil(error, now)).toBe('2026-10-15T00:01:00.000Z')
+  }
+  expect(
+    githubRateLimitUntil(new GitHubApiError(403, 'Resource not accessible by integration'), now),
+  ).toBeUndefined()
+  expect(
+    githubRateLimitUntil(new GitHubApiError(429, 'limited', {}, { 'retry-after': '120' }), now),
+  ).toBe('2026-10-15T00:02:00.000Z')
+})
+
+test('summary cooldown uses the primary reset only when primary quota is exhausted', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-15T00:00:00Z')
+  const reset = String((now + 50 * 60_000) / 1000)
+  for (const status of [403, 429]) {
+    for (const remaining of ['4800', undefined]) {
+      for (const retry of ['60', '120', undefined]) {
+        const error = new GitHubApiError(
+          status,
+          'Secondary content creation rate limit',
+          {},
+          {
+            'x-ratelimit-reset': reset,
+            ...(remaining === undefined ? {} : { 'x-ratelimit-remaining': remaining }),
+            ...(retry === undefined ? {} : { 'retry-after': retry }),
+          },
+        )
+        expect(githubRateLimitUntil(error, now)).toBe(
+          new Date(now + (retry === '120' ? 120_000 : 60_000)).toISOString(),
+        )
+      }
+    }
+    expect(
+      githubRateLimitUntil(
+        new GitHubApiError(
+          status,
+          'Rate limit exceeded',
+          {},
+          {
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': reset,
+            'retry-after': '60',
+          },
+        ),
+        now,
+      ),
+    ).toBe('2026-10-15T00:50:00.000Z')
+  }
+})
+
+test('fetch errors retain lowercased cooldown headers', async () => {
+  const stub = stubFetch(
+    () =>
+      new Response(JSON.stringify({ message: 'secondary rate limit' }), {
+        status: 403,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '120',
+          'X-RateLimit-Reset': '1792022520',
+        },
+      }),
+  )
+  try {
+    const error = await createGitHubFetchTransport({ token: 't' })(
+      'POST',
+      'repos/acme/app/issues/1/comments',
+    ).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(GitHubApiError)
+    expect((error as GitHubApiError).headers['retry-after']).toBe('120')
+    expect((error as GitHubApiError).headers['x-ratelimit-reset']).toBe('1792022520')
+  } finally {
+    stub.restore()
+  }
+})

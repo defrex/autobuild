@@ -207,6 +207,16 @@ function randomWrite(rand: () => number): EventWrite {
         },
       }),
     () => w('pr-attachment.reclaimed', { hostedSeq: 1 + Math.floor(rand() * 20) }),
+    () => w('pr-summary.requested', { occurrence: round, boundary: round + 1 }),
+    () => w('pr-summary.settled', { request: round, disposition: 'attempted' }),
+    () => w('pr-summary.attempted', { occurrence: round, boundary: round + 1, pr: 7 }),
+    () =>
+      w('pr-summary.result', {
+        attempt: round,
+        outcome: 'rate-limited',
+        eligibleAfter: '2026-10-15T00:01:00.000Z',
+      }),
+    () => w('finalize.step-started', { step: 'notes' }),
     () => w('build.auto-merge-default-observed', { defaultSeq: round }),
     () =>
       w('observation.recorded', {

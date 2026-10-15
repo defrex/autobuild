@@ -1335,3 +1335,103 @@ describe('GitHubForge repository coordinates', () => {
     expect(calls[0]?.path).toBe('repos/acme/app/pulls/42')
   })
 })
+
+describe('GitHub marked summary upsert', () => {
+  const marker = '<!-- autobuild-summary:v1:6162 -->'
+  const body = `${marker}\nnew summary`
+  test('creates once, rediscovers with a fresh adapter, edits, and skips unchanged', async () => {
+    let comments: { id: number; body: string }[] = []
+    const calls: ApiCall[] = []
+    const transport: GitHubRequest = async (method, path, opts) => {
+      calls.push({ method, path, opts })
+      if (method === 'POST') comments.push({ id: 7, body: (opts!.body as { body: string }).body })
+      if (method === 'PATCH') comments[0]!.body = (opts!.body as { body: string }).body
+      return { status: 200, headers: {}, json: method === 'GET' ? structuredClone(comments) : {} }
+    }
+    const forge = () => new GitHubForge({ transport, repository: 'acme/app' })
+    await forge().commentOnPr('/ws', 42, body)
+    await forge().commentOnPr('/ws', 42, `${body} changed`)
+    await forge().commentOnPr('/ws', 42, `${body} changed`)
+    expect(comments).toEqual([{ id: 7, body: `${body} changed` }])
+    expect(paths(calls)).toEqual([
+      'GET repos/acme/app/issues/42/comments',
+      'POST repos/acme/app/issues/42/comments',
+      'GET repos/acme/app/issues/42/comments',
+      'PATCH repos/acme/app/issues/comments/7',
+      'GET repos/acme/app/issues/42/comments',
+    ])
+    comments = []
+    await forge().commentOnPr('/ws', 42, body)
+    expect(comments).toHaveLength(1)
+  })
+
+  test('scans all pages before editing or creating and keeps PR/build identities isolated', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => ({ id: i + 1, body: 'unrelated' }))
+    const { forge, calls } = makeForge([
+      { json: page },
+      { json: [{ id: 101, body: `${marker}\nold` }] },
+      {},
+    ])
+    await forge.commentOnPr('/ws', 42, body)
+    expect(calls[1]!.opts?.query).toEqual({ per_page: '100', page: '2' })
+    expect(calls[2]).toMatchObject({
+      method: 'PATCH',
+      path: 'repos/acme/app/issues/comments/101',
+      opts: { body: { body } },
+    })
+    const other = makeForge([
+      { json: [{ id: 1, body: '<!-- autobuild-summary:v1:6364 -->\nother' }] },
+      {},
+    ])
+    await other.forge.commentOnPr('/ws', 43, body)
+    expect(paths(other.calls)).toEqual([
+      'GET repos/acme/app/issues/43/comments',
+      'POST repos/acme/app/issues/43/comments',
+    ])
+  })
+
+  test('deletion during PATCH triggers one rescan and confirmed recreation', async () => {
+    const { forge, calls } = makeForge([
+      { json: [{ id: 7, body: `${marker}\nold` }] },
+      { status: 404 },
+      { json: [] },
+      {},
+    ])
+    await forge.commentOnPr('/ws', 42, body)
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'PATCH', 'GET', 'POST'])
+  })
+
+  for (const scenario of [
+    [{ status: 500 }],
+    [{ json: [{ id: 7, body: `${marker}\nold` }] }, { status: 403 }],
+    [{ json: [{ id: '7', body: `${marker}\nold` }] }],
+    [{ json: [{ id: 7.5, body: `${marker}\nold` }] }],
+  ])
+    test('discovery and edit failures never fall through to creation', async () => {
+      const { forge, calls } = makeForge(scenario)
+      await expect(forge.commentOnPr('/ws', 42, body)).rejects.toThrow()
+      expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    })
+
+  test('ambiguous successful POST is rediscovered on the next refresh', async () => {
+    let persisted: string | undefined
+    const methods: string[] = []
+    const transport: GitHubRequest = async (method, _path, opts) => {
+      methods.push(method)
+      if (method === 'POST') {
+        persisted = (opts!.body as { body: string }).body
+        throw new Error('connection lost after POST')
+      }
+      return {
+        status: 200,
+        headers: {},
+        json: persisted === undefined ? [] : [{ id: 7, body: persisted }],
+      }
+    }
+    await expect(
+      new GitHubForge({ transport, repository: 'acme/app' }).commentOnPr('/ws', 42, body),
+    ).rejects.toThrow()
+    await new GitHubForge({ transport, repository: 'acme/app' }).commentOnPr('/ws', 42, body)
+    expect(methods).toEqual(['GET', 'POST', 'GET'])
+  })
+})

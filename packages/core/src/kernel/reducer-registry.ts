@@ -1,3 +1,4 @@
+import { summaryBoundaryReducer, summaryRequestsReducer } from './pr-summary'
 import { dispatchFailureBudgetReducer } from '../processes/dispatch-failure-budget'
 import { ticketSourceHealthReducer } from './ticket-source-health'
 /**
@@ -59,6 +60,8 @@ export interface RegisteredReducer {
 /** Parameterized reducers are registered with representative arguments; the
  * accumulator shape does not depend on them. */
 export const REDUCERS: Record<string, RegisteredReducer> = {
+  summaryBoundary: { reducer: summaryBoundaryReducer, covers: ['summaryBoundary'] },
+  summaryRequests: { reducer: summaryRequestsReducer, covers: ['pendingSummaryRequests'] },
   ticketSourceHealth: { reducer: ticketSourceHealthReducer, covers: ['reduceTicketSourceHealth'] },
   build: { reducer: buildReducer, covers: ['reduceBuild'] },
   harvest: { reducer: harvestReducer, covers: ['reduceHarvest'] },

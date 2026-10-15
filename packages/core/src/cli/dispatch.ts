@@ -1,3 +1,4 @@
+import { settleSummaryRequests } from './pr-summary-publication'
 import { readDispatcherLiveness, StandbyIdentityResolver } from './dispatcher-liveness'
 import { formatDispatcherIdentity } from '../kernel/dispatcher-liveness'
 /**
@@ -2628,7 +2629,7 @@ class DispatchLoop {
     return null
   }
 
-  private async settlePendingPublication(slug: string): Promise<void> {
+  private async settlePendingPublication(slug: string, reservation?: string): Promise<void> {
     // The guest appended through its own handle; settle against fresh state.
     await this.repoView.refreshBuild(slug)
     await settleWorkspacePublication(
@@ -2645,6 +2646,16 @@ class DispatchLoop {
       },
       slug,
     )
+    await settleSummaryRequests({
+      store: this.repoView,
+      forge: this.wiring.forge,
+      slug,
+      workspacePath: this.opts.targetRepo,
+      storeRef: this.wiring.storeRef,
+      clock: this.wiring.clock,
+      holder: `summary:${this.runId}`,
+      ...(reservation === undefined ? {} : { reservation }),
+    })
   }
 
   private async recordInfrastructureFailure(input: {
@@ -2736,7 +2747,7 @@ class DispatchLoop {
       // A prior publication acknowledgement may have been lost after its push
       // reached the durable branch. Reconcile that fact before a replacement
       // runner can rerun the phase and create a non-fast-forward successor.
-      await this.settlePendingPublication(slug)
+      await this.settlePendingPublication(slug, instance)
       const handle = await owning.execution.start({
         slug,
         storeRef: this.wiring.storeRef,
