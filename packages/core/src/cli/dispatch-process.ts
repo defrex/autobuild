@@ -220,12 +220,18 @@ export function superviseDispatchChild(deps: DispatchChildSupervisorDeps): Dispa
         if (child.exitCode !== null) return
         stopping = true
         requestedSignal = signal
-        if (signal !== undefined)
-          await deps.store.appendRepo(deps.repo, {
-            actor: DISPATCHER,
-            type: 'dispatcher.stop-requested',
-            payload: { run: deps.run, signal },
-          })
+        if (signal !== undefined) {
+          try {
+            await deps.store.appendRepo(deps.repo, {
+              actor: DISPATCHER,
+              type: 'dispatcher.stop-requested',
+              payload: { run: deps.run, signal },
+            })
+          } catch {
+            // Signal delivery must survive a transient Store failure. The
+            // kernel can still record its own abort reason after draining.
+          }
+        }
         child.kill('SIGINT')
         const timeout = deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS
         const stopped = await Promise.race([

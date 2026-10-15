@@ -124,6 +124,39 @@ describe('dispatch child supervision', () => {
     expect(stopped[0]?.payload).toMatchObject({ run: 'run-1', outcome: 'normal' })
   })
 
+  test('a failed stop-request deposit still signals and drains the child once', async () => {
+    const store = new MemoryBuildStore()
+    await store.ensureRepo('/repo')
+    const append = store.appendRepo.bind(store)
+    let requests = 0
+    store.appendRepo = async (repo, event) => {
+      if (event.type === 'dispatcher.stop-requested') {
+        requests += 1
+        throw new Error('store temporarily unavailable')
+      }
+      return append(repo, event)
+    }
+    const child = fakeSubprocess((signal) => {
+      if (signal === 'SIGINT') child.finish(0)
+    })
+    const supervisor = supervisorFixture(store, child)
+    const stopping = supervisor.stop('SIGTERM')
+    expect(supervisor.stop('SIGHUP')).toBe(stopping)
+    await stopping
+    expect(await supervisor.completed).toEqual({
+      outcome: 'normal',
+      exitCode: 0,
+      signal: 'SIGTERM',
+    })
+    expect(requests).toBe(1)
+    expect(child.kills).toEqual(['SIGINT'])
+    const stops = (await store.getRepoEvents('/repo')).filter(
+      (event) => event.type === 'dispatcher.run-stopped',
+    )
+    expect(stops).toHaveLength(1)
+    expect(stops[0]?.payload).toMatchObject({ signal: 'SIGTERM', outcome: 'normal' })
+  })
+
   test('a normal stop fact preserves a later nonzero cleanup exit without duplication', async () => {
     const store = new MemoryBuildStore()
     await store.ensureRepo('/repo')

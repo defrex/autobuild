@@ -12,13 +12,15 @@ export async function readDispatcherLiveness(
 ) {
   const record = await store.getRepo(repo)
   let events = record === null ? [] : (subset ?? (await store.getRepoStateEvents(repo)))
+  const bounded = projectDispatcherLiveness(record, events, now)
   if (
     record &&
     ((record.lease &&
       !events.some(
         (e) => e.type === 'dispatcher.run-started' && e.payload.run === record.lease!.holder,
       )) ||
-      (events.some((e) => e.type === 'dispatcher.run-started') &&
+      (bounded.state !== 'held' &&
+        events.some((e) => e.type === 'dispatcher.run-started') &&
         !events.some((e) => e.type === 'dispatcher.run-stopped')))
   ) {
     events = await store.getRepoEvents(repo)
