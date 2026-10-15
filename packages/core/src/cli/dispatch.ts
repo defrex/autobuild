@@ -1,5 +1,7 @@
 import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
+import { isRemoteStoreRef } from './repo-state'
+import { projectToken } from './project-credentials'
 import { settleSummaryRequests } from './pr-summary-publication'
 import { readDispatcherLiveness, StandbyIdentityResolver } from './dispatcher-liveness'
 import { formatDispatcherIdentity } from '../kernel/dispatcher-liveness'
@@ -3819,16 +3821,21 @@ function acceptableOriginModeStore(storeRef: string): boolean {
  * names the operator's own machine (local development, integration harnesses).
  * Requirements are validated here so a misconfigured origin-mode launch fails
  * before any side effect. */
-async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePaths> {
+async function resolveOriginModeState(
+  opts: DispatchOpts,
+  configStore?: string,
+): Promise<RepoStatePaths> {
   const identity = normalizeGitRemoteUrl(opts.repository!)
-  const selectedStore = opts.storeRef ?? opts.env.AB_STORE
+  const selectedStore = opts.storeRef?.trim() || opts.env.AB_STORE?.trim() || configStore
   if (selectedStore === undefined || !acceptableOriginModeStore(selectedStore)) {
     throw new Error(
       'origin-mode dispatch requires an HTTPS BuildStore — set AB_STORE (or --store) to the hosted Store URL',
     )
   }
-  if (opts.env.AB_TOKEN === undefined || opts.env.AB_TOKEN === '') {
-    throw new Error('origin-mode dispatch requires AB_TOKEN for the remote Store')
+  if (!projectToken(selectedStore, identity, opts.env)) {
+    throw new Error(
+      'origin-mode dispatch requires a project credential; run ab connect or set AB_TOKEN',
+    )
   }
   // Checkout-less hosts (serverless functions, sandboxes) have no gh CLI and
   // no keyring, and the only workspace provider origin mode can run —
@@ -3846,6 +3853,7 @@ async function resolveOriginModeState(opts: DispatchOpts): Promise<RepoStatePath
   await mkdir(scratch, { recursive: true })
   return resolveRepoStatePaths({
     repo: identity,
+    configStore,
     checkout: scratch,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
     ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
@@ -3868,9 +3876,23 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (opts.wire !== undefined && opts.nonStoreWire !== undefined) {
     throw new Error('dispatch wire and nonStoreWire are mutually exclusive')
   }
+  const explicitOriginStore = opts.storeRef?.trim() || opts.env.AB_STORE?.trim()
+  if (
+    opts.repository !== undefined &&
+    explicitOriginStore &&
+    !acceptableOriginModeStore(explicitOriginStore)
+  ) {
+    throw new Error(
+      'origin-mode dispatch requires an HTTPS BuildStore — set AB_STORE (or --store) to the hosted Store URL',
+    )
+  }
+  const originConfig =
+    opts.repository !== undefined
+      ? await fetchOriginModeConfig(opts, opts.originConfigTransport)
+      : undefined
   const state =
     opts.repository !== undefined
-      ? await resolveOriginModeState(opts)
+      ? await resolveOriginModeState(opts, originConfig?.config.store?.url)
       : await resolveRepoState({
           targetRepo: opts.targetRepo,
           exec: opts.exec,
@@ -3884,6 +3906,13 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   const resolvedOpts: DispatchOpts = {
     ...opts,
     targetRepo: state.checkout,
+    env: {
+      ...opts.env,
+      AB_STORE: state.storeRef,
+      ...(isRemoteStoreRef(state.storeRef)
+        ? { AB_TOKEN: projectToken(state.storeRef, state.repo, opts.env) }
+        : {}),
+    },
     storeRef: state.storeRef,
     repo: opts.repo ?? state.repo,
   }
@@ -3941,7 +3970,7 @@ export async function abDispatch(opts: DispatchOpts): Promise<void> {
   if (opts.repository !== undefined) {
     // Origin mode startup config: the base branch's autobuild.toml, fetched
     // through the forge (default branch first — baseBranch itself is config).
-    const fetched = await fetchOriginModeConfig(opts, opts.originConfigTransport)
+    const fetched = originConfig!
     configContent = fetched.content
     config = fetched.config
     if (config.forge !== 'github') {

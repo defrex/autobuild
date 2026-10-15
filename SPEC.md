@@ -1067,8 +1067,18 @@ Hosted ticket operations are gated by grant kind: build-runner and build-phase
 grants have no access; harvest-phase grants can only list-ready, get and read
 dependency-states; harvest-runner grants can also create proposals. All other
 ticket mutations require project or admin authority. Refusals name the grant
-kind and operation. Tickets remain team-scoped by request context until AUT-689;
-repository-keyed ticket assets retain project isolation.
+kind and operation.
+
+Ticket admission uses the credential project. Hosted tickets, comments, blockers, creation-key
+deduplication and assets are partitioned by registered repository, never team.
+Lifecycle comes from that project's latest durable effective configuration
+(triage Backlog, claim Doing, completion Done by default; configurable
+`doneState`). Owner admin ticket requests explicitly select a registered
+repository. The service has no Linear ticket backend: external tracker and
+file sources remain dispatcher-side, and service ticket surfaces refuse those
+projects with actionable source feedback. Legacy team queues migrate atomically
+to their sole configured claimant; conflicts stop unchanged for an owner
+assignment and rerun. See the hosted service migration procedure.
 See the remote store, remote ticket and operator protocol references for wire
 and revocation details. Least privilege comes from code, not prompt instructions.
 
@@ -1336,6 +1346,17 @@ fails closed inside a phase session — repository-wide operator authority canno
 be narrowed to the ambient build — and `--repo` constrains every call to one
 repository. Mutating tools attribute their writes to the sessionless operator
 identity, exactly as the other operator commands do.
+
+### 8.10 Hosted project connection
+
+`ab connect <service-url>` requests owner browser approval for the normalized
+origin, registers the project, and saves a project credential outside the
+checkout. `ab connect` reports its status; `ab disconnect` revokes and removes
+only that credential, retaining project data. Store precedence is `--store`,
+nonblank `AB_STORE`, `[store] url`, then local state. `AB_TOKEN` overrides saved
+credentials. Configured services without credentials fail closed. Connection
+commands require a network origin and are unavailable in phase sessions.
+
 
 ## 9. AgentRunner
 
@@ -1736,6 +1757,18 @@ event-level mechanics live in the repository catalog and reducer tests):
   them — a bounce filed into Ready is claimed and bounced again forever.
 
 ## 13. Ticket source policy
+
+**Hosted tickets are project-scoped.** A project credential selects one registered
+repository; an owner selects a registered repository explicitly. Team and state
+fields from clients convey no authority or lifecycle policy. Tickets, comments,
+blockers, creation-key deduplication and assets are isolated by repository.
+The project's latest effective configuration supplies hosted lifecycle names:
+triage Backlog, claimed Doing, completion Done (`doneState`) and create/proposal
+equal to triage by default; `readyState` is required. Configured roles may overlap.
+The service has no Linear backend and never relays external ticket sources.
+Projects using Linear, files or plugins keep their direct dispatcher connection;
+service ticket surfaces refuse with project/source feedback instead of empty data.
+
 
 The TicketSource **initiates and receives projections; it is never consulted
 mid-build and never used as artifact storage.** Dispatch reads the ticket

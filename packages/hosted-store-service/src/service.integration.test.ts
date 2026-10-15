@@ -1,3 +1,4 @@
+import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
@@ -33,6 +34,8 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   let serviceUrl = ''
   let serviceToken = ''
   const serviceSecret = 'integration-signing-secret'
+  const credentials = testCredentials(projects).store
+  let ticketToken = ''
   let hostedTickets: TicketSource | undefined
   const ticketBackend = new FakeTicketSource([
     { ...readyTicket('T-1'), blockedBy: ['T-blocker'] },
@@ -51,6 +54,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
     storeAdapter: async (backing) => {
       const service = createHostedStoreService({
         openProjectRegistry: async () => projects,
+        openCredentials: async () => credentials,
         env: {
           AB_STORE_SECRET: serviceSecret,
           AB_POSTGRES_URL: 'postgres://injected/test',
@@ -91,6 +95,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   })
   harnesses.push(h)
   await projects.add(h.origin, 'fixture')
+  ticketToken = (await credentials.issue(h.origin, 'fixture')).token
 
   const {
     store: _store,
@@ -111,7 +116,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
       nonStoreWire: async (config, opts, state, plugins) => {
         hostedTickets = await createTicketSource(
           config.tickets,
-          opts.env,
+          { ...opts.env, AB_TOKEN: ticketToken },
           state.repo,
           state.localStateRoot,
           plugins,
@@ -181,7 +186,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   const requestCountBeforeDashboard = requests.length
   await abDispatch({
     targetRepo: h.origin,
-    env: { AB_STORE: serviceUrl, AB_TOKEN: serviceToken },
+    env: { AB_STORE: serviceUrl, AB_TOKEN: ticketToken },
     exec: spawnExec,
     stdout: () => {},
     stderr: () => {},

@@ -18,6 +18,12 @@ The [minimal hosted service deployment](hosted-service.md) defaults to store-onl
 mode and supplies no cron. The source-checkout deployment below retains the
 opt-in dispatcher packing and shipping pipeline.
 
+For a dispatcher running as a local user or service manager, first
+[connect the project](hosted-service.md#connect-a-project). Origin-mode dispatch
+can read the committed `[store] url` and the same user credential by origin.
+A deployment running under another identity needs its own project credential;
+`AB_TOKEN` remains the explicit CI override.
+
 ## Enabling the schedule
 
 1. Deploy the hosted service with the dispatcher package installed and the

@@ -405,6 +405,7 @@ function unique(fields: readonly string[]): string[] {
  * be traversed safely through Zod internals.
  */
 const TABLE_HEADINGS: Record<string, string> = {
+  store: '`[store]`',
   pr: '`[pr]`',
   workspace: '`[workspace]`',
   commands: '`[commands]`',
@@ -417,6 +418,7 @@ const TABLE_HEADINGS: Record<string, string> = {
 }
 
 const TABLE_FIELDS: Record<string, string[]> = {
+  store: ['url'],
   pr: Object.keys(prSchema.shape),
   workspace: Object.keys(workspaceSchema.shape),
   // Open map: command names are repository-defined.

@@ -15,6 +15,17 @@ const config: NextConfig = {
   // the authorization server from `/.well-known/oauth-protected-resource` at
   // the resource URL's origin before falling back to path-based probes. The
   // MCP plugin serves both documents under /api/auth; rewrite them up.
+  async headers() {
+    return [
+      {
+        source: '/connect/:path*',
+        headers: [
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'Cache-Control', value: 'no-store' },
+        ],
+      },
+    ]
+  },
   async rewrites() {
     return {
       beforeFiles: [

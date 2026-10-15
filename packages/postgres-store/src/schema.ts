@@ -1,3 +1,7 @@
+import { PostgresProjectRegistry } from './projects'
+import type { PostgresEnv } from './env'
+import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
+import { migrateLegacyTickets } from './ticket-migration'
 import { SQL } from 'bun'
 import {
   AUTH_SCHEMA_CHECKSUM,
@@ -8,7 +12,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -798,13 +802,28 @@ CREATE TABLE IF NOT EXISTS project_credentials (
   last_used_at timestamptz, revoked_at timestamptz, expires_at timestamptz,
   purpose text NOT NULL CHECK (purpose IN ('project-owner','dispatcher'))
 );`.trim()
-export const SCHEMA_DDL = `${SCHEMA_V10_DDL}\n${CREDENTIAL_SCHEMA_DDL}`
+export const SCHEMA_V11_DDL = `${SCHEMA_V10_DDL}\n${CREDENTIAL_SCHEMA_DDL}`
+export const SCHEMA_V11_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V11_DDL)
+  .digest('hex')
+export const CONNECTION_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS project_connections (
+  id text PRIMARY KEY, repo text NOT NULL, credential_id text NOT NULL,
+  digest text NOT NULL, capability_hash text NOT NULL, code text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL, expires_at timestamptz NOT NULL,
+  status text NOT NULL CHECK (status IN ('pending','approved','denied','expired')),
+  approved_by text, polled_at timestamptz, poll_attempts integer NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS connection_lookup_limits (
+  actor text PRIMARY KEY, started_at timestamptz NOT NULL, attempts integer NOT NULL
+);`.trim()
+export const SCHEMA_DDL = `${SCHEMA_V11_DDL}\n${CONNECTION_SCHEMA_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
  * remain valid while the hosted ticket tables are added. */
-export const TICKET_SCHEMA_VERSION = 1
-export const TICKET_SCHEMA_DDL = `
+export const TICKET_SCHEMA_VERSION = 2
+export const TICKET_SCHEMA_V1_DDL = `
 CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   version integer NOT NULL, checksum text NOT NULL, applied_at timestamptz NOT NULL
@@ -829,6 +848,10 @@ CREATE TABLE IF NOT EXISTS ab_ticket_blockers (
   FOREIGN KEY (team, blocker_id) REFERENCES ab_tickets(team, id) ON DELETE CASCADE,
   CHECK (ticket_id <> blocker_id)
 );`.trim()
+export const TICKET_SCHEMA_V1_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_V1_DDL)
+  .digest('hex')
+export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V1_DDL.replaceAll('team', 'repo')
 export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_DDL)
   .digest('hex')
@@ -851,6 +874,25 @@ CREATE TABLE IF NOT EXISTS reducer_snapshots (
 type ExpectedColumn = readonly [name: string, type: string, notNull: boolean, defaultValue?: string]
 
 const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
+  project_connections: [
+    ['id', 'text', true],
+    ['repo', 'text', true],
+    ['credential_id', 'text', true],
+    ['digest', 'text', true],
+    ['capability_hash', 'text', true],
+    ['code', 'text', true],
+    ['created_at', 'timestamp with time zone', true],
+    ['expires_at', 'timestamp with time zone', true],
+    ['status', 'text', true],
+    ['approved_by', 'text', false],
+    ['polled_at', 'timestamp with time zone', false],
+    ['poll_attempts', 'integer', true, '0'],
+  ],
+  connection_lookup_limits: [
+    ['actor', 'text', true],
+    ['started_at', 'timestamp with time zone', true],
+    ['attempts', 'integer', true],
+  ],
   project_credentials: [
     ['id', 'text', true],
     ['digest', 'text', true],
@@ -1006,6 +1048,9 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_connections|p|id||||',
+  'project_connections|c|||||',
+  'connection_lookup_limits|p|actor||||',
   'project_credentials|p|id||||',
   'project_credentials|c|||||',
   'project_journal|p|seq||||',
@@ -1225,7 +1270,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['applied_at', 'timestamp with time zone', true],
     ],
     ab_tickets: [
-      ['team', 'text', true],
+      ['repo', 'text', true],
       ['id', 'text', true],
       ['creation_key', 'text', false],
       ['title', 'text', true],
@@ -1236,14 +1281,14 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['updated_at', 'timestamp with time zone', true],
     ],
     ab_ticket_comments: [
-      ['team', 'text', true],
+      ['repo', 'text', true],
       ['ticket_id', 'text', true],
       ['seq', 'bigint', true],
       ['body', 'text', true],
       ['created_at', 'timestamp with time zone', true],
     ],
     ab_ticket_blockers: [
-      ['team', 'text', true],
+      ['repo', 'text', true],
       ['ticket_id', 'text', true],
       ['blocker_id', 'text', true],
     ],
@@ -1267,6 +1312,32 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
     if (JSON.stringify(actual) !== JSON.stringify(shape)) {
       throw schemaError(`ticket table ${table} is missing or mismatched`)
     }
+  }
+  const constraints: { table_name: string; definition: string }[] = await sql`
+    SELECT c.relname AS table_name, pg_get_constraintdef(k.oid) AS definition
+    FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = current_schema() AND k.contype IN ('p', 'u', 'f', 'c') AND c.relname IN ('ab_tickets', 'ab_ticket_comments', 'ab_ticket_blockers')`
+  const expectedConstraints: Record<string, string[]> = {
+    ab_tickets: ['PRIMARY KEY (repo, id)', 'UNIQUE (repo, creation_key)'],
+    ab_ticket_comments: [
+      'PRIMARY KEY (repo, ticket_id, seq)',
+      'FOREIGN KEY (repo, ticket_id) REFERENCES ab_tickets(repo, id) ON DELETE CASCADE',
+    ],
+    ab_ticket_blockers: [
+      'PRIMARY KEY (repo, ticket_id, blocker_id)',
+      'FOREIGN KEY (repo, ticket_id) REFERENCES ab_tickets(repo, id) ON DELETE CASCADE',
+      'FOREIGN KEY (repo, blocker_id) REFERENCES ab_tickets(repo, id) ON DELETE CASCADE',
+      'CHECK ((ticket_id <> blocker_id))',
+    ],
+  }
+  for (const [table, definitions] of Object.entries(expectedConstraints)) {
+    const actual = constraints
+      .filter((row) => row.table_name === table)
+      .map((row) => row.definition)
+      .sort()
+    if (JSON.stringify(actual) !== JSON.stringify(definitions.sort()))
+      throw schemaError(`ticket table ${table} constraints are missing or mismatched`)
   }
 }
 
@@ -1298,7 +1369,13 @@ const STREAMS_CREATION_SEQ_MIGRATION = `
   END $$;
 `
 
-export async function migratePostgres(url: string): Promise<void> {
+export async function migratePostgres(
+  url: string,
+  options: {
+    openBlobs?: () => BlobStore | Promise<BlobStore>
+    legacyProjectEnv?: PostgresEnv
+  } = {},
+): Promise<void> {
   const sql = new SQL(url)
   try {
     await sql.begin(async (tx) => {
@@ -1482,6 +1559,9 @@ export async function migratePostgres(url: string): Promise<void> {
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 11 && marker.checksum === SCHEMA_V11_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+            applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 10 && marker.checksum === SCHEMA_V10_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
@@ -1506,10 +1586,23 @@ export async function migratePostgres(url: string): Promise<void> {
         await tx`INSERT INTO ab_schema_migrations (singleton, version, checksum, applied_at)
           VALUES (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
       }
+      if (options.legacyProjectEnv !== undefined) {
+        await new PostgresProjectRegistry(tx as SQL).initializeFromEnvInTransaction(
+          options.legacyProjectEnv,
+        )
+      }
       const ticketRows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_ticket_schema_migrations WHERE singleton = true FOR UPDATE`
       const ticketMarker = ticketRows[0]
-      if (ticketMarker) {
+      if (
+        ticketMarker &&
+        Number(ticketMarker.version) === 1 &&
+        ticketMarker.checksum === TICKET_SCHEMA_V1_CHECKSUM
+      ) {
+        await migrateLegacyTickets(tx as SQL, options.openBlobs)
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION},
+          checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+      } else if (ticketMarker) {
         if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
           throw schemaError(
             `ticket marker is incompatible: version ${ticketMarker.version} does not match ` +

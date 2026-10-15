@@ -90,6 +90,7 @@ const tickCountersSchema = z.strictObject({
 const restartRequiredConfigPathSchema = z.enum([
   'forge',
   'plugins',
+  'store',
   'workspace.provider',
   'workspace.config',
   'tickets.source',

@@ -44,9 +44,26 @@ release checkout. The database identity needs permission to create tables,
 constraints, and migration markers during migration and to select, insert,
 update, and delete the resulting tables at runtime. The ticket schema has its
 own version/checksum marker, so migrating an existing BuildStore v1 database
-adds team-scoped tickets, comments, and blockers without replacing the
+adds project-scoped tickets, comments, and blockers without replacing the
 established BuildStore marker. Opening against a missing, older/newer, or
 checksum-mismatched schema fails; schema creation is never implicit.
+
+Populated legacy ticket-v1 upgrades also require the running service's blob
+backend, credentials, access mode and prefix. The environment-aware migration
+CLI opens blobs lazily to read each registered project's selected effective
+configuration when ownership must be inferred. Registered projects without a
+run/config reference make no claim. Unreadable selected configs stop unchanged;
+restoring their bytes or assigning every remaining legacy team unblocks migration.
+Complete registered owner assignments avoid unrelated configuration reads.
+Fresh installs, empty-v1 upgrades and v2 reruns remain SQL-only.
+Released main-v9 upgrades import `AB_WEB_REPOSITORIES` once inside that same
+transaction. On failure, main promotion and registry import roll back with
+tickets. Owner `projects add` and `tickets assign-team` independently bootstrap
+their registry/recovery journals on v9, so they remain usable after rollback.
+Ambiguous teams stop unchanged; the owner resolves them with
+`ab-hosted-store tickets assign-team TEAM REPOSITORY --user IDENTITY` before
+rerunning migration. See the hosted-service migration procedure.
+
 
 The current DDL of every marker — build store, ticket, and auth — is immutable
 once a database has deployed it: deployed databases carry that exact DDL's

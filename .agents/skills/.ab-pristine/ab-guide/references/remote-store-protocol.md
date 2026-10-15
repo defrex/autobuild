@@ -33,8 +33,8 @@ headers, or available backend.
 ## 1. Transport and conventions
 
 - The transport is JSON over HTTP or HTTPS. There is no API version prefix.
-  Point Autobuild at the server's base URL with `--store`, or set that URL in
-  `AB_STORE`; the shipped client appends the routes below.
+  Point Autobuild at the server's base URL with `--store`, `AB_STORE`, or
+  `[store] url` (in that precedence order, before the local default); the shipped client appends the routes below.
 - Every `/builds`, `/repos`, and `/sessions` request sends
   `X-Autobuild-Version` with the exact client package version and
   `X-Autobuild-Protocol-Version` with the remote protocol version (`3` in this
@@ -819,8 +819,9 @@ ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user ow
 ```
 
 Issue prints the secret once; list contains metadata only. Issue optionally
-accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
-`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. For administrative/non-interactive issuance, set the returned token as
+`AB_TOKEN`. Interactive project onboarding uses `ab connect <service-url>`;
+it saves the credential outside the repository and commits no secret. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
 retired: the service responds that the credential format changed and points
 to `credentials issue`. Supported old protocol shapes still work with a new
 credential; protocol compatibility does not restore retired authentication.
@@ -933,8 +934,8 @@ cannot call ticket routes. Harvest-phase grants may call only list-ready, get
 and dependency-states; harvest-runner grants may additionally create proposals.
 Other ticket mutations require project or admin authority. A denied operation
 returns 403 naming the grant kind and operation before parsing or source construction.
-Tickets remain team-scoped by request context until AUT-689 introduces project
-tenancy. Repository-keyed ticket assets retain project isolation.
+Ticket admission and repository-keyed assets use the authenticated project;
+delegated harvest grants retain that same project boundary.
 
 Workspace plugin factories receive a host-only `delegateCredential` callback
 instead of a project token; their environment excludes `AB_TOKEN`. Provisioning
@@ -1180,3 +1181,25 @@ calling the backing store directly.
 Passing only route smoke tests is not conformance. The complete shared contract
 driven through an HTTP-backed client, plus the protocol-specific cases above,
 is the required compatibility test.
+
+## 13. Project connection protocol
+
+`ab connect <url>` uses `POST /connect/v1/requests` with the normalized origin,
+a random credential id and SHA-256 digest of a CLI-held secret. The response
+contains a ten-minute request id, separate private polling capability, short
+browser code, verification URL and five-second interval. `POST /connect/v1/poll`
+and `/cancel` require id and capability in JSON; the browser code cannot poll.
+Poll returns pending, approved, denied or expired plus immutable repository
+and credential id, never the secret. Cancel denies pending work or revokes
+only that request's already approved credential. Polling and authenticated
+browser code lookup have durable limits; 429 includes Retry-After.
+
+The web-enabled origin serves `/connect` and cookie-authenticated JSON
+`POST /connect/v1/browser/lookup` and `/decide`. Decisions read the saved
+proposal, require an allowed live Better Auth session and exact Origin, and
+atomically register the project, install the digest and record the outcome.
+GET cannot approve. `GET /connect/v1/status` and `POST /connect/v1/revoke`
+require a project credential and operate only on its own identity; admin and
+internal operator credentials cannot impersonate self-service. All protocol
+responses are no-store/no-referrer. Connection commands are unavailable in
+build/harvest sessions.

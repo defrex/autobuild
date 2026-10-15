@@ -39,8 +39,9 @@ ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user ow
 ```
 
 Issue prints the secret once; list contains metadata only. Issue optionally
-accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
-`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. For administrative/non-interactive issuance, set the returned token as
+`AB_TOKEN`. Interactive project onboarding uses `ab connect <service-url>`;
+it saves the credential outside the repository and commits no secret. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
 retired: the service responds that the credential format changed and points
 to `credentials issue`. Supported old protocol shapes still work with a new
 credential; protocol compatibility does not restore retired authentication.
@@ -139,3 +140,13 @@ The hosted dispatcher queries current registrations on every authorized
 invocation. With `AB_DISPATCHER_REPOSITORIES` unset, it serves all registered
 projects; an explicit list preserves its order and is intersected with current
 registration. An empty registry is a successful zero-project invocation.
+
+Hosted tickets are scoped to the credential's registered project. Lifecycle
+comes from that project's effective configuration; projects using external
+trackers keep the connection in their dispatcher and receive source feedback
+from service ticket surfaces. This service has no Linear backend.
+`AB_TICKET_BACKEND` and `LINEAR_API_KEY` are ignored with one startup removal
+message, and all `AB_TICKET_*_STATE` lifecycle variables are removed and ignored.
+See [project ticket migration](../../docs/hosted-service.md#hosted-ticket-projects-and-v1-migration)
+for atomic v1 upgrades, owner `tickets assign-team` recovery, and the blob
+credentials/access/prefix required during populated-v1 deployment builds.

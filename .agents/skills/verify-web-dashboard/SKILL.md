@@ -50,6 +50,18 @@ inspect the diff and not to decide applicability again.
    as ordinary PR attachments, then issue the passing verdict:
 
    ```
+   ab artifact put web-dashboard-frame:connect-code-wide:png .ab/web-dashboard-frames/connect-code-wide.png --attach
+   ab artifact put web-dashboard-frame:connect-approval-wide:png .ab/web-dashboard-frames/connect-approval-wide.png --attach
+   ab artifact put web-dashboard-frame:connect-error-wide:png .ab/web-dashboard-frames/connect-error-wide.png --attach
+   ab artifact put web-dashboard-frame:connect-approved-wide:png .ab/web-dashboard-frames/connect-approved-wide.png --attach
+   ab artifact put web-dashboard-frame:connect-denied-wide:png .ab/web-dashboard-frames/connect-denied-wide.png --attach
+   ab artifact put web-dashboard-frame:connect-expired-wide:png .ab/web-dashboard-frames/connect-expired-wide.png --attach
+   ab artifact put web-dashboard-frame:connect-code-narrow:png .ab/web-dashboard-frames/connect-code-narrow.png --attach
+   ab artifact put web-dashboard-frame:connect-approval-narrow:png .ab/web-dashboard-frames/connect-approval-narrow.png --attach
+   ab artifact put web-dashboard-frame:connect-error-narrow:png .ab/web-dashboard-frames/connect-error-narrow.png --attach
+   ab artifact put web-dashboard-frame:connect-approved-narrow:png .ab/web-dashboard-frames/connect-approved-narrow.png --attach
+   ab artifact put web-dashboard-frame:connect-denied-narrow:png .ab/web-dashboard-frames/connect-denied-narrow.png --attach
+   ab artifact put web-dashboard-frame:connect-expired-narrow:png .ab/web-dashboard-frames/connect-expired-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-loading-wide:png .ab/web-dashboard-frames/builds-loading-wide.png --attach
    ab artifact put web-dashboard-frame:builds-loading-narrow:png .ab/web-dashboard-frames/builds-loading-narrow.png --attach
    ab artifact put web-dashboard-frame:builds-happy-wide:png .ab/web-dashboard-frames/builds-happy-wide.png --attach

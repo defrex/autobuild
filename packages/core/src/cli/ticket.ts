@@ -199,13 +199,20 @@ export async function openTicketSource(
   const plugins = await loadPlugins(config.plugins, targetRepo)
   const repoState = resolveRepoStatePaths({
     repo: targetRepo,
+    configStore: config.store?.url,
     ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
     ...(opts.env.AB_STORE !== undefined ? { envStore: opts.env.AB_STORE } : {}),
   })
   const factory = opts.sourceFactory ?? createTicketSource
   return {
     config,
-    source: await factory(config.tickets, opts.env, targetRepo, repoState.localStateRoot, plugins),
+    source: await factory(
+      config.tickets,
+      config.tickets.source === 'hosted' ? { ...opts.env, AB_STORE: repoState.storeRef } : opts.env,
+      targetRepo,
+      repoState.localStateRoot,
+      plugins,
+    ),
   }
 }
 

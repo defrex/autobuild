@@ -107,12 +107,13 @@ export async function buildMcpTicketBackend(
         config.tickets.readyState,
         config.tickets.claimedState,
         config.tickets.createState,
+        config.tickets.doneState,
       ].filter((state): state is string => state !== undefined),
     ),
   ]
   return {
     sourceFor: async (context) => {
-      if (config.tickets.teamKey !== context.teamKey) {
+      if ((config.tickets.teamKey ?? '') !== context.teamKey) {
         throw new Error(
           `the repository's effective ticket config names team "${context.teamKey}", but this checkout's autobuild.toml names team "${String(config.tickets.teamKey)}"; refusing to serve tickets across that drift — run ab mcp from the checkout dispatch uses`,
         )
@@ -200,6 +201,11 @@ export async function abMcp(opts: AbMcpOpts): Promise<number> {
   try {
     const backend = await buildMcpTicketBackend({
       ...opts,
+      env: {
+        ...opts.env,
+        AB_STORE: context.storeRef,
+        ...(context.token !== undefined ? { AB_TOKEN: context.token } : {}),
+      },
       checkout: context.checkout,
       localStateRoot: context.localStateRoot,
     })

@@ -1,3 +1,6 @@
+import { openPostgresConnectionStoreFromEnv } from '@defrex/autobuild-postgres-store/connections'
+import { openPostgresCredentialStoreFromEnv } from '@defrex/autobuild-postgres-store/credentials'
+import { createConnectionHandler } from '../connections'
 import { createHostedStoreService } from '../service'
 import { parseWebAuthEnv } from './config'
 import { webAuth } from './auth'
@@ -41,4 +44,28 @@ export function mcpEndpoint() {
     delegate: (request) => hostedService().fetch(request),
   })
   return mcp
+}
+
+let connectionStore: ReturnType<typeof openPostgresConnectionStoreFromEnv> | undefined
+let connectionCredentials: ReturnType<typeof openPostgresCredentialStoreFromEnv> | undefined
+export function connectionEndpoint() {
+  const config = parseWebAuthEnv(process.env)
+  return createConnectionHandler({
+    store: () =>
+      (connectionStore ??= openPostgresConnectionStoreFromEnv(process.env).catch((error) => {
+        connectionStore = undefined
+        throw error
+      })),
+    credentials: () =>
+      (connectionCredentials ??= openPostgresCredentialStoreFromEnv(process.env).catch((error) => {
+        connectionCredentials = undefined
+        throw error
+      })),
+    machineAuth: hostedService().machineAuth,
+    baseURL: config.baseURL,
+    browser: {
+      getSession: (headers) => webAuth().api.getSession({ headers }),
+      allowedEmails: config.allowedEmails,
+    },
+  })
 }

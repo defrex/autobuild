@@ -3,7 +3,7 @@
 // the deployment composes.
 export { createTicketServer } from './ticket-server'
 export type { TicketServerOptions } from './ticket-server'
-export { HostedTicketSource, LinearTicketSource } from '@defrex/autobuild/hosted-tickets'
+export { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
 export type { HostedTicketFetch, HostedTicketSourceOptions } from '@defrex/autobuild/hosted-tickets'
 export {
   HOSTED_TICKET_OPERATIONS,

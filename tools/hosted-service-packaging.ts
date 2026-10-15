@@ -4,7 +4,18 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { SQL } from 'bun'
 import { installPackedDistribution } from '../packages/core/src/testing/packed-install'
-import { SCHEMA_VERSION } from '../packages/postgres-store/src/schema'
+import {
+  SCHEMA_VERSION,
+  SCHEMA_V9_CHECKSUM,
+  TICKET_SCHEMA_VERSION,
+  TICKET_SCHEMA_V1_DDL,
+  TICKET_SCHEMA_V1_CHECKSUM,
+  migratePostgres,
+} from '../packages/postgres-store/src/schema'
+import { openPostgresBuildStore } from '../packages/postgres-store/src/store'
+import { MemoryBlobStore } from '../packages/core/src/plugin-sdk'
+import { parseConfig } from '../packages/core/src/config/load'
+import { DISPATCHER } from '../packages/core/src/testing'
 import { AUTH_SCHEMA_VERSION } from '../packages/postgres-store/src/auth-schema'
 import { repoRoot } from './git-tracked'
 
@@ -64,6 +75,7 @@ export async function checkHostedServicePackaging() {
   const schema = `ab_pack_${crypto.randomUUID().replaceAll('-', '')}`
   const admin = new SQL(url)
   let server: ReturnType<typeof Bun.spawn> | undefined
+  let blobServer: ReturnType<typeof Bun.serve> | undefined
   try {
     await admin.unsafe(`CREATE SCHEMA ${schema}`)
     const scoped = new URL(url)
@@ -148,12 +160,113 @@ export async function checkHostedServicePackaging() {
       false,
     )
     assert(!failure.includes('Creating an optimized production build'))
+    // Upgrade a genuine populated ticket-v1 database through the *packed*
+    // deployment CLI, fetching config bytes through its production S3 adapter.
+    await migratePostgres(scoped.toString())
+    const blobs = new MemoryBlobStore()
+    const backing = await openPostgresBuildStore(scoped.toString(), blobs)
+    const legacyDb = new SQL(scoped.toString())
+    try {
+      const repo = 'https://github.com/owner/repo'
+      await legacyDb`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (nextval('project_journal_seq'), ${repo}, 'added', 'packaging', ${new Date().toISOString()})`
+      await backing.ensureRepo(repo)
+      const { verify, finalize, ...config } = parseConfig(
+        '[tickets]\nsource = "hosted"\nteamKey = "PACK"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
+      )
+      const artifact = await backing.putRepoArtifact(repo, {
+        kind: 'dispatcher-effective-config',
+        content: JSON.stringify({
+          ...config,
+          verify: { steps: verify.steps },
+          finalize: { steps: finalize.steps },
+        }),
+      })
+      await backing.appendRepo(repo, {
+        actor: DISPATCHER,
+        type: 'dispatcher.run-started',
+        payload: {
+          run: 'packaging',
+          pid: 1,
+          effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+          roleWarnings: [],
+        },
+      })
+      await legacyDb.unsafe(
+        'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+      )
+      await legacyDb.unsafe(TICKET_SCHEMA_V1_DDL)
+      await legacyDb`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
+      await legacyDb`INSERT INTO ab_tickets VALUES ('PACK', 'PACK-1', 'key', 'Preserved', 'Body', 'Historical', ARRAY[]::text[], ${new Date().toISOString()}, ${new Date().toISOString()})`
+      // Released v0.11.0 used main schema v9: its registry did not exist yet.
+      await legacyDb.unsafe(
+        'DROP TABLE project_credentials, project_journal, project_registry_state; DROP SEQUENCE project_journal_seq',
+      )
+      await legacyDb`UPDATE ab_schema_migrations SET version = 9, checksum = ${SCHEMA_V9_CHECKSUM}`
+    } finally {
+      await backing.close()
+      await legacyDb.close()
+    }
+    const blobRequests: string[] = []
+    blobServer = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname
+        blobRequests.push(path)
+        const prefix = '/unused/packaging/'
+        const bytes = path.startsWith(prefix) ? await blobs.get(path.slice(prefix.length)) : null
+        return bytes === null
+          ? new Response('', { status: 404 })
+          : new Response(new Uint8Array(bytes))
+      },
+    })
+    env.AB_S3_ENDPOINT = `http://127.0.0.1:${blobServer.port}`
+    env.AB_S3_FORCE_PATH_STYLE = 'true'
+    env.AB_BLOB_PREFIX = 'packaging'
+    const blocked = await command(
+      ['bun', 'run', 'build'],
+      consumer,
+      { ...env, AB_BLOB_BACKEND: undefined },
+      false,
+    )
+    assert(blocked.includes('blob'), blocked)
+    assert(!blocked.includes('Creating an optimized production build'))
+    const unchanged = new SQL(scoped.toString())
+    try {
+      assert.equal(
+        Number((await unchanged`SELECT version FROM ab_schema_migrations`)[0].version),
+        9,
+      )
+      assert.equal(
+        (await unchanged`SELECT to_regclass('project_journal') AS table_name`)[0].table_name,
+        null,
+      )
+      assert.equal(
+        Number((await unchanged`SELECT version FROM ab_ticket_schema_migrations`)[0].version),
+        1,
+      )
+    } finally {
+      await unchanged.close()
+    }
     await command(['bun', 'run', 'build'], consumer, env)
-    console.log('Packed service migrated and built')
+    assert(blobRequests.some((path) => path.startsWith('/unused/packaging/')))
+    console.log('Packed service migrated populated ticket v1 and built')
     const db = new SQL(scoped.toString())
     try {
       const markers = await db`SELECT version FROM ab_schema_migrations`
       assert.equal(Number(markers[0]?.version), SCHEMA_VERSION)
+      const importedProjects = await db`SELECT repo, actor FROM project_journal`
+      assert.deepEqual(
+        [...importedProjects],
+        [{ repo: 'https://github.com/owner/repo', actor: 'system:AB_WEB_REPOSITORIES' }],
+      )
+      const ticketMarkers = await db`SELECT version FROM ab_ticket_schema_migrations`
+      assert.equal(Number(ticketMarkers[0]?.version), TICKET_SCHEMA_VERSION)
+      const ticket = (await db`SELECT repo, id, state FROM ab_tickets`)[0]
+      assert.deepEqual(
+        { ...ticket },
+        { repo: 'https://github.com/owner/repo', id: 'PACK-1', state: 'Historical' },
+      )
       const authMarkers = await db`SELECT version FROM ab_auth_schema_migrations`
       assert.equal(Number(authMarkers[0]?.version), AUTH_SCHEMA_VERSION)
       await command(
@@ -290,6 +403,7 @@ export async function checkHostedServicePackaging() {
     assert.equal(generated.crons?.length ?? 0, 0)
     console.log('Packed Vercel service deployment passed')
   } finally {
+    blobServer?.stop(true)
     if (server) {
       server.kill()
       await server.exited

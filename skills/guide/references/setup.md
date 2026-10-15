@@ -28,7 +28,7 @@ maintainer before selecting it:
 - a dispatcher-side push-capable `GITHUB_TOKEN` or `GH_TOKEN`;
 - for a private repository, a separate read-only clone identity named by
   `gitUsernameEnv` and `gitPasswordEnv`;
-- an HTTPS hosted `AB_STORE` reachable from Vercel and a scoped `AB_TOKEN`;
+- an HTTPS hosted service reachable from Vercel, configured through `ab connect <url>`;
 - each selected role and alternate's runtime/model, its pinned
   `[workspace.config.runtimeProvisioning.<runtime>]` commands, and the API
   credential names it needs in `[workspace.config].environmentVariables`.
@@ -177,7 +177,7 @@ ab dispatch --repository https://github.com/owner/repository \\
 ```
 
 `--repository` (or `AB_REPOSITORY`) is the normalized origin. Origin mode
-requires an HTTPS `AB_STORE` plus `AB_TOKEN`, an exported `GITHUB_TOKEN` or
+requires an HTTPS service selected through `[store] url` or `AB_STORE`, a saved project credential or `AB_TOKEN`, an exported `GITHUB_TOKEN` or
 `GH_TOKEN`, and `forge = "github"`; the interactive dashboard is unavailable
 (`--plain` or no TTY). Origin mode never consults the gh CLI: a checkout-less
 host has no gh and no keyring, and the only workspace provider it can run,
@@ -276,6 +276,46 @@ production) or every MCP client's discovery binds tokens to the wrong
 resource.
 
 
+## Connect a project
+
+From a checkout with an origin remote, run `ab connect https://YOUR_ORIGIN`.
+The CLI prints a verification URL and short code and attempts to open a browser.
+Sign in as an allowed owner, check the full repository identity and code, and
+approve or deny. Another device can open the printed URL, or visit `/connect`
+and enter the code. Approval requires the web-enabled service origin; a
+standalone machine-only listener cannot present browser consent. Requests
+expire after ten minutes. Denial and timeout leave local configuration unchanged.
+
+On approval the service registers the project and issues a project credential.
+The CLI keeps it in `$XDG_CONFIG_HOME/autobuild/credentials` (or
+`~/.config/autobuild/credentials`), keyed by normalized service and origin,
+with directory mode 0700 and file mode 0600. Credentials never belong in the
+repository. It adds the non-secret `[store] url` to `autobuild.toml` when
+absent; review and commit that change yourself. An existing different URL
+must be changed explicitly before connecting. Reconnecting replaces the saved
+credential only after approval and revokes the previous credential.
+
+All worktrees share the main checkout's configuration and the user's saved
+credential. A service manager running as that user uses the same HOME and
+XDG_CONFIG_HOME, with no AB_STORE or AB_TOKEN exports. A fresh clone with
+committed store configuration but no saved credential fails with `ab connect`
+guidance; it never silently creates local state. Run connect on each host/user.
+
+`ab connect` without a URL reports service, project, and credential status:
+accepted, rejected, missing, or unreachable. `ab disconnect` revokes the saved
+credential remotely before removing it locally, keeping the project registered,
+its data, and store configuration. A network/server failure retains the local
+entry for retry; an already revoked credential can be removed. If saving a new
+connection fails, the CLI cancels/revokes it and retains the previous entry.
+If remote cleanup cannot be confirmed, check the printed credential id with
+the owner's administrative tools before retrying.
+
+Store selection is `--store` > nonblank `AB_STORE` > `[store] url` > the
+main checkout's `.autobuild/`. `AB_TOKEN` overrides the exact service/project's
+saved credential for CI and other non-interactive hosts. A service override
+never borrows another service's credential. Build and harvest sessions keep
+their explicit scoped authority.
+
 ## Connected projects
 
 Migrate PostgreSQL from the pinned release before deploying (`bun run
@@ -303,8 +343,7 @@ MCP discovery and calls, and every operator API route consult current
 registration. Removal hides a project from all these surfaces and subsequent
 hosted dispatcher invocations; builds, events, artifacts and tickets remain,
 and re-registration restores access. Already-started work is not cancelled.
-Machine BuildStore and ticket credentials retain their existing authority;
-project-bound credentials are a separate feature.
+Project credentials issued by connect authorize only their registered project. Administrative credential issuance remains available for non-interactive hosts.
 
 Link directly to `/?repo=<URL-encoded normalized origin>`. The page selects the
 first registered origin when the requested one is missing or removed, and an
@@ -355,3 +394,56 @@ explanation, never a skip or silent pass. Use `skip` only when the complete step
 does not apply. If guidance still cannot make a verdict possible, escalate and
 explain what remains unresolved. Record out-of-scope work with `ab observe`;
 the verifier does not fix it.
+
+### Project-scoped hosted tickets
+
+Hosted ticket queues belong to the credential's registered repository, even
+when projects share a team key. The latest uploaded effective `[tickets]`
+configuration owns lifecycle: hosted defaults are Backlog / Doing / Done,
+`readyState` is required, `doneState` customizes completion, and create/proposal
+default to triage. The union of configured roles is allowed; roles may overlap.
+Owner admin requests require an explicit registered `context.repo`; project
+credentials cannot select another project. Missing effective configuration is
+an actionable refusal: run the project's dispatcher to publish it.
+
+The service never contacts Linear. Projects with external sources (including
+file and Linear) keep using those sources directly through their dispatcher;
+service ticket HTTP, operator and MCP surfaces refuse with project/source
+feedback rather than returning an empty queue. Removed `AB_TICKET_BACKEND` and
+`LINEAR_API_KEY` values are ignored with one startup removal message, including
+blank/unknown values. Removed `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
+`AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` values are ignored even when
+malformed. None of these retired settings prevents startup.
+
+The environment-aware migration imports `AB_WEB_REPOSITORIES` once before
+ownership preflight, including released main-v9 deployments without registry
+tables. A failed migration rolls back the import, main-schema promotion and
+ticket changes together. Owner `projects add` and `tickets assign-team` commands
+bootstrap only the registry/recovery journals and work while the main marker
+is still v9. Without the retired environment, first register the intended
+project with `ab-hosted-store projects add REPOSITORY --user IDENTITY`, then
+assign the team and rerun migration. A successful one-time import is never
+reapplied from later environment edits.
+
+Ticket schema v1 migration assigns each whole legacy team to its sole claimant
+among registered projects' latest effective configs, reading their actual blob
+bytes. Projects with no dispatcher run or no effective-config reference make
+no team claim and do not block other projects. Unclaimed teams still fail closed.
+When inferring ownership, a selected configuration whose revision/blob is missing,
+unreadable or invalid stops unchanged with recovery guidance. Restore the selected
+configuration or assign every remaining legacy team explicitly; complete owner
+assignments to registered projects bypass unrelated configuration reads. Conflicts
+and asset ownership mismatches also stop unchanged. Resolve ownership, then rerun:
+
+```sh
+ab-hosted-store tickets assign-team TEAM https://github.com/acme/app --user owner@example.com
+ab-postgres-store migrate
+```
+
+The assignment journal works before v2 assertion, retains the actor, and grants
+no future cross-project access. Migration preserves ids, states, comments,
+blockers, timestamps and assets. Populated-v1 migration and deployment builds
+require the running service's blob backend, access mode, credentials and prefix
+(`AB_BLOB_PREFIX`), not just PostgreSQL access. `deploy:build` inherits this
+environment and migration failure stops Next build. Fresh databases, empty v1
+queues and v2 reruns stay SQL-only and do not initialize blob storage.

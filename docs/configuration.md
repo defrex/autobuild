@@ -14,6 +14,18 @@ and sessionless `ab init --validate` readiness check. Examples labelled as
 fragments are intended to be added to an existing file; the [complete
 example](#complete-example) is valid on its own.
 
+## `[store]`
+
+| Key | Required | Values / purpose |
+|---|---|---|
+| `url` | When `[store]` exists | Absolute HTTPS service base URL; loopback HTTP is allowed for development. No credentials, query or fragment. Trailing slashes are normalized. |
+
+Selection is explicit `--store` > nonblank `AB_STORE` > `[store] url` > the main
+checkout's `.autobuild/`. A configured service without a user credential fails
+with `ab connect` guidance. `AB_TOKEN` overrides the saved service/project
+credential. See [connecting a project](hosted-service.md#connect-a-project).
+Changing the store requires restarting dispatch.
+
 ## Hosted service and PostgreSQL BuildStore environment
 
 The optional `@defrex/autobuild-hosted-store-service` and its
@@ -59,7 +71,7 @@ separate signed-user token described by the [operator API](operator-api.md).
 | `AB_HOST` | Optional, ordinary Bun host | Bind hostname; defaults to `0.0.0.0`. Vercel supplies its own listener. |
 | `PORT` | Optional, ordinary Bun host | Integer 1–65535; defaults to `3000`. Vercel supplies its own listener. |
 | `AB_STORE` | Remote client | Hosted service base URL used by the kernel, phase commands, and dashboard. |
-| `AB_TOKEN` | Authenticated remote client | Offline-minted bearer token; this is not the signing secret. |
+| `AB_TOKEN` | Authenticated remote client | Explicit project bearer credential override for CI; otherwise use ab connect. This is not the signing secret. |
 | `BETTER_AUTH_SECRET` | Web dashboard | Independent server-only session secret with at least 32 high-entropy characters. |
 | `BETTER_AUTH_URL` | Web dashboard | Exact HTTP(S) origin, without credentials or a path; HTTPS is mandatory in production. |
 | `GITHUB_CLIENT_ID` | GitHub sign-in | OAuth application client id. |
@@ -212,6 +224,7 @@ remain pinned to their startup values and are reported explicitly:
 
 | Restart-required field | Reason |
 |---|---|
+| `store` | Store selection and project authority are fixed when dispatch starts. |
 | `plugins` | Plugin modules and registration catalogs load before wiring. |
 | `forge` | Selects the constructed Forge adapter. |
 | `workspace.provider`, `workspace.config` | Select and configure the constructed workspace provider. |
@@ -1199,9 +1212,10 @@ state. Within a present table, `source` and `readyState` are required.
 | `readyState` | — | required nonblank string | The one workflow state eligible for dispatch. |
 | `readyAssignee` | — | optional; `"me"` or an email address; Linear only (rejected for file, hosted, and plugin sources) | Require the ticket to be assigned to one Linear user, in addition to the state and label gates. |
 | `teamKey` | — | required for Linear and hosted; forbidden for file; optional for plugins | Backend team key such as `"ENG"`, or an existing plugin config field. |
-| `claimedState` | `"In Progress"` for direct Linear; hosted backend default otherwise | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
+| `claimedState` | `"In Progress"` for direct Linear; `"Doing"` for hosted | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
+| `doneState` | `"Done"` | optional nonblank string; hosted | Project completion state and merged-ticket transition. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
-| `triageState` | Linear: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `triageState` | Linear/hosted: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
 | `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
@@ -1317,13 +1331,14 @@ Set `AB_STORE` to the service's HTTP(S) URL and `AB_TOKEN` to a stored credentia
 for that registered project (`credentials issue REPOSITORY --user IDENTITY`). The same source-agnostic wiring powers dispatch, harvest, ticket-aware
 skills, and all seven command families: `ab ticket create`, `update`, `block`,
 `unblock`, `list`, `show`, and `move`. See the
-[hosted ticket protocol](remote-ticket-protocol.md). In hosted Linear mode,
-`LINEAR_API_KEY` is configured only on the service; direct Linear remains
-supported.
+[hosted ticket protocol](remote-ticket-protocol.md). Tickets are partitioned by
+the credential's registered project; lifecycle comes from its latest effective
+configuration. The service has no Linear backend and refuses ticket operations
+for projects using external sources. Direct Linear remains dispatcher-side.
 
 When filing dependent tickets into the ready state, follow the
-[safe blocker-filing workflow](ticket-dependencies.md). Direct and hosted Linear
-create the issue before recording its blockers, so `create --blocked-by` is not
+[safe blocker-filing workflow](ticket-dependencies.md). Direct Linear
+creates the issue before recording its blockers, so `create --blocked-by` is not
 an atomic publication guarantee. Stage outside ready, verify the relationships,
 then move to the intended ready state last.
 
@@ -1664,8 +1679,8 @@ Secrets and store selection accompany the file through environment variables:
 
 | Variable | Used for | Notes |
 |---|---|---|
-| `LINEAR_API_KEY` | Direct Linear ticket source | Required and nonempty when `tickets.source = "linear"`; in hosted Linear mode it is service-only. |
-| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
+| `LINEAR_API_KEY` | Direct Linear ticket source | Required and nonempty when `tickets.source = "linear"`; never used by the hosted service. |
+| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then `[store] url`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
 | `AB_TOKEN` | Protected remote BuildStore and hosted tickets | Bearer credential forwarded to the service. Hosted tickets require a stored credential for a registered project. Owner admin is an explicit break-glass exception. Empty means no token; nonempty token bytes are treated as opaque. |
 
 A local store selection relocates the state database, blobs, worktrees, and the

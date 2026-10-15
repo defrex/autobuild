@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#615](https://github.com/defrex/autobuild/pull/615) — Scope agent credentials to their build or session
+- [#613](https://github.com/defrex/autobuild/pull/613) — Scope hosted tickets to authenticated projects
+- [#612](https://github.com/defrex/autobuild/pull/612) — Add browser-approved hosted project connections
 - [#611](https://github.com/defrex/autobuild/pull/611) — Enforce revocable project credentials across hosted machine routes
 - [#608](https://github.com/defrex/autobuild/pull/608) — Add a durable hosted project registry
 

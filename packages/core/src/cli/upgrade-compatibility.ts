@@ -1,6 +1,6 @@
-import { resolve } from 'node:path'
+import { spawnExec } from '../ports/workspace/git-worktree'
 import { readDistributionIdentity } from './installation'
-import { isRemoteStoreRef, resolveRepoStatePaths } from './repo-state'
+import { isRemoteStoreRef, resolveRepoState } from './repo-state'
 import {
   classifyClient,
   compatibilityAdvice,
@@ -20,8 +20,9 @@ export async function checkUpgradeCompatibility(options: {
   fetch?: CompatibilityFetch
   timeoutMs?: number
 }): Promise<void> {
-  const paths = resolveRepoStatePaths({
-    repo: resolve(options.targetRepo),
+  const paths = await resolveRepoState({
+    targetRepo: options.targetRepo,
+    exec: spawnExec,
     envStore: (options.env ?? process.env).AB_STORE,
   })
   if (!isRemoteStoreRef(paths.storeRef)) return

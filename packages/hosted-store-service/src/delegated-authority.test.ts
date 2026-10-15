@@ -670,3 +670,95 @@ test('a prepared harvest reads hosted tickets and files proposals using delegate
     await rm(workspace, { recursive: true, force: true })
   }
 })
+
+test('composed ticket routing binds delegated harvest access to its authenticated project', async () => {
+  const { createHostedStoreService } = await import('./service')
+  const { parseConfig } = await import('@defrex/autobuild/testing')
+  const f = await fixture()
+  const config = parseConfig('[tickets]\nsource = "hosted"\nteamKey = "TEAM"\nreadyState = "Ready"')
+  const artifact = await f.store.putRepoArtifact(A, {
+    kind: 'dispatcher-effective-config',
+    content: JSON.stringify({
+      ...config,
+      verify: { steps: config.verify.steps },
+      finalize: { steps: config.finalize.steps },
+    }),
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'dispatch',
+      pid: 1,
+      effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+      roleWarnings: [],
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'kernel' },
+    type: 'harvest.started',
+    payload: {
+      run: 'run',
+      observations: [{ build: 'one', seq: 1 }],
+      scan: { kind: 'harvest-scan', rev: 0 },
+    },
+  })
+  await f.store.appendRepo(A, {
+    actor: { kind: 'dispatcher' },
+    type: 'harvest.execution.authorized',
+    payload: { execution: 'execution', run: 'run', launch: 'started', leaseHolder: 'dispatcher' },
+  })
+  await f.store.claimRepoLease(A, 'dispatcher', 60000)
+  const opened: string[] = []
+  const service = createHostedStoreService({
+    env: {
+      AB_STORE_SECRET: secret,
+      AB_POSTGRES_URL: 'postgres://injected/test',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'unused',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    clock: f.clock,
+    openStore: async () => f.store,
+    openProjectRegistry: async () => f.projects,
+    openCredentials: async () => f.credentials,
+    sourceFor: (context) => {
+      opened.push(context.repo)
+      return new FakeTicketSource([])
+    },
+  })
+  const issued = await service.fetch(
+    request('/credentials/delegate', f.project.token, {
+      kind: 'harvest-runner',
+      repo: A,
+      id: 'run',
+      execution: 'execution',
+      leaseHolder: 'dispatcher',
+    }),
+  )
+  expect(issued.status).toBe(200)
+  const token = (await issued.json()).token
+  expect(
+    (
+      await service.fetch(
+        request('/tickets/list-ready', token, { context: { teamKey: 'FORGED' }, input: {} }),
+      )
+    ).status,
+  ).toBe(200)
+  expect(opened).toEqual([A])
+  expect(
+    (
+      await service.fetch(
+        request('/tickets/list-ready', token, {
+          context: { repo: B, teamKey: 'FORGED' },
+          input: {},
+        }),
+      )
+    ).status,
+  ).toBe(403)
+  expect((await service.fetch(request('/tickets/claim', token, {}))).status).toBe(403)
+  expect((await service.fetch(request('/tickets/list-ready', f.token, {}))).status).toBe(403)
+  expect(opened).toEqual([A])
+})

@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 import { describePostgresTarget, resolvePostgresUrl } from './env'
-import { migratePostgres } from './schema'
+import { migratePostgresFromEnv } from './config'
 
 async function main(): Promise<void> {
   if (process.argv.length !== 3 || process.argv[2] !== 'migrate') {
     throw new Error('usage: ab-postgres-store migrate')
   }
   const url = resolvePostgresUrl(process.env)
-  await migratePostgres(url)
+  await migratePostgresFromEnv(process.env)
   console.log(`Autobuild PostgreSQL schema is ready on ${describePostgresTarget(url)}`)
 }
 

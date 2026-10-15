@@ -275,13 +275,11 @@ if (testUrl) {
       const database = await isolatedDatabase()
       const sql = new SQL(database.url, { max: 1 })
       await assertTicketSchema(sql)
-      const tickets = new PostgresTicketDatabase(sql, {
-        triage: 'Triage',
-        ready: 'Ready',
-        doing: 'Doing',
-        done: 'Done',
+      const tickets = new PostgresTicketDatabase(sql)
+      const source = tickets.source({
+        repo: 'https://github.com/acme/one',
+        lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
       })
-      const source = tickets.source({ teamKey: 'ENG' })
       try {
         const created = await source.create({ title: 'plan probe', body: 'probe body' })
         const id = created.ref.id
@@ -330,13 +328,11 @@ if (testUrl) {
       const database = await isolatedDatabase()
       const sql = new SQL(database.url, { max: 1 })
       await assertTicketSchema(sql)
-      const tickets = new PostgresTicketDatabase(sql, {
-        triage: 'Triage',
-        ready: 'Ready',
-        doing: 'Doing',
-        done: 'Done',
+      const tickets = new PostgresTicketDatabase(sql)
+      const source = tickets.source({
+        repo: 'https://github.com/acme/one',
+        lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
       })
-      const source = tickets.source({ teamKey: 'ENG' })
       try {
         // The first create warms the transactional `INSERT … RETURNING *`
         // plan (its result type changes with the added column).

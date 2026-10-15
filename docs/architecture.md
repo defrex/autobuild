@@ -579,7 +579,7 @@ slug routing. Upgrade performs the same composition lazily at its first merge
 conflict.
 
 `packages/core/src/cli/repo-state.ts` owns repository identity and store precedence
-(`--store` > `AB_STORE` > `.autobuild/`); `packages/core/src/cli/store-opening.ts` is the
+(`--store` > `AB_STORE` > `[store] url` > `.autobuild/`); `packages/core/src/cli/store-opening.ts` is the
 production store composition boundary shared by finite sessionless queries and
 phase sessions. Its shared scoping primitive preserves remote token composition
 and adds local ambient authority only for filesystem stores. The dedicated
@@ -906,8 +906,9 @@ validates issuance, durable lifecycle bindings and the 60-second terminal grace;
 `machine-auth.ts` authenticates these signed version-2 grants as delegated
 principals. `remote-store-server.ts` enforces resource mutations before deposits,
 including body-selected and addressed-stream resources. Operator routes reject
-these principals. Ticket routes intentionally retain project-credential parity
-while hosted tickets are team-scoped (AUT-689); ticket assets are repository-keyed.
+these principals. Ticket routes deny build grants and allow harvest grants only the reads and
+runner filing operations they require. Ticket sources and assets are partitioned
+by the authenticated project.
 
 Dispatch prepares harvest claims using `HarvestRunner.run(true)` before issuing
 an execution grant. `harvest.execution.authorized` binds the selected run,
@@ -920,3 +921,8 @@ Workspace plugin factories receive an exchange callback and a scrubbed environme
 while local children and sandbox bootstrap/launch replace inherited authority.
 Service requests reread durable state; detached executions need neither renewal
 secrets nor their original dispatcher. Local stores retain their existing path.
+Project onboarding uses `cli/connect.ts`, user-level `cli/project-credentials.ts`,
+the shared `connection.ts` wire types, and Postgres `connections.ts`. Approval
+commits registry membership, a credential digest, and the outcome atomically.
+The web connection routes authenticate the existing Better Auth session and
+reuse the sign-in/consent layout; CLI polling uses a separate private capability.

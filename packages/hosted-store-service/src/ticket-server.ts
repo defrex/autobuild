@@ -1,8 +1,12 @@
+import { normalizeProjectRepository } from '@defrex/autobuild-postgres-store/projects'
+import { OperatorQueryError } from '@defrex/autobuild/operator'
 import {
   createMachineAuth,
   MachineAuthError,
   requireMachineAccess,
   type MachineAuth,
+  type MachinePrincipal,
+  requireProject,
 } from './machine-auth'
 import { systemClock, type Clock, type TicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
@@ -22,7 +26,10 @@ import {
 export interface TicketServerOptions {
   secret: string
   auth?: MachineAuth
-  sourceFor(context: HostedTicketContext): TicketSource | Promise<TicketSource>
+  sourceFor(
+    context: HostedTicketContext,
+    principal: MachinePrincipal,
+  ): TicketSource | Promise<TicketSource>
   clock?: Clock
   /** Observes unexpected source failures without changing their wire response. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
@@ -70,10 +77,13 @@ export function createTicketServer(options: TicketServerOptions): {
       credentials: { authenticate: async () => null },
       projects: { has: async () => false, list: async () => [] },
     })
-  async function authorize(req: Request, operation: HostedTicketOperation): Promise<void> {
+  async function authorize(
+    req: Request,
+    operation: HostedTicketOperation,
+  ): Promise<MachinePrincipal> {
     const principal = await auth.authenticate(req)
     requireMachineAccess(principal)
-    if (principal.kind !== 'delegated') return
+    if (principal.kind !== 'delegated') return principal
     const kind = principal.delegation.kind
     const read =
       operation === 'get' || operation === 'list-ready' || operation === 'dependency-states'
@@ -81,7 +91,7 @@ export function createTicketServer(options: TicketServerOptions): {
       ((kind === 'harvest-runner' || kind === 'harvest-phase') && read) ||
       (kind === 'harvest-runner' && operation === 'create')
     )
-      return
+      return principal
     throw new MachineAuthError(
       403,
       `delegated ${kind} credential cannot perform ticket operation ${operation}`,
@@ -96,7 +106,11 @@ export function createTicketServer(options: TicketServerOptions): {
     }
   }
 
-  async function route(req: Request, operation: HostedTicketOperation): Promise<Response> {
+  async function route(
+    req: Request,
+    operation: HostedTicketOperation,
+    principal: MachinePrincipal,
+  ): Promise<Response> {
     const raw = await body(req)
     const parsed = hostedTicketRequestSchemas[operation].safeParse(raw)
     if (!parsed.success) {
@@ -106,8 +120,20 @@ export function createTicketServer(options: TicketServerOptions): {
         `invalid request body: ${parsed.error.message}`,
       )
     }
-    const context = parsed.data.context
-    const source = await options.sourceFor(context)
+    const context = { ...parsed.data.context }
+    if (context.repo !== undefined) {
+      try {
+        context.repo = normalizeProjectRepository(context.repo)
+      } catch {
+        throw new TicketRequestError(
+          400,
+          'validation',
+          'context.repo must name a normalized repository origin',
+        )
+      }
+      requireProject(principal, context.repo)
+    }
+    const source = await options.sourceFor(context, principal)
 
     // Both v0.9 and v0.10 use strict ticket decoders without resolution fields.
     // Project only the ticket boundary; current domain values remain authoritative.
@@ -185,9 +211,10 @@ export function createTicketServer(options: TicketServerOptions): {
         if (!Object.hasOwn(hostedTicketRequestSchemas, operation)) {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
         }
-        await authorize(req, operation)
-        return await route(req, operation)
+        const principal = await authorize(req, operation)
+        return await route(req, operation, principal)
       } catch (error) {
+        if (error instanceof OperatorQueryError) return failure(409, 'conflict', error.message)
         if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
         if (error instanceof TicketRequestError) {
           return failure(error.status, error.kind, error.message)
