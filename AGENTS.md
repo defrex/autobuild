@@ -112,6 +112,11 @@ Autobuild hosts or starts:
 - **When the web server is configured**, it is any agent running anywhere,
   connected through the MCP connector and calling the operator tools.
 
+In this repository, run the CLI from source as `bun bin/ab.ts`, never a global
+`ab`. This checkout does not install `@defrex/autobuild` as a dependency, and a
+global install can be a different version from the one the dispatcher runs.
+That includes long-running `watch` and `wait` monitors.
+
 There is no orchestrator setup step, and no human has to start it. The embedded
 hosted turn runner (AUT-342) is an abandoned direction, removed by AUT-658;
 do not extend it, and do not cite SPEC §7.1.2 as current design.
