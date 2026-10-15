@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#614](https://github.com/defrex/autobuild/pull/614) — Allow repositories to configure verification after reconcile
 - [#612](https://github.com/defrex/autobuild/pull/612) — Add browser-approved hosted project connections
 - [#611](https://github.com/defrex/autobuild/pull/611) — Enforce revocable project credentials across hosted machine routes
 - [#608](https://github.com/defrex/autobuild/pull/608) — Add a durable hosted project registry
