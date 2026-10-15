@@ -153,5 +153,8 @@ function openPostgresBlobs(config: PostgresStoreConfig): BlobStore {
 }
 
 export async function migratePostgresFromEnv(env: Env): Promise<void> {
-  await migratePostgres(resolvePostgresUrl(env), { openBlobs: () => openPostgresBlobsFromEnv(env) })
+  await migratePostgres(resolvePostgresUrl(env), {
+    openBlobs: () => openPostgresBlobsFromEnv(env),
+    legacyProjectEnv: env,
+  })
 }

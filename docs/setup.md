@@ -376,6 +376,16 @@ blank/unknown values. Removed `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
 `AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` values are ignored even when
 malformed. None of these retired settings prevents startup.
 
+The environment-aware migration imports `AB_WEB_REPOSITORIES` once before
+ownership preflight, including released main-v9 deployments without registry
+tables. A failed migration rolls back the import, main-schema promotion and
+ticket changes together. Owner `projects add` and `tickets assign-team` commands
+bootstrap only the registry/recovery journals and work while the main marker
+is still v9. Without the retired environment, first register the intended
+project with `ab-hosted-store projects add REPOSITORY --user IDENTITY`, then
+assign the team and rerun migration. A successful one-time import is never
+reapplied from later environment edits.
+
 Ticket schema v1 migration assigns each whole legacy team to its sole claimant
 among registered projects' latest effective configs, reading their actual blob
 bytes. Conflicts, missing configuration, unclaimed teams, blob failures and asset

@@ -28,6 +28,8 @@ import {
   SCHEMA_V7_DDL,
   SCHEMA_V8_CHECKSUM,
   SCHEMA_V8_DDL,
+  SCHEMA_V9_DDL,
+  SCHEMA_V9_CHECKSUM,
   SCHEMA_VERSION,
   assertSchema,
   migratePostgres,
@@ -1074,6 +1076,219 @@ if (testUrl)
       const entry = loaded!.entries[0]!
       expect(entry.type).toBe('file')
       if (entry.type === 'file') expect(new TextDecoder().decode(entry.content)).toBe('proof')
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+/** Build the released main-v9/ticket-v1 topology directly: no registry,
+ * credential table, or current-schema opener can accidentally prepare it. */
+async function releasedV9Tickets(repositories: string[]) {
+  const database = await schemaHarness()
+  const sql = new SQL(database.url, { prepare: false })
+  const directory = await mkdtemp(join(tmpdir(), 'ab-v9-ticket-blobs-'))
+  await sql.unsafe(SCHEMA_V9_DDL)
+  await sql`INSERT INTO ab_schema_migrations VALUES (true, 9, ${SCHEMA_V9_CHECKSUM}, ${CONTRACT_T0})`
+  await sql.unsafe(TICKET_SCHEMA_V1_DDL)
+  await sql`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${CONTRACT_T0})`
+  for (const repo of repositories) {
+    const { verify, finalize, ...root } = parseConfig(
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
+    )
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        ...root,
+        verify: { steps: verify.steps },
+        finalize: { steps: finalize.steps },
+      }),
+    )
+    const hash = new Bun.CryptoHasher('sha256').update(bytes).digest('hex')
+    await writeFile(join(directory, hash), bytes)
+    await sql`INSERT INTO repo_streams (repo,created_at,updated_at) VALUES (${repo},${CONTRACT_T0},${CONTRACT_T0})`
+    await sql`INSERT INTO repo_artifacts VALUES (${repo},'dispatcher-effective-config',1,${hash},'{}'::jsonb,${CONTRACT_T0})`
+    await sql`INSERT INTO repo_events VALUES (${repo},1,${CONTRACT_T0},${JSON.stringify(DISPATCHER)}::jsonb,'dispatcher.run-started',${JSON.stringify({ run: repo, pid: 1, effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 }, roleWarnings: [] })}::jsonb)`
+  }
+  await sql`INSERT INTO ab_tickets VALUES ('ENG','ENG-1','creation-1','Original','Body','Historical',ARRAY['label'],${CONTRACT_T0},${CONTRACT_T0}), ('ENG','ENG-2',NULL,'Blocker','Body','Done',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
+  await sql`INSERT INTO ab_ticket_comments VALUES ('ENG','ENG-1',7,'Comment',${CONTRACT_T0})`
+  await sql`INSERT INTO ab_ticket_blockers VALUES ('ENG','ENG-1','ENG-2')`
+  const requests: string[] = []
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname
+      requests.push(path)
+      if (!path.startsWith('/bucket/v9-prefix/')) return new Response('', { status: 404 })
+      try {
+        return new Response(
+          new Uint8Array(await readFile(join(directory, path.slice('/bucket/v9-prefix/'.length)))),
+        )
+      } catch {
+        return new Response('', { status: 404 })
+      }
+    },
+  })
+  const env = {
+    ...process.env,
+    AB_POSTGRES_URL: database.url,
+    AB_WEB_REPOSITORIES: repositories.join(','),
+    AB_BLOB_BACKEND: 's3',
+    AB_BLOB_PREFIX: 'v9-prefix',
+    AB_S3_ENDPOINT: `http://127.0.0.1:${server.port}`,
+    AB_S3_FORCE_PATH_STYLE: 'true',
+    AB_S3_BUCKET: 'bucket',
+    AB_S3_REGION: 'us-east-1',
+    AB_S3_ACCESS_KEY_ID: 'fixture',
+    AB_S3_SECRET_ACCESS_KEY: 'fixture-secret',
+  }
+  const run = async (owner: boolean, args: string[]) => {
+    const bin = owner
+      ? join(
+          dirname(Bun.resolveSync('@defrex/autobuild-hosted-store-service', import.meta.dir)),
+          'bin.ts',
+        )
+      : new URL('./bin.ts', import.meta.url).pathname
+    const child = Bun.spawn([process.execPath, bin, ...args], {
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    expect(stdout + stderr).not.toContain('fixture-secret')
+    return { code, stdout, stderr }
+  }
+  const snapshot = async () => ({
+    tickets: await sql`SELECT * FROM ab_tickets ORDER BY id`,
+    comments: await sql`SELECT * FROM ab_ticket_comments`,
+    blockers: await sql`SELECT * FROM ab_ticket_blockers`,
+  })
+  return {
+    sql,
+    env,
+    run,
+    snapshot,
+    requests,
+    cleanup: async () => {
+      server.stop(true)
+      await sql.close()
+      await rm(directory, { recursive: true, force: true })
+      await database.cleanup()
+    },
+  }
+}
+
+if (testUrl) {
+  test('released main-v9 + populated ticket-v1 migrates via the environment CLI with a one-time legacy registry import', async () => {
+    const repo = 'https://github.com/acme/released'
+    const world = await releasedV9Tickets([repo])
+    try {
+      const before = await world.snapshot()
+      expect(
+        (await world.sql`SELECT to_regclass('project_journal') AS table_name`)[0].table_name,
+      ).toBeNull()
+      const result = await world.run(false, ['migrate'])
+      expect(result.stderr).toBe('')
+      expect(result.code).toBe(0)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(
+        SCHEMA_VERSION,
+      )
+      await assertTicketSchema(world.sql)
+      const registry = await world.sql`SELECT repo,actor FROM project_journal`
+      expect(registry).toEqual([{ repo, actor: 'system:AB_WEB_REPOSITORIES' }])
+      expect(
+        (await world.sql`SELECT legacy_imported FROM project_registry_state`)[0].legacy_imported,
+      ).toBe(true)
+      const after = await world.snapshot()
+      for (const key of ['tickets', 'comments', 'blockers'] as const)
+        expect(after[key]).toEqual(
+          before[key].map(({ team: _team, ...row }: Row) => ({ repo, ...row })),
+        )
+      expect(world.requests.length).toBeGreaterThan(0)
+      // Subsequent malformed retired environment is not reinterpreted.
+      world.env.AB_WEB_REPOSITORIES = 'not-a-repository'
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      expect(await world.sql`SELECT repo,actor FROM project_journal`).toEqual(registry)
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+  test('released v9 ambiguity rolls back main and ticket schemas; both owner recovery commands work before rerunning migration', async () => {
+    const repos = [
+      'https://github.com/acme/one',
+      'https://github.com/acme/two',
+      'https://github.com/acme/three',
+    ]
+    const world = await releasedV9Tickets(repos)
+    world.env.AB_WEB_REPOSITORIES = repos.slice(0, 2).join(',')
+    try {
+      const before = await world.snapshot()
+      const failed = await world.run(false, ['migrate'])
+      expect(failed.code).toBe(1)
+      expect(failed.stderr).toContain(`conflicting projects: ${repos[0]}, ${repos[1]}`)
+      expect(await world.snapshot()).toEqual(before)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(9)
+      expect(
+        Number((await world.sql`SELECT version FROM ab_ticket_schema_migrations`)[0].version),
+      ).toBe(1)
+      expect(
+        (await world.sql`SELECT to_regclass('project_journal') AS table_name`)[0].table_name,
+      ).toBeNull()
+      const assigned = await world.run(true, [
+        'tickets',
+        'assign-team',
+        'ENG',
+        repos[0]!,
+        '--user',
+        'owner',
+      ])
+      expect(assigned.stderr).toBe('')
+      expect(assigned.code).toBe(0)
+      const added = await world.run(true, ['projects', 'add', repos[2]!, '--user', 'owner'])
+      expect(added.stderr).toBe('')
+      expect(added.code).toBe(0)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(9)
+      expect(await world.snapshot()).toEqual(before)
+      expect(
+        (await world.sql`SELECT to_regclass('project_credentials') AS table_name`)[0].table_name,
+      ).toBeNull()
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      await assertSchema(world.sql)
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
+        { repo: repos[0] },
+      ])
+      expect((await world.sql`SELECT actor FROM ticket_team_assignments`)[0].actor).toBe('owner')
+    } finally {
+      await world.cleanup()
+    }
+  })
+}
+
+if (testUrl)
+  test('released v9 without legacy environment remains recoverable by explicit project registration and team assignment', async () => {
+    const repo = 'https://github.com/acme/recovery'
+    const world = await releasedV9Tickets([repo])
+    world.env.AB_WEB_REPOSITORIES = ''
+    try {
+      const before = await world.snapshot()
+      const failed = await world.run(false, ['migrate'])
+      expect(failed.code).toBe(1)
+      expect(failed.stderr).toContain('no project claims this team')
+      expect((await world.run(true, ['projects', 'add', repo, '--user', 'owner'])).code).toBe(0)
+      expect(
+        (await world.run(true, ['tickets', 'assign-team', 'ENG', repo, '--user', 'owner'])).code,
+      ).toBe(0)
+      expect(Number((await world.sql`SELECT version FROM ab_schema_migrations`)[0].version)).toBe(9)
+      expect(await world.snapshot()).toEqual(before)
+      expect((await world.run(false, ['migrate'])).code).toBe(0)
+      await assertSchema(world.sql)
+      await assertTicketSchema(world.sql)
+      expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([{ repo }])
     } finally {
       await world.cleanup()
     }

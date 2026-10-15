@@ -1,5 +1,5 @@
 import { SQL } from 'bun'
-import { normalizeProjectRepository } from './projects'
+import { normalizeProjectRepository, initializeProjectRegistryForRecovery } from './projects'
 import { resolvePostgresUrl, type PostgresEnv } from './env'
 
 export const TICKET_ASSIGNMENTS_DDL = `CREATE TABLE IF NOT EXISTS ticket_team_assignments (
@@ -15,6 +15,7 @@ export interface TicketAssignments {
 export async function openTicketAssignmentsFromEnv(env: PostgresEnv): Promise<TicketAssignments> {
   const sql = new SQL(resolvePostgresUrl(env))
   try {
+    await initializeProjectRegistryForRecovery(sql, env)
     await sql.unsafe(TICKET_ASSIGNMENTS_DDL)
     return {
       async assign(team, rawRepo, actor) {

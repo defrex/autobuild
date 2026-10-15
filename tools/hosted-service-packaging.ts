@@ -6,6 +6,7 @@ import { SQL } from 'bun'
 import { installPackedDistribution } from '../packages/core/src/testing/packed-install'
 import {
   SCHEMA_VERSION,
+  SCHEMA_V9_CHECKSUM,
   TICKET_SCHEMA_VERSION,
   TICKET_SCHEMA_V1_DDL,
   TICKET_SCHEMA_V1_CHECKSUM,
@@ -196,6 +197,11 @@ export async function checkHostedServicePackaging() {
       await legacyDb.unsafe(TICKET_SCHEMA_V1_DDL)
       await legacyDb`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`
       await legacyDb`INSERT INTO ab_tickets VALUES ('PACK', 'PACK-1', 'key', 'Preserved', 'Body', 'Historical', ARRAY[]::text[], ${new Date().toISOString()}, ${new Date().toISOString()})`
+      // Released v0.11.0 used main schema v9: its registry did not exist yet.
+      await legacyDb.unsafe(
+        'DROP TABLE project_credentials, project_journal, project_registry_state; DROP SEQUENCE project_journal_seq',
+      )
+      await legacyDb`UPDATE ab_schema_migrations SET version = 9, checksum = ${SCHEMA_V9_CHECKSUM}`
     } finally {
       await backing.close()
       await legacyDb.close()
@@ -228,6 +234,14 @@ export async function checkHostedServicePackaging() {
     const unchanged = new SQL(scoped.toString())
     try {
       assert.equal(
+        Number((await unchanged`SELECT version FROM ab_schema_migrations`)[0].version),
+        9,
+      )
+      assert.equal(
+        (await unchanged`SELECT to_regclass('project_journal') AS table_name`)[0].table_name,
+        null,
+      )
+      assert.equal(
         Number((await unchanged`SELECT version FROM ab_ticket_schema_migrations`)[0].version),
         1,
       )
@@ -241,6 +255,11 @@ export async function checkHostedServicePackaging() {
     try {
       const markers = await db`SELECT version FROM ab_schema_migrations`
       assert.equal(Number(markers[0]?.version), SCHEMA_VERSION)
+      const importedProjects = await db`SELECT repo, actor FROM project_journal`
+      assert.deepEqual(
+        [...importedProjects],
+        [{ repo: 'https://github.com/owner/repo', actor: 'system:AB_WEB_REPOSITORIES' }],
+      )
       const ticketMarkers = await db`SELECT version FROM ab_ticket_schema_migrations`
       assert.equal(Number(ticketMarkers[0]?.version), TICKET_SCHEMA_VERSION)
       const ticket = (await db`SELECT repo, id, state FROM ab_tickets`)[0]

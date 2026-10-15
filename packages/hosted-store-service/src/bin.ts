@@ -8,7 +8,7 @@ import {
   type CredentialStore,
 } from '@defrex/autobuild-postgres-store/credentials'
 import {
-  openPostgresProjectRegistryFromEnv,
+  openPostgresProjectRegistryForRecoveryFromEnv,
   normalizeProjectRepository,
   type ProjectRegistry,
 } from '@defrex/autobuild-postgres-store/projects'
@@ -107,7 +107,7 @@ export async function runHostedCli(
   env: Env = process.env,
   write: (text: string) => void = console.log,
   writeError: (text: string) => void = console.error,
-  open: (env: Env) => Promise<ProjectRegistry> = openPostgresProjectRegistryFromEnv,
+  open: (env: Env) => Promise<ProjectRegistry> = openPostgresProjectRegistryForRecoveryFromEnv,
   openCredentials: (env: Env) => Promise<CredentialStore> = openPostgresCredentialStoreFromEnv,
   openAssignments: (env: Env) => Promise<TicketAssignments> = openTicketAssignmentsFromEnv,
 ): Promise<number> {

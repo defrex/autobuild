@@ -1,7 +1,7 @@
 import { SQL } from 'bun'
 import { normalizeGitRemoteUrl } from '@defrex/autobuild/origin'
 import { resolvePostgresUrl, type PostgresEnv } from './env'
-import { assertSchema } from './schema'
+import { assertSchema, PROJECT_SCHEMA_DDL } from './schema'
 
 export interface ProjectEntry {
   repo: string
@@ -98,18 +98,27 @@ export class PostgresProjectRegistry implements ProjectRegistry {
     await this.importOnce(() => legacyProjectRepositories(env))
   }
 
+  /** The migration owns this transaction; do not open a nested connection. */
+  async initializeFromEnvInTransaction(env: PostgresEnv): Promise<void> {
+    await this.sql`INSERT INTO project_registry_state (singleton, legacy_imported)
+      VALUES (true, false) ON CONFLICT (singleton) DO NOTHING`
+    await this.sql`SELECT singleton FROM project_registry_state WHERE singleton = true FOR UPDATE`
+    await this.importIn(this.sql, () => legacyProjectRepositories(env))
+  }
+
   private async importOnce(source: () => readonly string[]): Promise<void> {
-    await this.locked(async (tx) => {
-      const [state] =
-        await tx`SELECT legacy_imported FROM project_registry_state WHERE singleton = true`
-      if (state.legacy_imported) return
-      // Once imported, the deprecated environment is no longer configuration:
-      // even a later malformed edit cannot replace or disable the registry.
-      const normalized = source().map(normalizeProjectRepository)
-      if (normalized.length === 0) return
-      for (const repo of normalized) await this.addIn(tx, repo, 'system:AB_WEB_REPOSITORIES')
-      await tx`UPDATE project_registry_state SET legacy_imported = true WHERE singleton = true`
-    })
+    await this.locked((tx) => this.importIn(tx, source))
+  }
+
+  private async importIn(tx: SQL, source: () => readonly string[]): Promise<void> {
+    const [state] =
+      await tx`SELECT legacy_imported FROM project_registry_state WHERE singleton = true`
+    if (state.legacy_imported) return
+    // Read the retired environment only until the one-time import succeeds.
+    const normalized = source().map(normalizeProjectRepository)
+    if (normalized.length === 0) return
+    for (const repo of normalized) await this.addIn(tx, repo, 'system:AB_WEB_REPOSITORIES')
+    await tx`UPDATE project_registry_state SET legacy_imported = true WHERE singleton = true`
   }
 
   async list(): Promise<ProjectEntry[]> {
@@ -167,6 +176,32 @@ export async function openPostgresProjectRegistryFromEnv(
     const registry = new PostgresProjectRegistry(sql, true)
     await registry.initializeFromEnv(env)
     return registry
+  } catch (error) {
+    await sql.close()
+    throw error
+  }
+}
+
+/** Owner recovery must work while the main-schema promotion is rolled back by
+ * a stopped ticket migration. Bootstrap only the independent registry tables. */
+export async function initializeProjectRegistryForRecovery(
+  sql: SQL,
+  env: PostgresEnv,
+): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(470281941)`
+    await tx.unsafe(PROJECT_SCHEMA_DDL)
+    await new PostgresProjectRegistry(tx as SQL).initializeFromEnvInTransaction(env)
+  })
+}
+
+export async function openPostgresProjectRegistryForRecoveryFromEnv(
+  env: PostgresEnv,
+): Promise<ProjectRegistry> {
+  const sql = new SQL(resolvePostgresUrl(env))
+  try {
+    await initializeProjectRegistryForRecovery(sql, env)
+    return new PostgresProjectRegistry(sql, true)
   } catch (error) {
     await sql.close()
     throw error

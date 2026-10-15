@@ -52,6 +52,10 @@ Populated legacy ticket-v1 upgrades also require the running service's blob
 backend, credentials, access mode and prefix. The environment-aware migration
 CLI opens blobs lazily to read each registered project's selected effective
 configuration. Fresh installs, empty-v1 upgrades and v2 reruns remain SQL-only.
+Released main-v9 upgrades import `AB_WEB_REPOSITORIES` once inside that same
+transaction. On failure, main promotion and registry import roll back with
+tickets. Owner `projects add` and `tickets assign-team` independently bootstrap
+their registry/recovery journals on v9, so they remain usable after rollback.
 Ambiguous teams stop unchanged; the owner resolves them with
 `ab-hosted-store tickets assign-team TEAM REPOSITORY --user IDENTITY` before
 rerunning migration. See the hosted-service migration procedure.

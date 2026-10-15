@@ -1,3 +1,5 @@
+import { PostgresProjectRegistry } from './projects'
+import type { PostgresEnv } from './env'
 import type { BlobStore } from '@defrex/autobuild/plugin-sdk'
 import { migrateLegacyTickets } from './ticket-migration'
 import { SQL } from 'bun'
@@ -1332,7 +1334,10 @@ const STREAMS_CREATION_SEQ_MIGRATION = `
 
 export async function migratePostgres(
   url: string,
-  options: { openBlobs?: () => BlobStore | Promise<BlobStore> } = {},
+  options: {
+    openBlobs?: () => BlobStore | Promise<BlobStore>
+    legacyProjectEnv?: PostgresEnv
+  } = {},
 ): Promise<void> {
   const sql = new SQL(url)
   try {
@@ -1540,6 +1545,11 @@ export async function migratePostgres(
       } else {
         await tx`INSERT INTO ab_schema_migrations (singleton, version, checksum, applied_at)
           VALUES (true, ${SCHEMA_VERSION}, ${SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
+      }
+      if (options.legacyProjectEnv !== undefined) {
+        await new PostgresProjectRegistry(tx as SQL).initializeFromEnvInTransaction(
+          options.legacyProjectEnv,
+        )
       }
       const ticketRows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_ticket_schema_migrations WHERE singleton = true FOR UPDATE`

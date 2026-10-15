@@ -126,6 +126,17 @@ The removed `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
 `AB_TICKET_DOING_STATE` and `AB_TICKET_DONE_STATE` settings are ignored even if
 malformed. Lifecycle now comes only from project configuration.
 
+The environment-aware migration first imports `AB_WEB_REPOSITORIES` into the
+registry once, including upgrades from released main schema v9 where registry
+tables do not yet exist. This import and the main-schema promotion share the
+ticket transaction: a stopped ticket migration rolls them back too. The owner
+`projects add` and `tickets assign-team` commands can independently bootstrap
+the registry while that old main marker remains, so recovery does not require
+a successful ticket migration. If the retired environment is unavailable,
+register the intended project with `ab-hosted-store projects add REPOSITORY
+--user IDENTITY` before assigning its legacy team. Once the import succeeds,
+later changes to the retired environment are ignored.
+
 Fresh databases install ticket schema v2 directly. Existing team-keyed v1
 queues migrate in one transaction. For each registered project, migration reads
 the effective configuration selected by its latest dispatcher run and reloads,
