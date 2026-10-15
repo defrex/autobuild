@@ -286,7 +286,21 @@ export function replacePackageVersion(manifestText: string, version: string): st
   const content = `${manifestText.slice(0, match.index)}${replacement}${manifestText.slice(match.index + match[0].length)}`
   const rendered = JSON.parse(content) as { version?: unknown }
   if (rendered.version !== version) throw new Error('rendered package.json has the wrong version')
-  return content
+  // The hosted application requires the matching core release at build time.
+  return content.replace(
+    /("@defrex\/autobuild"\s*:\s*")\d+\.\d+\.\d+(?:-[^" ]+)?(")/g,
+    `$1${version}$2`,
+  )
+}
+
+export function replaceHostedServicePins(text: string, version: string): string {
+  const manifest = JSON.parse(text)
+  for (const name of ['@defrex/autobuild', '@defrex/autobuild-hosted-store-service']) {
+    if (typeof manifest.dependencies?.[name] !== 'string')
+      throw new Error(`Missing template pin: ${name}`)
+    manifest.dependencies[name] = version
+  }
+  return `${JSON.stringify(manifest, null, 2)}\n`
 }
 
 function readReleaseConfig(content: string): ReleaseConfig {
@@ -882,6 +896,30 @@ export async function runRelease(
     path: entry.path,
     content: replacePackageVersion(entry.text, version),
   }))
+
+  for (const path of [
+    'templates/hosted-service/package.json',
+    'packages/hosted-store-service/deployment/package.json',
+  ]) {
+    const file = resolve(root, path)
+    // Older repositories/fixture release trees may not carry this template.
+    const template = Bun.file(file)
+    if (await template.exists())
+      manifestCandidates.push({
+        path,
+        content: replaceHostedServicePins(await template.text(), version),
+      })
+  }
+
+  const serviceDocs = Bun.file(resolve(root, 'docs/hosted-service.md'))
+  if (await serviceDocs.exists())
+    manifestCandidates.push({
+      path: 'docs/hosted-service.md',
+      content: (await serviceDocs.text()).replace(
+        /("@defrex\/autobuild(?:-hosted-store-service)?"\s*:\s*")\d+\.\d+\.\d+(?:-[^" ]+)?(")/g,
+        `$1${version}$2`,
+      ),
+    })
 
   output.log(`Release ${tag} (${date})`)
   output.log(`Summary: ${summary ?? '[omitted; Claude did not return usable prose]'}`)

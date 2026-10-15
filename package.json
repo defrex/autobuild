@@ -150,8 +150,5 @@
     "git-format-staged": "4.0.1",
     "husky": "9.1.7",
     "typescript": "5.9.3"
-  },
-  "patchedDependencies": {
-    "better-auth@1.4.18": "patches/better-auth@1.4.18.patch"
   }
 }
