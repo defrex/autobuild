@@ -1,3 +1,4 @@
+import { AUTOBUILD_VERSION, REMOTE_STORE_PROTOCOL_VERSION } from './version'
 import { expect, test } from 'bun:test'
 import {
   classifyClient,
@@ -5,6 +6,7 @@ import {
   compatibilityAdvice,
   clientIdentityError,
   stableVersion,
+  RELEASE_LINE_PROTOCOLS,
 } from './compatibility'
 
 test('release lines ignore patches and enforce both window boundaries', () => {
@@ -58,4 +60,45 @@ test('identities are strict stable versions with known independent protocols', (
     expect(clientIdentityError(value, '3')).toBeUndefined()
   for (const protocol of [null, '2', '4', '03'])
     expect(clientIdentityError('0.9.0', protocol)).toContain('version mismatch')
+})
+
+// Exercise negotiation, rather than just range arithmetic, against the actual
+// distribution and a synthetic next release before package.json is bumped.
+const installed = stableVersion(AUTOBUILD_VERSION)!
+const nextMinor = `${installed.major}.${installed.minor + 1}.0`
+for (const serviceVersion of [AUTOBUILD_VERSION, nextMinor, '2.0.0']) {
+  test(`every advertised line has a protocol identity for service ${serviceVersion}`, () => {
+    const range = supportedClientRange(serviceVersion)
+    const first = stableVersion(range.minVersion)!
+    const end = stableVersion(range.maxVersionExclusive)!
+    for (let minor = first.minor; minor < end.minor; minor++) {
+      const line = `${first.major}.${minor}`
+      const protocol =
+        minor === end.minor - 1 ? REMOTE_STORE_PROTOCOL_VERSION : RELEASE_LINE_PROTOCOLS[line]
+      expect(protocol).toBeDefined()
+      for (const patch of [0, 999]) {
+        expect(
+          clientIdentityError(`${line}.${patch}`, protocol ?? null, serviceVersion),
+        ).toBeUndefined()
+      }
+    }
+  })
+}
+
+test('the own-line protocol comes from service identity, including new major/minor lines', () => {
+  for (const serviceVersion of ['0.11.0', '0.12.0', '2.0.0']) {
+    const service = stableVersion(serviceVersion)!
+    const client = `${service.major}.${service.minor}.999`
+    expect(clientIdentityError(client, '4', serviceVersion, '4')).toBeUndefined()
+    expect(clientIdentityError(client, '3', serviceVersion, '4')).toContain(
+      'unsupported protocol identity',
+    )
+  }
+  // A new current protocol does not overwrite historical identities.
+  expect(clientIdentityError('0.10.0', '3', '0.12.0', '4')).toBeUndefined()
+  expect(clientIdentityError('0.10.0', '4', '0.12.0', '4')).toContain(
+    'unsupported protocol identity',
+  )
+  // Unknown historical lines remain closed, rather than inheriting a guessed identity.
+  expect(clientIdentityError('2.0.0', '4', '2.1.0', '4')).toContain('unsupported protocol identity')
 })

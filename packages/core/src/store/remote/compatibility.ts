@@ -61,7 +61,8 @@ export function compatibilityAdvice(
 }
 
 /** Retain these wire identities and handlers until their lines leave the window.
- * New release lines must deliberately extend this table; unknown protocols fail closed. */
+ * Historical lines require explicit entries; the service's own line uses its
+ * current protocol identity. Unknown historical protocols fail closed. */
 export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
   '0.9': '3',
   '0.10': '3',
@@ -71,11 +72,18 @@ export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
 export function clientIdentityError(
   client: string | null,
   protocol: string | null,
+  serviceVersion = AUTOBUILD_VERSION,
+  serviceProtocol = REMOTE_STORE_PROTOCOL_VERSION,
 ): string | undefined {
-  const range = supportedClientRange()
-  const advice = compatibilityAdvice(client, AUTOBUILD_VERSION, range)
+  const range = supportedClientRange(serviceVersion)
+  const service = stableVersion(serviceVersion)!
+  const advice = compatibilityAdvice(client, serviceVersion, range)
   const parsed = stableVersion(client)
-  const expected = parsed && RELEASE_LINE_PROTOCOLS[`${parsed.major}.${parsed.minor}`]
+  const expected =
+    parsed &&
+    (parsed.major === service.major && parsed.minor === service.minor
+      ? serviceProtocol
+      : RELEASE_LINE_PROTOCOLS[`${parsed.major}.${parsed.minor}`])
   if (!advice && expected !== undefined && protocol === expected) return undefined
-  return `remote store version mismatch: client Autobuild ${client ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}; ${advice ?? `supported clients ${formatClientRange(range)}; unsupported protocol identity`}`
+  return `remote store version mismatch: client Autobuild ${client ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${serviceVersion} protocol ${serviceProtocol}; ${advice ?? `supported clients ${formatClientRange(range)}; unsupported protocol identity`}`
 }
