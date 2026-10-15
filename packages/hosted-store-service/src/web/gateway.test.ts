@@ -1,3 +1,4 @@
+import { testProjects } from '../testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { verifyToken } from '@defrex/autobuild/remote-store'
 import { createWebGateway } from './gateway'
@@ -23,6 +24,7 @@ describe('web operator gateway', () => {
   test('scopes routes and replaces caller credentials with attributed short-lived authority', async () => {
     let delegated: Request | undefined
     const gateway = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
       env,
       now: () => new Date('2029-01-01T00:00:00Z'),
       getSession: session,
@@ -64,7 +66,12 @@ describe('web operator gateway', () => {
       throw new Error('must not delegate')
     }
     const request = (url: string, init?: RequestInit) => new Request(url, init)
-    const signedOut = createWebGateway({ env, getSession: async () => null, delegate })
+    const signedOut = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
+      env,
+      getSession: async () => null,
+      delegate,
+    })
     expect(
       (
         await signedOut.fetch(
@@ -75,6 +82,7 @@ describe('web operator gateway', () => {
       ).status,
     ).toBe(401)
     const removed = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: async () => ({ user: { email: 'other@example.com' } }),
       delegate,
@@ -88,7 +96,12 @@ describe('web operator gateway', () => {
         )
       ).status,
     ).toBe(403)
-    const gateway = createWebGateway({ env, getSession: session, delegate })
+    const gateway = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
+      env,
+      getSession: session,
+      delegate,
+    })
     expect(
       (
         await gateway.fetch(
@@ -116,6 +129,7 @@ describe('web operator gateway', () => {
 
   test('refuses every former browser ticket route without delegation', async () => {
     const gateway = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
       delegate: async () => {
@@ -165,6 +179,7 @@ describe('web operator gateway', () => {
 
   test('valid write routes still require application/json', async () => {
     const gateway = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
       delegate: async () => {
@@ -192,6 +207,7 @@ describe('web operator gateway', () => {
   test('preserves artifact bytes without exposing configured canaries', async () => {
     const bytes = Uint8Array.from([0, 255, 17])
     const gateway = createWebGateway({
+      projects: testProjects(['https://github.com/owner/repo']),
       env,
       getSession: session,
       delegate: async () =>
@@ -205,4 +221,38 @@ describe('web operator gateway', () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
     expect(JSON.stringify([...response.headers])).not.toContain('canary')
   })
+})
+
+test('all allowed owners see live additions and removals; registry failures fail closed', async () => {
+  const repo = 'https://github.com/owner/repo'
+  const projects = testProjects([])
+  let calls = 0
+  let email = 'ada@example.com'
+  const gateway = createWebGateway({
+    env: { ...env, AB_WEB_ALLOWED_EMAILS: 'ada@example.com,grace@example.com' },
+    projects,
+    getSession: async () => ({ user: { email } }),
+    delegate: async () => {
+      calls++
+      return Response.json({ ok: true })
+    },
+  })
+  const request = () =>
+    new Request(`https://operator.example/api/web/repos/${encodeURIComponent(repo)}/dashboard`)
+  expect((await gateway.fetch(request())).status).toBe(404)
+  await projects.add(repo, 'Ada')
+  for (const owner of ['ada@example.com', 'grace@example.com']) {
+    email = owner
+    expect((await gateway.fetch(request())).status).toBe(200)
+  }
+  email = 'outsider@example.com'
+  expect((await gateway.fetch(request())).status).toBe(403)
+  email = 'ada@example.com'
+  await projects.remove(repo, 'Ada')
+  expect((await gateway.fetch(request())).status).toBe(404)
+  projects.has = async () => {
+    throw new Error('unavailable')
+  }
+  expect((await gateway.fetch(request())).status).toBe(500)
+  expect(calls).toBe(2)
 })

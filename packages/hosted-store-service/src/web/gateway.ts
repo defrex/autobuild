@@ -1,3 +1,4 @@
+import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,
@@ -12,6 +13,7 @@ export interface GatewaySession {
   session?: { expiresAt?: Date | string }
 }
 export interface WebGatewayOptions {
+  projects: ProjectRegistryReader
   env?: WebEnv
   getSession: (headers: Headers) => Promise<GatewaySession | null>
   delegate: (request: Request) => Promise<Response>
@@ -86,8 +88,17 @@ export function createWebGateway(options: WebGatewayOptions): {
         return respond(failure(404, 'not-found', 'unknown web route'))
       const repo = parts[1]
       const suffix = parts.slice(2)
-      if (!config.repositories.includes(repo))
-        return respond(failure(404, 'not-found', 'unknown repository'))
+      try {
+        if (!(await options.projects.has(repo)))
+          return respond(failure(404, 'not-found', 'unknown repository'))
+      } catch {
+        return respond(
+          Response.json(
+            { kind: 'internal', error: 'project registry is unavailable' },
+            { status: 500 },
+          ),
+        )
+      }
       if (!operatorSuffix(request.method, suffix))
         return respond(failure(404, 'not-found', 'unknown web route'))
 

@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
@@ -27,6 +28,7 @@ afterEach(async () => {
 })
 
 test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted service', async () => {
+  const projects = testProjects([])
   const requests: Array<{ method: string; path: string; authorization: string | null }> = []
   let serviceUrl = ''
   let serviceToken = ''
@@ -48,6 +50,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
     processCli: true,
     storeAdapter: async (backing) => {
       const service = createHostedStoreService({
+        openProjectRegistry: async () => projects,
         env: {
           AB_STORE_SECRET: serviceSecret,
           AB_POSTGRES_URL: 'postgres://injected/test',
@@ -214,6 +217,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
     exp: Date.now() + 60_000,
   })
   const operator = new OperatorApiClient({ url: serviceUrl, token: operatorToken })
+  await projects.add(h.origin, 'fixture')
   const operatorDashboard = await operator.dashboard(h.origin)
   expect(operatorDashboard.model.repo).toBe(h.origin)
   expect(operatorDashboard.model.builds.some((build) => build.slug === 'add-rate-limiting')).toBe(

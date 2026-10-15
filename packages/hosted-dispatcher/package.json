@@ -29,7 +29,8 @@
   },
   "peerDependencies": {
     "@defrex/autobuild": ">=0.9.0",
-    "@defrex/autobuild-hosted-store-service": ">=0.9.0"
+    "@defrex/autobuild-hosted-store-service": ">=0.9.0",
+    "@defrex/autobuild-postgres-store": ">=0.11.0"
   },
   "publishConfig": {
     "access": "public"
@@ -40,6 +41,7 @@
     "!src/**/*.test.ts",
     "!src/**/*.test.tsx",
     "!src/**/*.spec.ts",
-    "!src/**/*.spec.tsx"
+    "!src/**/*.spec.tsx",
+    "!src/testing/**"
   ]
 }

@@ -1,3 +1,4 @@
+import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import type { ZodType } from 'zod'
 import { systemClock, type BuildStore, type Clock } from '@defrex/autobuild/plugin-sdk'
 import {
@@ -100,6 +101,7 @@ export interface OperatorOrchestratorOptions {
 }
 
 export interface OperatorServerOptions {
+  projects: ProjectRegistryReader
   store: BuildStore
   secret: string
   clock?: Clock
@@ -296,6 +298,8 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       throw new HttpError(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
     }
     const repo = parts[3]
+    if (!(await opts.projects.has(repo)))
+      throw new HttpError(404, 'not-found', 'unknown repository')
     const rest = parts.slice(4)
 
     // The registry's protocol face: one generic route for the whole closed

@@ -1,3 +1,8 @@
+import {
+  openPostgresProjectRegistryFromEnv,
+  normalizeProjectRepository,
+  type ProjectRegistryReader,
+} from '@defrex/autobuild-postgres-store/projects'
 /**
  * The hosted dispatcher (AUT-303): a cron-authenticated HTTP surface that
  * makes this deployment the kernel owner. One authorized invocation runs, per
@@ -26,7 +31,6 @@
  * operator servers.
  */
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { normalizeGitRemoteUrl } from '@defrex/autobuild/origin'
 import type { Clock } from '@defrex/autobuild/plugin-sdk'
 import { spawnExec } from '@defrex/autobuild/git-worktree'
 import { abDispatch, type DispatchOpts } from '@defrex/autobuild/cli'
@@ -46,8 +50,8 @@ export interface HostedDispatcherConfig {
   /** The deployment's public origin, used as `AB_STORE` for the kernel, the
    * hosted ticket source, and guests. */
   origin: string
-  /** Normalized https repository identities, configured order preserved. */
-  repositories: readonly string[]
+  /** Explicit normalized repository selection, in configured order; absent queries all registered projects. */
+  repositories?: readonly string[]
   /** Optional per-repository GitHub token overrides (`AB_DISPATCHER_GITHUB_TOKENS`),
    * keyed by the same normalized https identities as `repositories`. A
    * repository with an override authenticates its forge operations with it;
@@ -85,19 +89,18 @@ function integerSetting(env: HostedDispatcherEnv, name: string, fallback: number
 
 /** Parse one repository-CSV variable into normalized https identities. */
 function repositoryList(raw: string, name: string): string[] {
-  const values = raw
-    .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value !== '')
-  if (values.length === 0) throw new Error(`${name} must name at least one repository`)
+  const values = raw.split(',').map((value) => value.trim())
+
   const repositories: string[] = []
   for (const value of values) {
     // Entries are repository identities — normalized https origins — so an
     // operator-spelled `git@github.com:acme/app.git` still matches the Store's
     // identity for this repository (same rule as AB_WEB_REPOSITORIES).
-    const normalized = normalizeGitRemoteUrl(value)
-    if (!/^https:\/\/[^\s]+$/.test(normalized)) {
-      throw new Error(`${name} contains an unsafe repository name: ${JSON.stringify(value)}`)
+    let normalized: string
+    try {
+      normalized = normalizeProjectRepository(value)
+    } catch {
+      throw new Error(`${name} contains an unsafe repository name`)
     }
     if (!repositories.includes(normalized)) repositories.push(normalized)
   }
@@ -114,7 +117,7 @@ function repositoryList(raw: string, name: string): string[] {
  * Error messages name the variable and the offending identity — never a value. */
 function githubTokenOverrides(
   env: HostedDispatcherEnv,
-  repositories: readonly string[],
+  repositories?: readonly string[],
 ): Map<string, string> {
   const raw = env.AB_DISPATCHER_GITHUB_TOKENS?.trim()
   if (raw === undefined || raw === '') return new Map()
@@ -138,8 +141,13 @@ function githubTokenOverrides(
     // Entries are repository identities — normalized https origins, exactly
     // like the repository set — so an operator-spelled
     // `git@github.com:acme/app.git` matches the served `https://` identity.
-    const identity = normalizeGitRemoteUrl(rawKey)
-    if (!/^https:\/\/[^\s]+$/.test(identity) || !repositories.includes(identity)) {
+    let identity: string
+    try {
+      identity = normalizeProjectRepository(rawKey)
+    } catch {
+      throw new Error('AB_DISPATCHER_GITHUB_TOKENS contains an invalid repository identity')
+    }
+    if (repositories !== undefined && !repositories.includes(identity)) {
       throw new Error(
         `AB_DISPATCHER_GITHUB_TOKENS contains a key that is not a served repository: ${JSON.stringify(rawKey)}`,
       )
@@ -191,12 +199,10 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
   if (env.NODE_ENV === 'production' && origin.protocol !== 'https:') {
     throw new Error('AB_DISPATCHER_ORIGIN must use https in production')
   }
-  const rawRepositories = env.AB_DISPATCHER_REPOSITORIES?.trim()
+  const rawRepositories = env.AB_DISPATCHER_REPOSITORIES
   const repositories =
-    rawRepositories === undefined || rawRepositories === ''
-      ? // Fall back to the web configuration so a deployment configures its
-        // repository set once.
-        repositoryList(required(env, 'AB_WEB_REPOSITORIES'), 'AB_WEB_REPOSITORIES')
+    rawRepositories === undefined
+      ? undefined
       : repositoryList(rawRepositories, 'AB_DISPATCHER_REPOSITORIES')
   const rawBudget = integerSetting(env, 'AB_DISPATCHER_BUDGET_SECONDS', DEFAULT_BUDGET_SECONDS)
   const budgetSeconds = Math.min(MAX_BUDGET_SECONDS, Math.max(MIN_BUDGET_SECONDS, rawBudget))
@@ -216,7 +222,7 @@ export function parseHostedDispatcherEnv(env: HostedDispatcherEnv): HostedDispat
   return {
     secret,
     origin: origin.origin,
-    repositories,
+    ...(repositories !== undefined ? { repositories } : {}),
     githubTokenOverrides: githubTokenOverridesMap,
     budgetSeconds,
     tokenTtlSeconds,
@@ -244,6 +250,7 @@ export interface HostedDispatcherTickSummary {
 }
 
 export interface HostedDispatcherOptions {
+  openProjectRegistry?: (env: HostedDispatcherEnv) => Promise<ProjectRegistryReader>
   /** Service environment; defaults to `process.env`. */
   env?: HostedDispatcherEnv
   clock?: Clock
@@ -322,6 +329,18 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
   ): Promise<HostedDispatcherTickSummary>
 } {
   const env = options.env ?? process.env
+  let projectPromise: Promise<ProjectRegistryReader> | undefined
+  const openProjects = () => {
+    if (!projectPromise) {
+      const attempt = (options.openProjectRegistry ?? openPostgresProjectRegistryFromEnv)(env)
+      projectPromise = attempt
+      void attempt.catch(() => {
+        if (projectPromise === attempt) projectPromise = undefined
+      })
+    }
+    return projectPromise
+  }
+
   const clock: Clock = options.clock ?? (() => new Date())
   const dispatch = options.dispatch ?? ((opts: DispatchOpts) => abDispatch(opts))
   const log = options.log ?? ((line: string) => console.log(line))
@@ -332,14 +351,17 @@ export function createHostedDispatcher(options: HostedDispatcherOptions = {}): {
       credentials: HostedDispatcherInvocation = {},
     ): Promise<HostedDispatcherTickSummary> {
       const config = parseHostedDispatcherEnv(env)
+      const registered = (await (await openProjects()).list()).map((entry) => entry.repo)
+      const selected =
+        config.repositories?.filter((repo) => registered.includes(repo)) ?? registered
       const now = clock().getTime()
       const deadlineAt = now + config.budgetSeconds * 1000
       const sandboxAuth = sandboxAuthSource(env, credentials)
       log(
-        `${LOG_PREFIX} ${invocation}: tick start repositories=${config.repositories.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin} sandboxAuth=${sandboxAuth}`,
+        `${LOG_PREFIX} ${invocation}: tick start repositories=${selected.length} budgetSeconds=${config.budgetSeconds} origin=${config.origin} sandboxAuth=${sandboxAuth}`,
       )
       const repositories: HostedDispatcherRepositoryOutcome[] = []
-      for (const repository of config.repositories) {
+      for (const repository of selected) {
         if (clock().getTime() + MIN_REMAINING_MS > deadlineAt) {
           repositories.push({ repository, outcome: 'skipped' })
           log(`${LOG_PREFIX} ${invocation}: ${repository} skipped (invocation budget exhausted)`)

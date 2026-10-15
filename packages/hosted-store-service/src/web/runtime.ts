@@ -21,6 +21,7 @@ let gateway: ReturnType<typeof createWebGateway> | undefined
 export function webGateway() {
   gateway ??= createWebGateway({
     env: process.env,
+    projects: hostedService().projects,
     getSession: async (headers) => webAuth().api.getSession({ headers }),
     delegate: (request) => hostedService().fetch(request),
   })
@@ -34,6 +35,7 @@ let mcp: ReturnType<typeof createMcpEndpoint> | undefined
 export function mcpEndpoint() {
   mcp ??= createMcpEndpoint({
     config: parseWebAuthEnv(process.env),
+    projects: hostedService().projects,
     auth: webAuth(),
     storeSecret: process.env.AB_STORE_SECRET?.trim() ?? '',
     delegate: (request) => hostedService().fetch(request),

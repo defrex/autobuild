@@ -1,3 +1,4 @@
+import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '@defrex/autobuild/testing'
 import { DISPATCHER, KERNEL, humanActor } from '@defrex/autobuild/testing'
@@ -241,7 +242,12 @@ describe('agent tool registry contract', () => {
 
   test('builds.list matches the builds route for every scope', async () => {
     const world = await seedWorld()
-    const server = createOperatorServer({ store: world.store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo]),
+      store: world.store,
+      secret,
+      clock,
+    })
     const call = api(server)
     const runTool = toolFor(world)
     for (const scope of ['active', 'queued', 'all', undefined]) {
@@ -260,7 +266,12 @@ describe('agent tool registry contract', () => {
 
   test('builds.get matches the build detail route', async () => {
     const world = await seedWorld()
-    const server = createOperatorServer({ store: world.store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo]),
+      store: world.store,
+      secret,
+      clock,
+    })
     const call = api(server)
     const tool = (await toolFor(world)('builds.get', { repo, slug: 'demo' })) as object
     const route = await call('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo`)
@@ -270,7 +281,12 @@ describe('agent tool registry contract', () => {
 
   test('builds.artifact parity: decoded bytes equal the route body and its artifact headers', async () => {
     const world = await seedWorld()
-    const server = createOperatorServer({ store: world.store, secret, clock })
+    const server = createOperatorServer({
+      projects: testProjects([repo]),
+      store: world.store,
+      secret,
+      clock,
+    })
     const call = api(server)
     const tool = (await toolFor(world)('builds.artifact', {
       repo,
@@ -304,11 +320,16 @@ describe('agent tool registry contract', () => {
 
   test('builds.control matches the control route for an accepted command', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
-    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/control`,
-      { action: 'auto-merge-on' },
-    )
+    const route = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/control`, {
+      action: 'auto-merge-on',
+    })
     const tool = await toolFor(toolWorld)('builds.control', {
       repo,
       slug: 'demo',
@@ -328,11 +349,16 @@ describe('agent tool registry contract', () => {
     // rule cancels a pending pause; a pausing build (pending pause, lifecycle
     // running) must therefore cancel the pause identically on both faces.
     const [routeWorld, toolWorld] = await Promise.all([seedPausing(), seedPausing()])
-    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/pausing-b/control`,
-      { action: 'cancel-pause' },
-    )
+    const route = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/pausing-b/control`, {
+      action: 'cancel-pause',
+    })
     expect(route.status).toBe(200)
     const tool = await toolFor(toolWorld)('builds.control', {
       repo,
@@ -352,11 +378,17 @@ describe('agent tool registry contract', () => {
   test('builds.answer matches the answer route for guidance and revise-spec', async () => {
     // Guidance.
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
-    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`,
-      { resolution: 'guidance', text: 'take the smaller cut' },
-    )
+    const route = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`, {
+      resolution: 'guidance',
+      text: 'take the smaller cut',
+    })
     const tool = await toolFor(toolWorld)('builds.answer', {
       repo,
       slug: 'demo',
@@ -368,11 +400,18 @@ describe('agent tool registry contract', () => {
 
     // A destructive spec revision restarts from plan on both faces.
     const [routeWorld2, toolWorld2] = await Promise.all([seedWorld(), seedWorld()])
-    const route2 = await api(createOperatorServer({ store: routeWorld2.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`,
-      { resolution: 'revise-spec', origin: 'body', body: CONFORMING_SPEC },
-    )
+    const route2 = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld2.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/answer`, {
+      resolution: 'revise-spec',
+      origin: 'body',
+      body: CONFORMING_SPEC,
+    })
     const tool2 = await toolFor(toolWorld2)('builds.answer', {
       repo,
       slug: 'demo',
@@ -386,10 +425,9 @@ describe('agent tool registry contract', () => {
 
   test('repository.status matches the status route', async () => {
     const world = await seedWorld()
-    const route = await api(createOperatorServer({ store: world.store, secret, clock }))(
-      'GET',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/status`,
-    )
+    const route = await api(
+      createOperatorServer({ projects: testProjects([repo]), store: world.store, secret, clock }),
+    )('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/status`)
     const tool = await toolFor(world)('repository.status', { repo })
     expectEqual(tool, route.body)
     expectJsonClean(tool)
@@ -398,11 +436,14 @@ describe('agent tool registry contract', () => {
   test('repository.settings matches set and toggle on their routes', async () => {
     // Explicit set (PUT on the route).
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
-    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
-      'PUT',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/settings/intake`,
-      { enabled: false },
-    )
+    const route = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+      }),
+    )('PUT', `/operator/v1/repos/${encodeURIComponent(repo)}/settings/intake`, { enabled: false })
     const tool = await toolFor(toolWorld)('repository.settings', {
       repo,
       setting: 'intake',
@@ -413,10 +454,14 @@ describe('agent tool registry contract', () => {
 
     // Toggle (POST …/toggle on the route).
     const [routeWorld2, toolWorld2] = await Promise.all([seedWorld(), seedWorld()])
-    const route2 = await api(createOperatorServer({ store: routeWorld2.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/settings/auto-merge-default/toggle`,
-    )
+    const route2 = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld2.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/settings/auto-merge-default/toggle`)
     const tool2 = await toolFor(toolWorld2)('repository.settings', {
       repo,
       setting: 'auto-merge-default',
@@ -427,11 +472,14 @@ describe('agent tool registry contract', () => {
 
   test('repository.bulk_control matches the bulk-control route', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
-    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/bulk-control`,
-      { action: 'pause' },
-    )
+    const route = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/bulk-control`, { action: 'pause' })
     const tool = await toolFor(toolWorld)('repository.bulk_control', { repo, action: 'pause' })
     expectEqual(tool, route.body)
     expectJsonClean(tool)
@@ -453,7 +501,12 @@ describe('agent tool registry contract', () => {
       })
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
-      createOperatorServer({ store: breakWalk(routeWorld.store), secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: breakWalk(routeWorld.store),
+        secret,
+        clock,
+      }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/bulk-control`, { action: 'resume' })
     const registry = buildRegistry({
       store: breakWalk(toolWorld.store),
@@ -468,10 +521,9 @@ describe('agent tool registry contract', () => {
 
   test('harvest.status matches the harvest status route', async () => {
     const world = await seedWorld()
-    const route = await api(createOperatorServer({ store: world.store, secret, clock }))(
-      'GET',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/harvest/status`,
-    )
+    const route = await api(
+      createOperatorServer({ projects: testProjects([repo]), store: world.store, secret, clock }),
+    )('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/harvest/status`)
     const tool = await toolFor(world)('harvest.status', { repo })
     expectEqual(tool, route.body)
     expectJsonClean(tool)
@@ -479,11 +531,16 @@ describe('agent tool registry contract', () => {
 
   test('harvest.control matches the harvest control route', async () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
-    const route = await api(createOperatorServer({ store: routeWorld.store, secret, clock }))(
-      'POST',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/harvest/control`,
-      { action: 'toggle-gate' },
-    )
+    const route = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: routeWorld.store,
+        secret,
+        clock,
+      }),
+    )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/harvest/control`, {
+      action: 'toggle-gate',
+    })
     const tool = await toolFor(toolWorld)('harvest.control', { repo, action: 'toggle-gate' })
     expectEqual(tool, route.body)
     expectJsonClean(tool)
@@ -492,6 +549,7 @@ describe('agent tool registry contract', () => {
   test('tickets.list matches the ticket queue route with filters', async () => {
     const world = await seedWorld()
     const server = createOperatorServer({
+      projects: testProjects([repo]),
       store: world.store,
       secret,
       clock,
@@ -515,7 +573,13 @@ describe('agent tool registry contract', () => {
   test('tickets.get matches the ticket detail route', async () => {
     const world = await seedWorld()
     const route = await api(
-      createOperatorServer({ store: world.store, secret, clock, ticketBackend: world.backend }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: world.store,
+        secret,
+        clock,
+        ticketBackend: world.backend,
+      }),
     )('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-1`)
     const tool = await toolFor(world)('tickets.get', { repo, id: 'AUT-1' })
     expectEqual(tool, route.body)
@@ -527,6 +591,7 @@ describe('agent tool registry contract', () => {
     const request = { title: 'Fresh', body: 'fresh body', labels: ['web'], blockedBy: ['AUT-2'] }
     const route = await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: routeWorld.store,
         secret,
         clock,
@@ -543,6 +608,7 @@ describe('agent tool registry contract', () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: routeWorld.store,
         secret,
         clock,
@@ -558,6 +624,7 @@ describe('agent tool registry contract', () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: routeWorld.store,
         secret,
         clock,
@@ -577,6 +644,7 @@ describe('agent tool registry contract', () => {
     const [routeWorld2, toolWorld2] = await Promise.all([seedWorld(), seedWorld()])
     await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: routeWorld2.store,
         secret,
         clock,
@@ -588,6 +656,7 @@ describe('agent tool registry contract', () => {
     await toolFor(toolWorld2)('tickets.block', { repo, id: 'AUT-1', blockerIds: ['AUT-2'] })
     const route2 = await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: routeWorld2.store,
         secret,
         clock,
@@ -609,6 +678,7 @@ describe('agent tool registry contract', () => {
     const [routeWorld, toolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const route = await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: routeWorld.store,
         secret,
         clock,
@@ -625,10 +695,14 @@ describe('agent tool registry contract', () => {
   test('mapped failure bodies equal their routes, per tool', async () => {
     // Not-found build through the query service (OperatorQueryError path).
     const queryWorld = await seedWorld()
-    const queryRoute = await api(createOperatorServer({ store: queryWorld.store, secret, clock }))(
-      'GET',
-      `/operator/v1/repos/${encodeURIComponent(repo)}/builds/missing`,
-    )
+    const queryRoute = await api(
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: queryWorld.store,
+        secret,
+        clock,
+      }),
+    )('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/missing`)
     expect(queryRoute.status).toBe(404)
     const queryFailure = await toolFailure(() =>
       toolFor(queryWorld)('builds.get', { repo, slug: 'missing' }),
@@ -638,7 +712,12 @@ describe('agent tool registry contract', () => {
     // Unknown build through the control glue (requireRouteBuild path, no code).
     const controlWorld = await seedWorld()
     const controlRoute = await api(
-      createOperatorServer({ store: controlWorld.store, secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: controlWorld.store,
+        secret,
+        clock,
+      }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/missing/control`, {
       action: 'pause',
     })
@@ -651,7 +730,12 @@ describe('agent tool registry contract', () => {
     // Inapplicable control (BuildControlError path with code).
     const inactiveWorld = await seedWorld()
     const inactiveRoute = await api(
-      createOperatorServer({ store: inactiveWorld.store, secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: inactiveWorld.store,
+        secret,
+        clock,
+      }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/queued-b/control`, {
       action: 'pause',
     })
@@ -666,7 +750,12 @@ describe('agent tool registry contract', () => {
     // and cancel-pause without a pending pause.
     const [pausingRouteWorld, pausingToolWorld] = await Promise.all([seedPausing(), seedPausing()])
     const pausingRoute = await api(
-      createOperatorServer({ store: pausingRouteWorld.store, secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: pausingRouteWorld.store,
+        secret,
+        clock,
+      }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/pausing-b/control`, {
       action: 'pause',
     })
@@ -678,7 +767,12 @@ describe('agent tool registry contract', () => {
 
     const [runningRouteWorld, runningToolWorld] = await Promise.all([seedWorld(), seedWorld()])
     const runningRoute = await api(
-      createOperatorServer({ store: runningRouteWorld.store, secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: runningRouteWorld.store,
+        secret,
+        clock,
+      }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/control`, {
       action: 'cancel-pause',
     })
@@ -691,7 +785,12 @@ describe('agent tool registry contract', () => {
     // Answer with no open escalations.
     const answerWorld = await seedWorld()
     const answerRoute = await api(
-      createOperatorServer({ store: answerWorld.store, secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: answerWorld.store,
+        secret,
+        clock,
+      }),
     )('POST', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/queued-b/answer`, {
       resolution: 'guidance',
       text: 'no blockers here',
@@ -710,7 +809,12 @@ describe('agent tool registry contract', () => {
     // Missing artifact.
     const artifactWorld = await seedWorld()
     const artifactRoute = await api(
-      createOperatorServer({ store: artifactWorld.store, secret, clock }),
+      createOperatorServer({
+        projects: testProjects([repo]),
+        store: artifactWorld.store,
+        secret,
+        clock,
+      }),
     )('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/builds/demo/artifacts/missing-kind`)
     expect(artifactRoute.status).toBe(404)
     const artifactFailure = await toolFailure(() =>
@@ -722,6 +826,7 @@ describe('agent tool registry contract', () => {
     const ticketWorld = await seedWorld()
     const ticketRoute = await api(
       createOperatorServer({
+        projects: testProjects([repo]),
         store: ticketWorld.store,
         secret,
         clock,
