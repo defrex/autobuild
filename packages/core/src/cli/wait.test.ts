@@ -6,7 +6,7 @@
  * through those seams, and the store is asserted unchanged after every wait.
  */
 import { describe, expect, test } from 'bun:test'
-import { DISPATCHER, KERNEL, agentActor } from '../events/envelope'
+import { DISPATCHER, KERNEL, agentActor, humanActor } from '../events/envelope'
 import { manualClock, steppingClock } from '../testing/fixed'
 import type { Exec } from '../ports/workspace/git-worktree'
 import { MemoryBuildStore } from '../store/memory'
@@ -539,10 +539,10 @@ describe('wait conditions satisfied by later events', () => {
     expect(records(finalizeh.out)[0]).toMatchObject({ state: { phase: 'finalize' } })
   })
 
-  test('attention fires only on post-start attention events, not pre-existing ones', async () => {
+  test('attention recognizes an already open escalation immediately', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
-    await appendEscalation(store, 'b1') // pre-existing: must NOT fire
+    await appendEscalation(store, 'b1') // current state satisfies attention
     let ticks = 0
     const h = harness(store, {
       forValues: ['attention'],
@@ -558,10 +558,10 @@ describe('wait conditions satisfied by later events', () => {
       },
     })
     expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '2' })).toBe(0)
-    // The pre-existing escalation.raised is history; the mid-wait
-    // phase.failed is the one attention event that fires.
+    // No poll is needed for a currently open escalation.
+    expect(ticks).toBe(0)
     expect(records(h.out)[0]).toMatchObject({
-      event: { type: 'phase.failed' },
+      event: { type: 'escalation.raised' },
       condition: 'attention',
     })
   })
@@ -1806,4 +1806,71 @@ describe('wait wiring and exit codes', () => {
     expect(out.join('\n')).toContain('exit 2')
     expect(out.join('\n')).toContain('exit 4')
   })
+})
+
+test('already finalized merge decision satisfies attention with --since and preserves watch metadata', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: KERNEL,
+    type: 'finalize.completed',
+    payload: {
+      pr: { number: 9, url: 'https://example.com/pr/9', headSha: 'abc' },
+    },
+  })
+  const since = encodeCursor({
+    v: 1,
+    store: `${REPO}/.autobuild`,
+    repo: REPO,
+    streams: { b1: 2, '#repo': 7 },
+    deliveredAttention: ['source:3'],
+    lostRuns: ['r1'],
+  })
+  const h = harness(store, { forValues: ['attention'] })
+  expect(await abWait({ ...h.base, slugs: ['b1'], since })).toBe(0)
+  const record = JSON.parse(h.out[0]!)
+  expect(record).toMatchObject({
+    build: 'b1',
+    condition: 'attention',
+    state: { prState: 'open' },
+    observation: { type: 'build.merge-decision', pr: { number: 9 } },
+  })
+  const cursor = JSON.parse(Buffer.from(record.cursor.slice(3), 'base64url').toString())
+  expect(cursor.deliveredAttention).toEqual(['source:3', '["b1",9]'])
+  expect(cursor.lostRuns).toEqual(['r1'])
+  expect(cursor.streams['#repo']).toBe(7)
+})
+
+test('armed finalize and self-healing failures stay silent for attention; explicit globs still match', async () => {
+  const store = makeStore()
+  await seedRunningBuild(store, 'b1')
+  await store.append('b1', {
+    actor: humanActor('op'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  let tick = 0
+  const h = harness(store, {
+    forValues: ['attention'],
+    onTick: async () => {
+      if (++tick !== 1) return
+      await store.append('b1', {
+        actor: KERNEL,
+        type: 'phase.failed',
+        payload: { phase: 'implement', attempt: 1, error: 'retry', willRetry: true },
+      })
+      await store.append('b1', {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: {
+          pr: { number: 9, url: 'https://example.com/pr/9', headSha: 'abc' },
+        },
+      })
+    },
+  })
+  expect(await abWait({ ...h.base, slugs: ['b1'], timeout: '2' })).toBe(3)
+  const since = encodeCursor({ v: 1, store: `${REPO}/.autobuild`, repo: REPO, streams: { b1: 2 } })
+  const explicit = harness(store, { forValues: [], events: ['phase.failed', 'finalize.*'] })
+  expect(await abWait({ ...explicit.base, slugs: ['b1'], since })).toBe(0)
+  expect(JSON.parse(explicit.out[0]!).event.type).toBe('phase.failed')
 })
