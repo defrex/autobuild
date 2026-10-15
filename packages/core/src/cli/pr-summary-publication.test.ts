@@ -191,7 +191,11 @@ describe('phase summary publication', () => {
           403,
           'Secondary content creation rate limit',
           {},
-          { 'retry-after': '120' },
+          {
+            'retry-after': '120',
+            'x-ratelimit-remaining': '4800',
+            'x-ratelimit-reset': String((h.clock().getTime() + 50 * 60_000) / 1000),
+          },
         )
       return original(...args)
     }

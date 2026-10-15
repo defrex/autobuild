@@ -384,6 +384,46 @@ test('summary cooldown recognizes documented rate limits but excludes permission
   ).toBe('2026-10-15T00:02:00.000Z')
 })
 
+test('summary cooldown uses the primary reset only when primary quota is exhausted', async () => {
+  const { githubRateLimitUntil } = await import('./github-transport')
+  const now = Date.parse('2026-10-15T00:00:00Z')
+  const reset = String((now + 50 * 60_000) / 1000)
+  for (const status of [403, 429]) {
+    for (const remaining of ['4800', undefined]) {
+      for (const retry of ['60', '120', undefined]) {
+        const error = new GitHubApiError(
+          status,
+          'Secondary content creation rate limit',
+          {},
+          {
+            'x-ratelimit-reset': reset,
+            ...(remaining === undefined ? {} : { 'x-ratelimit-remaining': remaining }),
+            ...(retry === undefined ? {} : { 'retry-after': retry }),
+          },
+        )
+        expect(githubRateLimitUntil(error, now)).toBe(
+          new Date(now + (retry === '120' ? 120_000 : 60_000)).toISOString(),
+        )
+      }
+    }
+    expect(
+      githubRateLimitUntil(
+        new GitHubApiError(
+          status,
+          'Rate limit exceeded',
+          {},
+          {
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': reset,
+            'retry-after': '60',
+          },
+        ),
+        now,
+      ),
+    ).toBe('2026-10-15T00:50:00.000Z')
+  }
+})
+
 test('fetch errors retain lowercased cooldown headers', async () => {
   const stub = stubFetch(
     () =>

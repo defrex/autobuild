@@ -383,7 +383,11 @@ export function githubRateLimitUntil(error: unknown, now: number): string | unde
   const retry = error.headers['retry-after']
   const seconds = retry === undefined ? NaN : Number(retry)
   const retryAt = Number.isFinite(seconds) ? now + seconds * 1000 : Date.parse(retry ?? '')
-  const reset = Number(error.headers['x-ratelimit-reset']) * 1000
+  // The reset describes the primary quota window, even on secondary-limit responses.
+  const reset =
+    error.headers['x-ratelimit-remaining'] === '0'
+      ? Number(error.headers['x-ratelimit-reset']) * 1000
+      : NaN
   return new Date(
     Math.max(
       now + 60_000,
