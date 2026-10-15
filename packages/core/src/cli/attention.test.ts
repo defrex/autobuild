@@ -80,8 +80,71 @@ describe('repository attention projection', () => {
     )
     projection.fold(degraded(3, 0, { source: 'other' }))
     expect(projection.pending(at(9_999))).toEqual([])
-    expect(projection.pending(at(10_000))).toHaveLength(1)
+    expect(projection.pending(at(10_000))).toEqual([])
+    projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, 4, 10_001))
+    projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, 5, 10_002))
+    expect(projection.pending(at(10_002))).toHaveLength(1)
     expect(projection.pending(at(15 * 60_000))).toHaveLength(2)
+  })
+
+  test('normal recovery on the first post-reset tick never needs attention', () => {
+    const projection = new RepositoryAttention()
+    const reset = 2 * 60_000
+    projection.fold(degraded(1, 0, { cause: 'rate-limited', resetAt: at(reset).toISOString() }))
+    let seq = 2
+    for (let ms = 1; ms < reset; ms += 10_000) {
+      projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, seq++, ms))
+      projection.fold(failed(seq++, ms + 1))
+    }
+    expect(projection.pending(at(reset + 1_000))).toEqual([])
+    projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, seq++, reset + 10_000))
+    expect(projection.pending(at(reset + 10_001))).toEqual([])
+    projection.fold(
+      repo('dispatcher.ticket-source-recovered', { source: 'linear' }, seq++, reset + 10_002),
+    )
+    projection.fold(repo('dispatcher.tick-completed', { run: 'r1' }, seq++, reset + 10_003))
+    expect(projection.pending(at(reset + 20_000))).toEqual([])
+  })
+
+  test.each(['dispatcher.tick-completed', 'dispatcher.tick-failed'])(
+    'persistence requires a post-reset tick outcome: %s',
+    (outcome) => {
+      const projection = new RepositoryAttention()
+      projection.fold(degraded(1, 0, { cause: 'rate-limited', resetAt: at(10_000).toISOString() }))
+      // A tick crossing reset while in flight is not evidence of a retry.
+      projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, 2, 9_000))
+      projection.fold(repo(outcome, { run: 'r1', error: 'offline' }, 3, 11_000))
+      expect(projection.pending(at(12_000))).toEqual([])
+      projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, 4, 13_000))
+      // A foreign run outcome cannot consume this tick's evidence.
+      projection.fold(repo(outcome, { run: 'other', error: 'offline' }, 5, 14_000))
+      expect(projection.pending(at(15_000))).toEqual([])
+      projection.fold(repo(outcome, { run: 'r1', error: 'offline' }, 6, 16_000))
+      expect(projection.pending(at(16_000))).toMatchObject([{ identity: 'source:1' }])
+    },
+  )
+
+  test('a long cooldown cannot become a five-minute dispatcher outage', () => {
+    const projection = new RepositoryAttention()
+    const reset = 40 * 60_000
+    projection.fold(degraded(1, 0, { cause: 'rate-limited', resetAt: at(reset).toISOString() }))
+    let seq = 2
+    for (let ms = 1; ms < reset; ms += 10_000) {
+      projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, seq++, ms))
+      projection.fold(failed(seq++, ms + 1))
+      expect(projection.pending(at(ms + 1))).toEqual([])
+    }
+    expect(projection.pending(at(reset + 1_000))).toEqual([])
+    projection.fold(repo('dispatcher.tick-started', { run: 'r1' }, seq++, reset + 10_000))
+    const firstFailureSeq = seq++
+    projection.fold(failed(firstFailureSeq, reset + 10_001))
+    expect(projection.pending(at(reset + 10_001)).map((entry) => entry.identity)).toEqual([
+      'source:1',
+    ])
+    expect(projection.pending(at(reset + 310_001)).map((entry) => entry.identity)).toEqual([
+      'source:1',
+      `tick:${firstFailureSeq}`,
+    ])
   })
 
   test.each(['dispatcher.tick-completed', 'dispatcher.run-stopped', 'dispatcher.run-started'])(

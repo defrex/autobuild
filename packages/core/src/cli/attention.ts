@@ -87,9 +87,33 @@ export type PersistenceObservation =
 export class RepositoryAttention {
   private sources = new Map<
     string,
-    { event: Degraded; deadline: number; dependencyLimited: boolean }
+    {
+      event: Degraded
+      deadline: number
+      dependencyLimited: boolean
+      requiresRetry: boolean
+      retryObserved: boolean
+    }
   >()
   private failure: Failed | undefined
+  private tickStarts = new Map<string, number>()
+
+  private sourceDefersTick(now: number): boolean {
+    return [...this.sources.values()].some(
+      (source) => now < source.deadline || (source.requiresRetry && !source.retryObserved),
+    )
+  }
+
+  /** Crossing resetAt alone does not prove persistence: the dispatcher must
+   * finish a tick that could actually retry after the provider cooldown. */
+  private observeRetry(run: string): void {
+    const startedAt = this.tickStarts.get(run)
+    this.tickStarts.delete(run)
+    if (startedAt === undefined) return
+    for (const source of this.sources.values()) {
+      if (startedAt >= source.deadline) source.retryObserved = true
+    }
+  }
   fold(event: RepositoryEvent): void {
     switch (event.type) {
       case 'dispatcher.ticket-source-degraded': {
@@ -98,8 +122,19 @@ export class RepositoryAttention {
           'resetAt' in event.payload
             ? Date.parse(event.payload.resetAt)
             : Date.parse(event.ts) + 15 * 60_000
-        if (existing) existing.deadline = Math.min(existing.deadline, deadline)
-        else this.sources.set(event.payload.source, { event, deadline, dependencyLimited: false })
+        if (existing) {
+          existing.deadline = Math.min(existing.deadline, deadline)
+          existing.requiresRetry ||= 'resetAt' in event.payload
+        } else
+          this.sources.set(event.payload.source, {
+            event,
+            deadline,
+            dependencyLimited: false,
+            requiresRetry: 'resetAt' in event.payload,
+            retryObserved: false,
+          })
+        // Cooldown-driven failures are not an independent dispatcher outage.
+        if (this.sourceDefersTick(Date.parse(event.ts))) this.failure = undefined
         break
       }
       case 'dispatcher.ticket-source-dependency-limited': {
@@ -112,20 +147,36 @@ export class RepositoryAttention {
         break
       case 'dispatcher.run-started':
         this.failure = undefined
+        this.tickStarts.clear()
         break
       case 'dispatcher.run-stopped':
+        this.tickStarts.delete(event.payload.run)
+        if (this.failure?.payload.run === event.payload.run) this.failure = undefined
+        break
+      case 'dispatcher.tick-started':
+        this.tickStarts.set(event.payload.run, Date.parse(event.ts))
+        break
       case 'dispatcher.tick-completed':
+        this.observeRetry(event.payload.run)
         if (this.failure?.payload.run === event.payload.run) this.failure = undefined
         break
       case 'dispatcher.tick-failed':
-        if (this.failure?.payload.run !== event.payload.run) this.failure = event
+        this.observeRetry(event.payload.run)
+        if (this.sourceDefersTick(Date.parse(event.ts))) this.failure = undefined
+        else if (this.failure?.payload.run !== event.payload.run) this.failure = event
         break
     }
   }
   pending(now: Date): { identity: string; observation: PersistenceObservation }[] {
     const results: { identity: string; observation: PersistenceObservation }[] = []
-    for (const { event, deadline, dependencyLimited } of this.sources.values()) {
-      if (now.getTime() < deadline) continue
+    for (const {
+      event,
+      deadline,
+      dependencyLimited,
+      requiresRetry,
+      retryObserved,
+    } of this.sources.values()) {
+      if (now.getTime() < deadline || (requiresRetry && !retryObserved)) continue
       results.push({
         identity: `source:${event.seq}`,
         observation: {
@@ -138,7 +189,11 @@ export class RepositoryAttention {
       })
     }
     const event = this.failure
-    if (event && now.getTime() >= Date.parse(event.ts) + 5 * 60_000)
+    if (
+      event &&
+      !this.sourceDefersTick(now.getTime()) &&
+      now.getTime() >= Date.parse(event.ts) + 5 * 60_000
+    )
       results.push({
         identity: `tick:${event.seq}`,
         observation: {

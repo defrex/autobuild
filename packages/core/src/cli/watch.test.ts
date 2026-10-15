@@ -1978,12 +1978,11 @@ for (const remote of [false, true]) {
       payload: {
         source: 'linear',
         operation: 'ready-scan',
-        cause: 'rate-limited',
-        message: 'quota',
-        resetAt: new Date(clock().getTime() + 2000).toISOString(),
+        cause: 'ready-scan-failed',
+        message: 'offline',
       },
     })
-    // A later run anchor must not hide the episode's true start/reset.
+    // A later run anchor must not hide the episode's true start.
     await store.appendRepo(REPO, {
       actor: DISPATCHER,
       type: 'dispatcher.run-started',
@@ -2024,10 +2023,10 @@ for (const remote of [false, true]) {
       now: clock,
       openStore: () => (remote ? quietRemote : store),
       delay: async () => {
-        clock.advance(1000)
+        clock.advance(900_000)
       },
     })
-    await abWatch({ ...h.base, storeRef, count: 1, timeout: '10' })
+    await abWatch({ ...h.base, storeRef, count: 1, timeout: '1000' })
     if (remote) expect(heldReads).toBeGreaterThan(0)
     const record = JSON.parse(h.out[0]!)
     expect(record).toMatchObject({
@@ -2042,7 +2041,7 @@ for (const remote of [false, true]) {
     const resume = harness(store, {
       now: clock,
       delay: async () => {
-        clock.advance(1000)
+        clock.advance(900_000)
       },
     })
     await abWatch({ ...resume.base, storeRef, since: record.cursor, timeout: '2' })
@@ -2219,3 +2218,81 @@ test('a failed repository catch-up cannot report an obsolete persistence conditi
   expect(h.out).toHaveLength(1)
   expect(h.err[0]).toContain('unavailable')
 })
+
+for (const recovers of [true, false]) {
+  test(`rate-limit attention waits for the first post-reset retry outcome (recovers=${recovers})`, async () => {
+    const clock = manualClock()
+    const store = new MemoryBuildStore({ clock })
+    await store.ensureRepo(REPO)
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-started',
+      payload: { run: 'r' },
+    })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.ticket-source-degraded',
+      payload: {
+        source: 'linear',
+        cause: 'rate-limited',
+        operation: 'ready-scan',
+        message: 'quota',
+        resetAt: new Date(clock().getTime() + 2000).toISOString(),
+      },
+    })
+    await store.appendRepo(REPO, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-failed',
+      payload: { run: 'r', error: 'quota' },
+    })
+    let seconds = 0
+    const h = harness(store, {
+      now: clock,
+      delay: async () => {
+        clock.advance(1000)
+        seconds += 1
+        if (seconds === 10)
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-started',
+            payload: { run: 'r' },
+          })
+        if (seconds !== 11) return
+        if (recovers) {
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.ticket-source-recovered',
+            payload: { source: 'linear', cause: 'rate-limited', operation: 'ready-scan' },
+          })
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-completed',
+            payload: {
+              run: 'r',
+              queued: 0,
+              counters: noopTickCounters(),
+              janitorDiagnostics: [],
+              ticketDiagnostics: [],
+              dependencyDiagnostics: [],
+            },
+          })
+        } else
+          await store.appendRepo(REPO, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-failed',
+            payload: { run: 'r', error: 'still offline' },
+          })
+      },
+    })
+    await abWatch({ ...h.base, repository: true, timeout: '13' })
+    const records = h.out.slice(0, -1).map((line) => JSON.parse(line))
+    if (recovers) expect(records).toEqual([])
+    else {
+      expect(records).toHaveLength(1)
+      expect(records[0].observation.type).toBe('dispatcher.ticket-source-persistent')
+      expect(records[0].observation.observedAt).toBe(
+        new Date(clock().getTime() - 2000).toISOString(),
+      )
+    }
+  })
+}
