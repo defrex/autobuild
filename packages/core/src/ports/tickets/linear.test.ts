@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { TicketSourceRateLimitError } from '../types'
 import { LINEAR_API_URL, LinearTicketSource, type LinearFetch } from './linear'
 
 interface RecordedCall {
@@ -9,7 +10,9 @@ interface RecordedCall {
 }
 
 /** Canned-exchange fetch: dequeues one response per request, records each. */
-function fakeLinear(responses: Array<{ status?: number; body: unknown }>) {
+function fakeLinear(
+  responses: Array<{ status?: number; body: unknown; headers?: Record<string, string> }>,
+) {
   const calls: RecordedCall[] = []
   const fetchFn: LinearFetch = async (url, init) => {
     const parsed = JSON.parse(init.body) as {
@@ -20,7 +23,12 @@ function fakeLinear(responses: Array<{ status?: number; body: unknown }>) {
     const next = responses.shift()
     if (!next) throw new Error('fakeLinear: no canned response left')
     const status = next.status ?? 200
-    return { ok: status < 400, status, json: async () => next.body }
+    return {
+      ok: status < 400,
+      status,
+      headers: new Headers(next.headers),
+      json: async () => next.body,
+    }
   }
   return { fetchFn, calls }
 }
@@ -1574,6 +1582,143 @@ describe('LinearTicketSource', () => {
       await expect(promise).rejects.toThrow('unknown ticket "ENG-404"')
       expect(calls).toHaveLength(1)
     }
+  })
+})
+
+describe('Linear rate limiting', () => {
+  const start = 1_800_000_000_000
+  const limited = { errors: [{ message: 'Budget exhausted', extensions: { code: 'RATELIMITED' } }] }
+
+  test('cooldown suppresses reads and mutations and resumes exactly at reset', async () => {
+    let now = start
+    const resetAt = start + 120_000
+    const fake = fakeLinear([
+      { status: 400, body: limited, headers: { 'X-RateLimit-Requests-Reset': String(resetAt) } },
+      { body: { data: { issue: gqlIssue() } } },
+      { body: limited, headers: { 'x-ratelimit-requests-reset': String(resetAt + 120_000) } },
+    ])
+    const source = new LinearTicketSource({
+      apiKey: 'test',
+      teamKey: 'ENG',
+      fetchFn: fake.fetchFn,
+      now: () => now,
+    })
+    const error = await rejectionOf(source.get('ENG-42'))
+    expect(error).toBeInstanceOf(TicketSourceRateLimitError)
+    expect(error).toMatchObject({ source: 'linear', resetAt })
+    expect(error.message).toContain(new Date(resetAt).toISOString())
+    expect(await rejectionOf(source.dependencyStates(['ENG-42']))).toBe(error)
+    expect(await rejectionOf(source.comment('ENG-42', 'test'))).toBe(error)
+    now = resetAt - 1
+    expect(await rejectionOf(source.get('ENG-42'))).toBe(error)
+    expect(fake.calls).toHaveLength(1)
+    now = resetAt
+    expect(await source.get('ENG-42')).not.toBeNull()
+    expect(await rejectionOf(source.get('ENG-42'))).toMatchObject({ resetAt: resetAt + 120_000 })
+    expect(fake.calls).toHaveLength(3)
+  })
+
+  for (const header of [
+    undefined,
+    'invalid',
+    'Infinity',
+    '0',
+    String(start - 1),
+    '8640000000000001',
+  ]) {
+    test(`unusable reset ${header} uses a 60-second fallback`, async () => {
+      const fake = fakeLinear([
+        {
+          status: 400,
+          body: limited,
+          headers: header ? { 'x-ratelimit-requests-reset': header } : {},
+        },
+      ])
+      const source = new LinearTicketSource({
+        apiKey: 'test',
+        teamKey: 'ENG',
+        fetchFn: fake.fetchFn,
+        now: () => start,
+      })
+      expect(await rejectionOf(source.get('ENG-42'))).toMatchObject({ resetAt: start + 60_000 })
+      expect(await rejectionOf(source.get('ENG-42'))).toBeInstanceOf(TicketSourceRateLimitError)
+      expect(fake.calls).toHaveLength(1)
+    })
+  }
+
+  test('HTTP-200 mixed errors prioritize rate limiting over missing issues', async () => {
+    const fake = fakeLinear([
+      {
+        body: {
+          errors: [
+            { message: 'Entity not found: Issue', extensions: { code: 'INPUT_ERROR' } },
+            ...limited.errors,
+          ],
+        },
+      },
+    ])
+    expect(await rejectionOf(makeSource(fake.fetchFn).get('ENG-42'))).toBeInstanceOf(
+      TicketSourceRateLimitError,
+    )
+  })
+
+  test('ordinary non-2xx GraphQL errors include code, message and status', async () => {
+    const fake = fakeLinear([
+      {
+        status: 400,
+        body: { errors: [{ message: 'Bad query', extensions: { code: 'INPUT_ERROR' } }] },
+      },
+    ])
+    expect((await rejectionOf(makeSource(fake.fetchFn).get('ENG-42'))).message).toContain(
+      'HTTP 400: GraphQL errors — INPUT_ERROR: Bad query',
+    )
+  })
+
+  test('non-JSON and data-only HTTP failures retain HTTP status', async () => {
+    const source = makeSource(async () => ({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('not JSON')
+      },
+    }))
+    expect((await rejectionOf(source.get('ENG-42'))).message).toBe('linear get: HTTP 502')
+    const fake = fakeLinear([{ status: 400, body: { data: { issue: gqlIssue() } } }])
+    expect((await rejectionOf(makeSource(fake.fetchFn).get('ENG-42'))).message).toBe(
+      'linear get: HTTP 400',
+    )
+  })
+
+  test('successful zero-quota responses and independent instances remain callable', async () => {
+    const fake = fakeLinear([
+      { body: limited },
+      { body: { data: { issue: gqlIssue() } }, headers: { 'x-ratelimit-requests-remaining': '0' } },
+      { body: { data: { issue: gqlIssue() } } },
+    ])
+    await rejectionOf(makeSource(fake.fetchFn).get('ENG-42'))
+    const other = makeSource(fake.fetchFn)
+    await other.get('ENG-42')
+    await other.get('ENG-42')
+    expect(fake.calls).toHaveLength(3)
+  })
+
+  test('an older in-flight success does not clear a newer active limit', async () => {
+    let complete!: (value: { ok: boolean; status: number; json(): Promise<unknown> }) => void
+    let calls = 0
+    const source = makeSource(async () => {
+      calls += 1
+      if (calls === 1)
+        return new Promise((resolve) => {
+          complete = resolve
+        })
+      return { ok: false, status: 400, json: async () => limited }
+    })
+    const older = source.get('ENG-42')
+    const error = await rejectionOf(source.get('ENG-42'))
+    complete({ ok: true, status: 200, json: async () => ({ data: { issue: gqlIssue() } }) })
+    await older
+    expect(await rejectionOf(source.get('ENG-42'))).toBe(error)
+    expect(calls).toBe(2)
   })
 })
 
