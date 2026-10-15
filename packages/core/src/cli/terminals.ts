@@ -50,7 +50,6 @@ import type { ArtifactMeta, BuildStore } from '../store/types'
 import { textContent } from '../store/types'
 import { expandIssues } from '../zod-issues'
 import { preparePrAttachments } from './pr-attachments'
-import { renderPrSummary } from './pr-summary'
 import type { CliEnv } from './env'
 
 /** Structural subset of CliDeps (src/cli/main.ts) — what terminals need. */
@@ -441,15 +440,6 @@ export async function completeFinalizePr(
     }
   }
 
-  try {
-    await deps.forge.commentOnPr(
-      deps.workspacePath,
-      pr.number,
-      renderPrSummary(env, await store.getEvents(env.build)),
-    )
-  } catch {
-    // The durable audit trail remains authoritative.
-  }
   return event
 }
 

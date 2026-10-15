@@ -1606,7 +1606,7 @@ describe('runCli — artifact and observe', () => {
     expect(getter.out).toEqual(['# The plan\n'])
   })
 
-  test('artifact put --attach prints only the rev and refreshes a complete existing PR summary', async () => {
+  test('artifact put --attach prints only the rev and hosts attachments without publishing a summary', async () => {
     await store.close()
     store = await seedStore({
       imageHost: {
@@ -1645,9 +1645,7 @@ describe('runCli — artifact and observe', () => {
     expect(await runCli(['artifact', 'put', 'visual:late', file, '--attach'], d)).toBe(0)
     expect(d.out).toEqual(['0'])
     expect(forge.prAttachmentUploads).toHaveLength(1)
-    expect(forge.comments).toHaveLength(1)
-    expect(forge.comments[0]!.body).toContain('<code>visual:late@0</code>')
-    expect(forge.comments[0]!.body).toContain('<img ')
+    expect(forge.comments).toHaveLength(0)
     expect((await store.getEvents(BUILD)).map((event) => event.type)).toContain(
       'pr-attachment.designated',
     )
@@ -1701,9 +1699,7 @@ describe('runCli — artifact and observe', () => {
     expect(await runCli(['artifact', 'put', 'visual:late-failure', file, '--attach'], d)).toBe(0)
     expect(d.out).toEqual(['0'])
     expect(forge.prAttachmentUploads).toHaveLength(1)
-    expect(forge.comments).toHaveLength(1)
-    expect(forge.comments[0]!.body).toContain('<code>visual:late-failure@0</code>')
-    expect(forge.comments[0]!.body).not.toContain('<img ')
+    expect(forge.comments).toHaveLength(0)
 
     const events = await store.getEvents(BUILD)
     expect(events.some((event) => event.type === 'pr-attachment.hosted')).toBe(false)

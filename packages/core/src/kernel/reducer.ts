@@ -457,6 +457,11 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'workspace.provisioned':
       case 'workspace.released':
+      case 'pr-summary.requested':
+      case 'pr-summary.attempted':
+      case 'pr-summary.result':
+      case 'pr-summary.settled':
+      case 'finalize.step-started':
       case 'publication.requested':
       // Inert loss fact (AUT-328): the dispatcher released a workspace with a
       // pending publication. Recovery runs through the existing

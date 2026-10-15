@@ -1,3 +1,4 @@
+import { summaryBoundary, settleSummaryRequests } from '../cli/pr-summary-publication'
 /**
  * Build-runner process tests (SPEC §3.3, §8, §9, §10, §15.6, D5): memory
  * store + ScriptedAgentRunner + FakeWorkspaceProvider + fake exec. The scripts
@@ -1778,9 +1779,14 @@ describe('happy path (§15.6)', () => {
     'session.started',
     'finalize.completed',
     'session.ended',
+    'pr-summary.attempted',
+    'pr-summary.result',
+    'finalize.step-started',
     'session.started',
     'session.ended',
     'finalize.step-completed',
+    'pr-summary.attempted',
+    'pr-summary.result',
   ]
 
   test('run() drives the full pipeline; the complete event-type sequence matches §15.6 with session brackets', async () => {
@@ -5018,7 +5024,7 @@ describe('operator commands (D2)', () => {
     expect(state.status).toBe('running') // resumed and ran to awaiting-pr
     const types = await typesOf(h.store)
     expect(types).toContain('build.resumed')
-    expect(types.at(-1)).toBe('finalize.step-completed')
+    expect(types.at(-1)).toBe('pr-summary.result')
   })
 
   test('abort-requested is acknowledged and run() exits aborted', async () => {
@@ -5350,4 +5356,132 @@ describe('session streams: close outcomes per exit path', () => {
     const ended = ofType(await h.store.getEvents(SLUG), 'session.ended')
     expect(ended).toHaveLength(1)
   })
+})
+
+describe('coalesced summary boundaries', () => {
+  for (const remote of [false, true])
+    for (const count of [3, 300]) {
+      test(`${remote ? 'remote' : 'local'} verify with ${count} attachments publishes only after session settlement`, async () => {
+        const forge = new FakeForge()
+        forge.setPrState(7, { state: 'open', mergeable: true })
+        let verifyCalls = 0
+        let guestSummaryCalls = 0
+        const h = await makeHarness({
+          forge,
+          workspaceRemote: remote,
+          handlers: (store) => ({
+            ...happyHandlers(store),
+            'verify-e2e': async (ctx) => {
+              verifyCalls++
+              // Simulate artifact put's atomic designation, including one after
+              // the terminal command: the session must settle before rendering.
+              await store.append(SLUG, {
+                actor: agentActor('verify-e2e', sessionOf(ctx)),
+                type: 'verify.completed',
+                payload: { step: 'e2e', attempt: roundOf(ctx), outcome: 'pass' },
+              })
+              for (let i = 0; i < count; i++) {
+                await store.appendWithArtifacts(
+                  SLUG,
+                  [{ kind: `frame:${i}`, content: 'pixels' }],
+                  (metas) => ({
+                    actor: agentActor('verify-e2e', sessionOf(ctx)),
+                    type: 'pr-attachment.designated',
+                    payload: {
+                      artifact: refOf(metas),
+                      filename: `frame-${i}.png`,
+                      mediaType: 'image/png',
+                    },
+                  }),
+                )
+                expect(forge.comments).toHaveLength(0)
+              }
+              return defaultTurnResult('complete')
+            },
+          }),
+        })
+        await seedFinalized(h.store)
+        // Make a fresh verification cycle eligible after a completed reconcile.
+        await h.store.append(SLUG, {
+          actor: DISPATCHER,
+          type: 'pr.conflicted',
+          payload: { baseSha: 'detected-base' },
+        })
+        // Drive deterministic checks first; run() then verifies and handles the boundary.
+        await h.br.attach()
+        await h.br.step() // progress check
+        await h.br.step() // reconcile
+        await h.br.step() // types
+        const previous = summaryBoundary(await h.store.getEvents(SLUG))!
+        if (remote) {
+          const request = await h.store.append(SLUG, {
+            actor: KERNEL,
+            type: 'pr-summary.requested',
+            payload: previous,
+          })
+          await h.store.append(SLUG, {
+            actor: KERNEL,
+            type: 'pr-summary.settled',
+            payload: { request: request.seq, disposition: 'skipped' },
+          })
+        } else {
+          await h.store.append(SLUG, {
+            actor: KERNEL,
+            type: 'pr-summary.attempted',
+            payload: { ...previous, pr: 7 },
+          })
+        }
+        if (remote) {
+          // Any summary call by the guest is an error, even if best effort.
+          forge.commentOnPr = async () => {
+            guestSummaryCalls++
+            throw new Error('guest summary call')
+          }
+        }
+        await h.br.run()
+        expect(verifyCalls).toBe(1)
+        const events = await h.store.getEvents(SLUG)
+        const latest = events.findLast(
+          (e) => e.type === 'pr-summary.requested' || e.type === 'pr-summary.attempted',
+        )!
+        if (remote) {
+          expect(latest.type).toBe('pr-summary.requested')
+          expect(events.some((e) => e.type === 'pr-summary.attempted')).toBe(false)
+          expect(forge.comments).toHaveLength(0)
+          expect(guestSummaryCalls).toBe(0)
+          // The execution owner has reaped the guest and released its lease.
+          await h.store.releaseLease(SLUG, 'runner-1')
+          const hostForge = new FakeForge()
+          hostForge.setPrState(7, { state: 'open', mergeable: true })
+          await settleSummaryRequests({
+            store: h.store,
+            forge: hostForge,
+            slug: SLUG,
+            workspacePath: h.workspacePath,
+            storeRef: 'https://store.test',
+            clock: steppingClock(),
+            holder: 'authenticated-host',
+          })
+          expect(hostForge.comments).toHaveLength(1)
+          const body = hostForge.comments[0]!.body
+          const full = body.includes('pr-summary@')
+            ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+            : body
+          expect(full).toContain(`frame-${count - 1}.png`)
+          expect(full).toContain('<code>e2e</code> (attempt 2): pass')
+          await h.br.run()
+          expect(verifyCalls).toBe(1)
+          expect(guestSummaryCalls).toBe(0)
+        } else {
+          expect(latest.type).toBe('pr-summary.attempted')
+          expect(forge.comments).toHaveLength(1)
+          const body = forge.comments[0]!.body
+          const full = body.includes('pr-summary@')
+            ? new TextDecoder().decode((await h.store.getArtifact(SLUG, 'pr-summary', 0))!.content)
+            : body
+          expect(full).toContain(`frame-${count - 1}.png`)
+          expect(full).toContain('<code>e2e</code> (attempt 2): pass')
+        }
+      })
+    }
 })
