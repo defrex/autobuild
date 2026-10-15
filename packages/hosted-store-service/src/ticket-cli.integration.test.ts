@@ -78,8 +78,8 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       })
       env.AB_STORE = `http://127.0.0.1:${server.port}`
       env.AB_TOKEN = mintToken(secret, {
-        operator: true,
-        session: '*',
+        version: 1,
+        ownerAdmin: { user: 'owner:fixture' },
         exp: Date.now() + 60_000,
       })
     }
@@ -182,7 +182,11 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     )
     const env = {
       AB_STORE: `http://127.0.0.1:${server.port}`,
-      AB_TOKEN: mintToken(secret, { operator: true, session: '*', exp: Date.now() + 60_000 }),
+      AB_TOKEN: mintToken(secret, {
+        version: 1,
+        ownerAdmin: { user: 'owner:fixture' },
+        exp: Date.now() + 60_000,
+      }),
     }
     const run = async (argv: string[]): Promise<string> => {
       const lines: string[] = []

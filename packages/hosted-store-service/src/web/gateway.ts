@@ -119,7 +119,8 @@ export function createWebGateway(options: WebGatewayOptions): {
       headers.set(AUTOBUILD_VERSION_HEADER, AUTOBUILD_VERSION)
       headers.set(REMOTE_STORE_PROTOCOL_VERSION_HEADER, REMOTE_STORE_PROTOCOL_VERSION)
       const token = mintToken(storeSecret, {
-        operator: { user: email },
+        version: 1,
+        internalOperator: { user: email, repo },
         exp: now().getTime() + 30_000,
       })
       headers.set('authorization', `Bearer ${token}`)

@@ -307,8 +307,8 @@ it to exist. An unknown build returns `404 not-found`.
 
 | BuildStore operation | HTTP route | Request | Success |
 |---|---|---|---|
-| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write}`; `slug`, `repo`, and a supplied `branch` are nonempty. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + `BuildRecord`; duplicate slug is `409 conflict` |
-| `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`; list order is unspecified |
+| `createBuild` | `POST /builds` | `{slug: string, repo: string, repoOrigin?: string, ticket?: TicketRef, branch?: string, created?: event write}`; `slug`, `repo`, and a supplied `branch` are nonempty. `created`, when present, must be a valid `build.created` write; the server appends it as seq 1 atomically with the record (both exist or neither), and an invalid one is `422` with nothing created | `201` + authoritative `BuildRecord`; project credentials receive a fresh random-suffixed slug and matching branch. Owner admin/open mode keeps exact-slug semantics with `409 conflict` for duplicates |
+| `listBuilds` | `GET /builds` | none | `200` + `BuildRecord[]`, filtered by the server to the credential project; owner admin may list all projects. List order is unspecified |
 | `getBuild` | `GET /builds/{slug}` | none | `200` + `BuildRecord`; absent is `404` (the shipped client maps this to `null`) |
 | `append` | `POST /builds/{slug}/events` | event write | `201` + build event envelope |
 | `appendIfCurrent` | `POST /builds/{slug}/events/conditional` | `{"expectedSeq": nonnegative integer, "event": event write}` | appended: `201` + build event envelope; stream advanced: `200 null` |
@@ -378,8 +378,7 @@ no protocol-version bump. The store, not the client, enforces the invariants:
 A client treats `404` and `405` from either route as "no snapshot", so a client
 newer than its store replays the log with no error, and a client older than its
 store never calls the routes. Authentication and transport failures still
-surface normally. A build token may touch only its own build's snapshots and a
-repository token only its own repository's, exactly as for events.
+surface normally. Snapshot authorization follows the owning project, exactly as for events.
 
 ### The event-read bounded wait
 
@@ -416,7 +415,7 @@ artifacts, and leases. `{repo}` is one percent-encoded repository id; encode
 embedded `/` characters. All resource routes authorize and require the
 repository to exist. An unknown repository returns `404 not-found` — with one
 carve-out: the build-digest batch read of this section is keyed to build
-records, not the repository journal record, so it authorizes the repo token
+records, not the repository journal record, so it authorizes the project credential
 but answers `200` (possibly empty) even for an unknown repository, a repository
 without a journal record, or a repository without builds.
 
@@ -483,12 +482,11 @@ a ticket, keyed by `(repo, ticketId, kind, name)`. These routes live under the
 repository but, unlike the journal routes, **do not require a repository
 record**: assets can precede any journal row, so the repository-existence gate
 does not apply. `{repo}` and `{id}` are percent-encoded path segments. Token
-authorization follows the one-matching-repo column of the matrix (a repo token
-for its own repository, or admin); build and session tokens receive `403 auth`.
+authorization requires a credential for that registered project, or owner admin.
 The family is additive, so `REMOTE_STORE_PROTOCOL_VERSION` did not change.
 
 A build also reads the assets it froze at its claim through its own build-scoped
-routes, which a build token may use (no ticket-asset authority needed). The
+routes, authorized against the build's actual project. The
 server reduces the build's events to find the pinned revision, then returns that
 exact revision, so a later replace or removal never changes the answer and a
 finished build still answers:
@@ -802,140 +800,79 @@ These additions were purely additive in the version they landed in (protocol
 conforming server implements the stream routes together with this document's
 rules exactly as it does for the event and artifact routes.
 
-## 7. Authentication and token scope
+## 7. Authentication and project authority
 
-### Open and authenticated modes
+Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
+registered normalized repository. The service stores only a SHA-256 digest of
+the random secret, plus project, creator, creation time, last use, expiry and
+revocation metadata. It checks credential status and project registration on
+every request. Revocation takes effect on the next request without affecting
+other credentials. Unknown, expired or revoked credentials receive `401 auth`;
+removed projects receive `403 auth` with `project not registered`.
 
-A server configured without a signing secret is in open mode: no route checks
-a token or event session attribution. This is intended for local development
-and the open contract harness.
+The deployment owner runs these commands locally with database access:
 
-A server configured with a secret requires this header on every `/builds`,
-`/repos`, and `/sessions` route:
-
-```http
-Authorization: Bearer <token>
+```sh
+ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
+ab-hosted-store credentials list https://github.com/acme/app
+ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
 ```
 
-`GET /health` is always unauthenticated. Package/protocol identity validation
-occurs first on machine routes. Authorization then occurs before request body
-processing on collection routes and before resource lookup on resource routes.
-A caller with the wrong scope therefore cannot use existence or validation
-differences to inspect another resource.
+Issue prints the secret once; list contains metadata only. Issue optionally
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
+`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+retired: the service responds that the credential format changed and points
+to `credentials issue`. Supported old protocol shapes still work with a new
+credential; protocol compatibility does not restore retired authentication.
 
-### Token encoding
+`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
+break-glass credential. It can cross project boundaries. Keep it owner-only:
+never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
 
-A token has two dot-separated base64url segments:
-
-```text
-base64url(UTF-8 JSON scope) + "." + base64url(HMAC-SHA256(secret, payloadSegment))
-```
-
-The HMAC input is the first token segment exactly as encoded, not the decoded
-JSON bytes. The signature is compared in constant time. The scope JSON must
-match exactly one of these shapes; unknown keys are invalid:
+Service-owned signatures use `base64url(JSON scope) + "." +
+base64url(HMAC-SHA256(AB_STORE_SECRET, payloadSegment))`. Signatures are checked
+in constant time. Current strict scope shapes are:
 
 ```jsonc
-// Legacy build scope, retained for wire compatibility
-{ "build": "build-slug", "session": "s_123", "exp": 1784116800000 }
-
-// Explicit resource scope
-{
-  "resource": { "kind": "build", "id": "build-slug" },
-  "session": "s_123",
-  "exp": 1784116800000
-}
-
-{
-  "resource": { "kind": "repo", "id": "acme/autobuild" },
-  "session": "hs_123",
-  "exp": 1784116800000
-}
-
-{
-  "resource": { "kind": "session", "id": "os_123" },
-  "session": "*",
-  "exp": 1784116800000
-}
+{ "version": 1, "ownerAdmin": { "user": "owner identity" }, "exp": 1800000000000 }
+{ "version": 1, "internalOperator": { "user": "owner identity", "repo": "https://github.com/acme/app" }, "exp": 1800000000000 }
 ```
 
-`build`, resource `id`, and `session` are nonempty strings. A resource or
-operator scope may carry an optional `via` claim (the same shape as the
-actor's `via` marker). `exp` is an integer
-Unix epoch in **milliseconds**. A token is expired when `exp <=` the server's
-current epoch milliseconds. A malformed token, malformed scope, bad signature,
-or expired token is invalid and receives `401 auth` without a more specific
-verification diagnostic.
+Internal operator scopes may also carry `via`, using the actor's existing
+shape. Unknown fields are invalid. `exp` is epoch milliseconds and expiry is
+inclusive (`exp <= now` is refused). These signatures are separate from opaque
+project credentials and are never project onboarding credentials.
 
-The legacy scope `{"build":"*", ...}` is the admin resource scope. The
-normal runner/admin form also uses `"session":"*"`, allowing event writes on
-behalf of any valid actor. Only the legacy `build: "*"` spelling grants admin
-resource access; an explicit resource whose id is `"*"` is not admin.
+Every machine route requires Bearer authentication after version negotiation;
+`GET /health` stays public. Explicitly unauthenticated local test servers may
+remain open. Internal owner operator signatures cannot use raw store routes.
 
-### Resource authorization matrix
+A project credential may read and write its repository journal, artifacts,
+snapshots, leases, ticket assets, builds, sessions and streams. Explicit repo
+paths and create bodies must match its project (`403 auth: wrong project`).
+Indirect build/session/stream IDs are resolved internally and checked against
+the resource's actual repository. Missing and foreign IDs both return the same
+`404 not-found` error: `resource unavailable: unknown resource or wrong project`.
+Remote clients continue mapping addressed GET 404 responses to null. Nested
+streams must also belong to the addressed parent.
 
-| Token resource | `/builds` create/list | one matching build | `/repos` ensure | one matching repo | `/repos/{repo}/sessions` create/list | `/repos/{repo}/build-digests` | `/repos/{repo}/state-events` | `/repos/{repo}/tickets/{id}/assets` and `/repos/{repo}/ticket-asset-limits` | one matching session |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| admin (`build: "*"`) | yes | any | yes | any | yes | any | any | any | any |
-| build | no | exact id only | no | no | no | no | no | no | no |
-| repo | no | no | no | exact id only | yes | exact id only | exact id only | exact repo only | no |
-| session | no | no | no | no | no | no | no | no | exact id only |
+`GET /builds` is filtered by the server to the credential's project. Project
+`POST /builds` always allocates a fresh random-suffixed slug from the requested
+base and a matching `ab/<slug>` branch, even when the base is unused. The
+returned BuildRecord slug and branch are authoritative for all subsequent
+work. A foreign or missing base returns null on GET; it neither reveals
+collisions nor blocks creation. Owner admin retains exact-slug creation and
+all-project listing. Local BuildStore adapters retain exact-slug semantics.
 
-The snapshot routes (`/builds/{slug}/snapshots/{reducer}` and
-`/repos/{repo}/snapshots/{reducer}`) follow the one-matching-build and
-one-matching-repo columns: a build token reads and writes only its own build's
-snapshots, a repo token only its own repository's.
-
-A valid token used for the wrong resource receives `403 auth`. Resource scope
-gates all operations, including reads, artifact operations, and leases. A
-session resource token's authority is exactly its one session — it cannot
-create or list sessions, and it cannot touch another session's events,
-artifacts, or streams. A repo token owns its repository's session collection
-routes but not any session resource. Session resource and repo/build tokens
-never cross.
-
-The token's session dimension adds a second gate only to event-bearing writes:
-`POST .../events`, `POST .../events/conditional`, and `POST .../deposits`.
-
-- `session: "*"` may submit any actor that the event catalog itself allows.
-- Any other session may submit only an actor with `kind: "agent"` and a
-  `session` exactly equal to the token session.
-- Another agent session or a kernel, human, dispatcher, or ingester actor
-  receives `403 auth` before catalog validation.
-- Reads, standalone artifact puts, and lease operations do not apply session
-  attribution beyond the resource-scope check.
-
-### Delegated-write attribution (`via`)
-
-On every event-bearing write (`POST .../events`, `POST .../events/conditional`,
-and `POST .../deposits` on build, repository, and session resources), a server
-in authenticated mode enforces `via` attribution after token verification and
-before catalog validation:
-
-- A human actor claiming a `via` the token does not carry is `403 auth` — the
-  caller must be able to distinguish "not your delegate" from "malformed
-  event", which is why this is authority (403) and not validation (422).
-- A token carrying a `via` claim stamps that `via` onto every human actor in
-  the write: the token is authoritative, and a matching claim or no claim both
-  end with the token's `via` on the stored event.
-- A non-human actor carrying a `via` key is not an authority question; it falls
-  through to catalog validation, which rejects it with the rule message.
-- An unscoped operator token carries no `via` and never authorizes raw store
-  routes at all.
-
-In open mode there is no token to be authoritative and writes pass through
-unchanged. Events without a `via` member are stored, replayed, and read
-byte-identically to before.
-
-Build and repository scopes never cross: a harvest repository token cannot
-read a build stream, and a build token cannot read a repository journal.
-Attributed human-operator scopes have
-`{ "operator": { "user": "nonblank identity" }, "exp": … }`. They are accepted
-only by the [operator API](operator-api.md), never by raw store or ticket routes;
-conversely, deployment/admin/build/repository scopes are refused there.
-Deployment scopes have `{ "operator": true, "session": "*", "exp": … }` and
-cover raw store and [hosted ticket](remote-ticket-protocol.md) routes without
-granting attributed operator controls.
+Project credentials retain runner-style actor/session attribution within the
+project; phase CLI scoped handles still constrain build and session access.
+Authenticated raw writes cannot claim a delegated `via`. Owner-project
+credentials also use their recorded creator for operator writes. Dispatcher
+credentials have an immutable server-side purpose: raw store and tickets only,
+never human operator controls. The hosted dispatcher issues one per project
+invocation, expiring at its configured TTL, and does not revoke at tick return
+because launched builds may still need it. Shared content-addressed blobs
+remain deduplicated; this is resource authorization, not blob partitioning.
 
 ## 8. Atomic deposits
 
@@ -994,7 +931,7 @@ The shipped server maps failures as follows:
 |---:|---|---|
 | `400` | `validation` | Invalid JSON, request body schema, malformed percent-encoding, missing/empty required `kind`, a `since`/`rev` value whose JavaScript `Number` conversion is not an integer, or a `wait` value that is not one or more ASCII digits |
 | `401` | `auth` | Missing bearer credentials or an invalid, malformed, badly signed, or expired token |
-| `403` | `auth` | Valid token with the wrong resource scope or event-session attribution |
+| `403` | `auth` | Wrong project, project not registered, or disallowed credential purpose |
 | `404` | `not-found` | Unknown route, unsupported method, unknown build, unknown repository, unknown session, or an unknown or foreign-scoped stream |
 | `409` | `conflict` | Missing/mismatched package or protocol identity, duplicate build creation, appending to a closed stream (`stream "…" is closed`), or a backing conflict reported as already existing |
 | `413` | `validation` | Decoded artifact or serialized stream batch exceeds the configured ceiling; a ticket-asset request or response exceeds the deployment's request ceiling; the message names the ceiling |
@@ -1169,8 +1106,7 @@ Add protocol-specific tests alongside the shared contract for token encoding
 and resource isolation, session-attributed writes, exact validation feedback,
 atomic placeholder substitution, event paging, unauthenticated health, and
 continuity across server restarts. The session family (section 5), the
-session-scoped token's authority matrix, and the `via` stamp/reject order
-(section 7) are part of the contract suite and of the protocol-specific cases. Exercise all routes through HTTP, not by
+project credential boundary, revocation, and delegated-write attribution are part of the contract suite and of the protocol-specific cases. Exercise all routes through HTTP, not by
 calling the backing store directly.
 
 Passing only route smoke tests is not conformance. The complete shared contract

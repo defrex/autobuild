@@ -6,26 +6,47 @@ Every request must send `X-Autobuild-Version`,
 `X-Autobuild-Protocol-Version: 3`, and `Authorization: Bearer …`. Identity is
 checked before authentication or resource lookup.
 
-Mint a token offline; the signed user is used as the human actor on every write:
+Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
+registered normalized repository. The service stores only a SHA-256 digest of
+the random secret, plus project, creator, creation time, last use, expiry and
+revocation metadata. It checks credential status and project registration on
+every request. Revocation takes effect on the next request without affecting
+other credentials. Unknown, expired or revoked credentials receive `401 auth`;
+removed projects receive `403 auth` with `project not registered`.
+
+The deployment owner runs these commands locally with database access:
 
 ```sh
-AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator \
-  --user 'Ada Lovelace' --ttl-seconds 3600
+ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
+ab-hosted-store credentials list https://github.com/acme/app
+ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
 ```
 
-Admin, build, repository, and deployment (`{ "operator": true, … }`) tokens
-have no attributed operator authority. Human-operator tokens have no raw
-`/builds`, `/repos`, `/sessions`, or `/tickets` authority. Encode repository,
-build, session, and artifact kind as separate URL path segments.
+Issue prints the secret once; list contains metadata only. Issue optionally
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
+`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+retired: the service responds that the credential format changed and points
+to `credentials issue`. Supported old protocol shapes still work with a new
+credential; protocol compatibility does not restore retired authentication.
 
-Every repository path is checked against the durable connected-project
-registry after authentication and before any route or generic tool executes.
-An unregistered or removed project returns `404 not-found` for every operator
-credential. Every allowlisted user owns all active projects. Removal preserves
-history; adding the same normalized origin restores access. Registry failures
-fail closed. Owners manage registration with database credentials through
-`ab-hosted-store projects list|add|remove`; see the
-[owner workflow](setup.md#connected-projects).
+`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
+break-glass credential. It can cross project boundaries. Keep it owner-only:
+never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
+
+Owner-purpose project credentials attribute every write to their recorded creator.
+Dispatcher-purpose credentials are refused. Signed-in owners in the dashboard
+and MCP receive short-lived internal signatures with an explicit version,
+selected repository, signed user, expiry and MCP `via`. Only the service holds
+the signing key. These signatures authorize operator routes only and require a
+registered project; replay against another project is refused.
+
+The path project is checked before registry lookup, body parsing and generic
+tool execution. Body repositories and secondary build/session identifiers are
+also checked inside that project. Explicit project mismatches return `403 auth:
+wrong project`; removal returns `403 auth: project not registered`. Encode each
+repository, build, session and artifact kind as a separate URL path segment.
+Registration changes use the database-local `projects list|add|remove` owner
+commands; see [owner workflow](setup.md#connected-projects).
 
 ## Operator sessions
 

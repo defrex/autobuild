@@ -1,3 +1,4 @@
+import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 /**
  * The hosted dispatcher integration scenario (AUT-303, SPEC §12): a real
@@ -317,6 +318,11 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   const guestRuns = new Map<string, GuestRun>()
 
   const backing = new MemoryBuildStore({ clock })
+  await backing.createBuild({
+    slug: 'add-rate-limiting',
+    repo: 'https://github.com/acme/second-project',
+    branch: 'ab/add-rate-limiting',
+  })
   const ticketBackend = new FakeTicketSource([readyTicket('T-1')])
   let readyScans = 0
   const listReady = ticketBackend.listReady.bind(ticketBackend)
@@ -324,8 +330,19 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     readyScans++
     return listReady(...args)
   }
+  const secondRepo = 'https://github.com/acme/second-project'
+  const credentialRegistry = testProjects([
+    secondRepo,
+    REPO,
+    'https://github.com/acme/one',
+    'https://github.com/acme/two',
+  ])
+  const credentials = testCredentials(credentialRegistry, storeEnv.AB_STORE_SECRET, clock).store
+  const issueDispatcherCredential = async (repo: string, creator: string, expiresAt: Date) =>
+    (await credentials.issue(repo, creator, { purpose: 'dispatcher', expiresAt })).token
   const service = createHostedStoreService({
-    openProjectRegistry: async () => testProjects([REPO]),
+    openCredentials: async () => credentials,
+    openProjectRegistry: async () => credentialRegistry,
     env: storeEnv,
     clock,
     openStore: async () => backing,
@@ -469,7 +486,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     )
     await abDispatch({
       targetRepo: join(tmp, 'unused-checkout'),
-      repository: REPO,
+      repository: opts.repository!,
       originConfigTransport: transport,
       once: true,
       plain: true,
@@ -505,7 +522,8 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   }
 
   const endpoint = createDispatcherEndpoint({
-    openProjectRegistry: async () => testProjects([REPO]),
+    issueDispatcherCredential,
+    openProjectRegistry: async () => credentialRegistry,
     env: {
       ...storeEnv,
       AB_DISPATCHER_ORIGIN: serviceUrl,
@@ -597,7 +615,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     expect(b1).toBeDefined()
     // Slug naming falls back deterministically: the scripted runtime has no
     // one-shot model, so the title slug wins.
-    expect(b1!.slug).toBe('add-rate-limiting')
+    expect(b1!.slug).toMatch(/^add-rate-limiting-[a-f0-9]+$/)
     const b1Slug = b1!.slug
     let events = await buildEvents(b1Slug)
     expect(typesOf(events)).toContain('workspace.provisioned')
@@ -649,7 +667,8 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
 
     // ── Dashboard controls take effect on the next invocation. ─────────────
     const operatorToken = mintToken(storeEnv.AB_STORE_SECRET, {
-      operator: { user: 'Operator' },
+      version: 1,
+      internalOperator: { user: 'Operator', repo: REPO },
       exp: clock().getTime() + 3_600_000,
     })
     const operator = new OperatorApiClient({ url: serviceUrl, token: operatorToken })
@@ -769,6 +788,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
       return new Date(clockBase + (boundedCalls > 3 ? 30_000 : 0))
     }) as Clock
     const boundedEndpoint = createDispatcherEndpoint({
+      issueDispatcherCredential,
       openProjectRegistry: async () =>
         testProjects(['https://github.com/acme/one', 'https://github.com/acme/two']),
       env: {
@@ -803,6 +823,50 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
     expect(boundedDispatched).toEqual(['https://github.com/acme/one'])
 
     // ── Every delegated request authenticated; guest env carries the ───────
+    // Both projects dispatch the same human-readable base without an oracle or collision.
+    const crossTicket = await ticketBackend.create(
+      { title: 'Add rate limiting', body: readyTicket('cross').body, labels: ['autobuild'] },
+      { state: 'Ready' },
+    )
+    const secondEndpoint = createDispatcherEndpoint({
+      issueDispatcherCredential,
+      openProjectRegistry: async () => credentialRegistry,
+      env: {
+        ...storeEnv,
+        AB_DISPATCHER_ORIGIN: serviceUrl,
+        AB_DISPATCHER_REPOSITORIES: secondRepo,
+        AB_DISPATCHER_BUDGET_SECONDS: '780',
+        CRON_SECRET: 'cron-secret',
+        GITHUB_TOKEN: 'override-forge-token',
+        GH_TOKEN: 'override-forge-token',
+      },
+      clock,
+      dispatch,
+      stdout: () => {},
+      stderr: (line) => kernelErrors.push(line),
+    })
+    const crossResponse = await secondEndpoint.fetch(
+      new Request(`${serviceUrl}/api/dispatch`, {
+        headers: { authorization: 'Bearer cron-secret' },
+      }),
+    )
+    expect(crossResponse.status).toBe(200)
+    const crossBuild = (await backing.listBuilds()).find(
+      (record) => record.repo === secondRepo && record.ticket?.id === crossTicket.ref.id,
+    )
+    expect(crossBuild).toBeDefined()
+    expect(crossBuild!.slug).toMatch(/^add-rate-limiting-2-[a-f0-9]+$/)
+    expect(crossBuild!.slug).not.toBe(b1Slug)
+    expect(crossBuild!.branch).toBe(`ab/${crossBuild!.slug}`)
+    await waitForBuildEvent(crossBuild!.slug, 'finalize.completed', 'second project finalize')
+    const projectA = new RemoteBuildStore({ url: serviceUrl, token: mintedTokens[0]! })
+    expect(await projectA.getBuild('add-rate-limiting')).toBeNull()
+    expect(await projectA.getBuild(crossBuild!.slug)).toBeNull()
+    expect(await projectA.getBuild('absent-base')).toBeNull()
+    expect((await projectA.listBuilds()).every((record) => record.repo === REPO)).toBe(true)
+    const dispatcherOperator = new OperatorApiClient({ url: serviceUrl, token: mintedTokens[0]! })
+    await expect(dispatcherOperator.repositoryStatus(REPO)).rejects.toThrow('dispatcher credential')
+
     // ── deployment's own AB_STORE/AB_TOKEN. ────────────────────────────────
     expect(
       requests

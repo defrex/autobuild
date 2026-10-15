@@ -14,8 +14,8 @@ import { createTicketServer } from './ticket-server'
 const secret = 'ticket-test-secret'
 const now = new Date('2026-01-01T00:00:00.000Z')
 const operator = mintToken(secret, {
-  operator: true,
-  session: '*',
+  version: 1,
+  ownerAdmin: { user: 'owner:fixture' },
   exp: now.getTime() + 60_000,
 })
 
@@ -93,7 +93,7 @@ describe('hosted ticket protocol', () => {
         body: '{not json',
       }),
     )
-    expect(response.status).toBe(403)
+    expect(response.status).toBe(401)
     expect(invoked).toBe(0)
   })
 

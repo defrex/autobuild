@@ -6,26 +6,47 @@ Every request must send `X-Autobuild-Version`,
 `X-Autobuild-Protocol-Version: 3`, and `Authorization: Bearer …`. Identity is
 checked before authentication or resource lookup.
 
-Mint a token offline; the signed user is used as the human actor on every write:
+Project credentials are opaque `abp_1_<id>_<secret>` bearer values bound to one
+registered normalized repository. The service stores only a SHA-256 digest of
+the random secret, plus project, creator, creation time, last use, expiry and
+revocation metadata. It checks credential status and project registration on
+every request. Revocation takes effect on the next request without affecting
+other credentials. Unknown, expired or revoked credentials receive `401 auth`;
+removed projects receive `403 auth` with `project not registered`.
+
+The deployment owner runs these commands locally with database access:
 
 ```sh
-AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator \
-  --user 'Ada Lovelace' --ttl-seconds 3600
+ab-hosted-store credentials issue https://github.com/acme/app --user owner@example.com
+ab-hosted-store credentials list https://github.com/acme/app
+ab-hosted-store credentials revoke https://github.com/acme/app --id ID --user owner@example.com
 ```
 
-Admin, build, repository, and deployment (`{ "operator": true, … }`) tokens
-have no attributed operator authority. Human-operator tokens have no raw
-`/builds`, `/repos`, `/sessions`, or `/tickets` authority. Encode repository,
-build, session, and artifact kind as separate URL path segments.
+Issue prints the secret once; list contains metadata only. Issue optionally
+accepts `--ttl-seconds N` or `--expires-at ISO-8601`. Set the returned token as
+`AB_TOKEN`. Previous `AB_TOKEN` values and `mint operator` / `mint build` are
+retired: the service responds that the credential format changed and points
+to `credentials issue`. Supported old protocol shapes still work with a new
+credential; protocol compatibility does not restore retired authentication.
 
-Every repository path is checked against the durable connected-project
-registry after authentication and before any route or generic tool executes.
-An unregistered or removed project returns `404 not-found` for every operator
-credential. Every allowlisted user owns all active projects. Removal preserves
-history; adding the same normalized origin restores access. Registry failures
-fail closed. Owners manage registration with database credentials through
-`ab-hosted-store projects list|add|remove`; see the
-[owner workflow](setup.md#connected-projects).
+`mint admin --ttl-seconds N` creates an explicit versioned, attributed owner
+break-glass credential. It can cross project boundaries. Keep it owner-only:
+never give it or `AB_STORE_SECRET` to a dispatcher or build agent.
+
+Owner-purpose project credentials attribute every write to their recorded creator.
+Dispatcher-purpose credentials are refused. Signed-in owners in the dashboard
+and MCP receive short-lived internal signatures with an explicit version,
+selected repository, signed user, expiry and MCP `via`. Only the service holds
+the signing key. These signatures authorize operator routes only and require a
+registered project; replay against another project is refused.
+
+The path project is checked before registry lookup, body parsing and generic
+tool execution. Body repositories and secondary build/session identifiers are
+also checked inside that project. Explicit project mismatches return `403 auth:
+wrong project`; removal returns `403 auth: project not registered`. Encode each
+repository, build, session and artifact kind as a separate URL path segment.
+Registration changes use the database-local `projects list|add|remove` owner
+commands; see [owner workflow](setup.md#connected-projects).
 
 ## Operator sessions
 
@@ -75,7 +96,11 @@ supplied forms return `400 validation`.
 Dashboard reads use the latest durable, run-correlated `effectiveConfig`
 repository artifact. Missing, corrupt, or invalid configuration returns a typed
 `409 effective-config-unavailable`; the service never guesses from a checkout.
-Clients poll these reads; streaming is not provided. `triageState`, `readyState`,
+Clients poll these reads — the operator HTTP API exposes no push or long-poll
+event transport. Streaming is provided as a CLI read surface: `ab watch`
+streams build and repository events by polling the same event logs client-side
+(the store protocol's `GET /builds/{slug}/events` and `GET /repos/{repo}/events`
+reads), not as a transport on this API. `triageState`, `readyState`,
 and every entry in `states` are backend state names and must be sent back verbatim
 when used with the move control.
 
@@ -114,11 +139,24 @@ The retry object is deliberately bare: adding `text` is a `400 validation`
 rather than silently changing the resolution to guidance. A revision object may
 also carry `ceiling` only to receive the shared `incompatible-answer-options`
 refusal; a ceiling and spec revision cannot be performed together.
-
 The hosted service has no ticket-provider credentials. For ticket-origin
 revision, a trusted caller fetches the current ticket body and supplies it; the
 build must still have a recorded ticket. Revision conformance, lazy retry,
 artifact metadata, event ordering, and refusal rules are the same as the CLI.
+
+## The registry's protocol face: `POST …/tools/{tool}`
+
+One generic route executes any entry of the agent tool registry (the same
+closed table `ab mcp` serves over stdio and the hosted `/mcp` endpoint serves
+over Streamable HTTP): the body is the tool's validated input — `repo`
+included and required to equal the URL's repository — and the response is the
+registry result verbatim. The verified operator token supplies the acting
+identity and, when minted with one, the `via` attribution marker; the body
+never does. Failures keep the shared `{kind,error,code?,progress?}` shape:
+validation is `400`, auth `403`, not-found `404`, conflict and refusal `409`,
+internal `500`. The route adds no authority of its own — it is the registry
+behind the token check — so a tool available here is exactly the tool table,
+and the table's contract suite is the single gate.
 
 ### Success results
 
@@ -166,11 +204,33 @@ headers with a server-minted token that expires after 30 seconds and carries
 the normalized signed-in email. Consequently every durable control event has
 the browser user's human actor while no token or signing secret reaches client
 code. Responses are private/no-store; a 401 sends the application back to sign
-in. Browser clients poll the visible dashboard every two seconds; live transcript
-streaming is not provided. Delegated bearer tokens remain server-side.
+in. Browser clients poll the visible dashboard every two seconds; the browser
+surface offers no streaming of its own — live transcript streaming remains
+absent here, and the streaming read surface is the CLI's `ab watch`, which
+polls the store's event reads client-side. Delegated bearer tokens remain
+server-side.
 
-The API does not expose phase-session commands, runner startup, live streaming,
-or a generic event-append operation.
+The API does not expose phase-session commands, runner startup, a push or
+long-poll streaming transport, or a generic event-append operation; event
+streaming is composed client-side by `ab watch`, which polls the store's
+event reads.
+
+
+Dispatcher liveness is also visible through `ab repository status --json`:
+`dispatcher.holder` identifies the unexpired repository lease owner, independently
+of `latestRun`. Heartbeat age measures attributable renewals; tick age measures
+durable progress. Missing historical evidence is null. The liveness query uses
+bounded repository facts first, with a full-history fallback when a later
+invocation hides the holder start or the latest stop. Other state reads retain
+their bounded semantics.
+
+Repository-following `ab watch` additionally emits a read-only `dispatcher.lost`
+observation when an observed lease expires without a matching stop. JSON carries
+`observation` instead of `event`, with run, observedAt, leaseExpiresAt and available
+identity, plus the usual repo/build/state/cursor fields. It invents no durable
+sequence or actor. Retain the cursor to avoid repeat reports across invocations.
+No lease alone is not evidence of death. SIGINT, SIGHUP and SIGTERM drain dispatch,
+record the first signal in the stop fact, and release its lease before exit.
 
 ### CLI attention monitoring
 

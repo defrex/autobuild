@@ -1,3 +1,4 @@
+import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { verifyToken } from '@defrex/autobuild/remote-store'
@@ -6,58 +7,21 @@ import { mintTokenFromArgs, runTokenCli, runHostedCli } from './bin'
 const now = new Date('2026-09-02T00:00:00.000Z')
 
 describe('offline token command', () => {
-  test('mints deployment, admin, build/session, and attributed operator scopes offline', () => {
-    const deployment = mintTokenFromArgs(
-      ['mint', 'operator', '--ttl-seconds', '60'],
-      { AB_STORE_SECRET: 's' },
-      now,
-    )
-    expect(verifyToken('s', deployment, now)).toEqual({
-      operator: true,
-      session: '*',
-      exp: now.getTime() + 60_000,
-    })
-
+  test('mints explicit owner admin and retires client resource issuance', () => {
     const admin = mintTokenFromArgs(
       ['mint', 'admin', '--ttl-seconds', '60'],
       { AB_STORE_SECRET: 's' },
       now,
     )
     expect(verifyToken('s', admin, now)).toEqual({
-      build: '*',
-      session: '*',
-      exp: now.getTime() + 60_000,
+      version: 1,
+      ownerAdmin: { user: 'owner:break-glass' },
+      exp: now.getTime() + 60000,
     })
-
-    const build = mintTokenFromArgs(
-      [
-        'mint',
-        'build',
-        '--build',
-        'demo',
-        '--session',
-        'implement',
-        '--expires-at',
-        '2026-09-03T00:00:00Z',
-      ],
-      { AB_STORE_SECRET: 's' },
-      now,
-    )
-    expect(verifyToken('s', build, now)).toEqual({
-      build: 'demo',
-      session: 'implement',
-      exp: Date.parse('2026-09-03T00:00:00Z'),
-    })
-
-    const humanOperator = mintTokenFromArgs(
-      ['mint', 'operator', '--user', 'Ada Lovelace', '--ttl-seconds', '60'],
-      { AB_STORE_SECRET: 's' },
-      now,
-    )
-    expect(verifyToken('s', humanOperator, now)).toEqual({
-      operator: { user: 'Ada Lovelace' },
-      exp: now.getTime() + 60_000,
-    })
+    for (const kind of ['operator', 'build'])
+      expect(() =>
+        mintTokenFromArgs(['mint', kind, '--ttl-seconds', '60'], { AB_STORE_SECRET: 's' }, now),
+      ).toThrow('credentials issue')
   })
 
   test('prints only a token on success and actionable usage on failure', () => {
@@ -167,4 +131,34 @@ describe('project owner command', () => {
     expect(errors[0]).toContain('database unavailable')
     expect(closed).toBe(true)
   })
+})
+
+test('credential owner commands issue once, list redacted metadata, revoke idempotently and close pools', async () => {
+  const repo = 'https://github.com/acme/owner-cli'
+  const { store } = testCredentials(testProjects([repo]))
+  let closes = 0
+  store.close = async () => {
+    closes++
+  }
+  const output: string[] = []
+  const run = (args: string[]) =>
+    runHostedCli(
+      ['credentials', ...args],
+      {},
+      (text) => output.push(text),
+      (text) => {
+        throw new Error(text)
+      },
+      undefined,
+      async () => store,
+    )
+  expect(await run(['issue', repo, '--user', 'owner'])).toBe(0)
+  const issued = JSON.parse(output.pop()!)
+  expect(issued.token).toMatch(/^abp_1_/)
+  expect(await run(['list', repo])).toBe(0)
+  expect(output.pop()).not.toContain(issued.token)
+  expect(await run(['revoke', repo, '--id', issued.credential.id, '--user', 'owner'])).toBe(0)
+  expect(await run(['revoke', repo, '--id', issued.credential.id, '--user', 'owner'])).toBe(0)
+  expect(await store.authenticate(issued.token, new Date())).toBeNull()
+  expect(closes).toBe(4)
 })

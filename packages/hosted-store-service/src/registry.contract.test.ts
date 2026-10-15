@@ -157,7 +157,11 @@ async function seedWorld(): Promise<World> {
   return { store, source, backend }
 }
 
-const TOKEN = mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 })
+const TOKEN = mintToken(secret, {
+  version: 1,
+  internalOperator: { user: 'Ada', repo },
+  exp: now.getTime() + 60_000,
+})
 
 type ApiResult = { status: number; headers: Headers; body: object; bytes: Uint8Array }
 

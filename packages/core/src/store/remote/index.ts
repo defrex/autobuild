@@ -4,7 +4,12 @@
 export { AuthError, RemoteBuildStore } from './client'
 export type { RemoteBuildStoreOptions, RemoteStoreIdentity } from './client'
 export { mintToken, tokenResource, verifyToken } from './token'
-export type { OperatorTokenScope, TokenScope } from './token'
+export type {
+  OperatorTokenScope,
+  InternalOperatorTokenScope,
+  AdminTokenScope,
+  TokenScope,
+} from './token'
 export {
   AUTOBUILD_VERSION,
   AUTOBUILD_VERSION_HEADER,

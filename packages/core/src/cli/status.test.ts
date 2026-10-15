@@ -2209,7 +2209,7 @@ describe('own-session ambient authority over a relocated checkout', () => {
         now: () => NOW,
         slug: 'theirs',
       }),
-    ).rejects.toThrow(`build "theirs" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
+    ).rejects.toThrow('phase-session store scoped to build')
   })
 
   test('an explicit --store other than the session store does not authorize the bypass', async () => {
@@ -2248,7 +2248,7 @@ describe('own-session ambient authority over a relocated checkout', () => {
         now: () => NOW,
         slug: 'legacy',
       }),
-    ).rejects.toThrow(`build "legacy" belongs to repository "${OTHER_REPO}", not "${GUEST_ORIGIN}"`)
+    ).rejects.toThrow('phase-session store scoped to repo')
   })
 })
 

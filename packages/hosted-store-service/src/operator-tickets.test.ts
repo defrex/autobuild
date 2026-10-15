@@ -57,7 +57,11 @@ async function setup(source: FakeTicketSource) {
   })
   const client = new OperatorApiClient({
     url: 'http://operator.test',
-    token: mintToken(secret, { operator: { user: 'Ada' }, exp: now.getTime() + 60_000 }),
+    token: mintToken(secret, {
+      version: 1,
+      internalOperator: { user: 'Ada', repo: repo },
+      exp: now.getTime() + 60_000,
+    }),
     fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
       server.fetch(
         input instanceof Request ? new Request(input, init) : new Request(String(input), init),

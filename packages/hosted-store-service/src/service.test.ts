@@ -72,7 +72,8 @@ function postMessage(
         method: 'POST',
         headers: {
           authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
-            operator: { user: 'Ada' },
+            version: 1,
+            ownerAdmin: { user: 'Ada' },
             exp: now.getTime() + 60_000,
           })}`,
           [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -89,7 +90,8 @@ function operatorClientFor(service: ReturnType<typeof createHostedStoreService>)
   return new OperatorApiClient({
     url: 'http://hosted.test',
     token: mintToken(env.AB_STORE_SECRET, {
-      operator: { user: 'Ada' },
+      version: 1,
+      ownerAdmin: { user: 'Ada' },
       exp: now.getTime() + 60_000,
     }),
     fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
@@ -100,8 +102,8 @@ function operatorClientFor(service: ReturnType<typeof createHostedStoreService>)
 }
 
 const token = mintToken(env.AB_STORE_SECRET, {
-  build: '*',
-  session: '*',
+  version: 1,
+  ownerAdmin: { user: 'owner:fixture' },
   exp: now.getTime() + 60_000,
 })
 const machineHeaders = {
@@ -112,8 +114,8 @@ const machineHeaders = {
 
 function clientFor(service: ReturnType<typeof createHostedStoreService>, identity = {}) {
   const token = mintToken(env.AB_STORE_SECRET, {
-    build: '*',
-    session: '*',
+    version: 1,
+    ownerAdmin: { user: 'owner:fixture' },
     exp: now.getTime() + 60_000,
   })
   const fetchFn = ((input: string | URL | Request, init?: RequestInit) =>
@@ -128,6 +130,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -156,6 +159,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -165,7 +169,8 @@ describe('hosted store service', () => {
       },
     })
     const token = mintToken(env.AB_STORE_SECRET, {
-      operator: { user: 'Hosted Operator' },
+      version: 1,
+      internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
       exp: now.getTime() + 60_000,
     })
     const client = new OperatorApiClient({
@@ -203,13 +208,15 @@ describe('hosted store service', () => {
   test('routes the generic tools POST to the operator server', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
       openStore: async () => backing,
     })
     const token = mintToken(env.AB_STORE_SECRET, {
-      operator: { user: 'Hosted Operator' },
+      version: 1,
+      internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
       via: { kind: 'mcp', client: 'claude' },
       exp: now.getTime() + 60_000,
     })
@@ -245,6 +252,7 @@ describe('hosted store service', () => {
     }
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -254,7 +262,8 @@ describe('hosted store service', () => {
     const operator = new OperatorApiClient({
       url: 'http://hosted.test',
       token: mintToken(env.AB_STORE_SECRET, {
-        operator: { user: 'Hosted Operator' },
+        version: 1,
+        internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
         exp: now.getTime() + 60_000,
       }),
       fetchFn: ((input: string | URL | Request, init?: RequestInit) =>
@@ -284,6 +293,7 @@ describe('hosted store service', () => {
   test('unknown and unsupported routes return 404 without opening persistence', async () => {
     let opens = 0
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       openStore: async () => {
@@ -318,6 +328,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -347,6 +358,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -383,6 +395,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -410,6 +423,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     const deferred = Promise.withResolvers<MemoryBuildStore>()
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -433,6 +447,7 @@ describe('hosted store service', () => {
   test('round-trips 1 MiB and rejects ceiling-plus-one without mutation', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -457,6 +472,7 @@ describe('hosted store service', () => {
 
   test('reports package skew before authentication and redacts opener failures', async () => {
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -471,6 +487,7 @@ describe('hosted store service', () => {
     const failure = new Error('postgres://user:password@secret-host/db')
     const reports: unknown[][] = []
     const failed = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       openStore: async () => {
@@ -500,6 +517,7 @@ describe('hosted store service', () => {
     }
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -526,6 +544,7 @@ describe('hosted store service', () => {
 
   test('passes expected protocol errors through unchanged', async () => {
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -547,6 +566,7 @@ describe('hosted store service', () => {
     await publishOrchestratorConfig(backing)
     const scheduled: (() => Promise<void>)[] = []
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -585,6 +605,7 @@ describe('hosted store service', () => {
     // Neither scheduleBackground nor a reporter: pin only what the default
     // guarantees through the public surface.
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
       clock,
@@ -684,6 +705,7 @@ model = "test/mock"
   ) {
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env: { ...env, ...extraEnv },
       clock,
@@ -699,7 +721,8 @@ model = "test/mock"
     extraHeaders: Record<string, string> = {},
   ): Promise<Response> {
     const token = mintToken(env.AB_STORE_SECRET, {
-      operator: { user: 'Hosted Operator' },
+      version: 1,
+      internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
       exp: now.getTime() + 60_000,
     })
     return service.fetch(
@@ -729,7 +752,8 @@ model = "test/mock"
           method: 'POST',
           headers: {
             authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
-              operator: { user: 'Hosted Operator' },
+              version: 1,
+              internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
               exp: now.getTime() + 60_000,
             })}`,
             [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -765,7 +789,8 @@ model = "test/mock"
           method: 'POST',
           headers: {
             authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
-              operator: { user: 'Hosted Operator' },
+              version: 1,
+              internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
               exp: now.getTime() + 60_000,
             })}`,
             [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -801,7 +826,8 @@ model = "test/mock"
           method: 'POST',
           headers: {
             authorization: `Bearer ${mintToken(env.AB_STORE_SECRET, {
-              operator: { user: 'Hosted Operator' },
+              version: 1,
+              internalOperator: { user: 'Hosted Operator', repo: 'acme/repo' },
               exp: now.getTime() + 60_000,
             })}`,
             [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
@@ -827,6 +853,7 @@ test('project discovery opens independently of blobs and retries failed initiali
   let attempts = 0
   const projects = testProjects(['https://github.com/acme/one'])
   const service = createHostedStoreService({
+    issueDispatcherCredential: async () => 'abp_1_fixture',
     env: {},
     openStore: async () => {
       throw new Error('project discovery opened blobs')

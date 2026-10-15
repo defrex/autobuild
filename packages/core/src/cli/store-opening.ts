@@ -16,7 +16,7 @@ import {
   type CliEnv,
   type HarvestCliEnv,
 } from './env'
-import { isRemoteStoreRef, resolveRepoState, type RepoStatePaths } from './repo-state'
+import { resolveRepoState, type RepoStatePaths } from './repo-state'
 import { resolveStore } from './store-ref'
 
 /** Shared injection seam used by every command that opens a BuildStore. */
@@ -39,15 +39,14 @@ export const openProductionStore: StoreOpener = (ref, token) => {
 }
 
 /** Apply validated ambient authority to a selected Store handle. Remote
- * handles retain token-backed server authorization; filesystem handles receive
- * the equivalent in-process scope. Keeping this primitive shared prevents
+ * handles retain server-side project authorization; every handle receives
+ * the same in-process build/session scope. Keeping this primitive shared prevents
  * phase commands and ambient-aware query commands from drifting. */
 function scopeSelectedStoreToPhaseSession(
   store: BuildStore,
-  ref: string,
+  _ref: string,
   env: AmbientReadSession,
 ): BuildStore {
-  if (isRemoteStoreRef(ref)) return store
   return scopeLocalStoreToPhaseSession(
     store,
     'build' in env
@@ -65,9 +64,8 @@ export interface OpenedStoreContext extends RepoStatePaths {
   store: BuildStore
   token?: string
   /** The validated ambient phase/Harvest identity this invocation carries, if
-   * any — the same value that scoped `store` on the local path. Exposed so a
-   * command core can extend own-resource authority to remote handles too,
-   * where no session wrapper exists. */
+   * any — the same value that scoped `store`. Exposed for commands whose
+   * repository selection also depends on ambient own-build authority. */
   ambient?: AmbientReadSession
 }
 
@@ -115,10 +113,8 @@ export async function openSessionlessStore(
 /** Finite command ownership boundary. Opening failures occur before the
  * try/finally, so only a successfully returned handle is ever closed.
  *
- * Remote store handles do not session-scope (bearer authorization is the
- * server's concern), so a command core that needs own-build authority must
- * consume `ambient` from the context directly rather than rely on the handle
- * enforcing a scope. */
+ * Ambient query openers apply in-process build/session scope to both local
+ * and remote handles; the server additionally enforces project authority. */
 export async function withSessionlessStore<T>(
   opts: SessionlessStoreOpts,
   use: (context: OpenedStoreContext) => Promise<T> | T,

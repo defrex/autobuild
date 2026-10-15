@@ -56,7 +56,8 @@ describe('web operator gateway', () => {
     const raw = delegated!.headers.get('authorization')!.replace(/^Bearer /, '')
     expect(raw).not.toBe('attacker')
     expect(verifyToken(storeSecret, raw, new Date('2029-01-01T00:00:01Z'))).toEqual({
-      operator: { user: 'ada@example.com' },
+      version: 1,
+      internalOperator: { user: 'ada@example.com', repo: 'https://github.com/owner/repo' },
       exp: Date.parse('2029-01-01T00:00:30Z'),
     })
   })

@@ -1,3 +1,5 @@
+import { testProjects } from './testing/projects'
+import { testCredentials } from './testing/credentials'
 /**
  * Ticket assets over the remote store wire (SPEC §7.1, docs/remote-store-
  * protocol.md): token matrix, the advertised deployment ceiling and its
@@ -50,27 +52,28 @@ function spyFetch(overrides?: (url: URL) => Response | undefined) {
 
 function harness(opts: { maxTicketAssetRequestBytes?: number; secret?: string } = {}) {
   const backing = new MemoryBuildStore()
-  const server = startStoreServer({ store: backing, ...opts })
-  return { backing, server }
+  const credentials = testCredentials(
+    testProjects([REPO, 'https://github.com/acme/other']),
+    opts.secret,
+  )
+  const server = startStoreServer({
+    store: backing,
+    ...opts,
+    ...(opts.secret ? { auth: credentials.auth } : {}),
+  })
+  return { backing, server, credentials: credentials.store }
 }
 
 describe('ticket asset routes: token matrix', () => {
   test('repo token for its own repo and admin may use them; build and foreign repo tokens may not', async () => {
     const secret = 's3cret'
-    const { server } = harness({ secret })
+    const { server, credentials } = harness({ secret })
     try {
-      const repoToken = mintToken(secret, {
-        resource: { kind: 'repo', id: REPO },
-        session: '*',
-        exp: FAR,
-      })
-      const adminToken = mintToken(secret, { build: '*', session: '*', exp: FAR })
+      const repoToken = (await credentials.issue(REPO, 'owner')).token
+      const adminToken = mintToken(secret, { version: 1, ownerAdmin: { user: 'owner' }, exp: FAR })
       const buildToken = mintToken(secret, { build: 'some-build', session: '*', exp: FAR })
-      const otherRepoToken = mintToken(secret, {
-        resource: { kind: 'repo', id: 'https://github.com/acme/other' },
-        session: '*',
-        exp: FAR,
-      })
+      const otherRepoToken = (await credentials.issue('https://github.com/acme/other', 'owner'))
+        .token
       for (const token of [repoToken, adminToken]) {
         const store = new RemoteBuildStore({ url: server.url, token })
         const meta = await store.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('x')))
@@ -407,20 +410,19 @@ describe('pinned ticket asset routes (SPEC §6.3)', () => {
     })
   }
 
-  test("a build token reads its own build's pinned asset, even after the ticket replaced it", async () => {
+  test("a project credential reads its build's pinned asset, even after the ticket replaced it", async () => {
     const secret = 's3cret'
-    const { backing, server } = harness({ secret })
+    const { backing, server, credentials } = harness({ secret })
     try {
       await pinnedBuild(backing, 'pinned-build')
       await backing.putTicketAsset(REPO, 'T-1', fileAsset('a', enc('replaced')))
-      const buildToken = mintToken(secret, { build: 'pinned-build', session: '*', exp: FAR })
+      const buildToken = (await credentials.issue(REPO, 'owner')).token
       const store = new RemoteBuildStore({ url: server.url, token: buildToken })
 
       const asset = await store.getPinnedTicketAsset('pinned-build', 'design', 'a')
       expect(asset?.meta.revision).toBe(0)
       expect(asset?.entries).toEqual([{ type: 'file', path: 'a', content: enc('one') }])
-      // The ticket-asset routes themselves stay closed to the build token.
-      await expect(store.listTicketAssets(REPO, 'T-1')).rejects.toBeInstanceOf(AuthError)
+      expect(await store.listTicketAssets(REPO, 'T-1')).toHaveLength(1)
     } finally {
       await server.stop()
     }
@@ -428,7 +430,7 @@ describe('pinned ticket asset routes (SPEC §6.3)', () => {
 
   test("another build's token is refused (403) and an unpinned name is null", async () => {
     const secret = 's3cret'
-    const { backing, server } = harness({ secret })
+    const { backing, server, credentials } = harness({ secret })
     try {
       await pinnedBuild(backing, 'pinned-build')
       const other = new RemoteBuildStore({
@@ -441,7 +443,7 @@ describe('pinned ticket asset routes (SPEC §6.3)', () => {
 
       const own = new RemoteBuildStore({
         url: server.url,
-        token: mintToken(secret, { build: 'pinned-build', session: '*', exp: FAR }),
+        token: (await credentials.issue(REPO, 'owner')).token,
       })
       expect(await own.getPinnedTicketAsset('pinned-build', 'design', 'unpinned')).toBeNull()
       expect(await own.getPinnedTicketAsset('pinned-build', 'design', 'a', 7)).toBeNull()

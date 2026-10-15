@@ -24,8 +24,8 @@ describeTicketSourceContract('hosted service composition', async () => {
     sourceFor: () => backend,
   })
   const token = mintToken(secret, {
-    operator: true,
-    session: '*',
+    version: 1,
+    ownerAdmin: { user: 'owner:fixture' },
     exp: now.getTime() + 60_000,
   })
   return {
@@ -62,7 +62,11 @@ test.each([true, undefined])('real hosted transport preserves listing hint %s', 
     diagnostics: [],
   })
   const service = createHostedStoreService({ env, clock: () => now, sourceFor: () => backend })
-  const token = mintToken(secret, { operator: true, session: '*', exp: now.getTime() + 60_000 })
+  const token = mintToken(secret, {
+    version: 1,
+    ownerAdmin: { user: 'owner:fixture' },
+    exp: now.getTime() + 60_000,
+  })
   const source = new HostedTicketSource({
     url: 'https://hosted.example',
     token,

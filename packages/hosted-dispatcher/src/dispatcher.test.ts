@@ -1,14 +1,29 @@
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import type { DispatchOpts } from '@defrex/autobuild/cli'
-import { verifyToken } from '@defrex/autobuild/remote-store'
 import { parseHostedStoreEnv } from '@defrex/autobuild-hosted-store-service'
 import {
-  createDispatcherEndpoint,
-  createHostedDispatcher,
+  createDispatcherEndpoint as realCreateDispatcherEndpoint,
+  createHostedDispatcher as realCreateHostedDispatcher,
   parseHostedDispatcherEnv,
   type HostedDispatcherOptions,
 } from './dispatcher'
+
+// Issuance seam records an opaque, distinct project-bound credential per tick.
+const issued = new Map<string, { repo: string; creator: string; expiresAt: Date }>()
+async function issueDispatcherCredential(
+  repo: string,
+  creator: string,
+  expiresAt: Date,
+): Promise<string> {
+  const token = `abp_1_${crypto.randomUUID()}`
+  issued.set(token, { repo, creator, expiresAt })
+  return token
+}
+const createHostedDispatcher = (options: HostedDispatcherOptions) =>
+  realCreateHostedDispatcher({ issueDispatcherCredential, ...options })
+const createDispatcherEndpoint = (options: HostedDispatcherOptions) =>
+  realCreateDispatcherEndpoint({ issueDispatcherCredential, ...options })
 
 const storeEnv = {
   AB_STORE_SECRET: 'test-signing-secret',
@@ -206,11 +221,10 @@ describe('createHostedDispatcher', () => {
       expect(call.kernelRunId).toMatch(/^hosted-dispatcher-/)
       expect(call.env?.AB_STORE).toBe('https://hosted.example.test')
       const token = call.env?.AB_TOKEN ?? ''
-      // The minted credential is a deployment operator token signed with the
-      // store secret: accepted by the store and ticket servers alike.
-      expect(verifyToken(storeEnv.AB_STORE_SECRET, token, at)).toMatchObject({
-        operator: true,
-        session: '*',
+      expect(issued.get(token)).toEqual({
+        repo: call.repository!,
+        creator: `system:${call.kernelRunId}`,
+        expiresAt: new Date(at.getTime() + 604800000),
       })
     }
     expect(calls[0]!.kernelRunId).not.toBe(calls[1]!.kernelRunId)

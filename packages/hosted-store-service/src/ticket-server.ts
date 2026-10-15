@@ -1,7 +1,11 @@
+import {
+  createMachineAuth,
+  MachineAuthError,
+  requireMachineAccess,
+  type MachineAuth,
+} from './machine-auth'
 import { systemClock, type Clock, type TicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
-  tokenResource,
-  verifyToken,
   clientIdentityError,
   stableVersion,
   AUTOBUILD_VERSION_HEADER,
@@ -17,6 +21,7 @@ import {
 
 export interface TicketServerOptions {
   secret: string
+  auth?: MachineAuth
   sourceFor(context: HostedTicketContext): TicketSource | Promise<TicketSource>
   clock?: Clock
   /** Observes unexpected source failures without changing their wire response. */
@@ -57,19 +62,16 @@ export function createTicketServer(options: TicketServerOptions): {
     }
   }
 
-  function authorize(req: Request): void {
-    const match = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') ?? '')
-    if (!match) throw new TicketRequestError(401, 'auth', 'missing bearer token')
-    const scope = verifyToken(options.secret, match[1]!, clock())
-    if (scope === null) throw new TicketRequestError(401, 'auth', 'invalid or expired token')
-    const resource = tokenResource(scope)
-    if (resource.kind !== 'deployment') {
-      throw new TicketRequestError(
-        403,
-        'auth',
-        `token scoped to ${resource.kind} "${resource.id}" may not access ticket operations`,
-      )
-    }
+  const auth =
+    options.auth ??
+    createMachineAuth({
+      secret: options.secret,
+      clock,
+      credentials: { authenticate: async () => null },
+      projects: { has: async () => false, list: async () => [] },
+    })
+  async function authorize(req: Request): Promise<void> {
+    requireMachineAccess(await auth.authenticate(req))
   }
 
   async function body(req: Request): Promise<unknown> {
@@ -165,13 +167,14 @@ export function createTicketServer(options: TicketServerOptions): {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
         }
         identify(req)
-        authorize(req)
+        await authorize(req)
         const operation = url.pathname.slice('/tickets/'.length) as HostedTicketOperation
         if (!Object.hasOwn(hostedTicketRequestSchemas, operation)) {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
         }
         return await route(req, operation)
       } catch (error) {
+        if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
         if (error instanceof TicketRequestError) {
           return failure(error.status, error.kind, error.message)
         }
