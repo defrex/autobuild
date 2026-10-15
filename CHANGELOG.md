@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#611](https://github.com/defrex/autobuild/pull/611) — Enforce revocable project credentials across hosted machine routes
 - [#608](https://github.com/defrex/autobuild/pull/608) — Add a durable hosted project registry
 
 - [#610](https://github.com/defrex/autobuild/pull/610) — Accept hosted clients within a release-line compatibility window
