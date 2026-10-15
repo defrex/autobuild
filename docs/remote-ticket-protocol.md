@@ -77,3 +77,8 @@ The shared `TicketSource` contract is normative for the database adapter and
 the hosted client/server pair. External pass-through is tested with a fake
 source behind HTTP. The existing opt-in live Linear contract remains the proof
 of Linear's GraphQL behavior; the hosted service uses that adapter unchanged.
+
+Every ticket returned by list, get, or create requires a boolean `resolved`,
+with the same source-native completion semantics as `DependencyState.resolved`.
+The client preserves it when remapping ticket references. Missing or non-boolean
+values fail wire validation. Client and service still require exact version matches.

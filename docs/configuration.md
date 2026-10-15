@@ -313,7 +313,12 @@ without adding a runtime Autobuild dependency to the plugin. That entry point
 exports the manifest/factory types, port types, fake adapters, and reusable
 TicketSource, AgentRunner, WorkspaceProvider, Forge, BuildStore, and BlobStore
 contract suites. Adapter values may use the backward-compatible bare factory or
-carry a contract fixture descriptor. Ticket sources may also declare
+carry a contract fixture descriptor.
+TicketSource adapters must populate the required `Ticket.resolved` boolean on
+listReady, get, and create projections, using the same native lifecycle rules as
+`dependencyStates`. Plugin authors upgrading older adapters must add this field;
+ready-state membership does not imply that a ticket is unresolved. Dispatch
+reuses these facts only within the current tick. Ticket sources may also declare
 `requiredEnv`; the host checks every declared variable for a nonempty value
 before invoking the adapter factory. Plugins using Forge abort-cleanup and
 AgentRunner turn-cancellation capabilities introduced in API 1.2 should require

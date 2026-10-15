@@ -105,6 +105,7 @@ describe('operator ticket HTTP routes', () => {
         title: 'One',
         body: 'body',
         state: 'Ready',
+        resolved: false,
         labels: [],
       },
     ])

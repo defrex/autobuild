@@ -663,6 +663,7 @@ export class FileTicketSource implements TicketSource {
       title: front.title,
       body,
       state,
+      resolved: state === this.doneState,
       labels: [...front.labels],
       ...(front.blockedBy !== undefined && front.blockedBy.length > 0
         ? { blockedBy: [...front.blockedBy] }

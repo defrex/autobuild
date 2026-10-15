@@ -57,10 +57,13 @@ describe('hosted ticket protocol', () => {
       { title: 'Exact', body, labels: ['ready'] },
       { state: 'Ready', idempotencyKey: 'creation-1' },
     )
+    expect(created.resolved).toBe(false)
     expect(created.body).toBe(body)
     expect(created.ref.source).toBe('hosted')
     expect((await backend.get(created.ref.id))?.body).toBe(body)
     expect(contexts).toEqual([{ teamKey: 'ENG', claimedState: 'Doing', createState: 'Triage' }])
+    await source.transition(created.ref.id, 'Done')
+    expect((await source.get(created.ref.id))?.resolved).toBe(true)
   })
 
   test('only operator scope reaches parsing or backend construction', async () => {

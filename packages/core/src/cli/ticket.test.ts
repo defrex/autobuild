@@ -132,6 +132,7 @@ function fakeFactory(
           title: draft.title,
           body: draft.body,
           state: 'Triage',
+          resolved: false,
           labels: draft.labels ?? [],
           ...(draft.blockedBy !== undefined ? { blockedBy: draft.blockedBy } : {}),
         })
@@ -708,6 +709,7 @@ function seededTicket(overrides: Partial<Ticket> = {}): Ticket {
     title: 'Throttle repeated logins',
     body: '## What and why\n\nProtect accounts.\n',
     state: 'Ready',
+    resolved: false,
     labels: ['security', 'api'],
     blockedBy: ['AUT-0'],
     ...overrides,

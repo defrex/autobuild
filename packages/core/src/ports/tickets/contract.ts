@@ -116,6 +116,29 @@ export function describeTicketSourceContract(
   factory: TicketSourceContractFactory,
 ): void {
   describe(`TicketSource contract: ${name}`, () => {
+    test('completion projections agree across create, get, listing, and transitions', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const created = await createTracked(
+          harness,
+          {
+            title: contractTicketTitle('completion facts'),
+            body: CONTRACT_TICKET_BODY,
+          },
+          { state: harness.states.ready },
+        )
+        expect(created.resolved).toBe(false)
+        for (const state of [harness.states.completed, harness.states.ready]) {
+          await harness.source.transition(created.ref.id, state)
+          const [dependency] = await harness.source.dependencyStates([created.ref.id])
+          expect((await harness.source.get(created.ref.id))?.resolved).toBe(dependency?.resolved)
+          const listing = await harness.source.listReady({ state })
+          expect(listing.tickets.find((ticket) => ticket.ref.id === created.ref.id)?.resolved).toBe(
+            dependency?.resolved,
+          )
+          expect(dependency?.resolved).toBe(state === harness.states.completed)
+        }
+      })
+    })
     test('create/get round-trips common fields and honors an explicit state', async () => {
       await withTicketSource(factory, async (harness) => {
         const title = contractTicketTitle('round trip')
@@ -302,6 +325,8 @@ export function describeTicketSourceContract(
           },
           { state: harness.states.completed },
         )
+        expect(completed.resolved).toBe(true)
+        expect(unresolved.resolved).toBe(false)
         const dependent = await createTracked(
           harness,
           {

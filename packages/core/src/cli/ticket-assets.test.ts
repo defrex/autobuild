@@ -29,6 +29,7 @@ const TICKET: Ticket = {
   title: 'A ticket',
   body: 'the body',
   state: 'Ready',
+  resolved: false,
   labels: [],
 }
 

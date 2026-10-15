@@ -22,6 +22,7 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       title: 'Dependency',
       body: 'dependency body',
       state: 'Triage',
+      resolved: false,
       labels: [],
     },
   ])
@@ -155,6 +156,7 @@ test('ticket assets attach, list, download and remove over the hosted store and 
       title: 'Asset ticket',
       body: 'body',
       state: 'Ready',
+      resolved: false,
       labels: [],
     },
   ])

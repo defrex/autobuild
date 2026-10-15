@@ -59,6 +59,8 @@ export interface Ticket {
   /** The ticket body — pre-build, the spec lives here (§6.3). */
   body: string
   state?: string
+  /** Native completion fact, identical to DependencyState.resolved. */
+  resolved: boolean
   labels: string[]
   /** Source-local ids of tickets declared as blockers. Absent ≡ none. */
   blockedBy?: string[]

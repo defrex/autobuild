@@ -124,6 +124,7 @@ export function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {})
     title,
     body: over.body ?? CONFORMING_BODY,
     state: over.state ?? 'Ready',
+    resolved: false,
     labels: over.labels ?? ['autobuild'],
   }
 }

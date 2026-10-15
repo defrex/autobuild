@@ -756,6 +756,7 @@ describe('HarvestRunner', () => {
       title: 'Prerequisite',
       body: 'body',
       state: 'Ready',
+      resolved: false,
       labels: [],
     })
     const ids = sequentialIds()
@@ -808,6 +809,7 @@ describe('HarvestRunner', () => {
       title: 'Originating work',
       body: 'body',
       state: 'Done',
+      resolved: true,
       labels: [],
     }
     const tickets = new FakeTicketSource([origin])
@@ -873,6 +875,7 @@ describe('HarvestRunner', () => {
       title: 'Originating work',
       body: 'body',
       state: 'Doing',
+      resolved: false,
       labels: [],
     }
     const tickets = new FakeTicketSource([origin])
