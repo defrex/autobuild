@@ -9,6 +9,3 @@ export {
   hostedTicketRequestSchemas,
 } from './remote-protocol'
 export type { HostedTicketContext, HostedTicketOperation } from './remote-protocol'
-// The hosted service composes the already live-proven Linear adapter; provider
-// credentials remain server-side.
-export { LinearTicketSource } from './linear'

@@ -2,7 +2,8 @@ import {
   openPostgresCredentialStoreFromEnv,
   type CredentialReader,
 } from '@defrex/autobuild-postgres-store/credentials'
-import { createMachineAuth } from './machine-auth'
+import { createMachineAuth, MachineAuthError, requireProject } from './machine-auth'
+import { normalizeProjectRepository } from '@defrex/autobuild-postgres-store/projects'
 import {
   openPostgresProjectRegistryFromEnv,
   type ProjectRegistryReader,
@@ -25,15 +26,13 @@ import {
   orchestratorConfig,
   randomIds,
   type Config,
+  type OperatorTicketContext,
+  effectiveConfig,
+  OperatorQueryError,
   type OperatorSandboxService,
 } from '@defrex/autobuild/operator'
 import { createHostedOperatorSandboxService } from '@defrex/autobuild/operator-sandbox-host'
-import {
-  createTicketServer,
-  HOSTED_TICKET_OPERATIONS,
-  type HostedTicketContext,
-  LinearTicketSource,
-} from './remote-tickets'
+import { createTicketServer, HOSTED_TICKET_OPERATIONS } from './remote-tickets'
 import {
   AUTOBUILD_VERSION,
   clientIdentityError,
@@ -48,6 +47,7 @@ import {
   HOSTED_TICKET_ASSET_REQUEST_MAX_BYTES,
   HOSTED_EVENT_WAIT_MAX_SECONDS,
   parseHostedStoreEnv,
+  retiredTicketDiagnostic,
   type HostedStoreEnv,
 } from './config'
 
@@ -60,6 +60,7 @@ export interface HostedStoreErrorContext {
 }
 
 export interface HostedStoreServiceOptions {
+  diagnostic?: (message: string) => void
   issueDispatcherCredential?: (repo: string, creator: string, expiresAt: Date) => Promise<string>
   openCredentials?: (env: HostedStoreEnv) => Promise<CredentialReader>
   openProjectRegistry?: (env: HostedStoreEnv) => Promise<ProjectRegistryReader>
@@ -68,13 +69,10 @@ export interface HostedStoreServiceOptions {
   openStore?: (env: HostedStoreEnv, options: { clock?: Clock }) => Promise<BuildStore>
   /** Context-aware backend seam. Production chooses one deployment backend;
    * tests inject a fake while exercising the real authenticated protocol. */
-  sourceFor?: (context: HostedTicketContext) => TicketSource | Promise<TicketSource>
+  sourceFor?: (context: OperatorTicketContext) => TicketSource | Promise<TicketSource>
   /** State discovery seam paired with sourceFor. Defaults to configured database lifecycle. */
-  statesFor?: (context: HostedTicketContext, source: TicketSource) => string[] | Promise<string[]>
-  openTicketDatabase?: (
-    url: string,
-    lifecycle: { triage: string; ready: string; doing: string; done: string },
-  ) => Promise<PostgresTicketDatabase>
+  statesFor?: (context: OperatorTicketContext, source: TicketSource) => string[] | Promise<string[]>
+  openTicketDatabase?: (url: string) => Promise<PostgresTicketDatabase>
   /** Receives original failures and safe request metadata. Never exposed to clients. */
   reportInternalError?: (
     error: unknown,
@@ -385,6 +383,8 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   projects: ProjectRegistryReader
 } {
   const env = options.env ?? process.env
+  const diagnostic = retiredTicketDiagnostic(env)
+  if (diagnostic !== undefined) (options.diagnostic ?? console.warn)(diagnostic)
   let projectPromise: Promise<ProjectRegistryReader> | undefined
   const openProjects = () => {
     if (!projectPromise) {
@@ -423,6 +423,17 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     })
 
   const opener = options.openStore ?? openPostgresBuildStoreFromEnv
+  let ticketStorePromise: Promise<BuildStore> | undefined
+  const openTicketStore = () => {
+    if (!ticketStorePromise) {
+      const attempt = opener(env, options.clock === undefined ? {} : { clock: options.clock })
+      ticketStorePromise = attempt
+      void attempt.catch(() => {
+        if (ticketStorePromise === attempt) ticketStorePromise = undefined
+      })
+    }
+    return ticketStorePromise
+  }
   const ticketOpener = options.openTicketDatabase ?? openPostgresTicketDatabase
   const reporter =
     options.reportInternalError ??
@@ -433,9 +444,9 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   let ticketHandlerPromise: Promise<(req: Request) => Promise<Response>> | undefined
   let ticketBackendPromise:
     | Promise<{
-        sourceFor: (context: HostedTicketContext) => TicketSource | Promise<TicketSource>
+        sourceFor: (context: OperatorTicketContext) => TicketSource | Promise<TicketSource>
         statesFor: (
-          context: HostedTicketContext,
+          context: OperatorTicketContext,
           source: TicketSource,
         ) => string[] | Promise<string[]>
       }>
@@ -462,33 +473,59 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
   const openTicketBackend = () => {
     ticketBackendPromise ??= (async () => {
       const config = parseHostedStoreEnv(env)
-      if (options.sourceFor !== undefined) {
-        return {
-          sourceFor: options.sourceFor,
-          statesFor: options.statesFor ?? (() => Object.values(config.ticketLifecycle)),
+      let databasePromise: Promise<PostgresTicketDatabase> | undefined
+      const openDatabase = () => {
+        if (!databasePromise) {
+          const attempt = ticketOpener(config.postgres.url)
+          databasePromise = attempt
+          void attempt.catch(() => {
+            if (databasePromise === attempt) databasePromise = undefined
+          })
         }
+        return databasePromise
       }
-      if (config.ticketBackend === 'database') {
-        const database = await ticketOpener(config.postgres.url, config.ticketLifecycle)
-        return {
-          sourceFor: (context: HostedTicketContext) => database.source(context),
-          statesFor: () => Object.values(database.lifecycle),
-        }
+      const lifecycleFor = (context: OperatorTicketContext) => ({
+        triage: context.tickets.triageState ?? 'Backlog',
+        ready: context.tickets.readyState,
+        doing: context.tickets.claimedState ?? 'Doing',
+        done: context.tickets.doneState ?? 'Done',
+      })
+      const validate = async (context: OperatorTicketContext) => {
+        if (!(await projects.has(context.repo)))
+          throw new MachineAuthError(403, 'project not registered')
+        if (context.tickets.source !== 'hosted')
+          throw new OperatorQueryError(
+            'external-ticket-source',
+            `Tickets for project "${context.repo}" live in its own "${context.tickets.source}" ticket source, accessed directly by its dispatcher.`,
+          )
       }
-      const apiKey = config.linearApiKey!
-      const sourceFor = (context: HostedTicketContext) =>
-        new LinearTicketSource({
-          apiKey,
-          teamKey: context.teamKey,
-          ...(context.claimedState !== undefined ? { claimedState: context.claimedState } : {}),
-          ...(context.createState !== undefined ? { createState: context.createState } : {}),
-        })
       return {
-        sourceFor,
-        statesFor: async (_context: HostedTicketContext, source: TicketSource) => {
-          if (!(source instanceof LinearTicketSource))
-            throw new Error('linear state source unavailable')
-          return source.workflowStateNames()
+        sourceFor: async (context: OperatorTicketContext) => {
+          await validate(context)
+          if (options.sourceFor) return options.sourceFor(context)
+          return (await openDatabase()).source({
+            repo: context.repo,
+            lifecycle: lifecycleFor(context),
+            ...(context.tickets.createState !== undefined
+              ? { createState: context.tickets.createState }
+              : {}),
+            ...(context.tickets.proposalState !== undefined
+              ? { proposalState: context.tickets.proposalState }
+              : {}),
+          })
+        },
+        statesFor: async (context: OperatorTicketContext, source: TicketSource) => {
+          await validate(context)
+          if (options.statesFor) return options.statesFor(context, source)
+          return [
+            ...new Set(
+              [
+                ...Object.values(lifecycleFor(context)),
+                context.tickets.createState,
+                context.tickets.proposalState,
+              ].filter((v): v is string => v !== undefined),
+            ),
+          ]
         },
       }
     })()
@@ -499,7 +536,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     if (storeHandlerPromise === undefined) {
       const attempt = (async () => {
         const config = parseHostedStoreEnv(env)
-        const store = await opener(env, options.clock === undefined ? {} : { clock: options.clock })
+        const store = await openTicketStore()
         const shared = options.clock === undefined ? {} : { clock: options.clock }
         const clock = options.clock ?? systemClock
         // The hosted operator-sandbox backend (AUT-584): composed per runner
@@ -659,7 +696,33 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       return createTicketServer({
         auth: machineAuth(),
         secret: config.secret,
-        sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
+        sourceFor: async (context, principal) => {
+          if (principal.kind === 'internal')
+            throw new MachineAuthError(
+              403,
+              'internal operator credential may only access operator routes',
+            )
+          const repo =
+            context.repo !== undefined
+              ? normalizeProjectRepository(context.repo)
+              : principal.kind === 'project'
+                ? principal.repo
+                : undefined
+          if (!repo)
+            throw new MachineAuthError(
+              403,
+              'owner ticket requests require context.repo naming a registered project',
+            )
+          requireProject(principal, repo)
+          if (!(await projects.has(repo))) throw new MachineAuthError(403, 'project not registered')
+          const store = await openTicketStore()
+          const { config } = await effectiveConfig(store, repo)
+          return (await openTicketBackend()).sourceFor({
+            repo,
+            tickets: config.tickets,
+            teamKey: config.tickets.teamKey ?? '',
+          })
+        },
         onInternalError: (error, req) => reportProtocolFailure(error, req, 'tickets'),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
       }).fetch

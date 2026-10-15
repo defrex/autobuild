@@ -3235,6 +3235,31 @@ describe('Dispatcher janitor', () => {
     expect(h.tickets.transitions).toHaveLength(1)
   })
 
+  test('hosted merged transition follows the current project doneState while direct sources retain Done', async () => {
+    for (const source of ['hosted', 'linear']) {
+      let config = parseConfig(
+        withReadyState(`[tickets]\nsource = "${source}"\nteamKey = "ENG"\ndoneState = "Initial"\n`),
+      )
+      const h = harness({
+        tickets: [readyTicket('T-1', { labels: [] })],
+        toml: `[tickets]\nsource = "${source}"\nteamKey = "ENG"\ndoneState = "Initial"\n`,
+        getConfig: () => config,
+      })
+      await seedBuild(h, {
+        ticketId: 'T-1',
+        pr: PR,
+        workspaceRef: 'fake:workspace-1',
+        workspacePath: '/local/workspace-1',
+      })
+      config = { ...config, tickets: { ...config.tickets, doneState: 'Shipped' } }
+      h.forge.setPrState(1, { state: 'merged', sha: 'squash-1' })
+      await h.dispatcher.tick()
+      expect(h.tickets.transitions).toEqual([
+        { id: 'T-1', state: source === 'hosted' ? 'Shipped' : 'Done' },
+      ])
+    }
+  })
+
   test('per-build poll failures do not stop sibling janitor work, lease sweep, dispatch, or retry', async () => {
     const h = harness({
       tickets: [readyTicket('T-ready')],

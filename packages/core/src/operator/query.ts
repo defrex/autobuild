@@ -38,7 +38,7 @@ export type BuildListScope = 'active' | 'queued' | 'all'
 
 export class OperatorQueryError extends Error {
   constructor(
-    readonly code: 'not-found' | 'effective-config-unavailable',
+    readonly code: 'not-found' | 'effective-config-unavailable' | 'external-ticket-source',
     message: string,
   ) {
     super(message)
@@ -121,6 +121,23 @@ export async function effectiveConfig(
   status: ReturnType<typeof reduceDispatchStatus>
 }> {
   const repositoryEvents = journal ?? (await readRepoEventsIfRecorded(store, repo))
+  const status = selectEffectiveConfig(repositoryEvents, repo)
+  const ref = status.effectiveConfig!
+  const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
+  if (artifact === null) {
+    throw new OperatorQueryError(
+      'effective-config-unavailable',
+      `effective config ${ref.kind}@${ref.rev} is not retrievable`,
+    )
+  }
+  return {
+    config: decodeEffectiveConfig(artifact.content, `${ref.kind}@${ref.rev}`),
+    repositoryEvents,
+    status,
+  }
+}
+
+export function selectEffectiveConfig(repositoryEvents: RepositoryEvent[], repo: string) {
   let latestRun: string | undefined
   for (const event of repositoryEvents) {
     if (event.type === 'dispatcher.run-started') latestRun = event.payload.run
@@ -139,30 +156,27 @@ export async function effectiveConfig(
       `effective config unavailable for repository "${repo}"`,
     )
   }
-  const artifact = await store.getRepoArtifact(repo, ref.kind, ref.rev)
-  if (artifact === null) {
-    throw new OperatorQueryError(
-      'effective-config-unavailable',
-      `effective config ${ref.kind}@${ref.rev} is not retrievable`,
-    )
-  }
+  return status
+}
+
+export function decodeEffectiveConfig(content: Uint8Array, label: string): Config {
   let raw: unknown
   try {
-    raw = JSON.parse(new TextDecoder().decode(artifact.content))
+    raw = JSON.parse(new TextDecoder().decode(content))
   } catch {
     throw new OperatorQueryError(
       'effective-config-unavailable',
-      `effective config ${ref.kind}@${ref.rev} is not valid JSON`,
+      `effective config ${label} is not valid JSON`,
     )
   }
   const parsed = configSchema.safeParse(raw)
   if (!parsed.success) {
     throw new OperatorQueryError(
       'effective-config-unavailable',
-      `effective config ${ref.kind}@${ref.rev} is invalid: ${parsed.error.message}`,
+      `effective config ${label} is invalid: ${parsed.error.message}`,
     )
   }
-  return { config: parsed.data, repositoryEvents, status }
+  return parsed.data
 }
 
 export interface OperatorBuildView {

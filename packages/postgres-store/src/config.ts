@@ -1,5 +1,6 @@
+import { migratePostgres } from './schema'
 import { S3Client } from '@aws-sdk/client-s3'
-import type { Clock } from '@defrex/autobuild/plugin-sdk'
+import type { BlobStore, Clock } from '@defrex/autobuild/plugin-sdk'
 import { resolvePostgresUrl } from './env'
 import { S3BlobStore } from './s3'
 import { openPostgresBuildStore, type PostgresBuildStore } from './store'
@@ -117,6 +118,14 @@ export async function openPostgresBuildStoreFromEnv(
     ...options,
     ...(config.retention ? { retention: config.retention } : {}),
   }
+  return openPostgresBuildStore(config.url, openPostgresBlobs(config), storeOptions)
+}
+
+export function openPostgresBlobsFromEnv(env: Env): BlobStore {
+  return openPostgresBlobs(parsePostgresStoreEnv(env))
+}
+
+function openPostgresBlobs(config: PostgresStoreConfig): BlobStore {
   if (config.backend === 's3') {
     const client = new S3Client({
       region: config.region,
@@ -128,25 +137,21 @@ export async function openPostgresBuildStoreFromEnv(
         ...(config.sessionToken ? { sessionToken: config.sessionToken } : {}),
       },
     })
-    return openPostgresBuildStore(
-      config.url,
-      new S3BlobStore({
-        client,
-        bucket: config.bucket,
-        ...(config.prefix ? { prefix: config.prefix } : {}),
-      }),
-      storeOptions,
-    )
-  }
-  return openPostgresBuildStore(
-    config.url,
-    new VercelBlobStore({
-      access: config.access,
+    return new S3BlobStore({
+      client,
+      bucket: config.bucket,
       ...(config.prefix ? { prefix: config.prefix } : {}),
-      ...(config.token
-        ? { token: config.token }
-        : { oidcToken: config.oidcToken!, storeId: config.storeId! }),
-    }),
-    storeOptions,
-  )
+    })
+  }
+  return new VercelBlobStore({
+    access: config.access,
+    ...(config.prefix ? { prefix: config.prefix } : {}),
+    ...(config.token
+      ? { token: config.token }
+      : { oidcToken: config.oidcToken!, storeId: config.storeId! }),
+  })
+}
+
+export async function migratePostgresFromEnv(env: Env): Promise<void> {
+  await migratePostgres(resolvePostgresUrl(env), { openBlobs: () => openPostgresBlobsFromEnv(env) })
 }

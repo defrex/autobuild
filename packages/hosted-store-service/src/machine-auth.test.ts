@@ -337,7 +337,7 @@ test('ticket project admission preserves shared backend and rejects repo injecti
         request('/tickets/list-ready', a.token, { ...body, context: { ...body.context, repo: B } }),
       )
     ).status,
-  ).toBe(400)
+  ).toBe(403)
   expect(calls).toBe(2)
   await projects.remove(A, 'owner')
   expect((await server.fetch(request('/tickets/list-ready', a.token, {}))).status).toBe(403)

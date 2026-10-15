@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
 import {
+  openTicketAssignmentsFromEnv,
+  type TicketAssignments,
+} from '@defrex/autobuild-postgres-store'
+import {
   openPostgresCredentialStoreFromEnv,
   type CredentialStore,
 } from '@defrex/autobuild-postgres-store/credentials'
@@ -14,6 +18,7 @@ const USAGE = `Usage:
   ab-hosted-store credentials issue REPOSITORY --user IDENTITY [--ttl-seconds N | --expires-at ISO-8601]
   ab-hosted-store credentials list REPOSITORY
   ab-hosted-store credentials revoke REPOSITORY --id ID --user IDENTITY
+  ab-hosted-store tickets assign-team TEAM REPOSITORY --user IDENTITY
   ab-hosted-store projects list
   ab-hosted-store projects add REPOSITORY --user IDENTITY
   ab-hosted-store projects remove REPOSITORY --user IDENTITY
@@ -104,7 +109,32 @@ export async function runHostedCli(
   writeError: (text: string) => void = console.error,
   open: (env: Env) => Promise<ProjectRegistry> = openPostgresProjectRegistryFromEnv,
   openCredentials: (env: Env) => Promise<CredentialStore> = openPostgresCredentialStoreFromEnv,
+  openAssignments: (env: Env) => Promise<TicketAssignments> = openTicketAssignmentsFromEnv,
 ): Promise<number> {
+  if (args[0] === 'tickets') {
+    let assignments: TicketAssignments | undefined
+    try {
+      if (
+        args.length !== 6 ||
+        args[1] !== 'assign-team' ||
+        !args[2]?.trim() ||
+        args[4] !== '--user' ||
+        !args[5]?.trim() ||
+        args[5].startsWith('--')
+      )
+        throw new Error('expected tickets assign-team TEAM REPOSITORY --user IDENTITY')
+      const repo = normalizeProjectRepository(args[3]!)
+      assignments = await openAssignments(env)
+      await assignments.assign(args[2], repo, args[5])
+      write(JSON.stringify({ team: args[2], repo, assigned: true }))
+      return 0
+    } catch (error) {
+      writeError(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`)
+      return 2
+    } finally {
+      await assignments?.close()
+    }
+  }
   if (args[0] === 'credentials') {
     let credentials: CredentialStore | undefined
     let credentialResult = 0
