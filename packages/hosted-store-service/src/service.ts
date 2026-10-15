@@ -32,6 +32,8 @@ import {
 } from './remote-tickets'
 import {
   AUTOBUILD_VERSION,
+  clientIdentityError,
+  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
@@ -632,6 +634,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           ok: true,
           autobuildVersion: AUTOBUILD_VERSION,
           protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+          supportedClientRange: supportedClientRange(),
         })
       }
 
@@ -640,13 +643,11 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
 
       const clientAutobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
       const clientProtocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
-      if (
-        clientAutobuild !== AUTOBUILD_VERSION ||
-        clientProtocol !== REMOTE_STORE_PROTOCOL_VERSION
-      ) {
+      const mismatch = clientIdentityError(clientAutobuild, clientProtocol)
+      if (mismatch !== undefined) {
         return Response.json(
           {
-            error: `remote store version mismatch: client Autobuild ${clientAutobuild ?? '(missing)'} protocol ${clientProtocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}`,
+            error: mismatch,
             kind: 'conflict',
           },
           { status: 409 },

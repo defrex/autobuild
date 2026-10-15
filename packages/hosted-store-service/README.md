@@ -9,75 +9,31 @@ unchanged and serves the cookie-authenticated operator dashboard on the same
 origin. `server.ts` in this package remains the named bare-Bun
 machine-service entrypoint for non-Next hosts.
 
-Only this package's `src/` tree and this README publish to npm: every
-consumer of the published package imports through the manifest's `exports`
-and `bin`, all of which live under `src/`. The manifest's `files` allowlist
-pins the tarball to exactly that, and `bun tools/publish-contents-check.ts`
-in the repository `check` gate fails when anything else would ship — in
-particular the internal `.impeccable/` surface brief. The Next.js `app/`
-tree, `server.ts`, the Next/Vercel configuration files, and `.impeccable/`
-are release-checkout/Vercel surface — read from this repository at deploy
-time, never from the package npm installs — and their absence from the
-tarball is deliberate, not an oversight.
+## Deploy the full service
 
-## Configure and run locally
+Use the package's `deployment/package.json` and `deployment/vercel.json` as a
+small Git repository, install with Bun, commit the lockfile, and import it into
+Vercel. The template explicitly pins both this service and its required core
+peer to the same release. The package build command stages the complete application, migrates
+Postgres, then builds Next.js. No source checkout or patch is needed.
 
-The service and PostgreSQL adapter are published to npm
-(`@defrex/autobuild-hosted-store-service`, `@defrex/autobuild-postgres-store`)
-separately from the `@defrex/autobuild` CLI. Their published `src/` trees
-import `@defrex/autobuild` subpaths (`./operator`, `./hosted-tickets`,
-`./testing` among them) that exist only from `@defrex/autobuild` 0.9.0 —
-published 0.8.0 predates the renames and lacks them — so the manifest's
-optional peer dependency `"@defrex/autobuild": ">=0.9.0"` is the
-machine-readable form of that floor; install the service only against a
-provider that satisfies it.
-`tools/publish-imports-check.ts` in the repository `check` gate pins this
-coupling where releases are cut: it packs every publishable package, stages
-the tarballs into a scratch `node_modules` layout, and fails when a packed
-file imports a `@defrex/autobuild` subpath the packed provider does not
-export. The deployable web application
-runs from a release checkout: clone the compatible release tag and install it
-as shown in the [complete environment reference](../../docs/configuration.md),
-then migrate the database (the migration is idempotent):
+Follow the [hosted service setup](https://github.com/defrex/autobuild/blob/main/docs/hosted-service.md)
+for the exact template, environment, checks, and upgrade procedure. Store-only
+mode is the default: without the optional dispatcher, `/api/dispatch` returns
+503 with “dispatch runs elsewhere for this deployment”, and no cron is supplied.
+
+The existing `ab-hosted-store` binary still mints machine tokens locally:
 
 ```sh
-DATABASE_URL=postgres://… bun run postgres:migrate
-```
-
-Set `AB_STORE_SECRET`, `DATABASE_URL` (or an explicit `AB_POSTGRES_URL`), one
-blob backend, and the web/auth
-variables below in that pinned checkout. Register a GitHub OAuth app with
-`http://localhost:3000/api/auth/callback/github` as its local callback, then
-run the dev script from this package directory:
-
-```sh
-cd packages/hosted-store-service
-bun run dev
-```
-
-The GitHub app needs access to the user's primary email (`user:email`, or the
-GitHub App equivalent read-only email permission). Open `http://localhost:3000`.
-The browser receives only Better Auth's secure HTTP-only session cookie; it
-never receives a store/operator token or a signing/provider secret. To run only
-the legacy machine service use `bun run hosted-store` (from the package
-directory); `AB_HOST` defaults to
-`0.0.0.0` and `PORT` defaults to `3000`. Check the public
-endpoint with `curl http://localhost:3000/health`; it reports the Autobuild and
-remote-protocol versions without opening the database. Clients use the deploy
-URL and an offline-minted token:
-
-```sh
-export AB_STORE=https://store.example.com
-export AB_TOKEN="$(AB_STORE_SECRET='…' bun packages/hosted-store-service/src/bin.ts mint operator --ttl-seconds 3600)"
-ab dispatch
+AB_STORE_SECRET='…' bunx ab-hosted-store mint operator --ttl-seconds 3600
 ```
 
 Deployment operator tokens cover store and ticket operations, allowing one
 dispatcher credential. Legacy admin tokens still cover store administration but
 cannot access tickets.
 
-The same deployment also serves the versioned [operator API](../../docs/operator-api.md).
-External agents connect to the [MCP server](../../docs/mcp.md) at `/mcp` — the
+The same deployment also serves the versioned [operator API](https://github.com/defrex/autobuild/blob/main/docs/operator-api.md).
+External agents connect to the [MCP server](https://github.com/defrex/autobuild/blob/main/docs/mcp.md) at `/mcp` — the
 same operator tool registry over Streamable HTTP with OAuth 2.1 through Better
 Auth — and every write is attributed to the person who authorized the client.
 Mint an attributed human-operator token with `--user`; unlike the deployment
@@ -108,8 +64,7 @@ with `AB_TICKET_TRIAGE_STATE`, `AB_TICKET_READY_STATE`,
 and provide `LINEAR_API_KEY` on the service to pass every request to the
 existing Linear adapter. That key never belongs on dispatcher or browser
 hosts. Team and claim/create policy arrive per request from repository config. The signed-in web Tickets surface uses the same durable effective config, discovers lifecycle names from this configured backend, and polls every two seconds. Its create/edit/move/block operations are delegated through short-lived attributed operator tokens; provider credentials and bearer tokens never reach the browser.
-Run the migration before serving (`bun run deploy:build` does so inside a
-hosted build); it adds separately versioned ticket and
+Run the migration before serving (the deployment build does so automatically); it adds separately versioned ticket and
 Better Auth schemas without changing an existing BuildStore v1 marker. Startup
 never creates or changes schema.
 
@@ -127,33 +82,6 @@ clamped to 25, never rejected. The ceiling must stay under the machine routes'
 `app/repos/[[...path]]/route.ts` in this package's app tree), which exists to cover the hold; raise the
 two together if you change either.
 
-## Deploy to Vercel
-
-1. Import this repository and select `packages/hosted-store-service` (the
-   package directory holding `vercel.json` and the Next.js app) as the Root
-   Directory. `bun install` from a workspace member installs the whole
-   workspace.
-2. Select Bun. The checked-in `vercel.json` in the package directory pins Bun
-   1.4.x and sets the build
-   command to `bun run deploy:build`, which runs the idempotent migration
-   against the deployment's own database URL and then builds the Next.js
-   output. Pages and machine routes are one deployment.
-3. Create a GitHub OAuth app whose callback is
-   `https://YOUR_ORIGIN/api/auth/callback/github` and grant read-only email.
-4. Add the store/database/blob variables and every web/auth variable below to
-   each target environment. A Neon database and a Blob store connected through
-   Vercel Storage inject `DATABASE_URL` and `BLOB_READ_WRITE_TOKEN` themselves. Generate an independent Better Auth secret with at
-   least 32 high-entropy characters. `AB_HOST` and `PORT` are not needed.
-5. Deploy, then verify `/health`, browser sign-in, an operator control, a
-   ticket, and an artifact round-trip. The build log names the database host
-   the migration prepared; the build fails, and nothing goes live, when no
-   database URL is configured or the existing schema is incompatible with the
-   release being deployed.
-
-The shape follows Vercel's [Bun runtime](https://vercel.com/docs/functions/runtimes/bun).
-The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'
-[4.5 MB request and response payload limit](https://vercel.com/docs/functions/limitations#request-body-size).
-
 ### Web/auth variables
 
 - `BETTER_AUTH_SECRET`: separate 32+ character high-entropy session secret.
@@ -166,7 +94,7 @@ The 1 MiB decoded ceiling leaves room for base64/JSON beneath Vercel Functions'
   import; edits and restarts never resurrect removed projects.
 - `AB_WEB_MCP_RESOURCE` (optional): the protected resource the MCP server
   binds tokens to; defaults to `<BETTER_AUTH_URL>/mcp`. See the
-  [MCP server](../../docs/mcp.md).
+  [MCP server](https://github.com/defrex/autobuild/blob/main/docs/mcp.md).
 
 Removing an email blocks its next gateway request even if its database-backed
 session has not expired. Rotate `BETTER_AUTH_SECRET` to end every browser
@@ -183,10 +111,10 @@ application. `bun run hosted-store` serves machine routes only.
 The dispatch kernel is not part of this package. The cron-authenticated
 `GET /api/dispatch` endpoint, its `pack-distribution` bin command, and the
 packed-distribution trace helper live in the separate
-[`@defrex/autobuild-hosted-dispatcher`](../hosted-dispatcher/README.md)
+[`@defrex/autobuild-hosted-dispatcher`](https://github.com/defrex/autobuild/blob/main/packages/hosted-dispatcher/README.md)
 package; a deployment opts into building by installing it and mounting its
 route, and a deployment that only hosts state never attempts a dispatch tick.
-See the [operator procedure](../../docs/hosted-dispatcher.md) for the
+See the [operator procedure](https://github.com/defrex/autobuild/blob/main/docs/hosted-dispatcher.md) for the
 schedule, incident pauses, and behavior details.
 
 The Sandbox SDK authenticates with the deployment's own OIDC identity inside

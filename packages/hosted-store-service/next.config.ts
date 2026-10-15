@@ -2,14 +2,15 @@ import { resolve } from 'node:path'
 import type { NextConfig } from 'next'
 
 const config: NextConfig = {
+  transpilePackages: [
+    '@defrex/autobuild',
+    '@defrex/autobuild-postgres-store',
+    '@defrex/autobuild-hosted-store-service',
+  ],
   serverExternalPackages: ['better-auth', 'pg'],
-  // Turbopack's root must be the workspace root (this package directory is two
-  // levels below it) so module resolution spans the monorepo. Next loads this
-  // TypeScript config by transpiling it to CommonJS, where `import.meta` is a
-  // syntax error — so the root is derived from `cwd`, which is this package
-  // directory in every invocation (`bun run dev`/`build` from the package
-  // directory, Vercel building with the Root Directory as cwd).
-  turbopack: { root: resolve(process.cwd(), '..', '..') },
+  // Installed deployments explicitly supply their root; source deployments
+  // retain workspace-wide resolution.
+  turbopack: { root: process.env.AB_SERVICE_BUILD_ROOT ?? resolve(process.cwd(), '..', '..') },
   // RFC 9728 discovery must exist at the origin root: MCP clients discover
   // the authorization server from `/.well-known/oauth-protected-resource` at
   // the resource URL's origin before falling back to path-based probes. The
@@ -43,10 +44,12 @@ const config: NextConfig = {
   // the archive and the manifest to the dispatch route's trace only, and the
   // skill to both turn-executing routes. These entries document the intent
   // and still apply on any webpack build.
-  outputFileTracingIncludes: {
-    '/api/dispatch': ['./.autobuild-dist/**', './skills/operate/SKILL.md'],
-    '/operator/[[...path]]': ['./skills/operate/SKILL.md'],
-  },
+  outputFileTracingIncludes: process.env.AB_SERVICE_BUILD_ROOT
+    ? {}
+    : {
+        '/api/dispatch': ['./.autobuild-dist/**', './skills/operate/SKILL.md'],
+        '/operator/[[...path]]': ['./skills/operate/SKILL.md'],
+      },
 }
 
 export default config

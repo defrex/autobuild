@@ -2,8 +2,27 @@
 
 The hosted ticket protocol exposes the complete `TicketSource` port without
 exposing backend credentials. It shares the Autobuild and remote protocol
-version headers with the remote BuildStore. Both must exactly match the service;
-this release uses remote protocol version `3`.
+version headers with the remote BuildStore. The version must be in the
+published service window and the protocol must
+match its known release-line identity (`3` for 0.9, 0.10, and 0.11).
+
+A service accepts stable clients from its own `major.minor` release line and
+the two preceding minor lines in the same major. A major starts a new family:
+X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
+Patch versions are interchangeable in both directions and must never change
+the protocol. Upgrade the service first, then projects independently within
+its window. Supported release lines retain their wire handlers and known
+protocol identities; an unknown protocol is refused independently of version.
+Malformed, missing, and prerelease identities are refused with HTTP 409.
+A newer client is told to upgrade the service; a client below the window is
+told to upgrade the project's Autobuild. Diagnostics name the service version
+and supported range.
+
+Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
+`protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
+The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
+service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+headers, or available backend.
 
 ## Authentication and context
 
@@ -77,3 +96,13 @@ The shared `TicketSource` contract is normative for the database adapter and
 the hosted client/server pair. External pass-through is tested with a fake
 source behind HTTP. The existing opt-in live Linear contract remains the proof
 of Linear's GraphQL behavior; the hosted service uses that adapter unchanged.
+
+Every ticket returned by list, get, or create requires a boolean `resolved`,
+with the same source-native completion semantics as `DependencyState.resolved`.
+The client preserves it when remapping ticket references. Missing or non-boolean
+values fail wire validation. Client and service follow the published compatibility window.
+
+Legacy 0.9.x and 0.10.x ticket responses omit `resolved` and `blockersResolved`
+because those clients use strict decoders without these fields. This projection
+applies to list-ready, get, and create responses. Current clients retain the
+current required resolution fields; domain and storage types are unchanged.

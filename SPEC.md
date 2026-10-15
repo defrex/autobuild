@@ -700,7 +700,8 @@ conformance suite):
    hosted HTTP service, selected by an `http(s)://` reference. Kernels,
    sandboxes, terminal dashboards, and later human-facing pages share this
    service tier; it owns token authorization, protocol write validation,
-   artifact policy, and exact package/protocol version-skew enforcement. The
+   artifact policy, release-line compatibility, and independent protocol
+   enforcement. The
    later human routes share its deployment so a browser or second service never
    receives the machine signing secret. Artifacts remain content-by-value. The
    documented [remote store protocol](docs/remote-store-protocol.md) is the
@@ -708,6 +709,24 @@ conformance suite):
    `packages/core/src/store/contract.ts`, driven through the shipped remote
    client, is the conformance bar. Autobuild does not load in-process BuildStore
    plugins. Git worktrees and default file tickets necessarily remain local.
+
+A service accepts stable clients from its own `major.minor` release line and
+the two preceding minor lines in the same major. A major starts a new family:
+X.0 accepts only X.0, X.1 accepts X.0/X.1, and X.2 onward accepts three lines.
+Patch versions are interchangeable in both directions and must never change
+the protocol. Upgrade the service first, then projects independently within
+its window. Supported release lines retain their wire handlers and known
+protocol identities; an unknown protocol is refused independently of version.
+Malformed, missing, and prerelease identities are refused with HTTP 409.
+A newer client is told to upgrade the service; a client below the window is
+told to upgrade the project's Autobuild. Diagnostics name the service version
+and supported range.
+
+Unauthenticated `GET /health` publishes `ok`, `autobuildVersion`,
+`protocolVersion`, and `supportedClientRange: { minVersion, maxVersionExclusive }`.
+The range is inclusive at the minimum and exclusive at the maximum; a 0.11.x
+service publishes `>=0.9.0 <0.12.0`. Health needs no credentials, version
+headers, or available backend.
 
 `subscribe` is specced in the interface; the v2.0 implementation is polling
 `getEvents(since)`. True push comes later.
@@ -2549,6 +2568,15 @@ operator-selected `--version <semver>`, indeterminate mechanism, resolution, or
 install failure is fatal and does not merge against the wrong defaults.
 `--no-self-update` always selects merge-only
 behavior. An exact version may be older than the installed version.
+
+Before installation or project writes, upgrades targeting a hosted store probe
+its public health range. An incompatible target produces a directional warning
+(service first for a newer target, project upgrade for a stale target) and
+continues. A legacy health response has an exact-version contract; different
+targets warn that the service needs the compatibility-window release. Failed,
+timed-out, or malformed probes warn that connectivity could not be verified
+and may fail after upgrade, then continue. Merge-only and replacement-process
+handoffs check the distribution actually applied before skill writes.
 
 Upgrade records its successful work in one local commit on the target's current
 HEAD by default. The exact ownership boundary is the reported skills' canonical

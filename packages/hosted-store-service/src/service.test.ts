@@ -6,6 +6,7 @@ import { OperatorApiClient } from './operator-api'
 import { reduceSession } from './session-reducer'
 import {
   AUTOBUILD_VERSION,
+  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   RemoteBuildStore,
   REMOTE_STORE_PROTOCOL_VERSION,
@@ -141,6 +142,7 @@ describe('hosted store service', () => {
       ok: true,
       autobuildVersion: AUTOBUILD_VERSION,
       protocolVersion: REMOTE_STORE_PROTOCOL_VERSION,
+      supportedClientRange: supportedClientRange(),
     })
     expect(opens).toBe(0)
 

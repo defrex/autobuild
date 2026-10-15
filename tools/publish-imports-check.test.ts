@@ -1631,3 +1631,29 @@ describe('provider exports-target closure walk (AUT-507)', () => {
     expect(report.providerClosureFiles).toBeGreaterThan(0)
   }, 120000)
 })
+
+test('packed app and deployment support imports are scanned like server sources', async () => {
+  const specs: FixtureSpec[] = [
+    {
+      directory: '.',
+      manifest: providerManifest(operatorExports),
+      files: { 'core-src/operator/index.ts': OPERATOR_SOURCE },
+    },
+    {
+      directory: 'packages/store-service',
+      manifest: dependentManifest,
+      files: {
+        'packages/store-service/src/index.ts': OPERATOR_SOURCE,
+        'packages/store-service/app/page.tsx':
+          "import { missing } from '@defrex/autobuild/missing-app-export'\nexport default function Page() { return <div>{missing}</div> }\n",
+        'packages/store-service/next.config.ts':
+          "import { missing } from '@defrex/autobuild/missing-config-export'\nexport default missing\n",
+      },
+    },
+  ]
+  const root = await buildFixtureRepo(specs)
+  const report = await scanPublishedImports(fixtureEnvironment(root, specs))
+  expect(report.violations.filter((violation) => violation.kind === 'missing-export')).toHaveLength(
+    2,
+  )
+})

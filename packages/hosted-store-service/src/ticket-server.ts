@@ -2,9 +2,9 @@ import { systemClock, type Clock, type TicketSource } from '@defrex/autobuild/pl
 import {
   tokenResource,
   verifyToken,
-  AUTOBUILD_VERSION,
+  clientIdentityError,
+  stableVersion,
   AUTOBUILD_VERSION_HEADER,
-  REMOTE_STORE_PROTOCOL_VERSION,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
   type ErrorBody,
   type ErrorKind,
@@ -51,12 +51,9 @@ export function createTicketServer(options: TicketServerOptions): {
   function identify(req: Request): void {
     const autobuild = req.headers.get(AUTOBUILD_VERSION_HEADER)
     const protocol = req.headers.get(REMOTE_STORE_PROTOCOL_VERSION_HEADER)
-    if (autobuild !== AUTOBUILD_VERSION || protocol !== REMOTE_STORE_PROTOCOL_VERSION) {
-      throw new TicketRequestError(
-        409,
-        'conflict',
-        `remote store version mismatch: client Autobuild ${autobuild ?? '(missing)'} protocol ${protocol ?? '(missing)'}; server Autobuild ${AUTOBUILD_VERSION} protocol ${REMOTE_STORE_PROTOCOL_VERSION}`,
-      )
+    const mismatch = clientIdentityError(autobuild, protocol)
+    if (mismatch !== undefined) {
+      throw new TicketRequestError(409, 'conflict', mismatch)
     }
   }
 
@@ -96,16 +93,26 @@ export function createTicketServer(options: TicketServerOptions): {
     const context = parsed.data.context
     const source = await options.sourceFor(context)
 
+    // Both v0.9 and v0.10 use strict ticket decoders without resolution fields.
+    // Project only the ticket boundary; current domain values remain authoritative.
+    const client = stableVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
+    const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
+      if (ticket === null || client.major !== 0 || client.minor > 10) return ticket
+      const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = ticket
+      return legacy
+    }
+
     // Parse again through the operation-specific schema to preserve precise
     // inference in each branch while keeping the shared pre-source validation.
     switch (operation) {
       case 'list-ready': {
         const request = hostedTicketRequestSchemas['list-ready'].parse(raw)
-        return json(200, await source.listReady(request.input))
+        const listing = await source.listReady(request.input)
+        return json(200, { ...listing, tickets: listing.tickets.map(ticketResponse) })
       }
       case 'get': {
         const request = hostedTicketRequestSchemas.get.parse(raw)
-        return json(200, await source.get(request.input.id))
+        return json(200, ticketResponse(await source.get(request.input.id)))
       }
       case 'claim': {
         const request = hostedTicketRequestSchemas.claim.parse(raw)
@@ -123,7 +130,10 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       case 'create': {
         const request = hostedTicketRequestSchemas.create.parse(raw)
-        return json(201, await source.create(request.input.draft, request.input.options))
+        return json(
+          201,
+          ticketResponse(await source.create(request.input.draft, request.input.options)),
+        )
       }
       case 'update': {
         const request = hostedTicketRequestSchemas.update.parse(raw)

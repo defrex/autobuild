@@ -45,7 +45,8 @@
     }
   },
   "bin": {
-    "ab-hosted-store": "./src/bin.ts"
+    "ab-hosted-store": "./src/bin.ts",
+    "ab-hosted-service-build": "./src/deploy-build.ts"
   },
   "scripts": {
     "dev": "bun run --bun next dev",
@@ -54,9 +55,6 @@
     "hosted-store": "bun server.ts",
     "deploy:build": "bun ../../packages/hosted-dispatcher/src/bin.ts pack-distribution --root . && bun ../../packages/postgres-store/src/bin.ts migrate && bun run build && bun ../../packages/hosted-dispatcher/src/ship-packed-distribution.ts && bun ../../packages/hosted-dispatcher/src/ship-provider-plugin.ts"
   },
-  "peerDependencies": {
-    "@defrex/autobuild": ">=0.9.0"
-  },
   "dependencies": {
     "@defrex/autobuild-postgres-store": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -64,7 +62,14 @@
     "next": "16.1.6",
     "pg": "8.18.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "typescript": "5.9.3",
+    "@types/bun": "1.3.14",
+    "@types/node": "24.13.3",
+    "@types/pg": "8.16.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@types/semver": "^7.7.1"
   },
   "files": [
     "src",
@@ -73,20 +78,25 @@
     "!src/**/*.test.tsx",
     "!src/**/*.spec.ts",
     "!src/**/*.spec.tsx",
-    "!src/testing/**"
+    "!src/testing/**",
+    "app",
+    "server.ts",
+    "next.config.ts",
+    "tsconfig.deploy.json",
+    "next-env.d.ts",
+    "deployment",
+    "!app/**/*.test.ts",
+    "!app/**/*.test.tsx",
+    "!app/**/*.spec.ts",
+    "!app/**/*.spec.tsx"
   ],
   "publishConfig": {
     "access": "public"
   },
-  "peerDependenciesMeta": {
-    "@defrex/autobuild": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@types/pg": "8.16.0",
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
     "vercel": "^59.11.2"
+  },
+  "peerDependencies": {
+    "@defrex/autobuild": ">=0.11.0"
   }
 }

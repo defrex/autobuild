@@ -22,3 +22,5 @@ export type { SessionEvent, SessionEventWrite } from '../../events/sessions'
 export type { RepositoryEvent, RepositoryEventWrite } from '../../events/repository'
 export { SNAPSHOT_REDUCER_NAME } from '../snapshots'
 export type { ReducerSnapshot, SnapshotScope } from '../snapshots'
+
+export * from './compatibility'

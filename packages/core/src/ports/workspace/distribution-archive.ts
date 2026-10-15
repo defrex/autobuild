@@ -18,11 +18,9 @@
  * version in both modes: origin mode's release-asset tag is the running
  * version by construction, and source mode packs `distributionRoot()`, whose
  * package.json is the same file `readDistributionIdentity()` reads. The hosted
- * remote store enforces exact version lockstep — a client whose
- * `x-autobuild-version` or `x-autobuild-protocol-version` differs from the
- * server's is rejected (409) — so guest, store, and dispatcher versions must
- * move together through a release cut (`tools/release.ts`) plus
- * store/dispatcher upgrades; there is no code path that safely mixes versions.
+ * remote store accepts only its published client release-line window and known
+ * protocol identities (409 outside that contract). Upgrade the service before
+ * a dispatcher moves beyond its window; projects can then upgrade independently.
  * Provisioning records the installed distribution's identity stamp
  * (`readDistributionIdentityStamp()`) in the guest's `.distribution-version`
  * marker and reinstalls the archive on a later mismatch, so an upgraded

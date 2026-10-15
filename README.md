@@ -174,3 +174,5 @@ routine escalations, leaving you only the real product calls.
 ## License
 
 [Apache License 2.0](LICENSE).
+
+Deploy your own store and dashboard with the [hosted service setup](docs/hosted-service.md).

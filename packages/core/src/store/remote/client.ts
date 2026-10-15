@@ -578,7 +578,7 @@ export class RemoteBuildStore implements BuildStore {
 
   async getRepoHighWater(repo: string): Promise<number> {
     // Additive route beside `state-events`; the store service and client
-    // ship in version lockstep, so no protocol bump.
+    // retain this additive route throughout the supported client window.
     return this.requestJson('GET', `${this.repoPath(repo)}/high-water`, repoHighWaterSchema).then(
       (body) => (body as { seq: number }).seq,
     )

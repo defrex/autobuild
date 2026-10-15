@@ -88,7 +88,7 @@ if (testUrl) {
             blobs: new MemoryBlobStore(),
           }),
       )
-      const assertionSql = new SQL(database.url)
+      const assertionSql = new SQL(database.url, { max: 1 })
       try {
         const records = await Promise.all(stores.map((store) => store.ensureRepo('acme/new-repo')))
         expect(records).toHaveLength(stores.length)
@@ -130,7 +130,7 @@ if (testUrl) {
             blobs: new MemoryBlobStore(),
           }),
       )
-      const assertionSql = new SQL(database.url)
+      const assertionSql = new SQL(database.url, { max: 1 })
       try {
         const results = await Promise.allSettled(
           stores.map((store) => store.createBuild(sampleBuildInput('new-shared-build'))),

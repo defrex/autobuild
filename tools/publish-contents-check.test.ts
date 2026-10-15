@@ -1448,7 +1448,20 @@ describe('the real sub-package manifests', () => {
   const POSTGRES_AUT_500_FILES = [...AUT_490_BROADENED_FILES, '!src/testing/**']
   const AUT_500_FILES_BY_DIRECTORY: Record<string, string[]> = {
     'hosted-dispatcher': [...AUT_490_BROADENED_FILES, '!src/testing/**'],
-    'hosted-store-service': [...AUT_490_BROADENED_FILES, '!src/testing/**'],
+    'hosted-store-service': [
+      ...AUT_490_BROADENED_FILES,
+      '!src/testing/**',
+      'app',
+      'server.ts',
+      'next.config.ts',
+      'tsconfig.deploy.json',
+      'next-env.d.ts',
+      'deployment',
+      '!app/**/*.test.ts',
+      '!app/**/*.test.tsx',
+      '!app/**/*.spec.ts',
+      '!app/**/*.spec.tsx',
+    ],
     'postgres-store': POSTGRES_AUT_500_FILES,
   }
 

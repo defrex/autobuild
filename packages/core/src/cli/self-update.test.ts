@@ -735,3 +735,105 @@ describe('npm registry channel', () => {
     expect(errors.join('\n')).toContain('HTTP 404')
   })
 })
+
+for (const channel of ['github', 'npm'] as const) {
+  for (const scope of ['local', 'global'] as const) {
+    test(`${channel} ${scope} upgrade warns before installer and continues to handoff`, async () => {
+      const fixture = await installFixture(scope, channel)
+      const order: string[] = []
+      const update = await selfUpdate({
+        targetRepo: fixture.owner,
+        distRoot: fixture.dist,
+        env: { AB_STORE: 'https://service.test' },
+        version: '2.1.0',
+        stdout: () => {},
+        stderr: (line) => {
+          if (line.startsWith('warning:')) order.push('warning')
+        },
+        compatibilityFetch: async () => {
+          order.push('probe')
+          return Response.json({
+            autobuildVersion: '2.0.0',
+            supportedClientRange: { minVersion: '2.0.0', maxVersionExclusive: '2.1.0' },
+          })
+        },
+        registry: async () => ({ status: 200, body: '{"version":"2.1.0"}' }),
+        command: async (command) => {
+          if (command[1] === 'pm') return result(fixture.globalBin)
+          if (command[0] === 'gh') return result('{"tag_name":"v2.1.0"}')
+          if (command[1] === 'add') order.push('install')
+          else order.push('handoff')
+          return result()
+        },
+      })
+      expect(update).toEqual({ kind: 'handoff', exitCode: 0 })
+      expect(order).toEqual(['probe', 'warning', 'install', 'handoff'])
+    })
+  }
+}
+
+for (const mode of ['merge-only', 'handoff', 'fallback'] as const) {
+  test(`${mode} checks actual distribution before writing skills`, async () => {
+    const fixture = await installFixture()
+    const target = join(root!, 'other-target')
+    await mkdir(target)
+    await mkdir(join(fixture.dist, 'skills', 'plan'))
+    await writeFile(
+      join(fixture.dist, 'skills', 'plan', 'SKILL.md'),
+      '---\nname: ab-plan\n---\nNew skill\n',
+    )
+    const warnings: string[] = []
+    const code = await runCli(
+      ['upgrade', target, '--no-commit', ...(mode === 'merge-only' ? ['--no-self-update'] : [])],
+      {
+        workspacePath: fixture.owner,
+        distributionRoot: fixture.dist,
+        processEnv: {
+          AB_STORE: 'https://service.test',
+          ...(mode === 'handoff' ? { AB_SELF_UPDATE_HANDOFF: '1' } : {}),
+        },
+        selfUpdate: async () => ({ kind: 'continue' }),
+        compatibilityFetch: async () => {
+          expect(existsSync(join(target, '.agents'))).toBe(false)
+          return Response.json({
+            autobuildVersion: '1.9.0',
+            supportedClientRange: { minVersion: '1.7.0', maxVersionExclusive: '1.10.0' },
+          })
+        },
+        stdout: () => {},
+        stderr: (line) => {
+          expect(existsSync(join(target, '.agents'))).toBe(false)
+          warnings.push(line)
+        },
+      },
+    )
+    expect(code).toBe(0)
+    expect(warnings.filter((line) => line.startsWith('warning:'))).toHaveLength(1)
+    expect(warnings.join()).toContain('upgrade the service to at least 2.0.0')
+    expect(existsSync(join(target, '.agents', 'skills', 'ab-plan', 'SKILL.md'))).toBe(true)
+  })
+}
+
+test('fallback suppresses a duplicate unknown-compatibility warning in the same process', async () => {
+  const fixture = await installFixture()
+  const warnings: string[] = []
+  const unknown =
+    'warning: hosted service compatibility could not be verified; the upgraded project may fail to connect'
+  expect(
+    await runCli(['upgrade', fixture.owner, '--no-commit'], {
+      workspacePath: fixture.owner,
+      distributionRoot: fixture.dist,
+      processEnv: { AB_STORE: 'https://service.test' },
+      selfUpdate: async (options) => {
+        options.stderr(unknown)
+        return { kind: 'continue' }
+      },
+      compatibilityFetch: async () => {
+        throw new Error('offline')
+      },
+      stdout: () => {},
+      stderr: (line) => warnings.push(line),
+    }),
+  ).toBe(0)
+  expect(warnings.filter((line) => line === unknown)).toHaveLength(1)
+})
