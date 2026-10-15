@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#603](https://github.com/defrex/autobuild/pull/603) — Show persistent dispatcher standby ownership in terminal dashboards
 - [#602](https://github.com/defrex/autobuild/pull/602) — Expose dispatcher ownership and report lost dispatchers
 - [#601](https://github.com/defrex/autobuild/pull/601) — Separate ticket-source scans from dispatcher ticks
 - [#600](https://github.com/defrex/autobuild/pull/600) — Surface durable ticket-source degradation and recovery

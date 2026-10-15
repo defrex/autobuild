@@ -2581,3 +2581,168 @@ test('the bounded seed renders the same first frame as the full-journal seed (AU
   const full = await run({ boundedReturnsFull: true })
   expect(bounded).toEqual(full)
 })
+
+test('frontend standby refreshes ownership independently of yield notices and reuses seed/delta identities', async () => {
+  const { manualClock } = await import('../testing/fixed')
+  const clock = manualClock()
+  const repo = '/standby-frontend'
+  const backing = new MemoryBuildStore({ clock })
+  await backing.ensureRepo(repo)
+  const start = (run: string, pid: number) =>
+    backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.run-started',
+      payload: {
+        run,
+        pid,
+        host: `host-${run}`,
+        roleWarnings: [],
+        effectiveConfig: { kind: 'unused', rev: 0 },
+      },
+    })
+  await start('owner', 123)
+  await backing.claimRepoLease(repo, 'owner', 60000)
+  await backing.heartbeatRepo(repo, 'owner')
+  let recordFails = false
+  let fullReads = 0
+  const store = new Proxy(backing, {
+    get(target, key) {
+      if (key === 'getRepo')
+        return (repo: string) =>
+          recordFails ? Promise.reject(new Error('unavailable')) : target.getRepo(repo)
+      if (key === 'getRepoEvents')
+        return (repo: string, cursor = 0) => {
+          if (cursor === 0) fullReads++
+          return target.getRepoEvents(repo, cursor)
+        }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as BuildStore
+  const done = deferred<DispatchChildResult>()
+  const ready = deferred<void>()
+  const frames: DashboardModel[] = []
+  let ownRun = ''
+  let terminalOutput = ''
+  const frontend = new DispatchFrontend({
+    repo,
+    storeRef: 'memory',
+    store,
+    clock,
+    env: {},
+    once: false,
+    terminal: {
+      interactive: true,
+      columns: 180,
+      rows: 30,
+      write: (text) => {
+        terminalOutput += text
+      },
+      modes: createTerminalModeController(
+        () => {},
+        () => {},
+      ),
+    },
+    input: { start: () => () => {} },
+    resolveDashboardRenderer: () => (model) => {
+      frames.push(model)
+      if (model.standby) ready.resolve()
+      return ['frame']
+    },
+    launchChild: ({ run }) => {
+      ownRun = run
+      const startup = backing
+        .appendRepoWithArtifacts(
+          repo,
+          [
+            {
+              kind: 'dispatcher-effective-config',
+              content: JSON.stringify({
+                capacity: 4,
+                roles: { default: { runtime: 'claude' } },
+                tickets: { source: 'file', readyState: 'ready' },
+              }),
+            },
+          ],
+          (artifacts) => ({
+            actor: DISPATCHER,
+            type: 'dispatcher.run-started',
+            payload: {
+              run,
+              pid: 999,
+              effectiveConfig: { kind: artifacts[0]!.kind, rev: artifacts[0]!.revision },
+              roleWarnings: ['startup warning'],
+            },
+          }),
+        )
+        .then(() =>
+          backing.appendRepo(repo, {
+            actor: DISPATCHER,
+            type: 'dispatcher.tick-yielded',
+            payload: { run, holder: 'owner' },
+          }),
+        )
+      return { completed: startup.then(() => done.promise), async stop() {} }
+    },
+  })
+  // Drive ordinary projection cycles directly after the actual supervised-child
+  // startup, avoiding wall-clock waits for the frontend's two-second poll timer.
+  const poll = () => (frontend as unknown as { renderOnce(): Promise<void> }).renderOnce()
+  const running = frontend.run()
+  try {
+    await ready.promise
+    expect(frames.at(-1)!.standby).toContain('owner; pid 123; host host-owner;')
+    const baseline = fullReads
+    for (let i = 1; i <= 3; i++) {
+      clock.advance(500)
+      await poll()
+      expect(frames.at(-1)!.standby).toContain(`heartbeat ${i * 500}ms ago`)
+    }
+    expect(fullReads).toBe(baseline)
+    await backing.appendRepo(repo, {
+      actor: humanActor('operator'),
+      type: 'dispatcher.operator-reported',
+      payload: { run: ownRun, level: 'warning', message: 'transient warning' },
+    })
+    await backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.upgrade-available',
+      payload: { run: ownRun, version: '9.1.0' },
+    })
+    await poll()
+    expect(frames.at(-1)!.warningLines).toEqual(['startup warning', 'transient warning'])
+    expect(frames.at(-1)!.availableUpgrade).toBe('9.1.0')
+    expect(frames.at(-1)!.standby).toContain('owner;')
+    // A peer switch needs no additional yield event; its delta start avoids correlation.
+    await backing.releaseRepoLease(repo, 'owner')
+    await start('peer', 456)
+    await backing.claimRepoLease(repo, 'peer', 60000)
+    await poll()
+    expect(frames.at(-1)!.standby).toContain('peer; pid 456; host host-peer;')
+    expect(fullReads).toBe(baseline)
+    recordFails = true
+    await backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-started',
+      payload: { run: 'unrelated' },
+    })
+    await poll()
+    expect(frames.at(-1)!.standby).toBe('owner') // durable fallback, never peer metadata
+    await backing.appendRepo(repo, {
+      actor: DISPATCHER,
+      type: 'dispatcher.tick-started',
+      payload: { run: ownRun },
+    })
+    await poll()
+    expect(frames.at(-1)).not.toHaveProperty('standby')
+    recordFails = false
+    await backing.releaseRepoLease(repo, 'peer')
+    await backing.claimRepoLease(repo, ownRun, 60000)
+    await poll()
+    expect(frames.at(-1)).not.toHaveProperty('standby')
+    expect(terminalOutput).not.toContain('tick yielded:')
+  } finally {
+    done.resolve({ outcome: 'normal', exitCode: 0 })
+    await running
+  }
+})

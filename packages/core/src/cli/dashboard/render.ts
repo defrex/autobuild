@@ -722,6 +722,21 @@ interface DetailGeometry extends DetailBodyLayout {
   limit: number
 }
 
+function standbyLine(model: DashboardModel, color: boolean, width: number): string[] {
+  return model.standby === undefined
+    ? []
+    : [
+        truncate(
+          paint(
+            `  Dispatcher on standby: repository held by ${displayText(model.standby)}`,
+            'yellow',
+            color,
+          ),
+          width,
+        ),
+      ]
+}
+
 function upgradeNoticeLine(
   model: DashboardModel,
   color: boolean,
@@ -749,7 +764,8 @@ function detailGeometry(
   const build = model.builds.find((candidate) => candidate.slug === view.slug)
   if (build === undefined) return undefined
   const layout = detailBody(build, view, { color: false, width, height, now: 0 })
-  const topLength = 2 + (model.availableUpgrade === undefined ? 0 : 1)
+  const topLength =
+    2 + (model.standby === undefined ? 0 : 1) + (model.availableUpgrade === undefined ? 0 : 1)
   const controls =
     model.resumeInput !== undefined || model.abortConfirmation !== undefined
       ? dashboardControls(model, false, width, controlsCapacity(height, topLength))
@@ -808,6 +824,7 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
       `  status ${paint(build.status.toUpperCase(), STATUS_COLOR[build.status], color)}${paused}`,
       width,
     ),
+    ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
   ]
   const { body } = detailBody(build, view, opts)
@@ -862,11 +879,12 @@ export function transcriptScrollLimit(
   terminalWidth: number,
   height: number,
   hasUpgradeNotice = false,
+  hasStandby = false,
 ): number {
   const contentLines = transcriptContent(presentation, dashboardContentWidth(terminalWidth)).length
-  // Transcript chrome is two header rows, the optional upgrade row, two
+  // Transcript chrome is two header rows, optional standby/upgrade rows, two
   // separators, and controls. Keep this in lockstep with renderTranscript.
-  const capacity = Math.max(0, height - 5 - (hasUpgradeNotice ? 1 : 0))
+  const capacity = Math.max(0, height - 5 - (hasUpgradeNotice ? 1 : 0) - (hasStandby ? 1 : 0))
   return Math.max(0, contentLines - capacity)
 }
 
@@ -877,8 +895,15 @@ export function moveTranscriptScroll(
   current: number,
   delta: number,
   hasUpgradeNotice = false,
+  hasStandby = false,
 ): number {
-  const limit = transcriptScrollLimit(presentation, terminalWidth, height, hasUpgradeNotice)
+  const limit = transcriptScrollLimit(
+    presentation,
+    terminalWidth,
+    height,
+    hasUpgradeNotice,
+    hasStandby,
+  )
   // Clamp current first because a resize, or state from an older controller,
   // may leave it beyond the freshly wrapped viewport's end.
   return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
@@ -909,6 +934,7 @@ function renderTranscript(model: DashboardModel, opts: RenderOpts): string[] {
   const top = [
     truncate(`${paint('Transcript', 'bold', color)}  ${displayText(view.slug)}`, width),
     truncate(`  session ${displayText(view.sessionId)}`, width),
+    ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
   ]
   const content = transcriptContent(view.transcript, width).map((line) => truncate(line, width))
@@ -948,11 +974,12 @@ export function sessionScrollLimit(
   terminalWidth: number,
   height: number,
   hasUpgradeNotice = false,
+  hasStandby = false,
 ): number {
   const contentLines = sessionContentLines(view, dashboardContentWidth(terminalWidth)).length
-  // Session chrome is two header rows, the optional upgrade row, two
+  // Session chrome is two header rows, optional standby/upgrade rows, two
   // separators, and controls — the transcript's exact arithmetic.
-  const capacity = Math.max(0, height - 5 - (hasUpgradeNotice ? 1 : 0))
+  const capacity = Math.max(0, height - 5 - (hasUpgradeNotice ? 1 : 0) - (hasStandby ? 1 : 0))
   return Math.max(0, contentLines - capacity)
 }
 
@@ -963,8 +990,9 @@ export function moveSessionScroll(
   current: number,
   delta: number,
   hasUpgradeNotice = false,
+  hasStandby = false,
 ): number {
-  const limit = sessionScrollLimit(view, terminalWidth, height, hasUpgradeNotice)
+  const limit = sessionScrollLimit(view, terminalWidth, height, hasUpgradeNotice, hasStandby)
   // Clamp current first: a resize, a feed apply, or state from an older
   // controller may leave it beyond the freshly wrapped viewport's end.
   return Math.max(0, Math.min(limit, Math.min(current, limit) + delta))
@@ -983,6 +1011,7 @@ function renderSessionView(model: DashboardModel, opts: RenderOpts): string[] {
       }`,
       width,
     ),
+    ...standbyLine(model, color, width),
     ...(notice === undefined ? [] : [notice]),
   ]
   const content = sessionContentLines(view, width).map((line) => truncate(line, width))
@@ -1417,6 +1446,7 @@ function renderDashboardContent(model: DashboardModel, opts: RenderOpts): string
   const top = [
     summary,
     toggles,
+    ...standbyLine(model, color, width),
     ...(upgradeNotice === undefined ? [] : [upgradeNotice]),
     ...warnings,
   ]

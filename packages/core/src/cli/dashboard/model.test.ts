@@ -2320,3 +2320,16 @@ describe("the legacy frame's bounded repository read is replay-equivalent (AUT-5
     await store.close()
   })
 })
+
+test('invocation standby is forwarded independently and omitted for holders', () => {
+  const header = {
+    repo: '/repo',
+    queued: 0,
+    activeCount: 0,
+    capacity: 4,
+    observationCount: 0,
+    observationLimit: 9,
+  }
+  expect(buildDashboardFromProjected([], header)).not.toHaveProperty('standby')
+  expect(buildDashboardFromProjected([], { ...header, standby: 'peer' }).standby).toBe('peer')
+})

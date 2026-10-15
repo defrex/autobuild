@@ -73,6 +73,8 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'session-live',
     'session-closed',
     'resume-prompt',
+    'standby-list',
+    'standby-detail',
   ])
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
@@ -109,6 +111,12 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       expect(frame.text).toContain('CAP-COMPLETE')
       expect(frame.text).toContain('Harvest')
       expect(frame.text).toContain('PAUSED')
+    } else if (frame.id.startsWith('standby-')) {
+      expect(frame.text).toContain('Dispatcher on standby: repository held by peer-run')
+      if (frame.id === 'standby-list') {
+        expect(frame.text).toContain('run ab upgrade')
+        expect(frame.text).toContain('Unicode warning')
+      }
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')

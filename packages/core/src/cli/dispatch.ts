@@ -1,4 +1,4 @@
-import { readDispatcherLiveness } from './dispatcher-liveness'
+import { readDispatcherLiveness, StandbyIdentityResolver } from './dispatcher-liveness'
 import { formatDispatcherIdentity } from '../kernel/dispatcher-liveness'
 /**
  * `ab dispatch` — the operator's entry into the outer loop (SPEC §3.3, §12).
@@ -693,6 +693,9 @@ class DispatchLoop {
    * discarded on Escape. All read semantics live in the shared feed module. */
   private sessionFeed: SessionStreamFeed | undefined
   private warningLine: string | undefined
+  /** Invocation-local ownership; independent of every notice slot. */
+  private standby: string | undefined
+  private standbyResolver: StandbyIdentityResolver | undefined
   /** Process-local, persistent release notice. It never shares the replaceable
    * warning slot and is re-applied to every store projection. */
   private availableUpgrade: string | undefined
@@ -1192,6 +1195,7 @@ class DispatchLoop {
       selection: _oldSelection,
       warningLines: _oldWarningLines,
       availableUpgrade: _oldAvailableUpgrade,
+      standby: _oldStandby,
       resumeInput: _oldResumeInput,
       abortConfirmation: _oldAbortConfirmation,
       view: _oldView,
@@ -1206,6 +1210,7 @@ class DispatchLoop {
     ]
     let effective: DashboardModel = {
       ...base,
+      ...(this.standby !== undefined ? { standby: this.standby } : {}),
       ...(this.availableUpgrade !== undefined ? { availableUpgrade: this.availableUpgrade } : {}),
       ...(warningLines.length > 0 ? { warningLines } : {}),
       ...(this.selection !== undefined ? { selection: this.selection } : {}),
@@ -1260,7 +1265,13 @@ class DispatchLoop {
     const limit =
       terminal === undefined
         ? 0
-        : sessionScrollLimit(view, terminal.columns, paintableRows(terminal.rows), upgrade)
+        : sessionScrollLimit(
+            view,
+            terminal.columns,
+            paintableRows(terminal.rows),
+            upgrade,
+            this.standby !== undefined,
+          )
     const current = view.follow ? limit : view.scroll
     const scroll =
       terminal === undefined
@@ -1272,6 +1283,7 @@ class DispatchLoop {
             current,
             delta,
             upgrade,
+            this.standby !== undefined,
           )
     let follow = view.follow
     if (delta < 0 && follow && scroll < limit) follow = false
@@ -1293,6 +1305,7 @@ class DispatchLoop {
       terminal.columns,
       paintableRows(terminal.rows),
       this.availableUpgrade !== undefined,
+      this.standby !== undefined,
     )
     return { ...view, scroll: view.follow ? limit : Math.min(view.scroll, limit) }
   }
@@ -1352,6 +1365,7 @@ class DispatchLoop {
                 this.view.scroll,
                 delta,
                 this.availableUpgrade !== undefined,
+                this.standby !== undefined,
               ),
       }
       this.syncModelControls()
@@ -3391,6 +3405,18 @@ class DispatchLoop {
     const claimed = await this.wiring.store
       .claimRepoLease(this.repoIdentity, holder, REPO_LEASE_TTL_MS)
       .catch(() => false)
+    if (this.dashboard && !this.opts.once) {
+      this.standbyResolver ??= new StandbyIdentityResolver(this.wiring.store, this.repoIdentity)
+      this.standby = claimed
+        ? undefined
+        : await this.standbyResolver.refresh(
+            this.runId,
+            this.yieldedTo ?? 'another invocation',
+            this.wiring.clock(),
+          )
+      this.syncModelControls()
+      this.paint()
+    }
     if (!claimed) {
       if (this.repoLeaseHolder !== undefined) {
         // We held the lease and the store says it is gone: a peer took over.
@@ -3476,15 +3502,17 @@ class DispatchLoop {
     const holder = this.runId
     if (!(await this.ensureRepoLease(holder))) {
       await this.recordTickYielded()
-      const peer = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))?.lease
-        ?.holder
-      const liveness = await readDispatcherLiveness(
-        this.wiring.store,
-        this.repoIdentity,
-        this.wiring.clock(),
-      ).catch(() => null)
-      const message = `tick yielded: repository held by ${liveness?.dispatcher.holder ? formatDispatcherIdentity(liveness.dispatcher.holder) : (peer ?? 'another invocation')}`
-      this.warn(message)
+      if ((!this.dashboard && this.opts.kernelRunId === undefined) || this.opts.once) {
+        const peer = (await this.wiring.store.getRepo(this.repoIdentity).catch(() => null))?.lease
+          ?.holder
+        const liveness = await readDispatcherLiveness(
+          this.wiring.store,
+          this.repoIdentity,
+          this.wiring.clock(),
+        ).catch(() => null)
+        const message = `tick yielded: repository held by ${liveness?.dispatcher.holder ? formatDispatcherIdentity(liveness.dispatcher.holder) : (peer ?? 'another invocation')}`
+        this.warn(message)
+      }
       if (this.opts.once === true) return
       // Watch mode stays alive and retries the claim at every tick.
     }

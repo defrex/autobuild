@@ -1,3 +1,4 @@
+import { StandbyIdentityResolver } from './dispatcher-liveness'
 import { configSchema, type Config } from '../config/schema'
 import { humanActor } from '../events/envelope'
 import type { RepositoryEvent } from '../events/repository'
@@ -114,6 +115,7 @@ export interface DispatchFrontendOptions {
 /** Terminal controller with a deliberately narrow wiring surface: terminal,
  * BuildStore, immutable repository identity, clock, and child supervision. */
 export class DispatchFrontend {
+  private readonly standbyResolver: StandbyIdentityResolver
   private readonly runId = crypto.randomUUID()
   private readonly clock: Clock
   private readonly region: LiveRegion
@@ -153,6 +155,7 @@ export class DispatchFrontend {
   private operatorStopRequested = false
 
   constructor(private readonly opts: DispatchFrontendOptions) {
+    this.standbyResolver = new StandbyIdentityResolver(opts.store, opts.repo)
     this.clock = opts.clock ?? systemClock
     this.keyboard = createKeyboardProtocol(
       (chunk) => opts.terminal.write(chunk),
@@ -191,6 +194,7 @@ export class DispatchFrontend {
                 this.opts.store.getRepoEvents(this.opts.repo, 0),
               )
             : await this.opts.store.getRepoEvents(this.opts.repo, 0)
+        this.standbyResolver.ingest(seed)
         this.repositorySeq = seed.at(-1)?.seq ?? 0
         this.dispatchStatus = reduceDispatchStatus(seed, this.runId)
         this.repositoryEvents.push(...seed.filter(isDashboardRepositoryEvent))
@@ -199,6 +203,7 @@ export class DispatchFrontend {
       }
       const delta = await this.opts.store.getRepoEvents(this.opts.repo, this.repositorySeq)
       if (delta.length === 0) return
+      this.standbyResolver.ingest(delta)
       this.repositorySeq = delta.at(-1)!.seq
       this.dispatchStatus = reduceDispatchStatus(delta, this.runId, this.dispatchStatus)
       this.repositoryEvents.push(...delta.filter(isDashboardRepositoryEvent))
@@ -367,10 +372,14 @@ export class DispatchFrontend {
       ...status.roleWarnings,
       ...(status.warningNotice !== undefined ? [status.warningNotice] : []),
     ]
+    const standby = this.opts.once
+      ? undefined
+      : await this.standbyResolver.refresh(this.runId, status.yieldedHolder, this.clock())
     const projected = buildDashboardFromProjected(
       snapshot.builds,
       {
         repo: this.opts.repo,
+        ...(standby !== undefined ? { standby } : {}),
         queued: status.queued ?? 0,
         activeCount: [...snapshot.states.values()].filter(
           (state) => state.status !== 'done' && state.status !== 'aborted',
@@ -409,6 +418,7 @@ export class DispatchFrontend {
         this.opts.terminal.columns,
         paintableRows(this.opts.terminal.rows),
         upgrade,
+        this.model?.standby !== undefined,
       )
       const current = view.follow ? limit : view.scroll
       const scroll = moveSessionScroll(
@@ -418,6 +428,7 @@ export class DispatchFrontend {
         current,
         delta,
         upgrade,
+        this.model?.standby !== undefined,
       )
       let follow = view.follow
       if (delta < 0 && follow && scroll < limit) follow = false
@@ -437,6 +448,7 @@ export class DispatchFrontend {
           this.view.scroll,
           delta,
           this.model?.availableUpgrade !== undefined,
+          this.model?.standby !== undefined,
         ),
       }
     } else if (this.view?.kind === 'detail' && this.model !== undefined) {
@@ -598,6 +610,7 @@ export class DispatchFrontend {
             terminal.columns,
             paintableRows(terminal.rows),
             this.model?.availableUpgrade !== undefined,
+            this.model?.standby !== undefined,
           )
           this.view = {
             ...next,

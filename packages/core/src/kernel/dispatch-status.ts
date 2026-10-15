@@ -12,6 +12,7 @@ export interface DispatchStatus {
   queued?: number
   /** Standing count from newer tick facts; absent for historical events. */
   creationWithheld?: number
+  yieldedHolder?: string
   availableUpgrade?: string
   roleWarnings: string[]
   diagnostics: string[]
@@ -58,6 +59,7 @@ export function reduceDispatchStatus(
     state.lastSeq = event.seq
     switch (event.type) {
       case 'dispatcher.run-started':
+        state.yieldedHolder = undefined
         state.health = 'running'
         state.effectiveConfig = event.payload.effectiveConfig
         state.roleWarnings = [...event.payload.roleWarnings]
@@ -87,6 +89,12 @@ export function reduceDispatchStatus(
           event.payload.error,
         )
         state.warningNotice = state.notice
+        break
+      case 'dispatcher.tick-yielded':
+        state.yieldedHolder = event.payload.holder
+        break
+      case 'dispatcher.tick-started':
+        state.yieldedHolder = undefined
         break
       case 'dispatcher.tick-completed':
         state.queued = event.payload.queued
@@ -143,7 +151,7 @@ export function reduceDispatchStatus(
 
 /** Bump when `DispatchStatus`'s shape or fold semantics change (it is its own
  * accumulator: `lastSeq` makes the fold skip already-seen events). */
-export const DISPATCH_STATUS_REDUCER_VERSION = 1
+export const DISPATCH_STATUS_REDUCER_VERSION = 2
 
 /** The incremental form of `reduceDispatchStatus` for one run. The run is a
  * parameter, so this is a factory. */

@@ -108,7 +108,7 @@ describe('reducer registry', () => {
         "currentPrAttachments": 1,
         "dashboardFacts": 1,
         "dispatchSettings": 1,
-        "dispatchStatus": 1,
+        "dispatchStatus": 2,
         "frozenPrImageHost": 1,
         "harvest": 1,
         "hostedPrAttachments": 1,
