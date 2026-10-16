@@ -119,9 +119,9 @@ Only an object-store 404 is treated as absent; authorization and service errors
 are propagated. Vercel supports either a Blob read-write token or a Vercel OIDC
 token paired with its Blob store ID.
 
-`PostgresTicketDatabase.source({ teamKey, claimedState?, createState? })` creates
-a request-bound TicketSource view. The deployment supplies four distinct
-lifecycle names; the defaults are Triage, Ready, Doing, and Done. Ticket bodies
+`PostgresTicketDatabase.source({ repo, teamKey, lifecycle, claimedState?, createState? })`
+creates a request-bound TicketSource view. The deployment supplies the project
+identity, readable-id prefix, and lifecycle names. Ticket bodies
 are stored as PostgreSQL `text` and returned unchanged.
 
 For an authenticated HTTP deployment of this adapter, see the

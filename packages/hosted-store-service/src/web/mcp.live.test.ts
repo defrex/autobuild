@@ -627,9 +627,10 @@ if (postgresUrl) {
         const { Pool } = await import('pg')
         const pool = new Pool({ connectionString: url, max: 2 })
         const auth = createWebAuth(env, { database: pool })
-        const { app } = buildApp(env, auth)
+        const { app, backing } = buildApp(env, auth)
         const seeded = await seedUser(auth, 'ada@example.com')
-        const tokens = await authorizeFlow(app, seeded.cookie)
+        const registeredClient = await dynamicRegister(app, await discoverMetadata(app))
+        const tokens = await authorizeFlow(app, seeded.cookie, registeredClient)
         const response = await app(toolsListRequest(tokens.access_token!, 5))
         expect(response.status).toBe(200)
         const { result } = (await response.json()) as { result: { tools: unknown[] } }
@@ -638,6 +639,49 @@ if (postgresUrl) {
         // same authenticationScheme the memory adapter persists (the
         // registered client used token_endpoint_auth_method 'none'), and the
         // same column set the memory adapter carries.
+        await backing.ensureRepo(REPO)
+        const { verify, finalize, ...root } = parseConfig(
+          '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
+        )
+        const artifact = await backing.putRepoArtifact(REPO, {
+          kind: 'dispatcher-effective-config',
+          content: JSON.stringify({
+            ...root,
+            verify: { steps: verify.steps },
+            finalize: { steps: finalize.steps },
+          }),
+        })
+        await backing.appendRepo(REPO, {
+          actor: DISPATCHER,
+          type: 'dispatcher.run-started',
+          payload: {
+            run: 'tickets-readable',
+            pid: 1,
+            effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+            roleWarnings: [],
+          },
+        })
+        const mcp = await connectClient(app, tokens, registeredClient)
+        try {
+          const made = await mcp.callTool({
+            name: 'tickets.create',
+            arguments: { repo: REPO, title: 'Readable', body: 'Body' },
+          })
+          expect(made.isError).toBeUndefined()
+          expect(JSON.parse((made.content as { text: string }[])[0]!.text).ticket.ref.id).toBe(
+            'ENG-1',
+          )
+          const shown = await mcp.callTool({
+            name: 'tickets.get',
+            arguments: { repo: REPO, id: 'eNg-1' },
+          })
+          expect(shown.isError).toBeUndefined()
+          expect(JSON.parse((shown.content as { text: string }[])[0]!.text).ticket.ref.id).toBe(
+            'ENG-1',
+          )
+        } finally {
+          await mcp.close()
+        }
         const sql = new SQL(url)
         const clients = await sql`SELECT * FROM "oauthApplication"`
         const names = clients.map((row: { name: string }) => row.name)

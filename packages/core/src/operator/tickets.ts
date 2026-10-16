@@ -1,3 +1,4 @@
+import { ticketIdentity } from '../ports/tickets/identity'
 import type { Config } from '../config/schema'
 import { reduceBuild } from '../kernel/reducer'
 import {
@@ -103,10 +104,15 @@ async function matchingBuild(
   store: BuildStore,
   repo: string,
   id: string,
+  source: TicketSource,
 ): Promise<OperatorTicketBuild | null> {
-  const matches = (await store.listBuilds()).filter(
-    (record) => record.repo === repo && record.ticket?.id === id,
-  )
+  const identity = ticketIdentity(source)
+  const target = await identity({ source: source.name, id })
+  const matches = []
+  for (const record of await store.listBuilds()) {
+    if (record.repo === repo && record.ticket && (await identity(record.ticket)) === target)
+      matches.push(record)
+  }
   const projected = await Promise.all(
     matches.map(async (record) => ({
       record,
@@ -139,7 +145,11 @@ export async function getOperatorTicket(opts: {
   const { source } = await openOperatorTickets(opts)
   const ticket = await requireTicket(source, opts.id)
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
-  return { ticket, blockers, build: await matchingBuild(opts.store, opts.repo, opts.id) }
+  return {
+    ticket,
+    blockers,
+    build: await matchingBuild(opts.store, opts.repo, ticket.ref.id, source),
+  }
 }
 
 export async function mutateOperatorTicket(opts: {
@@ -171,5 +181,9 @@ export async function mutateOperatorTicket(opts: {
           ? await moveTicket(source, operation.id, operation.state)
           : await changeBlockers(source, operation.id, operation.blockerIds, operation.kind)
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
-  return { ticket, blockers, build: await matchingBuild(opts.store, opts.repo, ticket.ref.id) }
+  return {
+    ticket,
+    blockers,
+    build: await matchingBuild(opts.store, opts.repo, ticket.ref.id, source),
+  }
 }

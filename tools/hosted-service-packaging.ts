@@ -192,7 +192,7 @@ export async function checkHostedServicePackaging() {
         },
       })
       await legacyDb.unsafe(
-        'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+        'DROP TABLE ab_ticket_counters, ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
       )
       await legacyDb.unsafe(TICKET_SCHEMA_V1_DDL)
       await legacyDb`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${new Date().toISOString()})`

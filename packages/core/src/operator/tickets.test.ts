@@ -93,13 +93,13 @@ describe('operator ticket projections', () => {
 
   test('projects blockers and prefers an active matching repository build', async () => {
     const store = await configuredStore()
-    await store.createBuild({ slug: 'old', repo, ticket: { source: 'linear', id: 'AUT-1' } })
+    await store.createBuild({ slug: 'old', repo, ticket: { source: 'fake', id: 'AUT-1' } })
     await store.append('old', {
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
-    await store.createBuild({ slug: 'active', repo, ticket: { source: 'linear', id: 'AUT-1' } })
+    await store.createBuild({ slug: 'active', repo, ticket: { source: 'fake', id: 'AUT-1' } })
     const detail = await getOperatorTicket({
       store,
       repo,
@@ -136,4 +136,22 @@ describe('operator ticket projections', () => {
       }),
     ).rejects.toThrow('provider says transition is forbidden')
   })
+})
+
+test('canonical ticket detail finds historical build aliases and keeps sources separate', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([seed])
+  const get = source.get.bind(source)
+  source.get = (id) => get(id === 'ticket-legacy' || id === 'aut-1' ? 'AUT-1' : id)
+  await store.createBuild({ slug: 'legacy', repo, ticket: { source: 'fake', id: 'ticket-legacy' } })
+  await store.createBuild({
+    slug: 'foreign-source',
+    repo,
+    ticket: { source: 'linear', id: 'AUT-1' },
+  })
+  for (const id of ['AUT-1', 'aut-1', 'ticket-legacy']) {
+    const detail = await getOperatorTicket({ store, repo, backend: backend(source), id })
+    expect(detail.ticket.ref.id).toBe('AUT-1')
+    expect(detail.build?.slug).toBe('legacy')
+  }
 })

@@ -248,23 +248,34 @@ export class PostgresBuildStore implements BuildStore {
         ON CONFLICT (slug) DO NOTHING RETURNING slug`
       const row = await this.lockBuild(q, input.slug)
       if (!inserted[0]) throw new Error(`build "${input.slug}" already exists`)
-      if (created === undefined) return this.record(row)
+      if (created === undefined) return this.currentRecord(q, row)
       await this.appendLocked(q, input.slug, created, true)
-      return this.record(await this.lockBuild(q, input.slug))
+      return this.currentRecord(q, await this.lockBuild(q, input.slug))
     })
+  }
+
+  /** Current ticket identity is a read projection; event/artifact bytes remain historical. */
+  private async currentRecord(q: Exec, row: Row): Promise<BuildRecord> {
+    const record = this.record(row)
+    if (record.ticket?.source !== 'hosted') return record
+    const ticket = await this.hostedTicketRow(q, record.repo, record.ticket.id)
+    const id = ticket?.readable_id
+    return id ? { ...record, ticket: { ...record.ticket, id: String(id) } } : record
   }
 
   async getBuild(slug: string): Promise<BuildRecord | null> {
     return this.run(async (q) => {
       const rows: Row[] = await q`SELECT * FROM builds WHERE slug = ${slug}`
-      return rows[0] ? this.record(rows[0]) : null
+      return rows[0] ? this.currentRecord(q, rows[0]) : null
     })
   }
 
   async listBuilds(): Promise<BuildRecord[]> {
     return this.run(async (q) => {
       const rows: Row[] = await q`SELECT * FROM builds ORDER BY created_at, slug`
-      return rows.map((row) => this.record(row))
+      const records: BuildRecord[] = []
+      for (const row of rows) records.push(await this.currentRecord(q, row))
+      return records
     })
   }
 
@@ -1209,6 +1220,34 @@ export class PostgresBuildStore implements BuildStore {
     }
   }
 
+  private readableTicketSchema = false
+
+  /** Ticket tables are an independently migrated, optional store extension. */
+  private async hostedTicketRow(q: Exec, repo: string, id: string): Promise<Row | undefined> {
+    if (!this.readableTicketSchema) {
+      const tables: Row[] = await q`SELECT to_regclass('ab_ticket_schema_migrations') AS tickets`
+      if (!tables[0]?.tickets) return undefined
+      const markers: Row[] =
+        await q`SELECT version FROM ab_ticket_schema_migrations WHERE singleton = true`
+      if (Number(markers[0]?.version ?? 0) < 3) return undefined
+      // Cache only presence: a store opened before migration must discover a later upgrade.
+      this.readableTicketSchema = true
+    }
+    const rows: Row[] = await q`SELECT id, readable_id FROM ab_tickets
+      WHERE repo = ${repo} AND (id = ${id} OR lower(readable_id) = lower(${id}))`
+    return rows[0]
+  }
+
+  private async currentAssetMeta(q: Exec, row: Row): Promise<TicketAssetMeta> {
+    const meta = this.ticketAssetMeta(row)
+    const ticket = await this.hostedTicketRow(q, meta.repo, meta.ticketId)
+    return ticket?.readable_id ? { ...meta, ticketId: String(ticket.readable_id) } : meta
+  }
+
+  private async ticketStorageKey(q: Exec, repo: string, id: string): Promise<string> {
+    return String((await this.hostedTicketRow(q, repo, id))?.id ?? id)
+  }
+
   async putTicketAsset(
     repo: string,
     ticketId: string,
@@ -1218,16 +1257,28 @@ export class PostgresBuildStore implements BuildStore {
     const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
     const manifest = JSON.stringify(entries)
     return this.tx(async (q) => {
+      const key = await this.ticketStorageKey(q, repo, ticketId)
       // Serialize revision assignment per (repo, ticket, kind, name).
-      await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, ticketId, asset.kind, asset.name])}, 0))`
+      await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, key, asset.kind, asset.name])}, 0))`
       const tails: Row[] =
-        await q`SELECT COALESCE(MAX(revision), -1) AS revision FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${asset.kind} AND name=${asset.name}`
+        await q`SELECT COALESCE(MAX(revision), -1) AS revision FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} AND kind=${asset.kind} AND name=${asset.name}`
       const revision = num(tails[0]?.revision) + 1
       const createdAt = this.now()
-      await q`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${repo},${ticketId},${asset.kind},${asset.name},${revision},${asset.layout},${manifest}::jsonb,${size},false,${createdAt})`
+      await q`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${repo},${key},${asset.kind},${asset.name},${revision},${asset.layout},${manifest}::jsonb,${size},false,${createdAt})`
+      const display = await this.currentAssetMeta(q, {
+        repo,
+        ticket_id: key,
+        kind: asset.kind,
+        name: asset.name,
+        revision,
+        layout: asset.layout,
+        size,
+        manifest: entries,
+        created_at: createdAt,
+      })
       return {
         repo,
-        ticketId,
+        ticketId: display.ticketId,
         kind: asset.kind,
         name: asset.name,
         revision,
@@ -1246,14 +1297,15 @@ export class PostgresBuildStore implements BuildStore {
     name: string,
     rev?: number,
   ): Promise<TicketAsset | null> {
-    const rows: Row[] = await this.run((q) =>
-      rev === undefined
-        ? q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${kind} AND name=${name} ORDER BY revision DESC LIMIT 1`
-        : q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${kind} AND name=${name} AND revision=${rev}`,
-    )
+    const rows: Row[] = await this.run(async (q) => {
+      const key = await this.ticketStorageKey(q, repo, ticketId)
+      return rev === undefined
+        ? q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} AND kind=${kind} AND name=${name} ORDER BY revision DESC LIMIT 1`
+        : q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} AND kind=${kind} AND name=${name} AND revision=${rev}`
+    })
     const row = rows[0]
     if (!row || row.removed === true) return null
-    return loadTicketAsset(this.blobs, this.ticketAssetMeta(row))
+    return loadTicketAsset(this.blobs, await this.run((q) => this.currentAssetMeta(q, row)))
   }
 
   async getPinnedTicketAsset(
@@ -1270,10 +1322,15 @@ export class PostgresBuildStore implements BuildStore {
     ticketId: string,
     opts?: { revisions?: boolean },
   ): Promise<TicketAssetSummary[]> {
-    const rows: Row[] = await this.run(
-      (q) =>
-        q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} ORDER BY kind, name, revision`,
-    )
+    const rows: Row[] = await this.run(async (q) => {
+      const key = await this.ticketStorageKey(q, repo, ticketId)
+      const rows: Row[] =
+        await q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} ORDER BY kind, name, revision`
+      const projected: Row[] = []
+      for (const row of rows)
+        projected.push({ ...row, ticket_id: (await this.currentAssetMeta(q, row)).ticketId })
+      return projected
+    })
     if (opts?.revisions) {
       return rows
         .filter((row) => row.removed !== true)
@@ -1293,13 +1350,14 @@ export class PostgresBuildStore implements BuildStore {
     name: string,
   ): Promise<TicketAssetMeta | null> {
     return this.tx(async (q) => {
-      await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, ticketId, kind, name])}, 0))`
+      const key = await this.ticketStorageKey(q, repo, ticketId)
+      await q`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([repo, key, kind, name])}, 0))`
       const rows: Row[] =
-        await q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${ticketId} AND kind=${kind} AND name=${name} ORDER BY revision DESC LIMIT 1`
+        await q`SELECT * FROM ticket_assets WHERE repo=${repo} AND ticket_id=${key} AND kind=${kind} AND name=${name} ORDER BY revision DESC LIMIT 1`
       const latest = rows[0]
       if (!latest || latest.removed === true) return null
-      await q`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${repo},${ticketId},${kind},${name},${num(latest.revision) + 1},${String(latest.layout)},${'[]'}::jsonb,0,true,${this.now()})`
-      return this.ticketAssetMeta(latest)
+      await q`INSERT INTO ticket_assets (repo,ticket_id,kind,name,revision,layout,manifest,size,removed,created_at) VALUES (${repo},${key},${kind},${name},${num(latest.revision) + 1},${String(latest.layout)},${'[]'}::jsonb,0,true,${this.now()})`
+      return this.currentAssetMeta(q, latest)
     })
   }
 

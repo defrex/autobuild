@@ -519,3 +519,39 @@ if (testUrl) {
     test.skip('set AB_POSTGRES_TEST_URL to run the PostgreSQL contract and concurrency suite', () => {})
   })
 }
+
+if (testUrl)
+  test('current ticket projections preserve missing-source refs and arbitrary asset keys without ticket tables', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const store = await openPostgresBuildStore(database.url, new MemoryBlobStore())
+    try {
+      await sql.unsafe(
+        'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_counters, ab_ticket_schema_migrations',
+      )
+      await store.createBuild({
+        slug: 'missing-source',
+        repo: 'one',
+        ticket: { source: 'hosted', id: 'ticket-legacy' },
+      })
+      expect((await store.getBuild('missing-source'))?.ticket?.id).toBe('ticket-legacy')
+      const asset = await store.putTicketAsset('one', 'file-1', {
+        kind: 'reference',
+        name: 'proof',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'proof', content: new TextEncoder().encode('proof') }],
+      })
+      expect(asset.ticketId).toBe('file-1')
+      expect(
+        (await store.getTicketAsset('one', 'file-1', 'reference', 'proof'))?.meta.ticketId,
+      ).toBe('file-1')
+      expect(await store.listTicketAssets('one', 'file-1')).toHaveLength(1)
+      expect((await store.removeTicketAsset('one', 'file-1', 'reference', 'proof'))?.ticketId).toBe(
+        'file-1',
+      )
+    } finally {
+      await store.close()
+      await sql.close()
+      await database.cleanup()
+    }
+  })

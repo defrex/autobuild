@@ -1202,3 +1202,54 @@ describe('harvest deterministic scan and ledger', () => {
     store.getRepoArtifact = read
   })
 })
+
+test('harvest origin and declared blocker aliases project to one canonical identity', async () => {
+  const tickets = new FakeTicketSource([
+    {
+      ref: { source: 'fake', id: 'ENG-1' },
+      title: 'Origin',
+      body: 'body',
+      state: 'Doing',
+      resolved: false,
+      labels: [],
+    },
+  ])
+  const get = tickets.get.bind(tickets)
+  tickets.get = (id) => get(id === 'ticket-legacy' || id === 'eng-1' ? 'ENG-1' : id)
+  tickets.dependencyStates = async (ids) =>
+    Promise.all(
+      ids.map(async (id) => ({
+        id,
+        exists: !!(await tickets.get(id)),
+        resolved: false,
+        blockedBy: [],
+      })),
+    )
+  const observations = ['ticket-legacy', 'ENG-1'].map((id, i) => ({
+    occurrence: { build: `build-${i}`, seq: 1 },
+    id: `obs-${i}`,
+    kind: 'followup' as const,
+    summary: 'followup',
+    ts: '2026-01-01T00:00:00.000Z',
+    ticket: { source: 'fake', id },
+  }))
+  const origins = await reconcileOriginatingTickets(observations, tickets)
+  expect(origins.map((o) => o.ticket.id)).toEqual(['ENG-1'])
+  const blockers = await resolveHarvestCreateBlockers(
+    {
+      action: 'create',
+      title: 'Followup',
+      whatWhy: 'Needs origin',
+      acceptanceCriteria: ['Works'],
+      outOfScope: ['Other'],
+      blockedBy: ['eng-1'],
+      observations: observations.map((o) => o.occurrence),
+    },
+    observations,
+    tickets,
+  )
+  expect(blockers).toEqual({
+    blockedBy: ['ENG-1'],
+    provenance: { declared: ['ENG-1'], derived: ['ENG-1'] },
+  })
+})

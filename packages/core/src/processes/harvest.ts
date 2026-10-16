@@ -327,12 +327,17 @@ export async function reconcileHarvestLedger(
   )
   if (entries.length === 0) return []
 
-  const ids = entries.map((entry) => entry.ticket.id)
+  const ids = entries
+    .filter((entry) => entry.ticket.source === tickets.name)
+    .map((entry) => entry.ticket.id)
   const states = await tickets.dependencyStates(ids)
+  const byId = new Map(states.map((state) => [state.id, state]))
   const out: HarvestLedgerTicket[] = []
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index]!
-    const dependency = states[index] ?? {
+    const dependency = (entry.ticket.source === tickets.name
+      ? byId.get(entry.ticket.id)
+      : undefined) ?? {
       id: entry.ticket.id,
       exists: false,
       resolved: false,
@@ -341,7 +346,7 @@ export async function reconcileHarvestLedger(
     const current = dependency.exists ? await tickets.get(entry.ticket.id) : null
     out.push({
       proposalKey: entry.proposalKey,
-      ticket: structuredClone(entry.ticket),
+      ticket: structuredClone(current?.ref ?? entry.ticket),
       exists: dependency.exists,
       resolved: dependency.resolved,
       ...(current?.title !== undefined ? { title: current.title } : {}),
@@ -371,15 +376,25 @@ export async function reconcileOriginatingTickets(
   const states = matchingIds.length > 0 ? await tickets.dependencyStates(matchingIds) : []
   const byId = new Map(states.map((state) => [state.id, state]))
 
-  return refs.map((ticket) => {
-    const sourceMatches = ticket.source === tickets.name
-    const state = sourceMatches ? byId.get(ticket.id) : undefined
-    return {
-      ticket,
-      sourceMatches,
-      exists: state?.exists ?? false,
-      resolved: state?.resolved ?? false,
-    }
+  const identity = new Set<string>()
+  const projected = await Promise.all(
+    refs.map(async (ticket) => {
+      const sourceMatches = ticket.source === tickets.name
+      const state = sourceMatches ? byId.get(ticket.id) : undefined
+      const current = sourceMatches && state?.exists ? await tickets.get(ticket.id) : null
+      return {
+        ticket: current?.ref ?? ticket,
+        sourceMatches,
+        exists: state?.exists ?? false,
+        resolved: state?.resolved ?? false,
+      }
+    }),
+  )
+  return projected.filter((entry) => {
+    const key = `${entry.ticket.source}:${entry.ticket.id}`
+    if (identity.has(key)) return false
+    identity.add(key)
+    return true
   })
 }
 
@@ -536,9 +551,14 @@ export async function resolveHarvestCreateBlockers(
     const state = byId.get(id)
     return state?.exists === true && !state.resolved
   })
+  const canonical = new Map<string, string>()
+  for (const id of candidates) {
+    if (byId.get(id)?.exists) canonical.set(id, (await tickets.get(id))?.ref.id ?? id)
+  }
+  const project = (ids: string[]) => [...new Set(ids.map((id) => canonical.get(id) ?? id))]
   return {
-    blockedBy: [...new Set([...declared, ...derived])],
-    provenance: { declared, derived },
+    blockedBy: project([...declared, ...derived]),
+    provenance: { declared: project(declared), derived: project(derived) },
   }
 }
 

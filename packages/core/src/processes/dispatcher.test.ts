@@ -8414,3 +8414,20 @@ describe('durable ticket scan cadence', () => {
     expect(h.scans()).toBe(2)
   })
 })
+
+test('legacy active ticket aliases exclude canonical ready tickets from queue depth and dispatch', async () => {
+  const h = harness({
+    tickets: [readyTicket('ENG-1')],
+    toml: 'capacity = 3\n',
+    wrapTickets: (source) => {
+      const get = source.get.bind(source)
+      source.get = (id) => get(id === 'ticket-old-uuid' ? 'ENG-1' : id)
+      return source
+    },
+  })
+  await seedBuild(h, { ticketId: 'ticket-old-uuid', workspace: false, attached: false })
+  expect((await h.dispatcher.observeReady()).queued).toBe(0)
+  await h.dispatcher.tick()
+  expect(h.tickets.claims).not.toContain('ENG-1')
+  expect((await h.store.listBuilds()).length).toBe(1)
+})

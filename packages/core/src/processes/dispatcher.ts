@@ -1,3 +1,4 @@
+import { ticketIdentity } from '../ports/tickets/identity'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import {
   reduceTicketSourceHealth,
@@ -999,10 +1000,11 @@ export class Dispatcher {
   }> {
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     await this.store.refresh()
+    const identity = ticketIdentity(this.deps.tickets)
     const activeTicketIds = new Set<string>()
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (record.ticket !== undefined && digest.terminal === undefined) {
-        activeTicketIds.add(record.ticket.id)
+        activeTicketIds.add(await identity(record.ticket))
       }
     }
     const report = emptyTickReport()
@@ -1012,7 +1014,9 @@ export class Dispatcher {
       await this.store.refreshJournal()
       const listing = await this.listReady()
       await this.store.refreshJournal()
-      report.queued = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id)).length
+      report.queued = listing.tickets.filter(
+        (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+      ).length
       report.invalidTickets = listing.diagnostics.length
       report.ticketDiagnostics = [...listing.diagnostics]
       report.dependencyBlocked = 0
@@ -3101,11 +3105,12 @@ export class Dispatcher {
     // pending work are live, only waiting on a human. Capacity is per repo
     // (§16.1) — another repo's builds never consume this repo's slots.
     let active = 0
+    const identity = ticketIdentity(this.deps.tickets)
     const activeTicketIds = new Set<string>()
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (digest.terminal === undefined) {
         active += 1
-        if (record.ticket) activeTicketIds.add(record.ticket.id)
+        if (record.ticket) activeTicketIds.add(await identity(record.ticket))
       }
     }
     let capacity = config.capacity - active
@@ -3128,7 +3133,9 @@ export class Dispatcher {
         creation,
       ]),
     )
-    const ready = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id))
+    const ready = listing.tickets.filter(
+      (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+    )
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
     report.queued = ready.length

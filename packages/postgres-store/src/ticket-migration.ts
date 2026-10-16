@@ -41,41 +41,8 @@ export async function migrateLegacyTickets(
       )
     const claimants = new Map<string, string[]>()
     for (const { repo } of remaining.length > 0 ? projects : []) {
-      const rows: { seq: number; ts: string; actor: unknown; type: string; payload: unknown }[] =
-        await sql`SELECT seq, ts, actor, type, payload FROM repo_events WHERE repo = ${repo} ORDER BY seq`
-      const events = rows.map((row) => ({
-        ...row,
-        repo,
-        seq: Number(row.seq),
-        ts: new Date(row.ts).toISOString(),
-      })) as RepositoryEvent[]
-      const ref = findEffectiveConfigRef(events)
-      // Registration/onboarding alone makes no team claim.
-      if (ref === undefined) continue
-      const [artifact] =
-        await sql`SELECT blob_ref FROM repo_artifacts WHERE repo = ${repo} AND kind = ${ref.kind} AND revision = ${ref.rev}`
-      if (!artifact)
-        throw configFailure(`effective config ${ref.kind}@${ref.rev} unavailable for ${repo}`)
-      let bytes: Uint8Array | null
-      try {
-        bytes = await blobs.get(artifact.blob_ref)
-      } catch {
-        throw configFailure(
-          `cannot read effective configuration blob for ${repo}; check blob access and prefix`,
-        )
-      }
-      if (bytes === null)
-        throw configFailure(
-          `missing effective configuration blob for ${repo}; check blob backend and prefix`,
-        )
-      let config: ReturnType<typeof decodeEffectiveConfig>
-      try {
-        config = decodeEffectiveConfig(bytes, `${repo} ${ref.kind}@${ref.rev}`)
-      } catch {
-        throw configFailure(
-          `selected effective config ${ref.kind}@${ref.rev} for ${repo} is invalid`,
-        )
-      }
+      const config = await loadTicketConfig(sql, blobs, repo, configFailure)
+      if (!config) continue
       const team = config.tickets.teamKey
       if (team !== undefined) claimants.set(team, [...(claimants.get(team) ?? []), repo])
     }
@@ -144,4 +111,91 @@ export async function migrateLegacyTickets(
     ALTER TABLE ab_ticket_comments ADD FOREIGN KEY (repo,ticket_id) REFERENCES ab_tickets(repo,id) ON DELETE CASCADE;
     ALTER TABLE ab_ticket_blockers ADD FOREIGN KEY (repo,ticket_id) REFERENCES ab_tickets(repo,id) ON DELETE CASCADE;
     ALTER TABLE ab_ticket_blockers ADD FOREIGN KEY (repo,blocker_id) REFERENCES ab_tickets(repo,id) ON DELETE CASCADE;`)
+}
+
+/** Load exactly the durable effective config selected by the repository log. */
+async function loadTicketConfig(
+  sql: SQL,
+  blobs: BlobStore,
+  repo: string,
+  configFailure: (detail: string) => Error,
+) {
+  const rows: { seq: number; ts: string; actor: unknown; type: string; payload: unknown }[] =
+    await sql`SELECT seq, ts, actor, type, payload FROM repo_events WHERE repo = ${repo} ORDER BY seq`
+  const events = rows.map((row) => ({
+    ...row,
+    repo,
+    seq: Number(row.seq),
+    ts: new Date(row.ts).toISOString(),
+  })) as RepositoryEvent[]
+  const ref = findEffectiveConfigRef(events)
+  // Registration/onboarding alone makes no team claim.
+  if (ref === undefined) return undefined
+  const [artifact] =
+    await sql`SELECT blob_ref FROM repo_artifacts WHERE repo = ${repo} AND kind = ${ref.kind} AND revision = ${ref.rev}`
+  if (!artifact)
+    throw configFailure(`effective config ${ref.kind}@${ref.rev} unavailable for ${repo}`)
+  let bytes: Uint8Array | null
+  try {
+    bytes = await blobs.get(artifact.blob_ref)
+  } catch {
+    throw configFailure(
+      `cannot read effective configuration blob for ${repo}; check blob access and prefix`,
+    )
+  }
+  if (bytes === null)
+    throw configFailure(
+      `missing effective configuration blob for ${repo}; check blob backend and prefix`,
+    )
+  let config: ReturnType<typeof decodeEffectiveConfig>
+  try {
+    config = decodeEffectiveConfig(bytes, `${repo} ${ref.kind}@${ref.rev}`)
+  } catch {
+    throw configFailure(`selected effective config ${ref.kind}@${ref.rev} for ${repo} is invalid`)
+  }
+  return config
+}
+
+export const READABLE_TICKET_CONSTRAINTS = `
+ALTER TABLE ab_tickets ALTER COLUMN readable_id SET NOT NULL;
+ALTER TABLE ab_tickets ALTER COLUMN ticket_number SET NOT NULL;
+ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_ticket_number_check CHECK (ticket_number > 0);
+ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_repo_ticket_number_key UNIQUE (repo, ticket_number);
+CREATE UNIQUE INDEX ab_tickets_readable_id_key ON ab_tickets (repo, lower(readable_id));
+`
+
+/** Runs once, under the schema marker transaction; no historical foreign keys move. */
+export async function migrateReadableTickets(
+  sql: SQL,
+  openBlobs?: () => BlobStore | Promise<BlobStore>,
+): Promise<void> {
+  await sql`LOCK TABLE ab_tickets, ab_ticket_comments, ab_ticket_blockers, ticket_assets,
+    repo_events, repo_artifacts IN SHARE ROW EXCLUSIVE MODE`
+  await sql.unsafe(`ALTER TABLE ab_tickets ADD COLUMN readable_id text;
+    ALTER TABLE ab_tickets ADD COLUMN ticket_number bigint;
+    CREATE TABLE ab_ticket_counters (repo text PRIMARY KEY, last_number bigint NOT NULL CHECK (last_number >= 0));`)
+  const projects: { repo: string }[] = await sql`SELECT DISTINCT repo FROM ab_tickets ORDER BY repo`
+  const fail = (detail: string) =>
+    new Error(
+      `Readable ticket migration stopped unchanged: ${detail}. Restore the project's effective configuration and blob access, then rerun migration.`,
+    )
+  let blobs: BlobStore | undefined
+  if (projects.length) {
+    if (!openBlobs) throw fail('populated projects require blob access')
+    try {
+      blobs = await openBlobs()
+    } catch {
+      throw fail('cannot open blob storage')
+    }
+  }
+  for (const { repo } of projects) {
+    const config = await loadTicketConfig(sql, blobs!, repo, fail)
+    const prefix = config?.tickets.teamKey
+    if (!prefix?.trim()) throw fail(`project ${repo} has no nonblank effective tickets.teamKey`)
+    await sql`WITH numbered AS (SELECT id, row_number() OVER (ORDER BY created_at, id) AS n FROM ab_tickets WHERE repo = ${repo})
+      UPDATE ab_tickets t SET ticket_number = numbered.n, readable_id = ${prefix} || '-' || numbered.n::text
+      FROM numbered WHERE t.repo = ${repo} AND t.id = numbered.id`
+    await sql`INSERT INTO ab_ticket_counters (repo, last_number) SELECT ${repo}, max(ticket_number) FROM ab_tickets WHERE repo = ${repo}`
+  }
+  await sql.unsafe(READABLE_TICKET_CONSTRAINTS)
 }

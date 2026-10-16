@@ -1151,7 +1151,10 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
                   `ticket "${ref.id}" was not found in the configured ${source.name} source`,
                 )
               }
-              if (ticket.ref.source !== ref.source || ticket.ref.id !== ref.id) {
+              if (
+                ticket.ref.source !== ref.source ||
+                (source.name !== 'hosted' && ticket.ref.id !== ref.id)
+              ) {
                 throw new Error(
                   `ticket adapter returned ${ticket.ref.source}:${ticket.ref.id}, expected ${ref.source}:${ref.id}`,
                 )
