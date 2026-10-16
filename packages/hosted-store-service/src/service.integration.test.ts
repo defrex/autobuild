@@ -399,8 +399,8 @@ test('local build history stays local while hosted tickets drive intake, blocker
       configToml,
     })
     harnesses.push(h)
-    await projects.add(h.origin, 'fixture')
-    const { token } = await credentials.issue(h.origin, 'fixture')
+    await projects.add(h.remote, 'fixture')
+    const { token } = await credentials.issue(h.remote, 'fixture')
     const { HostedTicketSource } = await import('@defrex/autobuild/hosted-tickets')
     const tickets = new HostedTicketSource({ url: server.url.origin, token, teamKey: 'ENG' })
     await tickets.synchronizePolicy({
@@ -437,7 +437,9 @@ test('local build history stays local while hosted tickets drive intake, blocker
     expect(h.cliErrors).toEqual([])
     expect(await ticketStore.listBuilds()).toEqual([])
     expect(await ticketStore.getRepo(h.origin)).toBeNull()
-    expect(requests.every((path) => path.startsWith('/tickets/'))).toBe(true)
+    expect(
+      requests.every((path) => path.startsWith('/tickets/') || path.includes('/assets/')),
+    ).toBe(true)
   } finally {
     server.stop(true)
     await ticketStore.close()

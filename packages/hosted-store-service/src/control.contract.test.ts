@@ -9,6 +9,7 @@ import type { Exec } from '@defrex/autobuild/testing'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import {
+  buildRegistry,
   controlHarvestRun,
   setRepositorySetting,
   toggleHarvestGate,
@@ -53,19 +54,24 @@ function api(store: BuildStore): OperatorApiClient {
       exp: NOW.getTime() + 60_000,
     }),
     fetchFn: fetchFor(
-      createOperatorServer({ projects: testProjects([REPO]), store, secret: SECRET, clock }),
+      createOperatorServer({
+        projects: testProjects([REPO]),
+        store,
+        secret: SECRET,
+        clock,
+      }),
     ),
   })
 }
 
 async function makeStore(
-  opts: { active?: boolean; ticket?: boolean } = {},
+  opts: { active?: boolean; ticket?: boolean; ticketSource?: string } = {},
 ): Promise<MemoryBuildStore> {
   const store = new MemoryBuildStore({ clock })
   await store.createBuild({
     slug: SLUG,
     repo: REPO,
-    ...(opts.ticket ? { ticket: { source: 'linear', id: 'AUT-1' } } : {}),
+    ...(opts.ticket ? { ticket: { source: opts.ticketSource ?? 'linear', id: 'AUT-1' } } : {}),
   })
   if (opts.active !== false) {
     await store.append(SLUG, {
@@ -327,6 +333,12 @@ describe('operator behavioral parity contract', () => {
   test('answer: spec revision from ticket', async () => {
     const stores = [await makeStore({ ticket: true }), await makeStore({ ticket: true })]
     for (const store of stores) {
+      await store.putTicketAsset(REPO, 'AUT-1', {
+        kind: 'reference',
+        name: 'sample',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'sample', content: new Uint8Array([1, 2]) }],
+      })
       await seedSpec(store)
       await raise(store)
     }
@@ -354,6 +366,55 @@ describe('operator behavioral parity contract', () => {
     expect(artifacts[1]?.content).toEqual(artifacts[0]?.content)
     expect(artifacts[1]?.meta.metadata).toEqual(artifacts[0]?.meta.metadata)
   })
+
+  test.each(['file', 'linear'])(
+    'registry ticket re-pin for %s needs no external backend',
+    async (source) => {
+      for (const backendPresent of [false, true]) {
+        const store = await makeStore({ ticket: true, ticketSource: source })
+        await store.putTicketAsset(REPO, 'AUT-1', {
+          kind: 'reference',
+          name: 'sample',
+          layout: 'file',
+          entries: [{ type: 'file', path: 'sample', content: new Uint8Array([7]) }],
+        })
+        await seedSpec(store)
+        await raise(store)
+        const registry = buildRegistry({
+          store,
+          clock,
+          ...(backendPresent
+            ? {
+                tickets: {
+                  contextFor: async () => {
+                    throw new Error('external-ticket-source')
+                  },
+                  sourceFor: () => {
+                    throw new Error('external-ticket-source')
+                  },
+                  statesFor: () => [],
+                },
+              }
+            : {}),
+        })
+        await registry.call(
+          'builds.answer',
+          {
+            repo: REPO,
+            slug: SLUG,
+            resolution: 'revise-spec',
+            origin: 'ticket',
+            body: CONFORMING_SPEC,
+          },
+          { identity: USER },
+        )
+        const asset = await store.getPinnedTicketAsset(SLUG, 'reference', 'sample')
+        expect(asset?.entries).toEqual([
+          { type: 'file', path: 'sample', content: new Uint8Array([7]) },
+        ])
+      }
+    },
+  )
 
   test('repository settings, toggles, and harvest gate', async () => {
     const operations = [

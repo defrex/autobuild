@@ -29,6 +29,7 @@ import {
   getHarvestStatus,
   getOperatorBuild,
   getOperatorDashboard,
+  prepareOperatorTicketAssets,
   listOperatorTicketStates,
   createOperatorTicketState,
   getOperatorTicket,
@@ -727,7 +728,11 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             user,
             action,
             ...(request.resolution === 'revise-spec' && request.origin === 'ticket'
-              ? { readTicketBody: async () => request.body }
+              ? {
+                  readTicketBody: async () => request.body,
+                  prepareTicketAssets: (ref, store, repo) =>
+                    prepareOperatorTicketAssets({ ref, store, repo, backend: opts.ticketBackend }),
+                }
               : {}),
           }),
         )

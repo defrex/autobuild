@@ -124,7 +124,7 @@ describe('reducer registry', () => {
         "openWorkspace": 1,
         "pendingPrAttachmentReclaims": 1,
         "phaseFailures": 1,
-        "pinnedAssets": 1,
+        "pinnedAssets": 2,
         "provisionMarker": 1,
         "publicationState": 1,
         "publishedBranchHead": 1,

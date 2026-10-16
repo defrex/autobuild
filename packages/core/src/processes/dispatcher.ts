@@ -84,7 +84,7 @@ import type {
 import { TicketSourceRateLimitError } from '../ports/types'
 import type { Exec } from '../ports/workspace/git-worktree'
 import type { ArtifactMeta, BuildDigest, BuildRecord, BuildStore, Clock } from '../store/types'
-import { samplePinnedAssets } from '../store/ticket-assets'
+import { preparePinnedAssets } from '../store/ticket-assets'
 import { resolveRepoOrigin } from '../cli/repo-state'
 import { specConformance } from '../spec-standard'
 export { specConformance, type SpecConformance } from '../spec-standard'
@@ -2580,7 +2580,14 @@ export class Dispatcher {
         // can only sample the ticket's current assets (SPEC §6.3).
         const assets =
           seed?.assets ??
-          (await samplePinnedAssets(store, record.repo, record.ticket.id).catch(() => []))
+          (await preparePinnedAssets(this.deps.tickets, store, record.repo, record.ticket.id).catch(
+            (error) => {
+              // Preserve legacy non-hosted recovery; hosted preparation must never
+              // publish a successful empty pin after losing the source bytes.
+              if (this.deps.tickets.name === 'hosted') throw error
+              return []
+            },
+          ))
         await store.appendIfCurrent(record.slug, 0, {
           actor: DISPATCHER,
           type: 'build.created',
@@ -3221,7 +3228,7 @@ export class Dispatcher {
 
       // Freeze the ticket's assets at the claim (SPEC §6.3): sampled before the
       // spec-authoring interval so edits made during it are never pinned.
-      const assets = await samplePinnedAssets(store, this.deps.repo, ticket.ref.id)
+      const assets = await preparePinnedAssets(tickets, store, this.deps.repo, ticket.ref.id)
 
       // Quality gate (§6.3): import a conforming ticket body as the spec;
       // author one for thin-but-groomed tickets; otherwise bounce.

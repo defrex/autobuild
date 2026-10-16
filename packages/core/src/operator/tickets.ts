@@ -1,3 +1,6 @@
+import { samplePinnedAssets } from '../store/ticket-assets'
+import type { TicketRef } from '../ontology'
+import { prepareAssetSnapshots } from '../store/ticket-asset-snapshots'
 import type { Config } from '../config/schema'
 import { reduceBuild } from '../kernel/reducer'
 import {
@@ -187,6 +190,21 @@ export async function mutateOperatorTicket(opts: {
             )
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
   return { ticket, blockers, build: await matchingBuild(opts.store, opts.repo, ticket.ref.id) }
+}
+
+export async function prepareOperatorTicketAssets(opts: {
+  store: BuildStore
+  repo: string
+  backend?: OperatorTicketBackend
+  ref: TicketRef
+}) {
+  if (opts.ref.source !== 'hosted') return samplePinnedAssets(opts.store, opts.repo, opts.ref.id)
+  if (!opts.backend) throw new Error('ticket operator backend is not configured')
+  const { context, source } = await openOperatorTickets({ ...opts, backend: opts.backend })
+  if (context.tickets.source !== opts.ref.source)
+    throw new Error('build ticket source differs from configured source')
+  if (!source.assets) throw new Error('hosted ticket source has no asset capability')
+  return prepareAssetSnapshots(source.assets, opts.store, opts.repo, opts.ref.id)
 }
 
 export async function listOperatorTicketStates(opts: {
