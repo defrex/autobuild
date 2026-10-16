@@ -618,6 +618,7 @@ describe('orchestrator tick step', () => {
     // A real ticket in the effective triage state: the listing must name it.
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'T-9' },
         title: 'Fix the flake',
         body: 'It flakes.',

@@ -128,6 +128,7 @@ function fakeFactory(
         created.draft = draft
         created.createOptions = options
         return Promise.resolve({
+          revision: 'fixture',
           ref: { source: 'fake', id: 'fake-1', url: 'https://example.test/fake-1' },
           title: draft.title,
           body: draft.body,
@@ -705,6 +706,7 @@ class CapturingTicketSource extends FakeTicketSource {
 
 function seededTicket(overrides: Partial<Ticket> = {}): Ticket {
   return {
+    revision: 'fixture',
     ref: { source: 'fake', id: 'AUT-1', url: 'https://example.test/AUT-1' },
     title: 'Throttle repeated logins',
     body: '## What and why\n\nProtect accounts.\n',
@@ -920,7 +922,11 @@ describe('abTicketShow', () => {
       sourceFactory: () => new FakeTicketSource([ticket]),
     })
     // The complete Ticket plus the ticket's current assets.
-    expect(JSON.parse(out.join('\n'))).toEqual({ ...ticket, assets: [] })
+    expect(JSON.parse(out.join('\n'))).toEqual({
+      ...ticket,
+      revision: expect.any(String),
+      assets: [],
+    })
 
     await expect(
       abTicketShow({

@@ -81,6 +81,7 @@ async function seedWorld(): Promise<World> {
   const source = new FakeTicketSource(
     [
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'AUT-1', title: 'Seeded ticket' },
         title: 'Seeded ticket',
         body: 'seed body',
@@ -89,6 +90,7 @@ async function seedWorld(): Promise<World> {
         labels: ['web'],
       },
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'AUT-2', title: 'Queued ticket' },
         title: 'Queued ticket',
         body: 'queued body',

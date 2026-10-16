@@ -1,3 +1,4 @@
+import { ticketRevision } from './revision'
 /**
  * Linear TicketSource (SPEC §3.2, §13): GraphQL over an injectable fetch, so
  * tests run offline against canned exchanges. Queries are deliberately
@@ -796,7 +797,8 @@ export class LinearTicketSource implements TicketSource {
     // The issue projection predates newly created relations. Preserve native
     // existing blockers and report the requested set now known to be recorded.
     const blockedBy = [...new Set([...blockersOf(issue), ...requested])]
-    return { ...this.toTicket(issue), ...(blockedBy.length > 0 ? { blockedBy } : {}) }
+    const ticket = { ...this.toTicket(issue), ...(blockedBy.length > 0 ? { blockedBy } : {}) }
+    return { ...ticket, revision: ticketRevision(ticket) }
   }
 
   private async adoptCreatedIssue(id: string): Promise<GqlIssue | null> {
@@ -1017,6 +1019,13 @@ export class LinearTicketSource implements TicketSource {
   private toTicket(issue: GqlIssue): Ticket {
     const blockedBy = blockersOf(issue)
     return {
+      revision: ticketRevision({
+        title: issue.title,
+        body: issue.description ?? '',
+        labels: issue.labels.nodes.map((label) => label.name),
+        state: issue.state?.name,
+        blockedBy,
+      }),
       ref: {
         source: this.name,
         id: issue.identifier,

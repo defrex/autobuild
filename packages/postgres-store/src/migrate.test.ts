@@ -883,6 +883,7 @@ if (testUrl) {
       expect(tickets).toEqual(
         before.tickets.map(({ team, ...ticket }: Row) => ({
           repo: team === 'ONE' ? one : two,
+          revision: '1',
           ...ticket,
         })),
       )
@@ -1205,7 +1206,11 @@ if (testUrl) {
       const after = await world.snapshot()
       for (const key of ['tickets', 'comments', 'blockers'] as const)
         expect(after[key]).toEqual(
-          before[key].map(({ team: _team, ...row }: Row) => ({ repo, ...row })),
+          before[key].map(({ team: _team, ...row }: Row) => ({
+            repo,
+            ...row,
+            ...(key === 'tickets' ? { revision: '1' } : {}),
+          })),
         )
       expect(world.requests.length).toBeGreaterThan(0)
       // Subsequent malformed retired environment is not reinterpreted.

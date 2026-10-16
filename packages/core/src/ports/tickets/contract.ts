@@ -1,3 +1,4 @@
+import { updateTicket, moveTicket, changeBlockers } from './operations'
 import { describe, expect, test } from 'bun:test'
 import type {
   DependencyState,
@@ -116,6 +117,64 @@ export function describeTicketSourceContract(
   factory: TicketSourceContractFactory,
 ): void {
   describe(`TicketSource contract: ${name}`, () => {
+    test('revisions cover mutable content and guarded writes fail closed', async () => {
+      await withTicketSource(factory, async (harness) => {
+        const source = harness.source
+        const created = await createTracked(
+          harness,
+          { title: contractTicketTitle('revisions'), body: CONTRACT_TICKET_BODY },
+          { state: harness.states.ready },
+        )
+        const id = created.ref.id
+        expect(created.revision.trim()).not.toBe('')
+        expect((await source.get(id))?.revision).toBe(created.revision)
+        expect(
+          (await source.listReady({ state: harness.states.ready })).tickets.find(
+            (t) => t.ref.id === id,
+          )?.revision,
+        ).toBe(created.revision)
+        if (!source.mutateIfRevision) {
+          await expect(
+            updateTicket(source, id, { title: 'Never written' }, false, created.revision),
+          ).rejects.toThrow('does not support')
+          expect((await source.get(id))?.revision).toBe(created.revision)
+          return
+        }
+        let current = created
+        for (const patch of [
+          { title: contractTicketTitle('renamed') },
+          { body: 'Changed body' },
+          { labels: [harness.editableLabel] },
+        ]) {
+          await updateTicket(source, id, patch, false, current.revision)
+          const next = (await source.get(id))!
+          expect(next.revision).not.toBe(current.revision)
+          await expect(updateTicket(source, id, patch, false, current.revision)).rejects.toThrow(
+            'current revision',
+          )
+          expect(await source.get(id)).toEqual(next)
+          current = next
+        }
+        await moveTicket(source, id, harness.states.completed, current.revision)
+        const moved = (await source.get(id))!
+        expect(moved.revision).not.toBe(current.revision)
+        await expect(
+          moveTicket(source, id, harness.states.ready, current.revision),
+        ).rejects.toThrow('current revision')
+        const blocker = await createTracked(harness, {
+          title: contractTicketTitle('blocker'),
+          body: CONTRACT_TICKET_BODY,
+        })
+        await changeBlockers(source, id, [blocker.ref.id], 'block', moved.revision)
+        const blocked = (await source.get(id))!
+        expect(blocked.revision).not.toBe(moved.revision)
+        await expect(
+          changeBlockers(source, id, [blocker.ref.id], 'unblock', moved.revision),
+        ).rejects.toThrow('current revision')
+        await changeBlockers(source, id, [blocker.ref.id], 'unblock', blocked.revision)
+        expect((await source.get(id))?.revision).not.toBe(blocked.revision)
+      })
+    })
     test('completion projections agree across create, get, listing, and transitions', async () => {
       await withTicketSource(factory, async (harness) => {
         const created = await createTracked(

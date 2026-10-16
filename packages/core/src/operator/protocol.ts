@@ -55,15 +55,27 @@ export const ticketCreateRequestSchema = z.strictObject({
   state: z.string().min(1).optional(),
   blockedBy: z.array(z.string().min(1)).optional(),
 })
+const expectedRevisionSchema = z
+  .string()
+  .refine((v) => v.trim().length > 0, 'expectedRevision must be nonblank')
+  .optional()
 export const ticketUpdateRequestSchema = z
   .strictObject({
+    expectedRevision: expectedRevisionSchema,
     title: z.string().optional(),
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),
   })
-  .refine((value) => Object.keys(value).length > 0, 'update must name at least one field')
-export const ticketMoveRequestSchema = z.strictObject({ state: z.string().min(1) })
+  .refine(
+    (value) => value.title !== undefined || value.body !== undefined || value.labels !== undefined,
+    'update must name at least one field',
+  )
+export const ticketMoveRequestSchema = z.strictObject({
+  expectedRevision: expectedRevisionSchema,
+  state: z.string().min(1),
+})
 export const ticketBlockerRequestSchema = z.strictObject({
+  expectedRevision: expectedRevisionSchema,
   blockerIds: z.array(z.string().min(1)).min(1),
 })
 export type OperatorTicketCreateRequest = z.infer<typeof ticketCreateRequestSchema>

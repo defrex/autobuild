@@ -1,3 +1,8 @@
+import {
+  mutateTicketIfRevision,
+  TicketRevisionConflict,
+  TicketRevisionUnsupported,
+} from './revision'
 import type { Config } from '../../config/schema'
 import { readyCriteria } from '../../processes/dispatcher'
 import type { Ticket, TicketDraft, TicketSource, TicketUpdate } from '../types'
@@ -91,6 +96,8 @@ export async function createTicket(
       ? await source.create(draft)
       : await source.create(draft, { state: input.state })
   } catch (error) {
+    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
+      throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
@@ -103,10 +110,15 @@ export async function updateTicket(
   id: string,
   patch: TicketUpdate,
   readAfter = true,
+  expectedRevision?: string,
 ): Promise<Ticket | null> {
   try {
-    await source.update(id, patch)
+    if (expectedRevision !== undefined)
+      await mutateTicketIfRevision(source, id, expectedRevision, { kind: 'update', patch })
+    else await source.update(id, patch)
   } catch (error) {
+    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
+      throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
@@ -115,11 +127,20 @@ export async function updateTicket(
   return readAfter ? requirePostMutationTicket(source, id, 'the update') : null
 }
 
-export async function moveTicket(source: TicketSource, id: string, state: string): Promise<Ticket> {
+export async function moveTicket(
+  source: TicketSource,
+  id: string,
+  state: string,
+  expectedRevision?: string,
+): Promise<Ticket> {
   await requireTicket(source, id)
   try {
-    await source.transition(id, state)
+    if (expectedRevision !== undefined)
+      await mutateTicketIfRevision(source, id, expectedRevision, { kind: 'transition', state })
+    else await source.transition(id, state)
   } catch (error) {
+    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
+      throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
@@ -133,6 +154,7 @@ export async function changeBlockers(
   id: string,
   blockerIds: string[],
   operation: 'block' | 'unblock',
+  expectedRevision?: string,
 ): Promise<Ticket> {
   await requireTicket(source, id)
   const ids = await knownBlockers(source, blockerIds, '')
@@ -143,11 +165,20 @@ export async function changeBlockers(
     )
   }
   try {
-    for (const blockerId of ids) {
-      if (operation === 'block') await source.addBlocker(id, blockerId)
-      else await source.removeBlocker(id, blockerId)
-    }
+    if (expectedRevision !== undefined)
+      await mutateTicketIfRevision(source, id, expectedRevision, {
+        kind: 'blockers',
+        operation,
+        ids,
+      })
+    else
+      for (const blockerId of ids) {
+        if (operation === 'block') await source.addBlocker(id, blockerId)
+        else await source.removeBlocker(id, blockerId)
+      }
   } catch (error) {
+    if (error instanceof TicketRevisionConflict || error instanceof TicketRevisionUnsupported)
+      throw error
     throw new TicketOperationError(
       'refusal',
       error instanceof Error ? error.message : String(error),
