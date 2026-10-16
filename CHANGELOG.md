@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#616](https://github.com/defrex/autobuild/pull/616) — Read hosted ticket comments through CLI and MCP
 ## v0.12.0 — 2026-10-16
 
 This release makes the hosted service multi-project and secure. It adds a durable project registry, project connections that you approve in the browser, and project credentials that can be revoked, with tickets and agent credentials scoped to their authenticated project, build, or session. The full hosted service can now be deployed on its own to Vercel, and hosted clients are accepted as long as they fall within a release-line compatibility window. Operators also get smaller workflow improvements: repositories can configure verification to run after reconcile, PR summaries are combined into one bounded comment per build, watch defaults report conditions that need action, and repeated dispatch failures are capped by a human retry budget.
