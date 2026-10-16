@@ -60,6 +60,8 @@ import { SandboxOperationError } from '../ports/workspace/operator-sandbox'
 import type { OperatorSandboxService } from './sandbox'
 import {
   prepareOperatorTicketAssets,
+  listOperatorTicketStates,
+  createOperatorTicketState,
   getOperatorTicket,
   listOperatorTickets,
   mutateOperatorTicket,
@@ -697,6 +699,30 @@ export const TOOLS: readonly ToolEntry[] = [
             ...(ctx.via !== undefined ? { via: ctx.via } : {}),
             run: input.run,
           })
+    },
+  ),
+  defineTool(
+    'tickets.states',
+    'List all ticket states with ticket counts and optional purposes.',
+    z.strictObject({ repo: z.string().min(1) }),
+    'Array of {name,tickets,about?}.',
+    async (raw, ctx) => {
+      const input = raw as { repo: string }
+      return listOperatorTicketStates({
+        store: ctx.store,
+        repo: input.repo,
+        backend: ticketsOf(ctx),
+      })
+    },
+  ),
+  defineTool(
+    'tickets.state.create',
+    'Create a custom ticket state with an optional one-line purpose. Hosted duplicates are refused.',
+    z.strictObject({ repo: z.string().min(1), name: z.string(), about: z.string().optional() }),
+    '{state: {name,tickets,about?},created}.',
+    async (raw, ctx) => {
+      const input = raw as { repo: string; name: string; about?: string }
+      return createOperatorTicketState({ store: ctx.store, backend: ticketsOf(ctx), ...input })
     },
   ),
   defineTool(

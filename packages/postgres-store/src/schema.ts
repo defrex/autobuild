@@ -837,7 +837,7 @@ export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL)
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
  * remain valid while the hosted ticket tables are added. */
-export const TICKET_SCHEMA_VERSION = 3
+export const TICKET_SCHEMA_VERSION = 4
 export const TICKET_SCHEMA_V1_DDL = `
 CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -870,10 +870,20 @@ export const TICKET_SCHEMA_V2_DDL = TICKET_SCHEMA_V1_DDL.replaceAll('team', 'rep
 export const TICKET_SCHEMA_V2_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_V2_DDL)
   .digest('hex')
-export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V2_DDL.replace(
+export const TICKET_SCHEMA_V3_DDL = TICKET_SCHEMA_V2_DDL.replace(
   'updated_at timestamptz NOT NULL,',
   'updated_at timestamptz NOT NULL, revision bigint NOT NULL DEFAULT 1,',
 )
+export const TICKET_SCHEMA_V3_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_V3_DDL)
+  .digest('hex')
+export const TICKET_SCHEMA_DDL = `${TICKET_SCHEMA_V3_DDL}
+CREATE TABLE IF NOT EXISTS ab_ticket_states (
+  repo text NOT NULL, name text NOT NULL, about text,
+  PRIMARY KEY (repo, name),
+  CHECK (length(btrim(name)) > 0),
+  CHECK (about IS NULL OR (length(btrim(about)) > 0 AND position(chr(10) in about) = 0 AND position(chr(13) in about) = 0))
+);`
 export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_DDL)
   .digest('hex')
@@ -1325,6 +1335,11 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['updated_at', 'timestamp with time zone', true],
       ['revision', 'bigint', true],
     ],
+    ab_ticket_states: [
+      ['repo', 'text', true],
+      ['name', 'text', true],
+      ['about', 'text', false],
+    ],
     ab_ticket_comments: [
       ['repo', 'text', true],
       ['ticket_id', 'text', true],
@@ -1348,7 +1363,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
     WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
       AND a.attnum > 0 AND NOT a.attisdropped
       AND c.relname = ANY(ARRAY['ab_ticket_schema_migrations', 'ab_tickets',
-        'ab_ticket_comments', 'ab_ticket_blockers'])
+        'ab_ticket_comments', 'ab_ticket_blockers', 'ab_ticket_states'])
     ORDER BY c.relname, a.attnum`
   for (const [table, shape] of Object.entries(expected)) {
     const actual = columns
@@ -1362,8 +1377,13 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
     SELECT c.relname AS table_name, pg_get_constraintdef(k.oid) AS definition
     FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = current_schema() AND k.contype IN ('p', 'u', 'f', 'c') AND c.relname IN ('ab_tickets', 'ab_ticket_comments', 'ab_ticket_blockers')`
+    WHERE n.nspname = current_schema() AND k.contype IN ('p', 'u', 'f', 'c') AND c.relname IN ('ab_tickets', 'ab_ticket_comments', 'ab_ticket_blockers', 'ab_ticket_states')`
   const expectedConstraints: Record<string, string[]> = {
+    ab_ticket_states: [
+      'PRIMARY KEY (repo, name)',
+      'CHECK ((length(btrim(name)) > 0))',
+      'CHECK (((about IS NULL) OR ((length(btrim(about)) > 0) AND (POSITION((chr(10)) IN (about)) = 0) AND (POSITION((chr(13)) IN (about)) = 0))))',
+    ],
     ab_tickets: ['PRIMARY KEY (repo, id)', 'UNIQUE (repo, creation_key)'],
     ab_ticket_comments: [
       'PRIMARY KEY (repo, ticket_id, seq)',
@@ -1658,6 +1678,12 @@ export async function migratePostgres(
       ) {
         await tx`ALTER TABLE ab_tickets ADD COLUMN revision bigint NOT NULL DEFAULT 1`
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+      } else if (
+        ticketMarker &&
+        Number(ticketMarker.version) === 3 &&
+        ticketMarker.checksum === TICKET_SCHEMA_V3_CHECKSUM
+      ) {
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (ticketMarker) {
         if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
           throw schemaError(
@@ -1675,6 +1701,13 @@ export async function migratePostgres(
           (singleton, version, checksum, applied_at)
           VALUES (true, ${TICKET_SCHEMA_VERSION}, ${TICKET_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`
       }
+      await tx`INSERT INTO ab_ticket_states (repo, name)
+        SELECT DISTINCT repo, state FROM ab_tickets ON CONFLICT DO NOTHING`
+      await tx`INSERT INTO ab_ticket_states (repo, name)
+        SELECT p.repo, value FROM project_ticket_policy p,
+          LATERAL jsonb_each_text(p.policy->'tickets') AS field(key, value)
+        WHERE key IN ('triageState', 'readyState', 'claimedState', 'doneState', 'createState', 'proposalState')
+        ON CONFLICT DO NOTHING`
       const authRows: { version: number; checksum: string }[] =
         await tx`SELECT version, checksum FROM ab_auth_schema_migrations WHERE singleton = true FOR UPDATE`
       const authMarker = authRows[0]

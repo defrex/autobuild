@@ -120,7 +120,8 @@ export async function buildMcpTicketBackend(
       }
       return source
     },
-    statesFor: async () => states,
+    statesFor: async (_context, source) =>
+      source.listStates ? (await source.listStates()).map((s) => s.name) : states,
   }
 }
 

@@ -4,6 +4,7 @@ import { prepareAssetSnapshots } from '../store/ticket-asset-snapshots'
 import type { Config } from '../config/schema'
 import { reduceBuild } from '../kernel/reducer'
 import {
+  TicketOperationError,
   changeBlockers,
   createTicket,
   moveTicket,
@@ -204,4 +205,35 @@ export async function prepareOperatorTicketAssets(opts: {
     throw new Error('build ticket source differs from configured source')
   if (!source.assets) throw new Error('hosted ticket source has no asset capability')
   return prepareAssetSnapshots(source.assets, opts.store, opts.repo, opts.ref.id)
+}
+
+export async function listOperatorTicketStates(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend
+}) {
+  const { source } = await openOperatorTickets(opts)
+  if (!source.listStates)
+    throw new TicketOperationError('refusal', `state discovery is not supported by ${source.name}`)
+  return source.listStates()
+}
+
+export async function createOperatorTicketState(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend
+  name: string
+  about?: string
+}) {
+  const { source } = await openOperatorTickets(opts)
+  if (!source.addState)
+    throw new TicketOperationError('refusal', `state creation is not supported by ${source.name}`)
+  try {
+    return await source.addState(opts.name, opts.about === undefined ? {} : { about: opts.about })
+  } catch (error) {
+    throw new TicketOperationError(
+      'refusal',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
 }

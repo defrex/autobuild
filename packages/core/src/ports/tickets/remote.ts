@@ -25,6 +25,7 @@ import {
   ticketListingWireSchema,
   ticketWireSchema,
   ticketStatesWireSchema,
+  ticketStateCreateWireSchema,
 } from './remote-protocol'
 import {
   AUTOBUILD_VERSION,
@@ -138,6 +139,10 @@ export class HostedTicketSource implements TicketSource {
 
   async listStates() {
     return this.request('states', {}, ticketStatesWireSchema)
+  }
+
+  async addState(name: string, opts: { about?: string } = {}) {
+    return this.request('add-state', { name, ...opts }, ticketStateCreateWireSchema)
   }
 
   async get(id: string): Promise<Ticket | null> {

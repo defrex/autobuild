@@ -1,3 +1,10 @@
+import {
+  orderStates,
+  resolveState,
+  validateStateName,
+  validateStatePurpose,
+} from '@defrex/autobuild/hosted-tickets'
+import { seedTicketStates } from './ticket-states'
 import { TicketRevisionConflict } from '@defrex/autobuild/hosted-tickets'
 import { SQL } from 'bun'
 import type {
@@ -8,6 +15,7 @@ import type {
   TicketListing,
   TicketSource,
   TicketUpdate,
+  TicketStateInfo,
   TicketMutation,
 } from '@defrex/autobuild/plugin-sdk'
 import { validateTicketUpdate } from '@defrex/autobuild/ticket-update'
@@ -72,7 +80,7 @@ export class PostgresTicketSource implements TicketSource {
   private readonly repo: string
   private readonly claimedState: string
   private readonly createState: string
-  private readonly allowed: Set<string>
+  private readonly configured: string[]
 
   constructor(
     private readonly sql: SQL,
@@ -85,26 +93,67 @@ export class PostgresTicketSource implements TicketSource {
   ) {
     if (!context.repo.trim()) throw new Error('ticket repo must be nonblank')
     this.repo = context.repo
-    this.allowed = new Set(
-      [
-        ...Object.values(lifecycle),
-        context.claimedState ?? lifecycle.doing,
-        context.createState ?? lifecycle.triage,
-        context.proposalState ?? lifecycle.triage,
-      ].map((value) => requiredState(value, 'ticket state')),
+    this.configured = Array.from(
+      new Set(
+        [
+          ...Object.values(lifecycle),
+          context.claimedState ?? lifecycle.doing,
+          context.createState ?? lifecycle.triage,
+          context.proposalState ?? lifecycle.triage,
+        ].map((value) => requiredState(value, 'ticket state')),
+      ),
     )
     this.claimedState = context.claimedState ?? lifecycle.doing
     this.createState = context.createState ?? lifecycle.triage
-    this.assertState(this.claimedState)
-    this.assertState(this.createState)
   }
 
-  private assertState(state: string): void {
-    if (!this.allowed.has(state)) {
-      throw new Error(
-        `database ticket state "${state}" is not configured; allowed states: ${[...this.allowed].join(', ')}`,
-      )
-    }
+  private async states(q: Exec): Promise<TicketStateInfo[]> {
+    await seedTicketStates(q, this.repo, this.configured)
+    const rows: Row[] = await q`SELECT s.name, s.about, count(t.id)::integer AS tickets
+      FROM ab_ticket_states s LEFT JOIN ab_tickets t ON t.repo = s.repo AND t.state = s.name
+      WHERE s.repo = ${this.repo} GROUP BY s.name, s.about`
+    const infos = rows.map((row) => ({
+      name: String(row.name),
+      tickets: Number(row.tickets),
+      ...(row.about === null ? {} : { about: String(row.about) }),
+    }))
+    return orderStates(
+      infos.map((s) => s.name),
+      [this.lifecycle.triage, this.lifecycle.ready, this.lifecycle.doing, this.lifecycle.done],
+    ).map((name) => infos.find((s) => s.name === name)!)
+  }
+
+  async listStates(): Promise<TicketStateInfo[]> {
+    return this.retry.tx(this.sql, (q) => this.states(q))
+  }
+
+  async addState(
+    name: string,
+    opts: { about?: string } = {},
+  ): Promise<{ state: TicketStateInfo; created: boolean }> {
+    validateStateName(name, 'database ticket source')
+    const about = validateStatePurpose(opts.about, 'database ticket source')
+    return this.retry.tx(this.sql, async (q) => {
+      const states = await this.states(q)
+      const clash = states.find((s) => s.name.toLowerCase() === name.toLowerCase())
+      if (clash)
+        throw new Error(
+          `database ticket source: state "${name}" already exists as "${clash.name}"; state names are compared case-insensitively`,
+        )
+      await q`INSERT INTO ab_ticket_states (repo, name, about) VALUES (${this.repo}, ${name}, ${about ?? null})`
+      return {
+        state: { name, tickets: 0, ...(about === undefined ? {} : { about }) },
+        created: true,
+      }
+    })
+  }
+
+  private async state(q: Exec, name: string): Promise<string> {
+    return resolveState(
+      name,
+      (await this.states(q)).map((s) => s.name),
+      'database ticket source',
+    )
   }
 
   private async blockers(executor: Exec, id: string): Promise<string[]> {
@@ -144,11 +193,13 @@ export class PostgresTicketSource implements TicketSource {
 
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
     const labels = criteria.labels ?? []
-    return this.retry.run(this.sql, async (q) => {
+    return this.retry.tx(this.sql, async (q) => {
+      await seedTicketStates(q, this.repo, this.configured)
+      const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       const rows: Row[] =
         await q`SELECT *, revision::text AS revision, ARRAY(SELECT blocker_id FROM ab_ticket_blockers b WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY blocker_id) AS blockers FROM ab_tickets
         WHERE repo = ${this.repo}
-          AND (${criteria.state ?? null}::text IS NULL OR state = ${criteria.state ?? null})
+          AND (${state}::text IS NULL OR state = ${state})
           AND labels @> ${q.array(labels, 'text')}
         ORDER BY created_at, id`
       // Sequential, not `Promise.all`: every statement of a body runs on one
@@ -161,7 +212,8 @@ export class PostgresTicketSource implements TicketSource {
   }
 
   async get(id: string): Promise<Ticket | null> {
-    return this.retry.run(this.sql, async (q) => {
+    return this.retry.tx(this.sql, async (q) => {
+      await seedTicketStates(q, this.repo, this.configured)
       const rows: Row[] =
         await q`SELECT *, revision::text AS revision, ARRAY(SELECT blocker_id FROM ab_ticket_blockers b WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY blocker_id) AS blockers FROM ab_tickets WHERE repo = ${this.repo} AND id = ${id}`
       if (!rows[0]) return null
@@ -180,7 +232,8 @@ export class PostgresTicketSource implements TicketSource {
   }
 
   async claim(id: string): Promise<boolean> {
-    return this.retry.run(this.sql, async (q) => {
+    return this.retry.tx(this.sql, async (q) => {
+      await seedTicketStates(q, this.repo, this.configured)
       const rows: Row[] =
         await q`UPDATE ab_tickets SET state = ${this.claimedState}, revision = revision + 1,
         updated_at = ${new Date().toISOString()}
@@ -207,9 +260,8 @@ export class PostgresTicketSource implements TicketSource {
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
     if (!draft.title.trim()) throw new Error('database ticket create: title must be nonblank')
     if (!draft.body.trim()) throw new Error('database ticket create: body must be nonblank')
-    const state = options.state ?? this.createState
-    this.assertState(state)
     return this.retry.tx(this.sql, async (q) => {
+      const state = await this.state(q, options.state ?? this.createState)
       if (options.idempotencyKey !== undefined) {
         const adopted: Row[] = await q`SELECT *, revision::text AS revision FROM ab_tickets
           WHERE repo = ${this.repo} AND creation_key = ${options.idempotencyKey} FOR UPDATE`
@@ -263,8 +315,8 @@ export class PostgresTicketSource implements TicketSource {
 
   private async mutate(id: string, mutation: TicketMutation, expected?: string): Promise<void> {
     const patch = mutation.kind === 'update' ? validateTicketUpdate(mutation.patch) : undefined
-    if (mutation.kind === 'transition') this.assertState(mutation.state)
     await this.retry.tx(this.sql, async (q) => {
+      const state = mutation.kind === 'transition' ? await this.state(q, mutation.state) : undefined
       const row = await this.require(q, id, 'mutation', true)
       const revision = String(row.revision)
       if (expected !== undefined && revision !== expected)
@@ -282,9 +334,9 @@ export class PostgresTicketSource implements TicketSource {
         if (changed)
           await q`UPDATE ab_tickets SET title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')} WHERE repo = ${this.repo} AND id = ${id}`
       } else if (mutation.kind === 'transition') {
-        changed = row.state !== mutation.state
+        changed = row.state !== state
         if (changed)
-          await q`UPDATE ab_tickets SET state = ${mutation.state} WHERE repo = ${this.repo} AND id = ${id}`
+          await q`UPDATE ab_tickets SET state = ${state} WHERE repo = ${this.repo} AND id = ${id}`
       } else if (mutation.kind === 'blockers') {
         const ids = [...new Set(mutation.ids)]
         for (const blocker of ids) {

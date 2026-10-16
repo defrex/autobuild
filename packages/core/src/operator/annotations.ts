@@ -92,6 +92,18 @@ export const OPERATOR_TOOL_ANNOTATIONS = {
     idempotentHint: false,
     approval: 'default',
   },
+  'tickets.states': {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    approval: 'never',
+  },
+  'tickets.state.create': {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    approval: 'default',
+  },
   'tickets.list': {
     readOnlyHint: true,
     destructiveHint: false,

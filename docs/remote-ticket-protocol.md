@@ -103,8 +103,12 @@ history. Registration removal invalidates policy and grants from that registrati
 For compatibility, projects without independent policy use their latest uploaded
 dispatcher configuration with the old `Backlog`, `Doing`, `Done` defaults.
 New policy defaults are `triage`, `ready`, `doing`, `done`; create/proposal follow
-triage. Allowed states are the distinct union of configured roles. Existing rows
-remain unchanged. Explicit settings preserve state spelling.
+triage. States are persistent project data, including empty states and optional
+one-line purposes. Configured role names always exist; removed roles remain as
+custom states and keep their tickets. Explicit settings preserve state spelling.
+State lookup prefers an exact match, then a unique case-insensitive match;
+unknown or ambiguous names are refused. Lists order configured triage, ready,
+doing, done first (deduplicated), then other names alphabetically.
 
 `[tickets] url` selects the ticket service independently of the build store;
 otherwise the selected remote build store is used. A local build store requires
@@ -138,6 +142,8 @@ The operation names and `input` values are:
 
 | Operation | Input | Successful response |
 |---|---|---|
+| `states` | `{}` | `{name, tickets, about?}[]`, including empty states |
+| `add-state` | `{name, about?: string}` | `{state: {name,tickets,about?}, created: boolean}` |
 | `list-ready` | `{labels?: string[], state?: string}` | `TicketListing` |
 | `get` | `{id}` | `Ticket \| null` |
 | `claim` | `{id}` | `{claimed: boolean}` |
@@ -197,6 +203,13 @@ project removal are also checked before parsing or source construction.
 
 Ticket admission and assets use the authenticated project, including for
 delegated harvest grants.
+
+Custom state creation uses `/^[a-z][a-z0-9-]{0,39}$/`; an optional purpose must
+be one nonblank line. A duplicate in any letter case is refused without
+changing purpose. `add-state` requires project or owner machine authority;
+ticket grants and harvest delegations can read states but cannot create them.
+Request context cannot supply lifecycle policy or insert another project's
+states. These operations use the existing wire version and strict envelopes.
 
 ## Revision-checked ticket writes
 

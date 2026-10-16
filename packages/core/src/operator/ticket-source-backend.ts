@@ -21,7 +21,8 @@ export function ticketBackendFromSource(options: {
 }): OperatorTicketBackend {
   return {
     sourceFor: (_context: OperatorTicketContext) => options.source,
-    statesFor: (_context: OperatorTicketContext, _source: TicketSource): string[] => {
+    statesFor: async (_context: OperatorTicketContext, source: TicketSource): Promise<string[]> => {
+      if (source.listStates) return (await source.listStates()).map((s) => s.name)
       const tickets = options.config.tickets
       const lifecycle = ticketLifecycle(tickets)
       const states =
