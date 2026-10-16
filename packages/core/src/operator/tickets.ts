@@ -1,4 +1,4 @@
-import { preparePinnedAssets } from '../store/ticket-assets'
+import { samplePinnedAssets } from '../store/ticket-assets'
 import type { TicketRef } from '../ontology'
 import { prepareAssetSnapshots } from '../store/ticket-asset-snapshots'
 import type { Config } from '../config/schema'
@@ -182,15 +182,14 @@ export async function mutateOperatorTicket(opts: {
 export async function prepareOperatorTicketAssets(opts: {
   store: BuildStore
   repo: string
-  backend: OperatorTicketBackend
+  backend?: OperatorTicketBackend
   ref: TicketRef
 }) {
-  const { context, source } = await openOperatorTickets(opts)
+  if (opts.ref.source !== 'hosted') return samplePinnedAssets(opts.store, opts.repo, opts.ref.id)
+  if (!opts.backend) throw new Error('ticket operator backend is not configured')
+  const { context, source } = await openOperatorTickets({ ...opts, backend: opts.backend })
   if (context.tickets.source !== opts.ref.source)
     throw new Error('build ticket source differs from configured source')
-  if (context.tickets.source === 'hosted') {
-    if (!source.assets) throw new Error('hosted ticket source has no asset capability')
-    return prepareAssetSnapshots(source.assets, opts.store, opts.repo, opts.ref.id)
-  }
-  return preparePinnedAssets(source, opts.store, opts.repo, opts.ref.id)
+  if (!source.assets) throw new Error('hosted ticket source has no asset capability')
+  return prepareAssetSnapshots(source.assets, opts.store, opts.repo, opts.ref.id)
 }

@@ -176,12 +176,11 @@ export interface ResolvedTicketCommand {
   source: TicketSource
 }
 
-/** Resolve linked-worktree identity, config, selected local state, and adapter
- * exactly once for one ticket command or another sessionless caller. */
-export async function openTicketSource(
-  opts: TicketCommandOpts & { storeRef?: string },
+/** Resolve the main checkout and config without requiring provider credentials. */
+async function resolveTicketConfig(
+  opts: TicketCommandOpts,
   label: string,
-): Promise<ResolvedTicketCommand> {
+): Promise<{ targetRepo: string; config: Config }> {
   const targetRepo =
     opts.exec === undefined
       ? resolve(opts.targetRepo)
@@ -200,6 +199,21 @@ export async function openTicketSource(
     throw error
   }
 
+  return { targetRepo, config }
+}
+
+/** Resolve configuration and construct the configured ticket adapter. */
+export async function openTicketSource(
+  opts: TicketCommandOpts & { storeRef?: string },
+  label: string,
+): Promise<ResolvedTicketCommand> {
+  return createTicketCommandSource(opts, await resolveTicketConfig(opts, label))
+}
+
+async function createTicketCommandSource(
+  opts: TicketCommandOpts,
+  { targetRepo, config }: { targetRepo: string; config: Config },
+): Promise<ResolvedTicketCommand> {
   // Ticket commands use the same trusted plugin catalog as dispatch. Loading
   // and registration finish before any adapter is constructed or called.
   const plugins = await loadPlugins(config.plugins, targetRepo)
@@ -520,10 +534,17 @@ export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
 /** `ab ticket asset get <id> <kind> <name> <dest>` — exact bytes at the
  * latest or a named revision. */
 export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> {
-  const { source } = await resolveTicketCommand(opts, 'asset get')
-  const asset = await withTicketAssets(opts, source, ({ store, repo }) =>
-    store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev),
-  )
+  const resolved = await resolveTicketConfig(opts, 'ab ticket asset get')
+  const readAsset = ({ store, repo }: { store: TicketAssetStore; repo: string }) =>
+    store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev)
+  const asset =
+    resolved.config.tickets.source === 'hosted'
+      ? await withTicketAssets(
+          opts,
+          (await createTicketCommandSource(opts, resolved)).source,
+          readAsset,
+        )
+      : await withTicketStore(opts, readAsset)
   if (asset === null) {
     const revision = opts.rev === undefined ? '' : ` revision ${opts.rev}`
     throw new Error(

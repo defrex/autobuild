@@ -603,7 +603,7 @@ export const TOOLS: readonly ToolEntry[] = [
           ? {
               readTicketBody,
               prepareTicketAssets: (ref, store, repo) =>
-                prepareOperatorTicketAssets({ ref, store, repo, backend: ticketsOf(ctx) }),
+                prepareOperatorTicketAssets({ ref, store, repo, backend: ctx.tickets }),
             }
           : {}),
       })
