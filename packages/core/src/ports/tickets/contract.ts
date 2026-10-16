@@ -156,7 +156,13 @@ export function describeTicketSourceContract(
           state: harness.states.ready,
           labels: [],
         })
-        expect(await harness.source.get(created.ref.id)).toEqual(created)
+        const detail = await harness.source.get(created.ref.id)
+        expect(detail).not.toBeNull()
+        // Detail reads may expose structured history absent from write responses.
+        const { comments, ...record } = detail!
+        const { comments: createdComments, ...createdRecord } = created
+        expect(record).toEqual(createdRecord)
+        if (comments !== undefined) expect(comments).toEqual(createdComments ?? [])
       })
     })
 

@@ -287,7 +287,7 @@ if (testUrl) {
         // plan (the `labels @> ${sql.array(…)}` statement) on the source's
         // connection.
         const warmed = await source.get(id)
-        expect(warmed).toEqual(created)
+        expect(warmed).toEqual({ ...created, comments: [] })
         const listed = await source.listReady({})
         expect(listed.tickets.map((t) => t.ref.id)).toEqual([id])
 

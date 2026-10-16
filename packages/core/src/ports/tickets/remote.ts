@@ -11,6 +11,8 @@ import { AuthError } from '../../store/remote/client'
 import { errorBodySchema } from '../../store/remote/protocol'
 import {
   claimWireSchema,
+  TICKET_COMMENTS_HEADER,
+  TICKET_COMMENTS_CAPABILITY,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
@@ -68,6 +70,7 @@ export class HostedTicketSource implements TicketSource {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        [TICKET_COMMENTS_HEADER]: TICKET_COMMENTS_CAPABILITY,
         authorization: `Bearer ${this.token}`,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
