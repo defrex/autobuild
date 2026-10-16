@@ -1,3 +1,5 @@
+import { exportTickets, importTickets } from '../ports/tickets/migration'
+import { composeTicketAssets } from '../store/ticket-assets'
 import { editTicket, type TicketEditorRunner } from './ticket-editor'
 /**
  * Source-agnostic pre-build ticket operations (SPEC §8.8). These commands run
@@ -161,6 +163,8 @@ export interface TicketStateCreateOpts extends TicketCommandOpts {
 }
 
 type TicketCommandName =
+  | 'export'
+  | 'import'
   | 'states'
   | 'state create'
   | 'create'
@@ -462,7 +466,7 @@ function withTicketAssets<T>(
     throw new Error('hosted ticket source has no asset capability')
   }
   return withTicketStore(opts, ({ store, repo }) =>
-    use({ store: source.name === 'hosted' ? source.assets! : store, buildStore: store, repo }),
+    use({ store: composeTicketAssets(source, store), buildStore: store, repo }),
   )
 }
 
@@ -548,13 +552,13 @@ export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> 
   const readAsset = ({ store, repo }: { store: TicketAssetStore; repo: string }) =>
     store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev)
   const asset =
-    resolved.config.tickets.source === 'hosted'
-      ? await withTicketAssets(
+    resolved.config.tickets.source === 'linear'
+      ? await withTicketStore(opts, readAsset)
+      : await withTicketAssets(
           opts,
           (await createTicketCommandSource(opts, resolved)).source,
           readAsset,
         )
-      : await withTicketStore(opts, readAsset)
   if (asset === null) {
     const revision = opts.rev === undefined ? '' : ` revision ${opts.rev}`
     throw new Error(
@@ -740,6 +744,8 @@ const MOVE_USAGE =
 const STATES_USAGE = 'usage: ab ticket states [--json] (§8.8)'
 const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>] [--json] (§8.8)'
 export const TICKET_USAGE = [
+  'usage: ab ticket export <dir> [--store <ref>]',
+  'usage: ab ticket import <dir> [--store <ref>]',
   CREATE_USAGE,
   'usage: ab ticket edit <id> (§8.8)',
   UPDATE_USAGE,
@@ -772,6 +778,25 @@ interface TicketCliOpts extends TicketCommandOpts {
 export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<void> {
   const [command, ...args] = argv
   switch (command) {
+    case 'export':
+    case 'import': {
+      const parsed = parseArgs(args, { store: 'value' }, TICKET_USAGE)
+      const [dir, ...extra] = parsed.positionals
+      if (!dir?.trim() || extra.length) throw new Error(TICKET_USAGE)
+      const migrationOpts = { ...opts, storeRef: stringFlag(parsed, 'store') ?? opts.storeRef }
+      const { source } = await resolveTicketCommand(migrationOpts, command)
+      await withTicketAssets(migrationOpts, source, ({ store, repo }) =>
+        (command === 'export' ? exportTickets : importTickets)({
+          source,
+          assets: store,
+          repo,
+          dir,
+          print: opts.stdout,
+        }),
+      )
+      return
+    }
+
     case 'create': {
       const parsed = parseArgs(
         args,

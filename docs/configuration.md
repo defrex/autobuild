@@ -1224,6 +1224,9 @@ invariants, not additional configuration fields.
 
 ## `[tickets]`
 
+To move an existing project between sources, follow the
+[ticket migration procedure](ticket-migration.md).
+
 Required in practice: `readyState` deliberately has no default, so omitting the
 table fails at `tickets.readyState` rather than allowing tickets from every
 state. Within a present table, `source` is required; hosted tickets default `readyState` to `ready`. Other sources require it.

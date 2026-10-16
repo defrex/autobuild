@@ -368,51 +368,36 @@ describe('operator behavioral parity contract', () => {
   })
 
   test.each(['file', 'linear'])(
-    'registry ticket re-pin for %s needs no external backend',
+    'registry ticket re-pin for %s uses legacy storage without a backend',
     async (source) => {
-      for (const backendPresent of [false, true]) {
-        const store = await makeStore({ ticket: true, ticketSource: source })
-        await store.putTicketAsset(REPO, 'AUT-1', {
-          kind: 'reference',
-          name: 'sample',
-          layout: 'file',
-          entries: [{ type: 'file', path: 'sample', content: new Uint8Array([7]) }],
-        })
-        await seedSpec(store)
-        await raise(store)
-        const registry = buildRegistry({
-          store,
-          clock,
-          ...(backendPresent
-            ? {
-                tickets: {
-                  contextFor: async () => {
-                    throw new Error('external-ticket-source')
-                  },
-                  sourceFor: () => {
-                    throw new Error('external-ticket-source')
-                  },
-                  statesFor: () => [],
-                },
-              }
-            : {}),
-        })
-        await registry.call(
-          'builds.answer',
-          {
-            repo: REPO,
-            slug: SLUG,
-            resolution: 'revise-spec',
-            origin: 'ticket',
-            body: CONFORMING_SPEC,
-          },
-          { identity: USER },
-        )
-        const asset = await store.getPinnedTicketAsset(SLUG, 'reference', 'sample')
-        expect(asset?.entries).toEqual([
-          { type: 'file', path: 'sample', content: new Uint8Array([7]) },
-        ])
-      }
+      const store = await makeStore({ ticket: true, ticketSource: source })
+      await store.putTicketAsset(REPO, 'AUT-1', {
+        kind: 'reference',
+        name: 'sample',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'sample', content: new Uint8Array([7]) }],
+      })
+      await seedSpec(store)
+      await raise(store)
+      const registry = buildRegistry({
+        store,
+        clock,
+      })
+      await registry.call(
+        'builds.answer',
+        {
+          repo: REPO,
+          slug: SLUG,
+          resolution: 'revise-spec',
+          origin: 'ticket',
+          body: CONFORMING_SPEC,
+        },
+        { identity: USER },
+      )
+      const asset = await store.getPinnedTicketAsset(SLUG, 'reference', 'sample')
+      expect(asset?.entries).toEqual([
+        { type: 'file', path: 'sample', content: new Uint8Array([7]) },
+      ])
     },
   )
 

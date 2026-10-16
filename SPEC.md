@@ -633,11 +633,15 @@ needs reduction, and no retention pruning, because assets live as long as the
 ticket's other durable data and never expire on their own.
 
 Hosted ticket assets live in the ticket service's repository-keyed storage,
-regardless of where builds run or which BuildStore is selected. File and Linear
+regardless of where builds run or which BuildStore is selected. File tickets use
+native portable storage composed with legacy BuildStore attachments; Linear
 tickets retain BuildStore storage. Existing service assets need no migration;
 old local hosted-ticket attachments are not moved or used as a fallback.
 
-Each put creates a new 0-based **revision**; earlier revisions stay retrievable.
+Each put creates a new increasing **revision**; earlier revisions stay retrievable.
+Adapters normally start at 0. Native file assets reserve revisions from
+1,000,000,000 upward so explicit reads of old BuildStore revisions remain
+unambiguous when native and legacy assets are composed.
 An asset is a `file` (exactly one file) or a `tree` (a folder: its root is
 implicit, so a tree with zero entries is a valid empty folder). The manifest is
 a list of entries — `file` entries with size and content address, and `dir`
@@ -1284,9 +1288,10 @@ implementer:  ab context   (findings.json now materialized) → …
 
 Human/pre-build ticket grooming uses one configured-source namespace
 (`ab ticket create|update|block|unblock|list|show|move`, plus the ticket-asset
-forms below). These commands are
+forms below). Migration adds `ab ticket export <dir>` and `ab ticket import <dir>`
+(see [Ticket source migration](#ticket-source-migration)). These commands are
 sessionless, source-agnostic, and never available as a mid-build spec
-mutation path. Every subcommand accepts `--json` and then writes exactly one
+mutation path. The CRUD subcommands accept `--json` and then writes exactly one
 bare value: `list` emits `Ticket[]`; every other form emits the complete
 created, read, or post-mutation `Ticket`. Human-readable confirmations are not
 a data format and callers must not parse ids from them.
@@ -1302,8 +1307,9 @@ chain in dependency order, carrying each predecessor id into the next create,
 before a later ticket can be claimed.
 
 **Ticket assets** (§7.1) attach files to a ticket. Hosted tickets use their
-ticket service storage independently of the selected build store; other sources
-use the selected BuildStore:
+ticket service storage independently of the selected build store; file tickets use
+native storage with legacy fallback, and sources without native assets use the
+selected BuildStore:
 
 - `ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]`
   stores a file or a whole folder (its relative tree preserved) as an asset.
@@ -1794,7 +1800,8 @@ put blobs must be fully workable.
 
 **Ticket assets follow the same rule.** The contents of a ticket asset (§7.1)
 live in the ticket service for hosted tickets, independently of build storage;
-other sources keep them in the BuildStore. Attaching,
+file sources keep portable bundles and source-local history, while sources without
+native assets keep them in the BuildStore. Attaching,
 replacing, or removing an asset instead leaves a note on the ticket through the
 existing `comment()` port — the outward projection every source, including the
 plugin surface, already supports. The note names the asset, its revision, file
@@ -2817,8 +2824,10 @@ reapply the intended changes before retrying; conflicts are never merged.
 File and Linear revisions fingerprint title, body, canonical label/blocker sets
 and state; reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
-Direct file edits and state-directory moves change revisions. File comments
-change the body and revision; separate hosted comments do not. Hosted revisions
+Direct file edits and state-directory moves change revisions. File revisions also
+cover structured comments and portable attachments. Legacy file comments change
+the body; structured comments preserve it. Separate hosted comments do not change
+ticket revisions. Hosted revisions
 are monotonic decimal bigint strings, and checks run under the same row lock
 and transaction as all requested changes. Hosted reads return a coherent
 snapshot of fields, blockers and revision.
@@ -2834,3 +2843,30 @@ a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
 Independent harvest uses revocable, expiring, service-bound ticket grants with
 read/create runner authority and read-only child authority. Build state and harvest
 journals remain exclusively in the selected BuildStore.
+
+### Ticket source migration
+
+`ab ticket export <dir>` enumerates all states through TicketSource and writes a
+portable file tracker atomically to an absent or empty destination.
+`ab ticket import <dir>` preflights the entire tracker and target inventory, then
+creates or adopts tickets, maps blockers, deduplicates comments by exact body and
+restores current attachments. Both run sessionless without forge access.
+
+TicketCreateOptions includes optional `requestedId`. Unsupported sources reject
+it. File keeps safe ids exactly; hosted preserves canonical own-team positive
+numbers and advances its counter above every occupied number. Creation-key
+adoption precedes collision checks. Known kept-number clashes stop import before
+any target mutation. Stable migration identities and atomic mapping files make
+interrupted imports resumable without content-based adoption.
+
+File frontmatter additionally supports optional structured `comments` (body,
+createdAt, optional author) and `attachments` (kind, name, layout, entries with
+file base64 bytes or directory paths). Legacy absent fields retain old behavior;
+new creates use structured comments. Native file assets retain historical
+revisions in hidden source-local metadata and compose with legacy BuildStore
+assets. Build claims and spec re-pins freeze native assets into durable snapshots.
+
+State normalization and the complete operator procedure are documented in
+[Ticket migration](docs/ticket-migration.md). The same reference is delivered in
+the installed guide. Export keeps lifecycle membership without inferring roles;
+import reuses unique case-insensitive states and creates normalized missing ones.

@@ -42,3 +42,20 @@ export function resolveState(
     `${source}: unknown state "${name}" — this tracker's states are ${directories ? 'the directories: ' : ''}${existing.join(', ')}`,
   )
 }
+
+/** Portable directory vocabulary, without guessing lifecycle roles. */
+export function normalizeStateName(name: string): string {
+  if (/^[a-z][a-z0-9-]{0,39}$/.test(name)) return name
+  const candidate = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  try {
+    validateStateName(candidate)
+  } catch {
+    throw new Error(`invalid state "${name}" (normalized: "${candidate}")`)
+  }
+  return candidate
+}

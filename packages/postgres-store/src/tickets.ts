@@ -1,3 +1,4 @@
+import { hostedRequestedIds, MAX_TICKET_NUMBER } from '@defrex/autobuild/hosted-tickets'
 import {
   orderStates,
   resolveState,
@@ -269,26 +270,42 @@ export class PostgresTicketSource implements TicketSource {
     await this.mutate(id, { kind: 'transition', state })
   }
 
+  get requestedIds() {
+    return hostedRequestedIds(this.teamKey)
+  }
+
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
     if (!draft.title.trim()) throw new Error('database ticket create: title must be nonblank')
-    if (!draft.body.trim()) throw new Error('database ticket create: body must be nonblank')
+    if (!draft.body.trim() && options.requestedId === undefined)
+      throw new Error('database ticket create: body must be nonblank')
     requiredState(this.teamKey, 'ticket teamKey')
     return this.retry.tx(this.sql, async (q) => {
       await q`INSERT INTO ab_ticket_counters (repo, last_number) VALUES (${this.repo}, 0) ON CONFLICT DO NOTHING`
       await q`SELECT last_number FROM ab_ticket_counters WHERE repo = ${this.repo} FOR UPDATE`
-      const state = await this.state(q, options.state ?? this.createState)
       if (options.idempotencyKey !== undefined) {
         const adopted: Row[] = await q`SELECT *, revision::text AS revision FROM ab_tickets
           WHERE repo = ${this.repo} AND creation_key = ${options.idempotencyKey} FOR UPDATE`
         if (adopted[0]) return this.record(q, adopted[0])
       }
+      const state = await this.state(q, options.state ?? this.createState)
       const blockers: string[] = []
       for (const blocker of draft.blockedBy ?? []) {
         blockers.push(String((await this.require(q, blocker, 'create blocker')).id))
       }
-      const [allocation] =
-        await q`UPDATE ab_ticket_counters SET last_number = last_number + 1 WHERE repo = ${this.repo} RETURNING last_number::text`
-      const number = String(allocation!.last_number)
+      const policy = hostedRequestedIds(this.teamKey)
+      const kept =
+        options.requestedId === undefined ? undefined : policy.preserve(options.requestedId)
+      const rows: Row[] = await q`SELECT GREATEST(
+        (SELECT last_number FROM ab_ticket_counters WHERE repo = ${this.repo}),
+        COALESCE(MAX(ticket_number), 0))::text AS high FROM ab_tickets WHERE repo = ${this.repo}`
+      const high = BigInt(String(rows[0]!.high))
+      const chosen = kept === undefined ? high + 1n : BigInt(kept.slice(this.teamKey.length + 1))
+      if (chosen > MAX_TICKET_NUMBER) throw new Error('ticket numbers exhausted')
+      const clashes: Row[] =
+        await q`SELECT id FROM ab_tickets WHERE repo = ${this.repo} AND ticket_number = ${String(chosen)}::bigint`
+      if (clashes.length) throw new Error(`requested ticket id already occupied: ${kept}`)
+      const number = String(chosen)
+      await q`UPDATE ab_ticket_counters SET last_number = ${String(chosen > high ? chosen : high)}::bigint WHERE repo = ${this.repo}`
       const readable = `${this.teamKey}-${number}`
       const id = `ticket-${crypto.randomUUID()}`
       const now = new Date().toISOString()

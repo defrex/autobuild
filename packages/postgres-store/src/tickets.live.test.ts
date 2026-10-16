@@ -595,3 +595,49 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('requested numbers preserve identity, advance counters and remain project scoped', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const one = database.source({
+      teamKey: 'A.+',
+      repo: 'one',
+      lifecycle: { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' },
+    })
+    const two = database.source({
+      teamKey: 'A.+',
+      repo: 'two',
+      lifecycle: { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' },
+    })
+    const draft = { title: 'Imported', body: 'Body' }
+    try {
+      const created = await one.create(draft, { requestedId: 'A.+-706', idempotencyKey: 'key' })
+      expect(created.ref.id).toBe('A.+-706')
+      expect((await one.create(draft)).ref.id).toBe('A.+-707')
+      expect((await one.create(draft, { requestedId: 'A.+-2' })).ref.id).toBe('A.+-2')
+      expect((await one.create(draft, { requestedId: 'FOREIGN-9999' })).ref.id).toBe('A.+-708')
+      expect((await one.create(draft, { requestedId: 'A.+-01' })).ref.id).toBe('A.+-709')
+      expect(
+        (await one.create(draft, { requestedId: 'A.+-706', idempotencyKey: 'key' })).ref.id,
+      ).toBe('A.+-706')
+      await expect(
+        one.create(draft, { requestedId: 'A.+-706', idempotencyKey: 'other' }),
+      ).rejects.toThrow('occupied')
+      await expect(one.create(draft, { requestedId: 'A.+-9223372036854775808' })).rejects.toThrow(
+        'bigint',
+      )
+      expect((await one.create(draft)).ref.id).toBe('A.+-710')
+      expect(
+        (await two.create(draft, { requestedId: 'A.+-706', idempotencyKey: 'key' })).ref.id,
+      ).toBe('A.+-706')
+      // Simulate an old counter below occupied numbers: allocation must consult the inventory.
+      const sql = new SQL(isolated.url)
+      await sql`UPDATE ab_ticket_counters SET last_number = 1 WHERE repo = 'one'`
+      await sql.close()
+      expect((await one.create(draft)).ref.id).toBe('A.+-711')
+    } finally {
+      await database.close()
+      await isolated.cleanup()
+    }
+  })

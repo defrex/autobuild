@@ -60,8 +60,9 @@ describe('hosted ticket protocol', () => {
     const body = '# Spec\r\n\r\nUnicode: ☃  \r\ntrailing\t '
     const created = await source.create(
       { title: 'Exact', body, labels: ['ready'] },
-      { state: 'Ready', idempotencyKey: 'creation-1' },
+      { state: 'Ready', idempotencyKey: 'creation-1', requestedId: 'ENG-706' },
     )
+    expect(created.ref.id).toBe('ENG-706')
     expect(created.resolved).toBe(false)
     expect(created.body).toBe(body)
     expect(created.ref.source).toBe('hosted')

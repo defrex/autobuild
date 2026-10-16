@@ -1,3 +1,5 @@
+import { fileRequestedIds, validateFileTicketId } from './requested-id'
+import { FileTicketAssets } from './file-assets'
 /**
  * File-based TicketSource (SPEC §3.2, §13): the default tracker. A directory
  * of state directories — the lifecycle four `triage/ ready/ doing/ done/`
@@ -70,7 +72,14 @@ export { validateStateName } from './states'
 
 function statesIn(directories: string[]): string[] {
   return orderStates(
-    [...new Set([...LIFECYCLE_DIRS, ...directories.filter((name) => !name.startsWith('.'))])],
+    [
+      ...new Set([
+        ...LIFECYCLE_DIRS.filter(
+          (name) => !directories.some((dir) => dir.toLowerCase() === name && dir !== name),
+        ),
+        ...directories.filter((name) => !name.startsWith('.')),
+      ]),
+    ],
     LIFECYCLE_DIRS,
   )
 }
@@ -84,6 +93,8 @@ interface Located {
 
 export class FileTicketSource implements TicketSource {
   readonly name = 'file'
+  readonly requestedIds = fileRequestedIds
+  readonly assets: FileTicketAssets
 
   private readonly dir: string
   private readonly clock: Clock
@@ -112,6 +123,22 @@ export class FileTicketSource implements TicketSource {
      */
     selfIgnore?: boolean
   }) {
+    this.assets = new FileTicketAssets(opts.dir, async (id) => {
+      const found = await this.locate(id)
+      if (!found)
+        return {
+          exists: false,
+          front: { id, title: id, labels: [] },
+          save: async () => {
+            throw new Error(`file ticket source: asset on unknown ticket "${id}"`)
+          },
+        }
+      const loaded = { found, ...(await this.loadAt(found)) }
+      return {
+        ...loaded,
+        save: (front: Frontmatter) => this.rewriteAt(loaded.found, front, loaded.body),
+      }
+    })
     this.dir = opts.dir
     this.clock = opts.clock ?? systemClock
     const existing = this.statesSync()
@@ -187,7 +214,12 @@ export class FileTicketSource implements TicketSource {
       throw new Error(`file ticket source: comment on unknown ticket "${id}"`)
     }
     const raw = await readFile(found.path, 'utf8')
-    parseTicketFile(found.path, raw) // surface malformed files before appending
+    const parsed = parseTicketFile(found.path, raw)
+    if (parsed.front.comments !== undefined) {
+      parsed.front.comments.push({ body, createdAt: this.clock().toISOString() })
+      await this.rewriteAt(found, parsed.front, parsed.body)
+      return
+    }
     const separator = raw.endsWith('\n') ? '\n' : '\n\n'
     const stamp = this.clock().toISOString()
     await writeFile(found.path, `${raw}${separator}## Comment (${stamp})\n\n${body}\n`)
@@ -215,6 +247,7 @@ export class FileTicketSource implements TicketSource {
   /** Writes `<createState>/file-<n>.md` with the next free n (gaps reused),
    * or adopts the ticket carrying the same idempotency key. */
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
+    if (opts.requestedId !== undefined) validateFileTicketId(opts.requestedId)
     await this.ensureLayout()
     // Resolve before anything is read or written: an unknown state touches no file.
     const targetState =
@@ -246,7 +279,8 @@ export class FileTicketSource implements TicketSource {
     let n = 1
     while (taken.has(`file-${n}`)) n += 1
     const front: Frontmatter = {
-      id: `file-${n}`,
+      id: opts.requestedId ?? `file-${n}`,
+      comments: [],
       title: draft.title,
       labels: [...(draft.labels ?? [])],
       ...(draft.blockedBy !== undefined && draft.blockedBy.length > 0
@@ -254,7 +288,10 @@ export class FileTicketSource implements TicketSource {
         : {}),
       ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
     }
-    await writeFile(this.pathIn(targetState, front.id), serializeTicketFile(front, draft.body))
+    if (taken.has(front.id)) throw new Error(`requested ticket id already occupied: ${front.id}`)
+    await writeFile(this.pathIn(targetState, front.id), serializeTicketFile(front, draft.body), {
+      flag: 'wx',
+    })
     return this.toTicket(front, draft.body, targetState)
   }
 
@@ -485,10 +522,7 @@ export class FileTicketSource implements TicketSource {
   }
 
   private safeId(id: string): string {
-    if (id.includes('/') || id.includes('\\') || id.includes('..')) {
-      throw new Error(`file ticket source: invalid ticket id "${id}"`)
-    }
-    return id
+    return validateFileTicketId(id)
   }
 
   /** Find the one state dir holding `<id>.md`; null when absent. */
@@ -580,7 +614,9 @@ export class FileTicketSource implements TicketSource {
   /** Rewrite only the located file: editable writes can never move lifecycle
    * state because the existing state-directory path remains authoritative. */
   private async rewriteAt(found: Located, front: Frontmatter, body: string): Promise<void> {
-    await writeFile(found.path, serializeTicketFile(front, body))
+    const temp = `${found.path}.${crypto.randomUUID()}.tmp`
+    await writeFile(temp, serializeTicketFile(front, body))
+    await rename(temp, found.path)
   }
 
   private async listAll(): Promise<TicketListing> {
@@ -612,9 +648,12 @@ export class FileTicketSource implements TicketSource {
         labels: front.labels,
         state,
         blockedBy: front.blockedBy,
+        ...(front.comments !== undefined ? { comments: front.comments } : {}),
+        ...(front.attachments !== undefined ? { attachments: front.attachments } : {}),
       }),
       ref: { source: this.name, id: front.id, title: front.title },
       ...(front.idempotencyKey !== undefined ? { creationKey: front.idempotencyKey } : {}),
+      ...(front.comments !== undefined ? { comments: structuredClone(front.comments) } : {}),
       title: front.title,
       body,
       state,
