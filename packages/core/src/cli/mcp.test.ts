@@ -19,7 +19,7 @@ import { openLocalStore } from '../store/local/store'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
 const BIN = join(ROOT, 'bin', 'ab.ts')
-const TOOL_NAMES = 20
+const TOOL_NAMES = 22
 
 let tmp: string
 let storeDir: string
@@ -66,7 +66,7 @@ async function connect(env: Record<string, string> = bareEnv()): Promise<Client>
   return client
 }
 
-test('ab mcp advertises the registry: 20 tools with schemas and annotations', async () => {
+test('ab mcp advertises the registry: 22 tools with schemas and annotations', async () => {
   await seed()
   const client = await connect()
   try {

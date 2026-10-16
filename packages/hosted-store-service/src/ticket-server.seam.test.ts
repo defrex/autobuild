@@ -361,3 +361,82 @@ test('comments require explicit capability independently of client version on ev
     }
   }
 })
+
+test('hosted state transport preserves metadata and parses strict create envelopes', async () => {
+  const backend = Object.assign(new FakeTicketSource(), {
+    listStates: async () => [
+      { name: 'triage', tickets: 0 },
+      { name: 'icebox', tickets: 2, about: 'Deferred' },
+    ],
+    addState: async (name: string, opts: { about?: string } = {}) => ({
+      state: { name, tickets: 0, ...opts },
+      created: true,
+    }),
+  })
+  const { source, server } = harness(backend)
+  expect(await source.listStates()).toEqual(await backend.listStates())
+  expect(await source.addState('later', { about: 'Waiting' })).toEqual({
+    state: { name: 'later', tickets: 0, about: 'Waiting' },
+    created: true,
+  })
+  const malformed = await server.fetch(
+    new Request('https://tickets.example/tickets/add-state', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${operator}`,
+        'content-type': 'application/json',
+        [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+      },
+      body: JSON.stringify({
+        context: { teamKey: 'ENG' },
+        input: { name: 'later', surprise: true },
+      }),
+    }),
+  )
+  expect(malformed.status).toBe(400)
+})
+
+test('runner and phase grants can discover states but cannot create them', async () => {
+  for (const kind of ['runner', 'phase'] as const) {
+    let mutations = 0
+    const grant = {
+      id: kind,
+      repo: 'https://github.com/acme/grants',
+      execution: 'execution',
+      kind,
+      parent: null,
+      expiresAt: '2099-01-01T00:00:00Z',
+    }
+    const backend = Object.assign(new FakeTicketSource(), {
+      listStates: async () => [{ name: 'triage', tickets: 0 }],
+      addState: async () => {
+        mutations++
+        return { state: { name: 'later', tickets: 0 }, created: true }
+      },
+    })
+    const server = createTicketServer({
+      secret,
+      clock: () => now,
+      sourceFor: () => backend,
+      grants: {
+        authenticate: async () => grant,
+        issue: async () => {
+          throw new Error('unused')
+        },
+        revoke: async () => {},
+        renew: async () => {},
+      },
+    })
+    const source = new HostedTicketSource({
+      url: 'https://tickets.example',
+      token: 'abt_restricted',
+      teamKey: 'ENG',
+      repo: grant.repo,
+      fetchFn: (input, init) => server.fetch(new Request(input, init)),
+    })
+    expect(await source.listStates()).toEqual([{ name: 'triage', tickets: 0 }])
+    await expect(source.addState('later')).rejects.toThrow('ticket grant cannot perform')
+    expect(mutations).toBe(0)
+  }
+})

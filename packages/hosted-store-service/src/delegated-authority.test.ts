@@ -438,6 +438,8 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
     'list-ready': {},
     get: { id: 'unknown' },
     'dependency-states': { ids: ['unknown'] },
+    states: {},
+    'add-state': { name: 'icebox', about: 'Deferred' },
     create: { draft: { title: 'Proposal', body: 'Spec' } },
     claim: { id: 'unknown' },
     comment: { id: 'unknown', body: 'hello' },
@@ -467,7 +469,7 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
       })
       const allowed =
         target.kind.startsWith('harvest') &&
-        (['list-ready', 'get', 'dependency-states'].includes(operation) ||
+        (['list-ready', 'get', 'dependency-states', 'states'].includes(operation) ||
           (target.kind === 'harvest-runner' && operation === 'create'))
       const response = await server.fetch(
         request(`/tickets/${operation}`, token, {

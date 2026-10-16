@@ -190,6 +190,29 @@ guidance: state and labels live in Linear. The source-agnostic `ab ticket block`
 and `ab ticket unblock` commands still edit blocker relationships through the
 configured source.
 
+## Hosted ticket states
+
+For `[tickets].source = "hosted"`, states are project-owned service data.
+Run `ab ticket states` before creating a state, and reuse an existing purpose
+when it fits. `ab ticket state create icebox --about "Deferred work"` creates
+an empty state with an optional one-line, nonblank purpose. Custom names use
+one to forty lowercase letters, digits, or hyphens, starting with a letter.
+Hosted creation refuses an existing name in any letter case and never replaces
+its purpose; file creation remains idempotent and can update the purpose.
+
+Use `ab ticket create --state <name>`, `ab ticket move <id> <name>`, and
+`ab ticket list --state <name>` with any existing state. Unknown states are
+refused with the available names. Configured states are added automatically;
+former configuration roles remain custom states with their tickets intact.
+Listing puts the configured triage, ready, doing, and done roles first, then
+other states alphabetically, including empty states and purposes. Configured
+names keep their spelling; lookup prefers an exact match, then a unique
+case-insensitive match. States belong to one project.
+
+The directory `ls` and `mv` instructions above apply only to the file source.
+For MCP, use `tickets.states` and `tickets.state.create`; the latter requires
+an attributed operator identity and normal project authorization.
+
 ## Revision-checked ticket writes
 
 Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
