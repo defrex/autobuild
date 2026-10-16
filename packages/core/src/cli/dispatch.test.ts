@@ -10916,3 +10916,159 @@ test('dispatch repository config deposits preserve the post-reconcile opt-out ac
     await fx.cleanup()
   }
 })
+
+test('dispatcher repairs an incompatible parked build pin from its branch without another execution', async () => {
+  const fx = await makeFixture(readyTicket('T-repair-pin'), happyHandlers())
+  const stop = new AbortController()
+  let slug: string | undefined
+  let sleeps = 0
+  let sessions = 0
+  try {
+    await abDispatch({
+      targetRepo: fx.checkout,
+      env: {},
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: (line) => fx.err.push(line),
+      signal: stop.signal,
+      intervalMs: 1,
+      sleep: async () => {
+        sleeps++
+        if (sleeps === 1) {
+          await waitFor(async () => {
+            slug = (await fx.store.listBuilds())[0]?.slug
+            return (
+              slug !== undefined &&
+              (await fx.store.getEvents(slug)).some((event) => event.type === 'finalize.completed')
+            )
+          }, 10_000)
+          sessions = fx.agents.sessions.size
+          await fx.store.putArtifact(slug!, {
+            kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+            content: '{"schemaFromFuture":true}',
+          })
+        } else {
+          const artifact = await fx.store.getArtifact(slug!, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+          expect(artifact).not.toBeNull()
+          expect(parseEffectiveBuildConfig(artifact!).verify.steps).toEqual(['unit'])
+          expect(parseBuildConfigMetadata(artifact!).pipelineSource?.ref).toBe('branch-head')
+          expect(fx.agents.sessions.size).toBe(sessions)
+          stop.abort()
+        }
+      },
+      wire: fx.wire,
+    })
+    expect(
+      (await fx.store.getEvents(slug!)).filter((e) => e.type === 'execution.started'),
+    ).toHaveLength(1)
+    expect(fx.cliErrors).toEqual([])
+  } finally {
+    stop.abort()
+    await fx.cleanup()
+  }
+}, 30_000)
+
+for (const selected of [false, true]) {
+  test(`reconcile adopts branch pipeline at the next publication (explicit selection=${selected})`, async () => {
+    const handlers = happyHandlers()
+    if (selected) {
+      handlers.plan = async (cli) => {
+        await cli.run(['context'])
+        const path = join(cli.ws, '.ab/plan.md')
+        await writeFile(path, '+++\nverifySteps = ["unit"]\n+++\n\nAdd rate limiting.\n')
+        await cli.run(['artifact', 'put', 'plan', path])
+        await cli.run(['done'])
+      }
+    }
+    const clock = manualClock()
+    const fx = await makeFixture(
+      readyTicket('T-reconcile-pin'),
+      handlers,
+      DISPATCH_CONFIG_TOML,
+      clock,
+    )
+    const stop = new AbortController()
+    let slug: string | undefined
+    let stage = 0
+    const nextToml =
+      DISPATCH_CONFIG_TOML.replace('steps = ["unit"]', 'steps = ["unit", "new"]') +
+      '\n[verify.new]\nkind = "check"\ncommand = "test"\nalways = true\n'
+    handlers.reconcile = async (cli) => {
+      await cli.run(['context'])
+      await git([...GIT_ID, 'merge', '--no-edit', 'origin/main'], cli.ws)
+      await fx.store.append(slug!, {
+        actor: humanActor('operator'),
+        type: 'build.pause-requested',
+        payload: {},
+      })
+      const notes = join(cli.ws, '.ab/reconcile-notes.md')
+      await writeFile(notes, 'Merged current base configuration.\n')
+      await cli.run(['done', '--notes', notes])
+    }
+    try {
+      await abDispatch({
+        targetRepo: fx.checkout,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: (line) => fx.err.push(line),
+        signal: stop.signal,
+        intervalMs: 1,
+        wire: fx.wire,
+        sleep: async () => {
+          if (stage === 0) {
+            await waitFor(async () => {
+              slug = (await fx.store.listBuilds())[0]?.slug
+              return (
+                slug !== undefined &&
+                (await fx.store.getEvents(slug)).some((e) => e.type === 'finalize.completed')
+              )
+            }, 10_000)
+            await writeFile(join(fx.checkout, 'autobuild.toml'), nextToml)
+            await git(['add', 'autobuild.toml'], fx.checkout)
+            await git([...GIT_ID, 'commit', '-qm', 'add mandatory verify'], fx.checkout)
+            await git(['push', '-q', 'origin', 'main'], fx.checkout)
+            clock.advance(120_000)
+            fx.forge.setPrState(1, { state: 'open', mergeable: false })
+            stage = 1
+          } else if (stage === 1) {
+            await waitFor(
+              async () => (await fx.store.getEvents(slug!)).some((e) => e.type === 'build.paused'),
+              10_000,
+            )
+            fx.forge.setPrState(1, { state: 'open', mergeable: true })
+            await fx.store.append(slug!, {
+              actor: humanActor('operator'),
+              type: 'build.resume-requested',
+              payload: {},
+            })
+            stage = 2
+          } else {
+            await waitFor(
+              async () =>
+                (await fx.store.getEvents(slug!)).some(
+                  (e) => e.type === 'verify.completed' && e.payload.step === 'new',
+                ),
+              10_000,
+            )
+            stop.abort()
+          }
+        },
+      })
+      const artifact = await fx.store.getArtifact(slug!, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      expect(parseEffectiveBuildConfig(artifact!).verify.steps).toEqual(['unit', 'new'])
+      const events = await fx.store.getEvents(slug!)
+      expect(events.filter((e) => e.type === 'execution.started')).toHaveLength(3)
+      expect(events.filter((e) => e.type === 'reconcile.completed')).toHaveLength(1)
+      expect(events.filter((e) => e.type === 'verify.started').map((e) => e.payload.step)).toEqual([
+        'unit',
+        'unit',
+        'new',
+      ])
+      expect(fx.cliErrors).toEqual([])
+    } finally {
+      stop.abort()
+      await fx.cleanup()
+    }
+  }, 30_000)
+}

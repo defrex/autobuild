@@ -813,6 +813,7 @@ class DispatchLoop {
       forge: wiring.forge,
       config,
       getConfig: () => this.liveConfig.current().config,
+      repairBuildConfig: (slug) => this.publishBuildConfig(slug),
       repo: this.repoIdentity,
       // Origin mode: the forge answers remote base-branch questions; no
       // checkout git is probed for the served repository's origin.
