@@ -1,3 +1,5 @@
+import { decideNext } from '../kernel/engine'
+import { publicationPending } from './publication-state'
 import {
   BUILD_EFFECTIVE_CONFIG_ARTIFACT,
   effectiveBuildConfigContent,
@@ -5343,6 +5345,85 @@ describe('Dispatcher lease sweep', () => {
     ).toBe('sandbox-g1')
   })
 
+  for (const completions of [1, 3]) {
+    test(`parked remote publication recovery launches after ${completions} empty completions`, async () => {
+      const operations: string[] = []
+      const sha = 'f'.repeat(40)
+      const workspaceProvider: WorkspaceProvider = {
+        name: 'remote-test',
+        recovery: {
+          async reap() {
+            operations.push('reap')
+            throw new Error('a completed execution must recover publication in place')
+          },
+        },
+        async provision() {
+          throw new Error('publication recovery must retain the existing workspace')
+        },
+        async release() {},
+      }
+      const h = harness({
+        workspaceProvider,
+        onLaunch: async (slug, store) => {
+          operations.push('settle-publication')
+          // The real launchRunner settles publication before starting a guest.
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'finalize.completed',
+            payload: { pr: { ...PR, headSha: sha } },
+          })
+        },
+      })
+      const slug = await seedBuild(h, {
+        workspaceRef: 'sandbox-g0',
+        workspaceProvider: 'remote-test',
+        workspaceRemote: true,
+      })
+      await seedLoopsApproved(h, slug)
+      await h.store.append(slug, { actor: KERNEL, type: 'finalize.completed', payload: { pr: PR } })
+      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'publication.requested',
+        payload: {
+          operation: 'finalize',
+          branch: `ab/${slug}`,
+          sha,
+          description: { kind: 'pr-description', rev: 0 },
+        },
+      })
+      for (let i = 0; i < completions; i++) {
+        const instance = `completed-${i}`
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'remote-test', workspaceRef: 'sandbox-g0', instance },
+        })
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance, workspaceRef: 'sandbox-g0', outcome: 'completed', exitCode: 0 },
+        })
+      }
+      expect(await h.store.claimLease(slug, 'completed-0', 100)).toBe(true)
+      h.clock.advance(101)
+      const before = await h.store.getEvents(slug)
+      expect(decideNext(before, parseConfig(withReadyState('')))).toEqual({
+        kind: 'wait',
+        reason: 'awaiting-pr',
+      })
+      expect(publicationPending(before)).toBe(true)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+      expect(h.launches).toEqual([slug])
+      expect(operations).toEqual(['settle-publication'])
+      const after = await h.store.getEvents(slug)
+      expect(publicationPending(after)).toBe(false)
+      expect(after.some((event) => event.type === 'escalation.raised')).toBe(false)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
+      expect(h.launches).toEqual([slug])
+    })
+  }
+
   test('parked build with a reaped recovery-capable workspace: reap only — the surviving wait guard keeps it out of launch', async () => {
     // Regression for the dead duplicate of the top-level wait guard in
     // leaseSweep: the duplicate was removed, but the first guard is
@@ -8594,6 +8675,63 @@ for (const operation of ['observe', 'dispatch']) {
   })
 }
 
+for (const resumeCurrent of [false, true]) {
+  test(`no-progress guard repairs completion crash gap before ${resumeCurrent ? 'startup resume' : 'lease recovery'}, preserves pending abort`, async () => {
+    const h = harness({ opts: { leaseTtlMs: 0 } })
+    const slug = await seedBuild(h)
+    for (const instance of ['a', 'b', 'c']) {
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { instance, provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: '/ws/ab/auth-limit', outcome: 'completed', exitCode: 0 },
+      })
+    }
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick({ resumeCurrent })
+    expect(h.launches).toEqual([])
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'escalation.raised'),
+    ).toHaveLength(1)
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug,
+      user: 'operator',
+      action: { kind: 'abort' },
+    })
+    await h.dispatcher.tick({ resumeCurrent })
+    expect(h.launches).toEqual([slug])
+  })
+}
+
+test('recovered dispatch completion shares the guard before its first attachment', async () => {
+  const h = harness({ tickets: [readyTicket('T-recovered')], opts: { leaseTtlMs: 0 } })
+  const slug = await seedBuild(h, { attached: false, ticketId: 'T-recovered' })
+  for (const instance of ['a', 'b', 'c']) {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { instance, provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance, workspaceRef: '/ws/ab/auth-limit', outcome: 'completed', exitCode: 0 },
+    })
+  }
+  await h.dispatcher.tick({ resumeCurrent: true })
+  expect(h.launches).toEqual([])
+  expect(
+    (await h.store.getEvents(slug))
+      .filter((e) => e.type === 'escalation.raised')
+      .map((e) => e.payload.policyCause),
+  ).toEqual(['execution-no-progress'])
+})
+
 describe('dispatcher pipeline pins', () => {
   const pipeline = (table: 'verify' | 'finalize', name: string) =>
     parseConfig(
@@ -8735,6 +8873,32 @@ command = "run"
     await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
     expect(h.launches).toEqual(['due'])
   })
+  test('no-progress escalation describes the pinned pipeline at the launch boundary', async () => {
+    const h = harness({ getConfig: () => pipeline('verify', 'live-only') })
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', 'pinned-step'))
+    for (const instance of ['a', 'b', 'c']) {
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { instance, provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: '/ws/ab/auth-limit', outcome: 'completed', exitCode: 0 },
+      })
+    }
+    await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+    expect(h.launches).toEqual([])
+    const escalations = (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'escalation.raised',
+    )
+    expect(escalations).toHaveLength(1)
+    expect(escalations[0]?.payload.question).toContain('pinned-step')
+    expect(escalations[0]?.payload.question).not.toContain('live-only')
+  })
+
   test('last-moment merge guard reads a newly published pin', async () => {
     const h = harness()
     const slug = await seedAwaitingPr(h)

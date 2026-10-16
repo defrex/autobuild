@@ -1,3 +1,4 @@
+import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
@@ -1224,9 +1225,24 @@ export class Dispatcher {
     }
   }
 
-  private async launch(slug: string, launched: Set<string>): Promise<LaunchRunnerResult> {
+  private async launch(
+    slug: string,
+    launched: Set<string>,
+    report: TickReport = emptyTickReport(),
+  ): Promise<LaunchRunnerResult> {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
+    if (
+      !(await ensureExecutionProgress(
+        this.store,
+        this.deps.ids,
+        slug,
+        this.deps.config,
+        (state, log) => this.decideBuild(slug, state, log, report),
+      ))
+    ) {
+      return 'already-active'
+    }
     return this.deps.launchRunner(slug)
   }
 
@@ -2140,7 +2156,7 @@ export class Dispatcher {
       }
       // The dispatcher never runs agents (§15.7): re-attach a build-runner,
       // which executes the reconcile epilogue phase.
-      await this.launch(record.slug, launched)
+      await this.launch(record.slug, launched, report)
       report.conflicted += 1
       return
     }
@@ -2854,7 +2870,7 @@ export class Dispatcher {
         return 'parked'
       }
       if (launched === undefined) await this.deps.launchRunner(record.slug)
-      else await this.launch(record.slug, launched)
+      else await this.launch(record.slug, launched, report)
       if (authored && report !== undefined) report.authored += 1
       return 'completed'
     } catch (error) {
@@ -2968,7 +2984,7 @@ export class Dispatcher {
       // Disposable remote environments must pass through the stale-lease
       // fencing sweep below; startup must never attach directly to an old VM.
       if (this.deps.workspaces.recovery !== undefined) continue
-      const result = await this.launch(record.slug, launched)
+      const result = await this.launch(record.slug, launched, report)
       if (result === 'scheduled') report.resumed += 1
     }
   }
@@ -3132,7 +3148,7 @@ export class Dispatcher {
         // boundaries and the launch; this tick performs neither.
         continue
       }
-      const result = await this.launch(record.slug, launched)
+      const result = await this.launch(record.slug, launched, report)
       if (result === 'scheduled') report.swept += 1
     }
   }

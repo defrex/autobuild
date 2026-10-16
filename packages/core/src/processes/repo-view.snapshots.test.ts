@@ -449,6 +449,7 @@ describe('the work bundle is one atomic row', () => {
         'buildDigest',
         'currentDeferralObservation',
         'dashboardFacts',
+        'executionNoProgress',
         'lastExecutionOutcome',
         'logIndex',
         'openBuildWorkspace',
@@ -552,6 +553,7 @@ import {
 import { openBuildWorkspaceReducer as pinWorkspace } from './dispatcher-selectors'
 import { publicationStateReducer as pinPublication } from './publication-state'
 import { buildDigestReducer as pinDigest } from '../store/digest'
+import { executionNoProgressReducer as pinNoProgress } from './execution-no-progress'
 
 function pinnedBundleVersion(): number {
   const layout = 1
@@ -567,6 +569,7 @@ function pinnedBundleVersion(): number {
       pinWorkspace,
       pinPublication,
       pinDigest,
+      pinNoProgress,
     ]
       .map((reducer) => reducer.version)
       .reduce((a, b) => a + b, 0)
@@ -614,3 +617,48 @@ test('journal deltas and cold snapshots retain one latest scan across run turnov
   await rebuilt.refresh()
   expect(rebuilt.recordedJournal()).toEqual(view.recordedJournal())
 })
+
+for (const malformed of [
+  { count: -1 },
+  { count: '3' },
+  { open: [null] },
+  { active: {} },
+  { latest: {} },
+]) {
+  test(`invalid no-progress accumulator falls back to durable history: ${JSON.stringify(malformed)}`, async () => {
+    const store = new CountingStore()
+    await seededRepo(store)
+    for (const instance of ['a', 'b', 'c']) {
+      await store.append('a', {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { instance, provider: 'fake', workspaceRef: 'ws' },
+      })
+      await store.append('a', {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: 'ws', outcome: 'completed', exitCode: 0 },
+      })
+    }
+    await snapshotsOf(store, fresh(store))
+    store.tamper = (_scope, reducer, found) => {
+      if (reducer !== 'work') return found
+      const state = found.state as { extra: { executionNoProgress: object } }
+      return {
+        ...found,
+        state: {
+          ...state,
+          extra: {
+            ...state.extra,
+            executionNoProgress: { ...state.extra.executionNoProgress, ...malformed },
+          },
+        },
+      }
+    }
+    store.reset()
+    const view = fresh(store)
+    await view.refresh()
+    expect((await view.buildFacts('a')).executionNoProgress.count).toBe(3)
+    expect(store.rows.events).toBeGreaterThan(0)
+  })
+}

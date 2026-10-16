@@ -1,3 +1,4 @@
+import { executionNoProgressReducer } from './execution-no-progress'
 /**
  * The dispatcher's in-process repository view (AUT-647): a `BuildStore`
  * decorator that builds the state a tick needs once, at the first refresh, and
@@ -154,6 +155,7 @@ const EXTRA_REDUCERS = {
     finish: buildDigestReducer.finish,
   },
   logIndex: logIndexReducer,
+  executionNoProgress: executionNoProgressReducer,
   openExecution: openExecutionReducer,
   openBuildWorkspace: openBuildWorkspaceReducer,
   publicationState: publicationStateReducer,
@@ -186,6 +188,7 @@ const WORK_BUNDLE_REDUCER = { version: WORK_BUNDLE_VERSION }
 /** The facts a quiet-path stage needs about one build, without its event array. */
 export interface BuildFacts {
   state: BuildState
+  executionNoProgress: ReturnType<typeof executionNoProgressReducer.finish>
   log: LogIndex
   open: OpenExecution | null
   /** The open workspace (the latest provisioned, not yet released). */
@@ -279,6 +282,37 @@ function retainedShape(retained: unknown[], cursor: number): boolean {
 /** Structural checks on the small accumulators a later fold dereferences. */
 function extraAccsShape(extra: ExtraAccs): boolean {
   const field = (acc: unknown, key: string): unknown => (isObject(acc) ? acc[key] : undefined)
+  const emptyCount = field(extra.executionNoProgress, 'count')
+  const emptyOpen = field(extra.executionNoProgress, 'open')
+  if (
+    typeof emptyCount !== 'number' ||
+    !Number.isSafeInteger(emptyCount) ||
+    emptyCount < 0 ||
+    !Array.isArray(emptyOpen) ||
+    !emptyOpen.every((id) => typeof id === 'string')
+  )
+    return false
+  const emptyLatest = field(extra.executionNoProgress, 'latest')
+  if (
+    emptyLatest !== null &&
+    !(
+      isObject(emptyLatest) &&
+      typeof emptyLatest.instance === 'string' &&
+      typeof emptyLatest.seq === 'number'
+    )
+  )
+    return false
+  const active = field(extra.executionNoProgress, 'active')
+  if (
+    active !== null &&
+    !(
+      isObject(active) &&
+      typeof active.instance === 'string' &&
+      typeof active.seq === 'number' &&
+      typeof active.eligible === 'boolean'
+    )
+  )
+    return false
   const open = field(extra.openExecution, 'open')
   if (open !== null && !(isObject(open) && typeof open.instance === 'string')) return false
   const workspace = field(extra.openBuildWorkspace, 'open')
@@ -914,6 +948,7 @@ export class RepoViewStore implements BuildStore {
       const extra = log.extra!
       return {
         state: buildReducer.finish(log.acc!),
+        executionNoProgress: executionNoProgressReducer.finish(extra.executionNoProgress as never),
         log: logIndexReducer.finish(extra.logIndex as never),
         open: openExecutionReducer.finish(extra.openExecution as never),
         workspace: openBuildWorkspaceReducer.finish(extra.openBuildWorkspace as never),

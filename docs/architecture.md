@@ -364,6 +364,10 @@ once. Guidance answering the policy escalation after failed-report exhaustion
 instead routes to `implement` and outranks the pending report. A bare retry carries no
 feedback.
 
+The dispatcher launch boundary uses `processes/execution-no-progress.ts` to
+project clean empty execution streaks through `RepoViewStore` snapshots and
+conditionally raise an ordinary setup policy escalation before a fourth launch.
+
 **Launch ownership.** `packages/core/src/cli/dispatch.ts` is the kernel owner and
 single-flights supervised build executions per slug within its process. It
 publishes effective config into the build artifact namespace, claims the exact

@@ -110,6 +110,7 @@ describe('reducer registry', () => {
         "dispatchFailureBudget": 1,
         "dispatchSettings": 1,
         "dispatchStatus": 2,
+        "executionNoProgress": 1,
         "frozenPrImageHost": 1,
         "harvest": 1,
         "hostedPrAttachments": 1,

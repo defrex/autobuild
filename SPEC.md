@@ -2251,6 +2251,21 @@ adapter never re-cuts it from a newer base (§7.4). `ab context` rehydrates
 scratch from the store into a fresh session. Uncommitted round-2 work is lost by
 design (§7.3 — phase boundaries are the resume points).
 
+The dispatcher also applies a fixed, non-configurable limit of three consecutive
+executions that complete normally with exit code zero and no durable build
+progress. Execution start/end, runner attachment and workspace lifecycle
+bookkeeping do not count as progress. Pipeline, session, spec, publication/PR,
+observation and acknowledged operator facts reset the streak; infrastructure,
+budget and provider failures do not consume the allowance and retain their own
+retry limits. Before a fourth actionable launch, the dispatcher raises one
+setup-targeted `execution-no-progress` policy escalation naming the count and
+the next action it expected the runner to take. Waiting, paused and terminal
+builds are left parked, and pending operator commands remain executable.
+Answering that escalation with guidance or a bare `ab answer <slug>` retry grants
+three fresh executions. The guard is derived from durable facts, including on
+supervisor restart, and uses the ordinary watch, dashboard and operator API
+attention paths.
+
 Two liveness rules complete the picture. Within one dispatcher process,
 build-runner launches are single-flighted by slug through supervised process
 liveness — execution completion means the complete environment has been reaped,

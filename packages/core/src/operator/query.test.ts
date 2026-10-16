@@ -1066,3 +1066,24 @@ command = "postgres"
     }
   })
 })
+
+test('operator build detail exposes dispatcher execution-no-progress escalation', async () => {
+  const store = new MemoryBuildStore()
+  await publishRun(store, 'guard-run', config(2, 5))
+  await createBuild(store, 'empty', 'active')
+  const question = '3 empty executions; dispatcher expected verify:unit'
+  await store.append('empty', {
+    actor: DISPATCHER,
+    type: 'escalation.raised',
+    payload: {
+      id: 'empty-guard',
+      phase: 'setup',
+      source: 'policy',
+      policyCause: 'execution-no-progress',
+      question,
+    },
+  })
+  const result = await getOperatorBuild({ store, repo: REPO, slug: 'empty', now: new Date() })
+  expect(result.dashboardRow).toMatchObject({ status: 'blocked', blockers: [question] })
+  expect(JSON.stringify(result)).toContain(question)
+})

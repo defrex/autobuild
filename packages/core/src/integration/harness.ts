@@ -405,6 +405,8 @@ export async function makeHarness(opts: {
    * CONFIG_TOML, so every existing scenario is untouched; a scenario proving
    * two-axis routing (§9) supplies its own `[roles.default]`/phase roles. */
   configToml?: string
+  /** Force a routing disagreement while retaining the runner's branch config. */
+  dispatcherConfig?: (config: Config) => Config
   pinnedConfig?: boolean
   getConfig?: () => Config
   /** Forge gate existence is independent from current PR mergeability. */
@@ -670,7 +672,7 @@ export async function makeHarness(opts: {
     tickets: ticketSource,
     workspaces,
     forge: selectedForge,
-    config,
+    config: opts.dispatcherConfig?.(structuredClone(config)) ?? config,
     repo: origin,
     exec: spawnExec,
     launchRunner,

@@ -291,7 +291,7 @@ describe('remote infrastructure lifecycle protocol', () => {
     ).toBe('infrastructure.cleanup-attempted')
   })
 
-  test('permits only infrastructure and dispatch policy causes from a dispatcher', () => {
+  test('permits only supervised infrastructure, dispatch and no-progress causes from a dispatcher', () => {
     expect(
       validateEventWrite({
         actor: DISPATCHER,
@@ -318,6 +318,32 @@ describe('remote infrastructure lifecycle protocol', () => {
         },
       }),
     ).toMatchObject({ type: 'escalation.raised' })
+    expect(
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-empty',
+          phase: 'setup',
+          source: 'policy',
+          policyCause: 'execution-no-progress',
+          question: '3 empty executions; expected verify:unit',
+        },
+      }),
+    ).toMatchObject({ type: 'escalation.raised' })
+    expect(() =>
+      validateEventWrite({
+        actor: DISPATCHER,
+        type: 'escalation.raised',
+        payload: {
+          id: 'esc-empty',
+          phase: 'setup',
+          source: 'agent',
+          policyCause: 'execution-no-progress',
+          question: 'invalid source',
+        },
+      }),
+    ).toThrow()
     expect(() =>
       validateEventWrite({
         actor: DISPATCHER,

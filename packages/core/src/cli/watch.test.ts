@@ -191,6 +191,39 @@ describe('watch glob compilation', () => {
 })
 
 describe('watch attention-set defaults', () => {
+  test('dispatcher no-progress escalation enters default attention with its diagnostic', async () => {
+    const store = makeStore()
+    await seedRunningBuild(store, 'b1')
+    const question =
+      '3 consecutive executions ended normally without build progress. Dispatcher expected run-check unit (attempt 1).'
+    let appended = false
+    const h = harness(store, {
+      onTick: async () => {
+        if (appended) return
+        appended = true
+        await store.append('b1', {
+          actor: DISPATCHER,
+          type: 'escalation.raised',
+          payload: {
+            id: 'empty',
+            phase: 'setup',
+            source: 'policy',
+            policyCause: 'execution-no-progress',
+            question,
+          },
+        })
+      },
+    })
+    await abWatch({ ...h.base, slugs: ['b1'], timeout: '2' })
+    const records = h.out.slice(0, -1).map((line) => JSON.parse(line))
+    expect(records).toHaveLength(1)
+    expect(records[0].event.payload.policyCause).toBe('execution-no-progress')
+    expect(records[0].state).toMatchObject({
+      status: 'blocked',
+      openEscalations: [{ id: 'empty', question }],
+    })
+  })
+
   test('only attention events are emitted, in order, with the reduction after each', async () => {
     const store = makeStore()
     await seedRunningBuild(store, 'b1')
