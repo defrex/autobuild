@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.12.0 — 2026-10-16
+
+This release makes the hosted service multi-project and secure. It adds a durable project registry, project connections that you approve in the browser, and project credentials that can be revoked, with tickets and agent credentials scoped to their authenticated project, build, or session. The full hosted service can now be deployed on its own to Vercel, and hosted clients are accepted as long as they fall within a release-line compatibility window. Operators also get smaller workflow improvements: repositories can configure verification to run after reconcile, PR summaries are combined into one bounded comment per build, watch defaults report conditions that need action, and repeated dispatch failures are capped by a human retry budget.
+
 - [#615](https://github.com/defrex/autobuild/pull/615) — Scope agent credentials to their build or session
 - [#614](https://github.com/defrex/autobuild/pull/614) — Allow repositories to configure verification after reconcile
 - [#613](https://github.com/defrex/autobuild/pull/613) — Scope hosted tickets to authenticated projects
@@ -14,6 +18,7 @@
 - [#607](https://github.com/defrex/autobuild/pull/607) — Coalesce PR summaries into one bounded comment per build
 - [#606](https://github.com/defrex/autobuild/pull/606) — Make watch defaults report actionable operator conditions
 - [#605](https://github.com/defrex/autobuild/pull/605) — Bound persistent dispatch failures with a human retry budget
+
 ## v0.11.0 — 2026-10-15
 
 This release makes dispatching more resilient and much lighter on Linear's API quota. Dispatch now skips redundant dependency reads, batches the rest, and paginates ready listings. When Linear rate-limits a request, ready tickets are no longer claimed by mistake. Ticket-source scans now run separately from dispatcher ticks, degradation and recovery are recorded durably and shown to operators, and both the operator surfaces and terminal dashboards show which dispatcher owns the work, including persistent standby ownership and reports of lost dispatchers.
