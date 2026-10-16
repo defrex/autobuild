@@ -23,6 +23,15 @@ which both historical strict decoders reject; the server projects those fields
 away for both lines. Operator success responses do not use that strict ticket
 decoder and need no projection.
 
+Compared with v0.11.0 (a267bda6391e90bf760577032a74eec0e3d3d95b), reviewed
+for the v0.12.0 line: wire changes are additive (an optional `context.repo` on
+ticket requests, a separate delegate-credential route, and a new
+`dispatch-failure-limit` escalation cause). v0.11 clients decode the current
+ticket shape, so only v0.9 and v0.10 receive the projection. From v0.12.0 the
+window is v0.10 through v0.12; the v0.9 fixtures stay as v0.10's frozen
+baseline, and the contract suite derives the lines it exercises from the
+installed version's window.
+
 Retain these contracts while these lines are in the published service window.
 When adding or retiring a line, deliberately review the tag differences and
 update fixtures, the protocol identity table, and boundary projections together.

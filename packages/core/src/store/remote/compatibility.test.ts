@@ -56,10 +56,11 @@ test('identities are strict stable versions with known independent protocols', (
     expect(stableVersion(value)).toBeUndefined()
     expect(classifyClient(value, supportedClientRange())).toBe('invalid')
   }
-  for (const value of ['0.9.0', '0.10.99', '0.11.999'])
+  const oldest = supportedClientRange().minVersion
+  for (const value of [oldest, AUTOBUILD_VERSION.replace(/\.\d+$/, '.999')])
     expect(clientIdentityError(value, '3')).toBeUndefined()
   for (const protocol of [null, '2', '4', '03'])
-    expect(clientIdentityError('0.9.0', protocol)).toContain('version mismatch')
+    expect(clientIdentityError(oldest, protocol)).toContain('version mismatch')
 })
 
 // Exercise negotiation, rather than just range arithmetic, against the actual

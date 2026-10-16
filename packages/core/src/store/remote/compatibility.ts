@@ -67,6 +67,7 @@ export const RELEASE_LINE_PROTOCOLS: Readonly<Record<string, string>> = {
   '0.9': '3',
   '0.10': '3',
   '0.11': '3',
+  '0.12': '3',
 }
 
 export function clientIdentityError(

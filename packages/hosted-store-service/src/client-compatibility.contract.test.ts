@@ -5,6 +5,8 @@ import { expect, test } from 'bun:test'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import {
   mintToken,
+  classifyClient,
+  supportedClientRange,
   AUTOBUILD_VERSION_HEADER,
   REMOTE_STORE_PROTOCOL_VERSION_HEADER,
 } from '@defrex/autobuild/remote-store'
@@ -45,9 +47,26 @@ function request(path: string, version: string, body?: unknown, bearer = admin, 
   })
 }
 
-for (const version of ['0.9.0', '0.10.0', '0.11.0', '0.11.999', '0.8.99', '0.12.0', 'invalid']) {
+// Negotiate against the installed release's window so these contracts hold on
+// both sides of a minor bump.
+const clientWindow = supportedClientRange()
+const isSupported = (version: string) => classifyClient(version, clientWindow) === 'supported'
+const minLine = Number(clientWindow.minVersion.split('.')[1])
+const endLine = Number(clientWindow.maxVersionExclusive.split('.')[1])
+const advertised = Array.from({ length: endLine - minLine }, (_, i) => minLine + i).flatMap(
+  (minor) => [`0.${minor}.0`, `0.${minor}.999`],
+)
+// Lines whose clients decode with the frozen v0.9 baseline (see the fixtures README).
+const frozenBaseline = ['0.9.0', '0.10.0'].filter(isSupported)
+
+for (const version of [
+  ...advertised,
+  `0.${minLine - 1}.99`,
+  clientWindow.maxVersionExclusive,
+  'invalid',
+]) {
   test(`all gates negotiate ${version} before backend effects`, async () => {
-    const supported = ['0.9.0', '0.10.0', '0.11.0', '0.11.999'].includes(version)
+    const supported = isSupported(version)
     const store = new MemoryBuildStore()
     await store.ensureRepo('https://github.com/acme/compat')
     const config = parseConfig(
@@ -174,7 +193,7 @@ for (const version of ['0.9.0', '0.10.0', '0.11.0', '0.11.999', '0.8.99', '0.12.
   })
 }
 
-for (const version of ['0.9.0', '0.10.0']) {
+for (const version of frozenBaseline) {
   test(`frozen ${version} ticket requests and strict decoders survive current fields`, async () => {
     const source = new FakeTicketSource()
     const server = createTicketServer({ secret, sourceFor: () => source })
@@ -335,7 +354,7 @@ for (const version of ['0.9.0', '0.10.0']) {
   })
 }
 
-for (const version of ['0.9.0', '0.10.0']) {
+for (const version of frozenBaseline) {
   test(`historical ${version} wire shapes accept opaque project credentials`, async () => {
     const repo = 'https://github.com/acme/compatibility'
     const projects = testProjects([repo])
