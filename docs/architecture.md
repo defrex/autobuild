@@ -938,3 +938,9 @@ the shared `connection.ts` wire types, and Postgres `connections.ts`. Approval
 commits registry membership, a credential digest, and the outcome atomically.
 The web connection routes authenticate the existing Better Auth session and
 reuse the sign-in/consent layout; CLI polling uses a separate private capability.
+
+Hosted ticket detail reads expose complete, oldest-first structured comments in
+`ticket.comments`, preserving exact bodies. Scans do not fetch comments. Hosted
+HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict
+decoders retain compatible responses. File comments remain embedded in the body;
+Linear comment reads are unchanged.

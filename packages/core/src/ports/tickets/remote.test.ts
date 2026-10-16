@@ -166,6 +166,7 @@ describe('HostedTicketSource (client half)', () => {
       expect(call.method).toBe('POST')
       expect(call.headers).toEqual({
         'content-type': 'application/json',
+        'x-autobuild-ticket-comments': '1',
         authorization: 'Bearer t0k',
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
@@ -321,3 +322,20 @@ test.each([true, false, undefined])(
     expect(Object.hasOwn(result, 'blockersResolved')).toBe(hint !== undefined)
   },
 )
+
+test('hosted detail preserves exact comment bodies, ordering and optional authors', async () => {
+  const comments = [
+    { body: '  ☃\r\n\r\nend\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' },
+    { body: 'Attached asset: evidence/test.png\n', createdAt: '2026-01-02T00:00:00.000Z' },
+  ]
+  const { source } = makeSource([{ body: { ...TICKET, comments } }])
+  expect((await source.get('ENG-42'))?.comments).toEqual(comments)
+  for (const comment of [
+    { body: 1, createdAt: 'now' },
+    { body: 'x' },
+    { body: 'x', createdAt: 'now', author: 1 },
+    { body: 'x', createdAt: 'now', extra: true },
+  ]) {
+    expect(ticketWireSchema.safeParse({ ...TICKET, comments: [comment] }).success).toBe(false)
+  }
+})
