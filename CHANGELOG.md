@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#623](https://github.com/defrex/autobuild/pull/623) — Fix self-upgrade for Bun isolated installs
 - [#622](https://github.com/defrex/autobuild/pull/622) — Use build-pinned pipelines for dispatcher decisions
 - [#619](https://github.com/defrex/autobuild/pull/619) — Assign readable project-scoped IDs to hosted tickets
 - [#621](https://github.com/defrex/autobuild/pull/621) — Store hosted ticket attachments on the ticket service
