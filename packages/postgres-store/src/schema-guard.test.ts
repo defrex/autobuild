@@ -38,6 +38,8 @@ import {
   SCHEMA_VERSION,
   TICKET_SCHEMA_CHECKSUM,
   TICKET_SCHEMA_VERSION,
+  TICKET_SCHEMA_V2_DDL,
+  TICKET_SCHEMA_V2_CHECKSUM,
   TICKET_SCHEMA_V1_DDL,
   TICKET_SCHEMA_V1_CHECKSUM,
 } from './schema'
@@ -72,7 +74,10 @@ export const FROZEN: Record<'build' | 'ticket' | 'auth', Map<number, FrozenSchem
     [9, { ddl: SCHEMA_V9_DDL, checksum: SCHEMA_V9_CHECKSUM }],
     [10, { ddl: SCHEMA_V10_DDL, checksum: SCHEMA_V10_CHECKSUM }],
   ]),
-  ticket: new Map([[1, { ddl: TICKET_SCHEMA_V1_DDL, checksum: TICKET_SCHEMA_V1_CHECKSUM }]]),
+  ticket: new Map([
+    [1, { ddl: TICKET_SCHEMA_V1_DDL, checksum: TICKET_SCHEMA_V1_CHECKSUM }],
+    [2, { ddl: TICKET_SCHEMA_V2_DDL, checksum: TICKET_SCHEMA_V2_CHECKSUM }],
+  ]),
   auth: new Map([
     [1, { ddl: AUTH_SCHEMA_V1_DDL, checksum: AUTH_SCHEMA_V1_CHECKSUM }],
     [2, { ddl: AUTH_SCHEMA_V2_DDL, checksum: AUTH_SCHEMA_V2_CHECKSUM }],
@@ -109,8 +114,8 @@ const PINNED: Record<'build' | 'ticket' | 'auth', { version: number; checksum: s
     checksum: '8587c134f2dac6aa34c2a263d0911c84bff31b547652b1777670cb540bd0afca',
   },
   ticket: {
-    version: 2,
-    checksum: 'fe717f794214047509a2d4f3a4d452e40211be548130247ca41ef07a1c387646',
+    version: 3,
+    checksum: '20658449f35cf4abf197a92c33711441940d25a2ea16cf28783a8ad7a844f019',
   },
   auth: {
     version: 3,

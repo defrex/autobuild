@@ -203,9 +203,9 @@ export interface TicketSource {
    */
   listStates?(): Promise<TicketStateInfo[]>
   /**
-   * Optional state creation (`ab ticket state create`). Idempotent: an existing
-   * state is reported with `created: false`, and a supplied `about` replaces its
-   * purpose. Rejects a malformed or case-colliding name without creating anything.
+   * Optional state creation (`ab ticket state create`). Duplicate policy is
+   * adapter-specific: file creation is idempotent and can replace purpose;
+   * hosted creation refuses existing names in any case. Rejects malformed names.
    * Named `addState` because adapters already hold a `createState` option field.
    */
   addState?(

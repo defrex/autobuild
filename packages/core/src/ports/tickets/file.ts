@@ -20,6 +20,13 @@
  * human edits are explicitly last-write-wins. State renames never cross a
  * filesystem: `<dir>/ready` → `<dir>/doing` is one mount by construction.
  */
+import {
+  STATE_NAME_RULE,
+  validateStateName,
+  validateStatePurpose,
+  orderStates,
+  resolveState,
+} from './states'
 import { readdirSync, statSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -51,45 +58,12 @@ const LIFECYCLE_DIRS = ['triage', 'ready', 'doing', 'done'] as const
  * and non-`.md` files are never tickets, so it can never be mistaken for one. */
 const ABOUT_FILE = '.about'
 
-const STATE_NAME_RULE =
-  'a state name is one to forty characters of lowercase letters, digits, and hyphens, starting with a letter'
-const STATE_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/
+export { validateStateName } from './states'
 
-/** Throws, stating the rule, unless `name` may be used to create a state. */
-export function validateStateName(name: string): void {
-  if (!STATE_NAME_RE.test(name)) {
-    throw new Error(`file ticket source: invalid state name "${name}" — ${STATE_NAME_RULE}`)
-  }
-}
-
-/** The state names a root listing yields: the lifecycle four, then every other
- * non-dot directory alphabetically. Dot entries and files are never states. */
 function statesIn(directories: string[]): string[] {
-  const lifecycle: string[] = [...LIFECYCLE_DIRS]
-  const extra = directories
-    .filter((name) => !name.startsWith('.') && !lifecycle.includes(name))
-    .sort()
-  return [...lifecycle, ...extra]
-}
-
-/**
- * Resolve a state name to its directory. Case-insensitive in (a config's
- * `readyState = "ready"` means the `ready/` directory), the directory's real
- * name out — and a name matching no directory is a loud error, because a
- * typo'd state must not silently create a directory no `ls` would show.
- */
-function resolveState(name: string, existing: string[]): string {
-  if (existing.includes(name)) return name
-  const matches = existing.filter((s) => s.toLowerCase() === name.toLowerCase())
-  if (matches.length === 1) return matches[0] as string
-  if (matches.length > 1) {
-    throw new Error(
-      `file ticket source: ambiguous state "${name}" — it matches the directories ${matches.join(', ')}`,
-    )
-  }
-  throw new Error(
-    `file ticket source: unknown state "${name}" — this tracker's states are ` +
-      `the directories: ${existing.join(', ')}`,
+  return orderStates(
+    [...new Set([...LIFECYCLE_DIRS, ...directories.filter((name) => !name.startsWith('.'))])],
+    LIFECYCLE_DIRS,
   )
 }
 
@@ -448,10 +422,7 @@ export class FileTicketSource implements TicketSource {
     opts: { about?: string } = {},
   ): Promise<{ state: TicketStateInfo; created: boolean }> {
     validateStateName(name)
-    const about = opts.about === undefined ? undefined : opts.about.trim()
-    if (about !== undefined && (about === '' || /[\r\n]/.test(about))) {
-      throw new Error('file ticket source: a state purpose must be one nonblank line')
-    }
+    const about = validateStatePurpose(opts.about)
     const existing = await this.states()
     const clash = existing.find((s) => s !== name && s.toLowerCase() === name.toLowerCase())
     if (clash !== undefined) {

@@ -190,3 +190,143 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('durable custom states preserve purposes, role ordering, case variants and project isolation', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const repo = 'https://github.com/acme/states'
+    const lifecycle = { triage: 'Backlog', ready: 'Todo', doing: 'In Progress', done: 'Done' }
+    const context = { repo, lifecycle, createState: 'Draft', proposalState: 'Proposals' }
+    const source = db.source(context)
+    try {
+      expect((await source.listStates()).map((s) => s.name)).toEqual([
+        'Backlog',
+        'Todo',
+        'In Progress',
+        'Done',
+        'Draft',
+        'Proposals',
+      ])
+      const concurrent = await Promise.allSettled([
+        source.addState('icebox', { about: 'Deferred' }),
+        db.source(context).addState('icebox', { about: 'Deferred' }),
+      ])
+      expect(concurrent.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      expect(concurrent.filter((r) => r.status === 'rejected')).toHaveLength(1)
+      await source.addState('aaa')
+      expect((await source.listStates()).map((s) => s.name)).toEqual([
+        'Backlog',
+        'Todo',
+        'In Progress',
+        'Done',
+        'Draft',
+        'Proposals',
+        'aaa',
+        'icebox',
+      ])
+      await source.addState('ready')
+      expect((await source.listStates()).at(-1)?.name).toBe('ready')
+      const peer = db.source(context)
+      const ticket = await peer.create({ title: 'Deferred', body: 'Body' }, { state: 'ICEBOX' })
+      expect(ticket.state).toBe('icebox')
+      expect((await source.listStates()).find((s) => s.name === 'icebox')).toEqual({
+        name: 'icebox',
+        tickets: 1,
+        about: 'Deferred',
+      })
+      await expect(source.addState('icebox', { about: 'Changed' })).rejects.toThrow(
+        'already exists',
+      )
+      // Configured legacy names need not obey custom creation grammar.
+      const legacy = db.source({ repo, lifecycle: { ...lifecycle, ready: 'ICEBOX' } })
+      await legacy.listStates()
+      await expect(source.addState('icebox')).rejects.toThrow('already exists')
+      await expect(source.listReady({ state: 'Icebox' })).rejects.toThrow('ambiguous')
+      expect((await source.listReady({ state: 'icebox' })).tickets).toHaveLength(1)
+      for (const operation of [
+        () => source.create({ title: 'Bad', body: 'Body' }, { state: 'unknown' }),
+        () => source.transition(ticket.ref.id, 'unknown'),
+        () => source.listReady({ state: 'unknown' }),
+      ])
+        await expect(operation()).rejects.toThrow('Backlog')
+      expect((await source.get(ticket.ref.id))?.state).toBe('icebox')
+      const changed = db.source({ repo, lifecycle: { ...lifecycle, triage: 'Inbox' } })
+      const names = (await changed.listStates()).map((s) => s.name)
+      expect(names.slice(0, 4)).toEqual(['Inbox', 'Todo', 'In Progress', 'Done'])
+      expect(names).toContain('Backlog')
+      await changed.transition(ticket.ref.id, 'Backlog')
+      expect((await changed.listReady({ state: 'Backlog' })).tickets).toHaveLength(1)
+      const shared = db.source({
+        repo: 'https://github.com/acme/shared',
+        lifecycle: { triage: 'One', ready: 'One', doing: 'Two', done: 'Three' },
+      })
+      expect((await shared.listStates()).map((s) => s.name)).toEqual(['One', 'Two', 'Three'])
+      await expect(shared.listReady({ state: 'icebox' })).rejects.toThrow('unknown state')
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+
+if (testUrl)
+  test('policy publication retains empty and populated former roles before any source access', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const repo = 'https://github.com/acme/policy-states'
+    const projects = new PostgresProjectRegistry(db.sql)
+    const policies = new PostgresTicketPolicyStore(db.sql)
+    const old = {
+      version: 1 as const,
+      tickets: {
+        source: 'hosted' as const,
+        teamKey: 'SAME',
+        triageState: 'Old empty',
+        readyState: 'Old populated',
+        claimedState: 'Doing',
+        doneState: 'Done',
+        createState: 'Old empty',
+        proposalState: 'Old empty',
+      },
+    }
+    try {
+      await projects.add(repo, 'owner')
+      await policies.put(repo, old, 'owner')
+      // Simulate an existing ticket without triggering source-side state seeding.
+      await db.sql`INSERT INTO ab_tickets (repo,id,title,body,state,labels,created_at,updated_at) VALUES (${repo},'existing','Ticket','Body','Old populated','{}',now(),now())`
+      const next = {
+        ...old,
+        tickets: {
+          ...old.tickets,
+          triageState: 'Inbox',
+          readyState: 'Todo',
+          createState: 'Draft',
+          proposalState: 'Proposals',
+        },
+      }
+      await policies.put(repo, next, 'owner')
+      const source = db.source({
+        repo,
+        lifecycle: { triage: 'Inbox', ready: 'Todo', doing: 'Doing', done: 'Done' },
+        createState: 'Draft',
+        proposalState: 'Proposals',
+      })
+      expect((await source.listStates()).map((s) => s.name)).toEqual([
+        'Inbox',
+        'Todo',
+        'Doing',
+        'Done',
+        'Draft',
+        'Old empty',
+        'Old populated',
+        'Proposals',
+      ])
+      expect((await source.listStates()).find((s) => s.name === 'Old empty')?.tickets).toBe(0)
+      expect((await source.listReady({ state: 'Old populated' })).tickets).toHaveLength(1)
+      await source.transition('existing', 'Old empty')
+      expect((await source.get('existing'))?.state).toBe('Old empty')
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
