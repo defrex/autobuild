@@ -24,6 +24,8 @@ import {
   TicketRevisionConflict,
   TicketRevisionUnsupported,
   mutateTicketIfRevision,
+  TICKET_COMMENTS_HEADER,
+  TICKET_COMMENTS_CAPABILITY,
   type HostedTicketContext,
   type HostedTicketOperation,
 } from '@defrex/autobuild/hosted-tickets'
@@ -145,13 +147,18 @@ export function createTicketServer(options: TicketServerOptions): {
     const client = stableVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
     const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
       if (ticket === null) return ticket
-      const { revision: _revision, ...withoutRevision } = ticket
-      // Explicit opt-in also distinguishes new source clients from released
-      // 0.12 clients carrying the identical Autobuild version header.
-      const projected =
-        req.headers.get(TICKET_REVISIONS_HEADER) === TICKET_REVISIONS_CAPABILITY
-          ? ticket
-          : withoutRevision
+      const { revision: _revision, comments: _comments, ...base } = ticket
+      // Capabilities are independent: released strict decoders receive neither field.
+      const projected = {
+        ...base,
+        ...(req.headers.get(TICKET_REVISIONS_HEADER) === TICKET_REVISIONS_CAPABILITY
+          ? { revision: ticket.revision }
+          : {}),
+        ...(req.headers.get(TICKET_COMMENTS_HEADER) === TICKET_COMMENTS_CAPABILITY &&
+        ticket.comments !== undefined
+          ? { comments: ticket.comments }
+          : {}),
+      }
       if (client.major !== 0 || client.minor > 10) return projected
       const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = projected
       return legacy

@@ -832,6 +832,65 @@ describe('abTicketList', () => {
 })
 
 describe('abTicketShow', () => {
+  test('real file comments remain embedded in the body without structured history', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const source = new FileTicketSource({ dir: join(tmp, 'tickets') })
+    const ticket = await source.create({ title: 'File', body: 'original\n' })
+    await source.comment(ticket.ref.id, 'embedded comment\n')
+    const stored = await source.get(ticket.ref.id)
+    expect(stored?.body).toContain('embedded comment')
+    expect(stored?.comments).toBeUndefined()
+    for (const json of [true, false]) {
+      const out: string[] = []
+      await abTicketShow({
+        targetRepo: tmp,
+        id: ticket.ref.id,
+        env: {},
+        json,
+        stdout: (line) => out.push(line),
+      })
+      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...stored, assets: [] })
+      else {
+        expect(out.at(-1)).toBe(stored?.body)
+        expect(out.some((line) => line.startsWith('Comment '))).toBe(false)
+      }
+    }
+  })
+
+  test('structured comments retain complete bodies in human and JSON output', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const comments = [
+      { body: '  ☃\r\n\r\nend\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' },
+      { body: 'notice\n', createdAt: '2026-01-02T00:00:00.000Z' },
+    ]
+    const ticket = seededTicket({ comments })
+    for (const json of [false, true]) {
+      const out: string[] = []
+      await abTicketShow({
+        targetRepo: tmp,
+        id: ticket.ref.id,
+        env: {},
+        json,
+        stdout: (line) => out.push(line),
+        sourceFactory: () => {
+          const source = new FakeTicketSource([ticket])
+          source.get = async () => ticket
+          return source
+        },
+      })
+      if (json) expect(JSON.parse(out[0]!)).toEqual({ ...ticket, assets: [] })
+      else
+        expect(out.slice(-5)).toEqual([
+          ticket.body,
+          'Comment 2026-01-01T00:00:00.000Z — Ada',
+          comments[0]!.body,
+          'Comment 2026-01-02T00:00:00.000Z',
+          comments[1]!.body,
+        ])
+    }
+  })
+
   test('human output includes metadata and preserves the multiline body exactly', async () => {
     await writeRepo(FILE_TICKETS_TOML)
     const body = 'first line\n\nlast line\n'

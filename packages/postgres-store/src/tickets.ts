@@ -164,7 +164,18 @@ export class PostgresTicketSource implements TicketSource {
     return this.retry.run(this.sql, async (q) => {
       const rows: Row[] =
         await q`SELECT *, revision::text AS revision, ARRAY(SELECT blocker_id FROM ab_ticket_blockers b WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY blocker_id) AS blockers FROM ab_tickets WHERE repo = ${this.repo} AND id = ${id}`
-      return rows[0] ? this.record(q, rows[0]) : null
+      if (!rows[0]) return null
+      const ticket = await this.record(q, rows[0])
+      const comments: Row[] = await q`SELECT body, created_at FROM ab_ticket_comments
+        WHERE repo = ${this.repo} AND ticket_id = ${id}
+        ORDER BY created_at ASC, seq ASC`
+      return {
+        ...ticket,
+        comments: comments.map((row) => ({
+          body: String(row.body),
+          createdAt: new Date(row.created_at as string | Date).toISOString(),
+        })),
+      }
     })
   }
 

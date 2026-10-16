@@ -295,3 +295,69 @@ test('revision opt-in distinguishes new and released clients reporting the same 
   expect(response.status).toBe(200)
   expect(releasedTicketSchema.parse(await response.json()).title).toBe('New client')
 })
+
+test('comments require explicit capability independently of client version on every ticket route', async () => {
+  const comments = [
+    { body: '  first\r\n\r\n☃\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' },
+    { body: 'Attached asset: evidence/test.png\n', createdAt: '2026-01-02T00:00:00.000Z' },
+  ]
+  const ticket = {
+    revision: 'fixture-revision',
+    ref: { source: 'fake', id: 'AUT-1' },
+    title: 'Comments',
+    body: 'spec',
+    resolved: false,
+    labels: [],
+    comments,
+  }
+  const backend = new FakeTicketSource()
+  backend.get = async () => ticket
+  backend.create = async () => ticket
+  backend.listReady = async () => ({ tickets: [ticket], diagnostics: [] })
+  const { server, source } = harness(backend)
+  expect((await source.get('AUT-1'))?.comments).toEqual(comments)
+  const { ticketWireSchema: published } = await import('./compatibility-fixtures/tickets-v0.12')
+  const { ticketWireSchema: old } = await import('./compatibility-fixtures/tickets-v0.9')
+  for (const version of ['0.10.0', '0.11.0', '0.12.0']) {
+    for (const [capability, revisionCapability] of [
+      [undefined, undefined],
+      ['', undefined],
+      ['2', undefined],
+      ['1', undefined],
+      [undefined, '1'],
+      ['1', '1'],
+      ['1', 'unknown'],
+    ]) {
+      for (const [operation, input] of [
+        ['get', { id: 'AUT-1' }],
+        ['create', { draft: { title: 'Comments', body: 'spec' } }],
+        ['list-ready', {}],
+      ] as const) {
+        const headers: Record<string, string> = {
+          authorization: `Bearer ${operator}`,
+          [AUTOBUILD_VERSION_HEADER]: version,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+        }
+        if (capability !== undefined) headers['x-autobuild-ticket-comments'] = capability
+        if (revisionCapability !== undefined) headers[TICKET_REVISIONS_HEADER] = revisionCapability
+        const response = await server.fetch(
+          new Request(`https://tickets.example/tickets/${operation}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+          }),
+        )
+        expect(response.status).toBe(operation === 'create' ? 201 : 200)
+        const result = await response.json()
+        const value = operation === 'list-ready' ? result.tickets[0] : result
+        expect(value.comments).toEqual(capability === '1' ? comments : undefined)
+        expect(value.revision).toBe(revisionCapability === '1' ? 'fixture-revision' : undefined)
+        expect(value.resolved).toBe(version === '0.10.0' ? undefined : false)
+        if (capability !== '1' && revisionCapability !== '1') {
+          expect((version === '0.10.0' ? old : published).safeParse(value).success).toBe(true)
+        }
+      }
+    }
+  }
+})

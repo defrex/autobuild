@@ -15,6 +15,8 @@ import {
   claimWireSchema,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
+  TICKET_COMMENTS_HEADER,
+  TICKET_COMMENTS_CAPABILITY,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
@@ -72,6 +74,7 @@ export class HostedTicketSource implements TicketSource {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        [TICKET_COMMENTS_HEADER]: TICKET_COMMENTS_CAPABILITY,
         authorization: `Bearer ${this.token}`,
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,

@@ -578,6 +578,14 @@ describe('agent tool registry contract', () => {
 
   test('tickets.get matches the ticket detail route', async () => {
     const world = await seedWorld()
+    const originalGet = world.source.get.bind(world.source)
+    const comments = [
+      { body: '  ☃\r\n\r\nnotice\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' },
+    ]
+    world.source.get = async (id) => {
+      const ticket = await originalGet(id)
+      return ticket ? { ...ticket, comments } : null
+    }
     const route = await api(
       createOperatorServer({
         projects: testProjects([repo]),
@@ -589,6 +597,7 @@ describe('agent tool registry contract', () => {
     )('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/AUT-1`)
     const tool = await toolFor(world)('tickets.get', { repo, id: 'AUT-1' })
     expectEqual(tool, route.body)
+    expect((tool as { ticket: { comments: unknown } }).ticket.comments).toEqual(comments)
     expectJsonClean(tool)
   })
 

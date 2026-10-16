@@ -15,9 +15,19 @@ export const hostedTicketContextSchema = z.strictObject({
 })
 export type HostedTicketContext = z.infer<typeof hostedTicketContextSchema>
 
+export const TICKET_COMMENTS_HEADER = 'x-autobuild-ticket-comments'
+export const TICKET_COMMENTS_CAPABILITY = '1'
+
+export const ticketCommentWireSchema = z.strictObject({
+  body: z.string(),
+  createdAt: z.string(),
+  author: z.string().optional(),
+})
+
 export const ticketWireSchema = z.strictObject({
   revision: z.string().min(1),
   ref: ticketRefSchema,
+  comments: z.array(ticketCommentWireSchema).optional(),
   creationKey: z.string().optional(),
   title: z.string(),
   body: z.string(),

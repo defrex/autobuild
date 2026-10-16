@@ -49,9 +49,19 @@ export interface SessionStreamSink extends SessionStreamEmitter {
 // never consulted mid-build and never used as artifact storage. A file-based
 // adapter with nowhere to put blobs must be fully workable.
 
+/** A recorded comment, with its exact body and source timestamp. */
+export interface TicketComment {
+  body: string
+  createdAt: string
+  author?: string
+}
+
 export interface Ticket {
   /** Opaque source version of title, body, labels, state and blockers. */
   revision: string
+  /** Complete history oldest first when exposed by this read. Absent means
+   * unsupported; an empty array means no comments. Bodies are unchanged. */
+  comments?: TicketComment[]
   ref: TicketRef
   /** Stable source-native key used to correlate an externally created ticket
    * with Autobuild's durable creation reservation. It is separate from the

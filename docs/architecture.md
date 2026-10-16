@@ -965,3 +965,8 @@ change the body and revision; separate hosted comments do not. Hosted revisions
 are monotonic decimal bigint strings, and checks run under the same row lock
 and transaction as all requested changes. Hosted reads return a coherent
 snapshot of fields, blockers and revision.
+Hosted ticket detail reads expose complete, oldest-first structured comments in
+`ticket.comments`, preserving exact bodies. Scans do not fetch comments. Hosted
+HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict
+decoders retain compatible responses. File comments remain embedded in the body;
+Linear comment reads are unchanged.

@@ -710,9 +710,9 @@ export const TOOLS: readonly ToolEntry[] = [
   ),
   defineTool(
     'tickets.get',
-    'Show one ticket with its blockers and any related build.',
+    'Show one ticket with its hosted comments, blockers and any related build.',
     ticketDetailInput,
-    '{ticket, blockers, build}: the ticket, its dependency states, and the most relevant build for it (null when none).',
+    '{ticket, blockers, build}: the ticket (including hosted ticket.comments when available), its dependency states, and the most relevant build for it (null when none).',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketDetailInput>
       return getOperatorTicket({
