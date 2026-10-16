@@ -46,8 +46,20 @@ export function compareFrameSets(
   return { missing, extra, differing, compared: base.size - missing.length }
 }
 
-async function run(cwd: string, command: readonly string[]): Promise<void> {
-  const child = Bun.spawn([...command], { cwd, stdout: 'pipe', stderr: 'pipe' })
+export async function runCaptureCommand(cwd: string, command: readonly string[]): Promise<void> {
+  const child = Bun.spawn([...command], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    // The real-git capture fixtures expose the pipeline commit in detail.
+    // Both trees must create identical commits, including their timestamps;
+    // otherwise elapsed wall time alone changes three web frames.
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: '2026-07-15T12:00:00Z',
+      GIT_COMMITTER_DATE: '2026-07-15T12:00:00Z',
+    },
+  })
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
   await new Response(child.stdout).text()
   if (exitCode !== 0) {
@@ -81,7 +93,7 @@ async function hashFrames(root: string): Promise<Map<string, string>> {
 }
 
 async function captureAll(root: string): Promise<Map<string, string>> {
-  for (const capture of CAPTURES) await run(root, capture.command)
+  for (const capture of CAPTURES) await runCaptureCommand(root, capture.command)
   return hashFrames(root)
 }
 
