@@ -49,6 +49,7 @@ const seed = {
   ref: { source: 'fake', id: 'AUT-1', title: 'Ticket' },
   title: 'Ticket',
   body: 'body\r\nwithout-final-newline',
+  comments: [{ body: '  note\r\n☃\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' }],
   state: 'Backlog',
   resolved: false,
   labels: ['autobuild'],
@@ -256,4 +257,12 @@ test('the service database backend never looks up historical refs for an undispa
   const detail = await getOperatorTicket({ store, repo, backend: backend(source), id: 'AUT-1' })
   expect(detail.build).toBeNull()
   expect(reads).toEqual(['AUT-1'])
+})
+
+test('operator detail retains recorded comment bodies and authors', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([seed])
+  source.get = async () => seed
+  const detail = await getOperatorTicket({ store, repo, backend: backend(source), id: seed.ref.id })
+  expect(detail.ticket.comments).toEqual(seed.comments)
 })

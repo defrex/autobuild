@@ -26,8 +26,8 @@ decoder and need no projection.
 Compared with v0.11.0 (a267bda6391e90bf760577032a74eec0e3d3d95b), reviewed
 for the v0.12.0 line: wire changes are additive (an optional `context.repo` on
 ticket requests, a separate delegate-credential route, and a new
-`dispatch-failure-limit` escalation cause). v0.11 clients decode the current
-ticket shape, so only v0.9 and v0.10 receive the projection. From v0.12.0 the
+`dispatch-failure-limit` escalation cause). v0.11 clients decode the
+resolution fields, so only v0.9 and v0.10 receive that projection. From v0.12.0 the
 window is v0.10 through v0.12; the v0.9 fixtures stay as v0.10's frozen
 baseline, and the contract suite derives the lines it exercises from the
 installed version's window.
@@ -36,3 +36,11 @@ Retain these contracts while these lines are in the published service window.
 When adding or retiring a line, deliberately review the tag differences and
 update fixtures, the protocol identity table, and boundary projections together.
 Tests do not fetch tags or packages at runtime.
+
+The published v0.12.0 (0b73beec4b0b81a5dd55d7b0933e0281e431bbf6) ticket
+decoder and its runtime ticket-reference dependency are frozen separately in
+`tickets-v0.12.ts` and `identities-v0.12.ts`. The v0.11.0
+ticket and listing decoders are byte-identical to this v0.12.0 baseline.
+The ticket-server seam tests exercise both identities with this decoder.
+Comments require explicit capability header `x-autobuild-ticket-comments: 1`,
+independently of version; clients without it retain their historical shape.

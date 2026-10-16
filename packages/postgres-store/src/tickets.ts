@@ -166,7 +166,19 @@ export class PostgresTicketSource implements TicketSource {
   async get(id: string): Promise<Ticket | null> {
     return this.retry.run(this.sql, async (q) => {
       const row = await this.lookup(q, id)
-      return row ? this.record(q, row) : null
+      if (!row) return null
+      const ticket = await this.record(q, row)
+      const storageId = String(row.id)
+      const comments: Row[] = await q`SELECT body, created_at FROM ab_ticket_comments
+        WHERE repo = ${this.repo} AND ticket_id = ${storageId}
+        ORDER BY created_at ASC, seq ASC`
+      return {
+        ...ticket,
+        comments: comments.map((row) => ({
+          body: String(row.body),
+          createdAt: new Date(row.created_at as string | Date).toISOString(),
+        })),
+      }
     })
   }
 

@@ -778,3 +778,32 @@ test('repositories.list and tool gates query current registry for each allowed o
     expect(delegated).toBe(1)
   }
 })
+
+test('tickets.get comments survive MCP tool serialization', async () => {
+  const comments = [
+    { body: '  ☃\r\n\r\nnotice\n', createdAt: '2026-01-01T00:00:00.000Z', author: 'Ada' },
+  ]
+  const detail = { ticket: { comments }, blockers: [], build: null }
+  const endpoint_ = endpoint(fakeAuth(), { delegate: async () => Response.json(detail) })
+  const response = await endpoint_.fetch(
+    new Request('https://operator.example/mcp', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: 'Bearer any',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'tickets.get',
+          arguments: { repo: 'https://github.com/owner/repo', id: 'AUT-1' },
+        },
+      }),
+    }),
+  )
+  const decoded = (await jsonOf(response)) as { result: { content: { text: string }[] } }
+  expect(JSON.parse(decoded.result.content[0]!.text)).toEqual(detail)
+})

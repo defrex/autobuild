@@ -75,6 +75,8 @@ if (testUrl)
       expect(a.ref.id).not.toBe(b.ref.id)
       expect(a.state).toBe('Draft')
       expect(b.state).toBe('Backlog')
+      expect((await one.get(a.ref.id))?.comments).toEqual([])
+      expect(await one.get('missing')).toBeNull()
       expect(await two.get(a.ref.id)).toBeNull()
       expect(await two.claim(a.ref.id)).toBe(false)
       for (const operation of [
@@ -93,6 +95,23 @@ if (testUrl)
       await database.sql`UPDATE ab_tickets SET id = ${a.ref.id} WHERE repo = 'https://github.com/acme/two' AND readable_id = ${b.ref.id}`
       await one.comment(a.ref.id, 'one comment')
       await two.comment(a.ref.id, 'two comment')
+      expect((await one.get(a.ref.id))?.comments?.map((c) => c.body)).toEqual(['one comment'])
+      expect((await two.get(a.ref.id))?.comments?.map((c) => c.body)).toEqual(['two comment'])
+      const exact = '  ☃\r\n\r\ntrailing  \n'
+      await one.comment(a.ref.id, exact)
+      await one.comment(a.ref.id, 'Attached asset: evidence/test.png\n')
+      await database.sql`UPDATE ab_ticket_comments SET created_at = '2026-01-02T00:00:00Z'
+        WHERE repo = 'https://github.com/acme/one' AND ticket_id = (SELECT id FROM ab_tickets WHERE repo = 'https://github.com/acme/one' AND readable_id = ${a.ref.id})`
+      await database.sql`UPDATE ab_ticket_comments SET created_at = '2026-01-01T00:00:00Z'
+        WHERE repo = 'https://github.com/acme/one' AND ticket_id = (SELECT id FROM ab_tickets WHERE repo = 'https://github.com/acme/one' AND readable_id = ${a.ref.id}) AND seq = 3`
+      expect((await one.get(a.ref.id))?.comments).toEqual([
+        { body: 'Attached asset: evidence/test.png\n', createdAt: '2026-01-01T00:00:00.000Z' },
+        { body: 'one comment', createdAt: '2026-01-02T00:00:00.000Z' },
+        { body: exact, createdAt: '2026-01-02T00:00:00.000Z' },
+      ])
+      expect(
+        (await one.listReady({ state: 'Draft' })).tickets.every((t) => t.comments === undefined),
+      ).toBe(true)
       await one.transition(a.ref.id, 'Complete')
       await two.transition(a.ref.id, 'Shipped')
       expect((await one.get(a.ref.id))?.resolved).toBe(true)
@@ -100,7 +119,7 @@ if (testUrl)
       expect((await one.get(a.ref.id))?.title).toBe('One')
       expect((await two.get(a.ref.id))?.title).toBe('Two')
       const comments =
-        await database.sql`SELECT repo, seq, body FROM ab_ticket_comments ORDER BY repo`
+        await database.sql`SELECT repo, seq, body FROM ab_ticket_comments WHERE seq = 1 ORDER BY repo`
       expect(comments.map((row: { body: string }) => row.body)).toEqual([
         'one comment',
         'two comment',
@@ -187,6 +206,11 @@ if (testUrl) {
       const legacy = String(row.id)
       expect((await source.get(legacy))?.ref.id).toBe('ENG-1')
       await source.comment('eng-1', 'comment')
+      for (const id of [legacy, 'ENG-1', 'eng-1']) {
+        expect((await source.get(id))?.comments?.map((comment) => comment.body)).toEqual([
+          'comment',
+        ])
+      }
       await source.update(legacy, { body: 'changed' })
       await source.transition('eNg-1', 'Ready')
       expect(await source.claim('eng-1')).toBe(true)

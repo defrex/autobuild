@@ -689,6 +689,13 @@ if (testUrl)
         two = clients[1]!
       const a = await one.create({ title: 'One', body: 'Body' }, { idempotencyKey: 'same' })
       const b = await two.create({ title: 'Two', body: 'Body' }, { idempotencyKey: 'same' })
+      const commentBody = '  note\r\n\r\n☃\nAttached asset: evidence/test.png\n'
+      await one.comment(a.ref.id, commentBody)
+      const history = (await one.get(a.ref.id))?.comments
+      expect(history).toHaveLength(1)
+      expect(history![0]!.body).toBe(commentBody)
+      expect(history![0]!.author).toBeUndefined()
+      expect(new Date(history![0]!.createdAt).toISOString()).toBe(history![0]!.createdAt)
       expect(a.state).toBe('Draft0')
       expect(b.state).toBe('Draft1')
       expect(a.ref.id).toBe('SAME-1')
