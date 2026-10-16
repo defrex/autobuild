@@ -216,3 +216,52 @@ project removal are also checked before parsing or source construction.
 
 Ticket admission and assets use the authenticated project, including for
 delegated harvest grants.
+
+## Revision-checked ticket writes
+
+Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
+(on MCP/operator requests) or `--expected-revision <opaque>` on `ab ticket update`,
+`move`, `block` and `unblock`. A stale write fails without changing anything and
+reports the current revision. Omission preserves unguarded behavior. Blocker
+checks cover the entire batch. Dispatcher moves remain unguarded and change the
+revision. Sources without guarded writes, including Linear, refuse supplied
+revisions rather than ignoring them.
+
+`ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
+frontmatter and a Markdown body. Only title, body and labels are editable;
+id, blockers, creation key and reference comments are read-only. It saves only
+changed fields with the opening revision. Unchanged or formatting-only edits
+write nothing. On conflict, invalid input or editor failure, the error names an
+absolute file path containing the edited text. Read the current ticket and
+reapply the intended changes before retrying; conflicts are never merged.
+
+File and Linear revisions fingerprint title, body, canonical label/blocker sets
+and state; reverting identical content restores its fingerprint. File checks
+re-read immediately before writing, with the existing no-lock race window.
+Direct file edits and state-directory moves change revisions. File comments
+change the body and revision; separate hosted comments do not. Hosted revisions
+are monotonic decimal bigint strings, and checks run under the same row lock
+and transaction as all requested changes. Hosted reads return a coherent
+snapshot of fields, blockers and revision.
+
+### Guarded mutation transport
+
+`POST /tickets/mutate-if-revision` accepts the usual authenticated context and
+`input: { id, expectedRevision, mutation }`. Mutation is one of
+`{ kind: "update", patch: { title?, body?, labels? } }`,
+`{ kind: "transition", state }`, or
+`{ kind: "blockers", operation: "block" | "unblock", ids: string[] }`.
+Unknown keys and empty patches are refused. Success returns `{ ok: true }`.
+A revision conflict returns HTTP 409 with `kind: "conflict"`, `error`, `id`,
+`expectedRevision` and `currentRevision`. Delegated credentials retain existing
+permissions: none of the guarded mutation variants grants additional access.
+Ticket responses include `revision` only when the request advertises
+`x-autobuild-ticket-revisions: 1`. The current hosted client sends this header
+on every request and requires revision-bearing responses. Released clients
+through 0.12.x omit the header and retain their strict decoder's original
+response shape on get, list-ready and create. This explicit capability also
+supports new source checkouts that still report version 0.12.0; version alone
+cannot distinguish them from released clients. Unknown capability values do
+not opt in. Clients before 0.11 also omit the existing resolution projections.
+The capability does not change authentication, authorization or the remote
+BuildStore protocol version.

@@ -193,9 +193,9 @@ export async function mutateOperatorTicket(opts: {
         state?: string
         blockedBy?: string[]
       }
-    | { kind: 'update'; id: string; patch: TicketUpdate }
-    | { kind: 'move'; id: string; state: string }
-    | { kind: 'block' | 'unblock'; id: string; blockerIds: string[] }
+    | { kind: 'update'; id: string; patch: TicketUpdate; expectedRevision?: string }
+    | { kind: 'move'; id: string; state: string; expectedRevision?: string }
+    | { kind: 'block' | 'unblock'; id: string; blockerIds: string[]; expectedRevision?: string }
 }): Promise<OperatorTicketDetail> {
   const { source, context } = await openOperatorTickets(opts)
   const operation = opts.operation
@@ -204,10 +204,22 @@ export async function mutateOperatorTicket(opts: {
     operation.kind === 'create'
       ? await createTicket(source, operation)
       : operation.kind === 'update'
-        ? (await updateTicket(source, operation.id, operation.patch))!
+        ? (await updateTicket(
+            source,
+            operation.id,
+            operation.patch,
+            true,
+            operation.expectedRevision,
+          ))!
         : operation.kind === 'move'
-          ? await moveTicket(source, operation.id, operation.state)
-          : await changeBlockers(source, operation.id, operation.blockerIds, operation.kind)
+          ? await moveTicket(source, operation.id, operation.state, operation.expectedRevision)
+          : await changeBlockers(
+              source,
+              operation.id,
+              operation.blockerIds,
+              operation.kind,
+              operation.expectedRevision,
+            )
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
   return {
     ticket,

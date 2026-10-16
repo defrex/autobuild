@@ -109,6 +109,7 @@ test('a local harvest files proposals and origin blockers through read/create ti
   const backend = new FakeTicketSource(
     [
       {
+        revision: 'fixture-revision',
         ref: { source: 'hosted', id: 'origin' },
         title: 'Origin',
         body: 'Spec',

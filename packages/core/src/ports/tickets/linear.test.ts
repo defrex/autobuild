@@ -234,6 +234,7 @@ describe('LinearTicketSource', () => {
     expect(tickets).toEqual({
       tickets: [
         {
+          revision: expect.any(String),
           ref: {
             source: 'linear',
             id: 'ENG-42',

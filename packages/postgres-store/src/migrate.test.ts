@@ -880,10 +880,11 @@ if (testUrl) {
       await assertTicketSchema(world.sql)
       expect(world.reads).toContain(selected.blobRef)
       const tickets =
-        await world.sql`SELECT repo,id,creation_key,title,body,state,labels,created_at,updated_at FROM ab_tickets ORDER BY repo,id`
+        await world.sql`SELECT repo,id,creation_key,title,body,state,labels,created_at,updated_at,revision::text AS revision FROM ab_tickets ORDER BY repo,id`
       expect(tickets).toEqual(
         before.tickets.map(({ team, ...ticket }: Row) => ({
           repo: team === 'ONE' ? one : two,
+          revision: '1',
           ...ticket,
         })),
       )
@@ -1211,7 +1212,11 @@ if (testUrl) {
       const after = await world.snapshot()
       for (const key of ['tickets', 'comments', 'blockers'] as const)
         expect(after[key]).toEqual(
-          before[key].map(({ team: _team, ...row }: Row) => ({ repo, ...row })),
+          before[key].map(({ team: _team, ...row }: Row) => ({
+            repo,
+            ...row,
+            ...(key === 'tickets' ? { revision: 1 } : {}),
+          })),
         )
       expect(world.requests.length).toBeGreaterThan(0)
       // Subsequent malformed retired environment is not reinterpreted.
@@ -1591,8 +1596,9 @@ if (testUrl)
   })
 
 import { PostgresTicketPolicyStore } from './ticket-policy'
-if (testUrl)
-  test('readable migration uses independent policy without blobs and prefers it to uploaded config', async () => {
+import { TICKET_SCHEMA_V3_DDL, TICKET_SCHEMA_V3_CHECKSUM } from './schema'
+for (const version of testUrl ? [2, 3] : [])
+  test(`v${version} readable migration uses independent policy without blobs and prefers it to uploaded config`, async () => {
     const world = await legacyTickets()
     const independent = 'https://github.com/acme/independent'
     const uploaded = 'https://github.com/acme/uploaded'
@@ -1600,8 +1606,8 @@ if (testUrl)
       await world.sql.unsafe(
         'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
       )
-      await world.sql.unsafe(TICKET_SCHEMA_V2_DDL)
-      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,2,${TICKET_SCHEMA_V2_CHECKSUM},${CONTRACT_T0})`
+      await world.sql.unsafe(version === 2 ? TICKET_SCHEMA_V2_DDL : TICKET_SCHEMA_V3_DDL)
+      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,${version},${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : TICKET_SCHEMA_V3_CHECKSUM},${CONTRACT_T0})`
       await world.sql`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${independent}, 'added', 'fixture', ${CONTRACT_T0})`
       await world.project(uploaded, 'OLD')
       const policies = new PostgresTicketPolicyStore(world.sql)
@@ -1623,15 +1629,20 @@ if (testUrl)
           },
           'fixture',
         )
-        await world.sql`INSERT INTO ab_tickets VALUES (${repo},'ticket-old',NULL,'Original','Body','triage',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
+        await world.sql`INSERT INTO ab_tickets (repo,id,creation_key,title,body,state,labels,created_at,updated_at) VALUES (${repo},'ticket-old',NULL,'Original','Body','triage',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
       }
+      if (version === 3) await world.sql`UPDATE ab_tickets SET revision = 9007199254740993`
       await migratePostgres(world.url)
       await migratePostgres(world.url)
-      const rows = await world.sql`SELECT repo, readable_id FROM ab_tickets ORDER BY repo`
+      const rows =
+        await world.sql`SELECT repo, readable_id, revision::text AS revision FROM ab_tickets ORDER BY repo`
       expect(rows.map((row: { readable_id: string }) => row.readable_id)).toEqual([
         'NEW-1',
         'NEW-1',
       ])
+      expect(rows.map((row: { revision: string }) => row.revision)).toEqual(
+        Array(2).fill(version === 3 ? '9007199254740993' : '1'),
+      )
       expect(world.reads).toEqual([])
     } finally {
       await world.cleanup()

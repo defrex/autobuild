@@ -59,6 +59,7 @@ test('abort cleanup removes a real worktree and exact local/remote refs while pr
     const clock = manualClock()
     const store = new MemoryBuildStore({ clock })
     const ticket = {
+      revision: 'fixture',
       ref: { source: 'fake', id: 'T-real-abort', title: 'Real abort cleanup' },
       title: 'Real abort cleanup',
       body: '## Acceptance criteria\n- clean up\n\n## Out of scope\n- other refs',

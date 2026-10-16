@@ -120,6 +120,7 @@ export const CONFORMING_BODY = [
 export function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
   const title = over.title ?? 'Add rate limiting'
   return {
+    revision: 'fixture',
     ref: { source: 'fake', id, title },
     title,
     body: over.body ?? CONFORMING_BODY,

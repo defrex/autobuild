@@ -1,3 +1,4 @@
+import { TicketRevisionConflict, TicketRevisionUnsupported } from '@defrex/autobuild/hosted-tickets'
 import {
   createMachineAuth,
   MachineAuthError,
@@ -382,14 +383,14 @@ export function createOperatorServer(opts: OperatorServerOptions): {
         )
       }
       if (id && req.method === 'PATCH' && rest.length === 2) {
-        const patch = await body(req, ticketUpdateRequestSchema)
+        const { expectedRevision, ...patch } = await body(req, ticketUpdateRequestSchema)
         return json(
           200,
           await mutateOperatorTicket({
             store: opts.store,
             repo,
             backend: opts.ticketBackend,
-            operation: { kind: 'update', id, patch },
+            operation: { kind: 'update', id, patch, expectedRevision },
           }),
         )
       }
@@ -401,7 +402,12 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             store: opts.store,
             repo,
             backend: opts.ticketBackend,
-            operation: { kind: 'move', id, state: request.state },
+            operation: {
+              kind: 'move',
+              id,
+              state: request.state,
+              expectedRevision: request.expectedRevision,
+            },
           }),
         )
       }
@@ -418,7 +424,12 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             store: opts.store,
             repo,
             backend: opts.ticketBackend,
-            operation: { kind: rest[2], id, blockerIds: request.blockerIds },
+            operation: {
+              kind: rest[2],
+              id,
+              blockerIds: request.blockerIds,
+              expectedRevision: request.expectedRevision,
+            },
           }),
         )
       }
@@ -706,6 +717,9 @@ export function createOperatorServer(opts: OperatorServerOptions): {
       } catch (error) {
         if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
         if (error instanceof HttpError) return failure(error.status, error.kind, error.message)
+        if (error instanceof TicketRevisionConflict) return failure(409, 'conflict', error.message)
+        if (error instanceof TicketRevisionUnsupported)
+          return failure(409, 'refusal', error.message)
         if (error instanceof TicketOperationError) {
           return failure(
             error.code === 'not-found' ? 404 : 409,

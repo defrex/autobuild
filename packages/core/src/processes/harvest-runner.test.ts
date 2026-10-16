@@ -752,6 +752,7 @@ describe('HarvestRunner', () => {
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const tickets = new FakeTicketSource()
     tickets.add({
+      revision: 'fixture',
       ref: { source: 'fake', id: 'fake-8' },
       title: 'Prerequisite',
       body: 'body',
@@ -805,6 +806,7 @@ describe('HarvestRunner', () => {
     roots.push(workspace)
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const origin = {
+      revision: 'fixture',
       ref: { source: 'fake', id: 'origin-1' },
       title: 'Originating work',
       body: 'body',
@@ -871,6 +873,7 @@ describe('HarvestRunner', () => {
     roots.push(workspace)
     const store = new MemoryBuildStore({ clock: steppingClock() })
     const origin = {
+      revision: 'fixture',
       ref: { source: 'fake', id: 'origin-1' },
       title: 'Originating work',
       body: 'body',
@@ -2948,6 +2951,7 @@ test('resuming an approved join canonicalizes a legacy ledger target without cha
   const store = new MemoryBuildStore({ clock: steppingClock() })
   const tickets = new FakeTicketSource([
     {
+      revision: '1',
       ref: { source: 'fake', id: 'ENG-1' },
       title: 'Existing',
       body: 'Body',

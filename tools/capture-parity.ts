@@ -59,7 +59,7 @@ export function captureEnvironment(
   }
 }
 
-async function run(cwd: string, command: readonly string[]): Promise<void> {
+export async function runCaptureCommand(cwd: string, command: readonly string[]): Promise<void> {
   const child = Bun.spawn([...command], {
     cwd,
     env: captureEnvironment(),
@@ -99,7 +99,7 @@ async function hashFrames(root: string): Promise<Map<string, string>> {
 }
 
 async function captureAll(root: string): Promise<Map<string, string>> {
-  for (const capture of CAPTURES) await run(root, capture.command)
+  for (const capture of CAPTURES) await runCaptureCommand(root, capture.command)
   return hashFrames(root)
 }
 

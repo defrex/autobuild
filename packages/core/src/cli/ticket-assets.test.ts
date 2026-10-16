@@ -25,6 +25,7 @@ let source: FakeTicketSource
 let store: BuildStore
 
 const TICKET: Ticket = {
+  revision: 'fixture',
   ref: { source: 'fake', id: 'AUT-1' },
   title: 'A ticket',
   body: 'the body',

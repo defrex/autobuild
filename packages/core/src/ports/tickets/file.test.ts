@@ -704,6 +704,7 @@ describe('FileTicketSource', () => {
 
     expect(await readdir(join(dir, 'ready'))).toEqual([`${created.ref.id}.md`])
     expect(await tickets.get(created.ref.id)).toMatchObject({
+      revision: expect.any(String),
       ref: { title: 'Renamed' },
       title: 'Renamed',
       body: bodyBefore,
@@ -1020,4 +1021,28 @@ describe('state discovery and creation', () => {
       await rm(target, { recursive: true, force: true })
     }
   })
+})
+
+test('guarded file writes detect direct body edits and directory moves without losing either', async () => {
+  const tickets = source()
+  const created = await tickets.create({ title: 'Original', body: 'Body' }, { state: 'ready' })
+  const path = join(dir, 'ready', `${created.ref.id}.md`)
+  const raw = await readFile(path, 'utf8')
+  await writeFile(path, raw.replace('Body', 'Human body'))
+  await expect(
+    tickets.mutateIfRevision(created.ref.id, created.revision, {
+      kind: 'update',
+      patch: { title: 'Stale' },
+    }),
+  ).rejects.toThrow('current revision')
+  expect((await tickets.get(created.ref.id))?.body).toBe('Human body')
+  const edited = (await tickets.get(created.ref.id))!
+  await tickets.transition(created.ref.id, 'done')
+  await expect(
+    tickets.mutateIfRevision(created.ref.id, edited.revision, {
+      kind: 'transition',
+      state: 'ready',
+    }),
+  ).rejects.toThrow('current revision')
+  expect((await tickets.get(created.ref.id))?.state).toBe('done')
 })

@@ -70,6 +70,7 @@ describe('harvest blocker resolution', () => {
   test('deduplicates valid source-local ids in first-seen order', async () => {
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'fake-8' },
         title: 'Eight',
         body: 'body',
@@ -78,6 +79,7 @@ describe('harvest blocker resolution', () => {
         labels: [],
       },
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'fake-9' },
         title: 'Nine',
         body: 'body',
@@ -135,6 +137,7 @@ describe('harvest blocker resolution', () => {
   test('unions unresolved matching origins while retaining overlapping provenance', async () => {
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'fake-8' },
         title: 'Origin',
         body: 'body',
@@ -170,6 +173,7 @@ describe('harvest blocker resolution', () => {
   test('drops missing, resolved, foreign-source, and absent origins', async () => {
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'fake-done' },
         title: 'Done origin',
         body: 'body',
@@ -677,6 +681,7 @@ describe('harvest deterministic scan and ledger', () => {
   test('projects distinct origin lifecycle without querying foreign sources', async () => {
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'origin-open' },
         title: 'Open',
         body: 'body',
@@ -685,6 +690,7 @@ describe('harvest deterministic scan and ledger', () => {
         labels: [],
       },
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'origin-done' },
         title: 'Done',
         body: 'body',
@@ -1206,6 +1212,7 @@ describe('harvest deterministic scan and ledger', () => {
 test('harvest origin and declared blocker aliases project to one canonical identity', async () => {
   const tickets = new FakeTicketSource([
     {
+      revision: '1',
       ref: { source: 'fake', id: 'ENG-1' },
       title: 'Origin',
       body: 'body',

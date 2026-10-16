@@ -5,6 +5,7 @@ import { FakeTicketSource } from './fake'
 
 function ticket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
   return {
+    revision: 'fixture',
     ref: { source: 'fake', id },
     title: over.title ?? `Ticket ${id}`,
     body: over.body ?? `Body of ${id}`,
