@@ -82,6 +82,22 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
       env.AB_TOKEN = project.token
     }
 
+    const originalGet = backend.get.bind(backend)
+    const commentBody = '  ☃\r\n\r\nAttached asset: evidence/test.png\n'
+    backend.get = async (id) => {
+      const ticket = await originalGet(id)
+      return ticket
+        ? {
+            ...ticket,
+            comments: backend.comments
+              .filter((c) => c.id === id)
+              .map((c) => ({
+                body: c.body,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              })),
+          }
+        : null
+    }
     const output: unknown[] = []
     const invoke = async (argv: string[]) => {
       let text = ''
@@ -113,7 +129,11 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
     ])
     await invoke(['block', 'fake-1', 'B', '--json'])
     await invoke(['list', '--json'])
+    await backend.comment('fake-1', commentBody)
     await invoke(['show', 'fake-1', '--json'])
+    expect((output.at(-1) as { comments: unknown }).comments).toEqual([
+      { body: commentBody, createdAt: '2026-01-01T00:00:00.000Z' },
+    ])
     await invoke(['unblock', 'fake-1', 'B', '--json'])
     await invoke(['move', 'fake-1', 'Done', '--json'])
 

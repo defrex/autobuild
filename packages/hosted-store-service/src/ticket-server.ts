@@ -23,6 +23,8 @@ import {
   hostedTicketRequestSchemas,
   hostedTicketPolicySchema,
   type HostedTicketPolicy,
+  TICKET_COMMENTS_HEADER,
+  TICKET_COMMENTS_CAPABILITY,
   type HostedTicketContext,
   type HostedTicketOperation,
 } from '@defrex/autobuild/hosted-tickets'
@@ -170,8 +172,14 @@ export function createTicketServer(options: TicketServerOptions): {
     // Project only the ticket boundary; current domain values remain authoritative.
     const client = stableVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
     const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
-      if (ticket === null || client.major !== 0 || client.minor > 10) return ticket
-      const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = ticket
+      if (ticket === null) return null
+      const { comments: _comments, ...withoutComments } = ticket
+      const projected =
+        req.headers.get(TICKET_COMMENTS_HEADER) === TICKET_COMMENTS_CAPABILITY
+          ? ticket
+          : withoutComments
+      if (client.major !== 0 || client.minor > 10) return projected
+      const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = projected
       return legacy
     }
 

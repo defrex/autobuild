@@ -950,3 +950,9 @@ a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
 Independent harvest uses revocable, expiring, service-bound ticket grants with
 read/create runner authority and read-only child authority. Build state and harvest
 journals remain exclusively in the selected BuildStore.
+
+Hosted ticket detail reads expose complete, oldest-first structured comments in
+`ticket.comments`, preserving exact bodies. Scans do not fetch comments. Hosted
+HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict
+decoders retain compatible responses. File comments remain embedded in the body;
+Linear comment reads are unchanged.

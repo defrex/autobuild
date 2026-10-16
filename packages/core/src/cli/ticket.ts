@@ -399,6 +399,12 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
   // Keep the adapter-provided body untouched. It may itself be multiline and
   // may intentionally end (or not end) with a newline.
   opts.stdout(ticket.body)
+  for (const comment of ticket.comments ?? []) {
+    opts.stdout(
+      `Comment ${comment.createdAt}${comment.author !== undefined ? ` — ${comment.author}` : ''}`,
+    )
+    opts.stdout(comment.body)
+  }
 }
 
 function withTicketStore<T>(
