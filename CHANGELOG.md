@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#617](https://github.com/defrex/autobuild/pull/617) — Decouple hosted tickets from build storage
 - Hosted tickets support local builds through `[tickets] url` and `ab connect --tickets URL`.
   New hosted policy defaults to `triage`, `ready`, `doing`, `done`; `readyState` is optional
   for hosted. To retain former names configure `triageState = "Backlog"`,
