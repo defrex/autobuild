@@ -1071,9 +1071,9 @@ kind and operation.
 
 Ticket admission uses the credential project. Hosted tickets, comments, blockers, creation-key
 deduplication and assets are partitioned by registered repository, never team.
-Lifecycle comes from that project's latest durable effective configuration
-(triage Backlog, claim Doing, completion Done by default; configurable
-`doneState`). Owner admin ticket requests explicitly select a registered
+Lifecycle comes from independent project ticket policy (triage, ready, doing, done
+by default; configurable doneState). Legacy projects without independent policy
+use their uploaded configuration with Backlog / Doing / Done defaults. Owner admin ticket requests explicitly select a registered
 repository. The service has no Linear ticket backend: external tracker and
 file sources remain dispatcher-side, and service ticket surfaces refuse those
 projects with actionable source feedback. Legacy team queues migrate atomically
@@ -1762,9 +1762,10 @@ event-level mechanics live in the repository catalog and reducer tests):
 repository; an owner selects a registered repository explicitly. Team and state
 fields from clients convey no authority or lifecycle policy. Tickets, comments,
 blockers, creation-key deduplication and assets are isolated by repository.
-The project's latest effective configuration supplies hosted lifecycle names:
-triage Backlog, claimed Doing, completion Done (`doneState`) and create/proposal
-equal to triage by default; `readyState` is required. Configured roles may overlap.
+Independent project ticket policy supplies hosted lifecycle names: triage, ready,
+doing, done (`doneState`), and create/proposal equal to triage by default. Hosted
+readyState defaults to ready; other sources require it. Legacy clients without
+independent policy use uploaded dispatcher config and its old defaults. Configured roles may overlap.
 The service has no Linear backend and never relays external ticket sources.
 Projects using Linear, files or plugins keep their direct dispatcher connection;
 service ticket surfaces refuse with project/source feedback instead of empty data.
@@ -2808,3 +2809,15 @@ change the body and revision; separate hosted comments do not. Hosted revisions
 are monotonic decimal bigint strings, and checks run under the same row lock
 and transaction as all requested changes. Hosted reads return a coherent
 snapshot of fields, blockers and revision.
+
+### Independent hosted ticket service
+
+`[tickets] url` selects hosted ticket transport independently of BuildStore selection;
+without it, tickets use the selected remote build store. Local builds require an
+explicit ticket URL. Project registration and ticket policy publication through
+`ab connect --tickets URL` work before dispatch. Policy is a durable per-registration
+record, outside BuildStore events/artifacts; legacy uploaded configuration remains
+a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
+Independent harvest uses revocable, expiring, service-bound ticket grants with
+read/create runner authority and read-only child authority. Build state and harvest
+journals remain exclusively in the selected BuildStore.

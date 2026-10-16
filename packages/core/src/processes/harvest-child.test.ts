@@ -191,7 +191,11 @@ describe('harvest child (guest runner composition)', () => {
     ])
     try {
       const args = guestTicketSourceArgs(guestInput(), workspace)
-      const env = { AB_STORE: 'https://store.example.test', AB_TOKEN: 'scoped-token' }
+      const env = {
+        AB_STORE: 'https://store.example.test',
+        AB_TOKEN: 'scoped-token',
+        AB_HARVEST: 'harvest-fixture',
+      }
       const withGuestArgs = await createTicketSource(
         { source: 'hosted', teamKey: 'AUT', readyState: 'Todo' },
         env,

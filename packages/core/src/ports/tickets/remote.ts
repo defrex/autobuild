@@ -15,6 +15,8 @@ import {
   claimWireSchema,
   TICKET_REVISIONS_HEADER,
   TICKET_REVISIONS_CAPABILITY,
+  hostedTicketPolicySchema,
+  type HostedTicketPolicy,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
   dependencyStatesWireSchema,
@@ -22,6 +24,7 @@ import {
   successWireSchema,
   ticketListingWireSchema,
   ticketWireSchema,
+  ticketStatesWireSchema,
 } from './remote-protocol'
 import {
   AUTOBUILD_VERSION,
@@ -59,6 +62,10 @@ export class HostedTicketSource implements TicketSource {
       ...(options.claimedState !== undefined ? { claimedState: options.claimedState } : {}),
       ...(options.createState !== undefined ? { createState: options.createState } : {}),
     }
+  }
+
+  async synchronizePolicy(policy: HostedTicketPolicy): Promise<void> {
+    await this.request('policy', hostedTicketPolicySchema.parse(policy), successWireSchema)
   }
 
   private project(ticket: Ticket): Ticket {
@@ -114,6 +121,10 @@ export class HostedTicketSource implements TicketSource {
     }
     const listing = await this.request('list-ready', criteria, ticketListingWireSchema)
     return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
+  }
+
+  async listStates() {
+    return this.request('states', {}, ticketStatesWireSchema)
   }
 
   async get(id: string): Promise<Ticket | null> {

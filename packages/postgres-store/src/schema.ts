@@ -12,7 +12,7 @@ import {
   assertAuthSchema,
 } from './auth-schema'
 
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 export const MIGRATE_COMMAND = 'bun run postgres:migrate (from a pinned Autobuild release checkout)'
 
 /** The frozen v3 DDL, kept verbatim so a deployed v3 marker's checksum can be
@@ -817,7 +817,22 @@ CREATE TABLE IF NOT EXISTS project_connections (
 CREATE TABLE IF NOT EXISTS connection_lookup_limits (
   actor text PRIMARY KEY, started_at timestamptz NOT NULL, attempts integer NOT NULL
 );`.trim()
-export const SCHEMA_DDL = `${SCHEMA_V11_DDL}\n${CONNECTION_SCHEMA_DDL}`
+export const SCHEMA_V12_DDL = `${SCHEMA_V11_DDL}\n${CONNECTION_SCHEMA_DDL}`
+export const SCHEMA_V12_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(SCHEMA_V12_DDL)
+  .digest('hex')
+export const TICKET_POLICY_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS project_ticket_policy (
+  repo text PRIMARY KEY, registration bigint NOT NULL, policy jsonb NOT NULL,
+  writer text NOT NULL, updated_at timestamptz NOT NULL
+);`
+export const TICKET_GRANT_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS ticket_grants (
+ id text PRIMARY KEY, digest text NOT NULL UNIQUE, repo text NOT NULL, registration bigint NOT NULL,
+ execution text NOT NULL, kind text NOT NULL CHECK (kind IN ('runner','phase')),
+ parent text REFERENCES ticket_grants(id), expires_at timestamptz NOT NULL, revoked_at timestamptz
+);`
+export const SCHEMA_DDL = `${SCHEMA_V12_DDL}\n${TICKET_POLICY_SCHEMA_DDL}\n${TICKET_GRANT_SCHEMA_DDL}`
 export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL).digest('hex')
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
@@ -899,6 +914,24 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
     ['actor', 'text', true],
     ['started_at', 'timestamp with time zone', true],
     ['attempts', 'integer', true],
+  ],
+  project_ticket_policy: [
+    ['repo', 'text', true],
+    ['registration', 'bigint', true],
+    ['policy', 'jsonb', true],
+    ['writer', 'text', true],
+    ['updated_at', 'timestamp with time zone', true],
+  ],
+  ticket_grants: [
+    ['id', 'text', true],
+    ['digest', 'text', true],
+    ['repo', 'text', true],
+    ['registration', 'bigint', true],
+    ['execution', 'text', true],
+    ['kind', 'text', true],
+    ['parent', 'text', false],
+    ['expires_at', 'timestamp with time zone', true],
+    ['revoked_at', 'timestamp with time zone', false],
   ],
   project_credentials: [
     ['id', 'text', true],
@@ -1055,6 +1088,10 @@ const EXPECTED_COLUMNS: Record<string, readonly ExpectedColumn[]> = {
 }
 
 const EXPECTED_CONSTRAINTS = [
+  'project_ticket_policy|p|repo||||',
+  'ticket_grants|p|id||||',
+  'ticket_grants|c|||||',
+  'ticket_grants|f|parent|ticket_grants|id|a|',
   'project_connections|p|id||||',
   'project_connections|c|||||',
   'connection_lookup_limits|p|actor||||',
@@ -1567,6 +1604,9 @@ export async function migratePostgres(
             SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
               applied_at = ${new Date().toISOString()}
             WHERE singleton = true`
+        } else if (version === 12 && marker.checksum === SCHEMA_V12_CHECKSUM) {
+          await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
+            applied_at = ${new Date().toISOString()} WHERE singleton = true`
         } else if (version === 11 && marker.checksum === SCHEMA_V11_CHECKSUM) {
           await tx`UPDATE ab_schema_migrations SET version = ${SCHEMA_VERSION}, checksum = ${SCHEMA_CHECKSUM},
             applied_at = ${new Date().toISOString()} WHERE singleton = true`

@@ -27,6 +27,8 @@
 export const SANDBOX_FORBIDDEN_ENV: readonly string[] = [
   'AB_STORE',
   'AB_TOKEN',
+  'AB_TICKET_TOKEN',
+  'AB_TICKET_URL',
   'GITHUB_TOKEN',
   'GH_TOKEN',
   'LINEAR_API_KEY',

@@ -965,6 +965,19 @@ change the body and revision; separate hosted comments do not. Hosted revisions
 are monotonic decimal bigint strings, and checks run under the same row lock
 and transaction as all requested changes. Hosted reads return a coherent
 snapshot of fields, blockers and revision.
+
+### Independent hosted ticket service
+
+`[tickets] url` selects hosted ticket transport independently of BuildStore selection;
+without it, tickets use the selected remote build store. Local builds require an
+explicit ticket URL. Project registration and ticket policy publication through
+`ab connect --tickets URL` work before dispatch. Policy is a durable per-registration
+record, outside BuildStore events/artifacts; legacy uploaded configuration remains
+a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
+Independent harvest uses revocable, expiring, service-bound ticket grants with
+read/create runner authority and read-only child authority. Build state and harvest
+journals remain exclusively in the selected BuildStore.
+
 Hosted ticket detail reads expose complete, oldest-first structured comments in
 `ticket.comments`, preserving exact bodies. Scans do not fetch comments. Hosted
 HTTP clients opt in with `x-autobuild-ticket-comments: 1` so historical strict

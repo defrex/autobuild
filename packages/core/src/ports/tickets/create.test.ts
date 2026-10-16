@@ -25,20 +25,26 @@ describe('createTicketSource — hosted', () => {
   const config = { source: 'hosted', teamKey: 'ENG', readyState: 'Ready' }
 
   test('constructs from the shared service URL and operator token', async () => {
-    const source = await createTicketSource(
-      config,
-      { AB_STORE: 'https://store.example/', AB_TOKEN: 'operator-token' },
-      REPO,
-    )
-    expect(source).toBeInstanceOf(HostedTicketSource)
-    expect(source.name).toBe('hosted')
+    const original = globalThis.fetch
+    globalThis.fetch = (async () => Response.json({ ok: true })) as unknown as typeof fetch
+    try {
+      const source = await createTicketSource(
+        config,
+        { AB_STORE: 'https://store.example/', AB_TOKEN: 'operator-token' },
+        REPO,
+      )
+      expect(source).toBeInstanceOf(HostedTicketSource)
+      expect(source.name).toBe('hosted')
+    } finally {
+      globalThis.fetch = original
+    }
   })
 
   test('requires an HTTP(S) service, token, and team', async () => {
     await expect(createTicketSource(config, {}, REPO)).rejects.toThrow('AB_STORE')
     await expect(
       createTicketSource(config, { AB_STORE: '/local/store', AB_TOKEN: 'token' }, REPO),
-    ).rejects.toThrow('HTTP(S)')
+    ).rejects.toThrow('[tickets] url')
     await expect(
       createTicketSource(config, { AB_STORE: 'https://store.example' }, REPO),
     ).rejects.toThrow('AB_TOKEN')
@@ -233,5 +239,50 @@ describeTicketSourceContract('plugin-selected FakeTicketSource', async () => {
     ),
     states: { ready: 'Ready', claimed: 'Doing', completed: 'Done' },
     editableLabel: 'contract-editable',
+  }
+})
+
+test('independent ticket service uses its own credential and publishes policy before use', async () => {
+  const { ProjectCredentials } = await import('../../cli/project-credentials')
+  const home = await mkdtemp(join(tmpdir(), 'ab-ticket-credentials-'))
+  const env = {
+    XDG_CONFIG_HOME: home,
+    AB_STORE: 'https://builds.test',
+    AB_TOKEN: 'wrong-build-token',
+  }
+  const id = 'a'.repeat(32),
+    token = `abp_1_${id}_${'b'.repeat(64)}`
+  new ProjectCredentials(env).save({ service: 'https://tickets.test', repo: REPO, id, token })
+  const calls: Array<{ url: string; token: string | null; body: unknown }> = []
+  const original = globalThis.fetch
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: String(url),
+      token: new Headers(init?.headers).get('authorization'),
+      body: JSON.parse(String(init?.body)),
+    })
+    return Response.json({ ok: true })
+  }) as unknown as typeof fetch
+  try {
+    await createTicketSource(
+      { source: 'hosted', url: 'https://tickets.test', teamKey: 'ENG', readyState: 'ready' },
+      env,
+      REPO,
+    )
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe('https://tickets.test/tickets/policy')
+    expect(calls[0]?.token).toBe(`Bearer ${token}`)
+    expect(JSON.stringify(calls[0]?.body)).not.toContain('wrong-build-token')
+    await expect(
+      createTicketSource(
+        { source: 'hosted', url: 'https://tickets.test', teamKey: 'ENG', readyState: 'ready' },
+        { ...env, AB_TICKET_URL: 'https://other.test', AB_TICKET_TOKEN: 'abt_scoped' },
+        REPO,
+      ),
+    ).rejects.toThrow('does not match')
+    expect(calls).toHaveLength(1)
+  } finally {
+    globalThis.fetch = original
+    await rm(home, { recursive: true, force: true })
   }
 })

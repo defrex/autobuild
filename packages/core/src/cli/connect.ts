@@ -1,3 +1,6 @@
+import { parseConfig } from '../config/load'
+import { HostedTicketSource } from '../ports/tickets/remote'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { access, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -14,6 +17,8 @@ import { resolveMainRepo } from './repo-state'
 import { ProjectCredentials } from './project-credentials'
 
 interface ConnectOptions {
+  tickets?: boolean
+  builds?: boolean
   cwd: string
   env: Record<string, string | undefined>
   exec: Exec
@@ -45,8 +50,15 @@ async function project(opts: ConnectOptions) {
   const store = table.store as { url?: unknown } | undefined
   if (store && (typeof store !== 'object' || Array.isArray(store)))
     throw new Error('Invalid [store] configuration')
-  const service = store?.url === undefined ? undefined : normalizeServiceURL(String(store.url))
-  return { checkout, repo, path, text, table, service }
+  const tickets = table.tickets as { source?: string; url?: string } | undefined
+  const buildService = opts.env.AB_STORE?.trim() || store?.url
+  const ticketService = tickets?.source === 'hosted' ? (tickets.url ?? buildService) : undefined
+  const selected = opts.tickets ? ticketService : buildService
+  const service =
+    typeof selected === 'string' && /^https?:/.test(selected)
+      ? normalizeServiceURL(selected)
+      : undefined
+  return { checkout, repo, path, text, table, service, buildService, ticketService }
 }
 async function request(
   opts: ConnectOptions,
@@ -84,45 +96,64 @@ async function atomicConfig(path: string, before: string, after: string) {
   }
 }
 export async function abConnect(raw: string | undefined, opts: ConnectOptions): Promise<void> {
+  if (opts.tickets && opts.builds) throw new Error('Choose --tickets or --builds')
   const p = await project(opts)
+  if (opts.tickets && (p.table.tickets as { source?: string } | undefined)?.source !== 'hosted')
+    throw new Error('ab connect --tickets requires [tickets] source = "hosted"')
   const credentials = new ProjectCredentials(opts.env)
   if (raw === undefined) {
-    if (!p.service) {
-      opts.print(
-        `Project: ${p.repo}\nService: unconfigured\nCredential: missing; run ab connect <url>`,
-      )
+    const connections = new Map<string, string[]>()
+    for (const [use, candidate] of [
+      ['builds', p.buildService],
+      ['tickets', p.ticketService],
+    ] as const) {
+      if (typeof candidate !== 'string' || !/^https?:/.test(candidate)) continue
+      const service = normalizeServiceURL(candidate)
+      connections.set(service, [...(connections.get(service) ?? []), use])
+    }
+    if (connections.size === 0) {
+      opts.print(`Project: ${p.repo}\nService: unconfigured`)
       return
     }
-    const entry = credentials.load(p.service, p.repo)
-    let status = 'missing; run ab connect'
-    if (entry) {
-      try {
-        const response = await request(opts, p.service, 'status', undefined, entry.token)
-        if (response.ok) {
-          const body = (await response.json()) as {
-            repo?: string
-            credentialId?: string
-            accepted?: boolean
-          }
-          if (body.repo !== p.repo || body.credentialId !== entry.id || body.accepted !== true)
-            throw new Error('Invalid status response')
-        }
-        status = response.ok
-          ? 'accepted'
-          : response.status === 401 || response.status === 403
-            ? 'rejected; run ab connect'
-            : 'unreachable'
-      } catch {
-        status = 'unreachable'
+    for (const [service, uses] of connections) {
+      opts.print(`Uses: ${uses.join(', ')}`)
+      if (!service) {
+        opts.print(
+          `Project: ${p.repo}\nService: unconfigured\nCredential: missing; run ab connect <url>`,
+        )
+        return
       }
+      const entry = credentials.load(service, p.repo)
+      let status = 'missing; run ab connect'
+      if (entry) {
+        try {
+          const response = await request(opts, service, 'status', undefined, entry.token)
+          if (response.ok) {
+            const body = (await response.json()) as {
+              repo?: string
+              credentialId?: string
+              accepted?: boolean
+            }
+            if (body.repo !== p.repo || body.credentialId !== entry.id || body.accepted !== true)
+              throw new Error('Invalid status response')
+          }
+          status = response.ok
+            ? 'accepted'
+            : response.status === 401 || response.status === 403
+              ? 'rejected; run ab connect'
+              : 'unreachable'
+        } catch {
+          status = 'unreachable'
+        }
+      }
+      opts.print(`Service: ${service}\nProject: ${p.repo}\nCredential: ${status}`)
     }
-    opts.print(`Service: ${p.service}\nProject: ${p.repo}\nCredential: ${status}`)
     return
   }
   const service = normalizeServiceURL(raw)
-  if (p.service && p.service !== service)
+  if (!opts.tickets && p.service && p.service !== service)
     throw new Error(
-      'Configured [store] url differs; update it explicitly before connecting to another service',
+      `Configured [${opts.tickets ? 'tickets' : 'store'}] url differs; update it explicitly before connecting to another service`,
     )
   await access(p.path, constants.W_OK)
   await access(dirname(p.path), constants.W_OK)
@@ -169,6 +200,7 @@ export async function abConnect(raw: string | undefined, opts: ConnectOptions): 
   let approved = false
   let configChanged = false
   let saved = false
+  let updatedText = p.text
   try {
     let outcome: ConnectionOutcome | undefined
     while (!opts.signal?.aborted && now() <= Date.parse(started.expiresAt) + interval) {
@@ -199,14 +231,41 @@ export async function abConnect(raw: string | undefined, opts: ConnectOptions): 
     approved = true
     if (outcome.repo !== p.repo || outcome.credentialId !== id)
       throw new Error('Approval identity mismatch')
-    if (!p.service) {
-      // Dotted root key also supports an existing empty [store] table after it.
-      const after = `store.url = ${JSON.stringify(service)}\n${p.text}`
-      const parsed = parse(after)
-      if ((parsed.store as { url?: string })?.url !== service)
-        throw new Error('Cannot safely update [store] url; add it manually and retry')
-      await atomicConfig(p.path, p.text, after)
+    if (!p.service || (opts.tickets && (p.table.tickets as { url?: string }).url !== service)) {
+      updatedText = setConnectionURL(p.text, opts.tickets ? 'tickets' : 'store', service)
+      if (opts.tickets) parseConfig(updatedText)
+      else parse(updatedText)
+      await atomicConfig(p.path, p.text, updatedText)
       configChanged = true
+    }
+    const configuredTickets = p.table.tickets as { source?: string; url?: string } | undefined
+    if (
+      opts.tickets ||
+      (configuredTickets?.source === 'hosted' &&
+        (!configuredTickets.url || normalizeServiceURL(configuredTickets.url) === service))
+    ) {
+      const tickets = parseConfig(updatedText).tickets
+      const lifecycle = ticketLifecycle(tickets)
+      await new HostedTicketSource({
+        url: service,
+        token,
+        repo: p.repo,
+        teamKey: tickets.teamKey!,
+        ...(opts.fetch ? { fetchFn: (input, init) => opts.fetch!(String(input), init) } : {}),
+      }).synchronizePolicy({
+        version: 1,
+        tickets: {
+          source: 'hosted',
+          teamKey: tickets.teamKey!,
+          readyState: lifecycle.ready,
+          triageState: lifecycle.triage,
+          claimedState: lifecycle.doing,
+          doneState: lifecycle.done,
+          createState: lifecycle.create,
+          proposalState: lifecycle.proposal,
+          ...(tickets.readyLabels !== undefined ? { readyLabels: tickets.readyLabels } : {}),
+        },
+      })
     }
     credentials.save({ service, repo: p.repo, id, token })
     saved = true
@@ -233,21 +292,35 @@ export async function abConnect(raw: string | undefined, opts: ConnectOptions): 
       }
       if (configChanged) {
         try {
-          await atomicConfig(p.path, `store.url = ${JSON.stringify(service)}\n${p.text}`, p.text)
+          await atomicConfig(p.path, updatedText, p.text)
         } catch {
-          opts.print('Restore [store] url manually if needed; configuration changed concurrently.')
+          opts.print(
+            `Restore [${opts.tickets ? 'tickets' : 'store'}] url manually if needed; configuration changed concurrently.`,
+          )
         }
       }
     }
     throw new Error(
       approved
-        ? 'Connection could not be saved; previous credential retained. Repair local storage and run ab connect again.'
+        ? `Connection could not be saved; previous credential retained. ${(error as Error).message}. Repair the reported error and run ab connect again.`
         : (error as Error).message,
     )
   }
 }
 export async function abDisconnect(opts: ConnectOptions): Promise<void> {
+  if (opts.tickets && opts.builds) throw new Error('Choose --tickets or --builds')
   const p = await project(opts)
+  if (
+    !opts.tickets &&
+    !opts.builds &&
+    p.ticketService &&
+    p.service &&
+    normalizeServiceURL(String(p.ticketService)) !== p.service
+  )
+    throw new Error(
+      'Multiple services: use ab disconnect --tickets for tickets; set AB_STORE to the build service and select --builds for builds',
+    )
+  if (!p.service && !opts.builds && p.ticketService) return abDisconnect({ ...opts, tickets: true })
   if (!p.service) throw new Error('No configured service')
   const credentials = new ProjectCredentials(opts.env)
   const entry = credentials.load(p.service, p.repo)
@@ -255,7 +328,37 @@ export async function abDisconnect(opts: ConnectOptions): Promise<void> {
     opts.print('No stored credential; project configuration and service data retained.')
     return
   }
+  if (p.ticketService && p.buildService === p.ticketService)
+    opts.print('Builds and tickets share this credential; disconnecting affects both uses.')
   await revoke(opts, p.service, entry.token)
   credentials.remove(p.service, p.repo)
   opts.print('Disconnected; project registration, data, and [store] url retained.')
+}
+
+/** Edit only the selected table; preserve unrelated configuration and comments. */
+export function setConnectionURL(
+  text: string,
+  table: 'tickets' | 'store',
+  service: string,
+): string {
+  const lines = text.split('\n')
+  let inside = false
+  let start = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (/^\s*\[/.test(line)) {
+      if (inside) {
+        lines.splice(i, 0, `url = ${JSON.stringify(service)}`)
+        return lines.join('\n')
+      }
+      inside = new RegExp(`^\\s*\\[${table}\\]\\s*(?:#.*)?$`).test(line)
+      if (inside) start = i
+    } else if (inside && /^\s*url\s*=/.test(line)) {
+      lines[i] = `url = ${JSON.stringify(service)}`
+      return lines.join('\n')
+    }
+  }
+  if (start >= 0) lines.splice(start + 1, 0, `url = ${JSON.stringify(service)}`)
+  else lines.push(`[${table}]`, `url = ${JSON.stringify(service)}`)
+  return lines.join('\n')
 }

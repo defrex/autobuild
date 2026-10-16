@@ -153,6 +153,7 @@ test('all ab ticket subcommands have hosted/direct parity through normal config 
   expect(hosted.finalBody).toBe('# Updated\r\n\r\nUnicode ☃\r\ntrailing\t ')
   expect(new Set(hosted.requests)).toEqual(
     new Set([
+      '/tickets/policy',
       '/tickets/create',
       '/tickets/update',
       '/tickets/get',

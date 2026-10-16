@@ -1226,19 +1226,20 @@ invariants, not additional configuration fields.
 
 Required in practice: `readyState` deliberately has no default, so omitting the
 table fails at `tickets.readyState` rather than allowing tickets from every
-state. Within a present table, `source` and `readyState` are required.
+state. Within a present table, `source` is required; hosted tickets default `readyState` to `ready`. Other sources require it.
 
 | Field | Default | Constraints | Purpose |
 |---|---:|---|---|
 | `source` | — | required nonblank builtin or plugin registration name | Select the ticket adapter after configured plugins load. |
 | `readyLabels` | source-aware | optional array of nonempty strings; `[]` allowed | Require every listed label in addition to the state gate. |
-| `readyState` | — | required nonblank string | The one workflow state eligible for dispatch. |
+| `url` | selected build service | HTTPS service URL; HTTP allowed on loopback; no credentials, query or fragment; hosted only | Ticket service independent of [store] url and AB_STORE. Required with local builds. |
+| `readyState` | hosted: `"ready"` | nonblank string; required for other sources | The one workflow state eligible for dispatch. |
 | `readyAssignee` | — | optional; `"me"` or an email address; Linear only (rejected for file, hosted, and plugin sources) | Require the ticket to be assigned to one Linear user, in addition to the state and label gates. |
 | `teamKey` | — | required for Linear and hosted; forbidden for file; optional for plugins | Backend team key such as `"ENG"`, or an existing plugin config field. |
-| `claimedState` | `"In Progress"` for direct Linear; `"Doing"` for hosted | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
-| `doneState` | `"Done"` | optional nonblank string; hosted | Project completion state and merged-ticket transition. |
+| `claimedState` | `"In Progress"` for direct Linear; `"doing"` for hosted | optional nonempty string; forbidden for file; allowed for plugins | Workflow state entered when a ticket is claimed. |
+| `doneState` | hosted: `"done"` | optional nonblank string; hosted | Project completion state and merged-ticket transition. |
 | `createState` | provider default | optional nonempty string | Default state for newly created tickets when `ab ticket create` omits `--state`. |
-| `triageState` | Linear/hosted: `"Backlog"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
+| `triageState` | Linear: `"Backlog"`; hosted: `"triage"`; file/plugin: `"Triage"` | optional nonempty string | State used for spec-gate bounces, aborts, and closed-unmerged PRs. |
 | `proposalState` | the resolved `triageState` | optional nonempty string | State harvest files its synthesized proposals into. Setting it to `readyState` waives the human grooming gate, not dependency eligibility. |
 | `dir` | file: selected local state root's `tickets/`; plugin: omitted | optional nonempty path; forbidden for Linear; allowed for plugins | Root containing file-source state directories, or an existing plugin config field. Relative file paths resolve from the repository. |
 
@@ -1257,7 +1258,7 @@ When `readyLabels` is absent, direct Linear uses `["autobuild"]`; hosted, file,
 and plugin sources use `[]`, meaning no host-imposed label gate. An explicit value always
 wins. A nonempty list is
 conjunctive: every configured label must be present. `readyState` remains
-mandatory regardless of labels. Linear compares state and label names exactly
+mandatory regardless of labels (hosted defaults to `ready`). Linear compares state and label names exactly
 and case-sensitively. The file source matches state names case-insensitively against the directories
 under the tracker root: the four lifecycle directories (`triage/`, `ready/`,
 `doing/`, `done/`, always present) plus any directory the repository adds, such
@@ -1703,7 +1704,7 @@ Secrets and store selection accompany the file through environment variables:
 | Variable | Used for | Notes |
 |---|---|---|
 | `LINEAR_API_KEY` | Direct Linear ticket source | Required and nonempty when `tickets.source = "linear"`; never used by the hosted service. |
-| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. `tickets.source = "hosted"` requires a nonblank HTTP(S) URL. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then `[store] url`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
+| `AB_STORE` | BuildStore and hosted ticket selection | A local path or HTTP(S) remote-store URL. Hosted tickets use this only when `[tickets] url` is absent; local builds with hosted tickets require `[tickets] url`. A command's explicit `--store` wins for BuildStore selection, then nonblank `AB_STORE`, then `[store] url`, then the main checkout's `.autobuild/`. Relative local paths resolve from the main checkout. |
 | `AB_TOKEN` | Protected remote BuildStore and hosted tickets | Bearer credential forwarded to the service. Hosted tickets require a stored credential for a registered project. Owner admin is an explicit break-glass exception. Empty means no token; nonempty token bytes are treated as opaque. |
 
 A local store selection relocates the state database, blobs, worktrees, and the
