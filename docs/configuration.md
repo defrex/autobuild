@@ -1280,6 +1280,15 @@ Source-specific validation is strict:
 - Plugin sources receive the existing fields in this table unchanged and own
   any additional semantic validation. No untyped plugin-options table exists.
 
+Hosted states are durable service data scoped to a project. `ab ticket states`
+lists configured lifecycle roles first, then custom states alphabetically, with
+counts and optional purposes. `ab ticket state create <name> [--about <text>]`
+adds a state using the file source's lowercase name grammar. Hosted duplicates
+in any letter case are refused; file creation remains idempotent. Configured
+names always exist, preserve their spelling, and remain custom states after
+removal from config. Any existing state supports ticket create, move, and list;
+unknown names report the available states. Purposes must be one nonblank line.
+
 For Linear, omitting `createState` lets the team's default state apply. For the
 file source it defaults to `Triage`. A caller may override that default for one
 create with `ab ticket create --state <state>`; the value is passed unchanged to
