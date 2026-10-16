@@ -687,6 +687,50 @@ if (testUrl)
       )
       const one = clients[0]!,
         two = clients[1]!
+      // Publish before any CRUD call: the empty legacy Backlog role must survive.
+      await one.synchronizePolicy({
+        version: 1,
+        tickets: {
+          source: 'hosted',
+          teamKey: 'SAME',
+          triageState: 'Inbox',
+          readyState: 'Ready',
+          claimedState: 'Active0',
+          doneState: 'Complete0',
+          createState: 'Draft0',
+          proposalState: 'Inbox',
+        },
+      })
+      expect((await one.listStates()).map((s) => s.name)).toEqual([
+        'Inbox',
+        'Ready',
+        'Active0',
+        'Complete0',
+        'Backlog',
+        'Draft0',
+      ])
+      await one.addState('icebox', { about: 'Deferred' })
+      await expect(two.listReady({ state: 'icebox' })).rejects.toThrow('unknown state')
+      await expect(one.addState('icebox')).rejects.toThrow('already exists')
+      const custom = await one.create({ title: 'Custom', body: 'Body' }, { state: 'icebox' })
+      await one.transition(custom.ref.id, 'Backlog')
+      expect((await one.listReady({ state: 'Backlog' })).tickets.map((t) => t.title)).toEqual([
+        'Custom',
+      ])
+      expect((await one.listStates()).find((s) => s.name === 'icebox')).toEqual({
+        name: 'icebox',
+        tickets: 0,
+        about: 'Deferred',
+      })
+      const forged = new HostedTicketSource({
+        url: 'http://test',
+        token: tokens[0]!,
+        repo: repos[1]!,
+        teamKey: 'SAME',
+        fetchFn,
+      })
+      await expect(forged.addState('foreign')).rejects.toThrow('wrong project')
+      expect((await two.listStates()).map((s) => s.name)).not.toContain('foreign')
       const a = await one.create({ title: 'One', body: 'Body' }, { idempotencyKey: 'same' })
       const b = await two.create({ title: 'Two', body: 'Body' }, { idempotencyKey: 'same' })
       const commentBody = '  note\r\n\r\n☃\nAttached asset: evidence/test.png\n'
@@ -698,16 +742,17 @@ if (testUrl)
       expect(new Date(history![0]!.createdAt).toISOString()).toBe(history![0]!.createdAt)
       expect(a.state).toBe('Draft0')
       expect(b.state).toBe('Draft1')
-      expect(a.ref.id).toBe('SAME-1')
+      expect(custom.ref.id).toBe('SAME-1')
+      expect(a.ref.id).toBe('SAME-2')
       expect(b.ref.id).toBe('SAME-1')
       expect((await two.get('same-1'))?.title).toBe('Two')
       const [internal] =
         await tickets.sql`SELECT id FROM ab_tickets WHERE repo = ${repos[0]!} AND readable_id = ${a.ref.id}`
       expect(await two.get(String(internal.id))).toBeNull()
       await expect(two.addBlocker('same-1', String(internal.id))).rejects.toThrow('unknown ticket')
-      await one.claim('sAmE-1')
+      await one.claim('sAmE-2')
       expect((await one.get(a.ref.id))?.state).toBe('Active0')
-      await one.transition('same-1', 'Complete0')
+      await one.transition('same-2', 'Complete0')
       expect((await one.get(a.ref.id))?.resolved).toBe(true)
       expect((await two.listReady({})).tickets.map((ticket) => ticket.title)).toEqual(['Two'])
       const operator = new OperatorApiClient({

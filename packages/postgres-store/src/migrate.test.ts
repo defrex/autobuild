@@ -1489,7 +1489,6 @@ if (testUrl)
     }
   })
 
-import { TICKET_SCHEMA_V2_DDL, TICKET_SCHEMA_V2_CHECKSUM } from './schema'
 if (testUrl)
   test('v2 readable migration orders tied timestamps per project, rolls back missing blobs, and preserves aliases and asset pins', async () => {
     const world = await legacyTickets()
@@ -1596,8 +1595,7 @@ if (testUrl)
   })
 
 import { PostgresTicketPolicyStore } from './ticket-policy'
-import { TICKET_SCHEMA_V3_DDL, TICKET_SCHEMA_V3_CHECKSUM } from './schema'
-for (const version of testUrl ? [2, 3] : [])
+for (const version of testUrl ? [2, 3, 4] : [])
   test(`v${version} readable migration uses independent policy without blobs and prefers it to uploaded config`, async () => {
     const world = await legacyTickets()
     const independent = 'https://github.com/acme/independent'
@@ -1606,8 +1604,14 @@ for (const version of testUrl ? [2, 3] : [])
       await world.sql.unsafe(
         'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
       )
-      await world.sql.unsafe(version === 2 ? TICKET_SCHEMA_V2_DDL : TICKET_SCHEMA_V3_DDL)
-      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,${version},${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : TICKET_SCHEMA_V3_CHECKSUM},${CONTRACT_T0})`
+      await world.sql.unsafe(
+        version === 2
+          ? TICKET_SCHEMA_V2_DDL
+          : version === 3
+            ? TICKET_SCHEMA_V3_DDL
+            : TICKET_SCHEMA_V4_DDL,
+      )
+      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,${version},${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : version === 3 ? TICKET_SCHEMA_V3_CHECKSUM : TICKET_SCHEMA_V4_CHECKSUM},${CONTRACT_T0})`
       await world.sql`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${independent}, 'added', 'fixture', ${CONTRACT_T0})`
       await world.project(uploaded, 'OLD')
       const policies = new PostgresTicketPolicyStore(world.sql)
@@ -1631,7 +1635,9 @@ for (const version of testUrl ? [2, 3] : [])
         )
         await world.sql`INSERT INTO ab_tickets (repo,id,creation_key,title,body,state,labels,created_at,updated_at) VALUES (${repo},'ticket-old',NULL,'Original','Body','triage',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
       }
-      if (version === 3) await world.sql`UPDATE ab_tickets SET revision = 9007199254740993`
+      if (version >= 3) await world.sql`UPDATE ab_tickets SET revision = 9007199254740993`
+      if (version === 4)
+        await world.sql`INSERT INTO ab_ticket_states (repo,name,about) VALUES (${independent},'icebox','Deferred work')`
       await migratePostgres(world.url)
       await migratePostgres(world.url)
       const rows =
@@ -1641,10 +1647,75 @@ for (const version of testUrl ? [2, 3] : [])
         'NEW-1',
       ])
       expect(rows.map((row: { revision: string }) => row.revision)).toEqual(
-        Array(2).fill(version === 3 ? '9007199254740993' : '1'),
+        Array(2).fill(version >= 3 ? '9007199254740993' : '1'),
       )
+      if (version === 4)
+        expect(
+          (
+            await world.sql`SELECT about FROM ab_ticket_states WHERE repo = ${independent} AND name = 'icebox'`
+          )[0].about,
+        ).toBe('Deferred work')
       expect(world.reads).toEqual([])
     } finally {
       await world.cleanup()
     }
   })
+import {
+  TICKET_SCHEMA_V4_DDL,
+  TICKET_SCHEMA_V4_CHECKSUM,
+  TICKET_SCHEMA_V3_DDL,
+  TICKET_SCHEMA_V3_CHECKSUM,
+  TICKET_SCHEMA_V2_DDL,
+  TICKET_SCHEMA_V2_CHECKSUM,
+  TICKET_SCHEMA_CHECKSUM,
+  TICKET_SCHEMA_VERSION,
+} from './schema'
+
+if (testUrl)
+  test.each([2, 3])(
+    'ticket v%i upgrade backfills exact states and empty persisted policy roles, and rejects structural drift',
+    async (version) => {
+      const world = await schemaHarness()
+      const sql = new SQL(world.url)
+      try {
+        await migratePostgres(world.url)
+        await sql`DROP TABLE ab_ticket_states, ab_ticket_counters`
+        await sql`ALTER TABLE ab_tickets DROP COLUMN readable_id, DROP COLUMN ticket_number`
+        await sql`ALTER TABLE ab_tickets DROP COLUMN revision`
+        await sql.unsafe(version === 2 ? TICKET_SCHEMA_V2_DDL : TICKET_SCHEMA_V3_DDL)
+        if (version === 3)
+          await sql`ALTER TABLE ab_tickets ADD COLUMN revision bigint NOT NULL DEFAULT 1`
+        await sql`UPDATE ab_ticket_schema_migrations SET version = ${version}, checksum = ${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : version === 3 ? TICKET_SCHEMA_V3_CHECKSUM : TICKET_SCHEMA_V4_CHECKSUM}`
+        const repo = 'https://github.com/acme/v2'
+        await sql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (1,${repo},'added','owner',now())`
+        await sql`INSERT INTO ab_tickets (repo,id,title,body,state,labels,created_at,updated_at) VALUES (${repo},'old','Title','Body','Former State','{}',now(),now())`
+        await sql`INSERT INTO project_ticket_policy (repo,registration,policy,writer,updated_at) VALUES (${repo},1,${{ version: 1, tickets: { source: 'hosted', teamKey: 'ENG', triageState: 'Empty old', readyState: 'READY', claimedState: 'ready', doneState: 'Done', createState: 'Draft', proposalState: 'Proposals' } }},'owner',now())`
+        await migratePostgres(world.url)
+        await migratePostgres(world.url)
+        await assertTicketSchema(sql)
+        const rows =
+          await sql`SELECT name FROM ab_ticket_states WHERE repo = ${repo} ORDER BY name COLLATE "C"`
+        expect(rows.map((r: Row) => r.name)).toEqual([
+          'Done',
+          'Draft',
+          'Empty old',
+          'Former State',
+          'Proposals',
+          'READY',
+          'ready',
+        ])
+        expect((await sql`SELECT id, state FROM ab_tickets WHERE repo = ${repo}`)[0]).toEqual({
+          id: 'old',
+          state: 'Former State',
+        })
+        const [marker] = await sql`SELECT version, checksum FROM ab_ticket_schema_migrations`
+        expect(Number(marker.version)).toBe(TICKET_SCHEMA_VERSION)
+        expect(marker.checksum).toBe(TICKET_SCHEMA_CHECKSUM)
+        await sql`ALTER TABLE ab_ticket_states DROP CONSTRAINT ab_ticket_states_about_check`
+        await expect(assertTicketSchema(sql)).rejects.toThrow('constraints')
+      } finally {
+        await sql.close()
+        await world.cleanup()
+      }
+    },
+  )

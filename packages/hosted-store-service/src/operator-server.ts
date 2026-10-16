@@ -29,6 +29,8 @@ import {
   getHarvestStatus,
   getOperatorBuild,
   getOperatorDashboard,
+  listOperatorTicketStates,
+  createOperatorTicketState,
   getOperatorTicket,
   getRepositoryStatus,
   harvestControlRequestSchema,
@@ -51,6 +53,7 @@ import {
   TicketOperationError,
   ticketBlockerRequestSchema,
   ticketCreateRequestSchema,
+  ticketStateCreateRequestSchema,
   ticketMoveRequestSchema,
   ticketUpdateRequestSchema,
   toggleHarvestGate,
@@ -348,6 +351,29 @@ export function createOperatorServer(opts: OperatorServerOptions): {
     if (rest[0] === 'tickets') {
       if (opts.ticketBackend === undefined) {
         throw new HttpError(409, 'conflict', 'ticket operator backend is not configured')
+      }
+      if (rest[1] === 'states' && rest.length === 2) {
+        if (req.method === 'GET')
+          return json(
+            200,
+            await listOperatorTicketStates({
+              store: opts.store,
+              repo,
+              backend: opts.ticketBackend,
+            }),
+          )
+        if (req.method === 'POST') {
+          const request = await body(req, ticketStateCreateRequestSchema)
+          return json(
+            201,
+            await createOperatorTicketState({
+              store: opts.store,
+              repo,
+              backend: opts.ticketBackend,
+              ...request,
+            }),
+          )
+        }
       }
       if (req.method === 'GET' && rest.length === 1) {
         const state = url.searchParams.get('state')

@@ -246,3 +246,69 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     await rm(repo, { recursive: true, force: true })
   }
 }, 10_000)
+
+test('CLI lists and creates hosted states with purpose and duplicate refusal', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'ab-hosted-states-cli-'))
+  const states: { name: string; tickets: number; about?: string }[] = [
+    { name: 'triage', tickets: 0 },
+  ]
+  const backend = Object.assign(new FakeTicketSource(), {
+    listStates: async () => states,
+    addState: async (name: string, opts: { about?: string } = {}) => {
+      if (states.some((s) => s.name.toLowerCase() === name.toLowerCase()))
+        throw new Error(`database ticket source: state "${name}" already exists`)
+      const state = { name, tickets: 0, ...opts }
+      states.push(state)
+      return { state, created: true }
+    },
+  })
+  const project = await ticketProject(repo, 'states-secret')
+  const service = createHostedStoreService({
+    ...project,
+    env: {
+      AB_STORE_SECRET: 'states-secret',
+      AB_POSTGRES_URL: 'postgres://unused/injected',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'unused',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    sourceFor: () => backend,
+  })
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: service.fetch })
+  try {
+    await writeFile(
+      join(repo, 'autobuild.toml'),
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n',
+    )
+    const invoke = async (args: string[]) => {
+      let text = ''
+      await abTicket(args, {
+        targetRepo: repo,
+        env: { AB_STORE: server.url.href, AB_TOKEN: project.token },
+        stdout: (line) => {
+          text += line
+        },
+        stderr: () => {},
+      })
+      return JSON.parse(text)
+    }
+    const created = await invoke(['state', 'create', 'icebox', '--about', 'Deferred', '--json'])
+    expect(created).toMatchObject({
+      name: 'icebox',
+      tickets: 0,
+      about: 'Deferred',
+      created: true,
+    })
+    expect(await invoke(['states', '--json'])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'icebox', about: 'Deferred', tickets: 0 }),
+      ]),
+    )
+    await expect(invoke(['state', 'create', 'icebox', '--json'])).rejects.toThrow('already exists')
+  } finally {
+    server.stop(true)
+    await rm(repo, { recursive: true, force: true })
+  }
+})

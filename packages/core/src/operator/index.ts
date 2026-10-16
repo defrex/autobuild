@@ -92,6 +92,8 @@ export type {
   OperatorTicketQueue,
 } from './tickets'
 export {
+  listOperatorTicketStates,
+  createOperatorTicketState,
   getOperatorTicket,
   listOperatorTickets,
   mutateOperatorTicket,
@@ -132,3 +134,5 @@ export {
   findEffectiveConfigRef,
   decodeEffectiveConfig,
 } from './query'
+
+export { ticketStateCreateRequestSchema } from './protocol'

@@ -1,3 +1,5 @@
+import { seedTicketStates, policyStateNames } from './ticket-states'
+import type { Exec } from './retry'
 import type { SQL } from 'bun'
 import { hostedTicketPolicySchema, type HostedTicketPolicy } from '@defrex/autobuild/hosted-tickets'
 
@@ -26,6 +28,17 @@ export class PostgresTicketPolicyStore implements TicketPolicyStore {
       const [registration] =
         await tx`SELECT seq, action FROM project_journal WHERE repo = ${repo} ORDER BY seq DESC LIMIT 1`
       if (registration?.action !== 'added') throw new Error('project not registered')
+      const [previous] =
+        await tx`SELECT policy FROM project_ticket_policy WHERE repo = ${repo} AND registration = ${registration.seq}`
+      const old = previous
+        ? hostedTicketPolicySchema.parse(
+            typeof previous.policy === 'string' ? JSON.parse(previous.policy) : previous.policy,
+          )
+        : undefined
+      await seedTicketStates(tx as unknown as Exec, repo, [
+        ...(old ? policyStateNames(old) : []),
+        ...policyStateNames(parsed),
+      ])
       await tx`INSERT INTO project_ticket_policy (repo, registration, policy, writer, updated_at)
         VALUES (${repo}, ${registration.seq}, ${parsed}, ${writer}, ${new Date().toISOString()})
         ON CONFLICT (repo) DO UPDATE SET registration = EXCLUDED.registration, policy = EXCLUDED.policy,
