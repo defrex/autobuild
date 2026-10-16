@@ -1,3 +1,4 @@
+import { ticketRevision, checkTicketRevision } from './revision'
 /**
  * In-memory TicketSource for seam tests (SPEC §3.2, §13). Mirrors the policy
  * shape of the real adapters: initiation (listReady/get/claim/create),
@@ -12,11 +13,13 @@ import type {
   TicketListing,
   TicketSource,
   TicketUpdate,
+  TicketMutation,
 } from '../types'
 import { validateTicketUpdate } from './update'
 
 function cloneTicket(ticket: Ticket, doneState: string): Ticket {
   return {
+    revision: ticketRevision(ticket),
     ref: { ...ticket.ref },
     ...(ticket.creationKey !== undefined ? { creationKey: ticket.creationKey } : {}),
     title: ticket.title,
@@ -111,6 +114,7 @@ export class FakeTicketSource implements TicketSource {
     const ticket = this.tickets.get(id)
     if (!ticket || ticket.state === this.doneState || this.claimed.has(id)) return false
     this.claimed.add(id)
+    ticket.state = 'Doing'
     return true
   }
 
@@ -133,6 +137,7 @@ export class FakeTicketSource implements TicketSource {
     }
     const id = `fake-${this.nextId++}`
     const ticket: Ticket = {
+      revision: 'pending',
       ref: { source: this.name, id, title: draft.title },
       ...(opts.idempotencyKey !== undefined ? { creationKey: opts.idempotencyKey } : {}),
       title: draft.title,
@@ -151,6 +156,27 @@ export class FakeTicketSource implements TicketSource {
       this.idempotency.set(opts.idempotencyKey, id)
     }
     return cloneTicket(ticket, this.doneState)
+  }
+
+  async mutateIfRevision(id: string, expected: string, mutation: TicketMutation): Promise<void> {
+    const ticket = this.require(id, 'revision-checked write')
+    checkTicketRevision(cloneTicket(ticket, this.doneState), expected)
+    if (mutation.kind === 'update') await this.update(id, mutation.patch)
+    else if (mutation.kind === 'transition') await this.transition(id, mutation.state)
+    else {
+      for (const blocker of mutation.ids) {
+        this.require(blocker, 'blocker')
+        if (mutation.operation === 'block' && blocker === id)
+          throw new Error(`ticket "${id}" cannot block itself`)
+      }
+      // No await between validation and in-memory batch application.
+      const blockers = new Set(ticket.blockedBy ?? [])
+      for (const blocker of mutation.ids) {
+        if (mutation.operation === 'block') blockers.add(blocker)
+        else blockers.delete(blocker)
+      }
+      ticket.blockedBy = [...blockers]
+    }
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {

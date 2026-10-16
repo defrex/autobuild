@@ -48,6 +48,7 @@ test.each([true, undefined])('real hosted transport preserves listing hint %s', 
   backend.listReady = async () => ({
     tickets: [
       {
+        revision: 'fixture',
         ref: { source: 'linear', id: 'ENG-1', title: 'Example' },
         title: 'Example',
         body: 'Spec',

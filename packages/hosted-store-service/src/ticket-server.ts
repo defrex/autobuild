@@ -19,6 +19,9 @@ import {
 } from '@defrex/autobuild/remote-store'
 import {
   hostedTicketRequestSchemas,
+  TicketRevisionConflict,
+  TicketRevisionUnsupported,
+  mutateTicketIfRevision,
   type HostedTicketContext,
   type HostedTicketOperation,
 } from '@defrex/autobuild/hosted-tickets'
@@ -139,14 +142,22 @@ export function createTicketServer(options: TicketServerOptions): {
     // Project only the ticket boundary; current domain values remain authoritative.
     const client = stableVersion(req.headers.get(AUTOBUILD_VERSION_HEADER))!
     const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
-      if (ticket === null || client.major !== 0 || client.minor > 10) return ticket
-      const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = ticket
+      if (ticket === null) return ticket
+      const { revision: _revision, ...withoutRevision } = ticket
+      const projected = client.major === 0 && client.minor < 12 ? withoutRevision : ticket
+      if (client.major !== 0 || client.minor > 10) return projected
+      const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = projected
       return legacy
     }
 
     // Parse again through the operation-specific schema to preserve precise
     // inference in each branch while keeping the shared pre-source validation.
     switch (operation) {
+      case 'mutate-if-revision': {
+        const { input } = hostedTicketRequestSchemas['mutate-if-revision'].parse(raw)
+        await mutateTicketIfRevision(source, input.id, input.expectedRevision, input.mutation)
+        return json(200, { ok: true })
+      }
       case 'list-ready': {
         const request = hostedTicketRequestSchemas['list-ready'].parse(raw)
         const listing = await source.listReady(request.input)
@@ -214,6 +225,16 @@ export function createTicketServer(options: TicketServerOptions): {
         const principal = await authorize(req, operation)
         return await route(req, operation, principal)
       } catch (error) {
+        if (error instanceof TicketRevisionConflict)
+          return json(409, {
+            kind: 'conflict',
+            error: error.message,
+            id: error.id,
+            expectedRevision: error.expectedRevision,
+            currentRevision: error.currentRevision,
+          })
+        if (error instanceof TicketRevisionUnsupported)
+          return failure(409, 'conflict', error.message)
         if (error instanceof OperatorQueryError) return failure(409, 'conflict', error.message)
         if (error instanceof MachineAuthError) return failure(error.status, 'auth', error.message)
         if (error instanceof TicketRequestError) {

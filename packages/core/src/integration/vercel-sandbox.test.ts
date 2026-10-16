@@ -304,6 +304,7 @@ test('fake Vercel SDK lifecycle reaches PR creation across publication parks', a
     )
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'file', id: 'T-1', title: 'Composed remote build' },
         title: 'Composed remote build',
         body: '## Problem\nRemote.\n## Acceptance criteria\n- Works.\n## Out of scope\n- None.\n',
@@ -621,6 +622,7 @@ test('a guest that exits after the launching invocation detached is settled by t
     )
     const tickets = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'file', id: 'T-1', title: 'Detached guest settlement' },
         title: 'Detached guest settlement',
         body: '## Problem\nRemote.\n## Acceptance criteria\n- Works.\n## Out of scope\n- None.\n',

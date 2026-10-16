@@ -107,6 +107,7 @@ describe('operator ticket HTTP routes', () => {
   test('maps missing tickets and exact backend refusals', async () => {
     const source = new FakeTicketSource([
       {
+        revision: 'fixture',
         ref: { source: 'fake', id: 'AUT-1', title: 'One' },
         title: 'One',
         body: 'body',
@@ -131,4 +132,45 @@ describe('operator ticket HTTP routes', () => {
       message: 'provider refuses this exact transition',
     })
   })
+})
+
+test('operator writes forward expected revisions for update, move, block and unblock', async () => {
+  const source = new FakeTicketSource()
+  const client = await setup(source)
+  const target = await client.createTicket(repo, { title: 'Target', body: 'Body' })
+  const blocker = await client.createTicket(repo, { title: 'Blocker', body: 'Body' })
+  const id = target.ticket.ref.id
+  const stale = target.ticket.revision
+  const updated = await client.updateTicket(repo, id, { title: 'Updated', expectedRevision: stale })
+  const operations = [
+    () => client.updateTicket(repo, id, { body: 'Lost', expectedRevision: stale }),
+    () => client.moveTicket(repo, id, { state: 'Done', expectedRevision: stale }),
+    () =>
+      client.blockTicket(repo, id, {
+        blockerIds: [blocker.ticket.ref.id],
+        expectedRevision: stale,
+      }),
+    () =>
+      client.unblockTicket(repo, id, {
+        blockerIds: [blocker.ticket.ref.id],
+        expectedRevision: stale,
+      }),
+  ]
+  for (const operation of operations) {
+    await expect(operation()).rejects.toMatchObject({ status: 409, kind: 'conflict' })
+    expect((await client.getTicket(repo, id)).ticket).toEqual(updated.ticket)
+  }
+  const blocked = await client.blockTicket(repo, id, {
+    blockerIds: [blocker.ticket.ref.id],
+    expectedRevision: updated.ticket.revision,
+  })
+  const unblocked = await client.unblockTicket(repo, id, {
+    blockerIds: [blocker.ticket.ref.id],
+    expectedRevision: blocked.ticket.revision,
+  })
+  const moved = await client.moveTicket(repo, id, {
+    state: 'Done',
+    expectedRevision: unblocked.ticket.revision,
+  })
+  expect(moved.ticket.state).toBe('Done')
 })

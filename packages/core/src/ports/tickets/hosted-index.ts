@@ -9,3 +9,9 @@ export {
   hostedTicketRequestSchemas,
 } from './remote-protocol'
 export type { HostedTicketContext, HostedTicketOperation } from './remote-protocol'
+
+export {
+  TicketRevisionConflict,
+  TicketRevisionUnsupported,
+  mutateTicketIfRevision,
+} from './revision'

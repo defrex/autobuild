@@ -114,3 +114,109 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('revision checks serialize independent clients, batches roll back, and bigint versions stay exact', async () => {
+    const isolated = await isolatedDatabase()
+    const first = await openPostgresTicketDatabase(isolated.url)
+    const second = await openPostgresTicketDatabase(isolated.url)
+    const context = {
+      repo: 'https://github.com/acme/revisions',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    }
+    const a = first.source(context)
+    const b = second.source(context)
+    try {
+      const ticket = await a.create({ title: 'Original', body: 'Body' }, { state: 'Ready' })
+      const id = ticket.ref.id
+      const writes = await Promise.allSettled([
+        a.mutateIfRevision(id, ticket.revision, { kind: 'update', patch: { title: 'First' } }),
+        b.mutateIfRevision(id, ticket.revision, { kind: 'update', patch: { title: 'Second' } }),
+      ])
+      expect(writes.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+      expect(writes.filter((result) => result.status === 'rejected')).toHaveLength(1)
+      const current = (await a.get(id))!
+      const one = await a.create({ title: 'Blocker one', body: 'Body' })
+      const two = await a.create({ title: 'Blocker two', body: 'Body' })
+      await expect(
+        a.mutateIfRevision(id, current.revision, {
+          kind: 'blockers',
+          operation: 'block',
+          ids: [one.ref.id, 'missing'],
+        }),
+      ).rejects.toThrow('unknown ticket')
+      expect(await a.get(id)).toEqual(current)
+      await a.mutateIfRevision(id, current.revision, {
+        kind: 'blockers',
+        operation: 'block',
+        ids: [one.ref.id, two.ref.id],
+      })
+      const blocked = (await a.get(id))!
+      expect(BigInt(blocked.revision)).toBe(BigInt(current.revision) + 1n)
+      expect(blocked.blockedBy?.sort()).toEqual([one.ref.id, two.ref.id].sort())
+      await expect(
+        a.mutateIfRevision(id, current.revision, { kind: 'transition', state: 'Done' }),
+      ).rejects.toThrow('current revision')
+      await expect(
+        a.mutateIfRevision(id, current.revision, {
+          kind: 'blockers',
+          operation: 'unblock',
+          ids: [one.ref.id],
+        }),
+      ).rejects.toThrow('current revision')
+      await a.comment(id, 'Separate comment')
+      expect((await a.get(id))?.revision).toBe(blocked.revision)
+      expect(await a.claim(id)).toBe(true)
+      expect((await a.get(id))?.revision).not.toBe(blocked.revision)
+      await first.sql`UPDATE ab_tickets SET revision = 9007199254740993 WHERE repo = ${context.repo} AND id = ${id}`
+      expect((await a.get(id))?.revision).toBe('9007199254740993')
+      await b.mutateIfRevision(id, '9007199254740993', {
+        kind: 'update',
+        patch: { body: 'Exact bigint' },
+      })
+      expect((await a.get(id))?.revision).toBe('9007199254740994')
+      expect((await a.listReady({})).tickets.find((t) => t.ref.id === id)?.revision).toBe(
+        '9007199254740994',
+      )
+    } finally {
+      await first.close()
+      await second.close()
+      await isolated.cleanup()
+    }
+  })
+
+if (testUrl)
+  test('get and list pair blocker sets with their revision during concurrent writes', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const source = database.source({
+      repo: 'https://github.com/acme/snapshots',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    try {
+      const blocker = await source.create({ title: 'Blocker', body: 'Body' })
+      const target = await source.create({ title: 'Target', body: 'Body' })
+      const writer = async () => {
+        for (let i = 0; i < 30; i++) {
+          await source.addBlocker(target.ref.id, blocker.ref.id)
+          await source.removeBlocker(target.ref.id, blocker.ref.id)
+        }
+      }
+      const reader = async () => {
+        for (let i = 0; i < 60; i++) {
+          const single = (await source.get(target.ref.id))!
+          const listed = (await source.listReady({})).tickets.find(
+            (t) => t.ref.id === target.ref.id,
+          )!
+          for (const ticket of [single, listed])
+            expect(ticket.blockedBy ?? []).toEqual(
+              BigInt(ticket.revision) % 2n === 0n ? [blocker.ref.id] : [],
+            )
+        }
+      }
+      await Promise.all([writer(), reader()])
+    } finally {
+      await database.close()
+      await isolated.cleanup()
+    }
+  })

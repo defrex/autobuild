@@ -83,6 +83,7 @@ function wireError(error: string, kind: 'auth' | 'validation' | 'internal' | 'co
 /** A ticket as the *backend source* shapes it — the client must project the
  * ref onto its own 'hosted' identity, so the canned ref says 'linear'. */
 const TICKET = ticketWireSchema.parse({
+  revision: 'fixture',
   ref: {
     source: 'linear',
     id: 'ENG-42',
@@ -224,6 +225,7 @@ describe('HostedTicketSource (client half)', () => {
   test('the rest of the ticket shape survives the projection unchanged', async () => {
     const { source } = makeSource([{ body: TICKET }])
     expect(await source.get('ENG-42')).toEqual({
+      revision: 'fixture',
       ref: {
         source: 'hosted',
         id: 'ENG-42',

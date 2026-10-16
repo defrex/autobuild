@@ -46,6 +46,7 @@ async function configuredStore() {
 }
 
 const seed = {
+  revision: 'fixture',
   ref: { source: 'fake', id: 'AUT-1', title: 'Ticket' },
   title: 'Ticket',
   body: 'body\r\nwithout-final-newline',
@@ -55,6 +56,7 @@ const seed = {
   blockedBy: ['AUT-2', 'AUT-404'],
 }
 const blocker = {
+  revision: 'fixture',
   ref: { source: 'fake', id: 'AUT-2', title: 'Done' },
   title: 'Done',
   body: 'done',

@@ -169,3 +169,45 @@ describe('hosted ticket protocol', () => {
     expect(await response.text()).toContain('source failed')
   })
 })
+
+test('guarded transport rehydrates a conflict and legacy ticket decoders do not receive revision', async () => {
+  const { source, server } = harness()
+  const ticket = await source.create({ title: 'Original', body: 'Body' })
+  await source.mutateIfRevision(ticket.ref.id, ticket.revision, {
+    kind: 'update',
+    patch: { title: 'New' },
+  })
+  const current = (await source.get(ticket.ref.id))!
+  try {
+    await source.mutateIfRevision(ticket.ref.id, ticket.revision, {
+      kind: 'transition',
+      state: 'Done',
+    })
+    throw new Error('expected conflict')
+  } catch (error) {
+    expect(error).toMatchObject({
+      name: 'TicketRevisionConflict',
+      currentRevision: current.revision,
+      expectedRevision: ticket.revision,
+    })
+  }
+  expect(await source.get(ticket.ref.id)).toEqual(current)
+  for (const version of ['0.10.0', '0.11.0']) {
+    const response = await server.fetch(
+      new Request('https://tickets.example/tickets/get', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operator}`,
+          [AUTOBUILD_VERSION_HEADER]: version,
+          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { id: ticket.ref.id } }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as Record<string, unknown>
+    expect(body.revision).toBeUndefined()
+    expect(body.resolved).toBe(version === '0.11.0' ? false : undefined)
+  }
+})

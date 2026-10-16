@@ -11,6 +11,7 @@ export const hostedTicketContextSchema = z.strictObject({
 export type HostedTicketContext = z.infer<typeof hostedTicketContextSchema>
 
 export const ticketWireSchema = z.strictObject({
+  revision: z.string().min(1),
   ref: ticketRefSchema,
   creationKey: z.string().optional(),
   title: z.string(),
@@ -62,7 +63,24 @@ function envelope<T extends z.ZodType>(input: T) {
   return z.strictObject({ context: hostedTicketContextSchema, input })
 }
 
+const mutationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('update'), patch: updateSchema }),
+  z.strictObject({ kind: z.literal('transition'), state: z.string().min(1) }),
+  z.strictObject({
+    kind: z.literal('blockers'),
+    operation: z.enum(['block', 'unblock']),
+    ids: z.array(z.string().min(1)),
+  }),
+])
+
 export const hostedTicketRequestSchemas = {
+  'mutate-if-revision': envelope(
+    z.strictObject({
+      id: z.string().min(1),
+      expectedRevision: z.string().refine((v) => v.trim().length > 0),
+      mutation: mutationSchema,
+    }),
+  ),
   'list-ready': envelope(criteriaSchema),
   get: envelope(idSchema),
   claim: envelope(idSchema),

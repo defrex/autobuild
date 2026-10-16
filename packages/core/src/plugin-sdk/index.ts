@@ -152,6 +152,12 @@ export type {
 
 export { FakeTicketSource } from '../ports/tickets/fake'
 export { validateTicketUpdate } from '../ports/tickets/update'
+export {
+  TicketRevisionConflict,
+  TicketRevisionUnsupported,
+  ticketRevision,
+  checkTicketRevision,
+} from '../ports/tickets/revision'
 export { FakeWorkspaceProvider } from '../ports/workspace/fake'
 export { FakeForge } from '../ports/forge/fake'
 // ScriptContext + defaultTurnResult are the scripted fake's own API: the

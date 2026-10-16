@@ -50,6 +50,8 @@ export interface SessionStreamSink extends SessionStreamEmitter {
 // adapter with nowhere to put blobs must be fully workable.
 
 export interface Ticket {
+  /** Opaque source version of title, body, labels, state and blockers. */
+  revision: string
   ref: TicketRef
   /** Stable source-native key used to correlate an externally created ticket
    * with Autobuild's durable creation reservation. It is separate from the
@@ -148,7 +150,14 @@ export class TicketSourceRateLimitError extends Error {
   }
 }
 
+export type TicketMutation =
+  | { kind: 'update'; patch: TicketUpdate }
+  | { kind: 'transition'; state: string }
+  | { kind: 'blockers'; operation: 'block' | 'unblock'; ids: string[] }
+
 export interface TicketSource {
+  /** Check and mutate at the source boundary; absent means checks are unsupported. */
+  mutateIfRevision?(id: string, expectedRevision: string, mutation: TicketMutation): Promise<void>
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
    * actionable diagnostics for individual source records excluded as invalid.

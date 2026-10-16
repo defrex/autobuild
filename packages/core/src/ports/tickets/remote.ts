@@ -1,3 +1,4 @@
+import { TicketRevisionConflict } from './revision'
 import type {
   DependencyState,
   Ticket,
@@ -6,6 +7,7 @@ import type {
   TicketListing,
   TicketSource,
   TicketUpdate,
+  TicketMutation,
 } from '../types'
 import { AuthError } from '../../store/remote/client'
 import { errorBodySchema } from '../../store/remote/protocol'
@@ -77,8 +79,17 @@ export class HostedTicketSource implements TicketSource {
     if (!response.ok) {
       let message = `ticket service responded ${response.status}`
       try {
-        message = errorBodySchema.parse(await response.json()).error
-      } catch {
+        const body = (await response.json()) as Record<string, unknown>
+        if (
+          response.status === 409 &&
+          typeof body.currentRevision === 'string' &&
+          typeof body.expectedRevision === 'string' &&
+          typeof body.id === 'string'
+        )
+          throw new TicketRevisionConflict(body.id, body.expectedRevision, body.currentRevision)
+        message = errorBodySchema.parse(body).error
+      } catch (error) {
+        if (error instanceof TicketRevisionConflict) throw error
         // Keep the status-only safe fallback for non-protocol responses.
       }
       if (response.status === 401 || response.status === 403) throw new AuthError(message)
@@ -118,6 +129,14 @@ export class HostedTicketSource implements TicketSource {
 
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
     return this.project(await this.request('create', { draft, options }, ticketWireSchema))
+  }
+
+  async mutateIfRevision(
+    id: string,
+    expectedRevision: string,
+    mutation: TicketMutation,
+  ): Promise<void> {
+    await this.request('mutate-if-revision', { id, expectedRevision, mutation }, successWireSchema)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
