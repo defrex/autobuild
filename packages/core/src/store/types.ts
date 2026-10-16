@@ -412,7 +412,7 @@ export interface BuildStore {
   listRepoArtifacts(repo: string, kind?: string): Promise<RepositoryArtifactMeta[]>
   // ── Ticket assets (SPEC §7.1 — files attached to a ticket) ─────────────
   // Keyed by (repo, ticketId, kind, name); revisions are 0-based. The store
-  // owns the bytes, the ticket source only ever gets a note (SPEC §13).
+  // owns these bytes; hosted current assets use the ticket service store (SPEC §13).
   /** The effective ceilings this store accepts for `repo` (a remote
    * deployment may advertise lower ones than the defaults). */
   ticketAssetLimits(repo: string): Promise<TicketAssetLimits>

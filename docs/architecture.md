@@ -771,17 +771,24 @@ selected through the plugin ticket-source registry, the real filesystem and
 local-git adapters, the injected Claude and Codex CLI subprocess contracts,
 and the injected Pi CLI/RPC contract.
 Ticket assets (SPEC §7.1.3) are files attached to a ticket and kept in the
-BuildStore, never in the ticket source. `packages/core/src/store/ticket-assets.ts`
+ticket service for hosted tickets, independently of build storage, and in the
+BuildStore for other sources. `packages/core/src/store/ticket-assets.ts`
 holds the types, the limits, and the one validator every adapter calls;
 `packages/core/src/cli/ticket-assets.ts` holds the filesystem walk, the download
 writer, and the note builder; `ab ticket attach`, `asset get`, and `asset rm`
-live in `packages/core/src/cli/ticket.ts`. The only thing a ticket source sees is
-a note through `comment()`, so no source or plugin protocol changed.
+live in `packages/core/src/cli/ticket.ts`. The optional hosted source asset
+capability reuses RemoteBuildStore transport with the ticket URL and credential.
+Other sources retain the existing store path.
 A claim freezes the ticket's current assets into the build (SPEC §6.3):
 `build.created.assets` (and, when a spec is revised from the ticket,
 `spec.revised.assets`) record the pinned revisions, `state.pinnedAssets` in the
 reducer projects them, `getPinnedTicketAsset` reads them back by pinned revision,
 and `ab context` writes them under `.ab/assets/`.
+For hosted tickets, `store/ticket-asset-snapshots.ts` copies exact revisions
+into chunked immutable repository artifacts in the build store before pinning.
+Reads use explicit manifest/chunk revisions without a ticket connection. Old
+pins retain ticket-row reads; existing service attachments need no migration,
+and attachments in old local stores are not moved.
 
 Both `ab dispatch` and sessionless `ab ticket` load the repository's plugins
 before selecting their TicketSource; dispatch passes that one adapter instance

@@ -549,20 +549,31 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       return {
         sourceFor: async (context: OperatorTicketContext) => {
           await validate(context)
-          if (options.sourceFor) return options.sourceFor(context)
-          const source = (await openDatabase()).source({
-            repo: context.repo,
-            teamKey: context.teamKey,
-            lifecycle: lifecycleFor(context),
-            ...(context.tickets.createState !== undefined
-              ? { createState: context.tickets.createState }
-              : {}),
-            ...(context.tickets.proposalState !== undefined
-              ? { proposalState: context.tickets.proposalState }
-              : {}),
+          const source: TicketSource = options.sourceFor
+            ? await options.sourceFor(context)
+            : (await openDatabase()).source({
+                repo: context.repo,
+                teamKey: context.teamKey,
+                lifecycle: lifecycleFor(context),
+                ...(context.tickets.createState !== undefined
+                  ? { createState: context.tickets.createState }
+                  : {}),
+                ...(context.tickets.proposalState !== undefined
+                  ? { proposalState: context.tickets.proposalState }
+                  : {}),
+              })
+          if (!options.sourceFor) await source.listStates!()
+          if (source.assets) return source
+          const store = await authorityStore()
+          return Object.assign(source, {
+            assets: {
+              ticketAssetLimits: store.ticketAssetLimits.bind(store),
+              putTicketAsset: store.putTicketAsset.bind(store),
+              getTicketAsset: store.getTicketAsset.bind(store),
+              listTicketAssets: store.listTicketAssets.bind(store),
+              removeTicketAsset: store.removeTicketAsset.bind(store),
+            },
           })
-          await source.listStates()
-          return source
         },
         statesFor: async (context: OperatorTicketContext, source: TicketSource) => {
           await validate(context)

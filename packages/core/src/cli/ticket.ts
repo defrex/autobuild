@@ -20,7 +20,13 @@ import {
   ticketListCriteria,
   updateTicket,
 } from '../ports/tickets/operations'
-import type { Ticket, TicketSource, TicketStateInfo, TicketUpdate } from '../ports/types'
+import type {
+  TicketAssetStore,
+  Ticket,
+  TicketSource,
+  TicketStateInfo,
+  TicketUpdate,
+} from '../ports/types'
 import { reduceBuild } from '../kernel/reducer'
 import type { BuildStore } from '../store/types'
 import { spawnExec, type Exec } from '../ports/workspace/git-worktree'
@@ -174,12 +180,11 @@ export interface ResolvedTicketCommand {
   source: TicketSource
 }
 
-/** Resolve linked-worktree identity, config, selected local state, and adapter
- * exactly once for one ticket command or another sessionless caller. */
-export async function openTicketSource(
-  opts: TicketCommandOpts & { storeRef?: string },
+/** Resolve the main checkout and config without requiring provider credentials. */
+async function resolveTicketConfig(
+  opts: TicketCommandOpts,
   label: string,
-): Promise<ResolvedTicketCommand> {
+): Promise<{ targetRepo: string; config: Config }> {
   const targetRepo =
     opts.exec === undefined
       ? resolve(opts.targetRepo)
@@ -198,6 +203,21 @@ export async function openTicketSource(
     throw error
   }
 
+  return { targetRepo, config }
+}
+
+/** Resolve configuration and construct the configured ticket adapter. */
+export async function openTicketSource(
+  opts: TicketCommandOpts & { storeRef?: string },
+  label: string,
+): Promise<ResolvedTicketCommand> {
+  return createTicketCommandSource(opts, await resolveTicketConfig(opts, label))
+}
+
+async function createTicketCommandSource(
+  opts: TicketCommandOpts,
+  { targetRepo, config }: { targetRepo: string; config: Config },
+): Promise<ResolvedTicketCommand> {
   // Ticket commands use the same trusted plugin catalog as dispatch. Loading
   // and registration finish before any adapter is constructed or called.
   const plugins = await loadPlugins(config.plugins, targetRepo)
@@ -382,7 +402,7 @@ export async function abTicketShow(opts: TicketShowOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'show')
   const ticket = await requireTicket(source, opts.id)
   // An asset-listing failure fails the command rather than hiding the assets.
-  const assets = await withTicketStore(opts, ({ store, repo }) =>
+  const assets = await withTicketAssets(opts, source, ({ store, repo }) =>
     store.listTicketAssets(repo, opts.id),
   )
   if (opts.json === true) {
@@ -433,6 +453,19 @@ function withTicketStore<T>(
   )
 }
 
+function withTicketAssets<T>(
+  opts: TicketCommandOpts,
+  source: TicketSource,
+  use: (context: { store: TicketAssetStore; buildStore: BuildStore; repo: string }) => Promise<T>,
+): Promise<T> {
+  if (source.name === 'hosted' && !source.assets) {
+    throw new Error('hosted ticket source has no asset capability')
+  }
+  return withTicketStore(opts, ({ store, repo }) =>
+    use({ store: source.name === 'hosted' ? source.assets! : store, buildStore: store, repo }),
+  )
+}
+
 /** Slugs of this repo's non-terminal builds for the ticket. A build freezes its
  * ticket assets at the claim (SPEC §6.3), so a change to them does not reach
  * it. The notice is advisory: a failed lookup yields none and never blocks. */
@@ -471,18 +504,26 @@ export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
   await requireTicket(source, opts.id)
   const walk = await walkAssetPath(opts.path)
   const name = opts.name ?? walk.basename
-  const stored = await withTicketStore(opts, async ({ store, repo }) => {
+  const stored = await withTicketAssets(opts, source, async ({ store, buildStore, repo }) => {
     const limits = await store.ticketAssetLimits(repo)
     const input = await buildAssetInput(walk, { kind: opts.kind, name }, limits)
     const live = await store.listTicketAssets(repo, opts.id)
     const replacing = live.some((asset) => asset.kind === opts.kind && asset.name === name)
     const meta = await store.putTicketAsset(repo, opts.id, input)
-    return { meta, replacing, active: await activeBuildsFor(store, repo, opts.id) }
+    return { meta, replacing, active: await activeBuildsFor(buildStore, repo, opts.id) }
   })
   const { meta } = stored
   warnActiveBuilds(opts, stored.active)
   try {
-    await source.comment(opts.id, ticketAssetNote(stored.replacing ? 'replaced' : 'attached', meta))
+    await source.comment(
+      opts.id,
+      ticketAssetNote(
+        stored.replacing ? 'replaced' : 'attached',
+        meta,
+        'ab',
+        source.name === 'hosted',
+      ),
+    )
   } catch (error) {
     throw new Error(
       `ticket asset ${meta.kind}/${meta.name} was stored as revision ${meta.revision}, but the note on ` +
@@ -503,9 +544,17 @@ export async function abTicketAttach(opts: TicketAttachOpts): Promise<void> {
 /** `ab ticket asset get <id> <kind> <name> <dest>` — exact bytes at the
  * latest or a named revision. */
 export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> {
-  const asset = await withTicketStore(opts, ({ store, repo }) =>
-    store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev),
-  )
+  const resolved = await resolveTicketConfig(opts, 'ab ticket asset get')
+  const readAsset = ({ store, repo }: { store: TicketAssetStore; repo: string }) =>
+    store.getTicketAsset(repo, opts.id, opts.kind, opts.name, opts.rev)
+  const asset =
+    resolved.config.tickets.source === 'hosted'
+      ? await withTicketAssets(
+          opts,
+          (await createTicketCommandSource(opts, resolved)).source,
+          readAsset,
+        )
+      : await withTicketStore(opts, readAsset)
   if (asset === null) {
     const revision = opts.rev === undefined ? '' : ` revision ${opts.rev}`
     throw new Error(
@@ -527,16 +576,23 @@ export async function abTicketAssetGet(opts: TicketAssetGetOpts): Promise<void> 
  * (earlier revisions stay retrievable) and note the removal on the ticket. */
 export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'asset rm')
-  const { removed, active } = await withTicketStore(opts, async ({ store, repo }) => ({
-    removed: await store.removeTicketAsset(repo, opts.id, opts.kind, opts.name),
-    active: await activeBuildsFor(store, repo, opts.id),
-  }))
+  const { removed, active } = await withTicketAssets(
+    opts,
+    source,
+    async ({ store, buildStore, repo }) => ({
+      removed: await store.removeTicketAsset(repo, opts.id, opts.kind, opts.name),
+      active: await activeBuildsFor(buildStore, repo, opts.id),
+    }),
+  )
   if (removed === null) {
     throw new Error(`ticket ${opts.id} has no current asset ${opts.kind}/${opts.name} to remove`)
   }
   warnActiveBuilds(opts, active)
   try {
-    await source.comment(opts.id, ticketAssetNote('removed', removed))
+    await source.comment(
+      opts.id,
+      ticketAssetNote('removed', removed, 'ab', source.name === 'hosted'),
+    )
   } catch (error) {
     throw new Error(
       `ticket asset ${opts.kind}/${opts.name} was removed, but the note on ${source.name}:${opts.id} ` +

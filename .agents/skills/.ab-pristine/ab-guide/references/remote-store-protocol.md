@@ -485,6 +485,16 @@ does not apply. `{repo}` and `{id}` are percent-encoded path segments. Token
 authorization requires a credential for that registered project, or owner admin.
 The family is additive, so `REMOTE_STORE_PROTOCOL_VERSION` did not change.
 
+Hosted ticket attachments use the ticket service's existing repository-keyed
+asset routes with the ticket connection's URL and credential, independently
+of the build store. Names, revisions, tombstones and service limits are
+unchanged. Existing service attachments need no migration; old local
+attachments are not moved or used as a fallback. A claim or ticket spec re-pin
+copies exact revisions into immutable chunked repository artifacts in the
+destination build store. Build pins reference explicit snapshot manifests;
+build-scoped asset reads need no ticket credentials. Old pins without snapshot
+references keep their existing ticket-row lookup.
+
 A build also reads the assets it froze at its claim through its own build-scoped
 routes, authorized against the build's actual project. The
 server reduces the build's events to find the pinned revision, then returns that

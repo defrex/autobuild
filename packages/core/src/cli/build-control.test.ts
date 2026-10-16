@@ -1,3 +1,4 @@
+import { prepareAssetSnapshots } from '../store/ticket-asset-snapshots'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
 import type { EventEnvelope, EventWrite } from '../events/catalog'
@@ -1914,6 +1915,48 @@ describe('revise-spec re-pins ticket assets (SPEC §6.3)', () => {
     await store.close()
   })
 
+  test('hosted re-pin snapshots separate bytes and records authorization; preparation failure writes no answer', async () => {
+    const remote = new MemoryBuildStore()
+    const store = await pinnedStore()
+    await remote.putTicketAsset(REPO, ticket.id, file('a.png', 'hosted bytes'))
+    await raise(store, 'esc-1')
+    const base = {
+      store,
+      repo: REPO,
+      slug: SLUG,
+      env: {},
+      action: fromTicket,
+      readTicketBody: async () => CONFORMING_SPEC,
+    }
+    await expect(
+      controlBuild({
+        ...base,
+        prepareTicketAssets: async () => {
+          throw new Error('offline')
+        },
+      }),
+    ).rejects.toThrow('offline')
+    expect((await store.getEvents(SLUG)).some((e) => e.type === 'escalation.answered')).toBe(false)
+    await controlBuild({
+      ...base,
+      prepareTicketAssets: (ref, destination, repo) =>
+        prepareAssetSnapshots(remote, destination, repo, ref.id),
+    })
+    await remote.removeTicketAsset(REPO, ticket.id, 'mock', 'a.png')
+    const events = await store.getEvents(SLUG)
+    const answer = events.find((e) => e.type === 'escalation.answered')
+    const revised = events.find((e) => e.type === 'spec.revised')
+    expect(
+      answer?.type === 'escalation.answered' && answer.payload.assets?.[0]?.snapshot,
+    ).toBeDefined()
+    expect(revised?.type === 'spec.revised' && revised.payload.assets).toEqual(
+      answer?.type === 'escalation.answered' ? answer.payload.assets : undefined,
+    )
+    const asset = await store.getPinnedTicketAsset(SLUG, 'mock', 'a.png')
+    const entry = asset?.entries[0]
+    expect(entry?.type === 'file' && new TextDecoder().decode(entry.content)).toBe('hosted bytes')
+  })
+
   test('from the ticket re-pins to an empty set when every asset was removed', async () => {
     const store = await pinnedStore()
     await store.removeTicketAsset(REPO, ticket.id, 'mock', 'a.png')
@@ -1968,6 +2011,47 @@ describe('revise-spec re-pins ticket assets (SPEC §6.3)', () => {
     })
     expect(reduceBuild(events).pinnedAssets).toEqual([pin('a.png', 1, 4)])
     await store.close()
+  })
+
+  test('snapshot authorization retries reuse prepared bytes without reopening the source', async () => {
+    const store = await pinnedStore()
+    const remote = new MemoryBuildStore()
+    await remote.putTicketAsset(REPO, ticket.id, file('a.png', 'frozen'))
+    await raise(store, 'esc-1')
+    const append = store.append.bind(store)
+    let crash = true
+    store.append = async (slug, event) => {
+      if (crash && event.type === 'spec.revised') throw new Error('crash')
+      return append(slug, event)
+    }
+    await expect(
+      controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        action: fromTicket,
+        readTicketBody: async () => CONFORMING_SPEC,
+        prepareTicketAssets: (ref, destination, repo) =>
+          prepareAssetSnapshots(remote, destination, repo, ref.id),
+      }),
+    ).rejects.toThrow('crash')
+    await remote.removeTicketAsset(REPO, ticket.id, 'mock', 'a.png')
+    crash = false
+    await controlBuild({
+      store,
+      repo: REPO,
+      slug: SLUG,
+      action: fromTicket,
+      readTicketBody: async () => {
+        throw new Error('source must stay closed')
+      },
+      prepareTicketAssets: async () => {
+        throw new Error('source must stay closed')
+      },
+    })
+    const asset = await store.getPinnedTicketAsset(SLUG, 'mock', 'a.png')
+    const entry = asset?.entries[0]
+    expect(entry?.type === 'file' && new TextDecoder().decode(entry.content)).toBe('frozen')
   })
 
   test('a legacy authorization without assets leaves the pins unchanged on retry', async () => {

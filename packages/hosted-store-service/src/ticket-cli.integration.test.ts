@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { abTicket } from '@defrex/autobuild/testing'
-import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
+import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import type { TicketSourceFactory } from '@defrex/autobuild/testing'
 import { createHostedStoreService } from './service'
 
@@ -201,17 +201,21 @@ test('ticket assets attach, list, download and remove over the hosted store and 
   try {
     await writeFile(
       join(repo, 'autobuild.toml'),
-      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\nreadyLabels = []\n',
+      `[tickets]\nsource = "hosted"\nurl = "${server.url.href}"\nteamKey = "ENG"\nreadyState = "Ready"\nreadyLabels = []\n`,
     )
+    const locals = [new MemoryBuildStore(), new MemoryBuildStore()]
+    let client = 0
     const env = {
-      AB_STORE: `http://127.0.0.1:${server.port}`,
-      AB_TOKEN: project.token,
+      AB_STORE: join(repo, 'local-build-store'),
+      AB_TICKET_URL: server.url.href,
+      AB_TICKET_TOKEN: project.token,
     }
     const run = async (argv: string[]): Promise<string> => {
       const lines: string[] = []
       await abTicket(argv, {
         targetRepo: repo,
-        env,
+        env: { ...env, AB_STORE: join(repo, `local-build-store-${client}`) },
+        openStore: () => locals[client]!,
         stdout: (line) => lines.push(line),
         stderr: () => {},
       })
@@ -226,6 +230,7 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     expect(backend.comments[0]?.body).toContain('`design/mock.png`')
     expect(backend.comments[0]?.body).toContain('ab ticket asset get fake-1 design mock.png <dest>')
 
+    client = 1
     const shown = JSON.parse(await run(['show', 'fake-1', '--json'])) as {
       assets: { kind: string; name: string; revision: number; size: number }[]
     }
@@ -237,10 +242,30 @@ test('ticket assets attach, list, download and remove over the hosted store and 
     expect(new Uint8Array(await Bun.file(dest).arrayBuffer())).toEqual(
       Uint8Array.from([0, 1, 2, 250]),
     )
+    await writeFile(file, Uint8Array.from([9]))
+    await run(['attach', 'fake-1', 'design', file])
+    expect(JSON.parse(await run(['show', 'fake-1', '--json'])).assets[0].revision).toBe(1)
+    await run(['asset', 'get', 'fake-1', 'design', 'mock.png', dest, '--rev', '0'])
+    expect(new Uint8Array(await Bun.file(dest).arrayBuffer())).toEqual(
+      Uint8Array.from([0, 1, 2, 250]),
+    )
+    for (const store of locals) expect(await store.listTicketAssets(repo, 'fake-1')).toEqual([])
     await run(['asset', 'rm', 'fake-1', 'design', 'mock.png'])
-    expect(backend.comments).toHaveLength(2)
-    expect(backend.comments[1]?.body).toContain('Ticket asset removed')
+    expect(backend.comments).toHaveLength(3)
+    expect(backend.comments[2]?.body).toContain('Ticket asset removed')
     expect(JSON.parse(await run(['show', 'fake-1', '--json'])).assets).toEqual([])
+    // Existing service rows remain current attachments without copying or migration.
+    await project.store.putTicketAsset(repo, 'fake-1', {
+      kind: 'reference',
+      name: 'legacy',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'legacy', content: new Uint8Array([7]) }],
+    })
+    expect(JSON.parse(await run(['show', 'fake-1', '--json'])).assets).toEqual([
+      expect.objectContaining({ kind: 'reference', name: 'legacy', revision: 0 }),
+    ])
+    await run(['asset', 'get', 'fake-1', 'reference', 'legacy', dest])
+    expect(new Uint8Array(await Bun.file(dest).arrayBuffer())).toEqual(new Uint8Array([7]))
   } finally {
     await server.stop(true)
     await rm(repo, { recursive: true, force: true })

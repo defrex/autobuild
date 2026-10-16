@@ -541,3 +541,28 @@ describe('the file ticket source', () => {
     expect((await fileSource.get('file-1'))?.body).toContain('the spec')
   })
 })
+
+test.each(['file', 'linear'])(
+  'asset get for %s uses only build-store authority',
+  async (ticketSource) => {
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      `[tickets]\nsource = "${ticketSource}"\n${ticketSource === 'linear' ? 'teamKey = "ENG"\n' : ''}readyState = "ready"\n`,
+    )
+    await store.putTicketAsset(tmp, 'AUT-1', {
+      kind: 'reference',
+      name: 'sample',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'sample', content: new Uint8Array([7, 8]) }],
+    })
+    const dest = join(tmp, 'download')
+    await abTicket(['asset', 'get', 'AUT-1', 'reference', 'sample', dest], {
+      targetRepo: tmp,
+      env: {},
+      stdout: () => {},
+      stderr: () => {},
+      openStore: () => store,
+    })
+    expect(new Uint8Array(await readFile(dest))).toEqual(new Uint8Array([7, 8]))
+  },
+)

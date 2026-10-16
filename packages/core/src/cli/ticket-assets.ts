@@ -42,6 +42,7 @@ export function ticketAssetNote(
   event: TicketAssetNoteEvent,
   meta: TicketAssetMeta,
   cli = 'ab',
+  hosted = false,
 ): string {
   const fileCount = meta.entries.filter((entry) => entry.type === 'file').length
   const label = `\`${meta.kind}/${meta.name}\``
@@ -52,7 +53,9 @@ export function ticketAssetNote(
       return [
         `Ticket asset attached: ${label} (revision ${meta.revision}, ${contents}).`,
         '',
-        'The contents live in the Autobuild store, not in this ticket.',
+        hosted
+          ? 'The contents live in the ticket service storage.'
+          : 'The contents live in the Autobuild store, not in this ticket.',
         `Download the latest revision: \`${get}\``,
         `Download this exact revision: \`${get} --rev ${meta.revision}\``,
       ].join('\n')
@@ -60,7 +63,9 @@ export function ticketAssetNote(
       return [
         `Ticket asset replaced: ${label} is now revision ${meta.revision} (${contents}).`,
         '',
-        'The contents live in the Autobuild store, not in this ticket. Earlier revisions stay retrievable.',
+        hosted
+          ? 'The contents live in the ticket service storage. Earlier revisions stay retrievable.'
+          : 'The contents live in the Autobuild store, not in this ticket. Earlier revisions stay retrievable.',
         `Download the latest revision: \`${get}\``,
         `Download this exact revision: \`${get} --rev ${meta.revision}\``,
       ].join('\n')

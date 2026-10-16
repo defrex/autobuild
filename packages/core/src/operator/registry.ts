@@ -59,6 +59,7 @@ import { answerAction, controlPrechecks, requireRouteBuild, RouteRefusalError } 
 import { SandboxOperationError } from '../ports/workspace/operator-sandbox'
 import type { OperatorSandboxService } from './sandbox'
 import {
+  prepareOperatorTicketAssets,
   listOperatorTicketStates,
   createOperatorTicketState,
   getOperatorTicket,
@@ -601,7 +602,13 @@ export const TOOLS: readonly ToolEntry[] = [
         user: attributed(ctx),
         ...(ctx.via !== undefined ? { via: ctx.via } : {}),
         action,
-        ...(readTicketBody !== undefined ? { readTicketBody } : {}),
+        ...(readTicketBody !== undefined
+          ? {
+              readTicketBody,
+              prepareTicketAssets: (ref, store, repo) =>
+                prepareOperatorTicketAssets({ ref, store, repo, backend: ctx.tickets }),
+            }
+          : {}),
       })
     },
   ),

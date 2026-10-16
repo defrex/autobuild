@@ -1236,9 +1236,11 @@ subcommand accepts `--json`, which emits one bare JSON value and no prose: a
 
 ### Ticket assets
 
-A ticket asset is a file or folder attached to a ticket and stored in the
-BuildStore, never in the ticket source: a design export, reference screenshots,
-a sample payload. Each has a kind and a name.
+A ticket asset is a file or folder attached to a ticket: a design export,
+reference screenshots, or a sample payload. Hosted tickets store assets in their
+ticket service, independently of the build store; other sources use the
+BuildStore. Existing service assets need no migration. Old local hosted-ticket
+assets are not moved and are not a fallback. Each has a kind and a name.
 
 - `ab ticket attach <id> <kind> <path> [--name <name>] [--json]` stores `<path>`
   (default name: its basename). Attaching the same kind and name again makes a
@@ -1250,7 +1252,10 @@ a sample payload. Each has a kind and a name.
 - `ab ticket asset get <id> <kind> <name> <dest> [--rev <n>]` downloads the
   exact bytes of the latest (or given) revision; `ab ticket asset rm <id> <kind>
   <name>` drops it from the current assets.
-- **Frozen at claim.** A claim pins the current revisions into the build. A
+- **Frozen at claim.** A claim pins the current revisions into the build.
+  Hosted revisions are copied into immutable snapshots in the build store,
+  preserving revision numbers and allowing reads without the ticket service.
+  Old pins without snapshots keep reading their original ticket rows. A
   later attach or remove leaves a running build alone; a human answer with
   `--revise-spec-from-ticket` pins again. `ab build asset get <slug> <kind>
   <name> <dest> [--rev <n>]` downloads what the build froze, also after it ends.

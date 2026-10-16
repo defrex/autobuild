@@ -1,13 +1,15 @@
 /**
  * Ticket assets (SPEC §7.1): named, versioned bundles of files attached to a
- * ticket and kept in the BuildStore, keyed by `(repo, ticketId, kind, name)`.
- * The ticket source never stores the contents; it only gets a note through
+ * ticket and kept in its service (hosted) or BuildStore (other sources), keyed by `(repo, ticketId, kind, name)`.
+ * Sources also get a human-readable note through
  * `TicketSource.comment()` (SPEC §13).
  *
  * This module is the shared, adapter-independent half: the types, the limits,
  * and the one validator every adapter calls before any write.
  */
 
+import { readAssetSnapshot, prepareAssetSnapshots } from './ticket-asset-snapshots'
+import type { TicketSource } from '../ports/types'
 import type { AbEvent } from '../events/catalog'
 import type { PinnedAsset } from '../events/payloads'
 import { defineReducer } from '../kernel/incremental'
@@ -380,7 +382,19 @@ export async function samplePinnedAssets(
   return (await store.listTicketAssets(repo, ticketId)).map(pinnedAssetOf)
 }
 
-export const PINNED_ASSETS_REDUCER_VERSION = 1
+export async function preparePinnedAssets(
+  source: TicketSource,
+  store: BuildStore,
+  repo: string,
+  ticketId: string,
+): Promise<PinnedAsset[]> {
+  if (source.name !== 'hosted') return samplePinnedAssets(store, repo, ticketId)
+  if (!source.assets) throw new Error('hosted ticket source has no asset capability')
+  const ticket = await source.get(ticketId)
+  return prepareAssetSnapshots(source.assets, store, repo, ticketId, ticket?.ref.id ?? ticketId)
+}
+
+export const PINNED_ASSETS_REDUCER_VERSION = 2
 
 /** The asset sets recorded by every `build.created`/`spec.revised` pin event
  * that carries one, in array order. Each pin event replaces the set, so the
@@ -443,7 +457,7 @@ export function findPinnedRevision(
  * needed, so a finished build still answers. Null when the build never pinned
  * `kind/name` (or the revision). Rejects an unknown build. */
 export async function resolvePinnedAsset(
-  store: Pick<BuildStore, 'getBuild' | 'getEvents' | 'getTicketAsset'>,
+  store: Pick<BuildStore, 'getBuild' | 'getEvents' | 'getTicketAsset' | 'getRepoArtifact'>,
   slug: string,
   kind: string,
   name: string,
@@ -452,7 +466,23 @@ export async function resolvePinnedAsset(
   const record = await store.getBuild(slug)
   if (record === null) throw new Error(`unknown build "${slug}"`)
   if (record.ticket === undefined) return null
-  const revision = findPinnedRevision(await store.getEvents(slug), kind, name, rev)
-  if (revision === undefined) return null
-  return store.getTicketAsset(record.repo, record.ticket.id, kind, name, revision)
+  const events = await store.getEvents(slug)
+  const sets = pinnedAssetsReducer.reduce(events).pins
+  const pin =
+    rev === undefined
+      ? sets.at(-1)?.find((a) => a.kind === kind && a.name === name)
+      : sets.flat().find((a) => a.kind === kind && a.name === name && a.revision === rev)
+  if (!pin) return null
+  if (pin.snapshot) {
+    const created = events.find((event) => event.type === 'build.created')
+    const asset = await readAssetSnapshot(
+      store,
+      record.repo,
+      record.ticket.id,
+      pin,
+      created?.type === 'build.created' ? created.payload.ticket?.id : undefined,
+    )
+    return { ...asset, meta: { ...asset.meta, ticketId: record.ticket.id } }
+  }
+  return store.getTicketAsset(record.repo, record.ticket.id, kind, name, pin.revision)
 }

@@ -1015,6 +1015,7 @@ describe('runCli — sessionless build controls', () => {
       hostname: '127.0.0.1',
       port: 0,
       fetch: async (request) => {
+        if (new URL(request.url).pathname.endsWith('/assets/list')) return Response.json([])
         if (new URL(request.url).pathname.endsWith('/tickets/policy')) {
           return Response.json({ ok: true })
         }
@@ -1037,7 +1038,7 @@ describe('runCli — sessionless build controls', () => {
         openStore: () => openLocalStore(storeRef),
       }
       expect(await runCli(['answer', slug, '--revise-spec-from-ticket'], d)).toBe(0)
-      expect(requests).toEqual(['ticket-legacy'])
+      expect(requests).toEqual(['ticket-legacy', 'ticket-legacy'])
       const after = openLocalStore(storeRef)
       expect(new TextDecoder().decode((await after.getArtifact(slug, 'spec'))!.content)).toBe(body)
       await after.close()

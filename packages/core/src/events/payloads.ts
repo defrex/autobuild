@@ -196,6 +196,12 @@ const finalizeStepCompletedPayloadSchema = z.discriminatedUnion('ok', [
 /** One ticket asset revision a build froze (SPEC §6.3): the identity and
  * shape of what `listTicketAssets` returned at the pinning moment. */
 export const pinnedAssetSchema = z.strictObject({
+  snapshot: z
+    .strictObject({
+      kind: z.string().regex(/^ticket-snapshot-[a-f0-9-]+$/),
+      revision: z.number().int().nonnegative(),
+    })
+    .optional(),
   kind: z.string().min(1),
   name: z.string().min(1),
   revision: z.number().int().nonnegative(),

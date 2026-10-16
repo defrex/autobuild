@@ -1,3 +1,4 @@
+import type { BuildStore } from '../store/types'
 /**
  * Ports (SPEC §3.2): interfaces to the world, each with swappable adapters.
  * The kernel and processes depend only on these types; adapters live in
@@ -160,12 +161,22 @@ export class TicketSourceRateLimitError extends Error {
   }
 }
 
+export type TicketAssetStore = Pick<
+  BuildStore,
+  | 'ticketAssetLimits'
+  | 'putTicketAsset'
+  | 'getTicketAsset'
+  | 'listTicketAssets'
+  | 'removeTicketAsset'
+>
+
 export type TicketMutation =
   | { kind: 'update'; patch: TicketUpdate }
   | { kind: 'transition'; state: string }
   | { kind: 'blockers'; operation: 'block' | 'unblock'; ids: string[] }
 
 export interface TicketSource {
+  readonly assets?: TicketAssetStore
   /** Check and mutate at the source boundary; absent means checks are unsupported. */
   mutateIfRevision?(id: string, expectedRevision: string, mutation: TicketMutation): Promise<void>
   readonly name: string

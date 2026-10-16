@@ -1,3 +1,5 @@
+import { prepareAssetSnapshots } from './ticket-asset-snapshots'
+import { MemoryBuildStore } from './memory'
 /**
  * Reusable contract suites for the BuildStore seam (SPEC §7). The in-memory
  * adapter's behavior *is* the contract; every adapter — SQLite (§7.2.1),
@@ -2514,7 +2516,7 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
       async function pinnedBuild(
         store: BuildStore,
         slug: string,
-        assets: ReturnType<typeof pinOf>[],
+        assets: import('../events/payloads').PinnedAsset[],
       ): Promise<void> {
         const created = buildCreatedWrite()
         await store.createBuild({
@@ -2522,6 +2524,35 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           created: { ...created, payload: { ...created.payload, repo: REPO, assets } },
         })
       }
+
+      test('snapshot pins read independent bytes, historical revisions and scoped access', async () => {
+        await withStore(factory, undefined, async (store) => {
+          const source = new MemoryBuildStore()
+          await source.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'remote one'))
+          await store.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'local conflict'))
+          const pins = await prepareAssetSnapshots(source, store, REPO, 'TICK-1')
+          await pinnedBuild(store, 'snapshot-pin', pins)
+          await source.putTicketAsset(REPO, 'TICK-1', file('a.txt', 'remote two'))
+          const newer = await prepareAssetSnapshots(source, store, REPO, 'TICK-1')
+          await store.append('snapshot-pin', {
+            actor: KERNEL,
+            type: 'spec.revised',
+            payload: { artifact: { kind: 'spec', rev: 1 }, escalation: 1, assets: newer },
+          })
+          await source.removeTicketAsset(REPO, 'TICK-1', 'design', 'a.txt')
+          expect(text(await store.getPinnedTicketAsset('snapshot-pin', 'design', 'a.txt'))).toBe(
+            'remote two',
+          )
+          expect(text(await store.getPinnedTicketAsset('snapshot-pin', 'design', 'a.txt', 0))).toBe(
+            'remote one',
+          )
+          expect(await store.getPinnedTicketAsset('snapshot-pin', 'design', 'a.txt', 2)).toBeNull()
+          const scoped = store.scopeBuild('snapshot-pin')
+          expect(text(await scoped.getPinnedTicketAsset('snapshot-pin', 'design', 'a.txt'))).toBe(
+            'remote two',
+          )
+        })
+      })
 
       test('reads the pinned revision after the ticket replaces and then removes the asset', async () => {
         await withStore(factory, undefined, async (store) => {

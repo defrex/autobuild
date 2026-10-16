@@ -7524,6 +7524,55 @@ describe('Dispatcher freezes ticket assets at the claim (SPEC §6.3)', () => {
     expect(first?.type === 'file' ? new TextDecoder().decode(first.content) : null).toBe('one')
   })
 
+  test('hosted claim snapshots before authoring and resumes without the ticket service', async () => {
+    const remote = new MemoryBuildStore()
+    await remote.putTicketAsset(REPO, 'T-1', file('a.png', 'hosted'))
+    let available = true
+    const h = harness({
+      tickets: [readyTicket('T-1', { body: 'thin' })],
+      wrapTickets: (source) =>
+        Object.assign(source, {
+          name: 'hosted',
+          assets: {
+            listTicketAssets: async (...args: Parameters<BuildStore['listTicketAssets']>) => {
+              if (!available) throw new Error('offline')
+              return remote.listTicketAssets(...args)
+            },
+            getTicketAsset: remote.getTicketAsset.bind(remote),
+          },
+        }),
+      authorSpec: async () => {
+        await remote.removeTicketAsset(REPO, 'T-1', 'mock', 'a.png')
+        available = false
+        return CONFORMING_BODY
+      },
+    })
+    await h.store.putTicketAsset(REPO, 'T-1', file('a.png', 'local'))
+    await h.dispatcher.tick()
+    const asset = await h.store.getPinnedTicketAsset('add-rate-limiting', 'mock', 'a.png')
+    const entry = asset?.entries[0]
+    expect(entry?.type === 'file' && new TextDecoder().decode(entry.content)).toBe('hosted')
+    await h.dispatcher.tick()
+    expect(await h.store.getPinnedTicketAsset('add-rate-limiting', 'mock', 'a.png')).toEqual(asset)
+  })
+
+  test('hosted snapshot failure never launches an incomplete build', async () => {
+    const h = harness({
+      tickets: [readyTicket('T-1')],
+      wrapTickets: (source) =>
+        Object.assign(source, {
+          name: 'hosted',
+          assets: {
+            listTicketAssets: async () => {
+              throw new Error('ticket assets offline')
+            },
+          },
+        }),
+    })
+    await expect(h.dispatcher.tick()).rejects.toThrow('ticket assets offline')
+    expect(await h.store.listBuilds()).toEqual([])
+  })
+
   test('a ticket with no assets gets exactly the build.created it always had', async () => {
     const h = harness({ tickets: [readyTicket('T-1')] })
     await h.dispatcher.tick()
