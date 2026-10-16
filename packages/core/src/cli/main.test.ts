@@ -84,12 +84,13 @@ describe('runCli — routing and exit codes', () => {
     const help = d.out.join('\n')
     for (const form of [
       'ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]',
-      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json]',
-      'ab ticket block <id> <blocker-id[,blocker-id...]> [--json]',
-      'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json]',
+      'ab ticket edit <id>',
+      'ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--expected-revision <opaque>] [--json]',
+      'ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
+      'ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       'ab ticket list [--state <state>] [--labels a,b] [--json]',
       'ab ticket show <id> [--store <ref>] [--json]',
-      'ab ticket move <id> <state> [--json]',
+      'ab ticket move <id> <state> [--expected-revision <opaque>] [--json]',
       'ab ticket states [--json]',
       'ab ticket state create <name> [--about <text>] [--json]',
       'ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]',

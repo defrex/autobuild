@@ -2058,3 +2058,41 @@ build phase, which is the criterion for membership (§16.3): `ab-spec` and
 `ab-tickets` are human/agent-facing pre-build surfaces, `ab-guide` is
 read-only reference including the setup handoff guidance, and `ab-operate` is
 the manual for the orchestrator role, which any agent may take on.
+
+## Revision-checked ticket writes
+
+Every ticket read includes an opaque `revision`. Pass it as `expectedRevision`
+(on MCP/operator requests) or `--expected-revision <opaque>` on `ab ticket update`,
+`move`, `block` and `unblock`. A stale write fails without changing anything and
+reports the current revision. Omission preserves unguarded behavior. Blocker
+checks cover the entire batch. Dispatcher moves remain unguarded and change the
+revision. Sources without guarded writes, including Linear, refuse supplied
+revisions rather than ignoring them.
+
+`ab ticket edit <id>` opens `$VISUAL`, falling back to `$EDITOR`, using TOML
+frontmatter and a Markdown body. Only title, body and labels are editable;
+id, blockers, creation key and reference comments are read-only. It saves only
+changed fields with the opening revision. Unchanged or formatting-only edits
+write nothing. On conflict, invalid input or editor failure, the error names an
+absolute file path containing the edited text. Read the current ticket and
+reapply the intended changes before retrying; conflicts are never merged.
+
+File and Linear revisions fingerprint title, body, canonical label/blocker sets
+and state; reverting identical content restores its fingerprint. File checks
+re-read immediately before writing, with the existing no-lock race window.
+Direct file edits and state-directory moves change revisions. File comments
+change the body and revision; separate hosted comments do not. Hosted revisions
+are monotonic decimal bigint strings, and checks run under the same row lock
+and transaction as all requested changes. Hosted reads return a coherent
+snapshot of fields, blockers and revision.
+
+Read before writing, and copy the opaque revision verbatim:
+
+```sh
+ab ticket show AUT-8 --json
+ab ticket update AUT-8 --title 'Revised title' --expected-revision '<revision from show>'
+ab ticket edit AUT-8
+```
+
+Use `expectedRevision` on MCP `tickets.update`, `tickets.move`, `tickets.block`
+and `tickets.unblock` with the revision from `tickets.get` or `tickets.list`.

@@ -2036,7 +2036,7 @@ export class SqliteBuildStore implements BuildStore {
             return { stale: false, record: this.toStreamRecord(this.requireStream(streamId)) }
           },
         )
-        if (!committed.stale) return committed.record
+        if (committed.stale === false) return committed.record
         // A foreign appender landed inside the prepare window; loop and
         // re-prepare from the newer chunk set so its acknowledged chunk is
         // not omitted from the finalized artifact.

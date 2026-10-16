@@ -73,6 +73,7 @@ const CONFORMING_BODY = [
 function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
   const title = over.title ?? 'Add rate limiting'
   return {
+    revision: 'fixture',
     ref: { source: 'fake', id, title },
     ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
@@ -1105,7 +1106,11 @@ releaseId = 42
 
   test('claim race: lost claim skips the ticket without building', async () => {
     const h = harness({ tickets: [readyTicket('T-1')] })
-    await h.tickets.claim('T-1') // another dispatcher won the claim
+    const claim = h.tickets.claim.bind(h.tickets)
+    h.tickets.claim = async (id) => {
+      await claim(id) // another dispatcher wins after listing, before our claim
+      return false
+    }
 
     const report = await h.dispatcher.tick()
     expect(report).toEqual({ ...emptyTickReport(), claimRaces: 1 })
@@ -1143,9 +1148,8 @@ releaseId = 42
     })
 
     const second = await h2.dispatcher.tick()
-    // claimRaces: 1 — the fake still lists the already-claimed T-1 as Ready;
-    // the claim-before-launch gate is exactly what makes that harmless (§12).
-    expect(second).toEqual({ ...emptyTickReport(), dispatched: 1, claimRaces: 1 })
+    // The first ticket left Ready at claim, so only T-2 is offered this tick.
+    expect(second).toEqual({ ...emptyTickReport(), dispatched: 1 })
     expect((await h2.store.listBuilds()).map((b) => b.slug)).toEqual([
       'first-feature',
       'second-feature',

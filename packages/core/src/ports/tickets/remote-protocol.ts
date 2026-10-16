@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { ticketRefSchema } from '../../ontology'
 
+/** Explicit opt-in: released clients through 0.12 use strict decoders without revisions.
+ * Source checkouts can share their release version, so version alone is insufficient. */
+export const TICKET_REVISIONS_HEADER = 'x-autobuild-ticket-revisions'
+export const TICKET_REVISIONS_CAPABILITY = '1'
+
 /** Repository-owned policy sent with every hosted ticket operation. */
 export const hostedTicketContextSchema = z.strictObject({
   teamKey: z.string().min(1),
@@ -20,6 +25,7 @@ export const ticketCommentWireSchema = z.strictObject({
 })
 
 export const ticketWireSchema = z.strictObject({
+  revision: z.string().min(1),
   ref: ticketRefSchema,
   comments: z.array(ticketCommentWireSchema).optional(),
   creationKey: z.string().optional(),
@@ -72,7 +78,24 @@ function envelope<T extends z.ZodType>(input: T) {
   return z.strictObject({ context: hostedTicketContextSchema, input })
 }
 
+const mutationSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('update'), patch: updateSchema }),
+  z.strictObject({ kind: z.literal('transition'), state: z.string().min(1) }),
+  z.strictObject({
+    kind: z.literal('blockers'),
+    operation: z.enum(['block', 'unblock']),
+    ids: z.array(z.string().min(1)),
+  }),
+])
+
 export const hostedTicketRequestSchemas = {
+  'mutate-if-revision': envelope(
+    z.strictObject({
+      id: z.string().min(1),
+      expectedRevision: z.string().refine((v) => v.trim().length > 0),
+      mutation: mutationSchema,
+    }),
+  ),
   'list-ready': envelope(criteriaSchema),
   states: envelope(z.strictObject({})),
   get: envelope(idSchema),

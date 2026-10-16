@@ -1,3 +1,4 @@
+import { editTicket, type TicketEditorRunner } from './ticket-editor'
 /**
  * Source-agnostic pre-build ticket operations (SPEC §8.8). These commands run
  * outside build sessions and resolve the repository's configured TicketSource,
@@ -51,6 +52,8 @@ export type TicketSourceFactory = (
 
 export interface TicketCommandOpts {
   targetRepo: string
+  expectedRevision?: string
+  editorRunner?: TicketEditorRunner
   /** Process environment — store selection and adapter secrets. */
   env: Record<string, string | undefined>
   /** Git seam supplied by the CLI; omitted direct callers use targetRepo. */
@@ -162,6 +165,7 @@ type TicketCommandName =
   | 'state create'
   | 'create'
   | 'update'
+  | 'edit'
   | 'block'
   | 'unblock'
   | 'list'
@@ -333,18 +337,18 @@ export async function abTicketUpdate(opts: TicketUpdateOpts): Promise<void> {
     ...(opts.labels !== undefined ? { labels: [...opts.labels] } : {}),
   }
   if (opts.json === true) {
-    const updated = await updateTicket(source, opts.id, patch)
+    const updated = await updateTicket(source, opts.id, patch, true, opts.expectedRevision)
     if (updated !== null) emitTicketJson(opts, updated)
     return
   }
-  await updateTicket(source, opts.id, patch, false)
+  await updateTicket(source, opts.id, patch, false, opts.expectedRevision)
   opts.stdout(`ticket updated: ${source.name}:${opts.id}`)
 }
 
 export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'block')
   const blockerIds = [...new Set(opts.blockerIds)]
-  const updated = await changeBlockers(source, opts.id, blockerIds, 'block')
+  const updated = await changeBlockers(source, opts.id, blockerIds, 'block', opts.expectedRevision)
   if (opts.json === true) {
     emitTicketJson(opts, updated)
     return
@@ -357,7 +361,13 @@ export async function abTicketBlock(opts: TicketBlockerOpts): Promise<void> {
 export async function abTicketUnblock(opts: TicketBlockerOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'unblock')
   const blockerIds = [...new Set(opts.blockerIds)]
-  const updated = await changeBlockers(source, opts.id, blockerIds, 'unblock')
+  const updated = await changeBlockers(
+    source,
+    opts.id,
+    blockerIds,
+    'unblock',
+    opts.expectedRevision,
+  )
   if (opts.json === true) {
     emitTicketJson(opts, updated)
     return
@@ -599,7 +609,7 @@ export async function abTicketAssetRm(opts: TicketAssetRmOpts): Promise<void> {
 /** `ab ticket move <id> <state>` — adapter-owned state validation and move. */
 export async function abTicketMove(opts: TicketMoveOpts): Promise<void> {
   const { source } = await resolveTicketCommand(opts, 'move')
-  const moved = await moveTicket(source, opts.id, opts.state)
+  const moved = await moveTicket(source, opts.id, opts.state, opts.expectedRevision)
   if (opts.json === true) {
     opts.stdout(JSON.stringify(moved, null, 2))
     return
@@ -712,9 +722,11 @@ export async function abTicketStateCreate(opts: TicketStateCreateOpts): Promise<
 const CREATE_USAGE =
   'usage: ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json] (§8.8)'
 const UPDATE_USAGE =
-  'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--json] (§8.8)'
-const BLOCK_USAGE = 'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--json] (§8.8)'
-const UNBLOCK_USAGE = 'usage: ab ticket unblock <id> <blocker-id[,blocker-id...]> [--json] (§8.8)'
+  'usage: ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--expected-revision <opaque>] [--json] (§8.8)'
+const BLOCK_USAGE =
+  'usage: ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json] (§8.8)'
+const UNBLOCK_USAGE =
+  'usage: ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json] (§8.8)'
 const LIST_USAGE = 'usage: ab ticket list [--state <state>] [--labels a,b] [--json] (§8.8)'
 const SHOW_USAGE = 'usage: ab ticket show <id> [--store <ref>] [--json] (§8.8)'
 const ATTACH_USAGE =
@@ -723,11 +735,13 @@ const ASSET_GET_USAGE =
   'usage: ab ticket asset get <id> <kind> <name> <dest> [--rev <n>] [--store <ref>] [--json] (§8.8)'
 const ASSET_RM_USAGE =
   'usage: ab ticket asset rm <id> <kind> <name> [--store <ref>] [--json] (§8.8)'
-const MOVE_USAGE = 'usage: ab ticket move <id> <state> [--json] (§8.8)'
+const MOVE_USAGE =
+  'usage: ab ticket move <id> <state> [--expected-revision <opaque>] [--json] (§8.8)'
 const STATES_USAGE = 'usage: ab ticket states [--json] (§8.8)'
 const STATE_CREATE_USAGE = 'usage: ab ticket state create <name> [--about <text>] [--json] (§8.8)'
 export const TICKET_USAGE = [
   CREATE_USAGE,
+  'usage: ab ticket edit <id> (§8.8)',
   UPDATE_USAGE,
   BLOCK_USAGE,
   UNBLOCK_USAGE,
@@ -785,10 +799,23 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       return
     }
 
+    case 'edit': {
+      if (args.length !== 1 || !args[0]?.trim()) throw new Error('usage: ab ticket edit <id>')
+      const { source } = await resolveTicketCommand(opts, 'edit')
+      await editTicket(source, args[0], opts.env, opts.stdout, opts.editorRunner)
+      return
+    }
+
     case 'update': {
       const parsed = parseArgs(
         args,
-        { title: 'value', body: 'value', labels: 'value', json: 'boolean' },
+        {
+          title: 'value',
+          body: 'value',
+          labels: 'value',
+          'expected-revision': 'value',
+          json: 'boolean',
+        },
         TICKET_USAGE,
       )
       const [id, ...extra] = parsed.positionals
@@ -805,6 +832,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       await abTicketUpdate({
         ...opts,
         id,
+        expectedRevision: stringFlag(parsed, 'expected-revision'),
         ...(title !== undefined ? { title } : {}),
         ...(bodyFile !== undefined ? { bodyFile } : {}),
         ...(labels !== undefined ? { labels: commaList(labels) } : {}),
@@ -815,7 +843,11 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
 
     case 'block':
     case 'unblock': {
-      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const parsed = parseArgs(
+        args,
+        { json: 'boolean', 'expected-revision': 'value' },
+        TICKET_USAGE,
+      )
       const [id, blockerList, ...extra] = parsed.positionals
       if (
         id === undefined ||
@@ -828,7 +860,13 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
       }
       const blockerIds = commaList(blockerList)
       if (blockerIds.length === 0) throw new Error(TICKET_USAGE)
-      const blockerOpts = { ...opts, id, blockerIds, json: parsed.flags.has('json') }
+      const blockerOpts = {
+        ...opts,
+        id,
+        blockerIds,
+        expectedRevision: stringFlag(parsed, 'expected-revision'),
+        json: parsed.flags.has('json'),
+      }
       if (command === 'block') await abTicketBlock(blockerOpts)
       else await abTicketUnblock(blockerOpts)
       return
@@ -972,7 +1010,11 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
     }
 
     case 'move': {
-      const parsed = parseArgs(args, { json: 'boolean' }, TICKET_USAGE)
+      const parsed = parseArgs(
+        args,
+        { json: 'boolean', 'expected-revision': 'value' },
+        TICKET_USAGE,
+      )
       const [id, state, ...extra] = parsed.positionals
       if (
         id === undefined ||
@@ -987,6 +1029,7 @@ export async function abTicket(argv: string[], opts: TicketCliOpts): Promise<voi
         ...opts,
         id,
         state,
+        expectedRevision: stringFlag(parsed, 'expected-revision'),
         json: parsed.flags.has('json'),
       })
       return

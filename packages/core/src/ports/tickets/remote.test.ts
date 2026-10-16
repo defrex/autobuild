@@ -24,6 +24,8 @@ import {
 } from '../../store/remote/version'
 import {
   claimWireSchema,
+  TICKET_REVISIONS_HEADER,
+  TICKET_REVISIONS_CAPABILITY,
   dependencyStatesWireSchema,
   successWireSchema,
   ticketListingWireSchema,
@@ -83,6 +85,7 @@ function wireError(error: string, kind: 'auth' | 'validation' | 'internal' | 'co
 /** A ticket as the *backend source* shapes it — the client must project the
  * ref onto its own 'hosted' identity, so the canned ref says 'linear'. */
 const TICKET = ticketWireSchema.parse({
+  revision: 'fixture',
   ref: {
     source: 'linear',
     id: 'ENG-42',
@@ -168,6 +171,7 @@ describe('HostedTicketSource (client half)', () => {
         'content-type': 'application/json',
         'x-autobuild-ticket-comments': '1',
         authorization: 'Bearer t0k',
+        [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
       })
@@ -225,6 +229,7 @@ describe('HostedTicketSource (client half)', () => {
   test('the rest of the ticket shape survives the projection unchanged', async () => {
     const { source } = makeSource([{ body: TICKET }])
     expect(await source.get('ENG-42')).toEqual({
+      revision: 'fixture',
       ref: {
         source: 'hosted',
         id: 'ENG-42',

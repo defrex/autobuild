@@ -18,6 +18,7 @@ async function runScenario(mode: 'direct' | 'hosted'): Promise<ScenarioResult> {
   const repo = await mkdtemp(join(tmpdir(), `ab-ticket-${mode}-`))
   const backend = new FakeTicketSource([
     {
+      revision: 'fixture',
       ref: { source: 'fake', id: 'B', title: 'Dependency' },
       title: 'Dependency',
       body: 'dependency body',
@@ -171,6 +172,7 @@ test('ticket assets attach, list, download and remove over the hosted store and 
   const repo = await mkdtemp(join(tmpdir(), 'ab-ticket-assets-hosted-'))
   const backend = new FakeTicketSource([
     {
+      revision: 'fixture',
       ref: { source: 'fake', id: 'fake-1' },
       title: 'Asset ticket',
       body: 'body',

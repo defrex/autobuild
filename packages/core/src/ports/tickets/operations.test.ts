@@ -48,3 +48,28 @@ describe('shared ticket operations', () => {
     expect((await source.get(target.ref.id))?.blockedBy).toEqual([blocker.ref.id])
   })
 })
+
+test('guarded blockers are one adapter call and legacy plugins cannot silently drop checks', async () => {
+  const source = new FakeTicketSource()
+  const target = await source.create({ title: 'Target', body: 'Body' })
+  const one = await source.create({ title: 'One', body: 'Body' })
+  const two = await source.create({ title: 'Two', body: 'Body' })
+  const original = source.mutateIfRevision.bind(source)
+  const calls: unknown[] = []
+  source.mutateIfRevision = async (...args) => {
+    calls.push(args)
+    await original(...args)
+  }
+  await changeBlockers(source, target.ref.id, [one.ref.id, two.ref.id], 'block', target.revision)
+  expect(calls).toHaveLength(1)
+  expect(source.blockerAdds).toHaveLength(0)
+  Object.defineProperty(source, 'mutateIfRevision', { value: undefined })
+  const before = await source.get(target.ref.id)
+  await expect(
+    changeBlockers(source, target.ref.id, [one.ref.id], 'unblock', before!.revision),
+  ).rejects.toThrow('does not support')
+  await expect(
+    updateTicket(source, target.ref.id, { title: 'Lost' }, false, before!.revision),
+  ).rejects.toThrow('does not support')
+  expect(await source.get(target.ref.id)).toEqual(before)
+})

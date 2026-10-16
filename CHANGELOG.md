@@ -3,6 +3,8 @@
 ## Unreleased
 
 - [#621](https://github.com/defrex/autobuild/pull/621) — Store hosted ticket attachments on the ticket service
+- [#618](https://github.com/defrex/autobuild/pull/618) — Add revision-checked ticket writes and a guarded editor flow
+
 - [#617](https://github.com/defrex/autobuild/pull/617) — Decouple hosted tickets from build storage
 - Hosted tickets support local builds through `[tickets] url` and `ab connect --tickets URL`.
   New hosted policy defaults to `triage`, `ready`, `doing`, `done`; `readyState` is optional

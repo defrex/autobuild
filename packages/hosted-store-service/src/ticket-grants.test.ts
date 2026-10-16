@@ -86,6 +86,7 @@ test('ticket transport enforces runner/phase authority and service-only grants',
     'transition',
     'comment',
     'update',
+    'mutate-if-revision',
     'add-blocker',
     'remove-blocker',
   ])
