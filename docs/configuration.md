@@ -202,6 +202,10 @@ dashboard notice row or on plain-mode stderr, and suppresses repeats while the
 same failure remains. Restoring `autobuild.toml` with valid configuration clears
 the rejection and ordinary live reload resumes without a dispatcher restart.
 
+Dispatcher merge readiness, startup resume, and execution recovery use the same pinned
+commands, verify, and finalize configuration as the build runner. Missing pins retain
+the legacy live-configuration fallback.
+
 These fields hot-reload:
 
 | Field or table | Boundary where a new value applies |
@@ -210,8 +214,8 @@ These fields hot-reload:
 | `ticketScanIntervalSeconds` | Next tick; evaluates elapsed time against the new interval. |
 | `capacity` | Next dispatcher tick. |
 | `[pr]` | Next build creation. |
-| `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. A base-branch reload does not retarget an in-flight build. |
-| `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
+| `[commands]` | Next setup, verify check, or finalize check selected for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. A base-branch reload does not retarget an in-flight build. |
+| `[verify]` and `[finalize]` | Next engine step selection for a build whose OWN branch carries it. Dispatcher readiness, resume, and recovery use the same pin. An approved plan's stored verify selection remains authoritative, and a base-branch reload does not retarget an in-flight build. |
 | `[workspace]` provider and config (including `provisioning`) | Next launch of a build whose OWN branch carries it. A base-branch reload never re-provisions an in-flight build. |
 | `[roles]` | Next agent invocation for that role. Runtime, model, args, alternates, and the session budget are captured together and delivered live. |
 | `[policy]` | Next policy, convergence, or agent-session boundary, delivered live. A running session keeps its captured budget. |
