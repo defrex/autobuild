@@ -1,7 +1,25 @@
+import { portableAssetSchema } from './portable-assets'
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { z } from 'zod'
 
 const frontmatterSchema = z.strictObject({
+  comments: z
+    .array(
+      z.strictObject({ body: z.string(), createdAt: z.string(), author: z.string().optional() }),
+    )
+    .optional(),
+  attachments: z
+    .array(portableAssetSchema)
+    .superRefine((assets, ctx) => {
+      const names = new Set<string>()
+      for (const asset of assets) {
+        const key = `${asset.kind}/${asset.name}`
+        if (names.has(key))
+          ctx.addIssue({ code: 'custom', message: `duplicate attachment: ${key}` })
+        names.add(key)
+      }
+    })
+    .optional(),
   id: z.string().min(1),
   title: z.string().min(1),
   labels: z.array(z.string()).default([]),
@@ -65,6 +83,8 @@ export function serializeTicketFile(front: Frontmatter, body: string): string {
   if (front.idempotencyKey !== undefined) {
     data.idempotencyKey = front.idempotencyKey
   }
+  if (front.comments !== undefined) data.comments = front.comments
+  if (front.attachments !== undefined) data.attachments = front.attachments
   // smol-toml stringify ends with a newline; the closing fence follows it.
   return `${OPEN_FENCE}${stringifyToml(data)}+++\n${body}`
 }

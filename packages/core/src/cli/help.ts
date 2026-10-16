@@ -174,6 +174,8 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
       'Usage:',
       '  ab ticket create <title> --body <file> [--state <state>] [--labels a,b] [--blocked-by id,id] [--json]',
       '  ab ticket edit <id>',
+      '  ab ticket export <dir> [--store <ref>]',
+      '  ab ticket import <dir> [--store <ref>]',
       '  ab ticket update <id> [--title <title>] [--body <file>] [--labels a,b] [--expected-revision <opaque>] [--json]',
       '  ab ticket block <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',
       '  ab ticket unblock <id> <blocker-id[,blocker-id...]> [--expected-revision <opaque>] [--json]',

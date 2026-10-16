@@ -2637,9 +2637,9 @@ export class Dispatcher {
           seed?.assets ??
           (await preparePinnedAssets(this.deps.tickets, store, record.repo, record.ticket.id).catch(
             (error) => {
-              // Preserve legacy non-hosted recovery; hosted preparation must never
-              // publish a successful empty pin after losing the source bytes.
-              if (this.deps.tickets.name === 'hosted') throw error
+              // Preserve legacy recovery only without native assets. Native preparation
+              // must never publish an empty pin after losing the source bytes.
+              if (this.deps.tickets.assets || this.deps.tickets.name === 'hosted') throw error
               return []
             },
           ))

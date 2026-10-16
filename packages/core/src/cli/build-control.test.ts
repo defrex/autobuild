@@ -1957,6 +1957,39 @@ describe('revise-spec re-pins ticket assets (SPEC §6.3)', () => {
     expect(entry?.type === 'file' && new TextDecoder().decode(entry.content)).toBe('hosted bytes')
   })
 
+  test('file native re-pin uses the supplied preparation callback and freezes bytes', async () => {
+    const { FileTicketSource } = await import('../ports/tickets/file')
+    const { preparePinnedAssets } = await import('../store/ticket-assets')
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'native-repin-'))
+    try {
+      const source = new FileTicketSource({ dir })
+      await source.create({ title: 'Source', body: CONFORMING_SPEC }, { requestedId: ticket.id })
+      await source.assets.putTicketAsset(REPO, ticket.id, file('a.png', 'native bytes'))
+      const store = await pinnedStore()
+      await raise(store, 'esc-1')
+      await controlBuild({
+        store,
+        repo: REPO,
+        slug: SLUG,
+        env: {},
+        action: fromTicket,
+        readTicketBody: async () => CONFORMING_SPEC,
+        prepareTicketAssets: (ref, destination, repo) =>
+          preparePinnedAssets(source, destination, repo, ref.id),
+      })
+      await source.assets.removeTicketAsset(REPO, ticket.id, 'mock', 'a.png')
+      const asset = await store.getPinnedTicketAsset(SLUG, 'mock', 'a.png')
+      expect(
+        asset?.entries[0]?.type === 'file' && new TextDecoder().decode(asset.entries[0].content),
+      ).toBe('native bytes')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test('from the ticket re-pins to an empty set when every asset was removed', async () => {
     const store = await pinnedStore()
     await store.removeTicketAsset(REPO, ticket.id, 'mock', 'a.png')

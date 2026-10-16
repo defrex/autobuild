@@ -171,6 +171,13 @@ export function createTicketServer(options: TicketServerOptions): {
       }
       requireProject(principal, context.repo)
     }
+    if (
+      operation === 'create' &&
+      (principal.kind === 'ticket-grant' || principal.kind === 'delegated') &&
+      hostedTicketRequestSchemas.create.parse(raw).input.options?.requestedId !== undefined
+    ) {
+      throw new MachineAuthError(403, 'only project or owner authority may request a ticket id')
+    }
     const source = await options.sourceFor(context, principal)
 
     // Both v0.9 and v0.10 use strict ticket decoders without resolution fields.

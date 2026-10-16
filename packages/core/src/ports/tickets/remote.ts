@@ -1,3 +1,4 @@
+import { hostedRequestedIds } from './requested-id'
 import { TicketRevisionConflict } from './revision'
 import type {
   DependencyState,
@@ -48,6 +49,7 @@ export interface HostedTicketSourceOptions extends HostedTicketContext {
 /** Full TicketSource client for a hosted Autobuild service. */
 export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
+  readonly requestedIds: ReturnType<typeof hostedRequestedIds>
   readonly assets: import('../types').TicketAssetStore
   private readonly base: string
   private readonly token: string
@@ -55,6 +57,7 @@ export class HostedTicketSource implements TicketSource {
   private readonly context: HostedTicketContext
 
   constructor(options: HostedTicketSourceOptions) {
+    this.requestedIds = hostedRequestedIds(options.teamKey)
     const client = new RemoteBuildStore({
       url: options.url,
       token: options.token,

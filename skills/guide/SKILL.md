@@ -217,6 +217,8 @@ The distinctions that change an administrator's answer:
   guidance and later dispatcher ticks retry. Without consent it remains open for
   ordinary `git diff` inspection; it has no review UI or image host.
 
+For moving a project between sources, follow the [ticket migration procedure](references/ticket-migration.md).
+
 ## Independent hosted tickets
 
 Hosted tickets support local builds. Configure `[tickets] source = "hosted"`,
@@ -1231,8 +1233,8 @@ transitions, so an invalid state fails with the
 source's known states. A missing id fails nonzero with an error naming both the
 id and configured source.
 
-Human-readable output is the default and must not be parsed for ids. Every
-subcommand accepts `--json`, which emits one bare JSON value and no prose: a
+Human-readable output is the default and must not be parsed for ids. The CRUD
+subcommands accept `--json`, which emits one bare JSON value and no prose: a
 `Ticket[]` for `list`, and the complete resulting `Ticket` for `create`,
 `update`, `block`, `unblock`, `show`, or `move`.
 
@@ -1240,8 +1242,9 @@ subcommand accepts `--json`, which emits one bare JSON value and no prose: a
 
 A ticket asset is a file or folder attached to a ticket: a design export,
 reference screenshots, or a sample payload. Hosted tickets store assets in their
-ticket service, independently of the build store; other sources use the
-BuildStore. Existing service assets need no migration. Old local hosted-ticket
+ticket service, independently of the build store; file tickets use native portable
+assets composed with legacy BuildStore attachments. Sources without native assets
+use the BuildStore. Existing service assets need no migration. Old local hosted-ticket
 assets are not moved and are not a fallback. Each has a kind and a name.
 
 - `ab ticket attach <id> <kind> <path> [--name <name>] [--json]` stores `<path>`
@@ -2082,8 +2085,10 @@ reapply the intended changes before retrying; conflicts are never merged.
 File and Linear revisions fingerprint title, body, canonical label/blocker sets
 and state; reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
-Direct file edits and state-directory moves change revisions. File comments
-change the body and revision; separate hosted comments do not. Hosted revisions
+Direct file edits and state-directory moves change revisions. File revisions also
+cover structured comments and portable attachments. Legacy file comments change
+the body; structured comments preserve it. Separate hosted comments do not change
+ticket revisions. Hosted revisions
 are monotonic decimal bigint strings, and checks run under the same row lock
 and transaction as all requested changes. Hosted reads return a coherent
 snapshot of fields, blockers and revision.

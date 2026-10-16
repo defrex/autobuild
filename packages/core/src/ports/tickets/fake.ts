@@ -1,3 +1,4 @@
+import { fileRequestedIds } from './requested-id'
 import { ticketRevision, checkTicketRevision } from './revision'
 /**
  * In-memory TicketSource for seam tests (SPEC §3.2, §13). Mirrors the policy
@@ -32,6 +33,7 @@ function cloneTicket(ticket: Ticket, doneState: string): Ticket {
 }
 
 export class FakeTicketSource implements TicketSource {
+  readonly requestedIds = fileRequestedIds
   readonly name = 'fake'
 
   /** Journal of every projection sent outward (§13), in call order. */
@@ -135,7 +137,8 @@ export class FakeTicketSource implements TicketSource {
       const adopted = this.idempotency.get(opts.idempotencyKey)
       if (adopted !== undefined) return cloneTicket(this.require(adopted, 'create'), this.doneState)
     }
-    const id = `fake-${this.nextId++}`
+    const id = opts.requestedId ?? `fake-${this.nextId++}`
+    if (this.tickets.has(id)) throw new Error(`requested ticket id already occupied: ${id}`)
     const ticket: Ticket = {
       revision: 'pending',
       ref: { source: this.name, id, title: draft.title },

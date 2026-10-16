@@ -3,7 +3,10 @@ import type { Ticket, TicketMutation, TicketSource } from '../types'
 
 /** Content versions intentionally return to the same value after an exact revert. */
 export function ticketRevision(
-  ticket: Pick<Ticket, 'title' | 'body' | 'labels' | 'state' | 'blockedBy'>,
+  ticket: Pick<Ticket, 'title' | 'body' | 'labels' | 'state' | 'blockedBy'> & {
+    comments?: Ticket['comments']
+    attachments?: unknown
+  },
 ): string {
   return createHash('sha256')
     .update(
@@ -13,6 +16,9 @@ export function ticketRevision(
         [...new Set(ticket.labels)].sort(),
         ticket.state ?? null,
         [...new Set(ticket.blockedBy ?? [])].sort(),
+        ...(ticket.comments !== undefined || ticket.attachments !== undefined
+          ? [ticket.comments ?? null, ticket.attachments ?? null]
+          : []),
       ]),
     )
     .digest('hex')

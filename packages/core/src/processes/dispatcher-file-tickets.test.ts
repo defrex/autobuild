@@ -335,3 +335,64 @@ describe('minimal config dispatch over the real file tracker', () => {
     expect(await readdir(join(repoDir, 'tickets'))).not.toContain('.gitignore')
   })
 })
+
+test('file native attachments are frozen at claim and survive source removal', async () => {
+  const h = await harness()
+  const ticket = await h.tickets.create({ title: 'Freeze file assets', body: CONFORMING_BODY })
+  await h.tickets.assets!.putTicketAsset(REPO, ticket.ref.id, {
+    kind: 'design',
+    name: 'reference',
+    layout: 'file',
+    entries: [{ type: 'file', path: 'reference.png', content: new Uint8Array([0, 255, 7]) }],
+  })
+  await h.tickets.transition(ticket.ref.id, 'ready')
+  await h.dispatcher.tick()
+  const slug = h.launches[0]!
+  const created = (await h.store.getEvents(slug)).find((event) => event.type === 'build.created')
+  expect(created?.type === 'build.created' && created.payload.assets?.[0]?.snapshot).toBeDefined()
+  await h.tickets.assets!.removeTicketAsset(REPO, ticket.ref.id, 'design', 'reference')
+  expect((await h.store.getPinnedTicketAsset(slug, 'design', 'reference'))?.entries).toEqual([
+    { type: 'file', path: 'reference.png', content: new Uint8Array([0, 255, 7]) },
+  ])
+})
+
+test.each([false, true])(
+  'legacy recovery freezes native file assets or refuses missing bytes (failure=%s)',
+  async (failure) => {
+    const h = await harness()
+    const ticket = await h.tickets.create({ title: 'Recover file assets', body: CONFORMING_BODY })
+    await h.tickets.assets!.putTicketAsset(REPO, ticket.ref.id, {
+      kind: 'design',
+      name: 'reference',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'ref', content: new Uint8Array([7]) }],
+    })
+    await h.tickets.claim(ticket.ref.id)
+    await h.store.createBuild({
+      slug: 'legacy-native',
+      repo: REPO,
+      ticket: ticket.ref,
+      branch: 'ab/legacy-native',
+    })
+    if (failure)
+      h.tickets.assets!.getTicketAsset = async () => {
+        throw new Error('native bytes unavailable')
+      }
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const created = (await h.store.getEvents('legacy-native')).find(
+      (event) => event.type === 'build.created',
+    )
+    if (failure) {
+      expect(created).toBeUndefined()
+      expect(h.launches).toEqual([])
+    } else {
+      expect(
+        created?.type === 'build.created' && created.payload.assets?.[0]?.snapshot,
+      ).toBeDefined()
+      await h.tickets.assets!.removeTicketAsset(REPO, ticket.ref.id, 'design', 'reference')
+      expect(
+        (await h.store.getPinnedTicketAsset('legacy-native', 'design', 'reference'))?.entries,
+      ).toEqual([{ type: 'file', path: 'ref', content: new Uint8Array([7]) }])
+    }
+  },
+)
