@@ -837,6 +837,8 @@ describe('abTicketShow', () => {
     const { FileTicketSource } = await import('../ports/tickets/file')
     const source = new FileTicketSource({ dir: join(tmp, 'tickets') })
     const ticket = await source.create({ title: 'File', body: 'original\n' })
+    const path = join(tmp, 'tickets/triage', `${ticket.ref.id}.md`)
+    await writeFile(path, (await readFile(path, 'utf8')).replace('comments = []\n', ''))
     await source.comment(ticket.ref.id, 'embedded comment\n')
     const stored = await source.get(ticket.ref.id)
     expect(stored?.body).toContain('embedded comment')
@@ -1040,6 +1042,25 @@ describe('runCli — ticket routing', () => {
       err,
     }
   }
+
+  test('export and import route before forge access and reject missing or extra paths', async () => {
+    await writeRepo(FILE_TICKETS_TOML)
+    const { deps, err, out } = sessionlessDeps()
+    const guarded = Object.defineProperty(deps, 'forge', {
+      get() {
+        throw new Error('forge accessed')
+      },
+    })
+    const dir = join(tmp, 'export')
+    expect(await runCli(['ticket', 'export', dir], guarded)).toBe(0)
+    expect(await runCli(['ticket', 'import', dir], guarded)).toBe(0)
+    expect(err).toEqual([])
+    expect(out.some((line) => line === `mapping: ${join(dir, '.ab-import-map.json')}`)).toBe(true)
+    for (const command of ['export', 'import']) {
+      expect(await runCli(['ticket', command], guarded)).toBe(1)
+      expect(await runCli(['ticket', command, dir, 'extra'], guarded)).toBe(1)
+    }
+  })
 
   test('ab ticket without a subcommand prints the complete usage and exits 1', async () => {
     const { deps, err } = sessionlessDeps()

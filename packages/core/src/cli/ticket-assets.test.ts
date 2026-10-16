@@ -535,7 +535,7 @@ describe('the file ticket source', () => {
     })
     await run
     const written = await readFile(join(dir, 'ready', 'file-1.md'), 'utf8')
-    expect(written.startsWith(original)).toBe(true)
+    expect((await fileSource.get('file-1'))?.body.startsWith('\nthe spec\n')).toBe(true)
     expect(written).toContain('Ticket asset attached: `design/mock.txt`')
     expect(written).toContain('ab ticket asset get file-1 design mock.txt <dest>')
     expect((await fileSource.get('file-1'))?.body).toContain('the spec')

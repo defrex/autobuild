@@ -105,8 +105,10 @@ describe('FileTicketSource', () => {
 
     await tickets.comment('file-1', 'Build started.')
     const after = await tickets.get('file-1')
-    expect(after?.body).toContain('## Comment (2026-07-15T12:00:00.000Z)')
-    expect(after?.body).toContain('Build started.')
+    expect(after?.body).not.toContain('Build started.')
+    expect(after?.comments).toEqual([
+      { body: 'Build started.', createdAt: '2026-07-15T12:00:00.000Z' },
+    ])
   })
 
   // ── The state is the directory ─────────────────────────────────────────────

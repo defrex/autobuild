@@ -201,11 +201,11 @@ describe('HostedTicketSource (client half)', () => {
     const { source, calls } = makeSource([{ body: TICKET }])
     await source.create(
       { title: 'X', body: 'y', labels: ['ready'], blockedBy: ['ENG-8'] },
-      { state: 'Triage', idempotencyKey: 'creation-1' },
+      { state: 'Triage', idempotencyKey: 'creation-1', requestedId: 'ENG-706' },
     )
     expect(calls[0]?.body.input).toEqual({
       draft: { title: 'X', body: 'y', labels: ['ready'], blockedBy: ['ENG-8'] },
-      options: { state: 'Triage', idempotencyKey: 'creation-1' },
+      options: { state: 'Triage', idempotencyKey: 'creation-1', requestedId: 'ENG-706' },
     })
   })
 

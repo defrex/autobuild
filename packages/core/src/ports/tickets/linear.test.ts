@@ -66,7 +66,8 @@ function gqlIssue(over: Record<string, unknown> = {}) {
     description: '# Spec\n\nToken bucket on /auth/*.',
     url: 'https://linear.app/acme/issue/ENG-42',
     state: { name: 'Ready', type: 'unstarted' },
-    labels: { nodes: [{ name: 'autobuild' }] },
+    labels: connection([{ name: 'autobuild' }]),
+    comments: connection([]),
     inverseRelations: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
     ...over,
   }
@@ -887,6 +888,7 @@ describe('LinearTicketSource', () => {
                   { type: 'duplicate', issue: { identifier: 'ENG-78' } },
                   blocksRelation('ENG-9'),
                 ],
+                pageInfo: { hasNextPage: false, endCursor: null },
               },
             }),
           },
@@ -1306,13 +1308,13 @@ describe('LinearTicketSource', () => {
 
   // ── Post-create grooming writes ───────────────────────────────────────────
 
-  test('every full issue selection explicitly requests 250 inverse relations and relation ids', async () => {
+  test('detail issue selections request paginated inverse relations and relation ids', async () => {
     const { fetchFn, calls } = fakeLinear([{ body: { data: { issue: gqlIssue() } } }])
 
     await makeSource(fetchFn).get('ENG-42')
 
-    expect(calls[0]?.query).toContain('inverseRelations(first: 250)')
-    expect(calls[0]?.query).toContain('nodes { id type issue { id identifier } }')
+    expect(calls[0]?.query).toContain('inverseRelations(first: 100)')
+    expect(calls[0]?.query).toContain('nodes { id type issue { id identifier state { type } } }')
   })
 
   test('update maps a missing target to an id-specific error before mutation', async () => {
@@ -2070,4 +2072,89 @@ test('fallback relation continuation errors cannot turn an existing issue into a
     },
   ])
   await expect(makeSource(fetchFn).dependencyStates(['legacy'])).rejects.toThrow('Entity not found')
+})
+
+test('detail export exhausts labels, blockers and reverse-ordered comments, then sorts stably', async () => {
+  const comment = (body: string, createdAt: string, user: { name: string } | null = null) => ({
+    body,
+    createdAt,
+    user,
+  })
+  const { fetchFn, calls } = fakeLinear([
+    {
+      body: {
+        data: {
+          issue: gqlIssue({
+            labels: connection([{ name: 'first' }], true, 'labels-1'),
+            inverseRelations: connection([blocksRelation('ENG-8')], true, 'relations-1'),
+            comments: connection(
+              [
+                comment('newest', '2026-10-03T00:00:00Z'),
+                comment('equal-first', '2026-10-02T00:00:00Z'),
+              ],
+              true,
+              'comments-1',
+            ),
+          }),
+        },
+      },
+    },
+    { body: { data: { issue: { labels: connection([{ name: 'second' }]) } } } },
+    { body: { data: { r0: { inverseRelations: connection([blocksRelation('ENG-9')]) } } } },
+    {
+      body: {
+        data: {
+          issue: {
+            comments: connection([
+              comment('equal-second', '2026-10-02T00:00:00Z', { name: 'Ada' }),
+              comment('oldest', '2026-10-01T00:00:00Z'),
+            ]),
+          },
+        },
+      },
+    },
+  ])
+  const ticket = await makeSource(fetchFn).get('ENG-42')
+  expect(ticket?.labels).toEqual(['first', 'second'])
+  expect(ticket?.blockedBy).toEqual(['ENG-8', 'ENG-9'])
+  expect(ticket?.comments?.map((c) => c.body)).toEqual([
+    'oldest',
+    'equal-first',
+    'equal-second',
+    'newest',
+  ])
+  expect(ticket?.comments?.[0]?.author).toBeUndefined()
+  expect(ticket?.comments?.[2]?.author).toBe('Ada')
+  expect(calls[0]?.query).toContain('includeArchived: true, orderBy: createdAt')
+  expect(calls[1]?.variables.after).toBe('labels-1')
+  expect(calls[2]?.variables.after0).toBe('relations-1')
+  expect(calls[3]?.variables.after).toBe('comments-1')
+})
+
+test('detail comments reject missing and repeated cursors, and propagate continuation failure', async () => {
+  const issue = (pageInfo: unknown) => gqlIssue({ comments: { nodes: [], pageInfo } })
+  await expect(
+    makeSource(fakeLinear([{ body: { data: { issue: issue(undefined) } } }]).fetchFn).get('ENG-42'),
+  ).rejects.toThrow('missing pageInfo')
+  const repeated = fakeLinear([
+    { body: { data: { issue: issue({ hasNextPage: true, endCursor: 'same' }) } } },
+    { body: { data: { issue: { comments: connection([], true, 'same') } } } },
+  ])
+  await expect(makeSource(repeated.fetchFn).get('ENG-42')).rejects.toThrow('cursor')
+  const failure = fakeLinear([
+    { body: { data: { issue: issue({ hasNextPage: true, endCursor: 'next' }) } } },
+    { status: 503, body: { errors: [{ message: 'offline' }] } },
+  ])
+  await expect(makeSource(failure.fetchFn).get('ENG-42')).rejects.toThrow('offline')
+})
+
+test('unfiltered export includes archived issues and requested-id create rejects before transport', async () => {
+  const { fetchFn, calls } = fakeLinear([{ body: { data: { issues: connection([]) } } }])
+  const source = makeSource(fetchFn)
+  await source.listReady({})
+  expect(calls[0]?.query).toContain('after: $after, includeArchived: true')
+  await expect(
+    source.create({ title: 'X', body: 'Y' }, { requestedId: 'ENG-706' }),
+  ).rejects.toThrow('requested ids')
+  expect(calls).toHaveLength(1)
 })

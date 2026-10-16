@@ -268,3 +268,46 @@ test('operator detail retains recorded comment bodies and authors', async () => 
   const detail = await getOperatorTicket({ store, repo, backend: backend(source), id: seed.ref.id })
   expect(detail.ticket.comments).toEqual(seed.comments)
 })
+
+test('operator re-pin opens a configured native file source and snapshots its bytes', async () => {
+  const { FileTicketSource } = await import('../ports/tickets/file')
+  const { prepareOperatorTicketAssets } = await import('./tickets')
+  const { readAssetSnapshot } = await import('../store/ticket-asset-snapshots')
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'operator-native-'))
+  try {
+    const source = new FileTicketSource({ dir })
+    const ticket = await source.create({ title: 'Native', body: 'body' })
+    await source.assets.putTicketAsset(repo, ticket.ref.id, {
+      kind: 'design',
+      name: 'reference',
+      layout: 'file',
+      entries: [{ type: 'file', path: 'image', content: new Uint8Array([0, 255]) }],
+    })
+    const store = new MemoryBuildStore()
+    const fileConfig = parseConfig('[tickets]\nsource = "file"\nreadyState = "ready"\n')
+    let opens = 0
+    const pins = await prepareOperatorTicketAssets({
+      store,
+      repo,
+      ref: ticket.ref,
+      backend: {
+        contextFor: async () => ({ repo, tickets: fileConfig.tickets, teamKey: '' }),
+        sourceFor: () => {
+          opens++
+          return source
+        },
+        statesFor: () => [],
+      },
+    })
+    expect(opens).toBe(1)
+    await source.assets.removeTicketAsset(repo, ticket.ref.id, 'design', 'reference')
+    expect((await readAssetSnapshot(store, repo, ticket.ref.id, pins[0]!)).entries).toEqual([
+      { type: 'file', path: 'image', content: new Uint8Array([0, 255]) },
+    ])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

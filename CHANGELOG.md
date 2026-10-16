@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#625](https://github.com/defrex/autobuild/pull/625) — Add portable ticket export and resumable source migration
 - [#624](https://github.com/defrex/autobuild/pull/624) — Stop runner relaunch loops after three executions without progress
 - [#623](https://github.com/defrex/autobuild/pull/623) — Fix self-upgrade for Bun isolated installs
 - [#622](https://github.com/defrex/autobuild/pull/622) — Use build-pinned pipelines for dispatcher decisions

@@ -9,7 +9,7 @@
  */
 
 import { readAssetSnapshot, prepareAssetSnapshots } from './ticket-asset-snapshots'
-import type { TicketSource } from '../ports/types'
+import type { TicketSource, TicketAssetStore } from '../ports/types'
 import type { AbEvent } from '../events/catalog'
 import type { PinnedAsset } from '../events/payloads'
 import { defineReducer } from '../kernel/incremental'
@@ -58,7 +58,8 @@ export interface TicketAssetMeta {
   ticketId: string
   kind: string
   name: string
-  /** 0-based per `(repo, ticketId, kind, name)`. A removal consumes a number
+  /** Increasing per `(repo, ticketId, kind, name)` (normally from zero; native
+   * file revisions reserve a separate range for legacy compatibility). A removal consumes a number
    * too (a tombstone), so revisions may skip. */
   revision: number
   layout: TicketAssetLayout
@@ -388,10 +389,18 @@ export async function preparePinnedAssets(
   repo: string,
   ticketId: string,
 ): Promise<PinnedAsset[]> {
-  if (source.name !== 'hosted') return samplePinnedAssets(store, repo, ticketId)
-  if (!source.assets) throw new Error('hosted ticket source has no asset capability')
+  if (!source.assets) {
+    if (source.name === 'hosted') throw new Error('hosted ticket source has no asset capability')
+    return samplePinnedAssets(store, repo, ticketId)
+  }
   const ticket = await source.get(ticketId)
-  return prepareAssetSnapshots(source.assets, store, repo, ticketId, ticket?.ref.id ?? ticketId)
+  return prepareAssetSnapshots(
+    composeTicketAssets(source, store),
+    store,
+    repo,
+    ticketId,
+    ticket?.ref.id ?? ticketId,
+  )
 }
 
 export const PINNED_ASSETS_REDUCER_VERSION = 2
@@ -485,4 +494,43 @@ export async function resolvePinnedAsset(
     return { ...asset, meta: { ...asset.meta, ticketId: record.ticket.id } }
   }
   return store.getTicketAsset(record.repo, record.ticket.id, kind, name, pin.revision)
+}
+
+/** Native writes; merged reads preserve legacy file attachments and recorded revisions. */
+export function composeTicketAssets(
+  source: TicketSource,
+  legacy: TicketAssetStore,
+): TicketAssetStore {
+  const native = source.assets
+  if (!native) return legacy
+  if (!native.hasTicketAssetHistory) return native
+  const owns = (repo: string, id: string, kind: string, name: string) =>
+    native.hasTicketAssetHistory!(repo, id, kind, name)
+  return {
+    ticketAssetLimits: native.ticketAssetLimits.bind(native),
+    putTicketAsset: native.putTicketAsset.bind(native),
+    async getTicketAsset(repo, id, kind, name, rev) {
+      if (rev !== undefined)
+        return (
+          (await native.getTicketAsset(repo, id, kind, name, rev)) ??
+          legacy.getTicketAsset(repo, id, kind, name, rev)
+        )
+      return (await owns(repo, id, kind, name))
+        ? native.getTicketAsset(repo, id, kind, name)
+        : legacy.getTicketAsset(repo, id, kind, name)
+    },
+    async listTicketAssets(repo, id) {
+      const current = await native.listTicketAssets(repo, id)
+      for (const item of await legacy.listTicketAssets(repo, id)) {
+        if (!(await owns(repo, id, item.kind, item.name))) current.push(item)
+      }
+      return current
+    },
+    async removeTicketAsset(repo, id, kind, name) {
+      const previous = await this.getTicketAsset(repo, id, kind, name)
+      if (!previous) return null
+      await native.removeTicketAsset(repo, id, kind, name)
+      return previous?.meta ?? null
+    },
+  }
 }

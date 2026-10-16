@@ -261,8 +261,10 @@ reapply the intended changes before retrying; conflicts are never merged.
 File and Linear revisions fingerprint title, body, canonical label/blocker sets
 and state; reverting identical content restores its fingerprint. File checks
 re-read immediately before writing, with the existing no-lock race window.
-Direct file edits and state-directory moves change revisions. File comments
-change the body and revision; separate hosted comments do not. Hosted revisions
+Direct file edits and state-directory moves change revisions. File revisions also
+cover structured comments and portable attachments. Legacy file comments change
+the body; structured comments preserve it. Separate hosted comments do not change
+ticket revisions. Hosted revisions
 are monotonic decimal bigint strings, and checks run under the same row lock
 and transaction as all requested changes. Hosted reads return a coherent
 snapshot of fields, blockers and revision.
@@ -288,3 +290,25 @@ cannot distinguish them from released clients. Unknown capability values do
 not opt in. Clients before 0.11 also omit the existing resolution projections.
 The capability does not change authentication, authorization or the remote
 BuildStore protocol version.
+
+## Requested ids for migration
+
+Create options accept optional `requestedId: string` alongside `state` and
+`idempotencyKey`. Older clients omit it and responses are unchanged. Unsupported
+sources reject supplied ids; Linear is not an import target. File sources keep
+filesystem-safe ids exactly and never overwrite an occupied id.
+
+Hosted sources preserve only literal own-team `<teamKey>-<n>` ids, where `n` is a
+positive canonical decimal within PostgreSQL bigint bounds. For example,
+`AUT-706` in team `AUT` keeps 706; `OTHER-706`, `AUT-01` and `AUT-0` use ordinary
+allocation. Overflow canonical numbers are rejected. A matching creation key is
+adopted before occupancy checks. A kept number belonging to a different ticket
+fails without replacing it. Creation and counter advancement share the existing
+project transaction and counter lock. Later automatic numbers exceed both the
+counter and highest occupied number; importing a lower number never lowers the
+counter. Requested ids require project or owner authority. Ticket grants and
+delegated credentials receive 403 for create options containing `requestedId`,
+before source construction. Their ordinary create grants remain unchanged.
+
+See the [migration procedure](ticket-migration.md) for preflight, state mapping,
+resumption and portable file records.

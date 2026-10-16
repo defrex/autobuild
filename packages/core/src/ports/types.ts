@@ -119,6 +119,8 @@ export interface DependencyState {
 }
 
 export interface TicketCreateOptions {
+  /** Requested source id. Unsupported adapters must reject it. */
+  requestedId?: string
   /** Explicit workflow state for this create (harvest always targets Triage). */
   state?: string
   /** Source-level adoption key for crash-safe external creation. File and fake
@@ -161,7 +163,10 @@ export class TicketSourceRateLimitError extends Error {
   }
 }
 
-export type TicketAssetStore = Pick<
+export type TicketAssetStore = {
+  /** Native ownership, including tombstones, prevents resurrection from legacy stores. */
+  hasTicketAssetHistory?(repo: string, id: string, kind: string, name: string): Promise<boolean>
+} & Pick<
   BuildStore,
   | 'ticketAssetLimits'
   | 'putTicketAsset'
@@ -176,6 +181,8 @@ export type TicketMutation =
   | { kind: 'blockers'; operation: 'block' | 'unblock'; ids: string[] }
 
 export interface TicketSource {
+  /** Import support: the same pure id policy used by create, for mutation-free preflight. */
+  readonly requestedIds?: import('./tickets/requested-id').RequestedIdPolicy
   readonly assets?: TicketAssetStore
   /** Check and mutate at the source boundary; absent means checks are unsupported. */
   mutateIfRevision?(id: string, expectedRevision: string, mutation: TicketMutation): Promise<void>

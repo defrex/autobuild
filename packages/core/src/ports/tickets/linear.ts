@@ -110,7 +110,8 @@ interface GqlIssue {
   description: string | null
   url: string
   state: { name: string; type: string } | null
-  labels: { nodes: Array<{ name: string }> }
+  labels: { nodes: Array<{ name: string }>; pageInfo?: PageInfo }
+  comments?: Connection<{ body: string; createdAt: string; user: { name: string } | null }>
   /** Relations where THIS issue is the `relatedIssue` side. A relation
    * `{issue: A, relatedIssue: B, type: "blocks"}` reads "A blocks B", so an
    * issue's blockers are its inverse `blocks` relations, and the blocker is
@@ -238,6 +239,7 @@ function nextCursor(info: PageInfo | undefined, seen: Set<string>): string | nul
   return cursor
 }
 
+const GET_DETAIL_QUERY = `query GetIssue($id: String!) { issue(id: $id) { id identifier title description url state { name type } labels(first: 100) { nodes { name } ${PAGE_INFO} } inverseRelations(first: 100) { nodes { ${READY_RELATIONS} } ${PAGE_INFO} } comments(first: 100, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} } } }`
 const GET_ISSUE_QUERY = `query GetIssue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`
 const RESOLVE_ISSUE_QUERY = `query ResolveIssue($id: String!) { issue(id: $id) { id } }`
 const ISSUE_STATE_QUERY = `query IssueState($id: String!) { issue(id: $id) { id state { name type } } }`
@@ -344,11 +346,17 @@ export class LinearTicketSource implements TicketSource {
     const seen = new Set<string>()
     let after: string | null = null
     do {
-      const data: { issues: Connection<GqlIssue> } = await this.gql('listReady', LIST_READY_QUERY, {
-        filter,
-        first: READY_PAGE_SIZE,
-        after,
-      })
+      const data: { issues: Connection<GqlIssue> } = await this.gql(
+        'listReady',
+        Object.values(criteria).every((value) => value === undefined)
+          ? LIST_READY_QUERY.replace('after: $after)', 'after: $after, includeArchived: true)')
+          : LIST_READY_QUERY,
+        {
+          filter,
+          first: READY_PAGE_SIZE,
+          after,
+        },
+      )
       await this.completeRelations(data.issues.nodes, true)
       for (const issue of data.issues.nodes) {
         const relations = issue.inverseRelations!.nodes
@@ -370,7 +378,7 @@ export class LinearTicketSource implements TicketSource {
   async get(id: string): Promise<Ticket | null> {
     let data: { issue: GqlIssue | null }
     try {
-      data = await this.gql<{ issue: GqlIssue | null }>('get', GET_ISSUE_QUERY, { id })
+      data = await this.gql<{ issue: GqlIssue | null }>('get', GET_DETAIL_QUERY, { id })
     } catch (error) {
       // Linear's `issue(id:)` field is non-null in the live schema: an unknown
       // identifier arrives as INPUT_ERROR / Entity not found rather than the
@@ -378,7 +386,54 @@ export class LinearTicketSource implements TicketSource {
       if (isEntityNotFound(error)) return null
       throw error
     }
-    return data.issue ? this.toTicket(data.issue) : null
+    if (!data.issue) return null
+    const issue = data.issue
+    // Detail reads exhaust labels and relations independently of dispatch bounds.
+    const labels: Array<{ name: string }> = [...issue.labels.nodes]
+    const labelSeen = new Set<string>()
+    let labelAfter = nextCursor(issue.labels.pageInfo, labelSeen)
+    while (labelAfter !== null) {
+      const page: { issue: { labels: Connection<{ name: string }> } } = await this.gql(
+        'getLabels',
+        `query TicketLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 100, after: $after) { nodes { name } ${PAGE_INFO} } } }`,
+        { id: issue.id ?? id, after: labelAfter },
+      )
+      labels.push(...page.issue.labels.nodes)
+      labelAfter = nextCursor(page.issue.labels.pageInfo, labelSeen)
+    }
+    issue.labels = { nodes: labels }
+    await this.completeRelations([issue], true)
+    const mapComment = (c: { body: string; createdAt: string; user: { name: string } | null }) => ({
+      body: c.body,
+      createdAt: c.createdAt,
+      ...(c.user ? { author: c.user.name } : {}),
+    })
+    const comments: import('../types').TicketComment[] = (issue.comments?.nodes ?? []).map(
+      mapComment,
+    )
+    const seen = new Set<string>()
+    let after = nextCursor(issue.comments?.pageInfo, seen)
+    while (after !== null) {
+      const page: {
+        issue: {
+          comments: Connection<{ body: string; createdAt: string; user: { name: string } | null }>
+        }
+      } = await this.gql(
+        'getComments',
+        `query TicketComments($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after, includeArchived: true, orderBy: createdAt) { nodes { body createdAt user { name } } ${PAGE_INFO} } } }`,
+        { id: issue.id ?? id, after },
+      )
+      comments.push(
+        ...page.issue.comments.nodes.map((c) => ({
+          body: c.body,
+          createdAt: c.createdAt,
+          ...(c.user ? { author: c.user.name } : {}),
+        })),
+      )
+      after = nextCursor(page.issue.comments.pageInfo, seen)
+    }
+    comments.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    return { ...this.toTicket(issue), comments }
   }
 
   /**
@@ -431,6 +486,7 @@ export class LinearTicketSource implements TicketSource {
   }
 
   async create(draft: TicketDraft, opts: TicketCreateOptions = {}): Promise<Ticket> {
+    if (opts.requestedId !== undefined) throw new Error('linear does not support requested ids')
     const reservedId = opts.idempotencyKey
     if (reservedId !== undefined && !linearReservedIssueIdSchema.safeParse(reservedId).success) {
       throw new Error('linear create: idempotency key must be a UUID v4')

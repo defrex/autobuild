@@ -36,6 +36,7 @@ test('ticket transport enforces runner/phase authority and service-only grants',
     renew: async () => {},
   }
   const source = new FakeTicketSource()
+  let sourceOpens = 0
   const server = createTicketServer({
     secret: 'secret',
     clock: () => now,
@@ -45,7 +46,10 @@ test('ticket transport enforces runner/phase authority and service-only grants',
         throw new Error('ticket grants must not use BuildStore authority')
       },
     },
-    sourceFor: () => source,
+    sourceFor: () => {
+      sourceOpens++
+      return source
+    },
     policy: {
       get: async () => null,
       put: async () => {
@@ -71,6 +75,19 @@ test('ticket transport enforces runner/phase authority and service-only grants',
         body: JSON.stringify({ context, input }),
       }),
     )
+  for (const requestedId of ['ENG-706', 'ENG-9223372036854775807', 'foreign']) {
+    const denied = await call('abt_runner', 'create', {
+      draft: { title: 'Forbidden requested id', body: '' },
+      options: { requestedId, idempotencyKey: 'must-not-adopt' },
+    })
+    expect(denied.status).toBe(403)
+    expect(await denied.json()).toMatchObject({
+      kind: 'auth',
+      error: 'only project or owner authority may request a ticket id',
+    })
+  }
+  expect(sourceOpens).toBe(0)
+  expect((await source.listReady({})).tickets).toEqual([])
   const created = await call('abt_runner', 'create', {
     draft: { title: 'Proposal', body: 'Spec' },
     options: { idempotencyKey: 'once' },

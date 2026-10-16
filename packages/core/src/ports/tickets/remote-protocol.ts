@@ -63,6 +63,7 @@ const draftSchema = z.strictObject({
   blockedBy: z.array(z.string()).optional(),
 })
 const createOptionsSchema = z.strictObject({
+  requestedId: z.string().min(1).optional(),
   state: z.string().optional(),
   idempotencyKey: z.string().optional(),
 })

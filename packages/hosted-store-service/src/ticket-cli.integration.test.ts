@@ -337,3 +337,115 @@ test('CLI lists and creates hosted states with purpose and duplicate refusal', a
     await rm(repo, { recursive: true, force: true })
   }
 })
+
+test('file export imports Linear-style ids and states through hosted HTTP with comments, assets and blockers', async () => {
+  const { mkdir, readFile } = await import('node:fs/promises')
+  const root = await mkdtemp(join(tmpdir(), 'ticket-migration-http-'))
+  const backend = new FakeTicketSource()
+  const states = ['triage', 'ready', 'doing', 'done']
+  // This HTTP test uses the existing fake create semantics; live PostgreSQL tests
+  // separately assert the actual project counter transaction.
+  const target = Object.assign(backend, {
+    listStates: async () => states.map((name) => ({ name, tickets: 0 })),
+    addState: async (name: string) => {
+      if (states.includes(name)) throw new Error('duplicate state')
+      states.push(name)
+      return { state: { name, tickets: 0 }, created: true }
+    },
+  })
+  const get = target.get.bind(target)
+  target.get = async (id) => {
+    const ticket = await get(id)
+    return ticket
+      ? {
+          ...ticket,
+          comments: target.comments
+            .filter((c) => c.id === id)
+            .map((c) => ({ body: c.body, createdAt: '2026-01-01T00:00:00Z' })),
+        }
+      : null
+  }
+  const secret = 'migration-http-secret'
+  const project = await ticketProject(root, secret)
+  const service = createHostedStoreService({
+    ...project,
+    env: {
+      AB_STORE_SECRET: secret,
+      AB_POSTGRES_URL: 'postgres://unused/injected',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'unused',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    sourceFor: () => target,
+    openStore: project.openStore,
+  })
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request) => service.fetch(request),
+  })
+  const localStore = new MemoryBuildStore()
+  const lines: string[] = []
+  const run = (args: string[]) =>
+    abTicket(args, {
+      targetRepo: root,
+      env: { AB_TICKET_URL: server.url.href, AB_TICKET_TOKEN: project.token },
+      openStore: () => localStore,
+      exec: async (cmd) =>
+        cmd.includes('remote')
+          ? { stdout: '', stderr: '', exitCode: 1 }
+          : {
+              stdout: `${join(root, '.git')}\n${join(root, '.git')}\n${root}\n`,
+              stderr: '',
+              exitCode: 0,
+            },
+      stdout: (line) => lines.push(line),
+      stderr: () => {},
+    })
+  try {
+    await mkdir(join(root, 'tickets', 'In Progress'), { recursive: true })
+    await mkdir(join(root, 'tickets', 'Done'), { recursive: true })
+    await writeFile(
+      join(root, 'tickets', 'In Progress', 'AUT-706.md'),
+      '+++\nid = "AUT-706"\ntitle = "Preserved"\nblockedBy = ["foreign"]\ncomments = [{ body = "exact ☃", createdAt = "2026-01-01T00:00:00Z" }]\nattachments = [{ kind = "design", name = "image", layout = "file", entries = [{ type = "file", path = "image.png", base64 = "AP8=" }] }]\n+++\nexact body\n',
+    )
+    await writeFile(
+      join(root, 'tickets', 'Done', 'foreign.md'),
+      '+++\nid = "foreign"\ntitle = "Foreign"\n+++\ndependency\n',
+    )
+    await writeFile(
+      join(root, 'autobuild.toml'),
+      '[tickets]\nsource = "file"\ndir = "tickets"\nreadyState = "ready"\n',
+    )
+    const dir = join(root, 'export')
+    await run(['export', dir])
+    await writeFile(
+      join(root, 'autobuild.toml'),
+      `[tickets]\nsource = "hosted"\nurl = "${server.url.href}"\nteamKey = "AUT"\nreadyState = "ready"\n`,
+    )
+    await run(['import', dir])
+    await run(['import', dir])
+    expect((await target.get('AUT-706'))?.state).toBe('in-progress')
+    expect((await target.get('AUT-706'))?.blockedBy).toEqual(['AUT-707'])
+    expect((await target.get('AUT-707'))?.state).toBe('done')
+    expect(target.comments.filter((c) => c.id === 'AUT-706')).toEqual([
+      { id: 'AUT-706', body: 'exact ☃' },
+    ])
+    expect(JSON.parse(await readFile(join(dir, '.ab-import-map.json'), 'utf8')).tickets).toEqual({
+      'AUT-706': 'AUT-706',
+      foreign: 'AUT-707',
+    })
+    expect(lines.some((line) => line === `mapping: ${join(dir, '.ab-import-map.json')}`)).toBe(true)
+    // Export the hosted tracker again: the restored bytes travel through its asset seam.
+    const roundTrip = join(root, 'hosted-export')
+    await run(['export', roundTrip])
+    expect(await readFile(join(roundTrip, 'in-progress', 'AUT-706.md'), 'utf8')).toContain(
+      'base64 = "AP8="',
+    )
+  } finally {
+    await server.stop(true)
+    await rm(root, { recursive: true, force: true })
+  }
+})
