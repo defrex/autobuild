@@ -33,6 +33,7 @@ export interface PostgresTicketLifecycle {
 
 export interface PostgresTicketContext {
   repo: string
+  teamKey: string
   lifecycle: PostgresTicketLifecycle
   proposalState?: string
   claimedState?: string
@@ -77,6 +78,7 @@ export async function openPostgresTicketDatabase(url: string): Promise<PostgresT
 
 export class PostgresTicketSource implements TicketSource {
   readonly name = 'database'
+  private readonly teamKey: string
   private readonly repo: string
   private readonly claimedState: string
   private readonly createState: string
@@ -92,6 +94,7 @@ export class PostgresTicketSource implements TicketSource {
     private readonly retry: PlanRetryRunner = new PlanRetryRunner(),
   ) {
     if (!context.repo.trim()) throw new Error('ticket repo must be nonblank')
+    this.teamKey = context.teamKey
     this.repo = context.repo
     this.configured = Array.from(
       new Set(
@@ -157,8 +160,9 @@ export class PostgresTicketSource implements TicketSource {
   }
 
   private async blockers(executor: Exec, id: string): Promise<string[]> {
-    const rows: Row[] = await executor`SELECT blocker_id FROM ab_ticket_blockers
-      WHERE repo = ${this.repo} AND ticket_id = ${id} ORDER BY blocker_id`
+    const rows: Row[] = await executor`SELECT t.readable_id AS blocker_id FROM ab_ticket_blockers b
+      JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id
+      WHERE b.repo = ${this.repo} AND b.ticket_id = ${id} ORDER BY t.readable_id`
     return rows.map((row) => String(row.blocker_id))
   }
 
@@ -168,8 +172,8 @@ export class PostgresTicketSource implements TicketSource {
     const blockedBy =
       row.blockers === undefined ? await this.blockers(executor, id) : strings(row.blockers)
     return {
+      ref: { source: this.name, id: String(row.readable_id), title },
       revision: String(row.revision),
-      ref: { source: this.name, id, title },
       ...(row.creation_key !== null && row.creation_key !== undefined
         ? { creationKey: String(row.creation_key) }
         : {}),
@@ -182,11 +186,15 @@ export class PostgresTicketSource implements TicketSource {
     }
   }
 
-  private async require(executor: Exec, id: string, operation: string, lock = false): Promise<Row> {
+  private async lookup(executor: Exec, id: string, lock = false): Promise<Row | undefined> {
     const rows: Row[] = lock
-      ? await executor`SELECT *, revision::text AS revision FROM ab_tickets WHERE repo = ${this.repo} AND id = ${id} FOR UPDATE`
-      : await executor`SELECT *, revision::text AS revision FROM ab_tickets WHERE repo = ${this.repo} AND id = ${id}`
-    const row = rows[0]
+      ? await executor`SELECT *, revision::text AS revision FROM ab_tickets WHERE repo = ${this.repo} AND (id = ${id} OR lower(readable_id) = lower(${id})) FOR UPDATE`
+      : await executor`SELECT *, revision::text AS revision FROM ab_tickets WHERE repo = ${this.repo} AND (id = ${id} OR lower(readable_id) = lower(${id}))`
+    return rows[0]
+  }
+
+  private async require(executor: Exec, id: string, operation: string, lock = false): Promise<Row> {
+    const row = await this.lookup(executor, id, lock)
     if (!row) throw new Error(`database ticket source: ${operation} on unknown ticket "${id}"`)
     return row
   }
@@ -197,7 +205,7 @@ export class PostgresTicketSource implements TicketSource {
       await seedTicketStates(q, this.repo, this.configured)
       const state = criteria.state === undefined ? null : await this.state(q, criteria.state)
       const rows: Row[] =
-        await q`SELECT *, revision::text AS revision, ARRAY(SELECT blocker_id FROM ab_ticket_blockers b WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY blocker_id) AS blockers FROM ab_tickets
+        await q`SELECT *, revision::text AS revision, ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets
         WHERE repo = ${this.repo}
           AND (${state}::text IS NULL OR state = ${state})
           AND labels @> ${q.array(labels, 'text')}
@@ -215,11 +223,12 @@ export class PostgresTicketSource implements TicketSource {
     return this.retry.tx(this.sql, async (q) => {
       await seedTicketStates(q, this.repo, this.configured)
       const rows: Row[] =
-        await q`SELECT *, revision::text AS revision, ARRAY(SELECT blocker_id FROM ab_ticket_blockers b WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY blocker_id) AS blockers FROM ab_tickets WHERE repo = ${this.repo} AND id = ${id}`
+        await q`SELECT *, revision::text AS revision, ARRAY(SELECT t.readable_id FROM ab_ticket_blockers b JOIN ab_tickets t ON t.repo = b.repo AND t.id = b.blocker_id WHERE b.repo = ab_tickets.repo AND b.ticket_id = ab_tickets.id ORDER BY t.readable_id) AS blockers FROM ab_tickets WHERE repo = ${this.repo} AND (id = ${id} OR lower(readable_id) = lower(${id}))`
       if (!rows[0]) return null
       const ticket = await this.record(q, rows[0])
+      const storageId = String(rows[0].id)
       const comments: Row[] = await q`SELECT body, created_at FROM ab_ticket_comments
-        WHERE repo = ${this.repo} AND ticket_id = ${id}
+        WHERE repo = ${this.repo} AND ticket_id = ${storageId}
         ORDER BY created_at ASC, seq ASC`
       return {
         ...ticket,
@@ -234,10 +243,13 @@ export class PostgresTicketSource implements TicketSource {
   async claim(id: string): Promise<boolean> {
     return this.retry.tx(this.sql, async (q) => {
       await seedTicketStates(q, this.repo, this.configured)
+      const row = await this.lookup(q, id)
+      if (!row) return false
+      const storageId = String(row.id)
       const rows: Row[] =
         await q`UPDATE ab_tickets SET state = ${this.claimedState}, revision = revision + 1,
         updated_at = ${new Date().toISOString()}
-        WHERE repo = ${this.repo} AND id = ${id}
+        WHERE repo = ${this.repo} AND id = ${storageId}
           AND state <> ${this.claimedState} AND state <> ${this.lifecycle.done} RETURNING id`
       return rows.length === 1
     })
@@ -245,11 +257,11 @@ export class PostgresTicketSource implements TicketSource {
 
   async comment(id: string, body: string): Promise<void> {
     await this.retry.tx(this.sql, async (q) => {
-      await this.require(q, id, 'comment', true)
+      const storageId = String((await this.require(q, id, 'comment', true)).id)
       const tails: Row[] = await q`SELECT COALESCE(MAX(seq), 0) AS seq FROM ab_ticket_comments
-        WHERE repo = ${this.repo} AND ticket_id = ${id}`
+        WHERE repo = ${this.repo} AND ticket_id = ${storageId}`
       await q`INSERT INTO ab_ticket_comments (repo, ticket_id, seq, body, created_at)
-        VALUES (${this.repo}, ${id}, ${Number(tails[0]?.seq ?? 0) + 1}, ${body}, ${new Date().toISOString()})`
+        VALUES (${this.repo}, ${storageId}, ${Number(tails[0]?.seq ?? 0) + 1}, ${body}, ${new Date().toISOString()})`
     })
   }
 
@@ -260,21 +272,29 @@ export class PostgresTicketSource implements TicketSource {
   async create(draft: TicketDraft, options: TicketCreateOptions = {}): Promise<Ticket> {
     if (!draft.title.trim()) throw new Error('database ticket create: title must be nonblank')
     if (!draft.body.trim()) throw new Error('database ticket create: body must be nonblank')
+    requiredState(this.teamKey, 'ticket teamKey')
     return this.retry.tx(this.sql, async (q) => {
+      await q`INSERT INTO ab_ticket_counters (repo, last_number) VALUES (${this.repo}, 0) ON CONFLICT DO NOTHING`
+      await q`SELECT last_number FROM ab_ticket_counters WHERE repo = ${this.repo} FOR UPDATE`
       const state = await this.state(q, options.state ?? this.createState)
       if (options.idempotencyKey !== undefined) {
         const adopted: Row[] = await q`SELECT *, revision::text AS revision FROM ab_tickets
           WHERE repo = ${this.repo} AND creation_key = ${options.idempotencyKey} FOR UPDATE`
         if (adopted[0]) return this.record(q, adopted[0])
       }
+      const blockers: string[] = []
       for (const blocker of draft.blockedBy ?? []) {
-        await this.require(q, blocker, 'create blocker')
+        blockers.push(String((await this.require(q, blocker, 'create blocker')).id))
       }
+      const [allocation] =
+        await q`UPDATE ab_ticket_counters SET last_number = last_number + 1 WHERE repo = ${this.repo} RETURNING last_number::text`
+      const number = String(allocation!.last_number)
+      const readable = `${this.teamKey}-${number}`
       const id = `ticket-${crypto.randomUUID()}`
       const now = new Date().toISOString()
       const inserted: Row[] = await q`INSERT INTO ab_tickets
-        (repo, id, creation_key, title, body, state, labels, created_at, updated_at)
-        VALUES (${this.repo}, ${id}, ${options.idempotencyKey ?? null}, ${draft.title}, ${draft.body},
+        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at)
+        VALUES (${this.repo}, ${id}, ${readable}, ${number}::bigint, ${options.idempotencyKey ?? null}, ${draft.title}, ${draft.body},
           ${state}, ${q.array(draft.labels ?? [], 'text')}, ${now}, ${now})
         ON CONFLICT (repo, creation_key) DO NOTHING RETURNING *, revision::text AS revision`
       let row = inserted[0]
@@ -285,7 +305,7 @@ export class PostgresTicketSource implements TicketSource {
       }
       if (!row) throw new Error('database ticket create failed')
       if (String(row.id) === id) {
-        for (const blocker of [...new Set(draft.blockedBy ?? [])]) {
+        for (const blocker of [...new Set(blockers)]) {
           if (blocker === id)
             throw new Error(`database ticket source: ticket "${id}" cannot block itself`)
           await q`INSERT INTO ab_ticket_blockers (repo, ticket_id, blocker_id)
@@ -318,6 +338,7 @@ export class PostgresTicketSource implements TicketSource {
     await this.retry.tx(this.sql, async (q) => {
       const state = mutation.kind === 'transition' ? await this.state(q, mutation.state) : undefined
       const row = await this.require(q, id, 'mutation', true)
+      const storageId = String(row.id)
       const revision = String(row.revision)
       if (expected !== undefined && revision !== expected)
         throw new TicketRevisionConflict(id, expected, revision)
@@ -332,29 +353,35 @@ export class PostgresTicketSource implements TicketSource {
           JSON.stringify([...new Set(labels)].sort()) !==
             JSON.stringify([...new Set(strings(row.labels))].sort())
         if (changed)
-          await q`UPDATE ab_tickets SET title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')} WHERE repo = ${this.repo} AND id = ${id}`
+          await q`UPDATE ab_tickets SET title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')} WHERE repo = ${this.repo} AND id = ${storageId}`
       } else if (mutation.kind === 'transition') {
         changed = row.state !== state
         if (changed)
-          await q`UPDATE ab_tickets SET state = ${state} WHERE repo = ${this.repo} AND id = ${id}`
+          await q`UPDATE ab_tickets SET state = ${state} WHERE repo = ${this.repo} AND id = ${storageId}`
       } else if (mutation.kind === 'blockers') {
-        const ids = [...new Set(mutation.ids)]
-        for (const blocker of ids) {
-          if (mutation.operation === 'block' && blocker === id)
+        const keys = new Set<string>()
+        for (const blocker of mutation.ids) {
+          const target =
+            mutation.operation === 'block' || expected !== undefined
+              ? await this.require(q, blocker, 'blocker')
+              : await this.lookup(q, blocker)
+          if (!target) continue
+          const key = String(target.id)
+          if (mutation.operation === 'block' && key === storageId)
             throw new Error(`ticket "${id}" cannot block itself`)
-          if (mutation.operation === 'block' || expected !== undefined)
-            await this.require(q, blocker, 'blocker')
+          keys.add(key)
         }
+        const ids = [...keys]
         for (const blocker of ids) {
           const rows: Row[] =
             mutation.operation === 'block'
-              ? await q`INSERT INTO ab_ticket_blockers (repo, ticket_id, blocker_id) VALUES (${this.repo}, ${id}, ${blocker}) ON CONFLICT DO NOTHING RETURNING blocker_id`
-              : await q`DELETE FROM ab_ticket_blockers WHERE repo = ${this.repo} AND ticket_id = ${id} AND blocker_id = ${blocker} RETURNING blocker_id`
+              ? await q`INSERT INTO ab_ticket_blockers (repo, ticket_id, blocker_id) VALUES (${this.repo}, ${storageId}, ${blocker}) ON CONFLICT DO NOTHING RETURNING blocker_id`
+              : await q`DELETE FROM ab_ticket_blockers WHERE repo = ${this.repo} AND ticket_id = ${storageId} AND blocker_id = ${blocker} RETURNING blocker_id`
           changed ||= rows.length > 0
         }
       }
       if (changed)
-        await q`UPDATE ab_tickets SET revision = revision + 1, updated_at = ${new Date().toISOString()} WHERE repo = ${this.repo} AND id = ${id}`
+        await q`UPDATE ab_tickets SET revision = revision + 1, updated_at = ${new Date().toISOString()} WHERE repo = ${this.repo} AND id = ${storageId}`
     })
   }
 
@@ -364,14 +391,13 @@ export class PostgresTicketSource implements TicketSource {
         // One run per id keeps each id's state read + blockers query
         // sequential on one pinned connection; the ids stay concurrent.
         this.retry.run(this.sql, async (q) => {
-          const rows: Row[] = await q`SELECT state FROM ab_tickets
-          WHERE repo = ${this.repo} AND id = ${id}`
-          if (!rows[0]) return { id, exists: false, resolved: false, blockedBy: [] }
+          const row = await this.lookup(q, id)
+          if (!row) return { id, exists: false, resolved: false, blockedBy: [] }
           return {
             id,
             exists: true,
-            resolved: String(rows[0].state) === this.lifecycle.done,
-            blockedBy: await this.blockers(q, id),
+            resolved: String(row.state) === this.lifecycle.done,
+            blockedBy: await this.blockers(q, String(row.id)),
           }
         }),
       ),

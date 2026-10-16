@@ -165,6 +165,35 @@ Ticket body strings are opaque. Clients, JSON handling, the service, and the
 database backend must not trim or normalize bytes, newlines, Unicode, blank
 lines, or trailing whitespace.
 
+## Readable ticket identity
+
+New hosted tickets use `<teamKey>-<n>`, for example `ENG-1`. The effective
+project configuration supplies the literal prefix; the request's `teamKey`
+does not choose it. Numbers start at 1 in each project, increase atomically
+across concurrent creates, and are never reused after deletion. Projects sharing
+a team key have independent counters. Changing `teamKey` affects only future
+ids and continues the same numbering; existing ids retain their captured prefix.
+
+Every ticket operation, CLI command, MCP tool and blocker input accepts readable
+ids in any letter case. Legacy storage ids (such as `ticket-<uuid>`) remain
+aliases, including references in existing builds, harvest records and assets.
+Current ticket and blocker output uses the canonical readable id. The exception
+is `dependency-states`: each result's `id` echoes the requested id for correlation,
+while its `blockedBy` edges are canonical. Raw historical events and artifacts
+remain unchanged. These rules apply only to hosted tickets, not file or Linear ids.
+
+Upgrade the service with its environment-aware migration command before serving
+requests. The transactional migration preserves storage keys and assigns existing
+tickets numbers in `(created_at, id)` order within each project. It first resolves
+legacy team ownership, then reads each populated project's current independent
+ticket policy. Projects without that policy use their selected effective
+configuration through the configured blob backend. Independent-policy projects
+need no uploaded config or blob access. Missing or invalid fallback config,
+missing `teamKey`, or inaccessible required blobs abort the entire migration
+unchanged with a project diagnostic. Restore that config/blob access and rerun;
+an ownership assignment alone cannot supply a readable prefix. Empty projects
+need no config lookup. Re-running a completed migration does not renumber tickets.
+
 ## Errors and conformance
 
 Errors are JSON `{ "error": string, "kind": "validation" | "not-found" |

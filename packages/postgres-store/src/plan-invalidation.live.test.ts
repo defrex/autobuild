@@ -277,6 +277,7 @@ if (testUrl) {
       await assertTicketSchema(sql)
       const tickets = new PostgresTicketDatabase(sql)
       const source = tickets.source({
+        teamKey: 'AUT',
         repo: 'https://github.com/acme/one',
         lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
       })
@@ -330,6 +331,7 @@ if (testUrl) {
       await assertTicketSchema(sql)
       const tickets = new PostgresTicketDatabase(sql)
       const source = tickets.source({
+        teamKey: 'AUT',
         repo: 'https://github.com/acme/one',
         lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
       })
@@ -354,7 +356,8 @@ if (testUrl) {
         await source.comment(id, 'after migration')
         await source.update(id, { title: 'after migration' })
         const second = await source.create({ title: 'tx probe 2', body: 'probe body 2' })
-        expect(second.ref.id).not.toBe(id)
+        expect(id).toBe('AUT-1')
+        expect(second.ref.id).toBe('AUT-2')
 
         expect((await source.get(id))?.title).toBe('after migration')
         expect((await source.get(second.ref.id))?.title).toBe('tx probe 2')

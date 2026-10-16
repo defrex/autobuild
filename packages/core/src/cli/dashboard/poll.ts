@@ -211,7 +211,7 @@ export class DashboardBuildPollCache {
         // both the cached reduction and projected row untouched.
         next.set(
           record.slug,
-          configChanged
+          configChanged || current.build?.ticketId !== record.ticket?.id
             ? {
                 ...current,
                 build: await this.projectRow(record, current.state, current.events, config),

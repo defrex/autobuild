@@ -96,13 +96,13 @@ describe('operator ticket projections', () => {
 
   test('projects blockers and prefers an active matching repository build', async () => {
     const store = await configuredStore()
-    await store.createBuild({ slug: 'old', repo, ticket: { source: 'linear', id: 'AUT-1' } })
+    await store.createBuild({ slug: 'old', repo, ticket: { source: 'fake', id: 'AUT-1' } })
     await store.append('old', {
       actor: DISPATCHER,
       type: 'build.completed',
       payload: { outcome: 'merged' },
     })
-    await store.createBuild({ slug: 'active', repo, ticket: { source: 'linear', id: 'AUT-1' } })
+    await store.createBuild({ slug: 'active', repo, ticket: { source: 'fake', id: 'AUT-1' } })
     const detail = await getOperatorTicket({
       store,
       repo,
@@ -139,6 +139,126 @@ describe('operator ticket projections', () => {
       }),
     ).rejects.toThrow('provider says transition is forbidden')
   })
+})
+
+test('canonical ticket detail finds historical build aliases and keeps sources separate', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([seed])
+  Object.defineProperty(source, 'name', { value: 'hosted' })
+  const get = source.get.bind(source)
+  source.get = async (id) => {
+    const ticket = await get(id === 'ticket-legacy' || id === 'aut-1' ? 'AUT-1' : id)
+    return ticket ? { ...ticket, ref: { ...ticket.ref, source: 'hosted' } } : null
+  }
+  await store.createBuild({
+    slug: 'legacy',
+    repo,
+    ticket: { source: 'hosted', id: 'ticket-legacy' },
+  })
+  await store.createBuild({
+    slug: 'foreign-source',
+    repo,
+    ticket: { source: 'linear', id: 'AUT-1' },
+  })
+  for (const id of ['AUT-1', 'aut-1', 'ticket-legacy']) {
+    const detail = await getOperatorTicket({ store, repo, backend: backend(source), id })
+    expect(detail.ticket.ref.id).toBe('AUT-1')
+    expect(detail.build?.slug).toBe('legacy')
+  }
+})
+
+for (const provider of ['linear', 'file', 'hosted', 'database']) {
+  test(`${provider} exact build association never looks up unrelated historical tickets`, async () => {
+    const store = await configuredStore()
+    const source = new FakeTicketSource([
+      { ...seed, ref: { ...seed.ref, source: provider }, blockedBy: [] },
+    ])
+    Object.defineProperty(source, 'name', { value: provider })
+    const get = source.get.bind(source)
+    const gets: string[] = []
+    source.get = async (id) => {
+      gets.push(id)
+      if (id !== 'AUT-1') throw new Error('historical provider unavailable')
+      return get(id)
+    }
+    for (let i = 0; i < 20; i++)
+      await store.createBuild({
+        slug: `old-${i}`,
+        repo,
+        ticket: { source: provider, id: `old-${i}` },
+      })
+    await store.createBuild({
+      slug: 'matching',
+      repo,
+      ticket: { source: provider === 'database' ? 'hosted' : provider, id: 'AUT-1' },
+    })
+    expect(
+      (await getOperatorTicket({ store, repo, backend: backend(source), id: 'AUT-1' })).build?.slug,
+    ).toBe('matching')
+    expect(
+      (
+        await mutateOperatorTicket({
+          store,
+          repo,
+          backend: backend(source),
+          operation: { kind: 'update', id: 'AUT-1', patch: { title: 'Updated' } },
+        })
+      ).ticket.title,
+    ).toBe('Updated')
+    expect(gets.every((id) => id === 'AUT-1')).toBe(true)
+  })
+}
+
+test('hosted alias association failure preserves a completed mutation', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([
+    { ...seed, ref: { ...seed.ref, source: 'hosted' }, blockedBy: [] },
+  ])
+  Object.defineProperty(source, 'name', { value: 'hosted' })
+  const get = source.get.bind(source)
+  source.get = async (id) => {
+    if (id === 'legacy-unavailable') throw new Error('provider unavailable')
+    return get(id)
+  }
+  await store.createBuild({
+    slug: 'old',
+    repo,
+    ticket: { source: 'hosted', id: 'legacy-unavailable' },
+  })
+  const detail = await mutateOperatorTicket({
+    store,
+    repo,
+    backend: backend(source),
+    operation: { kind: 'move', id: 'AUT-1', state: 'Todo' },
+  })
+  expect(detail.ticket.state).toBe('Todo')
+  expect(detail.build).toBeNull()
+  expect((await get('AUT-1'))?.state).toBe('Todo')
+  expect(source.transitions).toEqual([{ id: 'AUT-1', state: 'Todo' }])
+})
+
+test('the service database backend never looks up historical refs for an undispatched ticket', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([
+    { ...seed, ref: { ...seed.ref, source: 'database' }, blockedBy: [] },
+  ])
+  Object.defineProperty(source, 'name', { value: 'database' })
+  const get = source.get.bind(source)
+  const reads: string[] = []
+  source.get = async (id) => {
+    reads.push(id)
+    if (id !== 'AUT-1') throw new Error('unrelated ticket read')
+    return get(id)
+  }
+  for (let i = 0; i < 20; i++)
+    await store.createBuild({
+      slug: `unrelated-${i}`,
+      repo,
+      ticket: { source: 'hosted', id: `AUT-${i + 2}` },
+    })
+  const detail = await getOperatorTicket({ store, repo, backend: backend(source), id: 'AUT-1' })
+  expect(detail.build).toBeNull()
+  expect(reads).toEqual(['AUT-1'])
 })
 
 test('operator detail retains recorded comment bodies and authors', async () => {

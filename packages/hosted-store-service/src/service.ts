@@ -553,6 +553,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             ? await options.sourceFor(context)
             : (await openDatabase()).source({
                 repo: context.repo,
+                teamKey: context.teamKey,
                 lifecycle: lifecycleFor(context),
                 ...(context.tickets.createState !== undefined
                   ? { createState: context.tickets.createState }

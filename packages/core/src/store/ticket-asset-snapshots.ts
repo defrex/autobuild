@@ -97,6 +97,7 @@ export async function prepareAssetSnapshots(
   store: Pick<BuildStore, 'putRepoArtifact' | 'ensureRepo'>,
   repo: string,
   ticketId: string,
+  canonicalTicketId: string = ticketId,
 ): Promise<PinnedAsset[]> {
   const pins = (await source.listTicketAssets(repo, ticketId)).map(pinnedAssetOf)
   if (pins.length > 0) await store.ensureRepo(repo)
@@ -104,7 +105,7 @@ export async function prepareAssetSnapshots(
     const asset = await source.getTicketAsset(repo, ticketId, pin.kind, pin.name, pin.revision)
     if (!asset) throw new Error('sampled ticket asset revision is missing')
     manifestSchema.shape.meta.parse(asset.meta)
-    verify(asset, repo, ticketId, pin)
+    verify(asset, repo, canonicalTicketId, pin)
     const files = []
     for (const entry of asset.entries) {
       if (entry.type !== 'file') continue
@@ -127,7 +128,7 @@ export async function prepareAssetSnapshots(
     const meta = await store.putRepoArtifact(repo, {
       kind: `ticket-snapshot-${randomUUID()}`,
       // Compression also bounds manifests with many maximum-length escaped paths.
-      content: gzipSync(JSON.stringify({ version: 1, meta: asset.meta, files })),
+      content: gzipSync(JSON.stringify({ version: 1, meta: { ...asset.meta, ticketId }, files })),
     })
     pin.snapshot = { kind: meta.kind, revision: meta.revision }
   }
@@ -139,6 +140,7 @@ export async function readAssetSnapshot(
   repo: string,
   ticketId: string,
   pin: PinnedAsset,
+  historicalTicketId?: string,
 ): Promise<TicketAsset> {
   if (!pin.snapshot) throw new Error('missing snapshot reference')
   const artifact = await store.getRepoArtifact(repo, pin.snapshot.kind, pin.snapshot.revision)
@@ -146,7 +148,11 @@ export async function readAssetSnapshot(
   const manifest = manifestSchema.parse(
     JSON.parse(gunzipSync(artifact.content, { maxOutputLength: 4 * 1024 * 1024 }).toString('utf8')),
   )
-  verifyMetadata(manifest.meta, repo, ticketId, pin)
+  // BuildStore projections can display a readable ID while the immutable
+  // build.created event and its older snapshots retain the storage alias.
+  const snapshotTicketId =
+    manifest.meta.ticketId === historicalTicketId ? historicalTicketId : ticketId
+  verifyMetadata(manifest.meta, repo, snapshotTicketId, pin)
   const entries: TicketAsset['entries'] = []
   const files = new Map(manifest.files.map((file) => [file.path, file]))
   if (
@@ -181,6 +187,6 @@ export async function readAssetSnapshot(
     entries.push({ type: 'file', path: entry.path, content })
   }
   const asset = { meta: manifest.meta, entries }
-  verify(asset, repo, ticketId, pin)
+  verify(asset, repo, snapshotTicketId, pin)
   return asset
 }

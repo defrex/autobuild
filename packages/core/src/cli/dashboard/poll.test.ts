@@ -488,3 +488,19 @@ readyState = "ready"
     await store.close()
   })
 })
+
+test('a canonical ticket identity change refreshes a cached row without changing its event stream', async () => {
+  const store = new MemoryBuildStore()
+  await addRunning(store, 'aliased')
+  let id = 'ticket-legacy'
+  const reader = new CountingReader(store)
+  const list = reader.listBuilds.bind(reader)
+  reader.listBuilds = async () =>
+    (await list()).map((record) => ({ ...record, ticket: { source: 'hosted', id } }))
+  const cache = new DashboardBuildPollCache(reader, REPO, CONFIG)
+  expect(row(await cache.refresh(), 'aliased')?.ticketId).toBe('ticket-legacy')
+  const events = await store.getEvents('aliased')
+  id = 'ENG-1'
+  expect(row(await cache.refresh(), 'aliased')?.ticketId).toBe('ENG-1')
+  expect(await store.getEvents('aliased')).toEqual(events)
+})

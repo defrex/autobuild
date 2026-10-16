@@ -309,6 +309,7 @@ if (testUrl)
           })
           await store.putArtifact('retained-project', { kind: 'notes', content: 'retained' })
           const source = tickets.source({
+            teamKey: 'AUT',
             repo,
             lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
           })
@@ -741,11 +742,17 @@ if (testUrl)
       expect(new Date(history![0]!.createdAt).toISOString()).toBe(history![0]!.createdAt)
       expect(a.state).toBe('Draft0')
       expect(b.state).toBe('Draft1')
-      expect(await two.get(a.ref.id)).toBeNull()
-      await expect(two.addBlocker(b.ref.id, a.ref.id)).rejects.toThrow('unknown ticket')
-      await one.claim(a.ref.id)
+      expect(custom.ref.id).toBe('SAME-1')
+      expect(a.ref.id).toBe('SAME-2')
+      expect(b.ref.id).toBe('SAME-1')
+      expect((await two.get('same-1'))?.title).toBe('Two')
+      const [internal] =
+        await tickets.sql`SELECT id FROM ab_tickets WHERE repo = ${repos[0]!} AND readable_id = ${a.ref.id}`
+      expect(await two.get(String(internal.id))).toBeNull()
+      await expect(two.addBlocker('same-1', String(internal.id))).rejects.toThrow('unknown ticket')
+      await one.claim('sAmE-2')
       expect((await one.get(a.ref.id))?.state).toBe('Active0')
-      await one.transition(a.ref.id, 'Complete0')
+      await one.transition('same-2', 'Complete0')
       expect((await one.get(a.ref.id))?.resolved).toBe(true)
       expect((await two.listReady({})).tickets.map((ticket) => ticket.title)).toEqual(['Two'])
       const operator = new OperatorApiClient({

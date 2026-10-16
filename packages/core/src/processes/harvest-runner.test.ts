@@ -2945,3 +2945,118 @@ describe('HarvestRunner session streams (SPEC §9)', () => {
     expect(await promptTexts(store, streams[0]!.id)).toEqual(['no terminal here'])
   })
 })
+
+test('resuming an approved join canonicalizes a legacy ledger target without changing its proposal key', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ab-harvest-alias-join-'))
+  const store = new MemoryBuildStore({ clock: steppingClock() })
+  const tickets = new FakeTicketSource([
+    {
+      revision: '1',
+      ref: { source: 'fake', id: 'ENG-1' },
+      title: 'Existing',
+      body: 'Body',
+      state: 'Triage',
+      resolved: false,
+      labels: [],
+    },
+  ])
+  const get = tickets.get.bind(tickets)
+  tickets.get = (id) => get(id === 'ticket-legacy' || id === 'eng-1' ? 'ENG-1' : id)
+  try {
+    await seedObservation(store, 'alias-origin', 'same defect')
+    const scan = await scanUnclaimedObservations(store, '/repo')
+    const run = 'h_alias_join'
+    const packet = {
+      repo: '/repo',
+      run,
+      observations: scan.observations,
+      ledger: [
+        {
+          proposalKey: 'immutable-old-key',
+          ticket: { source: 'fake', id: 'ticket-legacy' },
+          exists: true,
+          resolved: false,
+        },
+      ],
+    }
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-scan', content: JSON.stringify(packet) }],
+      (deposited) => ({
+        actor: KERNEL,
+        type: 'harvest.started',
+        payload: {
+          run,
+          observations: scan.observations.map((o) => o.occurrence),
+          scan: artifactRef(deposited[0]!),
+        },
+      }),
+    )
+    const proposal = {
+      action: 'join',
+      ticket: { source: 'fake', id: 'eng-1' },
+      reason: 'Same defect',
+      observations: scan.observations.map((o) => o.occurrence),
+    }
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-proposals', content: JSON.stringify({ proposals: [proposal] }) }],
+      (deposited) => ({
+        actor: agentActor('harvest', 's'),
+        type: 'harvest.proposals.submitted',
+        payload: { run, round: 1, artifact: artifactRef(deposited[0]!) },
+      }),
+    )
+    await store.appendRepoWithArtifacts(
+      '/repo',
+      [{ kind: 'harvest-review', content: 'approved' }],
+      (deposited) => ({
+        actor: agentActor('harvest-review', 'r'),
+        type: 'harvest.review.verdict',
+        payload: {
+          run,
+          round: 1,
+          verdict: 'approve',
+          findings: [],
+          artifact: artifactRef(deposited[0]!),
+        },
+      }),
+    )
+    const before = await store.getRepoEvents('/repo')
+    const runner = new HarvestRunner({
+      store,
+      tickets,
+      config: config(1),
+      runtimes: {
+        scripted: {
+          runner: new ScriptedAgentRunner({
+            script: () => {
+              throw new Error('approved file must resume without agents')
+            },
+          }),
+          servesModels: [''],
+        },
+      },
+      repo: '/repo',
+      workspacePath: workspace,
+      ids: sequentialIds(),
+      uuids: randomUuids(),
+      clock: steppingClock(),
+      instance: 'alias-join',
+      opts: { heartbeatMs: 100_000 },
+    })
+    expect(await runner.run()).toMatchObject({ outcome: 'completed', launch: 'resumed' })
+    const after = await store.getRepoEvents('/repo')
+    expect(after.slice(0, before.length)).toEqual(before)
+    const completed = after.find((e) => e.type === 'harvest.completed')
+    if (completed?.type !== 'harvest.completed') throw new Error('missing completion')
+    expect(completed.payload.dispositions[0]).toMatchObject({
+      action: 'joined',
+      proposalKey: 'immutable-old-key',
+      ticket: { id: 'ENG-1' },
+    })
+    expect((await tickets.listReady({})).tickets).toHaveLength(1)
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
+})

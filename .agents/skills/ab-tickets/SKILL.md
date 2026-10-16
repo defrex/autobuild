@@ -9,6 +9,16 @@ The local ticket tracker is a directory of markdown files. `ls` and `mv` are
 the state/backlog UI; source-agnostic `ab ticket` commands create and edit
 content and blocker relationships. The default file source needs no secret.
 
+## Hosted ticket ids
+
+When `[tickets].source = "hosted"`, use readable ids such as `ENG-12` with
+`ab ticket show`, `update`, `move`, `block`, and `unblock`. Inputs accept any
+letter case and old UUID ids remain aliases. Output shows canonical readable
+ids; blocker references use the same identity. Numbering belongs to each project
+and never resets or reuses deleted numbers. A `teamKey` change affects future
+prefixes only. File and Linear id rules are unchanged. See the
+[hosted ticket protocol](../ab-guide/references/remote-ticket-protocol.md).
+
 ## Where it lives
 
 `.autobuild/tickets/` by default (if `autobuild.toml` has a `[tickets] dir`,

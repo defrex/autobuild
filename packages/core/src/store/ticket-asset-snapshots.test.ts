@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { MemoryBuildStore } from './memory'
 import { prepareAssetSnapshots, readAssetSnapshot } from './ticket-asset-snapshots'
-import { preparePinnedAssets } from './ticket-assets'
+import { preparePinnedAssets, resolvePinnedAsset } from './ticket-assets'
+import { DISPATCHER } from '../events/envelope'
 import { FakeTicketSource } from '../ports/tickets/fake'
 
 test('hosted snapshots preserve trees, chunks, revision gaps, and conflicting destination rows', async () => {
@@ -112,4 +113,92 @@ test('maximum entry count with long escaped paths fits a bounded manifest artifa
   const manifest = await destination.getRepoArtifact('repo', pin!.snapshot!.kind)
   expect(manifest!.content.length).toBeLessThan(256 * 1024)
   expect((await readAssetSnapshot(destination, 'repo', 'T', pin!)).entries).toEqual(entries)
+})
+
+test('hosted snapshots validate canonical assets for aliases and retain historical build identity', async () => {
+  const assets = new MemoryBuildStore()
+  const destination = new MemoryBuildStore()
+  await assets.putTicketAsset('repo', 'ENG-1', {
+    kind: 'reference',
+    name: 'proof',
+    layout: 'file',
+    entries: [{ type: 'file', path: 'proof', content: new Uint8Array([7, 8]) }],
+  })
+  const source = new FakeTicketSource([])
+  Object.defineProperty(source, 'name', { value: 'hosted' })
+  source.get = async () => ({
+    ref: { source: 'hosted', id: 'ENG-1' },
+    revision: '1',
+    title: 'Ticket',
+    body: 'Body',
+    state: 'ready',
+    resolved: false,
+    labels: [],
+  })
+  Object.assign(source, {
+    assets: {
+      listTicketAssets: async () => assets.listTicketAssets('repo', 'ENG-1'),
+      getTicketAsset: async (
+        _repo: string,
+        _id: string,
+        kind: string,
+        name: string,
+        rev?: number,
+      ) => assets.getTicketAsset('repo', 'ENG-1', kind, name, rev),
+    },
+  })
+  for (const alias of ['ticket-legacy', 'eng-1']) {
+    const [pin] = await preparePinnedAssets(source, destination, 'repo', alias)
+    const frozen = await readAssetSnapshot(destination, 'repo', alias, pin!)
+    expect(frozen.meta.ticketId).toBe(alias)
+    expect(frozen.entries).toEqual([
+      { type: 'file', path: 'proof', content: new Uint8Array([7, 8]) },
+    ])
+    expect(await readAssetSnapshot(destination, 'repo', 'ENG-1', pin!, alias)).toEqual(frozen)
+    await destination.createBuild({
+      slug: alias,
+      repo: 'repo',
+      ticket: { source: 'hosted', id: alias },
+      created: {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: {
+          repo: 'repo',
+          baseBranch: 'main',
+          ticket: { source: 'hosted', id: alias },
+          assets: [pin!],
+        },
+      },
+    })
+    const record = (await destination.getBuild(alias))!
+    expect(
+      await resolvePinnedAsset(
+        {
+          getBuild: async () => ({ ...record, ticket: { source: 'hosted', id: 'ENG-1' } }),
+          getEvents: destination.getEvents.bind(destination),
+          getTicketAsset: destination.getTicketAsset.bind(destination),
+          getRepoArtifact: destination.getRepoArtifact.bind(destination),
+        },
+        alias,
+        'reference',
+        'proof',
+      ),
+    ).toEqual({ ...frozen, meta: { ...frozen.meta, ticketId: 'ENG-1' } })
+
+    await expect(readAssetSnapshot(destination, 'repo', 'FOREIGN-1', pin!)).rejects.toThrow(
+      'metadata',
+    )
+  }
+  source.get = async () => ({
+    ref: { source: 'hosted', id: 'FOREIGN-1' },
+    revision: '1',
+    title: 'Wrong ticket',
+    body: 'Body',
+    state: 'ready',
+    resolved: false,
+    labels: [],
+  })
+  await expect(preparePinnedAssets(source, destination, 'repo', 'ticket-legacy')).rejects.toThrow(
+    'metadata',
+  )
 })

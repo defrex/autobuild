@@ -109,10 +109,36 @@ async function matchingBuild(
   store: BuildStore,
   repo: string,
   id: string,
+  source: TicketSource,
+  configuredSource: string,
 ): Promise<OperatorTicketBuild | null> {
-  const matches = (await store.listBuilds()).filter(
-    (record) => record.repo === repo && record.ticket?.id === id,
+  // The service's database adapter implements the externally named hosted source.
+  const hosted =
+    source.name === 'hosted' || (configuredSource === 'hosted' && source.name === 'database')
+  const candidates = (await store.listBuilds()).filter(
+    (record) =>
+      record.repo === repo &&
+      (record.ticket?.source === source.name || (hosted && record.ticket?.source === 'hosted')),
   )
+  const matches = candidates.filter((record) => record.ticket!.id === id)
+  // The service database store always projects current ids, even when there is
+  // no matching build. Only a hosted client over an unprojected legacy store
+  // needs fallback lookups; failure must not undo a mutation.
+  if (matches.length === 0 && source.name === 'hosted') {
+    const identities = new Map<string, string>()
+    try {
+      for (const record of candidates) {
+        const raw = record.ticket!.id
+        if (!identities.has(raw)) {
+          const ticket = await source.get(raw)
+          identities.set(raw, ticket?.ref.source === source.name ? ticket.ref.id : raw)
+        }
+        if (identities.get(raw) === id) matches.push(record)
+      }
+    } catch {
+      // Build association is optional presentation; keep the successful ticket result.
+    }
+  }
   const projected = await Promise.all(
     matches.map(async (record) => ({
       record,
@@ -142,10 +168,20 @@ export async function getOperatorTicket(opts: {
   backend: OperatorTicketBackend
   id: string
 }): Promise<OperatorTicketDetail> {
-  const { source } = await openOperatorTickets(opts)
+  const { source, context } = await openOperatorTickets(opts)
   const ticket = await requireTicket(source, opts.id)
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
-  return { ticket, blockers, build: await matchingBuild(opts.store, opts.repo, opts.id) }
+  return {
+    ticket,
+    blockers,
+    build: await matchingBuild(
+      opts.store,
+      opts.repo,
+      ticket.ref.id,
+      source,
+      context.tickets.source,
+    ),
+  }
 }
 
 export async function mutateOperatorTicket(opts: {
@@ -165,7 +201,7 @@ export async function mutateOperatorTicket(opts: {
     | { kind: 'move'; id: string; state: string; expectedRevision?: string }
     | { kind: 'block' | 'unblock'; id: string; blockerIds: string[]; expectedRevision?: string }
 }): Promise<OperatorTicketDetail> {
-  const { source } = await openOperatorTickets(opts)
+  const { source, context } = await openOperatorTickets(opts)
   const operation = opts.operation
   if (operation.kind === 'update') await requireTicket(source, operation.id)
   const ticket =
@@ -189,7 +225,17 @@ export async function mutateOperatorTicket(opts: {
               operation.expectedRevision,
             )
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
-  return { ticket, blockers, build: await matchingBuild(opts.store, opts.repo, ticket.ref.id) }
+  return {
+    ticket,
+    blockers,
+    build: await matchingBuild(
+      opts.store,
+      opts.repo,
+      ticket.ref.id,
+      source,
+      context.tickets.source,
+    ),
+  }
 }
 
 export async function prepareOperatorTicketAssets(opts: {
@@ -204,7 +250,14 @@ export async function prepareOperatorTicketAssets(opts: {
   if (context.tickets.source !== opts.ref.source)
     throw new Error('build ticket source differs from configured source')
   if (!source.assets) throw new Error('hosted ticket source has no asset capability')
-  return prepareAssetSnapshots(source.assets, opts.store, opts.repo, opts.ref.id)
+  const ticket = await source.get(opts.ref.id)
+  return prepareAssetSnapshots(
+    source.assets,
+    opts.store,
+    opts.repo,
+    opts.ref.id,
+    ticket?.ref.id ?? opts.ref.id,
+  )
 }
 
 export async function listOperatorTicketStates(opts: {

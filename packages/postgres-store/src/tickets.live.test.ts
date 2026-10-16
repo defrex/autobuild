@@ -38,6 +38,7 @@ if (!testUrl) {
     const database = await openPostgresTicketDatabase(isolated.url)
     return {
       source: database.source({
+        teamKey: 'AUT',
         repo: 'https://github.com/acme/one',
         lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
       }),
@@ -57,12 +58,14 @@ if (testUrl)
     const isolated = await isolatedDatabase()
     const database = await openPostgresTicketDatabase(isolated.url)
     const one = database.source({
+      teamKey: 'AUT',
       repo: 'https://github.com/acme/one',
       lifecycle: { triage: 'Inbox', ready: 'Open', doing: 'Open', done: 'Complete' },
       createState: 'Draft',
       proposalState: 'Proposed',
     })
     const two = database.source({
+      teamKey: 'TWO',
       repo: 'https://github.com/acme/two',
       lifecycle: { triage: 'Backlog', ready: 'Todo', doing: 'Active', done: 'Shipped' },
     })
@@ -89,7 +92,7 @@ if (testUrl)
         { id: a.ref.id, exists: false, resolved: false, blockedBy: [] },
       ])
       // Reused historical ids must stay independent as well.
-      await database.sql`UPDATE ab_tickets SET id = ${a.ref.id} WHERE repo = 'https://github.com/acme/two' AND id = ${b.ref.id}`
+      await database.sql`UPDATE ab_tickets SET id = ${a.ref.id} WHERE repo = 'https://github.com/acme/two' AND readable_id = ${b.ref.id}`
       await one.comment(a.ref.id, 'one comment')
       await two.comment(a.ref.id, 'two comment')
       expect((await one.get(a.ref.id))?.comments?.map((c) => c.body)).toEqual(['one comment'])
@@ -98,9 +101,9 @@ if (testUrl)
       await one.comment(a.ref.id, exact)
       await one.comment(a.ref.id, 'Attached asset: evidence/test.png\n')
       await database.sql`UPDATE ab_ticket_comments SET created_at = '2026-01-02T00:00:00Z'
-        WHERE repo = 'https://github.com/acme/one' AND ticket_id = ${a.ref.id}`
+        WHERE repo = 'https://github.com/acme/one' AND ticket_id = (SELECT id FROM ab_tickets WHERE repo = 'https://github.com/acme/one' AND readable_id = ${a.ref.id})`
       await database.sql`UPDATE ab_ticket_comments SET created_at = '2026-01-01T00:00:00Z'
-        WHERE repo = 'https://github.com/acme/one' AND ticket_id = ${a.ref.id} AND seq = 3`
+        WHERE repo = 'https://github.com/acme/one' AND ticket_id = (SELECT id FROM ab_tickets WHERE repo = 'https://github.com/acme/one' AND readable_id = ${a.ref.id}) AND seq = 3`
       expect((await one.get(a.ref.id))?.comments).toEqual([
         { body: 'Attached asset: evidence/test.png\n', createdAt: '2026-01-01T00:00:00.000Z' },
         { body: 'one comment', createdAt: '2026-01-02T00:00:00.000Z' },
@@ -134,6 +137,109 @@ if (testUrl)
     }
   })
 
+if (testUrl) {
+  test('readable numbering serializes independent pools, adopts creation keys, and survives deletion and prefix changes', async () => {
+    const isolated = await isolatedDatabase()
+    const a = await openPostgresTicketDatabase(isolated.url)
+    const b = await openPostgresTicketDatabase(isolated.url)
+    const context = {
+      repo: 'one',
+      teamKey: 'Eng',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    }
+    const one = a.source(context),
+      otherPool = b.source(context)
+    const draft = { title: 'Ticket', body: 'Body' }
+    try {
+      const adopted = await Promise.all(
+        Array.from({ length: 12 }, (_, i) =>
+          (i % 2 ? one : otherPool).create(draft, { idempotencyKey: 'same' }),
+        ),
+      )
+      expect(new Set(adopted.map((t) => t.ref.id))).toEqual(new Set(['Eng-1']))
+      const created = await Promise.all(
+        Array.from({ length: 12 }, (_, i) => (i % 2 ? one : otherPool).create(draft)),
+      )
+      expect(new Set(created.map((t) => t.ref.id)).size).toBe(12)
+      expect(
+        (await a.sql`SELECT last_number::text FROM ab_ticket_counters WHERE repo = 'one'`)[0]
+          .last_number,
+      ).toBe('13')
+      await a.sql`DELETE FROM ab_tickets WHERE repo = 'one' AND ticket_number = 13`
+      const changed = a.source({ ...context, teamKey: 'NEW' })
+      expect((await changed.create(draft)).ref.id).toBe('NEW-14')
+      expect((await one.create(draft)).ref.id).toBe('Eng-15')
+      expect((await one.get('eng-1'))?.ref.id).toBe('Eng-1')
+      expect((await a.source({ ...context, repo: 'two' }).create(draft)).ref.id).toBe('Eng-1')
+      const [legacy] =
+        await a.sql`SELECT id FROM ab_tickets WHERE repo = 'one' AND ticket_number = 1`
+      expect(await b.source({ ...context, repo: 'two' }).get(String(legacy.id))).toBeNull()
+      await expect(one.create({ ...draft, blockedBy: ['missing'] })).rejects.toThrow(
+        'unknown ticket',
+      )
+      expect((await one.create(draft)).ref.id).toBe('Eng-16')
+      await a.sql`ALTER TABLE ab_tickets ADD CONSTRAINT fail_insert CHECK (title <> 'rollback')`
+      await expect(one.create({ title: 'rollback', body: 'Body' })).rejects.toThrow()
+      expect((await one.create(draft)).ref.id).toBe('Eng-17')
+      // bigint allocation never passes through a JS number.
+      await a.sql`UPDATE ab_ticket_counters SET last_number = 9007199254740992 WHERE repo = 'one'`
+      expect((await one.create(draft)).ref.id).toBe('Eng-9007199254740993')
+    } finally {
+      await a.close()
+      await b.close()
+      await isolated.cleanup()
+    }
+  })
+
+  test('all operations accept legacy and mixed-case ids and normalize blocker identity', async () => {
+    const isolated = await isolatedDatabase()
+    const db = await openPostgresTicketDatabase(isolated.url)
+    const source = db.source({
+      repo: 'one',
+      teamKey: 'ENG',
+      lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
+    })
+    try {
+      const first = await source.create({ title: 'One', body: 'Body' })
+      const [row] =
+        await db.sql`SELECT id FROM ab_tickets WHERE repo = 'one' AND readable_id = ${first.ref.id}`
+      const legacy = String(row.id)
+      expect((await source.get(legacy))?.ref.id).toBe('ENG-1')
+      await source.comment('eng-1', 'comment')
+      for (const id of [legacy, 'ENG-1', 'eng-1']) {
+        expect((await source.get(id))?.comments?.map((comment) => comment.body)).toEqual([
+          'comment',
+        ])
+      }
+      await source.update(legacy, { body: 'changed' })
+      await source.transition('eNg-1', 'Ready')
+      expect(await source.claim('eng-1')).toBe(true)
+      expect(await source.claim(legacy)).toBe(false)
+      const second = await source.create({
+        title: 'Two',
+        body: 'Body',
+        blockedBy: [legacy, 'eng-1', 'ENG-1'],
+      })
+      expect(second.blockedBy).toEqual(['ENG-1'])
+      await source.addBlocker('eng-2', legacy)
+      await expect(source.addBlocker('eng-1', legacy)).rejects.toThrow('cannot block itself')
+      expect(await source.dependencyStates([legacy, 'eNg-2'])).toEqual([
+        { id: legacy, exists: true, resolved: false, blockedBy: [] },
+        { id: 'eNg-2', exists: true, resolved: false, blockedBy: ['ENG-1'] },
+      ])
+      await source.removeBlocker('eNg-2', 'eng-1')
+      expect((await source.get('eng-2'))?.blockedBy).toBeUndefined()
+      await source.addBlocker('ENG-2', 'eng-1')
+      await source.removeBlocker('eng-2', legacy)
+      expect((await source.get('eng-2'))?.blockedBy).toBeUndefined()
+      await source.transition(legacy, 'Done')
+      expect((await source.get('eng-1'))?.resolved).toBe(true)
+    } finally {
+      await db.close()
+      await isolated.cleanup()
+    }
+  })
+}
 if (testUrl)
   test('revision checks serialize independent clients, batches roll back, and bigint versions stay exact', async () => {
     const isolated = await isolatedDatabase()
@@ -141,6 +247,7 @@ if (testUrl)
     const second = await openPostgresTicketDatabase(isolated.url)
     const context = {
       repo: 'https://github.com/acme/revisions',
+      teamKey: 'ENG',
       lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
     }
     const a = first.source(context)
@@ -148,9 +255,15 @@ if (testUrl)
     try {
       const ticket = await a.create({ title: 'Original', body: 'Body' }, { state: 'Ready' })
       const id = ticket.ref.id
+      const [stored] =
+        await first.sql`SELECT id FROM ab_tickets WHERE repo = ${context.repo} AND readable_id = ${id}`
+      const legacy = String(stored.id)
       const writes = await Promise.allSettled([
-        a.mutateIfRevision(id, ticket.revision, { kind: 'update', patch: { title: 'First' } }),
-        b.mutateIfRevision(id, ticket.revision, { kind: 'update', patch: { title: 'Second' } }),
+        a.mutateIfRevision(id.toLowerCase(), ticket.revision, {
+          kind: 'update',
+          patch: { title: 'First' },
+        }),
+        b.mutateIfRevision(legacy, ticket.revision, { kind: 'update', patch: { title: 'Second' } }),
       ])
       expect(writes.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
       expect(writes.filter((result) => result.status === 'rejected')).toHaveLength(1)
@@ -165,10 +278,18 @@ if (testUrl)
         }),
       ).rejects.toThrow('unknown ticket')
       expect(await a.get(id)).toEqual(current)
+      await expect(
+        a.mutateIfRevision(id.toLowerCase(), current.revision, {
+          kind: 'blockers',
+          operation: 'block',
+          ids: [legacy],
+        }),
+      ).rejects.toThrow('cannot block itself')
+      expect(await a.get(legacy)).toEqual(current)
       await a.mutateIfRevision(id, current.revision, {
         kind: 'blockers',
         operation: 'block',
-        ids: [one.ref.id, two.ref.id],
+        ids: [one.ref.id, one.ref.id.toLowerCase(), two.ref.id],
       })
       const blocked = (await a.get(id))!
       expect(BigInt(blocked.revision)).toBe(BigInt(current.revision) + 1n)
@@ -187,7 +308,7 @@ if (testUrl)
       expect((await a.get(id))?.revision).toBe(blocked.revision)
       expect(await a.claim(id)).toBe(true)
       expect((await a.get(id))?.revision).not.toBe(blocked.revision)
-      await first.sql`UPDATE ab_tickets SET revision = 9007199254740993 WHERE repo = ${context.repo} AND id = ${id}`
+      await first.sql`UPDATE ab_tickets SET revision = 9007199254740993 WHERE repo = ${context.repo} AND readable_id = ${id}`
       expect((await a.get(id))?.revision).toBe('9007199254740993')
       await b.mutateIfRevision(id, '9007199254740993', {
         kind: 'update',
@@ -210,6 +331,7 @@ if (testUrl)
     const database = await openPostgresTicketDatabase(isolated.url)
     const source = database.source({
       repo: 'https://github.com/acme/snapshots',
+      teamKey: 'ENG',
       lifecycle: { triage: 'Triage', ready: 'Ready', doing: 'Doing', done: 'Done' },
     })
     try {
@@ -303,7 +425,13 @@ if (testUrl)
     const db = await openPostgresTicketDatabase(isolated.url)
     const repo = 'https://github.com/acme/states'
     const lifecycle = { triage: 'Backlog', ready: 'Todo', doing: 'In Progress', done: 'Done' }
-    const context = { repo, lifecycle, createState: 'Draft', proposalState: 'Proposals' }
+    const context = {
+      repo,
+      teamKey: 'ENG',
+      lifecycle,
+      createState: 'Draft',
+      proposalState: 'Proposals',
+    }
     const source = db.source(context)
     try {
       expect((await source.listStates()).map((s) => s.name)).toEqual([
@@ -336,11 +464,15 @@ if (testUrl)
       const peer = db.source(context)
       const ticket = await peer.create({ title: 'Deferred', body: 'Body' }, { state: 'ICEBOX' })
       expect(ticket.state).toBe('icebox')
-      await source.mutateIfRevision(ticket.ref.id, ticket.revision, {
+      const [stored] =
+        await db.sql`SELECT id FROM ab_tickets WHERE repo = ${repo} AND readable_id = ${ticket.ref.id}`
+      const legacyId = String(stored.id)
+      await source.mutateIfRevision(ticket.ref.id.toLowerCase(), ticket.revision, {
         kind: 'transition',
         state: 'AAA',
       })
-      const moved = await peer.get(ticket.ref.id)
+      const moved = await peer.get(legacyId)
+      expect(moved?.ref.id).toBe(ticket.ref.id)
       expect(moved?.state).toBe('aaa')
       expect(moved?.revision).not.toBe(ticket.revision)
       await expect(
@@ -349,7 +481,7 @@ if (testUrl)
           state: 'icebox',
         }),
       ).rejects.toThrow('current revision')
-      await source.mutateIfRevision(ticket.ref.id, moved!.revision, {
+      await source.mutateIfRevision(legacyId, moved!.revision, {
         kind: 'transition',
         state: 'ICEBOX',
       })
@@ -362,7 +494,11 @@ if (testUrl)
         'already exists',
       )
       // Configured legacy names need not obey custom creation grammar.
-      const legacy = db.source({ repo, lifecycle: { ...lifecycle, ready: 'ICEBOX' } })
+      const legacy = db.source({
+        repo,
+        teamKey: 'ENG',
+        lifecycle: { ...lifecycle, ready: 'ICEBOX' },
+      })
       await legacy.listStates()
       await expect(source.addState('icebox')).rejects.toThrow('already exists')
       await expect(source.listReady({ state: 'Icebox' })).rejects.toThrow('ambiguous')
@@ -374,7 +510,11 @@ if (testUrl)
       ])
         await expect(operation()).rejects.toThrow('Backlog')
       expect((await source.get(ticket.ref.id))?.state).toBe('icebox')
-      const changed = db.source({ repo, lifecycle: { ...lifecycle, triage: 'Inbox' } })
+      const changed = db.source({
+        repo,
+        teamKey: 'ENG',
+        lifecycle: { ...lifecycle, triage: 'Inbox' },
+      })
       const names = (await changed.listStates()).map((s) => s.name)
       expect(names.slice(0, 4)).toEqual(['Inbox', 'Todo', 'In Progress', 'Done'])
       expect(names).toContain('Backlog')
@@ -382,6 +522,7 @@ if (testUrl)
       expect((await changed.listReady({ state: 'Backlog' })).tickets).toHaveLength(1)
       const shared = db.source({
         repo: 'https://github.com/acme/shared',
+        teamKey: 'ENG',
         lifecycle: { triage: 'One', ready: 'One', doing: 'Two', done: 'Three' },
       })
       expect((await shared.listStates()).map((s) => s.name)).toEqual(['One', 'Two', 'Three'])
@@ -416,7 +557,7 @@ if (testUrl)
       await projects.add(repo, 'owner')
       await policies.put(repo, old, 'owner')
       // Simulate an existing ticket without triggering source-side state seeding.
-      await db.sql`INSERT INTO ab_tickets (repo,id,title,body,state,labels,created_at,updated_at) VALUES (${repo},'existing','Ticket','Body','Old populated','{}',now(),now())`
+      await db.sql`INSERT INTO ab_tickets (repo,id,readable_id,ticket_number,title,body,state,labels,created_at,updated_at) VALUES (${repo},'existing','SAME-1',1,'Ticket','Body','Old populated','{}',now(),now())`
       const next = {
         ...old,
         tickets: {
@@ -430,6 +571,7 @@ if (testUrl)
       await policies.put(repo, next, 'owner')
       const source = db.source({
         repo,
+        teamKey: 'ENG',
         lifecycle: { triage: 'Inbox', ready: 'Todo', doing: 'Doing', done: 'Done' },
         createState: 'Draft',
         proposalState: 'Proposals',

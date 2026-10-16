@@ -1,3 +1,4 @@
+import { ticketIdentity } from '../ports/tickets/identity'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import {
@@ -984,6 +985,23 @@ export class Dispatcher {
     }
   }
 
+  private async activeTicketIdentities(refs: TicketRef[], listed: Ticket[]): Promise<Set<string>> {
+    const key = (ref: TicketRef) => `${ref.source}:${ref.id}`
+    const ids = new Set(refs.map(key))
+    if (this.deps.tickets.name !== 'hosted' || listed.length === 0) return ids
+    const listedIds = new Set(listed.map((ticket) => key(ticket.ref)))
+    const identity = ticketIdentity(this.deps.tickets)
+    try {
+      for (const ref of refs) {
+        if (ref.source === 'hosted' && !listedIds.has(key(ref))) ids.add(await identity(ref))
+      }
+    } catch (error) {
+      await this.sourceFailure(error, 'ready-scan')
+      throw error
+    }
+    return ids
+  }
+
   /** Observation-only ready listing for Store-backed frontends while intake is
    * disabled. It shares the active-ticket exclusion with dispatch but performs
    * no dependency fetch, claim, bounce, build, workspace, or launch side
@@ -995,20 +1013,21 @@ export class Dispatcher {
   }> {
     this.deps.config = this.deps.getConfig?.() ?? this.deps.config
     await this.store.refresh()
-    const activeTicketIds = new Set<string>()
-    for (const { record, digest } of await this.repoBuildDigests()) {
-      if (record.ticket !== undefined && digest.terminal === undefined) {
-        activeTicketIds.add(record.ticket.id)
-      }
-    }
     const report = emptyTickReport()
     this.restoreScan(report)
     const checkpoint = await this.scanCheckpoint('observation')
     if (checkpoint.due) {
       await this.store.refreshJournal()
       const listing = await this.listReady()
+      const refs: TicketRef[] = []
+      for (const { record, digest } of await this.repoBuildDigests()) {
+        if (record.ticket && digest.terminal === undefined) refs.push(record.ticket)
+      }
+      const activeTicketIds = await this.activeTicketIdentities(refs, listing.tickets)
       await this.store.refreshJournal()
-      report.queued = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id)).length
+      report.queued = listing.tickets.filter(
+        (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+      ).length
       report.invalidTickets = listing.diagnostics.length
       report.ticketDiagnostics = [...listing.diagnostics]
       report.dependencyBlocked = 0
@@ -3104,11 +3123,11 @@ export class Dispatcher {
     // pending work are live, only waiting on a human. Capacity is per repo
     // (§16.1) — another repo's builds never consume this repo's slots.
     let active = 0
-    const activeTicketIds = new Set<string>()
+    const activeRefs: TicketRef[] = []
     for (const { record, digest } of await this.repoBuildDigests()) {
       if (digest.terminal === undefined) {
         active += 1
-        if (record.ticket) activeTicketIds.add(record.ticket.id)
+        if (record.ticket) activeRefs.push(record.ticket)
       }
     }
     let capacity = config.capacity - active
@@ -3120,6 +3139,7 @@ export class Dispatcher {
     await this.store.refreshJournal()
     const journalBeforeReady = this.store.recordedJournal()
     const listing = await this.listReady()
+    const activeTicketIds = await this.activeTicketIdentities(activeRefs, listing.tickets)
     await this.store.refreshJournal()
     const journalAfterReady = this.store.recordedJournal()
     if (reduceTicketSourceHealth(journalAfterReady)?.cause === 'ready-scan-failed') {
@@ -3131,7 +3151,9 @@ export class Dispatcher {
         creation,
       ]),
     )
-    const ready = listing.tickets.filter((ticket) => !activeTicketIds.has(ticket.ref.id))
+    const ready = listing.tickets.filter(
+      (ticket) => !activeTicketIds.has(`${ticket.ref.source}:${ticket.ref.id}`),
+    )
     report.invalidTickets += listing.diagnostics.length
     report.ticketDiagnostics.push(...listing.diagnostics)
     report.queued = ready.length

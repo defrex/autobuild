@@ -273,7 +273,13 @@ export async function buildContext(deps: ContextDeps): Promise<ContextManifest> 
   if (inputs.ticket === true) {
     const created = events.find((event) => event.type === 'build.created')
     if (created !== undefined && created.type === 'build.created') {
-      const ticket = created.payload.ticket
+      const original = created.payload.ticket
+      const current =
+        original.source === 'hosted' ? (await store.getBuild(build))?.ticket : undefined
+      const ticket = {
+        ...original,
+        ...(current?.source === original.source ? { id: current.id } : {}),
+      }
       const lines = [
         `# Ticket: ${ticket.title ?? ticket.id}`,
         '',

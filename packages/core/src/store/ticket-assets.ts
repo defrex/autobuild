@@ -390,7 +390,8 @@ export async function preparePinnedAssets(
 ): Promise<PinnedAsset[]> {
   if (source.name !== 'hosted') return samplePinnedAssets(store, repo, ticketId)
   if (!source.assets) throw new Error('hosted ticket source has no asset capability')
-  return prepareAssetSnapshots(source.assets, store, repo, ticketId)
+  const ticket = await source.get(ticketId)
+  return prepareAssetSnapshots(source.assets, store, repo, ticketId, ticket?.ref.id ?? ticketId)
 }
 
 export const PINNED_ASSETS_REDUCER_VERSION = 2
@@ -465,12 +466,23 @@ export async function resolvePinnedAsset(
   const record = await store.getBuild(slug)
   if (record === null) throw new Error(`unknown build "${slug}"`)
   if (record.ticket === undefined) return null
-  const sets = pinnedAssetsReducer.reduce(await store.getEvents(slug)).pins
+  const events = await store.getEvents(slug)
+  const sets = pinnedAssetsReducer.reduce(events).pins
   const pin =
     rev === undefined
       ? sets.at(-1)?.find((a) => a.kind === kind && a.name === name)
       : sets.flat().find((a) => a.kind === kind && a.name === name && a.revision === rev)
   if (!pin) return null
-  if (pin.snapshot) return readAssetSnapshot(store, record.repo, record.ticket.id, pin)
+  if (pin.snapshot) {
+    const created = events.find((event) => event.type === 'build.created')
+    const asset = await readAssetSnapshot(
+      store,
+      record.repo,
+      record.ticket.id,
+      pin,
+      created?.type === 'build.created' ? created.payload.ticket?.id : undefined,
+    )
+    return { ...asset, meta: { ...asset.meta, ticketId: record.ticket.id } }
+  }
   return store.getTicketAsset(record.repo, record.ticket.id, kind, name, pin.revision)
 }

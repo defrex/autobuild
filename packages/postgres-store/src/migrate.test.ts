@@ -767,7 +767,7 @@ async function legacyTickets() {
   await migratePostgres(database.url)
   const sql = new SQL(database.url)
   await sql.unsafe(
-    'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+    'DROP TABLE ab_ticket_counters, ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
   )
   await sql.unsafe(TICKET_SCHEMA_V1_DDL)
   await sql`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${CONTRACT_T0})`
@@ -879,7 +879,8 @@ if (testUrl) {
       await migratePostgres(world.url, { openBlobs: () => world.blobs })
       await assertTicketSchema(world.sql)
       expect(world.reads).toContain(selected.blobRef)
-      const tickets = await world.sql`SELECT * FROM ab_tickets ORDER BY repo,id`
+      const tickets =
+        await world.sql`SELECT repo,id,creation_key,title,body,state,labels,created_at,updated_at,revision::text AS revision FROM ab_tickets ORDER BY repo,id`
       expect(tickets).toEqual(
         before.tickets.map(({ team, ...ticket }: Row) => ({
           repo: team === 'ONE' ? one : two,
@@ -905,11 +906,12 @@ if (testUrl) {
       const database = await openPostgresTicketDatabase(world.url)
       try {
         const source = database.source({
+          teamKey: 'AUT',
           repo: one,
           lifecycle: { triage: 'Backlog', ready: 'Ready', doing: 'Doing', done: 'Done' },
         })
         expect((await source.get('old-1'))?.state).toBe('Historical')
-        expect((await source.get('old-1'))?.blockedBy).toEqual(['old-2'])
+        expect((await source.get('old-1'))?.blockedBy).toEqual(['ONE-2'])
       } finally {
         await database.close()
       }
@@ -1092,7 +1094,7 @@ async function releasedV9Tickets(repositories: string[]) {
   await sql`INSERT INTO ab_schema_migrations VALUES (true, 9, ${SCHEMA_V9_CHECKSUM}, ${CONTRACT_T0})`
   await sql.unsafe(TICKET_SCHEMA_V1_DDL)
   await sql`INSERT INTO ab_ticket_schema_migrations VALUES (true, 1, ${TICKET_SCHEMA_V1_CHECKSUM}, ${CONTRACT_T0})`
-  for (const repo of repositories) {
+  async function publishConfig(repo: string) {
     const { verify, finalize, ...root } = parseConfig(
       '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n[verify]\nsteps = []\n[finalize]\nsteps = []',
     )
@@ -1109,6 +1111,7 @@ async function releasedV9Tickets(repositories: string[]) {
     await sql`INSERT INTO repo_artifacts VALUES (${repo},'dispatcher-effective-config',1,${hash},'{}'::jsonb,${CONTRACT_T0})`
     await sql`INSERT INTO repo_events VALUES (${repo},1,${CONTRACT_T0},${JSON.stringify(DISPATCHER)}::jsonb,'dispatcher.run-started',${JSON.stringify({ run: repo, pid: 1, effectiveConfig: { kind: 'dispatcher-effective-config', rev: 1 }, roleWarnings: [] })}::jsonb)`
   }
+  for (const repo of repositories) await publishConfig(repo)
   await sql`INSERT INTO ab_tickets VALUES ('ENG','ENG-1','creation-1','Original','Body','Historical',ARRAY['label'],${CONTRACT_T0},${CONTRACT_T0}), ('ENG','ENG-2',NULL,'Blocker','Body','Done',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
   await sql`INSERT INTO ab_ticket_comments VALUES ('ENG','ENG-1',7,'Comment',${CONTRACT_T0})`
   await sql`INSERT INTO ab_ticket_blockers VALUES ('ENG','ENG-1','ENG-2')`
@@ -1163,7 +1166,9 @@ async function releasedV9Tickets(repositories: string[]) {
     return { code, stdout, stderr }
   }
   const snapshot = async () => ({
-    tickets: await sql`SELECT * FROM ab_tickets ORDER BY id`,
+    tickets: (
+      await sql`SELECT to_jsonb(t) - 'readable_id' - 'ticket_number' AS value FROM ab_tickets t ORDER BY id`
+    ).map((row: { value: Row }) => row.value),
     comments: await sql`SELECT * FROM ab_ticket_comments`,
     blockers: await sql`SELECT * FROM ab_ticket_blockers`,
   })
@@ -1173,6 +1178,7 @@ async function releasedV9Tickets(repositories: string[]) {
     run,
     snapshot,
     requests,
+    publishConfig,
     cleanup: async () => {
       server.stop(true)
       await sql.close()
@@ -1209,7 +1215,7 @@ if (testUrl) {
           before[key].map(({ team: _team, ...row }: Row) => ({
             repo,
             ...row,
-            ...(key === 'tickets' ? { revision: '1' } : {}),
+            ...(key === 'tickets' ? { revision: 1 } : {}),
           })),
         )
       expect(world.requests.length).toBeGreaterThan(0)
@@ -1318,7 +1324,7 @@ if (testUrl) {
       await world.sql`INSERT INTO repo_events (repo,seq,ts,actor,type,payload) VALUES (${unconfigured},1,${CONTRACT_T0},${DISPATCHER},'dispatcher.run-started',${{ run: 'unconfigured', pid: 1, roleWarnings: [] }})`
       await migratePostgres(world.url, { openBlobs: () => world.blobs })
       await assertTicketSchema(world.sql)
-      expect(world.reads).toEqual([artifact.blobRef])
+      expect(new Set(world.reads)).toEqual(new Set([artifact.blobRef]))
       expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(owner)
       expect(
         Number((await world.sql`SELECT count(*) AS count FROM project_journal`)[0].count),
@@ -1365,8 +1371,12 @@ if (testUrl) {
         (await world.run(true, ['tickets', 'assign-team', 'ENG', fresh, '--user', 'owner'])).code,
       ).toBe(0)
       world.requests.length = 0
+      const missingConfig = await world.run(false, ['migrate'])
+      expect(missingConfig.code).toBe(1)
+      expect(missingConfig.stderr).toContain('no nonblank effective tickets.teamKey')
+      await world.publishConfig(fresh)
       expect((await world.run(false, ['migrate'])).code).toBe(0)
-      expect(world.requests).toEqual([])
+      expect(world.requests.length).toBeGreaterThan(0)
       await assertTicketSchema(world.sql)
       expect([...(await world.sql`SELECT DISTINCT repo FROM ab_tickets`)]).toEqual([
         { repo: fresh },
@@ -1377,7 +1387,7 @@ if (testUrl) {
     }
   })
 
-  test('unreadable selected configs fail closed with actionable guidance and complete owner assignments unblock migration', async () => {
+  test('unreadable unrelated configs stop ownership discovery; explicit ownership still requires the owning project config', async () => {
     for (const failure of [
       'missing-blob',
       'denied-blob',
@@ -1423,12 +1433,7 @@ if (testUrl) {
           await assignments.close()
         }
         await migratePostgres(world.url, {
-          openBlobs: () => ({
-            ...blobs,
-            get: async () => {
-              throw new Error('config bytes must not be read after all ownership is explicit')
-            },
-          }),
+          openBlobs: () => blobs,
         })
         await assertTicketSchema(world.sql)
         expect((await world.sql`SELECT DISTINCT repo FROM ab_tickets`)[0].repo).toBe(owner)
@@ -1465,7 +1470,11 @@ if (testUrl)
         )
         expect(await world.snapshot()).toEqual(before)
         await assignments.assign('TWO', two, 'owner')
-        await migratePostgres(world.url, { openBlobs: () => blobs })
+        await expect(migratePostgres(world.url, { openBlobs: () => blobs })).rejects.toThrow(
+          'Readable ticket migration stopped unchanged',
+        )
+        expect(await world.snapshot()).toEqual(before)
+        await migratePostgres(world.url, { openBlobs: () => world.blobs })
         await assertTicketSchema(world.sql)
         expect(
           (await world.sql`SELECT repo FROM ab_tickets WHERE id = 'old-1' ORDER BY repo`).map(
@@ -1480,7 +1489,180 @@ if (testUrl)
     }
   })
 
+if (testUrl)
+  test('v2 readable migration orders tied timestamps per project, rolls back missing blobs, and preserves aliases and asset pins', async () => {
+    const world = await legacyTickets()
+    const repo = 'https://github.com/acme/one',
+      two = 'https://github.com/acme/two'
+    try {
+      await world.sql.unsafe(
+        'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+      )
+      await world.sql.unsafe(TICKET_SCHEMA_V2_DDL)
+      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,2,${TICKET_SCHEMA_V2_CHECKSUM},${CONTRACT_T0})`
+      await world.project(repo, 'ENG')
+      await world.project(two, 'ENG')
+      for (const project of [repo, two]) {
+        await world.sql`INSERT INTO ab_tickets VALUES (${project},'ticket-b','key-b','Second','Body','Ready',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0}), (${project},'ticket-a','key-a','First','Body','Ready',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
+        await world.sql`INSERT INTO ab_ticket_comments VALUES (${project},'ticket-b',1,'kept',${CONTRACT_T0})`
+        await world.sql`INSERT INTO ab_ticket_blockers VALUES (${project},'ticket-b','ticket-a')`
+      }
+      await world.store.putTicketAsset(repo, 'ticket-a', {
+        kind: 'reference',
+        name: 'proof',
+        layout: 'file',
+        entries: [{ type: 'file', path: 'proof', content: new TextEncoder().encode('old') }],
+      })
+      await world.store.createBuild({
+        slug: 'legacy-pin',
+        repo,
+        ticket: { source: 'hosted', id: 'ticket-a' },
+        created: {
+          actor: DISPATCHER,
+          type: 'build.created',
+          payload: {
+            ticket: { source: 'hosted', id: 'ticket-a' },
+            repo,
+            baseBranch: 'main',
+            assets: [
+              {
+                kind: 'reference',
+                name: 'proof',
+                revision: 0,
+                layout: 'file',
+                size: 3,
+                fileCount: 1,
+                dirCount: 0,
+              },
+            ],
+          },
+        },
+      })
+      const originalEvents = await world.store.getEvents('legacy-pin')
+      await expect(migratePostgres(world.url)).rejects.toThrow('require blob access')
+      expect(
+        Number((await world.sql`SELECT version FROM ab_ticket_schema_migrations`)[0].version),
+      ).toBe(2)
+      expect(
+        (
+          await world.sql`SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'ab_tickets' AND column_name = 'readable_id'`
+        ).length,
+      ).toBe(0)
+      await migratePostgres(world.url, { openBlobs: () => world.blobs })
+      await migratePostgres(world.url)
+      const db = await openPostgresTicketDatabase(world.url)
+      try {
+        const source = db.source({
+          repo,
+          teamKey: 'NEW',
+          lifecycle: { triage: 'Backlog', ready: 'Ready', doing: 'Doing', done: 'Done' },
+        })
+        expect((await source.get('ticket-a'))?.ref.id).toBe('ENG-1')
+        expect((await source.get('ticket-b'))?.blockedBy).toEqual(['ENG-1'])
+        expect((await source.create({ title: 'Third', body: 'Body' })).ref.id).toBe('NEW-3')
+        expect((await world.store.getBuild('legacy-pin'))?.ticket?.id).toBe('ENG-1')
+        expect(
+          (await world.store.listBuilds()).find((b) => b.slug === 'legacy-pin')?.ticket?.id,
+        ).toBe('ENG-1')
+        expect(await world.store.getEvents('legacy-pin')).toEqual(originalEvents)
+        const asset = await world.store.getTicketAsset(repo, 'eng-1', 'reference', 'proof')
+        expect(asset?.meta.revision).toBe(0)
+        await world.store.putTicketAsset(repo, 'ENG-1', {
+          kind: 'reference',
+          name: 'proof',
+          layout: 'file',
+          entries: [{ type: 'file', path: 'proof', content: new TextEncoder().encode('new') }],
+        })
+        expect(
+          (await world.store.getTicketAsset(repo, 'ticket-a', 'reference', 'proof'))?.meta.revision,
+        ).toBe(1)
+        expect(
+          (await world.store.getPinnedTicketAsset('legacy-pin', 'reference', 'proof'))?.meta
+            .revision,
+        ).toBe(0)
+        expect(
+          (await world.store.listTicketAssets(repo, 'eng-1', { revisions: true })).length,
+        ).toBe(2)
+        await world.store.removeTicketAsset(repo, 'eNg-1', 'reference', 'proof')
+        expect(await world.store.getTicketAsset(repo, 'ticket-a', 'reference', 'proof')).toBeNull()
+        expect(Number((await world.sql`SELECT count(*) AS n FROM ab_ticket_comments`)[0].n)).toBe(2)
+      } finally {
+        await db.close()
+      }
+    } finally {
+      await world.cleanup()
+    }
+  })
+
+import { PostgresTicketPolicyStore } from './ticket-policy'
+for (const version of testUrl ? [2, 3, 4] : [])
+  test(`v${version} readable migration uses independent policy without blobs and prefers it to uploaded config`, async () => {
+    const world = await legacyTickets()
+    const independent = 'https://github.com/acme/independent'
+    const uploaded = 'https://github.com/acme/uploaded'
+    try {
+      await world.sql.unsafe(
+        'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+      )
+      await world.sql.unsafe(
+        version === 2
+          ? TICKET_SCHEMA_V2_DDL
+          : version === 3
+            ? TICKET_SCHEMA_V3_DDL
+            : TICKET_SCHEMA_V4_DDL,
+      )
+      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,${version},${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : version === 3 ? TICKET_SCHEMA_V3_CHECKSUM : TICKET_SCHEMA_V4_CHECKSUM},${CONTRACT_T0})`
+      await world.sql`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${independent}, 'added', 'fixture', ${CONTRACT_T0})`
+      await world.project(uploaded, 'OLD')
+      const policies = new PostgresTicketPolicyStore(world.sql)
+      for (const repo of [independent, uploaded]) {
+        await policies.put(
+          repo,
+          {
+            version: 1,
+            tickets: {
+              source: 'hosted',
+              teamKey: 'NEW',
+              triageState: 'triage',
+              readyState: 'ready',
+              claimedState: 'doing',
+              doneState: 'done',
+              createState: 'triage',
+              proposalState: 'triage',
+            },
+          },
+          'fixture',
+        )
+        await world.sql`INSERT INTO ab_tickets (repo,id,creation_key,title,body,state,labels,created_at,updated_at) VALUES (${repo},'ticket-old',NULL,'Original','Body','triage',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
+      }
+      if (version >= 3) await world.sql`UPDATE ab_tickets SET revision = 9007199254740993`
+      if (version === 4)
+        await world.sql`INSERT INTO ab_ticket_states (repo,name,about) VALUES (${independent},'icebox','Deferred work')`
+      await migratePostgres(world.url)
+      await migratePostgres(world.url)
+      const rows =
+        await world.sql`SELECT repo, readable_id, revision::text AS revision FROM ab_tickets ORDER BY repo`
+      expect(rows.map((row: { readable_id: string }) => row.readable_id)).toEqual([
+        'NEW-1',
+        'NEW-1',
+      ])
+      expect(rows.map((row: { revision: string }) => row.revision)).toEqual(
+        Array(2).fill(version >= 3 ? '9007199254740993' : '1'),
+      )
+      if (version === 4)
+        expect(
+          (
+            await world.sql`SELECT about FROM ab_ticket_states WHERE repo = ${independent} AND name = 'icebox'`
+          )[0].about,
+        ).toBe('Deferred work')
+      expect(world.reads).toEqual([])
+    } finally {
+      await world.cleanup()
+    }
+  })
 import {
+  TICKET_SCHEMA_V4_DDL,
+  TICKET_SCHEMA_V4_CHECKSUM,
   TICKET_SCHEMA_V3_DDL,
   TICKET_SCHEMA_V3_CHECKSUM,
   TICKET_SCHEMA_V2_DDL,
@@ -1497,13 +1679,15 @@ if (testUrl)
       const sql = new SQL(world.url)
       try {
         await migratePostgres(world.url)
-        await sql`DROP TABLE ab_ticket_states`
+        await sql`DROP TABLE ab_ticket_states, ab_ticket_counters`
+        await sql`ALTER TABLE ab_tickets DROP COLUMN readable_id, DROP COLUMN ticket_number`
         await sql`ALTER TABLE ab_tickets DROP COLUMN revision`
         await sql.unsafe(version === 2 ? TICKET_SCHEMA_V2_DDL : TICKET_SCHEMA_V3_DDL)
         if (version === 3)
           await sql`ALTER TABLE ab_tickets ADD COLUMN revision bigint NOT NULL DEFAULT 1`
-        await sql`UPDATE ab_ticket_schema_migrations SET version = ${version}, checksum = ${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : TICKET_SCHEMA_V3_CHECKSUM}`
+        await sql`UPDATE ab_ticket_schema_migrations SET version = ${version}, checksum = ${version === 2 ? TICKET_SCHEMA_V2_CHECKSUM : version === 3 ? TICKET_SCHEMA_V3_CHECKSUM : TICKET_SCHEMA_V4_CHECKSUM}`
         const repo = 'https://github.com/acme/v2'
+        await sql`INSERT INTO project_journal (seq,repo,action,actor,ts) VALUES (1,${repo},'added','owner',now())`
         await sql`INSERT INTO ab_tickets (repo,id,title,body,state,labels,created_at,updated_at) VALUES (${repo},'old','Title','Body','Former State','{}',now(),now())`
         await sql`INSERT INTO project_ticket_policy (repo,registration,policy,writer,updated_at) VALUES (${repo},1,${{ version: 1, tickets: { source: 'hosted', teamKey: 'ENG', triageState: 'Empty old', readyState: 'READY', claimedState: 'ready', doneState: 'Done', createState: 'Draft', proposalState: 'Proposals' } }},'owner',now())`
         await migratePostgres(world.url)

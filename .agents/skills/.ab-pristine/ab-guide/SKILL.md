@@ -805,7 +805,7 @@ state eligible.
 | `url` | selected build service | HTTPS URL (loopback HTTP allowed), no userinfo/query/fragment; hosted only | Ticket service independent of builds; required for local builds. |
 | `readyState` | hosted: `ready` | non-blank string; required for other sources | The one workflow state a ticket must sit in to be dispatchable. Linear matches exactly and case-sensitively; file matches it case-insensitively to a state directory (`ready` → `ready/`). There is no any-state mode. |
 | `readyAssignee` | — | optional; `"me"` or an email; `linear` only | Also require the ticket to be assigned to that Linear user (`me` = owner of `LINEAR_API_KEY`); unassigned tickets are never ready. |
-| `teamKey` | — | required by `linear` and `hosted`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`) or an existing plugin configuration field. |
+| `teamKey` | — | required by `linear` and `hosted`, forbidden by `file`, allowed for plugins | The Linear team key (e.g. `"ENG"`), the captured prefix for new hosted ticket ids (`ENG-1`), or a plugin configuration field. Hosted numbers are project-local and continue across prefix changes; legacy ids remain aliases and readable inputs are case-insensitive. |
 | `claimedState` | — | optional nonempty string; forbidden by `file`, allowed for plugins | Workflow state `claim()` moves a ticket to when a build starts. |
 | `doneState` | hosted: `"done"` | optional nonblank string | Project completion state and merged-ticket transition; hosted tickets only. |
 | `createState` | — | optional, nonempty string | Default state for new tickets when a create does not name one. Absent = the provider's default (Linear: the team's default, e.g. Backlog; file: Triage). |

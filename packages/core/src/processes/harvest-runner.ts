@@ -1,3 +1,4 @@
+import { ticketIdentity } from '../ports/tickets/identity'
 import { issueTicketGrant } from '../ports/tickets/grants'
 import { delegateCredential } from '../store/remote/credentials'
 /**
@@ -1177,9 +1178,16 @@ export class HarvestRunner {
     )
     const packet = await loadScanPacket(store, repo, current.scan)
     const observations = packet.observations
-    const knownLedger = new Map(
-      packet.ledger.map((entry) => [`${entry.ticket.source}:${entry.ticket.id}`, entry]),
-    )
+    const identity = ticketIdentity(tickets)
+    const knownLedger = new Map<string, (typeof packet.ledger)[number]>()
+    for (const entry of packet.ledger) {
+      const current =
+        entry.ticket.source === tickets.name ? await tickets.get(entry.ticket.id) : null
+      knownLedger.set(await identity(entry.ticket), {
+        ...entry,
+        ticket: current?.ref ?? entry.ticket,
+      })
+    }
     const alreadyFiled = new Map(current.filed.map((entry) => [entry.proposalKey, entry]))
     const reservations = new Map(current.reservations.map((entry) => [entry.proposalKey, entry.id]))
     const dispositions: HarvestDisposition[] = []
@@ -1259,7 +1267,7 @@ export class HarvestRunner {
           ...(filed.blockers !== undefined ? { blockers: filed.blockers } : {}),
         })
       } else if (proposal.action === 'join') {
-        const known = knownLedger.get(`${proposal.ticket.source}:${proposal.ticket.id}`)
+        const known = knownLedger.get(await identity(proposal.ticket))
         if (!known) {
           throw new Error(
             `approved join target ${proposal.ticket.source}:${proposal.ticket.id} is not in the ledger context`,

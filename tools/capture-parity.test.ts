@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'bun:test'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { compareFrameSets, runCaptureCommand } from './capture-parity'
+import { describe, expect, test } from 'bun:test'
+import { captureEnvironment, compareFrameSets, runCaptureCommand } from './capture-parity'
 
 describe('compareFrameSets', () => {
   const base = new Map([
@@ -31,6 +31,65 @@ describe('compareFrameSets', () => {
       compared: 1,
     })
   })
+})
+
+test('capture subprocesses produce identical fixture commit provenance despite different ambient Git dates', async () => {
+  const { mkdtemp, mkdir, rm, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const root = await mkdtemp(join(tmpdir(), 'ab-capture-git-dates-'))
+  async function commit(name: string, ambientDate: string): Promise<string> {
+    const cwd = join(root, name)
+    await mkdir(cwd)
+    const env = captureEnvironment({
+      ...process.env,
+      GIT_AUTHOR_DATE: ambientDate,
+      GIT_COMMITTER_DATE: ambientDate,
+    })
+    async function git(args: string[]) {
+      const child = Bun.spawn(
+        [
+          'git',
+          '-c',
+          'user.name=capture',
+          '-c',
+          'user.email=capture@example.invalid',
+          '-c',
+          'commit.gpgsign=false',
+          ...args,
+        ],
+        { cwd, env, stdout: 'pipe', stderr: 'pipe' },
+      )
+      const [code, out, err] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      if (code !== 0) throw new Error(err)
+      return out.trim()
+    }
+    await git(['init', '-q', '-b', 'main'])
+    await writeFile(
+      join(cwd, 'autobuild.toml'),
+      '[tickets]\nsource = "file"\nreadyState = "ready"\n',
+    )
+    await git(['add', 'autobuild.toml'])
+    await git(['commit', '-q', '-m', 'initial'])
+    return git(['show', '-s', '--format=%H %aI %cI', 'HEAD'])
+  }
+  try {
+    const base = await commit('base', '2020-01-01T00:00:00Z')
+    const head = await commit('head', '2030-01-01T00:00:00Z')
+    expect(head).toBe(base)
+    const [, authorDate, committerDate] = base.split(' ')
+    expect(new Date(authorDate!).toISOString()).toBe('2026-07-15T12:00:00.000Z')
+    expect(new Date(committerDate!).toISOString()).toBe('2026-07-15T12:00:00.000Z')
+    expect(
+      captureEnvironment({ PATH: '/capture-bin', CHROMIUM_BIN: '/capture-chromium' }),
+    ).toMatchObject({ PATH: '/capture-bin', CHROMIUM_BIN: '/capture-chromium' })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('capture commands create reproducible real Git provenance for independent trees', async () => {

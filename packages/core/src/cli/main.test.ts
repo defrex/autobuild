@@ -990,6 +990,63 @@ describe('runCli — sessionless build controls', () => {
     await after.close()
   })
 
+  test('from-ticket accepts a hosted legacy alias returning its canonical readable id', async () => {
+    const storeRef = join(tmp, 'hosted-alias-store')
+    await writeFile(
+      join(tmp, 'autobuild.toml'),
+      '[tickets]\nsource = "hosted"\nteamKey = "ENG"\nreadyState = "Ready"\n',
+    )
+    await seedControlStore(storeRef, {
+      escalations: ['esc-alias'],
+      ticket: { source: 'hosted', id: 'ticket-legacy' },
+    })
+    const local = openLocalStore(storeRef)
+    const original = await local.putArtifact(slug, { kind: 'spec', content: 'old' })
+    await local.append(slug, {
+      actor: agentActor('spec', 'source-spec'),
+      type: 'spec.authored',
+      payload: { artifact: { kind: 'spec', rev: original.revision }, session: 'source-spec' },
+    })
+    await local.close()
+    const body =
+      'Fix the defect.\n\n## Acceptance criteria\n- Works.\n\n## Out of scope\n- Other work.\n'
+    const requests: string[] = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async (request) => {
+        if (new URL(request.url).pathname.endsWith('/assets/list')) return Response.json([])
+        if (new URL(request.url).pathname.endsWith('/tickets/policy')) {
+          return Response.json({ ok: true })
+        }
+        const input = (await request.json()) as { input: { id: string } }
+        requests.push(input.input.id)
+        return Response.json({
+          ref: { source: 'database', id: 'ENG-1' },
+          revision: '1',
+          title: 'Canonical',
+          body,
+          state: 'Doing',
+          resolved: false,
+          labels: [],
+        })
+      },
+    })
+    try {
+      const d = {
+        ...controlDeps(`http://127.0.0.1:${server.port}`, { AB_TOKEN: 'test' }),
+        openStore: () => openLocalStore(storeRef),
+      }
+      expect(await runCli(['answer', slug, '--revise-spec-from-ticket'], d)).toBe(0)
+      expect(requests).toEqual(['ticket-legacy', 'ticket-legacy'])
+      const after = openLocalStore(storeRef)
+      expect(new TextDecoder().decode((await after.getArtifact(slug, 'spec'))!.content)).toBe(body)
+      await after.close()
+    } finally {
+      server.stop(true)
+    }
+  })
+
   test('resolution flags are mutually exclusive', async () => {
     const d = controlDeps(join(tmp, 'grammar-store'))
     expect(await runCli(['answer', slug, '--dismiss', '--revise-spec-from-ticket'], d)).toBe(1)
