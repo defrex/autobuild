@@ -6,7 +6,7 @@ import { abBulkControl } from '@defrex/autobuild/testing'
 import { agentActor, DISPATCHER, KERNEL } from '@defrex/autobuild/testing'
 import type { EscalationSource } from '@defrex/autobuild/testing'
 import type { Exec } from '@defrex/autobuild/testing'
-import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
+import { FakeTicketSource, MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import type { BuildStore } from '@defrex/autobuild/plugin-sdk'
 import {
   controlHarvestRun,
@@ -53,7 +53,21 @@ function api(store: BuildStore): OperatorApiClient {
       exp: NOW.getTime() + 60_000,
     }),
     fetchFn: fetchFor(
-      createOperatorServer({ projects: testProjects([REPO]), store, secret: SECRET, clock }),
+      createOperatorServer({
+        projects: testProjects([REPO]),
+        store,
+        secret: SECRET,
+        clock,
+        ticketBackend: {
+          contextFor: async () => ({
+            repo: REPO,
+            teamKey: '',
+            tickets: { source: 'linear', readyState: 'Ready' },
+          }),
+          sourceFor: () => new FakeTicketSource(),
+          statesFor: () => [],
+        },
+      }),
     ),
   })
 }

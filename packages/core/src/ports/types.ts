@@ -1,3 +1,4 @@
+import type { BuildStore } from '../store/types'
 /**
  * Ports (SPEC §3.2): interfaces to the world, each with swappable adapters.
  * The kernel and processes depend only on these types; adapters live in
@@ -158,7 +159,17 @@ export class TicketSourceRateLimitError extends Error {
   }
 }
 
+export type TicketAssetStore = Pick<
+  BuildStore,
+  | 'ticketAssetLimits'
+  | 'putTicketAsset'
+  | 'getTicketAsset'
+  | 'listTicketAssets'
+  | 'removeTicketAsset'
+>
+
 export interface TicketSource {
+  readonly assets?: TicketAssetStore
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
    * actionable diagnostics for individual source records excluded as invalid.

@@ -28,6 +28,7 @@ import {
   getHarvestStatus,
   getOperatorBuild,
   getOperatorDashboard,
+  prepareOperatorTicketAssets,
   getOperatorTicket,
   getRepositoryStatus,
   harvestControlRequestSchema,
@@ -690,7 +691,19 @@ export function createOperatorServer(opts: OperatorServerOptions): {
             user,
             action,
             ...(request.resolution === 'revise-spec' && request.origin === 'ticket'
-              ? { readTicketBody: async () => request.body }
+              ? {
+                  readTicketBody: async () => request.body,
+                  prepareTicketAssets: (ref, store, repo) => {
+                    if (!opts.ticketBackend)
+                      throw new Error('ticket operator backend is not configured')
+                    return prepareOperatorTicketAssets({
+                      ref,
+                      store,
+                      repo,
+                      backend: opts.ticketBackend,
+                    })
+                  },
+                }
               : {}),
           }),
         )

@@ -464,6 +464,7 @@ export interface ControlBuildOpts {
   via?: Via
   action: BuildControlAction
   /** Injected only for --revise-spec-from-ticket. */
+  prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
   readTicketBody?: (ref: TicketRef) => Promise<string>
 }
 
@@ -624,7 +625,15 @@ export async function controlBuild(opts: ControlBuildOpts): Promise<BuildControl
               )
             }
             body = await opts.readTicketBody(record.ticket)
-            assets = await samplePinnedAssets(opts.store, record.repo, record.ticket.id)
+            if (record.ticket.source === 'hosted' && !opts.prepareTicketAssets) {
+              throw new BuildControlError(
+                'ticket-unavailable',
+                'hosted ticket asset preparation is unavailable',
+              )
+            }
+            assets = opts.prepareTicketAssets
+              ? await opts.prepareTicketAssets(record.ticket, opts.store, record.repo)
+              : await samplePinnedAssets(opts.store, record.repo, record.ticket.id)
           }
           const conformance = specConformance(body)
           if (!conformance.conforms) {
@@ -862,6 +871,7 @@ export interface AbBuildControlOpts {
   /** Explicit `--store`; selection remains --store > AB_STORE > repo-local. */
   storeRef?: string
   /** Injected only for --revise-spec-from-ticket. */
+  prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>
   readTicketBody?: (ref: TicketRef) => Promise<string>
   /** Injectable adapter seam for unit tests. */
   openStore?: StoreOpener
@@ -881,6 +891,7 @@ export async function abBuildControl(opts: AbBuildControlOpts): Promise<BuildCon
       env: opts.env,
       action: opts.action,
       ...(opts.readTicketBody !== undefined ? { readTicketBody: opts.readTicketBody } : {}),
+      ...(opts.prepareTicketAssets ? { prepareTicketAssets: opts.prepareTicketAssets } : {}),
     }),
   )
 }

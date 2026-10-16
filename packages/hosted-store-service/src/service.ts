@@ -548,16 +548,28 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       return {
         sourceFor: async (context: OperatorTicketContext) => {
           await validate(context)
-          if (options.sourceFor) return options.sourceFor(context)
-          return (await openDatabase()).source({
-            repo: context.repo,
-            lifecycle: lifecycleFor(context),
-            ...(context.tickets.createState !== undefined
-              ? { createState: context.tickets.createState }
-              : {}),
-            ...(context.tickets.proposalState !== undefined
-              ? { proposalState: context.tickets.proposalState }
-              : {}),
+          const source: TicketSource = options.sourceFor
+            ? await options.sourceFor(context)
+            : (await openDatabase()).source({
+                repo: context.repo,
+                lifecycle: lifecycleFor(context),
+                ...(context.tickets.createState !== undefined
+                  ? { createState: context.tickets.createState }
+                  : {}),
+                ...(context.tickets.proposalState !== undefined
+                  ? { proposalState: context.tickets.proposalState }
+                  : {}),
+              })
+          if (source.assets) return source
+          const store = await authorityStore()
+          return Object.assign(source, {
+            assets: {
+              ticketAssetLimits: store.ticketAssetLimits.bind(store),
+              putTicketAsset: store.putTicketAsset.bind(store),
+              getTicketAsset: store.getTicketAsset.bind(store),
+              listTicketAssets: store.listTicketAssets.bind(store),
+              removeTicketAsset: store.removeTicketAsset.bind(store),
+            },
           })
         },
         statesFor: async (context: OperatorTicketContext, source: TicketSource) => {

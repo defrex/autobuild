@@ -7,7 +7,7 @@ import type {
   TicketSource,
   TicketUpdate,
 } from '../types'
-import { AuthError } from '../../store/remote/client'
+import { RemoteBuildStore, AuthError } from '../../store/remote/client'
 import { errorBodySchema } from '../../store/remote/protocol'
 import {
   claimWireSchema,
@@ -43,12 +43,25 @@ export interface HostedTicketSourceOptions extends HostedTicketContext {
 /** Full TicketSource client for a hosted Autobuild service. */
 export class HostedTicketSource implements TicketSource {
   readonly name = 'hosted'
+  readonly assets: import('../types').TicketAssetStore
   private readonly base: string
   private readonly token: string
   private readonly fetchFn: HostedTicketFetch
   private readonly context: HostedTicketContext
 
   constructor(options: HostedTicketSourceOptions) {
+    const client = new RemoteBuildStore({
+      url: options.url,
+      token: options.token,
+      ...(options.fetchFn ? { fetchFn: options.fetchFn as typeof fetch } : {}),
+    })
+    this.assets = {
+      ticketAssetLimits: client.ticketAssetLimits.bind(client),
+      putTicketAsset: client.putTicketAsset.bind(client),
+      getTicketAsset: client.getTicketAsset.bind(client),
+      listTicketAssets: client.listTicketAssets.bind(client),
+      removeTicketAsset: client.removeTicketAsset.bind(client),
+    }
     this.base = options.url.replace(/\/+$/, '')
     this.token = options.token
     this.fetchFn = options.fetchFn ?? fetch

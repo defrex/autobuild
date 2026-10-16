@@ -1,3 +1,5 @@
+import { preparePinnedAssets } from '../store/ticket-assets'
+import type { PinnedAsset } from '../events/payloads'
 import { abConnect, abDisconnect } from './connect'
 /**
  * `ab` — the only channel between agents and the store, and the enforcement
@@ -308,6 +310,7 @@ async function runBuildControl(
   action: BuildControlAction,
   storeRef?: string,
   readTicketBody?: (ref: TicketRef) => Promise<string>,
+  prepareTicketAssets?: (ref: TicketRef, store: BuildStore, repo: string) => Promise<PinnedAsset[]>,
 ): Promise<void> {
   if (deps.exec === undefined) {
     throw new Error(
@@ -322,6 +325,7 @@ async function runBuildControl(
     action,
     ...(storeRef !== undefined ? { storeRef } : {}),
     ...(readTicketBody !== undefined ? { readTicketBody } : {}),
+    ...(prepareTicketAssets ? { prepareTicketAssets } : {}),
     ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
   })
   deps.stdout(buildControlConfirmation(result))
@@ -1129,6 +1133,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
           : parsed.flags.has('revise-spec-from-ticket')
             ? ({ kind: 'revise-spec', body: { kind: 'ticket' } } as const)
             : undefined
+      let revisionTicketSource: import('../ports/types').TicketSource | undefined
       const readTicketBody =
         resolve?.kind === 'revise-spec' && resolve.body.kind === 'ticket'
           ? async (ref: TicketRef): Promise<string> => {
@@ -1142,6 +1147,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
                 },
                 'ab answer --revise-spec-from-ticket',
               )
+              revisionTicketSource = source
               if (source.name !== ref.source) {
                 throw new Error(
                   `build ticket source is "${ref.source}", but this repository is configured for "${source.name}"; refusing to read a same-id ticket from a different source`,
@@ -1172,6 +1178,13 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         },
         storeRef,
         readTicketBody,
+        readTicketBody
+          ? async (ref, store, repo) => {
+              if (!revisionTicketSource)
+                throw new Error('ticket body must be read before preparing assets')
+              return preparePinnedAssets(revisionTicketSource, store, repo, ref.id)
+            }
+          : undefined,
       )
       return 0
     }

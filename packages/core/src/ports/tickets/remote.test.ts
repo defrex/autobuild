@@ -339,3 +339,33 @@ test('hosted detail preserves exact comment bodies, ordering and optional author
     expect(ticketWireSchema.safeParse({ ...TICKET, comments: [comment] }).success).toBe(false)
   }
 })
+
+test('hosted assets reuse the selected ticket URL, credential and injected fetch', async () => {
+  const calls: { url: string; authorization: string | null }[] = []
+  const source = new HostedTicketSource({
+    url: 'https://tickets.example.test/',
+    token: 'ticket-only',
+    teamKey: 'ENG',
+    fetchFn: async (input, init) => {
+      calls.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get('authorization'),
+      })
+      return Response.json([])
+    },
+  })
+  expect(await source.assets.listTicketAssets('https://github.com/acme/repo', 'T-1')).toEqual([])
+  expect(calls).toEqual([
+    {
+      url: 'https://tickets.example.test/repos/https%3A%2F%2Fgithub.com%2Facme%2Frepo/tickets/T-1/assets/list',
+      authorization: 'Bearer ticket-only',
+    },
+  ])
+  const failing = new HostedTicketSource({
+    url: 'https://tickets.example.test',
+    token: 'ticket-only',
+    teamKey: 'ENG',
+    fetchFn: async () => Response.json({ error: 'denied', kind: 'auth' }, { status: 403 }),
+  })
+  await expect(failing.assets.listTicketAssets('repo', 'T')).rejects.toThrow('denied')
+})

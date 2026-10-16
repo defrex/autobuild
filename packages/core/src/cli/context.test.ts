@@ -1,3 +1,4 @@
+import { prepareAssetSnapshots } from '../store/ticket-asset-snapshots'
 /**
  * `ab context` materializer tests (SPEC §8.3): the exact `.ab/` tree per
  * PHASE_SPECS.inputs for all seven phase shapes, against a seeded
@@ -1000,6 +1001,36 @@ describe('buildContext — frozen ticket assets (SPEC §6.3)', () => {
     'skill = "ab-verify-e2e"',
     '',
   ].join('\n')
+
+  test('snapshot-backed assets hydrate with the same manifest and filesystem layout', async () => {
+    const source = await seedStore()
+    await source.putTicketAsset(REPO, TICKET, treeAsset('site', '<h1>hosted</h1>'))
+    const assets = await prepareAssetSnapshots(source, store, REPO, TICKET)
+    await store.append(BUILD, {
+      actor: KERNEL,
+      type: 'spec.revised',
+      payload: { artifact: { kind: 'spec', rev: 0 }, escalation: 1, assets },
+    })
+    await source.removeTicketAsset(REPO, TICKET, 'ref', 'site')
+    await source.close()
+    const manifest = await buildContext({
+      store,
+      env: makeEnv({ phase: 'plan', round: 1 }),
+      workspacePath: workspace,
+    })
+    expect(manifest.assets).toEqual([
+      {
+        kind: 'ref',
+        name: 'site',
+        revision: 0,
+        layout: 'tree',
+        size: 21,
+        path: '.ab/assets/ref/site',
+      },
+    ])
+    expect(await abFile('assets/ref/site/index.html')).toBe('<h1>hosted</h1>')
+    expect(existsSync(join(workspace, '.ab/assets/ref/site/empty'))).toBe(true)
+  })
 
   test('every phase writes the pinned assets and lists them in the manifest', async () => {
     await freeze()

@@ -432,6 +432,13 @@ body file leaves the pinned assets unchanged. The one case this cannot cover is
 a record an older dispatcher created with an empty stream: recovery can only
 sample the ticket's current assets for it.
 
+For hosted tickets, exact sampled revisions are copied into immutable repository
+artifacts in the destination build store before pins are published. Pins carry
+explicit manifest references; bounded binary chunks preserve files and empty
+directories without contacting the ticket service during build reads. Original
+ticket revision numbers are preserved. Old pins without snapshot references
+continue reading their existing ticket rows.
+
 ## 7. The build store
 
 The v1 repo-bloat and no-observability problems share one root cause: the
@@ -618,13 +625,17 @@ resume or turn — no second turn, no concurrent turns, no subagents.
 
 A **ticket asset** is a named, versioned bundle of files attached to a ticket —
 a design export, a reference screenshot, a sample payload — that shapes a change
-but belongs neither in the repository (where it goes stale once the change
-ships) nor in the ticket tool (which build agents cannot reach). It is keyed by
+but belongs outside the repository, where it would go stale once the change ships. It is keyed by
 `(repo, ticketId, kind, name)` and works identically whichever ticket source is
 configured. It is a fourth resource family beside builds, repository journals,
 and sessions, but a deliberately thin one: no event log, because nothing here
 needs reduction, and no retention pruning, because assets live as long as the
 ticket's other durable data and never expire on their own.
+
+Hosted ticket assets live in the ticket service's repository-keyed storage,
+regardless of where builds run or which BuildStore is selected. File and Linear
+tickets retain BuildStore storage. Existing service assets need no migration;
+old local hosted-ticket attachments are not moved or used as a fallback.
 
 Each put creates a new 0-based **revision**; earlier revisions stay retrievable.
 An asset is a `file` (exactly one file) or a `tree` (a folder: its root is
@@ -1290,8 +1301,9 @@ creates tickets directly in its ready state must therefore create a dependency
 chain in dependency order, carrying each predecessor id into the next create,
 before a later ticket can be claimed.
 
-**Ticket assets** (§7.1) attach files to a ticket without touching the ticket
-source's storage:
+**Ticket assets** (§7.1) attach files to a ticket. Hosted tickets use their
+ticket service storage independently of the selected build store; other sources
+use the selected BuildStore:
 
 - `ab ticket attach <id> <kind> <path> [--name <name>] [--store <ref>] [--json]`
   stores a file or a whole folder (its relative tree preserved) as an asset.
@@ -1781,14 +1793,15 @@ This keeps the abstraction honest: a file-based TicketSource with nowhere to
 put blobs must be fully workable.
 
 **Ticket assets follow the same rule.** The contents of a ticket asset (§7.1)
-live in the BuildStore and the ticket source never stores them. Attaching,
+live in the ticket service for hosted tickets, independently of build storage;
+other sources keep them in the BuildStore. Attaching,
 replacing, or removing an asset instead leaves a note on the ticket through the
 existing `comment()` port — the outward projection every source, including the
 plugin surface, already supports. The note names the asset, its revision, file
 count, and size, and gives the `ab ticket asset get` command that fetches it, so
 a person reading the ticket in Linear, the hosted service, or a local file knows
 the asset exists. The note is a projection outward only; nothing reads it back,
-and no TicketSource port or plugin-protocol change is needed.
+and existing sources and plugins need no asset capability.
 
 **Claim lifecycle.** Claim acquires nonterminal work: it returns `true` and
 moves a claimable ticket to the source's claimed state. It returns `false` for
