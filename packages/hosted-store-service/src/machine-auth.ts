@@ -1,3 +1,4 @@
+import type { TicketGrant } from '@defrex/autobuild-postgres-store/ticket-grants'
 import type { ProjectRegistryReader } from '@defrex/autobuild-postgres-store/projects'
 import {
   ProjectNotRegisteredError,
@@ -9,6 +10,7 @@ import { delegationActive, type Delegation } from './delegated-authority'
 import { verifyToken, type Via } from '@defrex/autobuild/remote-store'
 
 export type MachinePrincipal =
+  | { kind: 'ticket-grant'; repo: string; user: string; grant: TicketGrant }
   | { kind: 'delegated'; repo: string; user: string; delegation: Delegation }
   | { kind: 'project'; repo: string; user: string; credential: CredentialMetadata }
   | { kind: 'internal'; repo: string; user: string; via?: Via }
@@ -32,7 +34,7 @@ export function requireProject(principal: MachinePrincipal, repo: string): void 
     throw new MachineAuthError(403, 'wrong project')
 }
 export function requireMachineAccess(principal: MachinePrincipal): void {
-  if (principal.kind === 'internal')
+  if (principal.kind === 'internal' || principal.kind === 'ticket-grant')
     throw new MachineAuthError(403, 'internal operator credential may only access operator routes')
 }
 export function createMachineAuth(options: {

@@ -143,7 +143,7 @@ describe('layered CLI help catalog', () => {
 
   test('detailed pages retain nested forms, flags, and behavioral notes from flat help', () => {
     const expected: Record<(typeof COMMANDS)[number], string[]> = {
-      connect: ['ab connect [url]', 'approval', 'credential'],
+      connect: ['ab connect [--tickets] [url]', 'approval', 'credential'],
       disconnect: ['ab disconnect', 'Revokes', 'locally'],
       help: ['ab help <command>', 'requires no', 'AB_*'],
       init: [

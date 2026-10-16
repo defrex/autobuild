@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testProjects } from './projects'
@@ -37,6 +38,7 @@ export async function ticketProject(repo: string, secret: string, clock = () => 
     projects,
     credentials,
     token,
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     openStore: async () => store,
     openProjectRegistry: async () => projects,
     openCredentials: async () => credentials,

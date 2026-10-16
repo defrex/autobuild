@@ -1,3 +1,4 @@
+import { ticketGrantRequest } from '../ports/tickets/grants'
 /**
  * Crash-safe repository-scoped harvest workflow: scan -> synthesize <-> review
  * -> file. It reuses `converge` for adversarial review semantics while every
@@ -56,6 +57,20 @@ export async function runHarvestChild(
   workspacePath: string = process.cwd(),
 ): Promise<void> {
   const fullStore: BuildStore = openStore(input.storeRef, env.AB_TOKEN)
+  const ticketAuthority =
+    env.AB_TICKET_URL && env.AB_TICKET_TOKEN
+      ? { url: env.AB_TICKET_URL, token: env.AB_TICKET_TOKEN }
+      : undefined
+  const renewTickets = ticketAuthority
+    ? setInterval(() => {
+        void ticketGrantRequest(ticketAuthority.url, ticketAuthority.token, {
+          action: 'renew',
+          repo: input.repo,
+        }).catch(() => {
+          // Expiry denies subsequent ticket operations; never regain project authority.
+        })
+      }, 60_000)
+    : undefined
   try {
     const config = await loadConfig(join(workspacePath, 'autobuild.toml'))
     // Full build-child composition parity, in the same order: plugins load
@@ -80,7 +95,7 @@ export async function runHarvestChild(
     const { targetRepo, localStateRoot } = guestTicketSourceArgs(input, workspacePath)
     const tickets = await createTicketSource(
       config.tickets,
-      env,
+      { ...env, AB_HARVEST: input.preparedRun?.run ?? input.instance },
       targetRepo,
       localStateRoot,
       plugins,
@@ -103,6 +118,8 @@ export async function runHarvestChild(
       ...(input.leaseHolder !== undefined ? { leaseHolder: input.leaseHolder } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
       sessionEnv: {
+        ...(env.AB_TICKET_URL ? { AB_TICKET_URL: env.AB_TICKET_URL } : {}),
+        ...(env.AB_TICKET_TOKEN ? { AB_TICKET_TOKEN: env.AB_TICKET_TOKEN } : {}),
         AB_STORE: input.storeRef,
         ...(env.AB_TOKEN !== undefined && env.AB_TOKEN !== '' ? { AB_TOKEN: env.AB_TOKEN } : {}),
       },
@@ -112,10 +129,19 @@ export async function runHarvestChild(
     })
     await runner.run()
   } finally {
+    if (renewTickets) clearInterval(renewTickets)
     try {
-      await fullStore.close()
-    } catch {
-      // Process teardown cannot change the already-durable runner outcome.
+      if (ticketAuthority)
+        await ticketGrantRequest(ticketAuthority.url, ticketAuthority.token, {
+          action: 'revoke',
+          repo: input.repo,
+        })
+    } finally {
+      try {
+        await fullStore.close()
+      } catch {
+        // Process teardown cannot change the already-durable runner outcome.
+      }
     }
   }
 }

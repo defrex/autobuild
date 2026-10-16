@@ -82,16 +82,33 @@ The strict request envelope is:
 
 `teamKey` remains required for older client compatibility. It and the optional
 `claimedState` / `createState` fields are ignored as policy inputs. The service
-loads the project's latest effective configuration from its repository journal
-and artifact bytes for every operation. Missing or invalid configuration returns
-an actionable 409; run the project's dispatcher to publish its configuration.
-There is no deployment-wide lifecycle fallback.
+loads the project's durable independent ticket policy. Project authority publishes
+version 1 policy through `POST /tickets/policy`, using the usual context/input
+envelope. The input contains only `version` and `tickets`: source, teamKey,
+readyState, triageState, claimedState, doneState, createState, proposalState and
+optional readyLabels. URL, secrets, and pipeline configuration are rejected.
+Only project or owner authority can publish. This does not append BuildStore
+history. Registration removal invalidates policy and grants from that registration.
 
-Hosted lifecycle defaults are triage `Backlog`, claimed `Doing`, done `Done`,
-and create/proposal equal to triage. `readyState` is required. The allowed states
-are the distinct union of these configured roles, including custom create and
-proposal states; roles may overlap. Historical states remain readable unchanged.
-`tickets.doneState` controls completion and the dispatcher's merged transition.
+For compatibility, projects without independent policy use their latest uploaded
+dispatcher configuration with the old `Backlog`, `Doing`, `Done` defaults.
+New policy defaults are `triage`, `ready`, `doing`, `done`; create/proposal follow
+triage. Allowed states are the distinct union of configured roles. Existing rows
+remain unchanged. Explicit settings preserve state spelling.
+
+`[tickets] url` selects the ticket service independently of the build store;
+otherwise the selected remote build store is used. A local build store requires
+an explicit ticket URL. Credentials are resolved for that selected service.
+`ab connect --tickets URL` registers and publishes policy before any dispatcher run.
+
+`POST /tickets/grants` issues, renews or revokes short-lived, digest-stored ticket
+grants. Project authority issues runner grants scoped to project and execution;
+runners may issue only read-only phase children bound to themselves. Runner grants
+allow read and create; phase grants allow read only. Policy, claim, moves, comments,
+updates, blocker changes, BuildStore, and credential administration are denied.
+AB_TICKET_URL and AB_TICKET_TOKEN carry this authority separately from AB_STORE and
+AB_TOKEN. Revocation, expiry, parent revocation and registration changes invalidate
+grants. Existing combined-service BuildStore delegation remains supported.
 
 The service never contacts Linear or relays external trackers. If the project's
 source is Linear, file or another non-hosted source, machine HTTP, operator and

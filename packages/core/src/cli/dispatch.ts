@@ -1,3 +1,4 @@
+import { issueTicketGrant, ticketGrantRequest } from '../ports/tickets/grants'
 import { RemoteBuildStore } from '../store/remote/client'
 import { delegateCredential } from '../store/remote/credentials'
 import { isRemoteStoreRef } from './repo-state'
@@ -205,7 +206,8 @@ export function slugNamingPrompt(spec: string): string {
 function definedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const defined: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined && key !== 'AB_TOKEN') defined[key] = value
+    if (value !== undefined && !['AB_TOKEN', 'AB_TICKET_TOKEN', 'AB_TICKET_URL'].includes(key))
+      defined[key] = value
   }
   return defined
 }
@@ -2248,6 +2250,110 @@ class DispatchLoop {
 
     let tracked: Promise<void>
     tracked = (async () => {
+      const ticketUrl =
+        harvestDeps.config.tickets.source === 'hosted'
+          ? (harvestDeps.config.tickets.url ?? (/^https?:/i.test(storeRef) ? storeRef : undefined))
+          : undefined
+      if (ticketUrl && ticketUrl.replace(/\/+$/, '') !== storeRef.replace(/\/+$/, '')) {
+        const ticketToken = projectToken(ticketUrl, this.repoIdentity, {
+          ...this.opts.env,
+          AB_TOKEN: undefined,
+        })
+        if (!ticketToken)
+          throw new Error('Independent hosted harvest requires a ticket-service project credential')
+        const issued = await issueTicketGrant(
+          ticketUrl,
+          ticketToken,
+          this.repoIdentity,
+          harvestDeps.instance,
+          'runner',
+        )
+        let remoteRunnerStore: RemoteBuildStore | undefined
+        let preparedRun: { run: string } | undefined
+        let buildScoped: string | undefined
+        let renew: ReturnType<typeof setInterval> | undefined
+        try {
+          if (/^https?:/i.test(storeRef)) {
+            const prepared = await new HarvestRunner(harvestDeps).run(true)
+            if (prepared.outcome !== 'prepared') {
+              return prepared
+            }
+            preparedRun = { run: prepared.run }
+            await this.repoView.appendRepo(this.repoIdentity, {
+              actor: DISPATCHER,
+              type: 'harvest.execution.authorized',
+              payload: {
+                execution: harvestDeps.instance,
+                run: prepared.run,
+                launch: prepared.launch,
+                leaseHolder: this.repoLeaseHolder ?? harvestDeps.instance,
+              },
+            })
+            buildScoped = await (this.wiring.credentialIssuer ?? delegateCredential)(
+              storeRef,
+              token,
+              {
+                kind: 'harvest-runner',
+                execution: harvestDeps.instance,
+                repo: this.repoIdentity,
+                id: prepared.run,
+                leaseHolder: this.repoLeaseHolder ?? harvestDeps.instance,
+              },
+            )
+            remoteRunnerStore = new RemoteBuildStore({ url: storeRef, token: buildScoped })
+          }
+          const sessionEnv = {
+            ...harvestDeps.sessionEnv,
+            ...(buildScoped ? { AB_TOKEN: buildScoped } : {}),
+            AB_TICKET_URL: ticketUrl,
+            AB_TICKET_TOKEN: issued.token,
+          }
+          let renewalFailure: unknown
+          renew = setInterval(() => {
+            void ticketGrantRequest(ticketUrl, issued.token, {
+              action: 'renew',
+              repo: this.repoIdentity,
+              id: issued.grant.id,
+            }).catch((error) => {
+              renewalFailure = error
+            })
+          }, 60_000)
+          const runnerTickets = await createTicketSource(
+            harvestDeps.config.tickets,
+            { ...this.opts.env, ...sessionEnv, AB_TOKEN: undefined },
+            this.opts.targetRepo,
+            undefined,
+            this.wiring.plugins,
+          )
+          const result = await new HarvestRunner({
+            ...harvestDeps,
+            ...(remoteRunnerStore ? { store: remoteRunnerStore } : {}),
+            ...(preparedRun ? { preparedRun } : {}),
+            tickets: runnerTickets,
+            sessionEnv,
+          }).run()
+          if (renewalFailure) throw renewalFailure
+          return result
+        } finally {
+          if (renew) clearInterval(renew)
+          try {
+            if (remoteRunnerStore && preparedRun) {
+              await remoteRunnerStore.appendRepo(this.repoIdentity, {
+                actor: DISPATCHER,
+                type: 'harvest.execution.ended',
+                payload: { execution: harvestDeps.instance, run: preparedRun.run },
+              })
+              await remoteRunnerStore.close()
+            }
+          } finally {
+            await ticketGrantRequest(ticketUrl, ticketToken, {
+              action: 'revoke',
+              repo: this.repoIdentity,
+              id: issued.grant.id,
+            })
+          }
+        }
+      }
       if (!/^https?:/i.test(storeRef)) return new HarvestRunner(harvestDeps).run()
       const prepared = await new HarvestRunner(harvestDeps).run(true)
       if (prepared.outcome !== 'prepared') return prepared
@@ -2274,7 +2380,12 @@ class DispatchLoop {
           harvestDeps.config.tickets.source === 'hosted'
             ? await createTicketSource(
                 harvestDeps.config.tickets,
-                { ...this.opts.env, AB_STORE: storeRef, AB_TOKEN: scoped },
+                {
+                  ...this.opts.env,
+                  AB_STORE: storeRef,
+                  AB_TOKEN: scoped,
+                  AB_HARVEST: prepared.run,
+                },
                 this.opts.targetRepo,
                 resolveRepoStatePaths({
                   repo: this.repoIdentity,
@@ -2369,6 +2480,8 @@ class DispatchLoop {
     const repo = this.repoIdentity
     let handle: BuildExecutionHandle | undefined
     let startedSeq: number | undefined
+    let ticketAuthority: { url: string; token: string; id: string } | undefined
+    let renewTickets: ReturnType<typeof setInterval> | undefined
     // Shared with `stopHostedHarvest` through the `hostedHarvest` entry: a
     // detach must stay observable to the completion chain even after the
     // entry is cleared, or the chain would classify and reap a live guest.
@@ -2438,6 +2551,36 @@ class DispatchLoop {
             ),
           }
         : undefined
+      const ticketConfig = this.currentConfig().config.tickets
+      if (
+        ticketConfig.source === 'hosted' &&
+        ticketConfig.url &&
+        ticketConfig.url.replace(/\/+$/, '') !== storeRef.replace(/\/+$/, '')
+      ) {
+        const ticketToken = projectToken(ticketConfig.url, repo, {
+          ...this.opts.env,
+          AB_TOKEN: undefined,
+        })
+        if (!ticketToken || !launchAuth)
+          throw new Error('Independent harvest requires scoped build and ticket credentials')
+        const issued = await issueTicketGrant(
+          ticketConfig.url,
+          ticketToken,
+          repo,
+          execution,
+          'runner',
+        )
+        ticketAuthority = { url: ticketConfig.url, token: issued.token, id: issued.grant.id }
+        renewTickets = setInterval(() => {
+          void ticketGrantRequest(ticketConfig.url!, issued.token, {
+            action: 'renew',
+            repo,
+            id: issued.grant.id,
+          }).catch(() => {
+            // Expiry fails subsequent reads closed; the guest cannot regain project authority.
+          })
+        }, 60_000)
+      }
       handle = await harvestExecution.start(
         {
           preparedRun: { run: prepared.run },
@@ -2447,7 +2590,9 @@ class DispatchLoop {
           baseBranch: this.currentConfig().config.baseBranch,
           ...(this.repoLeaseHolder !== undefined ? { leaseHolder: this.repoLeaseHolder } : {}),
         },
-        launchAuth,
+        launchAuth && ticketAuthority
+          ? { ...launchAuth, tickets: { url: ticketAuthority.url, token: ticketAuthority.token } }
+          : launchAuth,
       )
       const identity = handle.identity
       if (
@@ -2525,6 +2670,13 @@ class DispatchLoop {
         )
       }
     } finally {
+      if (renewTickets) clearInterval(renewTickets)
+      if (ticketAuthority && !detached.value)
+        await ticketGrantRequest(ticketAuthority.url, ticketAuthority.token, {
+          action: 'revoke',
+          repo,
+          id: ticketAuthority.id,
+        })
       this.hostedHarvest = undefined
     }
   }

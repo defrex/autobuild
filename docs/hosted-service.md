@@ -153,9 +153,9 @@ or manual production deployment is required.
 ## Hosted ticket projects and v1 migration
 
 Hosted queues are partitioned by registered repository. Credentials select the
-project, and its latest uploaded effective `[tickets]` configuration selects the
-lifecycle; see the [ticket protocol](remote-ticket-protocol.md). If configuration
-is unavailable, run that project's dispatcher to publish it. Projects using file,
+project. Independent ticket policy selects lifecycle; `ab connect --tickets URL`
+publishes it before dispatch. Older clients retain uploaded dispatcher configuration
+as a fallback. See the [ticket protocol](remote-ticket-protocol.md). Projects using file,
 Linear or another external source continue to access it directly through their
 dispatcher. Service ticket surfaces refuse those projects with source feedback.
 The service never connects to Linear.
@@ -212,3 +212,29 @@ Missing blob configuration or denied reads stop deployment before Next builds;
 diagnostics never print credentials. SQL-only fresh installs, empty-v1 upgrades
 and already-v2 reruns do not open blob storage and keep their existing database
 requirements. Migration reruns are idempotent.
+
+## Local builds with hosted tickets
+
+Hosted tickets do not require hosted builds. Set `[tickets] source = "hosted"`
+and `teamKey = "ENG"`, then run `ab connect --tickets https://your-service.example`.
+Approve the project in the browser. This saves a service-scoped credential and
+`[tickets] url` while leaving `[store]` unchanged. Ticket commands work immediately,
+before any dispatcher runs. `ab connect` reports every service and whether it serves
+builds, tickets, or both. Use `ab disconnect --tickets` to revoke ticket access;
+when services differ use `--builds` to select build access. Shared uses share one
+credential, so disconnecting either shared use affects both.
+
+Ticket URL selection is `[tickets] url`, then the selected build service (including
+AB_STORE or a supported --store override). With local builds, `[tickets] url` is
+required. Builds, events, artifacts, and harvest journals remain in the local store.
+The service stores ticket records, project ticket policy, and restricted ticket
+grants. Normal project clients synchronize current `[tickets]` policy before use;
+failed synchronization fails the operation. Harvest grants can read and create;
+phase grants can only read. Neither can change policy or access BuildStore routes.
+
+New hosted policy defaults to `triage`, `ready`, `doing`, `done`, with creation and
+harvest proposals in `triage`. Explicit state names preserve their spelling.
+To retain earlier names configure `triageState = "Backlog"`,
+`claimedState = "Doing"`, `doneState = "Done"`, and the desired `readyState`.
+Existing ticket rows are never renamed. Older combined-service clients continue
+using the uploaded dispatcher configuration until independent policy is published.

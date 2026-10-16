@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
@@ -103,6 +104,7 @@ for (const version of [
     const operators = createOperatorServer({ store, secret, projects: testProjects(['repo']) })
     let opens = 0
     const composed = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       openProjectRegistry: async () => testProjects(['repo', 'https://github.com/acme/compat']),
       env: {
         AB_STORE_SECRET: secret,

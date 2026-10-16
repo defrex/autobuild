@@ -132,7 +132,11 @@ export async function createWorkspaceProvider(
     // receives through `opts` reach the plugin factory through the context.
     return await factory({
       config: config.config,
-      env: Object.fromEntries(Object.entries(opts.env).filter(([key]) => key !== 'AB_TOKEN')),
+      env: Object.fromEntries(
+        Object.entries(opts.env).filter(
+          ([key]) => !['AB_TOKEN', 'AB_TICKET_TOKEN', 'AB_TICKET_URL'].includes(key),
+        ),
+      ),
       repoRoot: resolve(opts.repoRoot),
       ...(opts.storeRef !== undefined ? { storeRef: opts.storeRef } : {}),
       ...(opts.storeRef !== undefined && opts.storeToken !== undefined

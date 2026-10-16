@@ -16,6 +16,8 @@ import type { TicketSource } from '../types'
 import { DEFAULT_TICKETS_DIR, FileTicketSource } from './file'
 import { LinearTicketSource } from './linear'
 import { HostedTicketSource } from './remote'
+import { ticketLifecycle } from './lifecycle'
+import { normalizeServiceURL } from '../../connection'
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -32,26 +34,41 @@ export async function createTicketSource(
   plugins: PluginRegistry = createPluginRegistry(),
 ): Promise<TicketSource> {
   if (config.source === 'hosted') {
-    const rawUrl = env.AB_STORE?.trim() || configuredStore(targetRepo)
+    const buildUrl = env.AB_STORE?.trim() || configuredStore(targetRepo)
+    const rawUrl = config.url ?? buildUrl
     if (!rawUrl) {
       throw new Error(
-        'AB_STORE is not set — required when [tickets].source = "hosted"; set it to the hosted service HTTP(S) URL',
+        'Hosted tickets require [tickets] url when builds are local; alternatively set [store] url or AB_STORE to a service',
       )
     }
     let serviceUrl: URL
     try {
-      serviceUrl = new URL(rawUrl)
+      serviceUrl = new URL(normalizeServiceURL(rawUrl, 'tickets.url'))
     } catch {
-      throw new Error('AB_STORE must be a valid HTTP(S) URL when [tickets].source = "hosted"')
+      throw new Error(
+        'Hosted tickets require [tickets] url when [store] url / AB_STORE selects local builds',
+      )
     }
-    if (serviceUrl.protocol !== 'http:' && serviceUrl.protocol !== 'https:') {
-      throw new Error('AB_STORE must be an HTTP(S) URL when [tickets].source = "hosted"')
-    }
-    const token = projectToken(
-      rawUrl,
-      (await resolveRepoOrigin(targetRepo, spawnExec)) ?? targetRepo,
-      env,
+    const ticketSession = env.AB_TICKET_TOKEN !== undefined || env.AB_TICKET_URL !== undefined
+    if (
+      ticketSession &&
+      (!env.AB_TICKET_TOKEN ||
+        !env.AB_TICKET_URL ||
+        normalizeServiceURL(env.AB_TICKET_URL) !== normalizeServiceURL(rawUrl))
     )
+      throw new Error('Ticket session credential does not match the selected ticket service')
+    const token = ticketSession
+      ? env.AB_TICKET_TOKEN
+      : projectToken(
+          rawUrl,
+          (await resolveRepoOrigin(targetRepo, spawnExec)) ?? targetRepo,
+          config.url &&
+            (!buildUrl ||
+              !/^https?:/.test(buildUrl) ||
+              normalizeServiceURL(config.url) !== normalizeServiceURL(buildUrl))
+            ? { ...env, AB_TOKEN: undefined }
+            : env,
+        )
     if (!token) {
       throw new Error(
         'No project credential; run ab connect (or set AB_TOKEN) — a project credential is required when [tickets].source = "hosted"',
@@ -60,13 +77,32 @@ export async function createTicketSource(
     if (config.teamKey === undefined) {
       throw new Error('[tickets].source = "hosted" requires teamKey')
     }
-    return new HostedTicketSource({
+    const source = new HostedTicketSource({
       url: serviceUrl.toString(),
       token,
       teamKey: config.teamKey,
       ...(config.claimedState !== undefined ? { claimedState: config.claimedState } : {}),
       ...(config.createState !== undefined ? { createState: config.createState } : {}),
     })
+    // Delegated sessions may read policy, but never redefine project authority.
+    if (!ticketSession && !env.AB_HARVEST && !env.AB_PHASE) {
+      const lifecycle = ticketLifecycle(config)
+      await source.synchronizePolicy({
+        version: 1,
+        tickets: {
+          source: 'hosted',
+          teamKey: config.teamKey,
+          readyState: lifecycle.ready,
+          triageState: lifecycle.triage,
+          claimedState: lifecycle.doing,
+          doneState: lifecycle.done,
+          createState: lifecycle.create,
+          proposalState: lifecycle.proposal,
+          ...(config.readyLabels !== undefined ? { readyLabels: config.readyLabels } : {}),
+        },
+      })
+    }
+    return source
   }
 
   if (config.source === 'linear') {

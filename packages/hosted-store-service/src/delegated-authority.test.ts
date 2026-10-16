@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { createTicketServer } from './ticket-server'
 import { expect, test } from 'bun:test'
@@ -711,6 +712,7 @@ test('composed ticket routing binds delegated harvest access to its authenticate
   await f.store.claimRepoLease(A, 'dispatcher', 60000)
   const opened: string[] = []
   const service = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     env: {
       AB_STORE_SECRET: secret,
       AB_POSTGRES_URL: 'postgres://injected/test',

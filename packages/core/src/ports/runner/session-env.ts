@@ -21,6 +21,8 @@ export function sessionEnv(
   for (const [key, value] of Object.entries(ambient)) {
     if (value !== undefined) env[key] = value
   }
+  delete env.AB_TICKET_TOKEN
+  delete env.AB_TICKET_URL
   delete env.AB_TOKEN
   Object.assign(env, scoped)
 

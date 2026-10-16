@@ -1,3 +1,4 @@
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
 /**
  * A dispatcher ticket source as the registry's ticket backend (AUT-342):
  * the tick's turn runner takes an `OperatorToolRegistry`, and
@@ -14,18 +15,6 @@ import type { Config } from '../config/schema'
 import type { OperatorTicketBackend, OperatorTicketContext } from './tickets'
 import type { TicketSource } from '../ports/types'
 
-/** The dispatcher's resolved triage state (the same default
- * `processes/dispatcher.ts` applies); inlined rather than imported so this
- * operator-seam module does not pull the dispatcher's module graph. */
-function defaultTriageState(config: Config): string {
-  return (
-    config.tickets.triageState ??
-    (config.tickets.source === 'linear' || config.tickets.source === 'hosted'
-      ? 'Backlog'
-      : 'Triage')
-  )
-}
-
 export function ticketBackendFromSource(options: {
   source: TicketSource
   config: Config
@@ -34,14 +23,20 @@ export function ticketBackendFromSource(options: {
     sourceFor: (_context: OperatorTicketContext) => options.source,
     statesFor: (_context: OperatorTicketContext, _source: TicketSource): string[] => {
       const tickets = options.config.tickets
-      const states = [
-        tickets.triageState ?? defaultTriageState(options.config),
-        tickets.readyState,
-        tickets.createState,
-        tickets.claimedState,
-        tickets.doneState,
-        tickets.proposalState ?? defaultTriageState(options.config),
-      ].filter((state): state is string => typeof state === 'string' && state.trim().length > 0)
+      const lifecycle = ticketLifecycle(tickets)
+      const states =
+        tickets.source === 'hosted'
+          ? Object.values(lifecycle)
+          : [
+              lifecycle.triage,
+              tickets.readyState,
+              tickets.createState,
+              tickets.claimedState,
+              tickets.doneState,
+              lifecycle.proposal,
+            ].filter(
+              (state): state is string => typeof state === 'string' && state.trim().length > 0,
+            )
       return [...new Set(states)]
     },
   }

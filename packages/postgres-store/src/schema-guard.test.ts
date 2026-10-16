@@ -12,6 +12,8 @@ import {
 import {
   SCHEMA_CHECKSUM,
   SCHEMA_V11_DDL,
+  SCHEMA_V12_DDL,
+  SCHEMA_V12_CHECKSUM,
   SCHEMA_V11_CHECKSUM,
   SCHEMA_V1_CHECKSUM,
   SCHEMA_V1_DDL,
@@ -58,6 +60,7 @@ interface FrozenSchema {
 export const FROZEN: Record<'build' | 'ticket' | 'auth', Map<number, FrozenSchema>> = {
   build: new Map([
     [11, { ddl: SCHEMA_V11_DDL, checksum: SCHEMA_V11_CHECKSUM }],
+    [12, { ddl: SCHEMA_V12_DDL, checksum: SCHEMA_V12_CHECKSUM }],
     [1, { ddl: SCHEMA_V1_DDL, checksum: SCHEMA_V1_CHECKSUM }],
     [2, { ddl: SCHEMA_V2_DDL, checksum: SCHEMA_V2_CHECKSUM }],
     [3, { ddl: SCHEMA_V3_DDL, checksum: SCHEMA_V3_CHECKSUM }],
@@ -102,8 +105,8 @@ interface GuardedFamily {
  * four-step paragraph). */
 const PINNED: Record<'build' | 'ticket' | 'auth', { version: number; checksum: string }> = {
   build: {
-    version: 12,
-    checksum: '8f01ff28dfc61d60a66ded382a78edb6ba03e4215107d043e685f1e2b3a2a97b',
+    version: 13,
+    checksum: '8587c134f2dac6aa34c2a263d0911c84bff31b547652b1777670cb540bd0afca',
   },
   ticket: {
     version: 2,

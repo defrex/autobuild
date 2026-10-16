@@ -47,7 +47,19 @@ export function compareFrameSets(
 }
 
 async function run(cwd: string, command: readonly string[]): Promise<void> {
-  const child = Bun.spawn([...command], { cwd, stdout: 'pipe', stderr: 'pipe' })
+  const child = Bun.spawn([...command], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    // Pipeline provenance displays fixture commit IDs. Both captures must use
+    // the same Git dates, or identical fixture contents hash differently when
+    // the merge-base and working-tree captures run in different seconds.
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z',
+      GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z',
+    },
+  })
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
   await new Response(child.stdout).text()
   if (exitCode !== 0) {
