@@ -1,3 +1,5 @@
+import { decideNext } from '../kernel/engine'
+import { publicationPending } from './publication-state'
 import { controlBuild } from '../cli/build-control'
 /**
  * Dispatcher tests (SPEC §3.3, §6.3, §12, §15.7 D1, §15.6-C): memory store +
@@ -5336,6 +5338,85 @@ describe('Dispatcher lease sweep', () => {
       events.filter((event) => event.type === 'workspace.provisioned').at(-1)?.payload.ref,
     ).toBe('sandbox-g1')
   })
+
+  for (const completions of [1, 3]) {
+    test(`parked remote publication recovery launches after ${completions} empty completions`, async () => {
+      const operations: string[] = []
+      const sha = 'f'.repeat(40)
+      const workspaceProvider: WorkspaceProvider = {
+        name: 'remote-test',
+        recovery: {
+          async reap() {
+            operations.push('reap')
+            throw new Error('a completed execution must recover publication in place')
+          },
+        },
+        async provision() {
+          throw new Error('publication recovery must retain the existing workspace')
+        },
+        async release() {},
+      }
+      const h = harness({
+        workspaceProvider,
+        onLaunch: async (slug, store) => {
+          operations.push('settle-publication')
+          // The real launchRunner settles publication before starting a guest.
+          await store.append(slug, {
+            actor: KERNEL,
+            type: 'finalize.completed',
+            payload: { pr: { ...PR, headSha: sha } },
+          })
+        },
+      })
+      const slug = await seedBuild(h, {
+        workspaceRef: 'sandbox-g0',
+        workspaceProvider: 'remote-test',
+        workspaceRemote: true,
+      })
+      await seedLoopsApproved(h, slug)
+      await h.store.append(slug, { actor: KERNEL, type: 'finalize.completed', payload: { pr: PR } })
+      h.forge.setPrState(PR.number, { state: 'open', mergeable: true })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'publication.requested',
+        payload: {
+          operation: 'finalize',
+          branch: `ab/${slug}`,
+          sha,
+          description: { kind: 'pr-description', rev: 0 },
+        },
+      })
+      for (let i = 0; i < completions; i++) {
+        const instance = `completed-${i}`
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.started',
+          payload: { provider: 'remote-test', workspaceRef: 'sandbox-g0', instance },
+        })
+        await h.store.append(slug, {
+          actor: DISPATCHER,
+          type: 'execution.ended',
+          payload: { instance, workspaceRef: 'sandbox-g0', outcome: 'completed', exitCode: 0 },
+        })
+      }
+      expect(await h.store.claimLease(slug, 'completed-0', 100)).toBe(true)
+      h.clock.advance(101)
+      const before = await h.store.getEvents(slug)
+      expect(decideNext(before, parseConfig(withReadyState('')))).toEqual({
+        kind: 'wait',
+        reason: 'awaiting-pr',
+      })
+      expect(publicationPending(before)).toBe(true)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(1)
+      expect(h.launches).toEqual([slug])
+      expect(operations).toEqual(['settle-publication'])
+      const after = await h.store.getEvents(slug)
+      expect(publicationPending(after)).toBe(false)
+      expect(after.some((event) => event.type === 'escalation.raised')).toBe(false)
+      expect((await h.dispatcher.tick({ acceptNewWork: false })).swept).toBe(0)
+      expect(h.launches).toEqual([slug])
+    })
+  }
 
   test('parked build with a reaped recovery-capable workspace: reap only — the surviving wait guard keeps it out of launch', async () => {
     // Regression for the dead duplicate of the top-level wait guard in

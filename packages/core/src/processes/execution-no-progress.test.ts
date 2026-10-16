@@ -227,7 +227,7 @@ test('three harmless parked completions do not manufacture an escalation', async
       payload: { instance, workspaceRef: 'ws', outcome: 'completed', exitCode: 0 },
     })
   }
-  expect(await ensureExecutionProgress(store, sequentialIds(), 'empty', config)).toBe(false)
+  expect(await ensureExecutionProgress(store, sequentialIds(), 'empty', config)).toBe(true)
   expect((await store.buildFacts('empty')).executionNoProgress.count).toBe(3)
   expect((await backing.getEvents('empty')).filter((e) => e.type === 'escalation.raised')).toEqual(
     [],

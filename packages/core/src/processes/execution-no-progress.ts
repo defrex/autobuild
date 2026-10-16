@@ -143,9 +143,11 @@ export async function ensureExecutionProgress(
     const decision = decideNextFromFacts(facts.state, facts.log, config)
     // Commands must still be acknowledged even while this guard is parked.
     if (decision.kind === 'acknowledge') return true
-    if (decision.kind === 'wait') return false
     const streak = facts.executionNoProgress
     if (streak.open.length > 0) return false
+    // Callers own wait routing, including publication-recovery launches. A
+    // legitimate wait is not dispatcher/runner disagreement.
+    if (decision.kind === 'wait') return true
     if (streak.count < 3) return true
     const raised = await store.appendIfCurrent(slug, facts.state.lastSeq, {
       actor: DISPATCHER,
