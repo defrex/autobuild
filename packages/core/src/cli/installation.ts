@@ -1,5 +1,5 @@
 import { stat, readFile, realpath } from 'node:fs/promises'
-import { join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import semver from 'semver'
 import { PLUGIN_API_VERSION } from '../plugins/manifest'
 import { defaultDistRoot } from './init'
@@ -155,6 +155,57 @@ function ownerRootForPackage(identity: DistributionIdentity): string | undefined
   return owner === '' ? sep : owner
 }
 
+/** Store-internal fallback links cannot establish project ownership. */
+function inBunStore(path: string): boolean {
+  return path
+    .split(sep)
+    .some((part, index, parts) => part === '.bun' && parts[index - 1] === 'node_modules')
+}
+
+function ancestors(path: string): string[] {
+  const result: string[] = []
+  for (let current = resolve(path); ; current = dirname(current)) {
+    result.push(current)
+    if (dirname(current) === current) return result
+  }
+}
+
+async function discoverOwner(
+  identity: DistributionIdentity,
+  cwd: string,
+): Promise<string | undefined> {
+  const direct = ownerRootForPackage(identity)
+  if (direct !== undefined && !inBunStore(direct)) return direct
+  // Reject invalid package names before constructing candidate public paths.
+  if (identity.packageName.split('/').some((part) => part === '' || part === '.' || part === '..'))
+    return undefined
+  const candidates = new Set([...ancestors(identity.root), ...ancestors(cwd)])
+  for (const candidate of candidates) {
+    if (inBunStore(candidate)) continue
+    if (!(await samePath(join(candidate, 'node_modules', identity.packageName), identity.root)))
+      continue
+    const manifestPath = join(candidate, 'package.json')
+    if (!(await exists(manifestPath))) continue
+    const manifest = await parseJson(manifestPath)
+    if (declaredSection(manifest, identity.packageName) !== undefined) return candidate
+  }
+  return undefined
+}
+
+async function readMetadata(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`${path} does not exist`, { cause: error })
+    }
+    throw new Error(
+      `cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    )
+  }
+}
+
 function githubDependency(value: unknown): { owner: string; repository: string } | undefined {
   if (typeof value !== 'string') return undefined
   const match = /^github:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:#([^\s]+))?$/.exec(value)
@@ -172,8 +223,9 @@ function registryDependency(value: unknown, installedVersion: string): boolean {
 }
 
 async function parseJson(path: string): Promise<Record<string, unknown>> {
+  const text = await readMetadata(path)
   try {
-    return object(JSON.parse(await readFile(path, 'utf8'))) ?? {}
+    return object(JSON.parse(text)) ?? {}
   } catch (error) {
     throw new Error(
       `${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -182,8 +234,9 @@ async function parseJson(path: string): Promise<Record<string, unknown>> {
 }
 
 async function parseJsonc(path: string): Promise<Record<string, unknown>> {
+  const text = await readMetadata(path)
   try {
-    const value = Bun.JSONC.parse(await readFile(path, 'utf8'))
+    const value = Bun.JSONC.parse(text)
     return object(value) ?? {}
   } catch (error) {
     throw new Error(
@@ -241,6 +294,7 @@ async function samePath(left: string, right: string): Promise<boolean> {
 export async function inspectInstallation(options: {
   distRoot?: string
   globalBin: string
+  cwd?: string
 }): Promise<InstallationInspection> {
   const identity = await readDistributionIdentity(options.distRoot)
   if (identity.sourceCheckout) {
@@ -251,18 +305,18 @@ export async function inspectInstallation(options: {
     }
   }
 
-  const ownerRoot = ownerRootForPackage(identity)
-  if (ownerRoot === undefined) {
-    return {
-      kind: 'unknown',
-      identity,
-      reason: 'the distribution is not a direct Bun node_modules package',
-    }
-  }
-  const ownerManifest = join(ownerRoot, 'package.json')
-  const ownerLock = join(ownerRoot, 'bun.lock')
-
   try {
+    const ownerRoot = await discoverOwner(identity, options.cwd ?? process.cwd())
+    if (ownerRoot === undefined) {
+      return {
+        kind: 'unknown',
+        identity,
+        reason: 'the distribution is not a direct Bun node_modules package',
+      }
+    }
+    const ownerManifest = join(ownerRoot, 'package.json')
+    const ownerLock = join(ownerRoot, 'bun.lock')
+
     const manifest = await parseJson(ownerManifest)
     const lock = await parseJsonc(ownerLock)
     const declared = declaredSection(manifest, identity.packageName)

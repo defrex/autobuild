@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ExecResult } from '../ports/workspace/git-worktree'
@@ -30,6 +30,7 @@ async function installFixture(
   scope: 'local' | 'global' = 'local',
   channel: 'github' | 'npm' = 'github',
   section: 'dependencies' | 'devDependencies' = 'dependencies',
+  isolated = false,
 ): Promise<{
   owner: string
   dist: string
@@ -80,6 +81,7 @@ async function installFixture(
     )
   }
   if (scope === 'global') await symlink(join(dist, 'bin', 'ab.ts'), join(globalBin, 'ab'))
+  if (isolated) return isolate({ owner, dist, globalBin })
   return { owner, dist, globalBin }
 }
 
@@ -836,4 +838,118 @@ test('fallback suppresses a duplicate unknown-compatibility warning in the same 
     }),
   ).toBe(0)
   expect(warnings.filter((line) => line === unknown)).toHaveLength(1)
+})
+
+async function isolate(f: { owner: string; dist: string; globalBin: string }) {
+  const dist = join(f.owner, 'node_modules/.bun/arbitrary-entry/node_modules/@defrex/autobuild')
+  await mkdir(join(dist, '..'), { recursive: true })
+  await rename(f.dist, dist)
+  for (const path of [
+    join(dist, 'package.json'),
+    join(f.owner, 'package.json'),
+    join(f.owner, 'bun.lock'),
+  ]) {
+    const text = await readFile(path, 'utf8')
+    await writeFile(
+      path,
+      text
+        .replaceAll('"autobuild"', '"@defrex/autobuild"')
+        .replaceAll('"autobuild@', '"@defrex/autobuild@'),
+    )
+  }
+  await mkdir(join(f.owner, 'node_modules/@defrex'), { recursive: true })
+  await symlink(dist, join(f.owner, 'node_modules/@defrex/autobuild'))
+  return { ...f, dist }
+}
+
+for (const channel of ['github', 'npm'] as const) {
+  test(`isolated ${channel} update rereads the replaced public symlink before handoff`, async () => {
+    const f = await installFixture('local', channel, 'devDependencies', true)
+    const calls: string[][] = []
+    const publicPath = join(f.owner, 'node_modules/@defrex/autobuild')
+    const next = join(f.owner, 'node_modules/.bun/new-entry/node_modules/@defrex/autobuild')
+    await mkdir(join(f.dist, 'skills/plan'))
+    await writeFile(join(f.dist, 'skills/plan/SKILL.md'), '---\nname: ab-plan\n---\nOld skill\n')
+    const update = await selfUpdate({
+      targetRepo: f.owner,
+      distRoot: f.dist,
+      env: {},
+      registry: async () => ({ status: 200, body: '{"version":"2.1.0"}' }),
+      command: async (argv) => {
+        calls.push(argv)
+        if (argv[1] === 'pm') return result(f.globalBin)
+        if (argv[0] === 'gh') return result('{"tag_name":"v2.1.0"}')
+        if (argv[1] === 'add') {
+          await mkdir(join(next, '..'), { recursive: true })
+          await rename(f.dist, next)
+          await writeFile(
+            join(next, 'package.json'),
+            JSON.stringify({
+              name: '@defrex/autobuild',
+              version: '2.1.0',
+              bin: { ab: 'bin/ab.ts' },
+            }),
+          )
+          await writeFile(
+            join(next, 'skills/plan/SKILL.md'),
+            '---\nname: ab-plan\n---\nUpdated skill\n',
+          )
+          await rm(publicPath)
+          await symlink(next, publicPath)
+          return result()
+        }
+        expect(existsSync(join(f.owner, '.agents'))).toBe(false)
+        const exitCode = await runCli(['upgrade', f.owner, '--no-commit'], {
+          workspacePath: f.owner,
+          distributionRoot: publicPath,
+          processEnv: { AB_SELF_UPDATE_HANDOFF: '1' },
+          stdout: () => {},
+          stderr: () => {},
+        })
+        return result('', '', exitCode)
+      },
+      stdout: () => {},
+      stderr: () => {},
+    })
+    expect(update).toEqual({ kind: 'handoff', exitCode: 0 })
+    expect(calls).toContainEqual([
+      'bun',
+      'add',
+      '--cwd',
+      f.owner,
+      '-d',
+      channel === 'npm' ? '@defrex/autobuild@2.1.0' : 'github:a-fork/autobuild#v2.1.0',
+    ])
+    expect(calls.at(-1)).toEqual(['bun', join(publicPath, 'bin/ab.ts'), 'upgrade', f.owner])
+    expect(existsSync(f.dist)).toBe(false)
+    expect(await readFile(join(f.owner, '.agents/skills/ab-plan/SKILL.md'), 'utf8')).toContain(
+      'Updated skill',
+    )
+  })
+}
+
+test('unknown isolated owner warns and still merges installed skills', async () => {
+  const f = await installFixture('local', 'npm', 'devDependencies', true)
+  await rm(join(f.owner, 'node_modules/@defrex/autobuild'))
+  await mkdir(join(f.dist, 'skills/plan'))
+  await writeFile(
+    join(f.dist, 'skills/plan/SKILL.md'),
+    '---\nname: ab-plan\n---\nInstalled skill\n',
+  )
+  const warnings: string[] = []
+  const code = await runCli(['upgrade', f.owner, '--no-commit'], {
+    workspacePath: f.owner,
+    distributionRoot: f.dist,
+    selfUpdateCommand: async (argv) => {
+      expect(argv).toEqual(['bun', 'pm', 'bin', '-g'])
+      return result(f.globalBin)
+    },
+    stdout: () => {},
+    stderr: (line) => warnings.push(line),
+  })
+  expect(code).toBe(0)
+  expect(warnings.join('\n')).toContain('self-update skipped:')
+  expect(await readFile(join(f.owner, '.agents/skills/ab-plan/SKILL.md'), 'utf8')).toContain(
+    'Installed skill',
+  )
 })
