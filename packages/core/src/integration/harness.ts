@@ -57,7 +57,13 @@ import type {
 import { GitWorktreeProvider, spawnExec } from '../ports/workspace/git-worktree'
 import { InProcessBuildExecution } from '../ports/workspace/in-process-build-execution'
 import { BuildRunner, LeaseHeldError, SetupFailureError } from '../processes/build-runner'
-import { diagnosticArtifact } from '../processes/build-execution-state'
+import {
+  diagnosticArtifact,
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  effectiveBuildConfigContent,
+  parseEffectiveBuildConfig,
+} from '../processes/build-execution-state'
+import { composeBuildConfig } from '../config/live'
 import { Dispatcher, type LaunchRunnerResult } from '../processes/dispatcher'
 import {
   getHarvestStatus,
@@ -401,6 +407,8 @@ export async function makeHarness(opts: {
   configToml?: string
   /** Force a routing disagreement while retaining the runner's branch config. */
   dispatcherConfig?: (config: Config) => Config
+  pinnedConfig?: boolean
+  getConfig?: () => Config
   /** Forge gate existence is independent from current PR mergeability. */
   gatePresence?: 'present' | 'absent'
   /** Optional adapter-level runtime composition for focused integration tests.
@@ -605,6 +613,20 @@ export async function makeHarness(opts: {
       runner: new BuildRunner({
         store: activeStore.scopeBuild(slug),
         config,
+        ...(opts.pinnedConfig
+          ? {
+              getConfig: async () => {
+                const artifact = await activeStore.getArtifact(
+                  slug,
+                  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+                )
+                return composeBuildConfig(
+                  artifact === null ? config : parseEffectiveBuildConfig(artifact),
+                  opts.getConfig?.() ?? config,
+                )
+              },
+            }
+          : {}),
         // Two-axis registry (§9): every runtime is backed by the SAME scripted
         // runner instance, so the `s_1…s_N` session numbering scenarios rely on
         // is preserved regardless of which runtime a role selects. `scripted`
@@ -632,6 +654,15 @@ export async function makeHarness(opts: {
     }
   }
   const launchRunner = async (slug: string): Promise<LaunchRunnerResult> => {
+    if (
+      opts.pinnedConfig &&
+      (await activeStore.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)) === null
+    ) {
+      await activeStore.putArtifact(slug, {
+        kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+        content: effectiveBuildConfigContent(config),
+      })
+    }
     launched.push({ slug, ...(await makeRunner(slug)) })
     return 'scheduled'
   }
@@ -645,6 +676,7 @@ export async function makeHarness(opts: {
     repo: origin,
     exec: spawnExec,
     launchRunner,
+    ...(opts.getConfig ? { getConfig: opts.getConfig } : {}),
     ids,
     clock,
   })

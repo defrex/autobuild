@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -17,6 +17,7 @@ afterEach(async () => {
 
 async function fixture(
   options: {
+    isolated?: boolean
     git?: 'file' | 'directory'
     tag?: string
     /** npm registry provenance instead of the default github: forge records. */
@@ -80,6 +81,7 @@ async function fixture(
   )
   if (options.git === 'file') await writeFile(join(dist, '.git'), 'gitdir: elsewhere')
   if (options.git === 'directory') await mkdir(join(dist, '.git'))
+  if (options.isolated) return isolate({ owner, dist, globalBin })
   return { owner, dist, globalBin }
 }
 
@@ -335,4 +337,88 @@ describe('installed distribution identity and Bun provenance', () => {
     expect(second.kind).toBe('unknown')
     if (second.kind === 'unknown') expect(second.reason).toContain('under devDependencies')
   })
+})
+
+async function isolate(f: { owner: string; dist: string; globalBin: string }) {
+  const dist = join(f.owner, 'node_modules/.bun/arbitrary-entry/node_modules/@defrex/autobuild')
+  await mkdir(join(dist, '..'), { recursive: true })
+  await rename(f.dist, dist)
+  for (const path of [
+    join(dist, 'package.json'),
+    join(f.owner, 'package.json'),
+    join(f.owner, 'bun.lock'),
+  ]) {
+    const text = await readFile(path, 'utf8')
+    await writeFile(
+      path,
+      text
+        .replaceAll('"autobuild"', '"@defrex/autobuild"')
+        .replaceAll('"autobuild@', '"@defrex/autobuild@'),
+    )
+  }
+  await mkdir(join(f.owner, 'node_modules/@defrex'), { recursive: true })
+  await symlink(dist, join(f.owner, 'node_modules/@defrex/autobuild'))
+  return { ...f, dist }
+}
+
+for (const npm of [undefined, { dependency: '^2.0.0' }]) {
+  test(`isolated scoped ${npm ? 'registry' : 'forge'} ownership uses physical ancestors`, async () => {
+    const f = await fixture({ isolated: true, npm, section: 'devDependencies' })
+    for (const cwd of ['/unrelated', join(f.owner, 'nested/deep')]) {
+      const result = await inspectInstallation({ distRoot: f.dist, globalBin: f.globalBin, cwd })
+      expect(result.kind).toBe(npm ? 'npm-registry' : 'bun-forge')
+      if (result.kind === 'unknown' || result.kind === 'source') throw new Error('missing owner')
+      expect(result.installation).toMatchObject({
+        ownerRoot: f.owner,
+        ownerManifest: join(f.owner, 'package.json'),
+        ownerLock: join(f.owner, 'bun.lock'),
+        section: 'devDependencies',
+        scope: 'local',
+        channel: npm ? 'npm' : 'github',
+      })
+    }
+    await symlink(join(f.dist, 'bin/ab.ts'), join(f.globalBin, 'ab'))
+    const global = await inspectInstallation({ distRoot: f.dist, globalBin: f.globalBin })
+    expect(global.kind !== 'unknown' && global.kind !== 'source' && global.installation.scope).toBe(
+      'global',
+    )
+  })
+}
+
+test('external symlink ownership requires matching public path and declaration', async () => {
+  const f = await fixture({ isolated: true, npm: { dependency: '^2.0.0' } })
+  const external = join(f.owner, '..', 'external')
+  await rename(f.dist, external)
+  const publicPath = join(f.owner, 'node_modules/@defrex/autobuild')
+  await rm(publicPath)
+  await symlink(external, publicPath)
+  const nested = join(f.owner, 'nested')
+  await mkdir(join(nested, 'node_modules/@defrex'), { recursive: true })
+  await writeFile(join(nested, 'package.json'), '{"dependencies":{"@defrex/autobuild":"2.0.0"}}')
+  await symlink('/different/distribution', join(nested, 'node_modules/@defrex/autobuild'))
+  const result = await inspectInstallation({
+    distRoot: external,
+    globalBin: f.globalBin,
+    cwd: nested,
+  })
+  expect(result.kind === 'npm-registry' && result.installation.ownerRoot).toBe(f.owner)
+  await rm(publicPath)
+  expect(
+    (await inspectInstallation({ distRoot: external, globalBin: f.globalBin, cwd: nested })).kind,
+  ).toBe('unknown')
+})
+
+test('missing metadata and malformed metadata have distinct diagnostics', async () => {
+  for (const file of ['package.json', 'bun.lock']) {
+    const f = await fixture()
+    const path = join(f.owner, file)
+    await rm(path)
+    const missing = await inspectInstallation({ distRoot: f.dist, globalBin: f.globalBin })
+    expect(missing.kind === 'unknown' && missing.reason).toBe(`${path} does not exist`)
+    await writeFile(path, '{broken')
+    const malformed = await inspectInstallation({ distRoot: f.dist, globalBin: f.globalBin })
+    expect(malformed.kind === 'unknown' && malformed.reason).toContain(
+      `is not valid ${file === 'bun.lock' ? 'JSONC' : 'JSON'}`,
+    )
+  }
 })

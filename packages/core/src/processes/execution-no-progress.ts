@@ -136,11 +136,18 @@ export async function ensureExecutionProgress(
   ids: IdSource,
   slug: string,
   config: Config,
+  decide?: (
+    state: Parameters<typeof decideNextFromFacts>[0],
+    log: Parameters<typeof decideNextFromFacts>[1],
+  ) => Promise<Decision | undefined>,
 ): Promise<boolean> {
   for (;;) {
     await store.refreshBuild(slug)
     const facts = await store.buildFacts(slug)
-    const decision = decideNextFromFacts(facts.state, facts.log, config)
+    const decision = decide
+      ? await decide(facts.state, facts.log)
+      : decideNextFromFacts(facts.state, facts.log, config)
+    if (decision === undefined) return false
     // Commands must still be acknowledged even while this guard is parked.
     if (decision.kind === 'acknowledge') return true
     const streak = facts.executionNoProgress

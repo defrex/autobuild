@@ -65,6 +65,8 @@ import {
 } from '../kernel/auto-merge-default'
 import { reduceDispatchSettings } from '../kernel/dispatch-settings'
 import { decideNextFromFacts } from '../kernel/engine'
+import { composeBuildConfig } from '../config/live'
+import { BUILD_EFFECTIVE_CONFIG_ARTIFACT, parseEffectiveBuildConfig } from './build-execution-state'
 import {
   DEFAULT_MAX_HARVEST_RECOVERY_ATTEMPTS,
   decideHarvestControl,
@@ -545,6 +547,8 @@ export interface DispatcherDeps {
   retiredWorkspaces?: readonly WorkspaceProvider[]
   forge: Forge
   config: Config
+  /** Configuration-only publication for incompatible pins; never launches a runner. */
+  repairBuildConfig?: (slug: string) => Promise<void>
   /** Current process snapshot, captured once at the beginning of each tick.
    * Omission preserves the cron/static-config API. */
   getConfig?: () => Config
@@ -645,6 +649,38 @@ export function heldByRepositoryPause(state: BuildState, paused: boolean): boole
 }
 
 export class Dispatcher {
+  /** Read at each decision boundary: artifact revisions are independent of events. */
+  private async decideBuild(
+    slug: string,
+    state: Parameters<typeof decideNextFromFacts>[0],
+    log: Parameters<typeof decideNextFromFacts>[1],
+    report: TickReport,
+  ): Promise<ReturnType<typeof decideNextFromFacts> | undefined> {
+    let revision: number | undefined
+    try {
+      let artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+      if (artifact === null) return decideNextFromFacts(state, log, this.deps.config)
+      revision = artifact.meta.revision
+      let pinned: Config
+      try {
+        pinned = parseEffectiveBuildConfig(artifact)
+      } catch (error) {
+        if (this.deps.repairBuildConfig === undefined) throw error
+        await this.deps.repairBuildConfig(slug)
+        artifact = await this.store.getArtifact(slug, BUILD_EFFECTIVE_CONFIG_ARTIFACT)
+        if (artifact === null) throw new Error('configuration repair deposited no pipeline')
+        revision = artifact.meta.revision
+        pinned = parseEffectiveBuildConfig(artifact)
+      }
+      return decideNextFromFacts(state, log, composeBuildConfig(pinned, this.deps.config))
+    } catch (error) {
+      report.blockedDiagnostics.push(
+        `build ${slug} pipeline${revision === undefined ? '' : ` revision ${revision}`} unavailable: pipeline decisions withheld; next tick retries. Restore readable build-branch configuration or use a compatible dispatcher version. ${error instanceof Error ? error.message : String(error)}`,
+      )
+      return undefined
+    }
+  }
+
   /** Memoized normalized origin of the served repository (one git call per
    * dispatcher), recorded on created builds so ambient reads can accept a
    * differently located checkout of the same repository by origin equality.
@@ -1189,10 +1225,22 @@ export class Dispatcher {
     }
   }
 
-  private async launch(slug: string, launched: Set<string>): Promise<LaunchRunnerResult> {
+  private async launch(
+    slug: string,
+    launched: Set<string>,
+    report: TickReport = emptyTickReport(),
+  ): Promise<LaunchRunnerResult> {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
-    if (!(await ensureExecutionProgress(this.store, this.deps.ids, slug, this.deps.config))) {
+    if (
+      !(await ensureExecutionProgress(
+        this.store,
+        this.deps.ids,
+        slug,
+        this.deps.config,
+        (state, log) => this.decideBuild(slug, state, log, report),
+      ))
+    ) {
       return 'already-active'
     }
     return this.deps.launchRunner(slug)
@@ -2108,7 +2156,7 @@ export class Dispatcher {
       }
       // The dispatcher never runs agents (§15.7): re-attach a build-runner,
       // which executes the reconcile epilogue phase.
-      await this.launch(record.slug, launched)
+      await this.launch(record.slug, launched, report)
       report.conflicted += 1
       return
     }
@@ -2142,12 +2190,12 @@ export class Dispatcher {
         const latest = await store.buildFacts(record.slug)
         const latestState = latest.state
         const latestIntent = pendingAutoMerge(latestState)
-        const decision = decideNextFromFacts(latest.state, latest.log, this.deps.config)
+        const decision = await this.decideBuild(record.slug, latest.state, latest.log, report)
         if (
           latestState.pr?.number === pr.number &&
           latestIntent?.enabled === true &&
           latestIntent.commandSeq === autoMerge.commandSeq &&
-          decision.kind === 'wait' &&
+          decision?.kind === 'wait' &&
           decision.reason === 'awaiting-pr'
         ) {
           await forge.squashMerge(workspacePath, pr.number, result.headSha)
@@ -2822,7 +2870,7 @@ export class Dispatcher {
         return 'parked'
       }
       if (launched === undefined) await this.deps.launchRunner(record.slug)
-      else await this.launch(record.slug, launched)
+      else await this.launch(record.slug, launched, report)
       if (authored && report !== undefined) report.authored += 1
       return 'completed'
     } catch (error) {
@@ -2899,7 +2947,6 @@ export class Dispatcher {
     opts: TickOpts = {},
   ): Promise<void> {
     const store = this.store
-    const { config } = this.deps
     for (const record of await this.nonterminalBuilds()) {
       if (launched.has(record.slug)) continue
       // Budget gate: resume launches runners (transport-backed work).
@@ -2922,7 +2969,8 @@ export class Dispatcher {
         !(await this.dispatchBudget(record.slug))
       )
         continue
-      const decision = decideNextFromFacts(state, facts.log, config)
+      const decision = await this.decideBuild(record.slug, state, facts.log, report)
+      if (decision === undefined) continue
       if (decision.kind === 'wait') {
         if (decision.reason === 'blocked' && state.openEscalations.length > 0) {
           report.blockedDiagnostics.push(
@@ -2936,7 +2984,7 @@ export class Dispatcher {
       // Disposable remote environments must pass through the stale-lease
       // fencing sweep below; startup must never attach directly to an old VM.
       if (this.deps.workspaces.recovery !== undefined) continue
-      const result = await this.launch(record.slug, launched)
+      const result = await this.launch(record.slug, launched, report)
       if (result === 'scheduled') report.resumed += 1
     }
   }
@@ -2998,7 +3046,8 @@ export class Dispatcher {
         !(await this.dispatchBudget(record.slug))
       )
         continue
-      const decision = decideNextFromFacts(state, facts.log, this.deps.config)
+      const decision = await this.decideBuild(record.slug, state, facts.log, report)
+      if (decision === undefined) continue
       if (state.status === 'done' || state.status === 'aborted') continue
       // Raw history, read at most once and only by a branch that acts on it.
       let loaded: AbEvent[] | undefined
@@ -3099,7 +3148,7 @@ export class Dispatcher {
         // boundaries and the launch; this tick performs neither.
         continue
       }
-      const result = await this.launch(record.slug, launched)
+      const result = await this.launch(record.slug, launched, report)
       if (result === 'scheduled') report.swept += 1
     }
   }

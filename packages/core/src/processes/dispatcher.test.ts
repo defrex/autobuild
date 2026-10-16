@@ -1,5 +1,9 @@
 import { decideNext } from '../kernel/engine'
 import { publicationPending } from './publication-state'
+import {
+  BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+  effectiveBuildConfigContent,
+} from './build-execution-state'
 import { controlBuild } from '../cli/build-control'
 /**
  * Dispatcher tests (SPEC §3.3, §6.3, §12, §15.7 D1, §15.6-C): memory store +
@@ -119,6 +123,7 @@ function harness(
     forge?: FakeForge
     exec?: Exec
     /** Mutable dispatcher snapshot used by hot-reload boundary tests. */
+    repairBuildConfig?: (slug: string) => Promise<void>
     getConfig?: () => Config
     /** A store to dispatch over instead of a fresh in-memory one — the seam
      * the restart tests use to hand a second Dispatcher a reopened store. */
@@ -187,6 +192,7 @@ function harness(
     forge,
     config: parseConfig(withReadyState(opts.toml ?? '')),
     ...(opts.getConfig !== undefined ? { getConfig: opts.getConfig } : {}),
+    ...(opts.repairBuildConfig ? { repairBuildConfig: opts.repairBuildConfig } : {}),
     repo: opts.repo ?? REPO,
     ...(opts.repoOrigin !== undefined ? { repoOrigin: opts.repoOrigin } : {}),
     ...(opts.orchestratorModel !== undefined ? { orchestratorModel: opts.orchestratorModel } : {}),
@@ -8724,4 +8730,195 @@ test('recovered dispatch completion shares the guard before its first attachment
       .filter((e) => e.type === 'escalation.raised')
       .map((e) => e.payload.policyCause),
   ).toEqual(['execution-no-progress'])
+})
+
+describe('dispatcher pipeline pins', () => {
+  const pipeline = (table: 'verify' | 'finalize', name: string) =>
+    parseConfig(
+      withReadyState(
+        name === ''
+          ? ''
+          : `
+[commands]
+run = "true"
+[${table}]
+steps = ["${name}"]
+[${table}.${name}]
+kind = "check"
+command = "run"
+`,
+      ),
+    )
+  async function pin(h: Harness, slug: string, config: Config) {
+    await h.store.putArtifact(slug, {
+      kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+      content: effectiveBuildConfigContent(config),
+    })
+  }
+  for (const table of ['verify', 'finalize'] as const) {
+    for (const change of ['add', 'remove', 'rename']) {
+      test(`${table} ${change}: merge and replacement launches follow the pin`, async () => {
+        const pinned = pipeline(table, change === 'add' ? '' : 'original')
+        let live = pipeline(table, change === 'remove' ? '' : 'replacement')
+        const h = harness({ getConfig: () => live })
+        const slug = await seedAwaitingPr(h)
+        await pin(h, slug, pinned)
+        await h.store.append(slug, {
+          actor: humanActor('operator'),
+          type: 'build.auto-merge-requested',
+          payload: {},
+        })
+        h.forge.setPrState(1, { state: 'open', mergeable: true })
+        h.forge.setPrHeadSha(1, PR.headSha)
+        h.forge.setGatePresence(1, 'absent')
+        await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+        expect(h.forge.squashMergeCalls.length).toBe(change === 'add' ? 1 : 0)
+        expect(h.launches.length).toBe(change === 'add' ? 0 : 1)
+        // A new deposit changes the very next decision without event changes.
+        live = pipeline(table, '')
+        await pin(h, slug, live)
+        await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+        expect(h.forge.squashMergeCalls.length).toBe(1)
+        expect(h.launches.length).toBe(change === 'add' ? 0 : 1)
+      })
+    }
+  }
+  for (const startup of [true, false]) {
+    test(`invalid pin contains failure and retries repair (startup=${startup})`, async () => {
+      let repairs = 0
+      let repairWorks = false
+      const h = harness({
+        toml: 'capacity = 3',
+        tickets: [readyTicket('T-intake')],
+        repairBuildConfig: async (slug) => {
+          repairs++
+          if (!repairWorks) throw new Error('branch config unavailable')
+          await pin(h, slug, pipeline('verify', ''))
+        },
+      })
+      const bad = await seedAwaitingPr(h, 'bad-pin')
+      const good = await seedBuild(h, { slug: 'healthy-pin' })
+      await h.store.putArtifact(bad, {
+        kind: BUILD_EFFECTIVE_CONFIG_ARTIFACT,
+        content: '{"futureSchema":true}',
+      })
+      h.clock.advance(120_000)
+      const report = await h.dispatcher.tick({ resumeCurrent: startup })
+      expect(
+        report.blockedDiagnostics.some(
+          (line) => line.includes('bad-pin') && line.includes('next tick retries'),
+        ),
+      ).toBe(true)
+      expect(h.launches).toEqual(['healthy-pin', 'add-rate-limiting'])
+      expect(report.dispatched).toBe(1)
+      expect(repairs).toBeGreaterThan(0)
+      repairWorks = true
+      await h.dispatcher.tick({ resumeCurrent: startup, acceptNewWork: false })
+      expect(h.launches.filter((slug) => slug === bad)).toHaveLength(0)
+      expect(good).toBeDefined()
+      expect(repairs).toBeGreaterThan(1)
+    })
+  }
+  test('transient artifact read failure withholds merge and launch, then recovers without repair', async () => {
+    const backing = new MemoryBuildStore()
+    let unavailable = true
+    let repairs = 0
+    const store = new Proxy(backing, {
+      get(target, key) {
+        if (key === 'getArtifact')
+          return async (...args: Parameters<BuildStore['getArtifact']>) => {
+            if (unavailable && args[0] === 'read-failure') throw new Error('temporary blob outage')
+            return target.getArtifact(...args)
+          }
+        const value = Reflect.get(target, key)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const h = harness({
+      store,
+      repairBuildConfig: async () => {
+        repairs++
+      },
+    })
+    const slug = await seedAwaitingPr(h, 'read-failure')
+    await pin(h, slug, pipeline('verify', ''))
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setGatePresence(1, 'absent')
+    const report = await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+    expect(report.blockedDiagnostics.some((line) => line.includes('temporary blob outage'))).toBe(
+      true,
+    )
+    expect(h.forge.squashMergeCalls).toHaveLength(0)
+    expect(h.launches).toHaveLength(0)
+    expect(repairs).toBe(0)
+    unavailable = false
+    await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+    expect(h.forge.squashMergeCalls).toHaveLength(1)
+    expect(h.launches).toHaveLength(0)
+  })
+
+  test('two builds use distinct pins under one live snapshot', async () => {
+    const live = pipeline('verify', 'live-only')
+    const h = harness({ getConfig: () => live })
+    const parked = await seedAwaitingPr(h, 'parked')
+    const due = await seedAwaitingPr(h, 'due')
+    await pin(h, parked, pipeline('verify', ''))
+    await pin(h, due, pipeline('verify', 'pending'))
+    await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+    expect(h.launches).toEqual(['due'])
+  })
+  test('no-progress escalation describes the pinned pipeline at the launch boundary', async () => {
+    const h = harness({ getConfig: () => pipeline('verify', 'live-only') })
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', 'pinned-step'))
+    for (const instance of ['a', 'b', 'c']) {
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { instance, provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: '/ws/ab/auth-limit', outcome: 'completed', exitCode: 0 },
+      })
+    }
+    await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+    expect(h.launches).toEqual([])
+    const escalations = (await h.store.getEvents(slug)).filter(
+      (event) => event.type === 'escalation.raised',
+    )
+    expect(escalations).toHaveLength(1)
+    expect(escalations[0]?.payload.question).toContain('pinned-step')
+    expect(escalations[0]?.payload.question).not.toContain('live-only')
+  })
+
+  test('last-moment merge guard reads a newly published pin', async () => {
+    const h = harness()
+    const slug = await seedAwaitingPr(h)
+    await pin(h, slug, pipeline('verify', ''))
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'build.auto-merge-requested',
+      payload: {},
+    })
+    h.forge.setPrState(1, { state: 'open', mergeable: true })
+    h.forge.setPrHeadSha(1, PR.headSha)
+    h.forge.setGatePresence(1, 'absent')
+    const setAutoMerge = h.forge.setAutoMerge.bind(h.forge)
+    h.forge.setAutoMerge = async (...args) => {
+      const result = await setAutoMerge(...args)
+      await pin(h, slug, pipeline('verify', 'just-published'))
+      return result
+    }
+    await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+    expect(h.forge.squashMergeCalls).toHaveLength(0)
+    expect(h.launches).toEqual([slug])
+  })
 })

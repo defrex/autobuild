@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { checkUpgradeCompatibility, type CompatibilityFetch } from './upgrade-compatibility'
 import { readFile, writeFile } from 'node:fs/promises'
 import semver from 'semver'
@@ -363,6 +364,7 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
   const inspection = await inspectInstallation({
     distRoot,
     globalBin: globalBinResult.stdout.trim(),
+    cwd: options.targetRepo,
   })
   if (inspection.kind !== 'bun-forge' && inspection.kind !== 'npm-registry') {
     return explicit ? fail(options, inspection.reason) : warn(options, inspection.reason)
@@ -469,7 +471,9 @@ export async function selfUpdate(options: SelfUpdateOptions): Promise<SelfUpdate
 
   let updated: DistributionIdentity
   try {
-    updated = await readDistributionIdentity(distRoot)
+    updated = await readDistributionIdentity(
+      join(install.ownerRoot, 'node_modules', ...install.packageName.split('/')),
+    )
     // Injected command fixtures do not rewrite disk; a real successful Bun
     // operation must. Keep the check injectable by accepting the old identity
     // only when the command seam itself was supplied.

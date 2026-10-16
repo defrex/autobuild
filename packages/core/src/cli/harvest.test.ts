@@ -570,6 +570,13 @@ describe('harvest CLI', () => {
       },
     ])
 
+    const missing = join(deps.workspacePath, 'missing.json')
+    await expect(submitHarvestProposals(deps, missing)).rejects.toThrow(
+      `file not found: ${missing}`,
+    )
+    await writeFile(missing, '{broken')
+    await expect(submitHarvestProposals(deps, missing)).rejects.toThrow('is not valid JSON')
+
     const bad = join(deps.workspacePath, 'bad.json')
     await writeFile(
       bad,
