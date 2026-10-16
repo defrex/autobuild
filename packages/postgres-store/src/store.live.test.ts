@@ -555,3 +555,58 @@ if (testUrl)
       await database.cleanup()
     }
   })
+
+if (testUrl)
+  test('listing hosted build refs uses a bounded query count across projects and exact raw history remains intact', async () => {
+    const database = await isolatedDatabase()
+    const sql = new SQL(database.url)
+    const statements: string[] = []
+    function tracked<T extends SQL>(connection: T): T {
+      return new Proxy(connection, {
+        apply(target, _receiver, args) {
+          statements.push((args[0] as TemplateStringsArray).join('?'))
+          return Reflect.apply(target, target, args)
+        },
+        get(target, key) {
+          if (key === 'reserve') return async () => tracked(await target.reserve())
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+    }
+    const store = new PostgresBuildStore(tracked(sql), { blobs: new MemoryBlobStore() })
+    try {
+      const now = new Date().toISOString()
+      for (const repo of ['one', 'two']) {
+        await sql`INSERT INTO ab_tickets (repo,id,readable_id,ticket_number,title,body,state,created_at,updated_at)
+        VALUES (${repo},'ticket-legacy',${repo === 'one' ? 'ENG-1' : 'OTHER-1'},1,'Title','Body','Ready',${now},${now})`
+        for (let i = 0; i < 20; i++) {
+          const ticket = {
+            source: 'hosted',
+            id: i % 2 ? (repo === 'one' ? 'eng-1' : 'other-1') : 'ticket-legacy',
+          }
+          await sql`INSERT INTO builds (slug,repo,ticket,created_at,updated_at) VALUES (${`${repo}-${i}`},${repo},${ticket},${now},${now})`
+        }
+      }
+      await sql`INSERT INTO builds (slug,repo,ticket,created_at,updated_at) VALUES ('foreign-source','one',${{ source: 'linear', id: 'ticket-legacy' }},${now},${now}), ('missing','one',${{ source: 'hosted', id: 'missing' }},${now},${now})`
+      const before = await sql`SELECT slug,ticket FROM builds ORDER BY slug`
+      statements.length = 0
+      const first = await store.listBuilds()
+      expect(statements.length).toBe(3) // optional schema discovery + one joined listing
+      expect(
+        first.filter((r) => r.slug.startsWith('one-')).every((r) => r.ticket?.id === 'ENG-1'),
+      ).toBe(true)
+      expect(
+        first.filter((r) => r.slug.startsWith('two-')).every((r) => r.ticket?.id === 'OTHER-1'),
+      ).toBe(true)
+      expect(first.find((r) => r.slug === 'foreign-source')?.ticket?.id).toBe('ticket-legacy')
+      expect(first.find((r) => r.slug === 'missing')?.ticket?.id).toBe('missing')
+      statements.length = 0
+      expect(await store.listBuilds()).toEqual(first)
+      expect(statements.length).toBe(1)
+      expect(await sql`SELECT slug,ticket FROM builds ORDER BY slug`).toEqual(before)
+    } finally {
+      await store.close()
+      await database.cleanup()
+    }
+  })

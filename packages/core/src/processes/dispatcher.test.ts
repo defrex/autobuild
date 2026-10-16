@@ -219,6 +219,7 @@ async function seedBuild(
   opts: {
     slug?: string
     ticketId?: string
+    ticketSource?: string
     repo?: string
     workspace?: boolean
     workspaceRef?: string
@@ -234,7 +235,11 @@ async function seedBuild(
 ): Promise<string> {
   const slug = opts.slug ?? 'auth-limit'
   const repo = opts.repo ?? REPO
-  const ticket = { source: 'fake', id: opts.ticketId ?? `T-${slug}`, title: slug }
+  const ticket = {
+    source: opts.ticketSource ?? 'fake',
+    id: opts.ticketId ?? `T-${slug}`,
+    title: slug,
+  }
   await h.store.createBuild({
     slug,
     repo,
@@ -8420,14 +8425,112 @@ test('legacy active ticket aliases exclude canonical ready tickets from queue de
     tickets: [readyTicket('ENG-1')],
     toml: 'capacity = 3\n',
     wrapTickets: (source) => {
+      Object.defineProperty(source, 'name', { value: 'hosted' })
+      const list = source.listReady.bind(source)
+      source.listReady = async (criteria) => {
+        const listing = await list(criteria)
+        return {
+          ...listing,
+          tickets: listing.tickets.map((t) => ({ ...t, ref: { ...t.ref, source: 'hosted' } })),
+        }
+      }
       const get = source.get.bind(source)
-      source.get = (id) => get(id === 'ticket-old-uuid' ? 'ENG-1' : id)
+      source.get = async (id) => {
+        const ticket = await get(id === 'ticket-old-uuid' ? 'ENG-1' : id)
+        return ticket ? { ...ticket, ref: { ...ticket.ref, source: 'hosted' } } : null
+      }
       return source
     },
   })
-  await seedBuild(h, { ticketId: 'ticket-old-uuid', workspace: false, attached: false })
+  await seedBuild(h, {
+    ticketId: 'ticket-old-uuid',
+    ticketSource: 'hosted',
+    workspace: false,
+    attached: false,
+  })
   expect((await h.dispatcher.observeReady()).queued).toBe(0)
   await h.dispatcher.tick()
   expect(h.tickets.claims).not.toContain('ENG-1')
   expect((await h.store.listBuilds()).length).toBe(1)
 })
+
+for (const provider of ['hosted', 'linear', 'file']) {
+  test(`${provider} identity reads obey observation cadence and skip ids already listed`, async () => {
+    let gets = 0,
+      scans = 0
+    const h = harness({
+      tickets: [readyTicket('ENG-1')],
+      wrapTickets(source) {
+        Object.defineProperty(source, 'name', { value: provider })
+        const list = source.listReady.bind(source)
+        source.listReady = async (criteria) => {
+          scans++
+          const listing = await list(criteria)
+          return {
+            ...listing,
+            tickets: listing.tickets.map((t) => ({ ...t, ref: { ...t.ref, source: provider } })),
+          }
+        }
+        source.get = async () => {
+          gets++
+          return { ...readyTicket('ENG-1'), ref: { source: provider, id: 'ENG-1' } }
+        }
+        return source
+      },
+    })
+    await seedBuild(h, {
+      ticketId: 'legacy',
+      ticketSource: provider,
+      workspace: false,
+      attached: false,
+    })
+    for (let i = 0; i < 5; i++) {
+      await h.dispatcher.observeReady()
+      h.clock.advance(10_000)
+    }
+    expect(scans).toBe(1)
+    expect(gets).toBe(provider === 'hosted' ? 1 : 0)
+    h.clock.advance(10_000)
+    await h.dispatcher.observeReady()
+    expect(scans).toBe(2)
+    expect(gets).toBe(provider === 'hosted' ? 2 : 0)
+    const raw = h.store.listBuilds.bind(h.store)
+    h.store.listBuilds = async () =>
+      (await raw()).map((r) => ({ ...r, ticket: { source: provider, id: 'ENG-1' } }))
+    h.clock.advance(60_000)
+    await h.dispatcher.observeReady()
+    expect(gets).toBe(provider === 'hosted' ? 2 : 0)
+  })
+}
+
+for (const operation of ['observe', 'dispatch']) {
+  test(`hosted alias lookup failure during ${operation} records source degradation without completing the scan`, async () => {
+    const h = harness({
+      tickets: [readyTicket('ENG-1')],
+      wrapTickets(source) {
+        Object.defineProperty(source, 'name', { value: 'hosted' })
+        source.get = async () => {
+          throw new TicketSourceRateLimitError('hosted', 1_800_000_120_000)
+        }
+        return source
+      },
+    })
+    await seedBuild(h, {
+      ticketId: 'legacy',
+      ticketSource: 'hosted',
+      workspace: false,
+      attached: false,
+    })
+    await expect(
+      operation === 'observe' ? h.dispatcher.observeReady() : h.dispatcher.tick(),
+    ).rejects.toBeInstanceOf(TicketSourceRateLimitError)
+    const events = await h.store.getRepoEvents(REPO)
+    expect(
+      events.filter((e) => e.type === 'dispatcher.ticket-source-degraded').map((e) => e.payload),
+    ).toContainEqual(
+      expect.objectContaining({ source: 'hosted', cause: 'rate-limited', operation: 'ready-scan' }),
+    )
+    expect(events.some((e) => e.type === 'dispatcher.ticket-scan-completed')).toBe(false)
+    expect(h.tickets.claims).toEqual([])
+  })
+}

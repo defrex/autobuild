@@ -272,10 +272,24 @@ export class PostgresBuildStore implements BuildStore {
 
   async listBuilds(): Promise<BuildRecord[]> {
     return this.run(async (q) => {
-      const rows: Row[] = await q`SELECT * FROM builds ORDER BY created_at, slug`
-      const records: BuildRecord[] = []
-      for (const row of rows) records.push(await this.currentRecord(q, row))
-      return records
+      if (!(await this.hasReadableTicketSchema(q))) {
+        const rows: Row[] = await q`SELECT * FROM builds ORDER BY created_at, slug`
+        return rows.map((row) => this.record(row))
+      }
+      const rows: Row[] = await q`SELECT b.*, t.readable_id AS projected_ticket_id FROM builds b
+        LEFT JOIN LATERAL (
+          SELECT readable_id FROM ab_tickets
+          WHERE b.ticket->>'source' = 'hosted' AND repo = b.repo
+            AND (id = b.ticket->>'id' OR lower(readable_id) = lower(b.ticket->>'id'))
+          LIMIT 1
+        ) t ON true
+        ORDER BY b.created_at, b.slug`
+      return rows.map((row) => {
+        const record = this.record(row)
+        return record.ticket && row.projected_ticket_id
+          ? { ...record, ticket: { ...record.ticket, id: String(row.projected_ticket_id) } }
+          : record
+      })
     })
   }
 
@@ -1223,16 +1237,21 @@ export class PostgresBuildStore implements BuildStore {
   private readableTicketSchema = false
 
   /** Ticket tables are an independently migrated, optional store extension. */
-  private async hostedTicketRow(q: Exec, repo: string, id: string): Promise<Row | undefined> {
+  private async hasReadableTicketSchema(q: Exec): Promise<boolean> {
     if (!this.readableTicketSchema) {
       const tables: Row[] = await q`SELECT to_regclass('ab_ticket_schema_migrations') AS tickets`
-      if (!tables[0]?.tickets) return undefined
+      if (!tables[0]?.tickets) return false
       const markers: Row[] =
         await q`SELECT version FROM ab_ticket_schema_migrations WHERE singleton = true`
-      if (Number(markers[0]?.version ?? 0) < 3) return undefined
+      if (Number(markers[0]?.version ?? 0) < 3) return false
       // Cache only presence: a store opened before migration must discover a later upgrade.
       this.readableTicketSchema = true
     }
+    return true
+  }
+
+  private async hostedTicketRow(q: Exec, repo: string, id: string): Promise<Row | undefined> {
+    if (!(await this.hasReadableTicketSchema(q))) return undefined
     const rows: Row[] = await q`SELECT id, readable_id FROM ab_tickets
       WHERE repo = ${repo} AND (id = ${id} OR lower(readable_id) = lower(${id}))`
     return rows[0]

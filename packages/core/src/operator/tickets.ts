@@ -1,4 +1,3 @@
-import { ticketIdentity } from '../ports/tickets/identity'
 import type { Config } from '../config/schema'
 import { reduceBuild } from '../kernel/reducer'
 import {
@@ -105,13 +104,33 @@ async function matchingBuild(
   repo: string,
   id: string,
   source: TicketSource,
+  configuredSource: string,
 ): Promise<OperatorTicketBuild | null> {
-  const identity = ticketIdentity(source)
-  const target = await identity({ source: source.name, id })
-  const matches = []
-  for (const record of await store.listBuilds()) {
-    if (record.repo === repo && record.ticket && (await identity(record.ticket)) === target)
-      matches.push(record)
+  // The service's database adapter implements the externally named hosted source.
+  const hosted =
+    source.name === 'hosted' || (configuredSource === 'hosted' && source.name === 'database')
+  const candidates = (await store.listBuilds()).filter(
+    (record) =>
+      record.repo === repo &&
+      (record.ticket?.source === source.name || (hosted && record.ticket?.source === 'hosted')),
+  )
+  const matches = candidates.filter((record) => record.ticket!.id === id)
+  // The hosted store projects current ids already. Only a legacy unprojected
+  // store needs fallback lookups, and provider failure must not undo a mutation.
+  if (matches.length === 0 && hosted) {
+    const identities = new Map<string, string>()
+    try {
+      for (const record of candidates) {
+        const raw = record.ticket!.id
+        if (!identities.has(raw)) {
+          const ticket = await source.get(raw)
+          identities.set(raw, ticket?.ref.source === source.name ? ticket.ref.id : raw)
+        }
+        if (identities.get(raw) === id) matches.push(record)
+      }
+    } catch {
+      // Build association is optional presentation; keep the successful ticket result.
+    }
   }
   const projected = await Promise.all(
     matches.map(async (record) => ({
@@ -142,13 +161,13 @@ export async function getOperatorTicket(opts: {
   backend: OperatorTicketBackend
   id: string
 }): Promise<OperatorTicketDetail> {
-  const { source } = await openOperatorTickets(opts)
+  const { source, config } = await openOperatorTickets(opts)
   const ticket = await requireTicket(source, opts.id)
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
   return {
     ticket,
     blockers,
-    build: await matchingBuild(opts.store, opts.repo, ticket.ref.id, source),
+    build: await matchingBuild(opts.store, opts.repo, ticket.ref.id, source, config.tickets.source),
   }
 }
 
@@ -169,7 +188,7 @@ export async function mutateOperatorTicket(opts: {
     | { kind: 'move'; id: string; state: string }
     | { kind: 'block' | 'unblock'; id: string; blockerIds: string[] }
 }): Promise<OperatorTicketDetail> {
-  const { source } = await openOperatorTickets(opts)
+  const { source, config } = await openOperatorTickets(opts)
   const operation = opts.operation
   if (operation.kind === 'update') await requireTicket(source, operation.id)
   const ticket =
@@ -184,6 +203,6 @@ export async function mutateOperatorTicket(opts: {
   return {
     ticket,
     blockers,
-    build: await matchingBuild(opts.store, opts.repo, ticket.ref.id, source),
+    build: await matchingBuild(opts.store, opts.repo, ticket.ref.id, source, config.tickets.source),
   }
 }
