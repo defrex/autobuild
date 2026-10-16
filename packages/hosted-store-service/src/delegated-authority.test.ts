@@ -479,6 +479,23 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
       )
       expect(response.status).toBe(allowed ? (operation === 'create' ? 201 : 200) : 403)
       expect(opened).toBe(allowed)
+      if (allowed && operation === 'create') {
+        for (const requestedId of ['TEAM-706', 'TEAM-9223372036854775807', 'foreign']) {
+          opened = false
+          const denied = await server.fetch(
+            request('/tickets/create', token, {
+              context: { teamKey: 'TEAM' },
+              input: { draft: { title: 'Forbidden import', body: '' }, options: { requestedId } },
+            }),
+          )
+          expect(denied.status).toBe(403)
+          expect(await denied.json()).toMatchObject({
+            kind: 'auth',
+            error: 'only project or owner authority may request a ticket id',
+          })
+          expect(opened).toBe(false)
+        }
+      }
       if (!allowed) {
         expect((await response.json()).error).toBe(
           `delegated ${target.kind} credential cannot perform ticket operation ${operation}`,
@@ -488,6 +505,20 @@ test('ticket operation matrix enforces every delegated grant kind before parsing
       }
     }
   }
+  const backend = new FakeTicketSource([])
+  const projectServer = createTicketServer({ secret, auth: f.auth, sourceFor: () => backend })
+  const imported = await projectServer.fetch(
+    request('/tickets/create', f.project.token, {
+      context: { teamKey: 'TEAM' },
+      input: {
+        draft: { title: 'Operator import', body: '' },
+        options: { requestedId: 'TEAM-706' },
+      },
+    }),
+  )
+  expect(imported.status).toBe(201)
+  expect((await imported.json()).ref.id).toBe('TEAM-706')
+  expect((await backend.listReady({})).tickets).toHaveLength(1)
 })
 
 test('project and admin credentials retain every hosted ticket operation', async () => {

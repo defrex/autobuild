@@ -306,7 +306,9 @@ adopted before occupancy checks. A kept number belonging to a different ticket
 fails without replacing it. Creation and counter advancement share the existing
 project transaction and counter lock. Later automatic numbers exceed both the
 counter and highest occupied number; importing a lower number never lowers the
-counter. Existing project credential and delegated create grants still apply.
+counter. Requested ids require project or owner authority. Ticket grants and
+delegated credentials receive 403 for create options containing `requestedId`,
+before source construction. Their ordinary create grants remain unchanged.
 
 See the [migration procedure](ticket-migration.md) for preflight, state mapping,
 resumption and portable file records.

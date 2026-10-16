@@ -17,7 +17,7 @@ forge. File and hosted sources support import. Linear supports export only.
 5. Inspect ticket bodies, labels, blockers, comments and attachments in the new
    source. Confirm lifecycle configuration and the ready gate, then resume intake.
 
-Use `bun bin/ab.ts` in an Autobuild source checkout. Both commands also accept
+Both commands also accept
 `--store <ref>` to reach legacy BuildStore attachments. Keep the old store available
 through export when file or Linear tickets have attachments there.
 
