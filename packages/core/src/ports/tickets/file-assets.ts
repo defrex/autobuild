@@ -149,6 +149,7 @@ export class FileTicketAssets implements TicketAssetStore {
       throw new Error(`file ticket source: asset on unknown ticket "${id}"`)
     const history = await this.history(id, loaded.front)
     const key = this.key(kind, name)
+    if (history[key]?.at(-1)?.asset === null) return null
     const items = history[key] ?? []
     history[key] = items
     items.push({ asset: null, createdAt: new Date().toISOString() })

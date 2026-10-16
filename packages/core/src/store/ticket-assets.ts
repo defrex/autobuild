@@ -528,6 +528,7 @@ export function composeTicketAssets(
     },
     async removeTicketAsset(repo, id, kind, name) {
       const previous = await this.getTicketAsset(repo, id, kind, name)
+      if (!previous) return null
       await native.removeTicketAsset(repo, id, kind, name)
       return previous?.meta ?? null
     },
