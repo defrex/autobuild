@@ -11,11 +11,14 @@ import { AuthError } from '../../store/remote/client'
 import { errorBodySchema } from '../../store/remote/protocol'
 import {
   claimWireSchema,
+  hostedTicketPolicySchema,
+  type HostedTicketPolicy,
   dependencyStatesWireSchema,
   type HostedTicketContext,
   successWireSchema,
   ticketListingWireSchema,
   ticketWireSchema,
+  ticketStatesWireSchema,
 } from './remote-protocol'
 import {
   AUTOBUILD_VERSION,
@@ -53,6 +56,10 @@ export class HostedTicketSource implements TicketSource {
       ...(options.claimedState !== undefined ? { claimedState: options.claimedState } : {}),
       ...(options.createState !== undefined ? { createState: options.createState } : {}),
     }
+  }
+
+  async synchronizePolicy(policy: HostedTicketPolicy): Promise<void> {
+    await this.request('policy', hostedTicketPolicySchema.parse(policy), successWireSchema)
   }
 
   private project(ticket: Ticket): Ticket {
@@ -97,6 +104,10 @@ export class HostedTicketSource implements TicketSource {
     }
     const listing = await this.request('list-ready', criteria, ticketListingWireSchema)
     return { ...listing, tickets: listing.tickets.map((ticket) => this.project(ticket)) }
+  }
+
+  async listStates() {
+    return this.request('states', {}, ticketStatesWireSchema)
   }
 
   async get(id: string): Promise<Ticket | null> {

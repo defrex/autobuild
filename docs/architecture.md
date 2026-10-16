@@ -938,3 +938,15 @@ the shared `connection.ts` wire types, and Postgres `connections.ts`. Approval
 commits registry membership, a credential digest, and the outcome atomically.
 The web connection routes authenticate the existing Better Auth session and
 reuse the sign-in/consent layout; CLI polling uses a separate private capability.
+
+### Independent hosted ticket service
+
+`[tickets] url` selects hosted ticket transport independently of BuildStore selection;
+without it, tickets use the selected remote build store. Local builds require an
+explicit ticket URL. Project registration and ticket policy publication through
+`ab connect --tickets URL` work before dispatch. Policy is a durable per-registration
+record, outside BuildStore events/artifacts; legacy uploaded configuration remains
+a compatibility fallback. Hosted lifecycle defaults are triage/ready/doing/done.
+Independent harvest uses revocable, expiring, service-bound ticket grants with
+read/create runner authority and read-only child authority. Build state and harvest
+journals remain exclusively in the selected BuildStore.

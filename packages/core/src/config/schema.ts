@@ -535,7 +535,8 @@ export type PolicyConfig = z.infer<typeof policySchema>
 // API key comes from the LINEAR_API_KEY environment variable, never from this
 // file.
 
-export const ticketsSchema = z.strictObject({
+export const ticketsInputSchema = z.strictObject({
+  url: z.string().optional(),
   /** Builtin or plugin-registered TicketSource name. Registry membership is
    * validated after configured plugins load. */
   source: z
@@ -569,7 +570,8 @@ export const ticketsSchema = z.strictObject({
     .refine(
       (s) => s.trim().length > 0,
       '[tickets].readyState must not be blank — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
-    ),
+    )
+    .optional(),
   /**
    * Narrows readiness to tickets assigned to one Linear user — a third
    * conjunctive gate beside readyState and readyLabels. `"me"` is the owner of
@@ -592,7 +594,7 @@ export const ticketsSchema = z.strictObject({
     .min(1)
     .refine((value) => value.trim().length > 0, 'state must be nonblank')
     .optional(),
-  /** Hosted project completion state; defaults to Done. */
+  /** Hosted project completion state; defaults to done. */
   doneState: z
     .string()
     .min(1)
@@ -634,6 +636,36 @@ export const ticketsSchema = z.strictObject({
    * still tell a defaulted dir from an explicit one. */
   dir: z.string().min(1).optional(),
 })
+export const ticketsSchema = ticketsInputSchema
+  .superRefine((tickets, ctx) => {
+    if (tickets.source === 'hosted' && tickets.url !== undefined) {
+      try {
+        normalizeServiceURL(tickets.url, 'tickets.url')
+      } catch (error) {
+        ctx.addIssue({ code: 'custom', path: ['url'], message: (error as Error).message })
+      }
+    }
+    if (tickets.source !== 'hosted' && tickets.readyState === undefined)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['readyState'],
+        message:
+          '[tickets].readyState is required — name the one workflow state a ticket must sit in to be dispatched (e.g. "ready").',
+      })
+    if (['file', 'linear'].includes(tickets.source) && tickets.url !== undefined)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['url'],
+        message: '[tickets].url applies only to source = "hosted"',
+      })
+  })
+  .transform((tickets) => ({
+    ...tickets,
+    readyState: tickets.readyState ?? 'ready',
+    ...(tickets.source === 'hosted' && tickets.url !== undefined
+      ? { url: normalizeServiceURL(tickets.url, 'tickets.url') }
+      : {}),
+  }))
 export type TicketsConfig = z.infer<typeof ticketsSchema>
 
 // ── [orchestrator] ──────────────────────────────────────────────────────────

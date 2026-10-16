@@ -9,3 +9,5 @@ export {
   hostedTicketRequestSchemas,
 } from './remote-protocol'
 export type { HostedTicketContext, HostedTicketOperation } from './remote-protocol'
+export { hostedTicketPolicySchema, type HostedTicketPolicy } from './remote-protocol'
+export { ticketLifecycle } from './lifecycle'

@@ -116,6 +116,7 @@ export type ExecutionObservation =
  * teardown of the environment and descendants it starts before completion. */
 export interface ExecutionLaunchAuth {
   token: string
+  tickets?: { url: string; token: string }
 }
 
 export interface BuildExecution {

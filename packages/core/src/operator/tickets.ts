@@ -9,7 +9,7 @@ import {
 } from '../ports/tickets/operations'
 import type { DependencyState, Ticket, TicketSource, TicketUpdate } from '../ports/types'
 import type { BuildStore } from '../store/types'
-import { defaultTriageState } from '../processes/dispatcher'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { effectiveConfig } from './query'
 
 export interface OperatorTicketContext {
@@ -21,6 +21,7 @@ export interface OperatorTicketContext {
 }
 
 export interface OperatorTicketBackend {
+  contextFor?(repo: string): Promise<OperatorTicketContext>
   sourceFor(context: OperatorTicketContext): TicketSource | Promise<TicketSource>
   statesFor(context: OperatorTicketContext, source: TicketSource): string[] | Promise<string[]>
 }
@@ -63,10 +64,11 @@ export async function openOperatorTickets(opts: {
   store: BuildStore
   repo: string
   backend: OperatorTicketBackend
-}): Promise<{ config: Config; context: OperatorTicketContext; source: TicketSource }> {
-  const { config } = await effectiveConfig(opts.store, opts.repo)
-  const context = contextFor(config, opts.repo)
-  return { config, context, source: await opts.backend.sourceFor(context) }
+}): Promise<{ context: OperatorTicketContext; source: TicketSource }> {
+  const context = opts.backend.contextFor
+    ? await opts.backend.contextFor(opts.repo)
+    : contextFor((await effectiveConfig(opts.store, opts.repo)).config, opts.repo)
+  return { context, source: await opts.backend.sourceFor(context) }
 }
 
 export async function listOperatorTickets(opts: {
@@ -76,9 +78,9 @@ export async function listOperatorTickets(opts: {
   state?: string
   labels?: string[]
 }): Promise<OperatorTicketQueue> {
-  const { config, context, source } = await openOperatorTickets(opts)
-  const triageState = defaultTriageState(config)
-  const readyState = config.tickets.readyState
+  const { context, source } = await openOperatorTickets(opts)
+  const triageState = ticketLifecycle(context.tickets).triage
+  const readyState = context.tickets.readyState
   // The operator surface is a grooming queue. Unlike the CLI's ticket list,
   // labels narrow the default state instead of replacing its lifecycle gate.
   const criteria = {

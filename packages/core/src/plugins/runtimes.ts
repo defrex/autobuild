@@ -40,7 +40,11 @@ export async function materializePluginRuntimes(
   const merged = Object.assign(Object.create(null) as RuntimeRegistry, builtins)
   const config = Object.freeze({})
   const env = Object.freeze(
-    Object.fromEntries(Object.entries(opts.env).filter(([key]) => key !== 'AB_TOKEN')),
+    Object.fromEntries(
+      Object.entries(opts.env).filter(
+        ([key]) => !['AB_TOKEN', 'AB_TICKET_TOKEN', 'AB_TICKET_URL'].includes(key),
+      ),
+    ),
   )
   const context: PluginFactoryContext = {
     config,

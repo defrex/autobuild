@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 import { afterEach, expect, test } from 'bun:test'
@@ -53,6 +54,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
     processCli: true,
     storeAdapter: async (backing) => {
       const service = createHostedStoreService({
+        openTicketPolicy: async () => new MemoryTicketPolicyStore(),
         openProjectRegistry: async () => projects,
         openCredentials: async () => credentials,
         env: {
@@ -150,7 +152,7 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   h.clock.advance(60_000)
   await dispatch()
   expect(ticketBackend.comments.some((comment) => comment.id === 'T-handback')).toBe(true)
-  expect(ticketBackend.transitions).toContainEqual({ id: 'T-handback', state: 'Backlog' })
+  expect(ticketBackend.transitions).toContainEqual({ id: 'T-handback', state: 'triage' })
   expect(requests.some((entry) => entry.method === 'POST' && entry.path.endsWith('/events'))).toBe(
     true,
   )
@@ -353,3 +355,91 @@ test('AB_STORE/AB_TOKEN drive dispatch and every phase through the hosted servic
   ).rejects.toThrow(/credential format changed/)
   expect(existsSync(join(h.origin, '.autobuild'))).toBe(false)
 }, 20_000)
+
+test('local build history stays local while hosted tickets drive intake, blockers, claims and completion', async () => {
+  const ticketBackend = new FakeTicketSource([
+    { ...readyTicket('T-1'), blockedBy: ['T-blocker'] },
+    readyTicket('T-blocker', { state: 'Triage', title: 'Dependency' }),
+  ])
+  const ticketStore = new (await import('@defrex/autobuild/plugin-sdk')).MemoryBuildStore()
+  const projects = testProjects([])
+  const credentials = testCredentials(projects).store
+  const requests: string[] = []
+  const service = createHostedStoreService({
+    env: {
+      AB_STORE_SECRET: 'secret',
+      AB_POSTGRES_URL: 'postgres://unused/test',
+      AB_BLOB_BACKEND: 's3',
+      AB_S3_BUCKET: 'unused',
+      AB_S3_REGION: 'us-east-1',
+      AB_S3_ACCESS_KEY_ID: 'unused',
+      AB_S3_SECRET_ACCESS_KEY: 'unused',
+    },
+    openStore: async () => ticketStore,
+    openProjectRegistry: async () => projects,
+    openCredentials: async () => credentials,
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
+    sourceFor: () => ticketBackend,
+  })
+  const server = Bun.serve({
+    port: 0,
+    fetch: (request) => {
+      requests.push(new URL(request.url).pathname)
+      return service.fetch(request)
+    },
+  })
+  try {
+    const configToml = CONFIG_TOML.replace(
+      'source = "file"',
+      `source = "hosted"\nteamKey = "ENG"\nurl = "${server.url.origin}"\ndoneState = "Done"`,
+    )
+    const h = await makeHarness({
+      handlers: happyHandlers(),
+      ticketSource: ticketBackend,
+      configToml,
+    })
+    harnesses.push(h)
+    await projects.add(h.origin, 'fixture')
+    const { token } = await credentials.issue(h.origin, 'fixture')
+    const { HostedTicketSource } = await import('@defrex/autobuild/hosted-tickets')
+    const tickets = new HostedTicketSource({ url: server.url.origin, token, teamKey: 'ENG' })
+    await tickets.synchronizePolicy({
+      version: 1,
+      tickets: {
+        source: 'hosted',
+        teamKey: 'ENG',
+        readyState: h.config.tickets.readyState,
+        triageState: 'triage',
+        claimedState: 'doing',
+        doneState: 'Done',
+        createState: 'triage',
+        proposalState: 'triage',
+      },
+    })
+    const dispatch = () =>
+      abDispatch({
+        targetRepo: h.origin,
+        env: {},
+        exec: spawnExec,
+        stdout: () => {},
+        stderr: () => {},
+        once: true,
+        plain: true,
+        wire: async () => ({ ...h.wiring, tickets }),
+      })
+    await dispatch()
+    expect(ticketBackend.claims).not.toContain('T-1')
+    await tickets.transition('T-blocker', 'Done')
+    h.clock.advance(60_000)
+    await dispatch()
+    expect(ticketBackend.claims).toContain('T-1')
+    expect(typesOf(await h.events('add-rate-limiting'))).toContain('finalize.completed')
+    expect(h.cliErrors).toEqual([])
+    expect(await ticketStore.listBuilds()).toEqual([])
+    expect(await ticketStore.getRepo(h.origin)).toBeNull()
+    expect(requests.every((path) => path.startsWith('/tickets/'))).toBe(true)
+  } finally {
+    server.stop(true)
+    await ticketStore.close()
+  }
+})

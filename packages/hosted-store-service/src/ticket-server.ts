@@ -1,3 +1,5 @@
+import { z } from 'zod'
+import type { TicketGrantStore } from '@defrex/autobuild-postgres-store/ticket-grants'
 import { normalizeProjectRepository } from '@defrex/autobuild-postgres-store/projects'
 import { OperatorQueryError } from '@defrex/autobuild/operator'
 import {
@@ -19,6 +21,8 @@ import {
 } from '@defrex/autobuild/remote-store'
 import {
   hostedTicketRequestSchemas,
+  hostedTicketPolicySchema,
+  type HostedTicketPolicy,
   type HostedTicketContext,
   type HostedTicketOperation,
 } from '@defrex/autobuild/hosted-tickets'
@@ -30,6 +34,16 @@ export interface TicketServerOptions {
     context: HostedTicketContext,
     principal: MachinePrincipal,
   ): TicketSource | Promise<TicketSource>
+  statesFor?: (
+    context: HostedTicketContext,
+    principal: MachinePrincipal,
+    source: TicketSource,
+  ) => Promise<string[]>
+  grants?: TicketGrantStore
+  policy?: {
+    get(repo: string): Promise<HostedTicketPolicy | null>
+    put(repo: string, policy: HostedTicketPolicy, writer: string): Promise<void>
+  }
   clock?: Clock
   /** Observes unexpected source failures without changing their wire response. */
   onInternalError?: (error: unknown, request: Request) => unknown | Promise<unknown>
@@ -77,16 +91,33 @@ export function createTicketServer(options: TicketServerOptions): {
       credentials: { authenticate: async () => null },
       projects: { has: async () => false, list: async () => [] },
     })
+  async function authenticate(req: Request): Promise<MachinePrincipal> {
+    const token = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') ?? '')?.[1]
+    if (token?.startsWith('abt_')) {
+      const grant = await options.grants?.authenticate(token, clock())
+      if (!grant) throw new MachineAuthError(401, 'ticket grant expired or revoked')
+      return { kind: 'ticket-grant', repo: grant.repo, user: 'ticket-grant', grant }
+    }
+    return auth.authenticate(req)
+  }
   async function authorize(
     req: Request,
     operation: HostedTicketOperation,
   ): Promise<MachinePrincipal> {
-    const principal = await auth.authenticate(req)
+    const principal = await authenticate(req)
+    if (principal.kind === 'ticket-grant') {
+      const read = ['get', 'list-ready', 'dependency-states', 'states'].includes(operation)
+      if (read || (principal.grant.kind === 'runner' && operation === 'create')) return principal
+      throw new MachineAuthError(403, 'ticket grant cannot perform this operation')
+    }
     requireMachineAccess(principal)
     if (principal.kind !== 'delegated') return principal
     const kind = principal.delegation.kind
     const read =
-      operation === 'get' || operation === 'list-ready' || operation === 'dependency-states'
+      operation === 'get' ||
+      operation === 'list-ready' ||
+      operation === 'dependency-states' ||
+      operation === 'states'
     if (
       ((kind === 'harvest-runner' || kind === 'harvest-phase') && read) ||
       (kind === 'harvest-runner' && operation === 'create')
@@ -147,6 +178,17 @@ export function createTicketServer(options: TicketServerOptions): {
     // Parse again through the operation-specific schema to preserve precise
     // inference in each branch while keeping the shared pre-source validation.
     switch (operation) {
+      case 'states': {
+        const names = options.statesFor ? await options.statesFor(context, principal, source) : []
+        const listing = await source.listReady({})
+        return json(
+          200,
+          names.map((name) => ({
+            name,
+            tickets: listing.tickets.filter((ticket) => ticket.state === name).length,
+          })),
+        )
+      }
       case 'list-ready': {
         const request = hostedTicketRequestSchemas['list-ready'].parse(raw)
         const listing = await source.listReady(request.input)
@@ -207,6 +249,106 @@ export function createTicketServer(options: TicketServerOptions): {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)
         }
         identify(req)
+        if (url.pathname === '/tickets/grants') {
+          const principal = await authenticate(req)
+          const parsed = z
+            .strictObject({
+              action: z.enum(['issue', 'renew', 'revoke']),
+              repo: z.string().min(1),
+              execution: z.string().min(1).optional(),
+              kind: z.enum(['runner', 'phase']).optional(),
+              id: z.string().optional(),
+            })
+            .safeParse(await body(req))
+          if (!parsed.success || !options.grants)
+            throw new TicketRequestError(400, 'validation', 'invalid ticket grant request')
+          const input = parsed.data
+          try {
+            input.repo = normalizeProjectRepository(input.repo)
+          } catch {
+            throw new TicketRequestError(400, 'validation', 'invalid project repository')
+          }
+          if (!input.id && principal.kind === 'ticket-grant') input.id = principal.grant.id
+          requireProject(principal, input.repo)
+          const project = principal.kind === 'project' || principal.kind === 'admin'
+          if (input.action === 'issue') {
+            if (
+              !input.execution ||
+              !input.kind ||
+              (project && input.kind !== 'runner') ||
+              (principal.kind === 'ticket-grant' &&
+                input.execution !== principal.grant.execution) ||
+              (!project &&
+                !(
+                  principal.kind === 'ticket-grant' &&
+                  principal.grant.kind === 'runner' &&
+                  input.kind === 'phase'
+                ))
+            )
+              throw new MachineAuthError(403, 'ticket grant issuance forbidden')
+            return json(
+              201,
+              await options.grants.issue(
+                input.repo,
+                input.execution,
+                input.kind,
+                principal.kind === 'ticket-grant' ? principal.grant : null,
+                clock(),
+              ),
+            )
+          }
+          if (
+            !input.id ||
+            (!project &&
+              !(
+                principal.kind === 'ticket-grant' &&
+                principal.grant.id === input.id &&
+                principal.grant.kind === 'runner'
+              ))
+          )
+            throw new MachineAuthError(403, 'ticket grant administration forbidden')
+          if (input.action === 'renew') await options.grants.renew(input.id, input.repo, clock())
+          else await options.grants.revoke(input.id, input.repo)
+          return json(200, { ok: true })
+        }
+        if (url.pathname === '/tickets/policy') {
+          const principal = await authenticate(req)
+          const raw = await body(req)
+          const envelope = z
+            .strictObject({
+              context: z.strictObject({
+                teamKey: z.string().min(1),
+                repo: z.string().min(1).optional(),
+                claimedState: z.string().optional(),
+                createState: z.string().optional(),
+              }),
+              input: hostedTicketPolicySchema.nullable(),
+            })
+            .safeParse(raw)
+          if (!envelope.success)
+            throw new TicketRequestError(400, 'validation', 'invalid ticket policy envelope')
+          const repo =
+            envelope.data.context.repo ?? (principal.kind !== 'admin' ? principal.repo : undefined)
+          if (!repo || !options.policy)
+            throw new MachineAuthError(403, 'registered project policy is required')
+          requireProject(principal, repo)
+          if (envelope.data.input === null) {
+            if (
+              principal.kind === 'internal' ||
+              (principal.kind === 'delegated' &&
+                !['harvest-runner', 'harvest-phase'].includes(principal.delegation.kind))
+            )
+              throw new MachineAuthError(403, 'credential cannot read ticket policy')
+            return json(200, await options.policy.get(repo))
+          }
+          if (principal.kind !== 'project' && principal.kind !== 'admin')
+            throw new MachineAuthError(
+              403,
+              'only project or owner authority may publish ticket policy',
+            )
+          await options.policy.put(repo, envelope.data.input, principal.user)
+          return json(200, { ok: true })
+        }
         const operation = url.pathname.slice('/tickets/'.length) as HostedTicketOperation
         if (!Object.hasOwn(hostedTicketRequestSchemas, operation)) {
           return failure(404, 'not-found', `no route: ${req.method} ${url.pathname}`)

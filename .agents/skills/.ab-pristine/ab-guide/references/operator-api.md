@@ -284,3 +284,8 @@ even with `--since`; live and backlog matches ignore routine outcomes and
 self-healing failures. A merge match uses the watch observation with
 `condition: "attention"`. Explicit `--event` globs remain event-only.
 Watch and wait preserve each other's cursor notification metadata.
+
+Hosted ticket tools resolve independent project ticket policy before legacy uploaded
+configuration. Queue, detail, state discovery and mutations work before any build
+or dispatcher run; detail reports a null matching build. Ticket policy publication
+never creates synthetic build or repository history.

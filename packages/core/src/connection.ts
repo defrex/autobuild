@@ -19,12 +19,12 @@ export interface ConnectionStarted extends ConnectionOutcome {
   interval: number
   expiresAt: string
 }
-export function normalizeServiceURL(raw: string): string {
+export function normalizeServiceURL(raw: string, setting = 'store.url'): string {
   let url: URL
   try {
     url = new URL(raw)
   } catch {
-    throw new Error('store.url must be an absolute HTTPS service URL')
+    throw new Error(`${setting} must be an absolute HTTPS service URL`)
   }
   if (
     !raw.trim() ||
@@ -39,7 +39,7 @@ export function normalizeServiceURL(raw: string): string {
     )
   ) {
     throw new Error(
-      'store.url must be HTTPS (HTTP is allowed on loopback), without credentials, query or fragment',
+      `${setting} must be HTTPS (HTTP is allowed on loopback), without credentials, query or fragment`,
     )
   }
   return url.href.replace(/\/+$/, '')

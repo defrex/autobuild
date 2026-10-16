@@ -398,13 +398,13 @@ the verifier does not fix it.
 ### Project-scoped hosted tickets
 
 Hosted ticket queues belong to the credential's registered repository, even
-when projects share a team key. The latest uploaded effective `[tickets]`
-configuration owns lifecycle: hosted defaults are Backlog / Doing / Done,
-`readyState` is required, `doneState` customizes completion, and create/proposal
-default to triage. The union of configured roles is allowed; roles may overlap.
-Owner admin requests require an explicit registered `context.repo`; project
-credentials cannot select another project. Missing effective configuration is
-an actionable refusal: run the project's dispatcher to publish it.
+when projects share a team key. Independent project ticket policy owns lifecycle:
+new defaults are triage / ready / doing / done, with create/proposal following
+triage. Explicit names retain their spelling; doneState customizes completion.
+`ab connect --tickets URL` publishes policy before dispatch. Older clients without
+independent policy retain their uploaded dispatcher configuration and legacy defaults.
+Owner admin requests require an explicit registered context.repo; project credentials
+cannot select another project. See [local builds with hosted tickets](#local-builds-with-hosted-tickets).
 
 The service never contacts Linear. Projects with external sources (including
 file and Linear) keep using those sources directly through their dispatcher;
@@ -447,3 +447,29 @@ require the running service's blob backend, access mode, credentials and prefix
 (`AB_BLOB_PREFIX`), not just PostgreSQL access. `deploy:build` inherits this
 environment and migration failure stops Next build. Fresh databases, empty v1
 queues and v2 reruns stay SQL-only and do not initialize blob storage.
+
+## Local builds with hosted tickets
+
+Hosted tickets do not require hosted builds. Set `[tickets] source = "hosted"`
+and `teamKey = "ENG"`, then run `ab connect --tickets https://your-service.example`.
+Approve the project in the browser. This saves a service-scoped credential and
+`[tickets] url` while leaving `[store]` unchanged. Ticket commands work immediately,
+before any dispatcher runs. `ab connect` reports every service and whether it serves
+builds, tickets, or both. Use `ab disconnect --tickets` to revoke ticket access;
+when services differ use `--builds` to select build access. Shared uses share one
+credential, so disconnecting either shared use affects both.
+
+Ticket URL selection is `[tickets] url`, then the selected build service (including
+AB_STORE or a supported --store override). With local builds, `[tickets] url` is
+required. Builds, events, artifacts, and harvest journals remain in the local store.
+The service stores ticket records, project ticket policy, and restricted ticket
+grants. Normal project clients synchronize current `[tickets]` policy before use;
+failed synchronization fails the operation. Harvest grants can read and create;
+phase grants can only read. Neither can change policy or access BuildStore routes.
+
+New hosted policy defaults to `triage`, `ready`, `doing`, `done`, with creation and
+harvest proposals in `triage`. Explicit state names preserve their spelling.
+To retain earlier names configure `triageState = "Backlog"`,
+`claimedState = "Doing"`, `doneState = "Done"`, and the desired `readyState`.
+Existing ticket rows are never renamed. Older combined-service clients continue
+using the uploaded dispatcher configuration until independent policy is published.
