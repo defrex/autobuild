@@ -233,3 +233,27 @@ test('hosted alias association failure preserves a completed mutation', async ()
   expect((await get('AUT-1'))?.state).toBe('Todo')
   expect(source.transitions).toEqual([{ id: 'AUT-1', state: 'Todo' }])
 })
+
+test('the service database backend never looks up historical refs for an undispatched ticket', async () => {
+  const store = await configuredStore()
+  const source = new FakeTicketSource([
+    { ...seed, ref: { ...seed.ref, source: 'database' }, blockedBy: [] },
+  ])
+  Object.defineProperty(source, 'name', { value: 'database' })
+  const get = source.get.bind(source)
+  const reads: string[] = []
+  source.get = async (id) => {
+    reads.push(id)
+    if (id !== 'AUT-1') throw new Error('unrelated ticket read')
+    return get(id)
+  }
+  for (let i = 0; i < 20; i++)
+    await store.createBuild({
+      slug: `unrelated-${i}`,
+      repo,
+      ticket: { source: 'hosted', id: `AUT-${i + 2}` },
+    })
+  const detail = await getOperatorTicket({ store, repo, backend: backend(source), id: 'AUT-1' })
+  expect(detail.build).toBeNull()
+  expect(reads).toEqual(['AUT-1'])
+})

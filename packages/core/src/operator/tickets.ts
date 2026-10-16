@@ -115,9 +115,10 @@ async function matchingBuild(
       (record.ticket?.source === source.name || (hosted && record.ticket?.source === 'hosted')),
   )
   const matches = candidates.filter((record) => record.ticket!.id === id)
-  // The hosted store projects current ids already. Only a legacy unprojected
-  // store needs fallback lookups, and provider failure must not undo a mutation.
-  if (matches.length === 0 && hosted) {
+  // The service database store always projects current ids, even when there is
+  // no matching build. Only a hosted client over an unprojected legacy store
+  // needs fallback lookups; failure must not undo a mutation.
+  if (matches.length === 0 && source.name === 'hosted') {
     const identities = new Map<string, string>()
     try {
       for (const record of candidates) {
