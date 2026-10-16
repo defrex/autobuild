@@ -1,3 +1,4 @@
+import { executionNoProgressReducer } from './execution-no-progress'
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER } from '../events/envelope'
 import type { AbEvent } from '../events/catalog'
@@ -232,4 +233,31 @@ describe('settleOpenExecution', () => {
       expect(await run('open')).toEqual(await run('events'))
     },
   )
+})
+
+test('provider-observed clean completions survive supervisor restart as empty executions', async () => {
+  const store = new MemoryBuildStore()
+  await store.createBuild({ slug: 'empty', repo: 'repo' })
+  const execution: BuildExecution = {
+    async start() {
+      throw new Error('not used')
+    },
+    async observe() {
+      return { state: 'ended', exitCode: 0 }
+    },
+  }
+  for (const instance of ['a', 'b', 'c']) {
+    const fact = started({ instance, commandId: `command-${instance}` })
+    await store.append('empty', {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: fact.payload as never,
+    })
+    await settleOpenExecution(
+      { store, execution },
+      'empty',
+      openExecution(await store.getEvents('empty'))!,
+    )
+  }
+  expect(executionNoProgressReducer.reduce(await store.getEvents('empty')).count).toBe(3)
 })

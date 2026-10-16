@@ -1,3 +1,4 @@
+import { ensureExecutionProgress } from './execution-no-progress'
 import { ticketIdentity } from '../ports/tickets/identity'
 import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
@@ -1191,6 +1192,9 @@ export class Dispatcher {
   private async launch(slug: string, launched: Set<string>): Promise<LaunchRunnerResult> {
     if (launched.has(slug)) return 'already-active'
     launched.add(slug)
+    if (!(await ensureExecutionProgress(this.store, this.deps.ids, slug, this.deps.config))) {
+      return 'already-active'
+    }
     return this.deps.launchRunner(slug)
   }
 

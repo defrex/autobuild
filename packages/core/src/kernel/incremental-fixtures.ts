@@ -99,7 +99,12 @@ export function randomBuildItem(rand: Rand): readonly [string, Record<string, un
     ],
     () => [
       'execution.ended',
-      { instance, workspaceRef: ref, outcome: pick(rand, ['completed', 'stopped', 'lost']) },
+      {
+        instance,
+        workspaceRef: ref,
+        outcome: pick(rand, ['completed', 'stopped', 'lost']),
+        ...(rand() < 0.5 ? { exitCode: pick(rand, [0, 1, null]) } : {}),
+      },
     ],
     () => [
       'workspace.provisioned',
@@ -132,7 +137,13 @@ export function randomBuildItem(rand: Rand): readonly [string, Record<string, un
         phase: pick(rand, ['setup', 'plan', 'implement', 'verify:unit']),
         source: pick(rand, ['policy', 'agent']),
         ...(rand() < 0.7
-          ? { policyCause: pick(rand, ['infrastructure-failure-limit', 'setup-failure-limit']) }
+          ? {
+              policyCause: pick(rand, [
+                'infrastructure-failure-limit',
+                'setup-failure-limit',
+                'execution-no-progress',
+              ]),
+            }
           : {}),
         ...(rand() < 0.5 ? { round: 1 } : {}),
         question: 'q',

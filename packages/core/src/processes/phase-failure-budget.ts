@@ -12,6 +12,7 @@ export const POLICY_PHASE_FAILURE_RESET_SCOPES = {
   'verify-failure-limit': 'all-phase-rounds',
   'reconcile-no-progress': 'none',
   'dispatch-failure-limit': 'none',
+  'execution-no-progress': 'none',
   'setup-failure-limit': 'none',
   'infrastructure-failure-limit': 'none',
   'phase-attempt-limit': 'matching-round',

@@ -185,10 +185,11 @@ export function validateEventWrite(input: {
       actor.kind === 'dispatcher' &&
       (escalation.source !== 'policy' ||
         (escalation.policyCause !== 'infrastructure-failure-limit' &&
-          escalation.policyCause !== 'dispatch-failure-limit'))
+          escalation.policyCause !== 'dispatch-failure-limit' &&
+          escalation.policyCause !== 'execution-no-progress'))
     ) {
       throw new EventValidationError(
-        'invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit may be raised outside the kernel',
+        'invalid dispatcher escalation: only policy/infrastructure-failure-limit or policy/dispatch-failure-limit or policy/execution-no-progress may be raised outside the kernel',
       )
     }
     if (escalation.source === 'policy' && escalation.policyCause === undefined) {

@@ -151,7 +151,7 @@ function randomWrite(rand: () => number): EventWrite {
         id,
         phase: 'plan',
         source: 'policy',
-        policyCause: 'infrastructure-failure-limit',
+        policyCause: round % 2 === 0 ? 'execution-no-progress' : 'infrastructure-failure-limit',
         question: 'q',
       }),
     () =>

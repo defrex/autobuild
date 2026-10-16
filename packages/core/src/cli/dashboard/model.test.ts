@@ -910,6 +910,23 @@ describe('projectBuild: native auto-merge display state', () => {
 })
 
 describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)', () => {
+  test('setup no-progress escalation projects the same blocker for terminal and web views', () => {
+    const question = '3 empty executions; dispatcher expected verify:unit'
+    const log = toLog([
+      ...prelude(),
+      ev('escalation.raised', {
+        id: 'empty',
+        phase: 'setup',
+        source: 'policy',
+        policyCause: 'execution-no-progress',
+        question,
+      }),
+    ])
+    const build = project(log)
+    expect(build.status).toBe('blocked')
+    expect(build.blockers).toEqual([question])
+  })
+
   const blockedAndPaused = toLog([
     ...prelude(),
     ev('plan.started', { round: 1 }),

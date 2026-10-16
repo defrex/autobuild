@@ -751,6 +751,21 @@ exhaustion dispatch parks durably; bare `ab answer <slug>` and text guidance
 both grant a fresh budget, while abort terminates without retrying. Workspace
 failures owned by provider infrastructure recovery use only its existing budget.
 
+The dispatcher also applies a fixed, non-configurable limit of three consecutive
+executions that complete normally with exit code zero and no durable build
+progress. Execution start/end, runner attachment and workspace lifecycle
+bookkeeping do not count as progress. Pipeline, session, spec, publication/PR,
+observation and acknowledged operator facts reset the streak; infrastructure,
+budget and provider failures do not consume the allowance and retain their own
+retry limits. Before a fourth actionable launch, the dispatcher raises one
+setup-targeted `execution-no-progress` policy escalation naming the count and
+the next action it expected the runner to take. Waiting, paused and terminal
+builds are left parked, and pending operator commands remain executable.
+Answering that escalation with guidance or a bare `ab answer <slug>` retry grants
+three fresh executions. The guard is derived from durable facts, including on
+supervisor restart, and uses the ordinary watch, dashboard and operator API
+attention paths.
+
 For each repeat conflict, Autobuild compares the base merged by the latest
 completed reconcile with a fresh authoritative base snapshot. An advanced base
 proves the attempt lost a race and permits another reconcile regardless of the

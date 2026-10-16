@@ -8587,3 +8587,60 @@ for (const operation of ['observe', 'dispatch']) {
     expect(h.tickets.claims).toEqual([])
   })
 }
+
+for (const resumeCurrent of [false, true]) {
+  test(`no-progress guard repairs completion crash gap before ${resumeCurrent ? 'startup resume' : 'lease recovery'}, preserves pending abort`, async () => {
+    const h = harness({ opts: { leaseTtlMs: 0 } })
+    const slug = await seedBuild(h)
+    for (const instance of ['a', 'b', 'c']) {
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { instance, provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+      })
+      await h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: '/ws/ab/auth-limit', outcome: 'completed', exitCode: 0 },
+      })
+    }
+    for (let i = 0; i < 3; i++) await h.dispatcher.tick({ resumeCurrent })
+    expect(h.launches).toEqual([])
+    expect(
+      (await h.store.getEvents(slug)).filter((e) => e.type === 'escalation.raised'),
+    ).toHaveLength(1)
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug,
+      user: 'operator',
+      action: { kind: 'abort' },
+    })
+    await h.dispatcher.tick({ resumeCurrent })
+    expect(h.launches).toEqual([slug])
+  })
+}
+
+test('recovered dispatch completion shares the guard before its first attachment', async () => {
+  const h = harness({ tickets: [readyTicket('T-recovered')], opts: { leaseTtlMs: 0 } })
+  const slug = await seedBuild(h, { attached: false, ticketId: 'T-recovered' })
+  for (const instance of ['a', 'b', 'c']) {
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { instance, provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+    })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance, workspaceRef: '/ws/ab/auth-limit', outcome: 'completed', exitCode: 0 },
+    })
+  }
+  await h.dispatcher.tick({ resumeCurrent: true })
+  expect(h.launches).toEqual([])
+  expect(
+    (await h.store.getEvents(slug))
+      .filter((e) => e.type === 'escalation.raised')
+      .map((e) => e.payload.policyCause),
+  ).toEqual(['execution-no-progress'])
+})
