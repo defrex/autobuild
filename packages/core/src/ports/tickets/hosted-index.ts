@@ -7,6 +7,8 @@ export {
   HOSTED_TICKET_OPERATIONS,
   hostedTicketContextSchema,
   hostedTicketRequestSchemas,
+  TICKET_REVISIONS_HEADER,
+  TICKET_REVISIONS_CAPABILITY,
 } from './remote-protocol'
 export type { HostedTicketContext, HostedTicketOperation } from './remote-protocol'
 

@@ -209,5 +209,13 @@ Unknown keys and empty patches are refused. Success returns `{ ok: true }`.
 A revision conflict returns HTTP 409 with `kind: "conflict"`, `error`, `id`,
 `expectedRevision` and `currentRevision`. Delegated credentials retain existing
 permissions: none of the guarded mutation variants grants additional access.
-Ticket responses to clients before 0.12 omit revision for strict legacy decoders;
-clients before 0.11 also omit the existing resolution projections.
+Ticket responses include `revision` only when the request advertises
+`x-autobuild-ticket-revisions: 1`. The current hosted client sends this header
+on every request and requires revision-bearing responses. Released clients
+through 0.12.x omit the header and retain their strict decoder's original
+response shape on get, list-ready and create. This explicit capability also
+supports new source checkouts that still report version 0.12.0; version alone
+cannot distinguish them from released clients. Unknown capability values do
+not opt in. Clients before 0.11 also omit the existing resolution projections.
+The capability does not change authentication, authorization or the remote
+BuildStore protocol version.

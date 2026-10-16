@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { z } from 'zod'
 import { mintToken } from '@defrex/autobuild/remote-store'
 import {
   AUTOBUILD_VERSION,
@@ -8,7 +9,11 @@ import {
 } from '@defrex/autobuild/remote-store'
 import { describeTicketSourceContract } from '@defrex/autobuild/plugin-sdk'
 import { FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
-import { HostedTicketSource } from '@defrex/autobuild/hosted-tickets'
+import {
+  HostedTicketSource,
+  TICKET_REVISIONS_HEADER,
+  TICKET_REVISIONS_CAPABILITY,
+} from '@defrex/autobuild/hosted-tickets'
 import { createTicketServer } from './ticket-server'
 
 const secret = 'ticket-test-secret'
@@ -170,8 +175,8 @@ describe('hosted ticket protocol', () => {
   })
 })
 
-test('guarded transport rehydrates a conflict and legacy ticket decoders do not receive revision', async () => {
-  const { source, server } = harness()
+test('guarded transport rehydrates a conflict', async () => {
+  const { source } = harness()
   const ticket = await source.create({ title: 'Original', body: 'Body' })
   await source.mutateIfRevision(ticket.ref.id, ticket.revision, {
     kind: 'update',
@@ -192,22 +197,101 @@ test('guarded transport rehydrates a conflict and legacy ticket decoders do not 
     })
   }
   expect(await source.get(ticket.ref.id)).toEqual(current)
-  for (const version of ['0.10.0', '0.11.0']) {
-    const response = await server.fetch(
-      new Request('https://tickets.example/tickets/get', {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${operator}`,
-          [AUTOBUILD_VERSION_HEADER]: version,
-          [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { id: ticket.ref.id } }),
-      }),
-    )
-    expect(response.status).toBe(200)
-    const body = (await response.json()) as Record<string, unknown>
-    expect(body.revision).toBeUndefined()
-    expect(body.resolved).toBe(version === '0.11.0' ? false : undefined)
+})
+
+// Frozen released ticket shape (v0.11/v0.12): strict decoders reject extra fields.
+const releasedTicketSchema = z.strictObject({
+  ref: z.strictObject({
+    source: z.string().min(1),
+    id: z.string().min(1),
+    url: z.string().optional(),
+    title: z.string().optional(),
+  }),
+  creationKey: z.string().optional(),
+  title: z.string(),
+  body: z.string(),
+  state: z.string().optional(),
+  resolved: z.boolean(),
+  labels: z.array(z.string()),
+  blockersResolved: z.boolean().optional(),
+  blockedBy: z.array(z.string()).optional(),
+})
+
+test.each(['0.10.0', '0.11.0', '0.12.0', '0.12.1'])(
+  'released %s ticket decoders accept get, list-ready and create responses',
+  async (version) => {
+    const { source, server } = harness()
+    const existing = await source.create({ title: 'Existing', body: 'Body' })
+    const schema = version.startsWith('0.10.')
+      ? releasedTicketSchema.omit({ resolved: true, blockersResolved: true })
+      : releasedTicketSchema
+    for (const [operation, input] of [
+      ['get', { id: existing.ref.id }],
+      ['list-ready', {}],
+      ['create', { draft: { title: 'Legacy create', body: 'Body' } }],
+    ] as const) {
+      const response = await server.fetch(
+        new Request(`https://tickets.example/tickets/${operation}`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${operator}`,
+            [AUTOBUILD_VERSION_HEADER]: version,
+            [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ context: { teamKey: 'ENG' }, input }),
+        }),
+      )
+      expect(response.status).toBe(operation === 'create' ? 201 : 200)
+      const body = await response.json()
+      if (operation === 'list-ready') {
+        expect(
+          z.strictObject({ tickets: z.array(schema), diagnostics: z.array(z.string()) }).parse(body)
+            .tickets,
+        ).toHaveLength(1)
+      } else
+        expect(schema.parse(body).title).toBe(operation === 'get' ? 'Existing' : 'Legacy create')
+    }
+  },
+)
+
+test('revision opt-in distinguishes new and released clients reporting the same 0.12.0 version', async () => {
+  const { server } = harness()
+  const headersSeen: Headers[] = []
+  const source = new HostedTicketSource({
+    url: 'https://tickets.example',
+    token: operator,
+    teamKey: 'ENG',
+    fetchFn: async (input, init) => {
+      const req = new Request(String(input), init)
+      req.headers.set(AUTOBUILD_VERSION_HEADER, '0.12.0')
+      headersSeen.push(new Headers(req.headers))
+      return server.fetch(req)
+    },
+  })
+  const created = await source.create({ title: 'New client', body: 'Body' })
+  expect(created.revision).toEqual(expect.any(String))
+  expect(created.revision.length).toBeGreaterThan(0)
+  expect((await source.get(created.ref.id))?.revision).toBe(created.revision)
+  expect((await source.listReady({})).tickets[0]?.revision).toBe(created.revision)
+  for (const headers of headersSeen) {
+    expect(headers.get(AUTOBUILD_VERSION_HEADER)).toBe('0.12.0')
+    expect(headers.get(TICKET_REVISIONS_HEADER)).toBe(TICKET_REVISIONS_CAPABILITY)
   }
+  // An unknown capability must retain the strict released decoder shape.
+  const response = await server.fetch(
+    new Request('https://tickets.example/tickets/get', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${operator}`,
+        [AUTOBUILD_VERSION_HEADER]: '0.12.0',
+        [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
+        [TICKET_REVISIONS_HEADER]: 'unknown',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ context: { teamKey: 'ENG' }, input: { id: created.ref.id } }),
+    }),
+  )
+  expect(response.status).toBe(200)
+  expect(releasedTicketSchema.parse(await response.json()).title).toBe('New client')
 })

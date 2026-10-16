@@ -19,6 +19,8 @@ import {
 } from '@defrex/autobuild/remote-store'
 import {
   hostedTicketRequestSchemas,
+  TICKET_REVISIONS_HEADER,
+  TICKET_REVISIONS_CAPABILITY,
   TicketRevisionConflict,
   TicketRevisionUnsupported,
   mutateTicketIfRevision,
@@ -144,7 +146,12 @@ export function createTicketServer(options: TicketServerOptions): {
     const ticketResponse = (ticket: Awaited<ReturnType<TicketSource['get']>>) => {
       if (ticket === null) return ticket
       const { revision: _revision, ...withoutRevision } = ticket
-      const projected = client.major === 0 && client.minor < 12 ? withoutRevision : ticket
+      // Explicit opt-in also distinguishes new source clients from released
+      // 0.12 clients carrying the identical Autobuild version header.
+      const projected =
+        req.headers.get(TICKET_REVISIONS_HEADER) === TICKET_REVISIONS_CAPABILITY
+          ? ticket
+          : withoutRevision
       if (client.major !== 0 || client.minor > 10) return projected
       const { resolved: _resolved, blockersResolved: _blockersResolved, ...legacy } = projected
       return legacy

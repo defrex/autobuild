@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { ticketRefSchema } from '../../ontology'
 
+/** Explicit opt-in: released clients through 0.12 use strict decoders without revisions.
+ * Source checkouts can share their release version, so version alone is insufficient. */
+export const TICKET_REVISIONS_HEADER = 'x-autobuild-ticket-revisions'
+export const TICKET_REVISIONS_CAPABILITY = '1'
+
 /** Repository-owned policy sent with every hosted ticket operation. */
 export const hostedTicketContextSchema = z.strictObject({
   teamKey: z.string().min(1),

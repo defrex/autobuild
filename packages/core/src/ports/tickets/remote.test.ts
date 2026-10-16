@@ -24,6 +24,8 @@ import {
 } from '../../store/remote/version'
 import {
   claimWireSchema,
+  TICKET_REVISIONS_HEADER,
+  TICKET_REVISIONS_CAPABILITY,
   dependencyStatesWireSchema,
   successWireSchema,
   ticketListingWireSchema,
@@ -168,6 +170,7 @@ describe('HostedTicketSource (client half)', () => {
       expect(call.headers).toEqual({
         'content-type': 'application/json',
         authorization: 'Bearer t0k',
+        [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
         [AUTOBUILD_VERSION_HEADER]: AUTOBUILD_VERSION,
         [REMOTE_STORE_PROTOCOL_VERSION_HEADER]: REMOTE_STORE_PROTOCOL_VERSION,
       })
