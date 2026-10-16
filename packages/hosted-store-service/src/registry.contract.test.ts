@@ -99,6 +99,9 @@ async function seedWorld(): Promise<World> {
     ],
     { createState: 'Backlog', doneState: 'Done' },
   )
+  Object.assign(source, {
+    listStates: async () => TICKET_STATES.map((name) => ({ name, tickets: 0 })),
+  })
   const backend: OperatorTicketBackend = {
     sourceFor: async () => source,
     statesFor: async () => TICKET_STATES,
@@ -897,6 +900,8 @@ describe('agent tool registry contract', () => {
       'repository.settings': { repo, setting: 'intake', enabled: true },
       'repository.bulk_control': { repo, action: 'pause' },
       'harvest.control': { repo, action: 'toggle-gate' },
+      'tickets.states': { repo },
+      'tickets.state.create': { repo, name: 'icebox' },
       'tickets.list': { repo },
       'tickets.get': { repo, id: 'AUT-1' },
       'tickets.create': { repo, title: 't', body: 'b' },
@@ -922,6 +927,8 @@ describe('agent tool registry contract', () => {
       'builds.artifact': { repo, slug: 'demo', kind: 'notes' },
       'repository.status': { repo },
       'harvest.status': { repo },
+      'tickets.states': { repo },
+      'tickets.state.create': { repo, name: 'icebox' },
       'tickets.list': { repo },
       'tickets.get': { repo, id: 'AUT-1' },
       'notes.read': { repo },
@@ -1372,4 +1379,55 @@ describe('sandbox registry tools (AUT-340)', () => {
       await fx.cleanup()
     }
   })
+})
+
+test('state tools and HTTP routes preserve full metadata and duplicate refusals', async () => {
+  const world = await seedWorld()
+  const states = [{ name: 'icebox', tickets: 0, about: 'Deferred' }]
+  Object.assign(world.source, {
+    listStates: async () => states,
+    addState: async (name: string, opts: { about?: string } = {}) => {
+      if (states.some((s) => s.name.toLowerCase() === name.toLowerCase()))
+        throw new Error('state already exists')
+      const state = { name, tickets: 0, about: opts.about ?? '' }
+      states.push(state)
+      return { state, created: true }
+    },
+  })
+  const registry = buildRegistry({ store: world.store, tickets: world.backend, clock })
+  expect(await registry.call('tickets.states', { repo })).toEqual(states)
+  const server = createOperatorServer({
+    store: world.store,
+    secret,
+    projects: testProjects([repo]),
+    clock,
+    ticketBackend: world.backend,
+  })
+  const http = api(server)
+  expectEqual(
+    (await http('GET', `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/states`)).body,
+    states,
+  )
+  const createdHttp = await http(
+    'POST',
+    `/operator/v1/repos/${encodeURIComponent(repo)}/tickets/states`,
+    { name: 'http', about: 'Through HTTP' },
+  )
+  expect(createdHttp.status).toBe(201)
+  expectEqual(createdHttp.body, {
+    state: { name: 'http', tickets: 0, about: 'Through HTTP' },
+    created: true,
+  })
+
+  const result = await registry.call(
+    'tickets.state.create',
+    { repo, name: 'later', about: 'Waiting' },
+    { identity: 'Ada' },
+  )
+  expect(result).toEqual({ state: { name: 'later', tickets: 0, about: 'Waiting' }, created: true })
+  const duplicate = await registry
+    .call('tickets.state.create', { repo, name: 'later' }, { identity: 'Ada' })
+    .catch((e) => e)
+  expect(duplicate).toBeInstanceOf(RegistryError)
+  expect((duplicate as RegistryError).body.error).toContain('already exists')
 })

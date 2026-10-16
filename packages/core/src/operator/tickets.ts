@@ -1,6 +1,7 @@
 import type { Config } from '../config/schema'
 import { reduceBuild } from '../kernel/reducer'
 import {
+  TicketOperationError,
   changeBlockers,
   createTicket,
   moveTicket,
@@ -174,4 +175,35 @@ export async function mutateOperatorTicket(opts: {
           : await changeBlockers(source, operation.id, operation.blockerIds, operation.kind)
   const blockers = await source.dependencyStates(ticket.blockedBy ?? [])
   return { ticket, blockers, build: await matchingBuild(opts.store, opts.repo, ticket.ref.id) }
+}
+
+export async function listOperatorTicketStates(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend
+}) {
+  const { source } = await openOperatorTickets(opts)
+  if (!source.listStates)
+    throw new TicketOperationError('refusal', `state discovery is not supported by ${source.name}`)
+  return source.listStates()
+}
+
+export async function createOperatorTicketState(opts: {
+  store: BuildStore
+  repo: string
+  backend: OperatorTicketBackend
+  name: string
+  about?: string
+}) {
+  const { source } = await openOperatorTickets(opts)
+  if (!source.addState)
+    throw new TicketOperationError('refusal', `state creation is not supported by ${source.name}`)
+  try {
+    return await source.addState(opts.name, opts.about === undefined ? {} : { about: opts.about })
+  } catch (error) {
+    throw new TicketOperationError(
+      'refusal',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
 }

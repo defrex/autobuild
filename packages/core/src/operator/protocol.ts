@@ -96,3 +96,8 @@ export const sessionApprovalRequestSchema = z.strictObject({
   decision: z.enum(['approve', 'deny']),
 })
 export type OperatorSessionApprovalRequest = z.infer<typeof sessionApprovalRequestSchema>
+
+export const ticketStateCreateRequestSchema = z.strictObject({
+  name: z.string(),
+  about: z.string().optional(),
+})

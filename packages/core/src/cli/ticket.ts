@@ -626,7 +626,7 @@ export async function abTicketStates(opts: TicketStatesOpts): Promise<void> {
   })
 }
 
-/** `ab ticket state create <name> [--about <text>]` — idempotent. */
+/** `ab ticket state create <name> [--about <text>]` — duplicate policy belongs to the source. */
 export async function abTicketStateCreate(opts: TicketStateCreateOpts): Promise<void> {
   const { config, source } = await resolveTicketCommand(opts, 'state create')
   if (typeof source.addState !== 'function') {

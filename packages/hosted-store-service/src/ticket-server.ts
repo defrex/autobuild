@@ -186,7 +186,24 @@ export function createTicketServer(options: TicketServerOptions): {
     // Parse again through the operation-specific schema to preserve precise
     // inference in each branch while keeping the shared pre-source validation.
     switch (operation) {
+      case 'add-state': {
+        const request = hostedTicketRequestSchemas['add-state'].parse(raw)
+        if (!source.addState)
+          throw new TicketRequestError(
+            409,
+            'conflict',
+            'ticket source does not support state creation',
+          )
+        return json(
+          200,
+          await source.addState(
+            request.input.name,
+            request.input.about === undefined ? {} : { about: request.input.about },
+          ),
+        )
+      }
       case 'states': {
+        if (source.listStates) return json(200, await source.listStates())
         const names = options.statesFor ? await options.statesFor(context, principal, source) : []
         const listing = await source.listReady({})
         return json(
@@ -371,6 +388,13 @@ export function createTicketServer(options: TicketServerOptions): {
         }
         // Only the message crosses the trust boundary; causes and stacks never do.
         const message = error instanceof Error ? error.message : 'ticket backend failed'
+        if (
+          /^database ticket source: (?:invalid state name|a state purpose|state |unknown state|ambiguous state)/.test(
+            message,
+          )
+        ) {
+          return failure(400, 'validation', message)
+        }
         const notFound = /unknown (?:ticket|issue)|not found/i.test(message)
         // These are intentional domain feedback from TicketSource implementations.
         // Their historical standalone mapping remains unchanged.

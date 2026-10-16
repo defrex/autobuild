@@ -40,6 +40,7 @@ import {
   type Config,
   type OperatorTicketContext,
   effectiveConfig,
+  findEffectiveConfigRef,
   OperatorQueryError,
   type OperatorSandboxService,
 } from '@defrex/autobuild/operator'
@@ -549,7 +550,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         sourceFor: async (context: OperatorTicketContext) => {
           await validate(context)
           if (options.sourceFor) return options.sourceFor(context)
-          return (await openDatabase()).source({
+          const source = (await openDatabase()).source({
             repo: context.repo,
             lifecycle: lifecycleFor(context),
             ...(context.tickets.createState !== undefined
@@ -559,9 +560,12 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
               ? { proposalState: context.tickets.proposalState }
               : {}),
           })
+          await source.listStates()
+          return source
         },
         statesFor: async (context: OperatorTicketContext, source: TicketSource) => {
           await validate(context)
+          if (source.listStates) return (await source.listStates()).map((s) => s.name)
           if (options.statesFor) return options.statesFor(context, source)
           return [
             ...new Set(
@@ -761,6 +765,23 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           put: async (repo, policy, writer) => {
             if (!(await projects.has(repo)))
               throw new MachineAuthError(403, 'project not registered')
+            // A new project can publish before its first dispatcher run. Only
+            // a real previous policy/config supplies historical names to retain.
+            const priorPolicy = await (await openPolicy()).get(repo)
+            let hasPriorConfig = false
+            if (!priorPolicy) {
+              const priorStore = await openTicketStore()
+              if (await priorStore.getRepo(repo))
+                hasPriorConfig =
+                  findEffectiveConfigRef(await priorStore.getRepoEvents(repo)) !== undefined
+            }
+            if (priorPolicy || hasPriorConfig) {
+              const previous = await ticketContext(repo)
+              if (previous.tickets.source === 'hosted') {
+                const source = await (await openTicketBackend()).sourceFor(previous)
+                await source.listStates?.()
+              }
+            }
             await (await openPolicy()).put(repo, policy, writer)
           },
         },

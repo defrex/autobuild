@@ -75,6 +75,7 @@ function envelope<T extends z.ZodType>(input: T) {
 export const hostedTicketRequestSchemas = {
   'list-ready': envelope(criteriaSchema),
   states: envelope(z.strictObject({})),
+  'add-state': envelope(z.strictObject({ name: z.string(), about: z.string().optional() })),
   get: envelope(idSchema),
   claim: envelope(idSchema),
   comment: envelope(z.strictObject({ id: z.string().min(1), body: z.string() })),
@@ -141,10 +142,13 @@ export const ticketGrantResponseSchema = z.strictObject({
   grant: ticketGrantSchema,
 })
 
-export const ticketStatesWireSchema = z.array(
-  z.strictObject({
-    name: z.string(),
-    tickets: z.number().int().nonnegative(),
-    about: z.string().optional(),
-  }),
-)
+export const ticketStateWireSchema = z.strictObject({
+  name: z.string(),
+  tickets: z.number().int().nonnegative(),
+  about: z.string().optional(),
+})
+export const ticketStatesWireSchema = z.array(ticketStateWireSchema)
+export const ticketStateCreateWireSchema = z.strictObject({
+  state: ticketStateWireSchema,
+  created: z.boolean(),
+})
