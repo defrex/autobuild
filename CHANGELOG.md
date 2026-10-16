@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#624](https://github.com/defrex/autobuild/pull/624) — Stop runner relaunch loops after three executions without progress
 - [#619](https://github.com/defrex/autobuild/pull/619) — Assign readable project-scoped IDs to hosted tickets
 - [#621](https://github.com/defrex/autobuild/pull/621) — Store hosted ticket attachments on the ticket service
 - [#620](https://github.com/defrex/autobuild/pull/620) — Add custom states for hosted tickets
