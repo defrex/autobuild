@@ -17,8 +17,8 @@ package's `deployment/` directory and in `templates/hosted-service/`).
     "build": "ab-hosted-service-build"
   },
   "dependencies": {
-    "@defrex/autobuild-hosted-store-service": "0.12.0",
-    "@defrex/autobuild": "0.12.0",
+    "@defrex/autobuild-hosted-store-service": "0.13.0",
+    "@defrex/autobuild": "0.13.0",
     "next": "16.1.6",
     "react": "19.2.4",
     "react-dom": "19.2.4"
