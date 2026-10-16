@@ -314,6 +314,7 @@ async function makeFixture(
 function readyTicket(id: string, over: Partial<Omit<Ticket, 'ref'>> = {}): Ticket {
   const title = over.title ?? 'Add rate limiting'
   return {
+    revision: 'fixture',
     ref: { source: 'fake', id, title },
     ...(over.creationKey !== undefined ? { creationKey: over.creationKey } : {}),
     title,
@@ -5894,7 +5895,8 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(fx.cliErrors).toEqual([])
       // T-late really was on offer by the time the pass drained…
       const ready = await fx.tickets.listReady({ labels: ['autobuild'], state: 'Ready' })
-      expect(ready.tickets.map((t) => t.ref.id).sort()).toEqual(['T-first', 'T-late'])
+      expect(ready.tickets.map((t) => t.ref.id)).toEqual(['T-late'])
+      expect((await fx.tickets.get('T-first'))?.state).toBe('Doing')
 
       // …and the pass still built only the ticket its ONE tick selected.
       const builds = await fx.store.listBuilds()

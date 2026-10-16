@@ -1,3 +1,4 @@
+import { TicketRevisionConflict, TicketRevisionUnsupported } from '../ports/tickets/revision'
 /**
  * The agent tool registry — one typed table that is the single source of
  * truth for the agent-facing operator surface (AUT-338).
@@ -778,12 +779,12 @@ export const TOOLS: readonly ToolEntry[] = [
     '{ticket, blockers, build}: the updated ticket.',
     async (raw, ctx) => {
       const input = raw as z.infer<typeof ticketsUpdateInput>
-      const { repo, id, ...patch } = input
+      const { repo, id, expectedRevision, ...patch } = input
       return mutateOperatorTicket({
         store: ctx.store,
         repo,
         backend: ticketsOf(ctx),
-        operation: { kind: 'update', id, patch },
+        operation: { kind: 'update', id, patch, expectedRevision },
       })
     },
   ),
@@ -798,7 +799,12 @@ export const TOOLS: readonly ToolEntry[] = [
         store: ctx.store,
         repo: input.repo,
         backend: ticketsOf(ctx),
-        operation: { kind: 'block', id: input.id, blockerIds: input.blockerIds },
+        operation: {
+          kind: 'block',
+          id: input.id,
+          blockerIds: input.blockerIds,
+          expectedRevision: input.expectedRevision,
+        },
       })
     },
   ),
@@ -813,7 +819,12 @@ export const TOOLS: readonly ToolEntry[] = [
         store: ctx.store,
         repo: input.repo,
         backend: ticketsOf(ctx),
-        operation: { kind: 'unblock', id: input.id, blockerIds: input.blockerIds },
+        operation: {
+          kind: 'unblock',
+          id: input.id,
+          blockerIds: input.blockerIds,
+          expectedRevision: input.expectedRevision,
+        },
       })
     },
   ),
@@ -828,7 +839,12 @@ export const TOOLS: readonly ToolEntry[] = [
         store: ctx.store,
         repo: input.repo,
         backend: ticketsOf(ctx),
-        operation: { kind: 'move', id: input.id, state: input.state },
+        operation: {
+          kind: 'move',
+          id: input.id,
+          state: input.state,
+          expectedRevision: input.expectedRevision,
+        },
       })
     },
   ),
@@ -990,6 +1006,10 @@ function mapDomainError(error: unknown): RegistryError {
       error: error.refusal.error,
     })
   }
+  if (error instanceof TicketRevisionConflict)
+    return new RegistryError('domain', error.message, { kind: 'conflict', error: error.message })
+  if (error instanceof TicketRevisionUnsupported)
+    return new RegistryError('domain', error.message, { kind: 'refusal', error: error.message })
   if (error instanceof TicketOperationError) {
     return new RegistryError('domain', error.message, {
       kind: error.code === 'not-found' ? 'not-found' : 'refusal',

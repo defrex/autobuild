@@ -9,8 +9,17 @@ export {
   TICKET_COMMENTS_CAPABILITY,
   hostedTicketContextSchema,
   hostedTicketRequestSchemas,
+  TICKET_REVISIONS_HEADER,
+  TICKET_REVISIONS_CAPABILITY,
 } from './remote-protocol'
 export type { HostedTicketContext, HostedTicketOperation } from './remote-protocol'
+
+export {
+  TicketRevisionConflict,
+  TicketRevisionUnsupported,
+  mutateTicketIfRevision,
+} from './revision'
+
 export { hostedTicketPolicySchema, type HostedTicketPolicy } from './remote-protocol'
 export { ticketLifecycle } from './lifecycle'
 

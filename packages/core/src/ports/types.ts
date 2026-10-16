@@ -57,6 +57,8 @@ export interface TicketComment {
 }
 
 export interface Ticket {
+  /** Opaque source version of title, body, labels, state and blockers. */
+  revision: string
   /** Complete history oldest first when exposed by this read. Absent means
    * unsupported; an empty array means no comments. Bodies are unchanged. */
   comments?: TicketComment[]
@@ -158,7 +160,14 @@ export class TicketSourceRateLimitError extends Error {
   }
 }
 
+export type TicketMutation =
+  | { kind: 'update'; patch: TicketUpdate }
+  | { kind: 'transition'; state: string }
+  | { kind: 'blockers'; operation: 'block' | 'unblock'; ids: string[] }
+
 export interface TicketSource {
+  /** Check and mutate at the source boundary; absent means checks are unsupported. */
+  mutateIfRevision?(id: string, expectedRevision: string, mutation: TicketMutation): Promise<void>
   readonly name: string
   /** Ready tickets matching the dispatch criteria (label/state — §3.3), plus
    * actionable diagnostics for individual source records excluded as invalid.

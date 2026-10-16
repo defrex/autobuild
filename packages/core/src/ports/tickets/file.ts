@@ -17,7 +17,8 @@
  * Concurrency: writes locate and validate immediately before a same-path
  * rewrite or same-filesystem rename; there is no filesystem lock. The
  * dispatcher remains the lifecycle single writer (SPEC §12), and concurrent
- * human edits are explicitly last-write-wins. State renames never cross a
+ * unguarded human edits are explicitly last-write-wins. Revision-checked writes
+ * compare the final read, retaining the same unlocked read/write race window. State renames never cross a
  * filesystem: `<dir>/ready` → `<dir>/doing` is one mount by construction.
  */
 import {
@@ -30,8 +31,14 @@ import {
 import { readdirSync, statSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
-import { z } from 'zod'
+import {
+  parseTicketFile,
+  serializeTicketFile,
+  TicketFileValidationError,
+  type Frontmatter,
+} from './file-codec'
+export { TicketFileValidationError } from './file-codec'
+import { ticketRevision, checkTicketRevision } from './revision'
 import { systemClock, type Clock } from '../../store/types'
 import type {
   DependencyState,
@@ -42,6 +49,7 @@ import type {
   TicketSource,
   TicketStateInfo,
   TicketUpdate,
+  TicketMutation,
 } from '../types'
 import { validateTicketUpdate } from './update'
 
@@ -65,74 +73,6 @@ function statesIn(directories: string[]): string[] {
     [...new Set([...LIFECYCLE_DIRS, ...directories.filter((name) => !name.startsWith('.'))])],
     LIFECYCLE_DIRS,
   )
-}
-
-const frontmatterSchema = z.strictObject({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  labels: z.array(z.string()).default([]),
-  /** Source-local blocker ids (§13). Absent ≡ no dependencies, which keeps
-   * every pre-existing ticket file valid. */
-  blockedBy: z.array(z.string()).optional(),
-  /** Stable external-create adoption key. It travels with the ticket across
-   * state-directory moves, so retries find it in any lifecycle state. */
-  idempotencyKey: z.string().min(1).optional(),
-})
-type Frontmatter = z.infer<typeof frontmatterSchema>
-
-const OPEN_FENCE = '+++\n'
-const CLOSE_FENCE = '\n+++\n'
-
-/** A malformed record that a complete tracker scan may safely exclude. This is
- * deliberately narrower than ordinary Error: filesystem failures, layout
- * violations, duplicate ids, and unexpected exceptions must still abort the
- * listing. */
-export class TicketFileValidationError extends Error {
-  override readonly name = 'TicketFileValidationError'
-}
-
-function parseTicketFile(path: string, raw: string): { front: Frontmatter; body: string } {
-  if (!raw.startsWith(OPEN_FENCE)) {
-    throw new TicketFileValidationError(
-      `${path}: malformed ticket file — missing opening "+++" fence`,
-    )
-  }
-  const close = raw.indexOf(CLOSE_FENCE, OPEN_FENCE.length)
-  if (close === -1) {
-    throw new TicketFileValidationError(
-      `${path}: malformed ticket file — missing closing "+++" fence`,
-    )
-  }
-  let parsed: unknown
-  try {
-    parsed = parseToml(raw.slice(OPEN_FENCE.length, close))
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new TicketFileValidationError(`${path}: malformed TOML frontmatter — ${message}`)
-  }
-  const result = frontmatterSchema.safeParse(parsed)
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-      .join('; ')
-    throw new TicketFileValidationError(`${path}: invalid frontmatter — ${issues}`)
-  }
-  return { front: result.data, body: raw.slice(close + CLOSE_FENCE.length) }
-}
-
-function serializeTicketFile(front: Frontmatter, body: string): string {
-  const data: Record<string, unknown> = { id: front.id, title: front.title }
-  if (front.labels.length > 0) data.labels = front.labels
-  // Only when nonempty: a file that never declared blockers must round-trip
-  // byte-identically rather than sprouting `blockedBy = []` on every write.
-  if (front.blockedBy !== undefined && front.blockedBy.length > 0) {
-    data.blockedBy = front.blockedBy
-  }
-  if (front.idempotencyKey !== undefined) {
-    data.idempotencyKey = front.idempotencyKey
-  }
-  // smol-toml stringify ends with a newline; the closing fence follows it.
-  return `${OPEN_FENCE}${stringifyToml(data)}+++\n${body}`
 }
 
 /** A ticket file found on disk: its id, its state (= its directory), its path. */
@@ -316,6 +256,43 @@ export class FileTicketSource implements TicketSource {
     }
     await writeFile(this.pathIn(targetState, front.id), serializeTicketFile(front, draft.body))
     return this.toTicket(front, draft.body, targetState)
+  }
+
+  async mutateIfRevision(id: string, expected: string, mutation: TicketMutation): Promise<void> {
+    const patch = mutation.kind === 'update' ? validateTicketUpdate(mutation.patch) : undefined
+    await this.ensureLayout()
+    const target =
+      mutation.kind === 'transition' ? resolveState(mutation.state, await this.states()) : undefined
+    if (mutation.kind === 'blockers') {
+      for (const blocker of new Set(mutation.ids)) {
+        if (mutation.operation === 'block' && blocker === id)
+          throw new Error(`ticket "${id}" cannot block itself`)
+        await this.requireForWrite(blocker, 'blocker')
+      }
+    }
+    // Final locate/read immediately precedes the write. This is best effort,
+    // matching unguarded file writes; it does not introduce filesystem locks.
+    const loaded = await this.requireForWrite(id, 'revision-checked write')
+    checkTicketRevision(this.toTicket(loaded.front, loaded.body, loaded.found.state), expected)
+    if (target !== undefined) {
+      if (loaded.found.state !== target) await rename(loaded.found.path, this.pathIn(target, id))
+      return
+    }
+    const front = { ...loaded.front }
+    let body = loaded.body
+    if (patch) {
+      if (patch.title !== undefined) front.title = patch.title
+      if (patch.labels !== undefined) front.labels = patch.labels
+      if (patch.body !== undefined) body = patch.body
+    } else if (mutation.kind === 'blockers') {
+      const blockers = new Set(front.blockedBy ?? [])
+      for (const blocker of mutation.ids) {
+        if (mutation.operation === 'block') blockers.add(blocker)
+        else blockers.delete(blocker)
+      }
+      front.blockedBy = [...blockers]
+    }
+    await this.rewriteAt(loaded.found, front, body)
   }
 
   async update(id: string, patch: TicketUpdate): Promise<void> {
@@ -629,6 +606,13 @@ export class FileTicketSource implements TicketSource {
 
   private toTicket(front: Frontmatter, body: string, state: string): Ticket {
     return {
+      revision: ticketRevision({
+        title: front.title,
+        body,
+        labels: front.labels,
+        state,
+        blockedBy: front.blockedBy,
+      }),
       ref: { source: this.name, id: front.id, title: front.title },
       ...(front.idempotencyKey !== undefined ? { creationKey: front.idempotencyKey } : {}),
       title: front.title,

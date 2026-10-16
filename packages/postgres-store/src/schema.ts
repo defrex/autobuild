@@ -837,7 +837,7 @@ export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL)
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
  * remain valid while the hosted ticket tables are added. */
-export const TICKET_SCHEMA_VERSION = 3
+export const TICKET_SCHEMA_VERSION = 4
 export const TICKET_SCHEMA_V1_DDL = `
 CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -870,7 +870,14 @@ export const TICKET_SCHEMA_V2_DDL = TICKET_SCHEMA_V1_DDL.replaceAll('team', 'rep
 export const TICKET_SCHEMA_V2_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_V2_DDL)
   .digest('hex')
-export const TICKET_SCHEMA_DDL = `${TICKET_SCHEMA_V2_DDL}
+export const TICKET_SCHEMA_V3_DDL = TICKET_SCHEMA_V2_DDL.replace(
+  'updated_at timestamptz NOT NULL,',
+  'updated_at timestamptz NOT NULL, revision bigint NOT NULL DEFAULT 1,',
+)
+export const TICKET_SCHEMA_V3_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_V3_DDL)
+  .digest('hex')
+export const TICKET_SCHEMA_DDL = `${TICKET_SCHEMA_V3_DDL}
 CREATE TABLE IF NOT EXISTS ab_ticket_states (
   repo text NOT NULL, name text NOT NULL, about text,
   PRIMARY KEY (repo, name),
@@ -1326,6 +1333,7 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['labels', 'text[]', true],
       ['created_at', 'timestamp with time zone', true],
       ['updated_at', 'timestamp with time zone', true],
+      ['revision', 'bigint', true],
     ],
     ab_ticket_states: [
       ['repo', 'text', true],
@@ -1660,6 +1668,7 @@ export async function migratePostgres(
         ticketMarker.checksum === TICKET_SCHEMA_V1_CHECKSUM
       ) {
         await migrateLegacyTickets(tx as SQL, options.openBlobs)
+        await tx`ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1`
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION},
           checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
@@ -1667,8 +1676,14 @@ export async function migratePostgres(
         Number(ticketMarker.version) === 2 &&
         ticketMarker.checksum === TICKET_SCHEMA_V2_CHECKSUM
       ) {
-        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION},
-          checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+        await tx`ALTER TABLE ab_tickets ADD COLUMN revision bigint NOT NULL DEFAULT 1`
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+      } else if (
+        ticketMarker &&
+        Number(ticketMarker.version) === 3 &&
+        ticketMarker.checksum === TICKET_SCHEMA_V3_CHECKSUM
+      ) {
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (ticketMarker) {
         if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
           throw schemaError(
