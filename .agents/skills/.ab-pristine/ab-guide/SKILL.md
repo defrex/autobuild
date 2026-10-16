@@ -197,7 +197,9 @@ The distinctions that change an administrator's answer:
   agent turn or command already running. Missing, unreadable, malformed, and
   routing-invalid candidates retain that snapshot with deduplicated operator
   notice, and restoring a valid file resumes reload. Scoped phase CLI processes
-  still read the build worktree's branch-owned file.
+  still read the build worktree's branch-owned file. Dispatcher merge readiness,
+  resume, and execution recovery use the runner's pinned commands, verify, and
+  finalize configuration; builds without a pin retain the live fallback.
 - **Workspaces** are provisioned per build and remain the locally reachable
   execution context for that build.
 - **Ticket providers** (`linear`, `file`) sit behind one port; the dispatcher

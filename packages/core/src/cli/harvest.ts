@@ -184,10 +184,20 @@ export async function buildHarvestContext(deps: HarvestCliDeps): Promise<Harvest
 }
 
 async function readJsonFile(path: string): Promise<unknown> {
-  const file = Bun.file(path)
-  if (!(await file.exists())) throw new Error(`file not found: ${path}`)
+  let text: string
   try {
-    return JSON.parse(await file.text())
+    text = await Bun.file(path).text()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`file not found: ${path}`, { cause: error })
+    }
+    throw new Error(
+      `cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    )
+  }
+  try {
+    return JSON.parse(text)
   } catch (error) {
     throw new Error(
       `${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
