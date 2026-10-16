@@ -46,8 +46,26 @@ export function compareFrameSets(
   return { missing, extra, differing, compared: base.size - missing.length }
 }
 
+/** Fixture commits expose their SHA in dashboard provenance. Give both trees
+ * the same Git timestamps so wall-clock time cannot change the rendered data.
+ * Keep this in the repo-local driver: it also governs captures at older bases. */
+export function captureEnvironment(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  return {
+    ...env,
+    GIT_AUTHOR_DATE: '2026-07-15T12:00:00Z',
+    GIT_COMMITTER_DATE: '2026-07-15T12:00:00Z',
+  }
+}
+
 async function run(cwd: string, command: readonly string[]): Promise<void> {
-  const child = Bun.spawn([...command], { cwd, stdout: 'pipe', stderr: 'pipe' })
+  const child = Bun.spawn([...command], {
+    cwd,
+    env: captureEnvironment(),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited])
   await new Response(child.stdout).text()
   if (exitCode !== 0) {
