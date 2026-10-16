@@ -1014,6 +1014,9 @@ describe('runCli — sessionless build controls', () => {
       hostname: '127.0.0.1',
       port: 0,
       fetch: async (request) => {
+        if (new URL(request.url).pathname.endsWith('/tickets/policy')) {
+          return Response.json({ ok: true })
+        }
         const input = (await request.json()) as { input: { id: string } }
         requests.push(input.input.id)
         return Response.json({

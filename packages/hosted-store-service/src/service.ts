@@ -1,3 +1,13 @@
+import {
+  PostgresTicketGrantStore,
+  type TicketGrantStore,
+} from '@defrex/autobuild-postgres-store/ticket-grants'
+import { SQL } from 'bun'
+import {
+  PostgresTicketPolicyStore,
+  type TicketPolicyStore,
+} from '@defrex/autobuild-postgres-store/ticket-policy'
+import { ticketLifecycle } from '@defrex/autobuild/hosted-tickets'
 import { openPostgresConnectionStoreFromEnv } from '@defrex/autobuild-postgres-store/connections'
 import { createConnectionHandler } from './connections'
 import {
@@ -74,6 +84,8 @@ export interface HostedStoreServiceOptions {
   sourceFor?: (context: OperatorTicketContext) => TicketSource | Promise<TicketSource>
   /** State discovery seam paired with sourceFor. Defaults to configured database lifecycle. */
   statesFor?: (context: OperatorTicketContext, source: TicketSource) => string[] | Promise<string[]>
+  openTicketGrants?: (url: string) => Promise<TicketGrantStore>
+  openTicketPolicy?: (url: string) => Promise<TicketPolicyStore>
   openTicketDatabase?: (url: string) => Promise<PostgresTicketDatabase>
   /** Receives original failures and safe request metadata. Never exposed to clients. */
   reportInternalError?: (
@@ -100,7 +112,7 @@ function notFound(req: Request, pathname: string): Response {
   )
 }
 
-const ticketOperations = new Set<string>(HOSTED_TICKET_OPERATIONS)
+const ticketOperations = new Set<string>([...HOSTED_TICKET_OPERATIONS, 'policy', 'grants'])
 /** `METHOD <path under …/tickets/{id}/assets>`: put, manifest, one file, list, remove. */
 const ticketAssetRoutes = new Set(['POST ', 'GET ', 'GET file', 'GET list', 'POST remove'])
 
@@ -477,6 +489,35 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
     return report(error, req, backend)
   }
 
+  let policyPromise: Promise<TicketPolicyStore> | undefined
+  const openPolicy = () => {
+    policyPromise ??= options.openTicketPolicy
+      ? options.openTicketPolicy(parseHostedStoreEnv(env).postgres.url)
+      : Promise.resolve(
+          new PostgresTicketPolicyStore(new SQL(parseHostedStoreEnv(env).postgres.url)),
+        )
+    return policyPromise
+  }
+  const ticketContext = async (repo: string): Promise<OperatorTicketContext> => {
+    if (!(await projects.has(repo))) throw new MachineAuthError(403, 'project not registered')
+    const policy = await (await openPolicy()).get(repo)
+    if (policy) return { repo, tickets: policy.tickets, teamKey: policy.tickets.teamKey }
+    const { config } = await effectiveConfig(await openTicketStore(), repo)
+    const legacy = ticketLifecycle(config.tickets, true)
+    return {
+      repo,
+      tickets: {
+        ...config.tickets,
+        triageState: legacy.triage,
+        claimedState: legacy.doing,
+        doneState: legacy.done,
+        createState: legacy.create,
+        proposalState: legacy.proposal,
+      },
+      teamKey: config.tickets.teamKey ?? '',
+    }
+  }
+
   const openTicketBackend = () => {
     ticketBackendPromise ??= (async () => {
       const config = parseHostedStoreEnv(env)
@@ -491,12 +532,10 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
         }
         return databasePromise
       }
-      const lifecycleFor = (context: OperatorTicketContext) => ({
-        triage: context.tickets.triageState ?? 'Backlog',
-        ready: context.tickets.readyState,
-        doing: context.tickets.claimedState ?? 'Doing',
-        done: context.tickets.doneState ?? 'Done',
-      })
+      const lifecycleFor = (context: OperatorTicketContext) => {
+        const { triage, ready, doing, done } = ticketLifecycle(context.tickets)
+        return { triage, ready, doing, done }
+      }
       const validate = async (context: OperatorTicketContext) => {
         if (!(await projects.has(context.repo)))
           throw new MachineAuthError(403, 'project not registered')
@@ -593,6 +632,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           store,
           secret: config.secret,
           ticketBackend: {
+            contextFor: ticketContext,
             sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
             statesFor: async (context, source) =>
               (await openTicketBackend()).statesFor(context, source),
@@ -636,6 +676,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
                   store,
                   clock,
                   tickets: {
+                    contextFor: ticketContext,
                     sourceFor: async (context) => (await openTicketBackend()).sourceFor(context),
                     statesFor: async (context, source) =>
                       (await openTicketBackend()).statesFor(context, source),
@@ -704,6 +745,26 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
       return createTicketServer({
         auth: machineAuth(),
         secret: config.secret,
+        grants: await (options.openTicketGrants
+          ? options.openTicketGrants(config.postgres.url)
+          : Promise.resolve(new PostgresTicketGrantStore(new SQL(config.postgres.url)))),
+        statesFor: async (context, principal, source) => {
+          const repo = context.repo ?? (principal.kind !== 'admin' ? principal.repo : undefined)
+          if (!repo) throw new MachineAuthError(403, 'project required')
+          return (await openTicketBackend()).statesFor(await ticketContext(repo), source)
+        },
+        policy: {
+          get: async (repo) => {
+            if (!(await projects.has(repo)))
+              throw new MachineAuthError(403, 'project not registered')
+            return (await openPolicy()).get(repo)
+          },
+          put: async (repo, policy, writer) => {
+            if (!(await projects.has(repo)))
+              throw new MachineAuthError(403, 'project not registered')
+            await (await openPolicy()).put(repo, policy, writer)
+          },
+        },
         sourceFor: async (context, principal) => {
           if (principal.kind === 'internal')
             throw new MachineAuthError(
@@ -713,7 +774,9 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
           const repo =
             context.repo !== undefined
               ? normalizeProjectRepository(context.repo)
-              : principal.kind === 'project' || principal.kind === 'delegated'
+              : principal.kind === 'project' ||
+                  principal.kind === 'delegated' ||
+                  principal.kind === 'ticket-grant'
                 ? principal.repo
                 : undefined
           if (!repo)
@@ -723,13 +786,7 @@ export function createHostedStoreService(options: HostedStoreServiceOptions = {}
             )
           requireProject(principal, repo)
           if (!(await projects.has(repo))) throw new MachineAuthError(403, 'project not registered')
-          const store = await openTicketStore()
-          const { config } = await effectiveConfig(store, repo)
-          return (await openTicketBackend()).sourceFor({
-            repo,
-            tickets: config.tickets,
-            teamKey: config.tickets.teamKey ?? '',
-          })
+          return (await openTicketBackend()).sourceFor(await ticketContext(repo))
         },
         onInternalError: (error, req) => reportProtocolFailure(error, req, 'tickets'),
         ...(options.clock === undefined ? {} : { clock: options.clock }),

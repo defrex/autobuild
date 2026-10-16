@@ -74,14 +74,14 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     audience: 'human',
     summary: 'Connect this project to a hosted service with browser approval.',
     detail:
-      'Usage: ab connect [url]\nWith a URL, approve the printed URL and code in your browser. Stores the credential in user configuration and adds [store] url to autobuild.toml. Without a URL, reports the saved credential status. Runs outside sessions.',
+      'Usage: ab connect [--tickets] [url]\nWith a URL, approve the printed URL and code in your browser. Stores the credential in user configuration and adds [store] url to autobuild.toml. Use --tickets to save [tickets] url and keep builds local. Without a URL, reports every service connection and its uses. Runs outside sessions.',
   },
   {
     name: 'disconnect',
     audience: 'human',
     summary: 'Revoke and remove this project’s saved credential.',
     detail:
-      'Usage: ab disconnect\nRevokes the saved credential remotely before removing it locally. Keeps project registration, data and [store] url. Runs outside sessions.',
+      'Usage: ab disconnect [--tickets | --builds]\nRevokes the saved credential remotely before removing it locally. Keeps project registration, data and [store] url. Runs outside sessions.',
   },
   {
     name: 'upgrade',

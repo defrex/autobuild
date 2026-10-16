@@ -572,10 +572,10 @@ export function stateRoles(
   const named: Array<[TicketStateRole, string]> = [
     ['create', tickets.createState ?? 'triage'],
     ['ready', tickets.readyState],
-    ['claimed', 'doing'],
+    ['claimed', tickets.source === 'hosted' ? (tickets.claimedState ?? 'doing') : 'doing'],
     ['triage', triage],
     ['proposal', tickets.proposalState ?? triage],
-    ['done', 'done'],
+    ['done', tickets.source === 'hosted' ? (tickets.doneState ?? 'done') : 'done'],
   ]
   const roles = new Map<string, TicketStateRole[]>(names.map((name) => [name, []]))
   for (const [role, target] of named) {

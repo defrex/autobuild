@@ -34,6 +34,14 @@
     "./connections": {
       "types": "./src/connections.ts",
       "import": "./src/connections.ts"
+    },
+    "./ticket-policy": {
+      "types": "./src/ticket-policy.ts",
+      "import": "./src/ticket-policy.ts"
+    },
+    "./ticket-grants": {
+      "types": "./src/ticket-grants.ts",
+      "import": "./src/ticket-grants.ts"
     }
   },
   "bin": {

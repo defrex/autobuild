@@ -240,3 +240,59 @@ if (testUrl) {
     }
   })
 }
+import { PostgresProjectRegistry } from './projects'
+import { PostgresTicketPolicyStore } from './ticket-policy'
+import { PostgresTicketGrantStore } from './ticket-grants'
+
+if (testUrl)
+  test('ticket policy and grants persist independently, expire, and cannot revive after registration removal', async () => {
+    const isolated = await isolatedDatabase()
+    const sql = new SQL(isolated.url)
+    const projects = new PostgresProjectRegistry(sql)
+    const policies = new PostgresTicketPolicyStore(sql)
+    const grants = new PostgresTicketGrantStore(sql)
+    const repo = 'https://github.com/acme/independent'
+    const now = new Date('2026-10-16T12:00:00Z')
+    const policy = {
+      version: 1 as const,
+      tickets: {
+        source: 'hosted' as const,
+        teamKey: 'ENG',
+        triageState: 'triage',
+        readyState: 'ready',
+        claimedState: 'doing',
+        doneState: 'done',
+        createState: 'triage',
+        proposalState: 'triage',
+      },
+    }
+    try {
+      await projects.add(repo, 'owner')
+      await Promise.all([policies.put(repo, policy, 'one'), policies.put(repo, policy, 'two')])
+      expect(await new PostgresTicketPolicyStore(sql).get(repo)).toEqual(policy)
+      expect((await sql`SELECT * FROM builds`).length).toBe(0)
+      expect((await sql`SELECT * FROM repo_events`).length).toBe(0)
+      const runner = await grants.issue(repo, 'execution', 'runner', null, now)
+      const phase = await grants.issue(repo, 'execution', 'phase', runner.grant, now)
+      expect(await new PostgresTicketGrantStore(sql).authenticate(phase.token, now)).toEqual(
+        phase.grant,
+      )
+      expect(await grants.authenticate(runner.token, new Date(now.getTime() + 300_001))).toBeNull()
+      await grants.renew(runner.grant.id, repo, new Date(now.getTime() + 240_000))
+      expect(
+        await grants.authenticate(phase.token, new Date(now.getTime() + 360_000)),
+      ).not.toBeNull()
+      await grants.revoke(runner.grant.id, repo)
+      expect(await grants.authenticate(phase.token, now)).toBeNull()
+      const active = await grants.issue(repo, 'other', 'runner', null, now)
+      await projects.remove(repo, 'owner')
+      await projects.add(repo, 'owner')
+      expect(await policies.get(repo)).toBeNull()
+      expect(await grants.authenticate(active.token, now)).toBeNull()
+      await policies.put(repo, policy, 'owner')
+      expect(await policies.get(repo)).toEqual(policy)
+    } finally {
+      await sql.close()
+      await isolated.cleanup()
+    }
+  })

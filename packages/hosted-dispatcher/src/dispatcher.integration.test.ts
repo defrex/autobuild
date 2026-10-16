@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testCredentials } from './testing/credentials'
 import { testProjects } from './testing/projects'
 /**
@@ -341,6 +342,7 @@ test('the cron endpoint drives the real kernel: claim, launch, observe, settle, 
   const issueDispatcherCredential = async (repo: string, creator: string, expiresAt: Date) =>
     (await credentials.issue(repo, creator, { purpose: 'dispatcher', expiresAt })).token
   const service = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     openCredentials: async () => credentials,
     openProjectRegistry: async () => credentialRegistry,
     env: storeEnv,

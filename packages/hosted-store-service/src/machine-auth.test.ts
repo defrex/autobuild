@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { expect, test } from 'bun:test'
 import {
   AUTOBUILD_VERSION,
@@ -255,6 +256,7 @@ test('composed service retries credential-store opening, checks warm revocation,
   let opens = 0
   const backing = new MemoryBuildStore()
   const service = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     env: {
       AB_STORE_SECRET: 'secret',
       AB_POSTGRES_URL: 'postgres://unused/db',

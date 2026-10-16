@@ -1589,3 +1589,51 @@ if (testUrl)
       await world.cleanup()
     }
   })
+
+import { PostgresTicketPolicyStore } from './ticket-policy'
+if (testUrl)
+  test('readable migration uses independent policy without blobs and prefers it to uploaded config', async () => {
+    const world = await legacyTickets()
+    const independent = 'https://github.com/acme/independent'
+    const uploaded = 'https://github.com/acme/uploaded'
+    try {
+      await world.sql.unsafe(
+        'DROP TABLE ab_ticket_blockers, ab_ticket_comments, ab_tickets, ab_ticket_schema_migrations',
+      )
+      await world.sql.unsafe(TICKET_SCHEMA_V2_DDL)
+      await world.sql`INSERT INTO ab_ticket_schema_migrations VALUES (true,2,${TICKET_SCHEMA_V2_CHECKSUM},${CONTRACT_T0})`
+      await world.sql`INSERT INTO project_journal (seq, repo, action, actor, ts) VALUES (nextval('project_journal_seq'), ${independent}, 'added', 'fixture', ${CONTRACT_T0})`
+      await world.project(uploaded, 'OLD')
+      const policies = new PostgresTicketPolicyStore(world.sql)
+      for (const repo of [independent, uploaded]) {
+        await policies.put(
+          repo,
+          {
+            version: 1,
+            tickets: {
+              source: 'hosted',
+              teamKey: 'NEW',
+              triageState: 'triage',
+              readyState: 'ready',
+              claimedState: 'doing',
+              doneState: 'done',
+              createState: 'triage',
+              proposalState: 'triage',
+            },
+          },
+          'fixture',
+        )
+        await world.sql`INSERT INTO ab_tickets VALUES (${repo},'ticket-old',NULL,'Original','Body','triage',ARRAY[]::text[],${CONTRACT_T0},${CONTRACT_T0})`
+      }
+      await migratePostgres(world.url)
+      await migratePostgres(world.url)
+      const rows = await world.sql`SELECT repo, readable_id FROM ab_tickets ORDER BY repo`
+      expect(rows.map((row: { readable_id: string }) => row.readable_id)).toEqual([
+        'NEW-1',
+        'NEW-1',
+      ])
+      expect(world.reads).toEqual([])
+    } finally {
+      await world.cleanup()
+    }
+  })

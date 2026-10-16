@@ -1,4 +1,5 @@
 import { ticketIdentity } from '../ports/tickets/identity'
+import { ticketLifecycle } from '../ports/tickets/lifecycle'
 import { ensureDispatchBudget } from './dispatch-failure-budget'
 import {
   reduceTicketSourceHealth,
@@ -149,16 +150,11 @@ export function readyCriteria(config: Config): {
  * readiness is: the file tracker's grooming area IS the `triage/` directory,
  * while a Linear team only has a "Triage" workflow state when the team's
  * triage feature is enabled — Backlog is the state every Linear team has.
- * The hosted source is the credential-bearing Linear proxy and shares that
- * fallback. Plugin sources use the neutral `Triage` fallback unless configured.
+ * Hosted projects default to lowercase triage; plugin sources use the neutral
+ * `Triage` fallback unless configured.
  */
 export function defaultTriageState(config: Config): string {
-  return (
-    config.tickets.triageState ??
-    (config.tickets.source === 'linear' || config.tickets.source === 'hosted'
-      ? 'Backlog'
-      : 'Triage')
-  )
+  return ticketLifecycle(config.tickets).triage
 }
 
 /**
@@ -671,7 +667,7 @@ export class Dispatcher {
     return (
       this.deps.opts?.doneState ??
       (this.deps.config.tickets.source === 'hosted'
-        ? this.deps.config.tickets.doneState
+        ? ticketLifecycle(this.deps.config.tickets).done
         : undefined) ??
       'Done'
     )

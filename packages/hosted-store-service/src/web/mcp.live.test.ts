@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
 import { testProjects } from '../testing/projects'
 /**
@@ -96,6 +97,7 @@ function buildApp(
   const backing = new MemoryBuildStore()
   const config = parseWebAuthEnv(env)
   const service = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     openProjectRegistry: async () => testProjects([REPO]),
     env,
     openStore: async () => backing,

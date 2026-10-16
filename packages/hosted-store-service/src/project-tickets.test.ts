@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { expect, test } from 'bun:test'
 import { MemoryBuildStore, FakeTicketSource } from '@defrex/autobuild/plugin-sdk'
 import { DISPATCHER, parseConfig } from '@defrex/autobuild/testing'
@@ -49,6 +50,7 @@ async function setup(extra: Record<string, string | undefined> = {}, publishConf
   const diagnostics: string[] = []
   const contexts: unknown[] = []
   const service = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     env: { ...env, ...extra },
     diagnostic: (message) => diagnostics.push(message),
     openStore: async () => store,

@@ -2,6 +2,7 @@ import type { SQL } from 'bun'
 import type { BlobStore, RepositoryEvent } from '@defrex/autobuild/plugin-sdk'
 import { findEffectiveConfigRef, decodeEffectiveConfig } from '@defrex/autobuild/operator'
 import { TICKET_ASSIGNMENTS_DDL } from './ticket-assignments'
+import { PostgresTicketPolicyStore } from './ticket-policy'
 
 /** Called only inside the schema migration transaction. Locks preserve the
  * registry/config/ownership snapshot across immutable blob reads and rekeying. */
@@ -170,7 +171,7 @@ export async function migrateReadableTickets(
   openBlobs?: () => BlobStore | Promise<BlobStore>,
 ): Promise<void> {
   await sql`LOCK TABLE ab_tickets, ab_ticket_comments, ab_ticket_blockers, ticket_assets,
-    repo_events, repo_artifacts IN SHARE ROW EXCLUSIVE MODE`
+    repo_events, repo_artifacts, project_ticket_policy, project_journal IN SHARE ROW EXCLUSIVE MODE`
   await sql.unsafe(`ALTER TABLE ab_tickets ADD COLUMN readable_id text;
     ALTER TABLE ab_tickets ADD COLUMN ticket_number bigint;
     CREATE TABLE ab_ticket_counters (repo text PRIMARY KEY, last_number bigint NOT NULL CHECK (last_number >= 0));`)
@@ -180,17 +181,23 @@ export async function migrateReadableTickets(
       `Readable ticket migration stopped unchanged: ${detail}. Restore the project's effective configuration and blob access, then rerun migration.`,
     )
   let blobs: BlobStore | undefined
-  if (projects.length) {
-    if (!openBlobs) throw fail('populated projects require blob access')
-    try {
-      blobs = await openBlobs()
-    } catch {
-      throw fail('cannot open blob storage')
-    }
-  }
   for (const { repo } of projects) {
-    const config = await loadTicketConfig(sql, blobs!, repo, fail)
-    const prefix = config?.tickets.teamKey
+    // Independent hosted policy is authoritative; projects using local build
+    // storage need not have an uploaded config or any configuration blobs.
+    const policy = await new PostgresTicketPolicyStore(sql).get(repo)
+    let prefix = policy?.tickets.teamKey
+    if (!policy) {
+      if (!blobs) {
+        if (!openBlobs) throw fail(`project ${repo}: populated projects require blob access`)
+        try {
+          blobs = await openBlobs()
+        } catch {
+          throw fail(`project ${repo}: cannot open blob storage`)
+        }
+      }
+      const config = await loadTicketConfig(sql, blobs, repo, fail)
+      prefix = config?.tickets.teamKey
+    }
     if (!prefix?.trim()) throw fail(`project ${repo} has no nonblank effective tickets.teamKey`)
     await sql`WITH numbered AS (SELECT id, row_number() OVER (ORDER BY created_at, id) AS n FROM ab_tickets WHERE repo = ${repo})
       UPDATE ab_tickets t SET ticket_number = numbered.n, readable_id = ${prefix} || '-' || numbered.n::text

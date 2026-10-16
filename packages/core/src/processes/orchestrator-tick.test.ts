@@ -621,7 +621,7 @@ describe('orchestrator tick step', () => {
         ref: { source: 'fake', id: 'T-9' },
         title: 'Fix the flake',
         body: 'It flakes.',
-        state: 'Backlog',
+        state: 'triage',
         resolved: false,
         labels: [],
       },
@@ -650,7 +650,7 @@ describe('orchestrator tick step', () => {
       | { output: { tickets?: Array<{ ref?: { id?: string } }>; triageState?: string } }
       | undefined
     expect(output).toBeDefined()
-    expect(output!.output.triageState).toBe('Backlog')
+    expect(output!.output.triageState).toBe('triage')
     expect(output!.output.tickets?.map((ticket) => ticket.ref?.id)).toContain('T-9')
   })
 

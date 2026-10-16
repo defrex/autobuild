@@ -220,3 +220,67 @@ test('origin-mode dispatch reads the forge config and forwards the exact saved s
   ).rejects.toThrow('verified stored authority')
   expect(reached).toBe(true)
 })
+
+test('ticket-only connect publishes policy before dispatch and leaves the build store alone', async () => {
+  const f = await fixture()
+  await writeFile(join(f.cwd, 'autobuild.toml'), '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n')
+  const fetcher = f.fetch
+  const policyCalls: unknown[] = []
+  await abConnect(service, {
+    ...f,
+    tickets: true,
+    fetch: async (url, init) => {
+      if (url.endsWith('/tickets/policy')) {
+        policyCalls.push(JSON.parse(String(init?.body)))
+        return Response.json({ ok: true })
+      }
+      return fetcher(url, init)
+    },
+  })
+  const text = await readFile(join(f.cwd, 'autobuild.toml'), 'utf8')
+  expect(text).toContain(`url = "${service}"`)
+  expect(text).not.toContain('[store]')
+  expect(policyCalls).toEqual([
+    {
+      context: { repo, teamKey: 'ENG' },
+      input: {
+        version: 1,
+        tickets: {
+          source: 'hosted',
+          teamKey: 'ENG',
+          readyState: 'ready',
+          triageState: 'triage',
+          claimedState: 'doing',
+          doneState: 'done',
+          createState: 'triage',
+          proposalState: 'triage',
+        },
+      },
+    },
+  ])
+  await abDisconnect({ ...f, tickets: true })
+  expect(new ProjectCredentials(f.env).load(service, repo)).toBeUndefined()
+})
+
+test('failed ticket policy publication restores configuration and retains the prior credential', async () => {
+  const f = await fixture()
+  const before = '[tickets]\nsource = "hosted"\nteamKey = "ENG"\n'
+  await writeFile(join(f.cwd, 'autobuild.toml'), before)
+  const fetcher = f.fetch
+  await expect(
+    abConnect(service, {
+      ...f,
+      tickets: true,
+      fetch: async (url, init) =>
+        url.endsWith('/tickets/policy')
+          ? Response.json(
+              { error: 'ticket policy temporarily unavailable', kind: 'conflict' },
+              { status: 503 },
+            )
+          : fetcher(url, init),
+    }),
+  ).rejects.toThrow('ticket policy temporarily unavailable')
+  expect(await readFile(join(f.cwd, 'autobuild.toml'), 'utf8')).toBe(before)
+  expect(new ProjectCredentials(f.env).load(service, repo)).toBeUndefined()
+  expect(f.calls.some((call) => call.path.endsWith('/cancel'))).toBe(true)
+})

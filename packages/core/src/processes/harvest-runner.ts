@@ -1,4 +1,5 @@
 import { ticketIdentity } from '../ports/tickets/identity'
+import { issueTicketGrant } from '../ports/tickets/grants'
 import { delegateCredential } from '../store/remote/credentials'
 /**
  * Crash-safe repository-scoped harvest workflow:
@@ -1646,9 +1647,20 @@ export class HarvestRunner {
             session,
           })
         : undefined
+    const ticketGrant =
+      parent?.AB_TICKET_URL && parent.AB_TICKET_TOKEN
+        ? await issueTicketGrant(
+            parent.AB_TICKET_URL,
+            parent.AB_TICKET_TOKEN,
+            this.deps.repo,
+            this.deps.instance,
+            'phase',
+          )
+        : undefined
     return {
       AB_STORE: 'local',
       ...this.deps.sessionEnv,
+      ...(ticketGrant ? { AB_TICKET_TOKEN: ticketGrant.token } : {}),
       ...(token ? { AB_TOKEN: token } : {}),
       AB_REPO: this.deps.repo,
       AB_HARVEST: run,

@@ -30,7 +30,7 @@ import {
   finalizeCheckStepSchema,
   policySchema,
   roleSchema,
-  ticketsSchema,
+  ticketsInputSchema,
   TOP_LEVEL_KEYS,
   TOP_LEVEL_SCALARS,
   TOP_LEVEL_TABLES,
@@ -80,7 +80,7 @@ const TABLE_FIELDS: Record<string, string[]> = {
   ],
   roles: Object.keys(roleSchema.shape),
   policy: Object.keys(policySchema.shape),
-  tickets: Object.keys(ticketsSchema.shape),
+  tickets: Object.keys(ticketsInputSchema.shape),
   // Derived like the strict-shape entries above: a schema field added without
   // a matching guide row fails the coverage loop rather than passing silently.
   orchestrator: Object.keys(orchestratorSchema.shape),

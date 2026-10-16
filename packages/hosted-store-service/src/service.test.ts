@@ -1,3 +1,4 @@
+import { MemoryTicketPolicyStore } from '@defrex/autobuild-postgres-store/ticket-policy'
 import { testProjects } from './testing/projects'
 import { describe, expect, test } from 'bun:test'
 import { MemoryBuildStore } from '@defrex/autobuild/plugin-sdk'
@@ -130,6 +131,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -159,6 +161,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -208,6 +211,7 @@ describe('hosted store service', () => {
   test('routes the generic tools POST to the operator server', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -252,6 +256,7 @@ describe('hosted store service', () => {
     }
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -293,6 +298,7 @@ describe('hosted store service', () => {
   test('unknown and unsupported routes return 404 without opening persistence', async () => {
     let opens = 0
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -328,6 +334,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -358,6 +365,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     let opens = 0
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -395,6 +403,7 @@ describe('hosted store service', () => {
     let opens = 0
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -423,6 +432,7 @@ describe('hosted store service', () => {
     const backing = new MemoryBuildStore({ clock })
     const deferred = Promise.withResolvers<MemoryBuildStore>()
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -447,6 +457,7 @@ describe('hosted store service', () => {
   test('round-trips 1 MiB and rejects ceiling-plus-one without mutation', async () => {
     const backing = new MemoryBuildStore({ clock })
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -472,6 +483,7 @@ describe('hosted store service', () => {
 
   test('reports package skew before authentication and redacts opener failures', async () => {
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -487,6 +499,7 @@ describe('hosted store service', () => {
     const failure = new Error('postgres://user:password@secret-host/db')
     const reports: unknown[][] = []
     const failed = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -517,6 +530,7 @@ describe('hosted store service', () => {
     }
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -544,6 +558,7 @@ describe('hosted store service', () => {
 
   test('passes expected protocol errors through unchanged', async () => {
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -566,6 +581,7 @@ describe('hosted store service', () => {
     await publishOrchestratorConfig(backing)
     const scheduled: (() => Promise<void>)[] = []
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -605,6 +621,7 @@ describe('hosted store service', () => {
     // Neither scheduleBackground nor a reporter: pin only what the default
     // guarantees through the public surface.
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env,
@@ -705,6 +722,7 @@ model = "test/mock"
   ) {
     const reports: unknown[][] = []
     const service = createHostedStoreService({
+      openTicketPolicy: async () => new MemoryTicketPolicyStore(),
       issueDispatcherCredential: async () => 'abp_1_fixture',
       openProjectRegistry: async () => testProjects([repo, 'acme/repo']),
       env: { ...env, ...extraEnv },
@@ -853,6 +871,7 @@ test('project discovery opens independently of blobs and retries failed initiali
   let attempts = 0
   const projects = testProjects(['https://github.com/acme/one'])
   const service = createHostedStoreService({
+    openTicketPolicy: async () => new MemoryTicketPolicyStore(),
     issueDispatcherCredential: async () => 'abp_1_fixture',
     env: {},
     openStore: async () => {

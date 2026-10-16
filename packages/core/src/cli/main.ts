@@ -451,9 +451,11 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     case 'connect':
     case 'disconnect': {
       const usage = command === 'connect' ? 'usage: ab connect [url]' : 'usage: ab disconnect'
-      const parsed = parseArgs(rest, {}, usage)
+      const parsed = parseArgs(rest, { tickets: 'boolean', builds: 'boolean' }, usage)
       if (parsed.positionals.length > (command === 'connect' ? 1 : 0)) throw new Error(usage)
       const options = {
+        tickets: parsed.flags.get('tickets') === true,
+        builds: parsed.flags.get('builds') === true,
         cwd: deps.workspacePath,
         env: deps.processEnv ?? process.env,
         exec: deps.exec ?? spawnExec,

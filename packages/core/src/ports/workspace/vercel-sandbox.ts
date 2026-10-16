@@ -641,7 +641,7 @@ function runtimeEnvironment(
 ): Record<string, string> {
   return Object.fromEntries(
     config.environmentVariables
-      .filter((name) => name !== 'AB_TOKEN')
+      .filter((name) => !['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(name))
       .map((name) => [name, requireVercelEnvironmentValue(env, name)]),
   )
 }
@@ -947,7 +947,7 @@ export async function validateVercelSandbox(
           ['AB_STORE', options.storeRef],
           ['AB_TOKEN', options.storeToken],
           ...config.environmentVariables
-            .filter((name) => name !== 'AB_TOKEN')
+            .filter((name) => !['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(name))
             .map((name) => [name, requireVercelEnvironmentValue(options.env, name)]),
         ]),
       }),
@@ -1602,7 +1602,8 @@ export class VercelSandboxProvider implements WorkspaceProvider {
       }),
     }
     for (const name of this.options.config.environmentVariables)
-      if (name !== 'AB_TOKEN') env[name] = requireVercelEnvironmentValue(this.options.env, name)
+      if (!['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(name))
+        env[name] = requireVercelEnvironmentValue(this.options.env, name)
     const command = (await sandbox.runCommand({
       cmd: 'sh',
       args: [
@@ -1906,10 +1907,13 @@ export class VercelSandboxProvider implements WorkspaceProvider {
     const env: Record<string, string> = {
       AB_STORE: this.options.storeRef,
       AB_TOKEN: scopedToken,
+      ...(auth?.tickets
+        ? { AB_TICKET_URL: auth.tickets.url, AB_TICKET_TOKEN: auth.tickets.token }
+        : {}),
       [HARVEST_RUNNER_OPTIONS_ENV]: JSON.stringify(envelope),
     }
     for (const envName of this.options.config.environmentVariables)
-      if (envName !== 'AB_TOKEN')
+      if (!['AB_TOKEN', 'AB_TICKET_URL', 'AB_TICKET_TOKEN'].includes(envName))
         env[envName] = requireVercelEnvironmentValue(this.options.env, envName)
     const command = (await sandbox.runCommand({
       cmd: 'sh',
