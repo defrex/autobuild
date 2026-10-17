@@ -49,6 +49,8 @@ export const harvestControlRequestSchema = z.discriminatedUnion('action', [
 ])
 
 export const ticketCreateRequestSchema = z.strictObject({
+  kind: z.enum(['work', 'node']).optional(),
+  target: z.string().trim().min(1).nullable().optional(),
   title: z.string(),
   body: z.string(),
   labels: z.array(z.string()).optional(),
@@ -61,13 +63,20 @@ const expectedRevisionSchema = z
   .optional()
 export const ticketUpdateRequestSchema = z
   .strictObject({
+    kind: z.enum(['work', 'node']).optional(),
+    target: z.string().trim().min(1).nullable().optional(),
     expectedRevision: expectedRevisionSchema,
     title: z.string().optional(),
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),
   })
   .refine(
-    (value) => value.title !== undefined || value.body !== undefined || value.labels !== undefined,
+    (value) =>
+      value.title !== undefined ||
+      value.body !== undefined ||
+      value.labels !== undefined ||
+      value.kind !== undefined ||
+      value.target !== undefined,
     'update must name at least one field',
   )
 export const ticketMoveRequestSchema = z.strictObject({

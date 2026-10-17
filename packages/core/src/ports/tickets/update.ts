@@ -4,6 +4,12 @@ import type { TicketUpdate } from '../types'
 
 const ticketUpdateSchema = z
   .strictObject({
+    kind: z.enum(['work', 'node']).optional(),
+    target: z
+      .string()
+      .refine((value) => value.trim().length > 0, 'target must not be blank')
+      .nullable()
+      .optional(),
     title: z
       .string()
       .refine((value) => value.trim().length > 0, 'title must not be blank')
@@ -15,8 +21,13 @@ const ticketUpdateSchema = z
     labels: z.array(z.string()).optional(),
   })
   .refine(
-    (patch) => patch.title !== undefined || patch.body !== undefined || patch.labels !== undefined,
-    'update must name at least one of title, body, or labels',
+    (patch) =>
+      patch.title !== undefined ||
+      patch.body !== undefined ||
+      patch.labels !== undefined ||
+      patch.kind !== undefined ||
+      patch.target !== undefined,
+    'update must name at least one of title, body, labels, kind, or target',
   )
 
 /** Render ticket-update issues while retaining nested union branch detail. */
@@ -44,6 +55,8 @@ export function validateTicketUpdate(patch: TicketUpdate): TicketUpdate {
   // Reconstruct the patch so arrays cannot be mutated behind an adapter's
   // back and explicit `undefined` never masquerades as a named field.
   return {
+    ...(result.data.kind !== undefined ? { kind: result.data.kind } : {}),
+    ...(result.data.target !== undefined ? { target: result.data.target } : {}),
     ...(result.data.title !== undefined ? { title: result.data.title } : {}),
     ...(result.data.body !== undefined ? { body: result.data.body } : {}),
     ...(result.data.labels !== undefined ? { labels: [...result.data.labels] } : {}),

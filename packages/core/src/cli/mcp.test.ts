@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { KERNEL } from '../events/envelope'
+import { KERNEL, DISPATCHER } from '../events/envelope'
 import { openLocalStore } from '../store/local/store'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', '..')
@@ -296,4 +296,69 @@ test('local MCP keeps file tickets usable without a team key', async () => {
   const source = await backend.sourceFor({ repo: tmp, tickets: config.tickets, teamKey: '' })
   const created = await source.create({ title: 'Local ticket', body: 'Spec' })
   expect((await source.get(created.ref.id))?.title).toBe('Local ticket')
+})
+
+test('MCP ticket tools expose node kind and nullable target, with metadata-only guarded updates', async () => {
+  await seed()
+  const repo = await realpath(tmp)
+  const local = openLocalStore(storeDir)
+  await local.ensureRepo(repo)
+  const config = parseConfig(await Bun.file(join(tmp, 'autobuild.toml')).text())
+  const { verify, finalize, ...root } = config
+  const artifact = await local.putRepoArtifact(repo, {
+    kind: 'dispatcher-effective-config',
+    content: JSON.stringify({
+      ...root,
+      verify: { steps: verify.steps, ...verify.stepConfigs },
+      finalize: { steps: finalize.steps, ...finalize.stepConfigs },
+    }),
+  })
+  await local.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.run-started',
+    payload: {
+      run: 'run-1',
+      pid: 1,
+      effectiveConfig: { kind: artifact.kind, rev: artifact.revision },
+      roleWarnings: [],
+    },
+  })
+  await local.close()
+  const client = await connect()
+  const resultTicket = (result: Awaited<ReturnType<Client['callTool']>>) => {
+    const content = result.content as Array<{ type: string; text?: string }>
+    const body = JSON.parse(content.find((item) => item.type === 'text')!.text!)
+    if (result.isError) throw new Error(JSON.stringify(body))
+    return body.ticket
+  }
+  try {
+    const node = resultTicket(
+      await client.callTool({
+        name: 'tickets.create',
+        arguments: { repo, title: 'Node', body: 'spec', kind: 'node' },
+      }),
+    )
+    expect(node.kind).toBe('node')
+    const child = resultTicket(
+      await client.callTool({
+        name: 'tickets.create',
+        arguments: { repo, title: 'Child', body: 'spec', target: node.ref.id },
+      }),
+    )
+    expect(child.kind).toBe('work')
+    expect(child.target).toBe(node.ref.id)
+    const cleared = resultTicket(
+      await client.callTool({
+        name: 'tickets.update',
+        arguments: { repo, id: child.ref.id, target: null, expectedRevision: child.revision },
+      }),
+    )
+    expect(cleared.target).toBeUndefined()
+    const shown = resultTicket(
+      await client.callTool({ name: 'tickets.get', arguments: { repo, id: node.ref.id } }),
+    )
+    expect(shown.kind).toBe('node')
+  } finally {
+    await client.close()
+  }
 })
