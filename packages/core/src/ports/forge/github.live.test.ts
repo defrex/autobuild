@@ -1,4 +1,4 @@
-import { describe } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -508,3 +508,102 @@ const runLiveGitHub =
 describe.skipIf(!runLiveGitHub)('GitHub live port contracts (opt-in)', () => {
   describeForgeContract('GitHubForge (live)', githubForgeContractFactory)
 })
+
+// A separate opt-in permits temporarily changing squash defaults on the explicitly
+// configured disposable repository. Always restore its original defaults.
+describe.skipIf(!runLiveGitHub || process.env.AB_RUN_LIVE_IDENTITY_DEFAULTS !== '1')(
+  'GitHub live identity message preservation against override-less baselines',
+  () => {
+    test('direct and native, single and multiple commits, representative server defaults', async () => {
+      const repo = requiredEnv('AB_GITHUB_CONTRACT_REPO')
+      const api = async (args: string[]) => run(['gh', 'api', ...args], tmpdir())
+      const original = parseJson<{
+        squash_merge_commit_title: string
+        squash_merge_commit_message: string
+      }>(await api([`repos/${repo}`]), 'repository defaults')
+      const setDefaults = async (title: string, body: string) =>
+        api([
+          `repos/${repo}`,
+          '--method',
+          'PATCH',
+          '-f',
+          `squash_merge_commit_title=${title}`,
+          '-f',
+          `squash_merge_commit_message=${body}`,
+        ])
+      try {
+        for (const [title, body] of [
+          ['PR_TITLE', 'PR_BODY'],
+          ['COMMIT_OR_PR_TITLE', 'COMMIT_MESSAGES'],
+          ['PR_TITLE', 'BLANK'],
+        ] as const) {
+          await setDefaults(title, body)
+          for (const commits of [1, 2])
+            for (const native of [false, true]) {
+              const land = async (identity: boolean): Promise<string> => {
+                const h = await githubForgeContractFactory({ gated: native })
+                try {
+                  await run(
+                    ['git', ...GIT_ID, 'commit', '--amend', '-m', 'Fixture change'],
+                    h.workspacePath,
+                  )
+                  if (commits === 2)
+                    await run(
+                      ['git', ...GIT_ID, 'commit', '--allow-empty', '-m', 'Second change'],
+                      h.workspacePath,
+                    )
+                  await h.forge.pushBranch(h.workspacePath, h.head)
+                  const pr = await h.forge.openPr({
+                    workspacePath: h.workspacePath,
+                    head: h.head,
+                    base: h.base,
+                    title: 'Identity comparison',
+                    body: '* Original body\n\nCo-authored-by: Example <example@test.invalid>',
+                  })
+                  await h.controls.trackPr(pr.number)
+                  await h.controls.prepareMergeable(pr.number)
+                  const options = identity ? { buildSlug: 'live-identity' } : undefined
+                  if (native) {
+                    expect(
+                      await h.forge.setAutoMerge(h.workspacePath, pr.number, true, options),
+                    ).toEqual({ kind: 'applied' })
+                    const protection = parseJson<{ contexts: string[] }>(
+                      await api([
+                        `repos/${repo}/branches/${h.base}/protection/required_status_checks`,
+                      ]),
+                      'required checks',
+                    )
+                    for (const context of protection.contexts)
+                      await api([
+                        `repos/${repo}/statuses/${pr.headSha}`,
+                        '--method',
+                        'POST',
+                        '-f',
+                        'state=success',
+                        '-f',
+                        `context=${context}`,
+                      ])
+                  } else await h.forge.squashMerge(h.workspacePath, pr.number, pr.headSha, options)
+                  const sha = await h.controls.mergeSha(pr.number)
+                  const message = await h.forge.readCommitMessage!(h.workspacePath, sha)
+                  return message.replaceAll(`#${pr.number}`, '#PR')
+                } finally {
+                  await h.cleanup?.()
+                }
+              }
+              const baseline = await land(false)
+              const trailered = await land(true)
+              // Git may omit the final newline in REST commit.message. Compare
+              // all other server-produced bytes after appending only identity.
+              const { withBuildTrailer } = await import('../../kernel/build-identity')
+              expect(trailered.trimEnd()).toBe(
+                withBuildTrailer(baseline, 'live-identity').trimEnd(),
+              )
+            }
+        }
+      } finally {
+        await setDefaults(original.squash_merge_commit_title, original.squash_merge_commit_message)
+      }
+    }, 1_800_000)
+  },
+)

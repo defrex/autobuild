@@ -443,3 +443,20 @@ describe('FakeForge', () => {
     ).resolves.toBeUndefined()
   })
 })
+
+test('fake models immutable build identity and actual landing messages independently of the PR description', async () => {
+  const forge = new FakeForge({ gatePresence: 'absent' })
+  const pr = await forge.openPr(prOpts({ mergeMessage: 'Original\n\nCo-authored-by: A\n' }))
+  forge.setPrState(pr.number, { state: 'open', mergeable: true })
+  await forge.squashMerge('/ws/a', pr.number, pr.headSha, { buildSlug: 'immutable-slug' })
+  const state = await forge.getPrState('/ws/a', pr.number)
+  if (state.state !== 'merged') throw new Error('expected merge')
+  expect(await forge.readCommitMessage('/ws/a', state.sha)).toBe(
+    'Original\n\nCo-authored-by: A\nAutobuild-Build: immutable-slug\n',
+  )
+  expect(forge.opened[0]?.mergeMessage).toBe('Original\n\nCo-authored-by: A\n')
+  forge.remoteBranches.set('base', state.sha)
+  expect(await forge.containsBuild('/ws/a', 'base', 'immutable-slug')).toBe(true)
+  expect(await forge.containsBuild('/ws/a', 'base', 'immutable')).toBe(false)
+  await expect(forge.containsBuild('/ws/a', 'missing', 'immutable-slug')).rejects.toThrow()
+})
