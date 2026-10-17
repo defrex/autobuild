@@ -1366,7 +1366,7 @@ export class Dispatcher {
     const providerName = this.deps.workspaces.name
     const facts = this.store.repositoryFacts()
     const idleMs = config.orchestrator.sandbox.idleMinutes * 60_000
-    for (const environment of facts.sandboxes) {
+    for (let environment of facts.sandboxes) {
       if (environment.state !== 'live') continue
       // Budget gate: once spent, stop settling further environments; the
       // next tick retries what remains.
@@ -1376,6 +1376,25 @@ export class Dispatcher {
         continue
       }
       try {
+        // Other processes may have recorded activity while earlier tick work
+        // awaited an outside read. Revalidate only an impending disposition.
+        await this.store.refreshJournal()
+        const current = this.store
+          .repositoryFacts()
+          .sandboxes.find(
+            (candidate) =>
+              candidate.operator === environment.operator &&
+              candidate.environmentId === environment.environmentId,
+          )
+        if (current === undefined || current.state !== 'live') continue
+        const currentEvidence = Date.parse(current.lastEvidenceTs)
+        if (
+          Number.isFinite(currentEvidence) &&
+          this.deps.clock().getTime() - currentEvidence < idleMs
+        ) {
+          continue
+        }
+        environment = current
         if (environment.provider !== providerName) {
           // Provider-mismatch disposition (AUT-377): the journaled provider no
           // longer matches the wired provider, so environmentIds are out of this
@@ -3101,6 +3120,9 @@ export class Dispatcher {
     const journalBeforeReady = this.store.repositoryFacts().harvest
     const listing = await this.listReady()
     const activeTicketIds = await this.activeTicketIdentities(activeRefs, listing.tickets)
+    // A provider listing can race reservation and blocker filing. Preserve
+    // the before/after union, refreshing once only when admission is possible.
+    if (listing.tickets.length > 0) await this.store.refreshJournal()
     const journalAfterReady = this.store.repositoryFacts()
     if (journalAfterReady.health?.cause === 'ready-scan-failed') {
       await this.sourceCondition(undefined, 'ready-scan')
