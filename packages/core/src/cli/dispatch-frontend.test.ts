@@ -2872,6 +2872,21 @@ for (const mode of ['paused', 'idle', 'live'] as const) {
               ...(mode === 'live' ? { getEvents: expected } : {}),
             },
       )
+      if (mode === 'idle') {
+        await addBuild()
+        await time.advance(5001)
+        expect(frames.at(-1)!.builds.map((build) => build.slug)).toContain('new-build')
+        await backing.append('new-build', {
+          actor: DISPATCHER,
+          type: 'build.completed',
+          payload: { outcome: 'merged' },
+        })
+        await time.advance(501)
+        expect(frames.at(-1)!.builds).toEqual([])
+        const afterCompletion = calls.listBuilds
+        await time.advance(4500)
+        expect(calls.listBuilds).toBe(afterCompletion)
+      }
       if (mode === 'paused') {
         expect(Object.values(calls).reduce((sum, n) => sum + n, 0)).toBe(0)
         // Simulated kernel commits independently, through the original store.
