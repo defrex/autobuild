@@ -120,10 +120,61 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
               input.localExpected ?? input.expected,
             ])
         }
+        // Replay stays detached until the guarded branch update is confirmed.
+        // Reattach only its exact workspace result; explicit-source callers may
+        // legitimately publish an object other than their checked-out HEAD.
+        const workspaceHead = await git(input.workspacePath, ['rev-parse', 'HEAD'])
+        if (workspaceHead.stdout.trim() === input.sha)
+          await git(input.workspacePath, ['checkout', '--no-guess', input.branch])
         return { kind: 'published' }
       }
+      async function mismatch(observed: string | null): Promise<RewriteResult> {
+        // Recover the effect-before-receipt window from immutable intent inputs
+        // and branch ancestry. The candidate must be newly introduced, not an
+        // ancestor already present in the expected old history.
+        if (
+          observed !== null &&
+          input.sha !== input.expected &&
+          (await git(input.workspacePath, ['cat-file', '-e', `${input.sha}^{commit}`], true))
+            .exitCode === 0 &&
+          (await git(input.workspacePath, ['cat-file', '-e', `${input.expected}^{commit}`], true))
+            .exitCode === 0
+        ) {
+          if (
+            !local &&
+            (await git(input.workspacePath, ['cat-file', '-e', `${observed}^{commit}`], true))
+              .exitCode !== 0
+          ) {
+            const fetchedRef = `refs/autobuild/reconcile/${input.branch.slice(3)}/rewrite-observed`
+            await git(input.workspacePath, [
+              'fetch',
+              '--no-tags',
+              '--no-write-fetch-head',
+              'origin',
+              `+${ref}:${fetchedRef}`,
+            ])
+            observed = (
+              await git(input.workspacePath, ['rev-parse', '--verify', `${fetchedRef}^{commit}`])
+            ).stdout.trim()
+            object(observed)
+          }
+          const introduced = await git(
+            input.workspacePath,
+            ['merge-base', '--is-ancestor', input.sha, input.expected],
+            true,
+          )
+          const retained = await git(
+            input.workspacePath,
+            ['merge-base', '--is-ancestor', input.sha, observed],
+            true,
+          )
+          if (introduced.exitCode === 1 && retained.exitCode === 0)
+            return { kind: 'lease-mismatch', actual: observed, rewritten: true }
+        }
+        return { kind: 'lease-mismatch', actual: observed }
+      }
       if (actual === input.sha) return acknowledge()
-      if (actual !== input.expected) return { kind: 'lease-mismatch', actual }
+      if (actual !== input.expected) return mismatch(actual)
       const result = await git(
         input.workspacePath,
         local
@@ -138,7 +189,10 @@ export function gitRewrite(exec: Exec, local: boolean): ForgeRewrite {
       )
       const after = await read(input.workspacePath, ref)
       if (after === input.sha) return acknowledge()
-      if (after !== input.expected) return { kind: 'lease-mismatch', actual: after }
+      // A successful CAS is a fact even if its candidate is overtaken before
+      // readback. Callers record that rewrite, then replay the observed head.
+      if (result.exitCode === 0) return { kind: 'lease-mismatch', actual: after, rewritten: true }
+      if (after !== input.expected) return mismatch(after)
       throw new Error(
         `guarded rewrite rejected for ${ref}: ${result.stderr}; enable guarded build-branch rewrites`,
       )

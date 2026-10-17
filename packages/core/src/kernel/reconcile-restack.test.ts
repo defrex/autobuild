@@ -3,9 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { seedStore, BUILD, BRANCH } from '../cli/testkit'
-import { bunExec } from '../ports/forge/github'
+import { bunExec, GitHubForge } from '../ports/forge/github'
 import { LocalGitForge } from '../ports/forge/local-git'
-import { KERNEL } from '../events/envelope'
+import { DISPATCHER, KERNEL } from '../events/envelope'
 import { archiveTips, prepareRestack, publishRestack, validateRestack } from './reconcile-restack'
 import { buildTrailers } from './build-identity'
 
@@ -50,6 +50,48 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
         type: 'reconcile.started',
         payload: { attempt: 1, baseSha: target },
       })
+      const unavailable = ['e'.repeat(40), 'f'.repeat(40)]
+      if (mode === 'clean') {
+        // One publication was declared lost, another was abandoned at release
+        // without its loss fact. Neither object ever reached the shared repo.
+        for (const [index, sha] of unavailable.entries()) {
+          const request = await store.append(BUILD, {
+            actor: (await import('../events/envelope')).agentActor('implement', `lost-${index}`),
+            type: 'publication.requested',
+            payload: {
+              operation: 'implement',
+              branch: BRANCH,
+              sha,
+              base,
+              round: 1,
+              artifact: { kind: 'implement-notes', rev: 0 },
+            },
+          })
+          if (index === 0)
+            await store.append(BUILD, {
+              actor: DISPATCHER,
+              type: 'publication.lost',
+              payload: {
+                request: request.seq,
+                operation: 'implement',
+                branch: BRANCH,
+                sha,
+                reason: 'workspace released before publication',
+              },
+            })
+        }
+        await store.append(BUILD, { actor: KERNEL, type: 'workspace.released', payload: {} })
+        await store.append(BUILD, {
+          actor: KERNEL,
+          type: 'workspace.provisioned',
+          payload: {
+            provider: 'git-worktree',
+            ref: cwd,
+            branch: BRANCH,
+            base: { source: 'existing', sha: base },
+          },
+        })
+      }
       let crashAfterCas = false
       const forgeExec: typeof bunExec = async (cmd, options) => {
         const result = await bunExec(cmd, options)
@@ -122,6 +164,13 @@ for (const mode of ['clean', 'conflict', 'empty'] as const) {
       ).toHaveLength(1)
       const archives = await archiveTips(deps)
       expect(archives.some((entry) => entry.sha === oldHead)).toBe(true)
+      for (const sha of unavailable) expect(archives.some((entry) => entry.sha === sha)).toBe(false)
+      // A failed post-reconcile verifier can return to implement. Ordinary
+      // publication from that same workspace must remain usable.
+      expect(await git(['symbolic-ref', '--short', 'HEAD'])).toBe(BRANCH)
+      const fix = await file('verify-fix', 'fix the failed verifier\n')
+      await deps.forge.pushBranch(cwd, BRANCH)
+      expect(await git(['rev-parse', BRANCH])).toBe(fix)
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }
@@ -279,3 +328,162 @@ test('an older forge plugin is refused before workspace interrogation or mutatio
   ).rejects.toThrow('legacy-plugin lacks the reconcile rewrite capability')
   expect(commands).toBe(0)
 })
+
+for (const local of [true, false]) {
+  test(`${local ? 'local-git' : 'GitHub transport'} records a successful CAS overtaken before readback`, async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'ab-overtaken-'))
+    const remote = `${cwd}.git`
+    async function git(args: string[]) {
+      const result = await bunExec(['git', ...args], { cwd })
+      if (result.exitCode !== 0) throw new Error(result.stderr)
+      return result.stdout.trim()
+    }
+    async function commit(name: string) {
+      await writeFile(join(cwd, name), `${name}\n`)
+      await git(['add', name])
+      await git(['commit', '-qm', name])
+      return git(['rev-parse', 'HEAD'])
+    }
+    try {
+      await git(['init', '-q', '-b', 'main'])
+      await git(['config', 'user.name', 'Test'])
+      await git(['config', 'user.email', 'test@example.invalid'])
+      await git(['config', 'commit.gpgsign', 'false'])
+      const base = await commit('original')
+      await git(['checkout', '-qb', BRANCH])
+      const old = await commit('build-change')
+      await git(['checkout', '-q', 'main'])
+      const target = await commit('upstream')
+      await git(['checkout', '-q', BRANCH])
+      if (!local) {
+        await git(['init', '--bare', '-q', remote])
+        await git(['remote', 'add', 'origin', remote])
+        await git(['push', '-q', 'origin', BRANCH])
+      }
+      const store = await seedStore()
+      await store.putArtifact(BUILD, { kind: 'pr-description', content: 'Build change\n' })
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'workspace.provisioned',
+        payload: {
+          provider: 'git-worktree',
+          ref: cwd,
+          branch: BRANCH,
+          base: { source: 'remote', sha: base },
+        },
+      })
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'finalize.completed',
+        payload: {
+          pr: { number: 1, url: 'https://forge.test/pr/1', headSha: old },
+        },
+      })
+      await store.append(BUILD, {
+        actor: DISPATCHER,
+        type: 'pr.conflicted',
+        payload: { baseSha: target },
+      })
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'reconcile.started',
+        payload: { attempt: 1, baseSha: target },
+      })
+      let overtake = true
+      let observed = ''
+      const exec: typeof bunExec = async (cmd, options) => {
+        const result = await bunExec(cmd, options)
+        const cas = local
+          ? cmd[1] === 'update-ref' && cmd[2] === `refs/heads/${BRANCH}`
+          : cmd[1] === 'push' && cmd.includes(`--force-with-lease=refs/heads/${BRANCH}:${old}`)
+        if (overtake && cas && result.exitCode === 0) {
+          overtake = false
+          const candidate = await git(['rev-parse', 'HEAD'])
+          const tree = await git(['rev-parse', `${candidate}^{tree}`])
+          observed = await git(['commit-tree', tree, '-p', candidate, '-m', 'competing writer'])
+          await git(
+            local
+              ? ['update-ref', `refs/heads/${BRANCH}`, observed, candidate]
+              : ['push', '-q', 'origin', `${observed}:refs/heads/${BRANCH}`],
+          )
+        }
+        return result
+      }
+      const forge = local ? new LocalGitForge({ exec }) : new GitHubForge({ exec })
+      const deps = { store, slug: BUILD, workspacePath: cwd, exec: bunExec, forge }
+      const transaction = await prepareRestack(deps, {
+        attempt: 1,
+        branch: BRANCH,
+        oldBase: base,
+        targetBase: target,
+        id: 'rewrite-1',
+      })
+      const candidate = await git(['rev-parse', 'HEAD'])
+      const intent = {
+        ...transaction,
+        headSha: candidate,
+        conflicted: false,
+        artifact: { kind: 'reconcile-notes', rev: 0 },
+      }
+      await store.append(BUILD, {
+        actor: KERNEL,
+        type: 'reconcile.publish-intended',
+        payload: intent,
+      })
+      const append = store.append.bind(store)
+      let loseReceipt = true
+      store.append = async (slug, event) => {
+        if (loseReceipt && event.type === 'reconcile.rewritten') {
+          loseReceipt = false
+          throw new Error('crash before overtaken write receipt')
+        }
+        return append(slug, event)
+      }
+      await expect(publishRestack(deps, intent)).rejects.toThrow(
+        'crash before overtaken write receipt',
+      )
+      expect(
+        (await store.getEvents(BUILD)).some((event) => event.type === 'reconcile.rewritten'),
+      ).toBe(false)
+      expect(await publishRestack(deps, intent)).toEqual({
+        kind: 'lease-mismatch',
+        actual: observed,
+        rewritten: true,
+      })
+      const receipts = (await store.getEvents(BUILD)).filter(
+        (event) => event.type === 'reconcile.rewritten',
+      )
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]!.payload).toMatchObject({
+        oldHead: old,
+        headSha: candidate,
+        targetBase: target,
+        observedHead: observed,
+      })
+      const { readBuildFacts, readBuildSelector } = await import('../store/reduced-reads')
+      expect(await readBuildSelector(store, BUILD, 'publishedBranchHead')).toBe(observed)
+      expect((await readBuildFacts(store, BUILD)).value.recoveryCheckpoint).toBe(observed)
+      expect(await readBuildSelector(store, BUILD, 'verifyDiffBase')).toBe(base)
+      expect((await readBuildFacts(store, BUILD)).value.state.pr?.headSha).toBe(observed)
+      expect(
+        (await store.getEvents(BUILD)).some((event) => event.type === 'reconcile.completed'),
+      ).toBe(false)
+      // Retrying the intent must retain the same receipt without claiming the
+      // archived candidate is still the branch's current head.
+      expect(await publishRestack(deps, intent)).toEqual({
+        kind: 'lease-mismatch',
+        actual: observed,
+        rewritten: true,
+      })
+      expect(
+        (await store.getEvents(BUILD)).filter((event) => event.type === 'reconcile.rewritten'),
+      ).toHaveLength(1)
+      const archive = `refs/autobuild/archive/${BUILD}/${candidate}`
+      if (local) expect(await git(['show', `${archive}:build-change`])).toBe('build-change')
+      else expect(await git(['ls-remote', 'origin', archive])).toContain(candidate)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+      await rm(remote, { recursive: true, force: true })
+    }
+  })
+}

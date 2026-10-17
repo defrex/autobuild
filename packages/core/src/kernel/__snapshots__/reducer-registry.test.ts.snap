@@ -1056,7 +1056,6 @@ exports[`reducer registry accumulator shapes 1`] = `
     "$.firstWorkspace.type: string",
     "$.firstWorkspace: object",
     "$.gitTips: array",
-    "$.gitTips[]: string",
     "$.hostedImages.byKind.screenshot.actor.kind: string",
     "$.hostedImages.byKind.screenshot.actor.role: string",
     "$.hostedImages.byKind.screenshot.actor.session: string",

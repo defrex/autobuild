@@ -441,10 +441,12 @@ export interface BuildLandingOptions {
   canApply?: () => Promise<boolean>
 }
 
-/** Reconcile-only branch replacement. All object ids are exact, never ref expressions. */
+/** Reconcile-only branch replacement. All object ids are exact, never ref expressions.
+ * A successful CAS overtaken before readback returns lease-mismatch with
+ * rewritten: true: record its receipt, then replay actual instead of completing. */
 export type RewriteResult =
   | { kind: 'published' }
-  | { kind: 'lease-mismatch'; actual: string | null }
+  | { kind: 'lease-mismatch'; actual: string | null; rewritten?: true }
 export interface ForgeRewrite {
   snapshot(input: {
     workspacePath: string

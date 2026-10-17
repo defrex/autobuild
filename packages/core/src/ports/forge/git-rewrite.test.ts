@@ -49,6 +49,7 @@ for (const local of [true, false]) {
         actual: sha,
       })
       if (!local) {
+        await git(['checkout', '--detach', '-q'])
         // The remote raced ahead while its local branch stayed at the last
         // published candidate. Keep both guards explicit when synchronizing.
         await writeFile(join(cwd, 'external'), 'external work\n')

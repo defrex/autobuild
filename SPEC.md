@@ -2357,24 +2357,36 @@ rewrite facts retain them. Ordinary per-WIP-commit rebase remains inappropriate.
 Existing historical merge reconciliations retain their original replay/display
 semantics and supply the promoted contribution base for a later restack.
 
-Before branch replacement the kernel publishes every event-referenced Git tip,
-plus both heads and the temporary change, under immutable non-branch refs
+Before branch replacement the kernel publishes Git tips named by retained
+history and rewrite facts, plus both heads and the temporary change, under immutable non-branch refs
 `refs/autobuild/archive/<slug>/<sha>`. Archives must be fetchable by exact ref;
 namespace or permission failures stop publication without a branch/tag fallback.
+Publication requests and loss records alone are not retained Git history: their
+unpublished objects may have died with a released sandbox. A separately published
+or reviewed tip remains an archive requirement even when an earlier request named
+that same SHA.
 The branch replacement uses an explicit expected-old-head guard. A lost lease
 fetches the observed contribution and prepares another correlated transaction on
 the same occurrence's frozen base, preserving external work; deleted, divergent,
 or ambiguous history requires operator resolution. It never changes the target
 because upstream advances during contention. Only a later conflict occurrence
 captures a new base. Replay occurs detached, leaving the named branch untouched
-until publication. Missing third-party forge capabilities refuse actionably.
+until publication. Confirmed publication reattaches the matching workspace HEAD
+to the build branch so a later verify → implement cycle can publish normally.
+Missing third-party forge capabilities refuse actionably.
 
 `reconcile.prepared` records transaction identity, attempt, branch, old head,
 effective old base, target base and temporary single-change SHA before checkout.
 `reconcile.replayed` records whether replay conflicted. Notes and the resolved
 head are deposited with `reconcile.publish-intended` before publication;
 `reconcile.rewritten` records old/new heads, old/new change SHAs, frozen base,
-conflict outcome and archive refs after confirmed publication. New completion is
+conflict outcome and archive refs after confirmed publication. A successful CAS
+that is overtaken before readback still records its receipt, with `observedHead`
+naming the later head (or null for deletion). That observed head informs recovery;
+it does not complete reconcile or promote the verification base. Intent recovery
+can recognize an overtaken candidate newly introduced into the observed branch
+history, while a candidate already present in the expected old history is not
+evidence of a new write. New completion is
 `{headSha, rewriteId, artifact}`; historical `{mergeCommit, artifact}` remains
 valid. Remote requests carry identical transaction inputs and use the provider's
 trusted rewrite/archive capability only after execution teardown. Contention is

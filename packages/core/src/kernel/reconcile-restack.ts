@@ -314,8 +314,8 @@ export async function validateRestack(
   if (violations.length) throw phaseScratchRejection(violations)
 }
 
-/** Intent is durable before the CAS. A receipt is appended only after exact
- * readback; callers complete only after this receipt. */
+/** Intent is durable before the CAS. Record proven writes even when readback
+ * observes a later writer, but complete only while the candidate is current. */
 export async function publishRestack(
   deps: RestackDeps,
   intent: EventPayload<'reconcile.publish-intended'>,
@@ -336,13 +336,19 @@ export async function publishRestack(
     localExpected: intent.localBranchHead,
     sha: intent.headSha,
   })
-  if (result.kind === 'lease-mismatch') return result
-  if (!events.some((e) => e.type === 'reconcile.rewritten' && e.payload.id === intent.id)) {
+  if (
+    (result.kind === 'published' || result.rewritten === true) &&
+    !events.some((e) => e.type === 'reconcile.rewritten' && e.payload.id === intent.id)
+  ) {
     const { artifact: _, ...rewrite } = intent
     await deps.store.append(deps.slug, {
       actor: KERNEL,
       type: 'reconcile.rewritten',
-      payload: { ...rewrite, archives },
+      payload: {
+        ...rewrite,
+        archives,
+        ...(result.kind === 'lease-mismatch' ? { observedHead: result.actual } : {}),
+      },
     })
   }
   return result

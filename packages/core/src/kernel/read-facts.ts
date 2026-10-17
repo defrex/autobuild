@@ -157,7 +157,7 @@ export interface BuildReadAcc {
   observations: Extract<AbEvent, { type: 'observation.recorded' }>['payload'][]
 }
 export const buildReadFactsReducer = defineReducer({
-  version: 2 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
+  version: 3 + Object.values(parts).reduce((sum, reducer) => sum + reducer.version, 0),
   initial: (): BuildReadAcc => ({
     summaryRequests: summaryRequestsReducer.initial(),
     summaryBoundary: summaryBoundaryReducer.initial(),

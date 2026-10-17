@@ -652,6 +652,8 @@ export const eventPayloadSchemas = {
   }),
   'reconcile.rewritten': reconcileTransactionSchema.extend({
     headSha: gitOid,
+    /** Later readback when a successful CAS was overtaken before acknowledgement. */
+    observedHead: gitOid.nullable().optional(),
     conflicted: z.boolean(),
     archives: z.array(archiveEntry),
   }),

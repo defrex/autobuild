@@ -1,3 +1,4 @@
+import { reconcileRewriteHead } from './reconcile-head'
 /**
  * The state reducer (SPEC §15.5, §3.4): state is a reduction of events — any
  * snapshot is a cache, never the source of truth, and resumability falls out.
@@ -350,7 +351,7 @@ export interface BuildAcc {
 }
 
 /** Bump when `BuildAcc`'s shape or the fold's semantics change. */
-export const BUILD_REDUCER_VERSION = 2
+export const BUILD_REDUCER_VERSION = 3
 
 function initialBuildAcc(): BuildAcc {
   return {
@@ -748,7 +749,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         })
         break
       case 'reconcile.rewritten':
-        if (pr !== undefined) pr = { ...pr, headSha: event.payload.headSha }
+        if (pr !== undefined) pr = { ...pr, headSha: reconcileRewriteHead(event.payload) }
         break
       case 'reconcile.completed': {
         if ('headSha' in event.payload && pr !== undefined)

@@ -77,6 +77,21 @@ export async function settlePendingPublication(
       localExpected: transaction.localBranchHead,
       archives,
     })
+    const history = (await readBuildFacts(deps.store, slug)).value.reconcileHistory
+    if (
+      (result.kind === 'published' || result.rewritten === true) &&
+      !history.some((e) => e.type === 'reconcile.rewritten' && e.payload.id === transaction.id)
+    )
+      await deps.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'reconcile.rewritten',
+        payload: {
+          ...transaction,
+          headSha: request.payload.sha,
+          archives,
+          ...(result.kind === 'lease-mismatch' ? { observedHead: result.actual } : {}),
+        },
+      })
     if (result.kind === 'lease-mismatch') {
       await deps.store.append(slug, {
         actor: DISPATCHER,
@@ -97,13 +112,6 @@ export async function settlePendingPublication(
       })
       return
     }
-    const history = (await readBuildFacts(deps.store, slug)).value.reconcileHistory
-    if (!history.some((e) => e.type === 'reconcile.rewritten' && e.payload.id === transaction.id))
-      await deps.store.append(slug, {
-        actor: DISPATCHER,
-        type: 'reconcile.rewritten',
-        payload: { ...transaction, headSha: request.payload.sha, archives },
-      })
     if (!(await readBuildFacts(deps.store, slug)).value.publication.requestCompleted(request))
       await deps.store.append(slug, {
         actor: DISPATCHER,

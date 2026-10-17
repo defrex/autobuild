@@ -22,7 +22,12 @@ Reconcile requires the optional grouped `Forge.rewrite` capability: snapshot the
 actual build branch into a build-private ref, publish immutable exact-SHA refs
 under `refs/autobuild/archive/<slug>/<sha>`, and replace the explicit branch with
 an explicit expected remote head. Return `lease-mismatch` separately from
-transport, auth and policy failures. Never overwrite unknown work or silently
+transport, auth and policy failures. If the CAS succeeds but another writer
+advances it before readback, return `lease-mismatch` with `rewritten: true` and the
+observed `actual` head. The kernel records that write and retries the observed
+history without claiming completion. After an acknowledged replacement, reattach
+the matching detached workspace HEAD to the build branch so later implementation
+publication remains usable. Never overwrite unknown work or silently
 fall back to merging, ordinary pushes, archive branches or tags. Older forge
 plugins remain loadable and receive an actionable refusal at reconcile time.
 Remote workspace providers additionally need trusted `WorkspacePublication.rewrite`
