@@ -845,7 +845,7 @@ export const SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256').update(SCHEMA_DDL)
 
 /** Ticket persistence evolves independently so deployed v1 BuildStore markers
  * remain valid while the hosted ticket tables are added. */
-export const TICKET_SCHEMA_VERSION = 5
+export const TICKET_SCHEMA_VERSION = 6
 export const TICKET_SCHEMA_V1_DDL = `
 CREATE TABLE IF NOT EXISTS ab_ticket_schema_migrations (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -895,7 +895,7 @@ export const TICKET_SCHEMA_V4_DDL = `${TICKET_SCHEMA_V3_DDL}\n${TICKET_STATES_DD
 export const TICKET_SCHEMA_V4_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_V4_DDL)
   .digest('hex')
-export const TICKET_SCHEMA_DDL =
+export const TICKET_SCHEMA_V5_DDL =
   TICKET_SCHEMA_V4_DDL +
   `
 ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS readable_id text;
@@ -903,6 +903,19 @@ ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS ticket_number bigint;
 CREATE TABLE IF NOT EXISTS ab_ticket_counters (repo text PRIMARY KEY, last_number bigint NOT NULL CHECK (last_number >= 0));
 ` +
   READABLE_TICKET_CONSTRAINTS.trim()
+export const TICKET_SCHEMA_V5_CHECKSUM = new Bun.CryptoHasher('sha256')
+  .update(TICKET_SCHEMA_V5_DDL)
+  .digest('hex')
+
+const TICKET_TREE_DELTA = `
+ALTER TABLE ab_tickets ADD COLUMN kind text NOT NULL DEFAULT 'work';
+ALTER TABLE ab_tickets ADD COLUMN target_id text;
+ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_kind_check CHECK (kind IN ('work', 'node'));
+ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_target_fk FOREIGN KEY (repo, target_id) REFERENCES ab_tickets(repo, id);
+ALTER TABLE ab_tickets ADD CONSTRAINT ab_tickets_target_self_check CHECK (target_id <> id);
+CREATE INDEX ab_tickets_target_idx ON ab_tickets (repo, target_id);
+`
+export const TICKET_SCHEMA_DDL = TICKET_SCHEMA_V5_DDL + TICKET_TREE_DELTA
 export const TICKET_SCHEMA_CHECKSUM = new Bun.CryptoHasher('sha256')
   .update(TICKET_SCHEMA_DDL)
   .digest('hex')
@@ -1356,6 +1369,8 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       ['revision', 'bigint', true],
       ['readable_id', 'text', true],
       ['ticket_number', 'bigint', true],
+      ['kind', 'text', true],
+      ['target_id', 'text', false],
     ],
     ab_ticket_counters: [
       ['repo', 'text', true],
@@ -1407,6 +1422,10 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
     !String(indexes[0].indexdef).endsWith('(repo, lower(readable_id))')
   )
     throw schemaError('ticket readable id unique index is missing or mismatched')
+  const targetIndexes =
+    await sql`SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'ab_tickets' AND indexname = 'ab_tickets_target_idx'`
+  if (!targetIndexes[0] || !String(targetIndexes[0].indexdef).endsWith('(repo, target_id)'))
+    throw schemaError('ticket target index is missing or mismatched')
   const constraints: { table_name: string; definition: string }[] = await sql`
     SELECT c.relname AS table_name, pg_get_constraintdef(k.oid) AS definition
     FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
@@ -1423,6 +1442,9 @@ export async function assertTicketSchema(sql: SQL): Promise<void> {
       'UNIQUE (repo, creation_key)',
       'UNIQUE (repo, ticket_number)',
       'CHECK ((ticket_number > 0))',
+      "CHECK ((kind = ANY (ARRAY['work'::text, 'node'::text])))",
+      'FOREIGN KEY (repo, target_id) REFERENCES ab_tickets(repo, id)',
+      'CHECK ((target_id <> id))',
     ],
     ab_ticket_counters: ['PRIMARY KEY (repo)', 'CHECK ((last_number >= 0))'],
     ab_ticket_comments: [
@@ -1713,6 +1735,7 @@ export async function migratePostgres(
         await migrateLegacyTickets(tx as SQL, options.openBlobs)
         await tx`ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1`
         await migrateReadableTickets(tx as SQL, options.openBlobs)
+        await tx.unsafe(TICKET_TREE_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION},
           checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
@@ -1722,6 +1745,7 @@ export async function migratePostgres(
       ) {
         await tx`ALTER TABLE ab_tickets ADD COLUMN revision bigint NOT NULL DEFAULT 1`
         await migrateReadableTickets(tx as SQL, options.openBlobs)
+        await tx.unsafe(TICKET_TREE_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1729,6 +1753,7 @@ export async function migratePostgres(
         ticketMarker.checksum === TICKET_SCHEMA_V3_CHECKSUM
       ) {
         await migrateReadableTickets(tx as SQL, options.openBlobs)
+        await tx.unsafe(TICKET_TREE_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (
         ticketMarker &&
@@ -1736,6 +1761,14 @@ export async function migratePostgres(
         ticketMarker.checksum === TICKET_SCHEMA_V4_CHECKSUM
       ) {
         await migrateReadableTickets(tx as SQL, options.openBlobs)
+        await tx.unsafe(TICKET_TREE_DELTA)
+        await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
+      } else if (
+        ticketMarker &&
+        Number(ticketMarker.version) === 5 &&
+        ticketMarker.checksum === TICKET_SCHEMA_V5_CHECKSUM
+      ) {
+        await tx.unsafe(TICKET_TREE_DELTA)
         await tx`UPDATE ab_ticket_schema_migrations SET version = ${TICKET_SCHEMA_VERSION}, checksum = ${TICKET_SCHEMA_CHECKSUM}, applied_at = ${new Date().toISOString()} WHERE singleton = true`
       } else if (ticketMarker) {
         if (Number(ticketMarker.version) !== TICKET_SCHEMA_VERSION) {
@@ -1752,6 +1785,7 @@ export async function migratePostgres(
       } else {
         await tx`ALTER TABLE ab_tickets ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1`
         await migrateReadableTickets(tx as SQL, options.openBlobs)
+        await tx.unsafe(TICKET_TREE_DELTA)
         await tx`INSERT INTO ab_ticket_schema_migrations
           (singleton, version, checksum, applied_at)
           VALUES (true, ${TICKET_SCHEMA_VERSION}, ${TICKET_SCHEMA_CHECKSUM}, ${new Date().toISOString()})`

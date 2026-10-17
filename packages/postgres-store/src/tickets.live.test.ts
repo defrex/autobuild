@@ -641,3 +641,71 @@ if (testUrl)
       await isolated.cleanup()
     }
   })
+
+if (testUrl)
+  test('integration tree persists, validates atomically and serializes concurrent graph writes', async () => {
+    const isolated = await isolatedDatabase()
+    const database = await openPostgresTicketDatabase(isolated.url)
+    const other = await openPostgresTicketDatabase(isolated.url)
+    const context = {
+      repo: 'tree',
+      teamKey: 'TREE',
+      lifecycle: { triage: 'triage', ready: 'ready', doing: 'doing', done: 'done' },
+    }
+    const source = database.source(context)
+    const concurrent = other.source(context)
+    try {
+      const a = await source.create({ title: 'A', body: 'Body', kind: 'node' })
+      const b = await source.create({ title: 'B', body: 'Body', kind: 'node' })
+      const child = await source.create({
+        title: 'Child',
+        body: 'Body',
+        target: a.ref.id.toLowerCase(),
+      })
+      expect(child).toMatchObject({ kind: 'work', target: a.ref.id })
+      await source.update(child.ref.id, { target: a.ref.id.toLowerCase(), kind: 'work' })
+      expect((await source.get(child.ref.id))?.revision).toBe(child.revision)
+      await source.transition(child.ref.id, 'done')
+      await expect(source.update(a.ref.id, { title: 'Lost', kind: 'work' })).rejects.toThrow(
+        'targets it',
+      )
+      expect((await source.get(a.ref.id))?.title).toBe('A')
+      await expect(source.update(a.ref.id, { target: child.ref.id })).rejects.toThrow('not a node')
+      await expect(source.update(a.ref.id, { target: a.ref.id })).rejects.toThrow('cycle')
+      await expect(source.update(a.ref.id, { target: 'MISSING' })).rejects.toThrow('unknown')
+      const foreign = database.source({ ...context, repo: 'foreign' })
+      await expect(
+        foreign.create({ title: 'Bad', body: 'Body', target: a.ref.id }),
+      ).rejects.toThrow('unknown')
+      const races = await Promise.allSettled([
+        source.update(a.ref.id, { target: b.ref.id }),
+        concurrent.update(b.ref.id, { target: a.ref.id }),
+      ])
+      expect(races.filter((r) => r.status === 'rejected')).toHaveLength(1)
+      const all = await source.listAll()
+      expect(all.tickets).toHaveLength(3)
+      const ar = (await source.get(a.ref.id))!
+      const br = (await source.get(b.ref.id))!
+      expect(ar.target === b.ref.id && br.target === a.ref.id).toBe(false)
+      await source.mutateIfRevision(child.ref.id, (await source.get(child.ref.id))!.revision!, {
+        kind: 'update',
+        patch: { target: null },
+      })
+      expect((await source.get(child.ref.id))?.target).toBeUndefined()
+      await source.update(a.ref.id, { target: null })
+      await source.update(b.ref.id, { target: null })
+      const demotion = await Promise.allSettled([
+        source.update(a.ref.id, { kind: 'work' }),
+        concurrent.update(child.ref.id, { target: a.ref.id }),
+      ])
+      expect(demotion.filter((r) => r.status === 'rejected')).toHaveLength(1)
+      const fresh = (await source.get(a.ref.id))!
+      expect((await source.get(child.ref.id))?.target === a.ref.id && fresh.kind !== 'node').toBe(
+        false,
+      )
+    } finally {
+      await other.close()
+      await database.close()
+      await isolated.cleanup()
+    }
+  })

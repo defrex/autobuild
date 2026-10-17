@@ -1,3 +1,5 @@
+export const TICKET_TREE_HEADER = 'x-autobuild-ticket-tree'
+export const TICKET_TREE_CAPABILITY = '1'
 import { z } from 'zod'
 import { ticketRefSchema } from '../../ontology'
 
@@ -25,6 +27,11 @@ export const ticketCommentWireSchema = z.strictObject({
 })
 
 export const ticketWireSchema = z.strictObject({
+  kind: z.enum(['work', 'node']).optional(),
+  target: z
+    .string()
+    .refine((v) => v.trim().length > 0)
+    .optional(),
   revision: z.string().min(1),
   ref: ticketRefSchema,
   comments: z.array(ticketCommentWireSchema).optional(),
@@ -57,6 +64,11 @@ const criteriaSchema = z.strictObject({
 })
 const idSchema = z.strictObject({ id: z.string().min(1) })
 const draftSchema = z.strictObject({
+  kind: z.enum(['work', 'node']).optional(),
+  target: z
+    .string()
+    .refine((v) => v.trim().length > 0)
+    .optional(),
   title: z.string(),
   body: z.string(),
   labels: z.array(z.string()).optional(),
@@ -69,6 +81,12 @@ const createOptionsSchema = z.strictObject({
 })
 const updateSchema = z
   .strictObject({
+    kind: z.enum(['work', 'node']).optional(),
+    target: z
+      .string()
+      .refine((v) => v.trim().length > 0)
+      .nullable()
+      .optional(),
     title: z.string().optional(),
     body: z.string().optional(),
     labels: z.array(z.string()).optional(),

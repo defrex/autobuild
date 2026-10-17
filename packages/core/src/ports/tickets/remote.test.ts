@@ -169,6 +169,7 @@ describe('HostedTicketSource (client half)', () => {
       expect(call.method).toBe('POST')
       expect(call.headers).toEqual({
         'content-type': 'application/json',
+        'x-autobuild-ticket-tree': '1',
         'x-autobuild-ticket-comments': '1',
         authorization: 'Bearer t0k',
         [TICKET_REVISIONS_HEADER]: TICKET_REVISIONS_CAPABILITY,
@@ -376,22 +377,17 @@ test('hosted assets reuse the selected ticket URL, credential and injected fetch
   await expect(failing.assets.listTicketAssets('repo', 'T')).rejects.toThrow('denied')
 })
 
-test('unsupported metadata writes, including defaults and clears, never reach the hosted protocol', async () => {
-  const { source, calls } = makeSource([])
-  for (const patch of [
-    { kind: 'node' as const },
-    { kind: 'work' as const },
-    { target: 'ENG-1' },
-    { target: null },
-    { title: 'Lost', target: null },
-  ]) {
-    await expect(source.create({ title: 'Title', body: 'Body', ...patch })).rejects.toThrow(
-      'integrationTree',
-    )
-    await expect(source.update('ENG-2', patch)).rejects.toThrow('integrationTree')
-    await expect(
-      source.mutateIfRevision('ENG-2', 'revision', { kind: 'update', patch }),
-    ).rejects.toThrow('integrationTree')
-  }
-  expect(calls).toHaveLength(0)
+test('hosted metadata survives reads and forwards updates including clears', async () => {
+  const node = { ...TICKET, kind: 'node', target: 'ENG-1' }
+  const { source, calls } = makeSource([
+    { body: node },
+    { body: { ok: true } },
+    { body: { ok: true } },
+  ])
+  expect(source.integrationTree).toBe(true)
+  expect(await source.get('ENG-2')).toMatchObject({ kind: 'node', target: 'ENG-1' })
+  await source.update('ENG-2', { target: null })
+  await source.mutateIfRevision('ENG-2', '1', { kind: 'update', patch: { kind: 'work' } })
+  expect(calls[1]!.body.input).toEqual({ id: 'ENG-2', patch: { target: null } })
+  expect(calls[0]!.headers['x-autobuild-ticket-tree']).toBe('1')
 })

@@ -79,6 +79,7 @@ export async function openPostgresTicketDatabase(url: string): Promise<PostgresT
 
 export class PostgresTicketSource implements TicketSource {
   readonly name = 'database'
+  readonly integrationTree = true
   private readonly teamKey: string
   private readonly repo: string
   private readonly claimedState: string
@@ -178,6 +179,14 @@ export class PostgresTicketSource implements TicketSource {
       ...(row.creation_key !== null && row.creation_key !== undefined
         ? { creationKey: String(row.creation_key) }
         : {}),
+      kind: row.kind === 'node' ? 'node' : 'work',
+      ...(row.target_id == null
+        ? {}
+        : {
+            target: String(
+              (await this.require(executor, String(row.target_id), 'target')).readable_id,
+            ),
+          }),
       title,
       body: String(row.body),
       state: String(row.state),
@@ -198,6 +207,49 @@ export class PostgresTicketSource implements TicketSource {
     const row = await this.lookup(executor, id, lock)
     if (!row) throw new Error(`database ticket source: ${operation} on unknown ticket "${id}"`)
     return row
+  }
+
+  listAll(): Promise<TicketListing> {
+    return this.listReady({})
+  }
+
+  // Creates and metadata mutations take this project lock before any ticket row
+  // lock, so ancestor validation cannot race reparenting or node demotion.
+  private async graphLock(q: Exec): Promise<void> {
+    await q`INSERT INTO ab_ticket_counters (repo, last_number) VALUES (${this.repo}, 0) ON CONFLICT DO NOTHING`
+    await q`SELECT last_number FROM ab_ticket_counters WHERE repo = ${this.repo} FOR UPDATE`
+  }
+
+  private async tree(
+    q: Exec,
+    row: Row | undefined,
+    patch: TicketDraft | TicketUpdate,
+  ): Promise<string | null> {
+    if (patch.kind !== undefined && patch.kind !== 'work' && patch.kind !== 'node')
+      throw new Error('kind must be work or node')
+    if (typeof patch.target === 'string' && !patch.target.trim())
+      throw new Error('target must not be blank')
+    if (row && row.kind === 'node' && patch.kind === 'work') {
+      const children: Row[] =
+        await q`SELECT readable_id FROM ab_tickets WHERE repo = ${this.repo} AND target_id = ${String(row.id)} LIMIT 1`
+      if (children.length)
+        throw new Error(`cannot demote node: ticket ${children[0]!.readable_id} targets it`)
+    }
+    if (patch.target === undefined) return row?.target_id == null ? null : String(row.target_id)
+    if (patch.target === null) return null
+    const seen = new Set(row ? [String(row.id)] : [])
+    let next: string | null = patch.target
+    let target: string | null = null
+    while (next !== null) {
+      const ancestor = await this.require(q, next, 'target')
+      if (ancestor.kind !== 'node') throw new Error(`target ${next} is not a node`)
+      const key = String(ancestor.id)
+      if (seen.has(key)) throw new Error(`target ${next} would create a cycle`)
+      seen.add(key)
+      target ??= key
+      next = ancestor.target_id == null ? null : String(ancestor.target_id)
+    }
+    return target
   }
 
   async listReady(criteria: { labels?: string[]; state?: string }): Promise<TicketListing> {
@@ -280,13 +332,13 @@ export class PostgresTicketSource implements TicketSource {
       throw new Error('database ticket create: body must be nonblank')
     requiredState(this.teamKey, 'ticket teamKey')
     return this.retry.tx(this.sql, async (q) => {
-      await q`INSERT INTO ab_ticket_counters (repo, last_number) VALUES (${this.repo}, 0) ON CONFLICT DO NOTHING`
-      await q`SELECT last_number FROM ab_ticket_counters WHERE repo = ${this.repo} FOR UPDATE`
+      await this.graphLock(q)
       if (options.idempotencyKey !== undefined) {
         const adopted: Row[] = await q`SELECT *, revision::text AS revision FROM ab_tickets
           WHERE repo = ${this.repo} AND creation_key = ${options.idempotencyKey} FOR UPDATE`
         if (adopted[0]) return this.record(q, adopted[0])
       }
+      const target = await this.tree(q, undefined, draft)
       const state = await this.state(q, options.state ?? this.createState)
       const blockers: string[] = []
       for (const blocker of draft.blockedBy ?? []) {
@@ -310,9 +362,9 @@ export class PostgresTicketSource implements TicketSource {
       const id = `ticket-${crypto.randomUUID()}`
       const now = new Date().toISOString()
       const inserted: Row[] = await q`INSERT INTO ab_tickets
-        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at)
+        (repo, id, readable_id, ticket_number, creation_key, title, body, state, labels, created_at, updated_at, kind, target_id)
         VALUES (${this.repo}, ${id}, ${readable}, ${number}::bigint, ${options.idempotencyKey ?? null}, ${draft.title}, ${draft.body},
-          ${state}, ${q.array(draft.labels ?? [], 'text')}, ${now}, ${now})
+          ${state}, ${q.array(draft.labels ?? [], 'text')}, ${now}, ${now}, ${draft.kind ?? 'work'}, ${target})
         ON CONFLICT (repo, creation_key) DO NOTHING RETURNING *, revision::text AS revision`
       let row = inserted[0]
       if (!row && options.idempotencyKey !== undefined) {
@@ -353,6 +405,7 @@ export class PostgresTicketSource implements TicketSource {
   private async mutate(id: string, mutation: TicketMutation, expected?: string): Promise<void> {
     const patch = mutation.kind === 'update' ? validateTicketUpdate(mutation.patch) : undefined
     await this.retry.tx(this.sql, async (q) => {
+      if (patch && (patch.kind !== undefined || patch.target !== undefined)) await this.graphLock(q)
       const state = mutation.kind === 'transition' ? await this.state(q, mutation.state) : undefined
       const row = await this.require(q, id, 'mutation', true)
       const storageId = String(row.id)
@@ -361,16 +414,20 @@ export class PostgresTicketSource implements TicketSource {
         throw new TicketRevisionConflict(id, expected, revision)
       let changed = false
       if (patch) {
+        const target = await this.tree(q, row, patch)
+        const kind = patch.kind ?? String(row.kind)
         const title = patch.title ?? String(row.title)
         const body = patch.body ?? String(row.body)
         const labels = patch.labels ?? strings(row.labels)
         changed =
+          kind !== row.kind ||
+          target !== row.target_id ||
           title !== row.title ||
           body !== row.body ||
           JSON.stringify([...new Set(labels)].sort()) !==
             JSON.stringify([...new Set(strings(row.labels))].sort())
         if (changed)
-          await q`UPDATE ab_tickets SET title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')} WHERE repo = ${this.repo} AND id = ${storageId}`
+          await q`UPDATE ab_tickets SET kind = ${kind}, target_id = ${target}, title = ${title}, body = ${body}, labels = ${q.array(labels, 'text')} WHERE repo = ${this.repo} AND id = ${storageId}`
       } else if (mutation.kind === 'transition') {
         changed = row.state !== state
         if (changed)

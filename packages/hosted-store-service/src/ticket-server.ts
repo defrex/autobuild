@@ -28,6 +28,8 @@ import {
   mutateTicketIfRevision,
   hostedTicketPolicySchema,
   type HostedTicketPolicy,
+  TICKET_TREE_HEADER,
+  TICKET_TREE_CAPABILITY,
   TICKET_COMMENTS_HEADER,
   TICKET_COMMENTS_CAPABILITY,
   type HostedTicketContext,
@@ -195,6 +197,12 @@ export function createTicketServer(options: TicketServerOptions): {
       // Capabilities are independent: released strict decoders receive neither field.
       const projected = {
         ...base,
+        ...(req.headers.get(TICKET_TREE_HEADER) === TICKET_TREE_CAPABILITY
+          ? {
+              kind: ticket.kind ?? 'work',
+              ...(ticket.target === undefined ? {} : { target: ticket.target }),
+            }
+          : {}),
         ...(req.headers.get(TICKET_REVISIONS_HEADER) === TICKET_REVISIONS_CAPABILITY
           ? { revision: ticket.revision }
           : {}),
