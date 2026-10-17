@@ -580,20 +580,18 @@ function BuildRow({
         </span>
       </div>
       {ceiling && <p className="sub">{ceiling}</p>}
+      {row.target && (
+        <div>
+          {row.kind ?? 'work'} · target {row.target}
+          {row.integration ? ` · ${row.integration}` : ''}
+        </div>
+      )}
       {row.abortProgress !== undefined ? (
         <MessagePreview value={row.abortProgress} tone={tone} expandable={false} />
       ) : row.dispatch !== undefined ? (
         <MessagePreview value={row.dispatch} tone={tone} expandable={false} />
       ) : (
-        <>
-          {row.target && (
-            <div>
-              {row.kind ?? 'work'} · target {row.target}
-              {row.integration ? ` · ${row.integration}` : ''}
-            </div>
-          )}
-          <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
-        </>
+        <StepLine steps={row.steps} now={now} label={`${row.slug} pipeline`} />
       )}
       {row.setupError !== undefined && (
         <MessagePreview value={row.setupError} tone="alert" expandable />
