@@ -439,6 +439,14 @@ export interface PrAttachmentHosting {
   reclaim(request: PrAttachmentReclaimRequest): Promise<void>
 }
 
+export interface BuildLandingOptions {
+  buildSlug: string
+  /** Optional query hint, verified against the current provider PR base. */
+  baseBranch?: string
+  /** Refresh durable consent and pipeline eligibility before native mutation. */
+  canApply?: () => Promise<boolean>
+}
+
 export interface Forge {
   readonly name: string
   /** Optional because another forge may support PRs but not public image assets. */
@@ -476,12 +484,29 @@ export interface Forge {
    * inspect or apply consent returns a reason-bearing deferral. The operation
    * is idempotent and safe to retry across the forge-call/event-append crash window.
    */
-  setAutoMerge(workspacePath: string, number: number, enabled: boolean): Promise<AutoMergeResult>
+  setAutoMerge(
+    workspacePath: string,
+    number: number,
+    enabled: boolean,
+    options?: BuildLandingOptions,
+  ): Promise<AutoMergeResult>
   /**
    * Perform a normal squash merge, guarded by the inspected PR head. This is
    * never an admin/force operation: forge-side protection still applies.
    */
-  squashMerge(workspacePath: string, number: number, expectedHeadSha: string): Promise<void>
+  squashMerge(
+    workspacePath: string,
+    number: number,
+    expectedHeadSha: string,
+    options?: BuildLandingOptions,
+  ): Promise<void>
+  /** Actual landed message. Absent capability or read failure means unknown
+   * trailer evidence; neither may prevent observing a merged PR. */
+  readCommitMessage?(workspacePath: string, sha: string): Promise<string>
+  /** Inspect exact trailer values across all reachable history, including
+   * merged side branches. Missing refs/read failures throw; false is proven
+   * absence. Do not cache by branch name across history rewrites. */
+  containsBuild?(workspacePath: string, branch: string, buildSlug: string): Promise<boolean>
   /** Post the build's summary comment (§7.5). */
   commentOnPr(workspacePath: string, number: number, body: string): Promise<void>
   /** Optional checkout-less capability: the current tip of a remote branch.

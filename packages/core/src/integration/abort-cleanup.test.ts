@@ -147,6 +147,7 @@ test('abort cleanup removes a real worktree and exact local/remote refs while pr
     const events = await store.getEvents(slug)
     expect(events.find((event) => event.type === 'pr.merged')?.payload).toEqual({
       sha: 'merged-sha-preserved',
+      buildTrailerPresent: false,
     })
     expect(reduceBuild(events)).toMatchObject({ status: 'done', outcome: 'abandoned' })
     await expect(forge.getPrState(repo, 1)).resolves.toEqual({
