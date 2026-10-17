@@ -42,6 +42,10 @@
     "./ticket-grants": {
       "types": "./src/ticket-grants.ts",
       "import": "./src/ticket-grants.ts"
+    },
+    "./request-context": {
+      "types": "./src/request-context.ts",
+      "import": "./src/request-context.ts"
     }
   },
   "bin": {
