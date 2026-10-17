@@ -26,7 +26,7 @@ import {
 } from '@defrex/autobuild/remote-store'
 import { DISPATCHER, KERNEL, humanActor, parseConfig, type Via } from '@defrex/autobuild/testing'
 import { migratePostgres } from '@defrex/autobuild-postgres-store/schema'
-import { openPostgresBuildStore } from '@defrex/autobuild-postgres-store/store'
+import { openPostgresBuildStore, PostgresBuildStore } from '@defrex/autobuild-postgres-store/store'
 import { createHostedStoreService } from './service'
 
 const testUrl = process.env.AB_POSTGRES_TEST_URL?.trim()
@@ -448,6 +448,25 @@ test.skipIf(!testUrl)(
     const credentials = new PostgresCredentialStore(sql, projects)
     const a = 'https://github.com/acme/credential-a'
     const b = 'https://github.com/acme/credential-b'
+    const listingRows: Record<string, unknown>[][] = []
+    const track = <T extends SQL>(connection: T): T =>
+      new Proxy(connection, {
+        apply(target, _receiver, args) {
+          const query = Reflect.apply(target, target, args)
+          if (!(args[0] as TemplateStringsArray).join('?').includes('projected_ticket_id'))
+            return query
+          return query.then((rows: Record<string, unknown>[]) => {
+            listingRows.push(rows)
+            return rows
+          })
+        },
+        get(target, key) {
+          if (key === 'reserve') return async () => track(await target.reserve())
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+    const backing = new PostgresBuildStore(track(sql), { blobs: new MemoryBlobStore() })
     try {
       await projects.add(a, 'owner')
       await projects.add(b, 'owner')
@@ -482,8 +501,7 @@ test.skipIf(!testUrl)(
           AB_S3_ACCESS_KEY_ID: 'unused',
           AB_S3_SECRET_ACCESS_KEY: 'unused',
         },
-        openStore: async () =>
-          new (await import('@defrex/autobuild/plugin-sdk')).MemoryBuildStore(),
+        openStore: async () => backing,
         openProjectRegistry: async () => projects,
         openCredentials: async () => credentials,
       })
@@ -496,6 +514,10 @@ test.skipIf(!testUrl)(
       const firstClient = client(first.token)
       const secondClient = client(second.token)
       const otherClient = client(other.token)
+      await otherClient.createBuild({ slug: 'early-foreign', repo: b })
+      listingRows.length = 0
+      expect(await firstClient.listBuilds()).toEqual([])
+      expect(listingRows).toEqual([[]])
       const created = await firstClient.createBuild({ slug: 'fix-login', repo: a })
       const foreign = await otherClient.createBuild({ slug: 'fix-login', repo: b })
       expect(created.slug).not.toBe(foreign.slug)
@@ -503,6 +525,17 @@ test.skipIf(!testUrl)(
       expect(await firstClient.getBuild(foreign.slug)).toBeNull()
       expect(await firstClient.getBuild('missing')).toBeNull()
       expect((await firstClient.listBuilds()).map((record) => record.slug)).toEqual([created.slug])
+      listingRows.length = 0
+      expect(await firstClient.listBuilds()).toEqual([created])
+      expect(listingRows.map((rows) => rows.map((r) => r.repo))).toEqual([[a]])
+      const admin = client(
+        mintToken('live-secret', {
+          version: 1,
+          ownerAdmin: { user: 'owner' },
+          exp: Date.now() + 60000,
+        }),
+      )
+      expect(await admin.listBuilds()).toEqual(await backing.listBuilds())
       await credentials.revoke(b, first.credential.id, 'owner')
       expect(await credentials.authenticate(first.token, now)).not.toBeNull()
       await credentials.revoke(a, first.credential.id, 'owner')
