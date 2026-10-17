@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- [#637](https://github.com/defrex/autobuild/pull/637) — Skip unchanged dashboard reads with repository change positions
 - [#635](https://github.com/defrex/autobuild/pull/635) — Pause unfocused dashboard polling and relax idle refreshes
 - [#634](https://github.com/defrex/autobuild/pull/634) — Reduce idle dispatcher ticks to six store requests
 - [#632](https://github.com/defrex/autobuild/pull/632) — Preserve stable build identity across squash landings
