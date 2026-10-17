@@ -89,6 +89,8 @@ export type CsiReport =
   | { kind: 'input'; event: TerminalInputEvent }
   | { kind: 'keyboard-flags'; flags: number }
   | { kind: 'device-attributes' }
+  | { kind: 'focus'; focused: boolean }
+  | { kind: 'suspend' }
   | { kind: 'ignored' }
 
 const ignored = (): CsiReport => ({ kind: 'ignored' })
@@ -104,6 +106,9 @@ export function decodeCsi(sequence: string): CsiReport {
     return { kind: 'keyboard-flags', flags: parseParam(body.slice(1)) ?? 0 }
   }
   if (final === 'c' && body.startsWith('?')) return { kind: 'device-attributes' }
+
+  if (body === '' && (final === 'I' || final === 'O'))
+    return { kind: 'focus', focused: final === 'I' }
 
   const params = body.split(';')
   if (final === 'u') {
@@ -127,6 +132,7 @@ export function decodeCsi(sequence: string): CsiReport {
       // The Dvorak physical-QWERTY-C collision contains both 106 and 99. The
       // produced `j` wins: a newline is recoverable while an interrupt is not.
       if (chordKeys.includes(106)) return input({ type: 'newline' })
+      if (chordKeys.includes(122)) return { kind: 'suspend' }
       if (chordKeys.includes(99)) return input({ type: 'interrupt' })
     }
 

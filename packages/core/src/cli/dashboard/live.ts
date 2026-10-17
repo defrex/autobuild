@@ -109,6 +109,11 @@ export class LiveRegion {
     this.paintedRows = rows
   }
 
+  /** Force the cached frame to repaint after terminal ownership resumes. */
+  invalidate(): void {
+    this.paintedRows = undefined
+  }
+
   /**
    * Release the region: restore the normal screen, copy the last frame there,
    * restore the cursor, and stop tracking. Idempotent.
