@@ -1,9 +1,10 @@
 /**
  * The operator read paths run on the snapshot-backed repository view (AUT-650):
- * within one serving process a poll reads no event rows at idle and exactly the
+ * within one serving process a poll reads no build event rows at idle and exactly the
  * newly appended rows after new events, whatever the number of concurrent
  * pollers; across serving processes each reads the same delta at most once; and
- * every response equals the one a full replay (no snapshots) produces.
+ * every response equals the one a full replay (no snapshots) produces. Each
+ * pass reloads the bounded journal; that tail is no longer snapshotted.
  */
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from '../config/load'
@@ -105,21 +106,23 @@ async function appendNew(store: MemoryBuildStore, build: number, journal: number
       payload: { run: 'run_0', holder: `h${tick}` },
     })
   }
-  return build + journal
+  return build
 }
 
 interface Instrumented {
   store: BuildStore
-  rows: () => number
+  buildRows: () => number
+  journalRows: () => number
   lookups: () => number
   reset: () => void
   gate: { hold: Promise<void> | undefined }
 }
 
 /** A process-like handle on one backing store: its own object identity (so its
- * own coalescing state), counting every event row a read returns. */
+ * own coalescing state), counting build and journal event rows separately. */
 function instrument(backing: MemoryBuildStore, opts: { noSnapshots?: boolean } = {}): Instrumented {
   let rows = 0
+  let journalRows = 0
   let lookups = 0
   const gate: { hold: Promise<void> | undefined } = { hold: undefined }
   const proxy = new Proxy(backing as unknown as Record<string, unknown>, {
@@ -130,7 +133,8 @@ function instrument(backing: MemoryBuildStore, opts: { noSnapshots?: boolean } =
       if (prop === 'getEvents' || prop === 'getRepoEvents' || prop === 'getRepoStateEvents') {
         return async (...args: unknown[]) => {
           const events = (await fn.apply(target, args)) as unknown[]
-          rows += events.length
+          if (prop === 'getEvents') rows += events.length
+          else journalRows += events.length
           return events
         }
       }
@@ -147,10 +151,12 @@ function instrument(backing: MemoryBuildStore, opts: { noSnapshots?: boolean } =
   })
   return {
     store: proxy as unknown as BuildStore,
-    rows: () => rows,
+    buildRows: () => rows,
+    journalRows: () => journalRows,
     lookups: () => lookups,
     reset: () => {
       rows = 0
+      journalRows = 0
       lookups = 0
     },
     gate,
@@ -171,7 +177,7 @@ async function pollAll(store: BuildStore) {
 }
 
 describe('operator reads from snapshots (AUT-650)', () => {
-  test('every route reads zero event rows at idle and exactly the new rows after new events', async () => {
+  test('every route restores build state and reloads the bounded journal', async () => {
     const backing = new MemoryBuildStore({ clock })
     await seed(backing)
     const process = instrument(backing)
@@ -179,16 +185,17 @@ describe('operator reads from snapshots (AUT-650)', () => {
 
     process.reset()
     await pollAll(process.store)
-    expect(process.rows()).toBe(0)
+    expect(process.buildRows()).toBe(0)
+    expect(process.journalRows()).toBeGreaterThan(0)
 
     const m = await appendNew(backing, 3, 2)
     process.reset()
     await pollAll(process.store)
-    expect(process.rows()).toBe(m)
+    expect(process.buildRows()).toBe(m)
 
     process.reset()
     await pollAll(process.store)
-    expect(process.rows()).toBe(0)
+    expect(process.buildRows()).toBe(0)
   })
 
   test('each route alone pays only its own delta, whichever route polls first', async () => {
@@ -207,7 +214,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
       }
       await routes[first]()
       await pollAll(process.store)
-      expect(process.rows()).toBe(m)
+      expect(process.buildRows()).toBe(m)
     }
   })
 
@@ -221,7 +228,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     const results = await Promise.all(Array.from({ length: 5 }, () => pollAll(process.store)))
     // Up to two passes serve the burst (the running one and the trailing one);
     // the delta is read once because the first pass persists what it folded.
-    expect(process.rows()).toBe(m)
+    expect(process.buildRows()).toBe(m)
     for (const result of results) expect(result).toEqual(results[0]!)
   })
 
@@ -249,14 +256,14 @@ describe('operator reads from snapshots (AUT-650)', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     // No independent restore began while the first pass is parked.
     expect(process.lookups()).toBe(parked)
-    expect(process.rows()).toBe(0)
+    expect(process.buildRows()).toBe(0)
 
     process.gate.hold = undefined
     release()
     await Promise.all([first, ...joiners])
     // Pass 1 read the m new rows and persisted them; the trailing pass
     // restored from that snapshot and read none: m rows, never 5·m.
-    expect(process.rows()).toBe(m)
+    expect(process.buildRows()).toBe(m)
     expect(process.lookups()).toBeGreaterThan(parked)
   })
 
@@ -278,7 +285,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     process.gate.hold = undefined
     release()
     const [a, b] = await Promise.all([first, joiner])
-    expect(process.rows()).toBe(m1 + m2)
+    expect(process.buildRows()).toBe(m1 + m2)
     // The joiner arrived after m1 but before m2 was appended; the pass that
     // served it started after m2, so it reflects every event.
     const latest = b.find((summary) => summary.slug === 'running')!
@@ -286,7 +293,7 @@ describe('operator reads from snapshots (AUT-650)', () => {
     expect(latest.updatedAt >= stale.updatedAt).toBe(true)
   })
 
-  test('P serving processes read the new rows at most P times in total, never history', async () => {
+  test('P serving processes read new build rows at most P times, never build history', async () => {
     const backing = new MemoryBuildStore({ clock })
     await seed(backing)
     const a = instrument(backing)
@@ -296,13 +303,13 @@ describe('operator reads from snapshots (AUT-650)', () => {
     a.reset()
     b.reset()
     await Promise.all([pollAll(a.store), pollAll(b.store)])
-    expect(a.rows()).toBeLessThanOrEqual(m)
-    expect(b.rows()).toBeLessThanOrEqual(m)
-    expect(a.rows() + b.rows()).toBeLessThanOrEqual(2 * m)
+    expect(a.buildRows()).toBeLessThanOrEqual(m)
+    expect(b.buildRows()).toBeLessThanOrEqual(m)
+    expect(a.buildRows() + b.buildRows()).toBeLessThanOrEqual(2 * m)
     a.reset()
     b.reset()
     await Promise.all([pollAll(a.store), pollAll(b.store)])
-    expect(a.rows() + b.rows()).toBe(0)
+    expect(a.buildRows() + b.buildRows()).toBe(0)
   })
 
   test('responses with snapshots equal the full-replay responses', async () => {

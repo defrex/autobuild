@@ -2,15 +2,15 @@
  * The operator read paths' repository view: every poll-driven route (dashboard,
  * repository and harvest status, build listings) derives its state from a
  * `RepoViewStore` cold-started from stored reducer snapshots and advanced with
- * delta reads, so a poll's event-row cost follows the events appended since the
- * last one, never the history, the open tabs, or the watchers.
+ * delta reads for builds. Each pass loads the bounded journal subset; its raw
+ * tail is held only for that pass, never restored from a snapshot.
  *
  * Passes are single-flight per `(store, repo)` within one serving process: at
  * most one pass runs at a time, and requests arriving while it runs join the
  * one trailing pass (each needs state at least as new as its arrival, which the
  * running pass cannot promise). That trailing pass restores from the snapshot
- * the previous pass persisted, so N concurrent pollers cost one delta read per
- * pass, not N. The coordination is scheduling inside this process; every datum
+ * the previous pass persisted for builds, so N concurrent pollers cost one
+ * build delta read per pass, not N. The coordination is scheduling inside this process; every datum
  * still comes from durable state, and a second serving process simply reads the
  * same delta once itself (duplicate reads are bounded by the process count).
  */
