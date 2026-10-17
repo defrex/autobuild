@@ -332,10 +332,12 @@ const ENABLE_AUTO_MERGE_MUTATION = `
 `
 
 const SQUASH_MESSAGE_QUERY = `
-  query ($owner: String!, $name: String!, $number: Int!) {
+  query ($owner: String!, $name: String!, $number: Int!, $branch: String) {
     repository(owner: $owner, name: $name) {
+      defaultBranchRef { name }
+      mergeQueue(branch: $branch) { id }
       pullRequest(number: $number) {
-        id headRefOid state
+        id headRefOid state baseRefName
         viewerMergeHeadlineText(mergeType: SQUASH)
         viewerMergeBodyText(mergeType: SQUASH)
         autoMergeRequest { commitHeadline commitBody mergeMethod }
@@ -345,7 +347,10 @@ const SQUASH_MESSAGE_QUERY = `
 `
 const squashMessageData = z.object({
   repository: z.object({
+    defaultBranchRef: z.object({ name: z.string().min(1) }).nullable(),
+    mergeQueue: z.object({ id: z.string().min(1) }).nullable(),
     pullRequest: z.object({
+      baseRefName: z.string().min(1),
       id: z.string().min(1),
       headRefOid: z.string().min(1),
       state: z.enum(['OPEN', 'MERGED', 'CLOSED']),
@@ -1054,11 +1059,24 @@ export class GitHubForge implements Forge {
     try {
       const { owner, name } = await this.requireCoordinates()
       const repoPath = `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+      // A matching native request needs only this authoritative read, even
+      // after a dispatcher restart. Consent is refreshed only before mutations.
+      const message =
+        options === undefined ? undefined : await this.squashMessage(number, options.baseBranch)
+      if (message !== undefined && options !== undefined) {
+        if (message.state !== 'OPEN') return { kind: 'deferred' }
+        if (this.identityMessageMatches(message, options.buildSlug)) return { kind: 'applied' }
+      }
       const { view, mergeState, requeries, waitedMs } = await this.inspectAutoMergeView(
         repoPath,
         number,
       )
       if (view.auto_merge !== null && options === undefined) return { kind: 'applied' }
+      if (
+        message !== undefined &&
+        (message.headRefOid !== view.head.sha || message.baseRefName !== view.base.ref)
+      )
+        return { kind: 'deferred' }
 
       const gate = await this.mergeGatePresence(view.base.ref, options !== undefined)
       if (gate.kind === 'deferred') return gate
@@ -1083,7 +1101,7 @@ export class GitHubForge implements Forge {
             }
           }
           if (options !== undefined)
-            return await this.applyIdentityAutoMerge(number, view.head.sha, options)
+            return await this.applyIdentityAutoMerge(number, view.head.sha, options, message!)
           await this.graphql(
             'enablePullRequestAutoMerge',
             enableAutoMergeData,
@@ -1162,28 +1180,57 @@ export class GitHubForge implements Forge {
     }
   }
 
-  private async squashMessage(number: number) {
+  private async squashMessage(number: number, branch?: string) {
     const { owner, name } = await this.requireCoordinates()
-    const data = await this.graphql('squashMessage', squashMessageData, SQUASH_MESSAGE_QUERY, {
-      owner,
-      name,
-      number,
-    })
-    return data.repository.pullRequest
+    // The default branch is the usual base. A supplied hint covers other bases
+    // in one query; always verify it against the PR, including after retargeting.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const data = await this.graphql('squashMessage', squashMessageData, SQUASH_MESSAGE_QUERY, {
+        owner,
+        name,
+        number,
+        branch: branch ?? null,
+      })
+      const message = data.repository.pullRequest
+      const inspectedBranch = branch ?? data.repository.defaultBranchRef?.name
+      if (inspectedBranch !== message.baseRefName) {
+        branch = message.baseRefName
+        continue
+      }
+      if (data.repository.mergeQueue !== null) {
+        throw new Error(
+          'GitHub merge queues ignore squash message overrides; land through a human or change the queue policy to preserve Autobuild-Build identity',
+        )
+      }
+      return message
+    }
+    throw new Error(
+      'GitHub PR base changed during squash-message and merge-queue inspection; retry',
+    )
+  }
+
+  private identityMessageMatches(
+    view: z.infer<typeof squashMessageData>['repository']['pullRequest'],
+    buildSlug: string,
+  ): boolean {
+    return (
+      view.autoMergeRequest !== null &&
+      view.autoMergeRequest.mergeMethod === 'SQUASH' &&
+      view.autoMergeRequest.commitHeadline === view.viewerMergeHeadlineText &&
+      view.autoMergeRequest.commitBody.trimEnd() ===
+        withBuildTrailer(view.viewerMergeBodyText, buildSlug).trimEnd()
+    )
   }
 
   private async applyIdentityAutoMerge(
     number: number,
     expectedHead: string,
     options: BuildLandingOptions,
+    message: z.infer<typeof squashMessageData>['repository']['pullRequest'],
   ): Promise<AutoMergeResult> {
-    let message = await this.squashMessage(number)
+    const expectedBase = message.baseRefName
     const matches = (view: typeof message): boolean =>
-      view.autoMergeRequest !== null &&
-      view.autoMergeRequest.mergeMethod === 'SQUASH' &&
-      view.autoMergeRequest.commitHeadline === view.viewerMergeHeadlineText &&
-      view.autoMergeRequest.commitBody ===
-        withBuildTrailer(view.viewerMergeBodyText, options.buildSlug)
+      this.identityMessageMatches(view, options.buildSlug)
     if (message.state !== 'OPEN' || message.headRefOid !== expectedHead) return { kind: 'deferred' }
     if (matches(message)) return { kind: 'applied' }
     if (options.canApply !== undefined && !(await options.canApply())) return { kind: 'deferred' }
@@ -1194,10 +1241,11 @@ export class GitHubForge implements Forge {
         DISABLE_AUTO_MERGE_MUTATION,
         { pullRequestId: message.id },
       )
-      message = await this.squashMessage(number)
+      message = await this.squashMessage(number, message.baseRefName)
       if (
         message.state !== 'OPEN' ||
         message.headRefOid !== expectedHead ||
+        message.baseRefName !== expectedBase ||
         message.autoMergeRequest !== null
       )
         return { kind: 'deferred' }
@@ -1215,8 +1263,11 @@ export class GitHubForge implements Forge {
         commitBody: withBuildTrailer(message.viewerMergeBodyText, options.buildSlug),
       },
     )
-    const after = await this.squashMessage(number)
-    return after.state === 'OPEN' && after.headRefOid === message.headRefOid && matches(after)
+    const after = await this.squashMessage(number, message.baseRefName)
+    return after.state === 'OPEN' &&
+      after.headRefOid === message.headRefOid &&
+      after.baseRefName === expectedBase &&
+      matches(after)
       ? { kind: 'applied' }
       : {
           kind: 'deferred',
@@ -1270,7 +1321,8 @@ export class GitHubForge implements Forge {
     options?: BuildLandingOptions,
   ): Promise<void> {
     const { owner, name } = await this.requireCoordinates()
-    const message = options === undefined ? undefined : await this.squashMessage(number)
+    const message =
+      options === undefined ? undefined : await this.squashMessage(number, options.baseBranch)
     if (
       message !== undefined &&
       (message.state !== 'OPEN' || message.headRefOid !== expectedHeadSha)

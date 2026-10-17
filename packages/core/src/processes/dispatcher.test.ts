@@ -9054,3 +9054,39 @@ describe('stable merged-build evidence and native maintenance', () => {
     expect(reduceBuild(await h.store.getEvents(slug)).autoMerge.requested).toBe(false)
   })
 })
+
+test('acknowledged unchanged native maintenance does not refresh consent or load pipeline configuration', async () => {
+  const h = harness()
+  const slug = await seedAwaitingPr(h)
+  const command = await h.store.append(slug, {
+    actor: humanActor('operator'),
+    type: 'build.auto-merge-requested',
+    payload: {},
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'pr.auto-merge-enabled',
+    payload: { commandSeq: command.seq },
+  })
+  await h.store.claimLease(slug, 'runner-live', 60_000)
+  h.forge.setPrState(1, { state: 'open', mergeable: true })
+  let pipelineReads = 0
+  const getArtifact = h.store.getArtifact.bind(h.store)
+  h.store.getArtifact = async (...args) => {
+    if (args[1] === BUILD_EFFECTIVE_CONFIG_ARTIFACT) pipelineReads++
+    return getArtifact(...args)
+  }
+  let checks = 0
+  h.forge.setAutoMerge = async (_path, _number, _enabled, options) => {
+    expect(options?.canApply).toBeDefined()
+    checks++
+    return { kind: 'applied' }
+  }
+  await h.dispatcher.tick()
+  await h.dispatcher.tick()
+  expect(checks).toBe(2)
+  expect(pipelineReads).toBe(0)
+  expect(
+    (await h.store.getEvents(slug)).filter((event) => event.type === 'pr.auto-merge-enabled'),
+  ).toHaveLength(1)
+})

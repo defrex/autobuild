@@ -299,6 +299,7 @@ export async function completeFinalizePr(
       ? undefined
       : await deps.forge.setAutoMerge(deps.workspacePath, pr.number, autoMerge.enabled, {
           buildSlug: env.build,
+          baseBranch: input.baseBranch,
           canApply: async () => {
             const current = (await readBuildFacts(store, env.build)).value.state
             return (

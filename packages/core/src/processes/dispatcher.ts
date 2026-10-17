@@ -2184,13 +2184,18 @@ export class Dispatcher {
       prState.state === 'open' &&
       state.autoMerge.requested === true &&
       commandSeq !== undefined &&
-      (await canApply())
+      state.prState === 'open' &&
+      // An acknowledged request gets a read-only freshness check. The adapter
+      // calls canApply before any repair, so quiet polls need no extra facts
+      // read, pipeline decision, or consent refresh.
+      (autoMerge?.enabled !== true || (await canApply()))
     ) {
       const result = await forge.setAutoMerge(workspacePath, pr.number, true, {
         buildSlug: record.slug,
+        baseBranch: this.deps.config.baseBranch,
         canApply,
       })
-      if (result.kind === 'applied') {
+      if (result.kind === 'applied' && autoMerge?.enabled === true) {
         await store.refreshBuild(record.slug)
         const pending = pendingAutoMerge((await store.buildFacts(record.slug)).state)
         if (pending?.enabled === true && pending.commandSeq === commandSeq)
@@ -2230,6 +2235,7 @@ export class Dispatcher {
         ) {
           await forge.squashMerge(workspacePath, pr.number, result.headSha, {
             buildSlug: record.slug,
+            baseBranch: this.deps.config.baseBranch,
           })
         }
       }

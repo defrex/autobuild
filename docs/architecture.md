@@ -555,8 +555,11 @@ built-in adapters preserve their squash message and normalize a final
 `Autobuild-Build: <slug>` trailer through `packages/core/src/kernel/build-identity.ts`. The GitHub
 adapter reads the viewer's squash headline/body and head in one GraphQL query;
 it never reconstructs server defaults from repository settings. The janitor
-maintains native request message freshness after acknowledgement, with refreshed
-durable consent and engine eligibility between disable and enable.
+maintains native request message freshness after acknowledgement. A matching
+request costs one GraphQL freshness query and no extra consent or pipeline read;
+full gate inspection and refreshed durable consent/engine eligibility precede
+any repair. Body comparison tolerates provider trimming of trailing whitespace
+while preserving the complete headline, body content, and squash method.
 
 Optional `Forge.readCommitMessage` and `Forge.containsBuild` capabilities expose
 actual landed messages and exact trailer presence in reachable branch history.
@@ -565,7 +568,11 @@ cleanup observations. Unsupported or failed inspection leaves evidence unknown;
 a read failure also records an observation without preventing completion. Old
 logs need no migration and keep the same status and presentation.
 
-GitHub merge queues ignore squash-message overrides. Kernel auto-merge therefore
+GitHub merge queues ignore squash-message overrides. The message query also
+reads `repository.mergeQueue(branch:)`, covering classic protection and rulesets.
+Its branch hint is checked against the PR's actual base, with a bounded re-query
+after a retarget rather than assuming the repository default is the base.
+Kernel auto-merge therefore
 returns an actionable `unproven-gate-state` deferral for queue-protected bases;
 it never bypasses the queue. Human queue landings still settle normally with
 inspected trailer evidence when available. Expected-head guards and recurring

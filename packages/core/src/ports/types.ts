@@ -426,6 +426,8 @@ export interface PrAttachmentHosting {
 
 export interface BuildLandingOptions {
   buildSlug: string
+  /** Optional query hint, verified against the current provider PR base. */
+  baseBranch?: string
   /** Refresh durable consent and pipeline eligibility before native mutation. */
   canApply?: () => Promise<boolean>
 }
