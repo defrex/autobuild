@@ -50,10 +50,11 @@ export type RepositoryReadFacts = ReturnType<typeof repositoryReadFactsReducer.f
 export async function readRepositoryFacts(
   store: Reader & Pick<BuildStore, 'getRepo'>,
   repo: string,
+  knownPresence?: boolean,
 ) {
   let absent = false
   try {
-    absent = (await store.getRepo(repo)) === null
+    absent = knownPresence === undefined ? (await store.getRepo(repo)) === null : !knownPresence
   } catch {
     // Lease/record metadata can be unavailable while durable values remain readable.
     return readValue<RepositoryReadFacts>(store, { kind: 'repo', repo }, 'repositoryReadFacts')

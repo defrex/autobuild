@@ -1015,9 +1015,10 @@ async function capturePaint(
     harness.store.heartbeatRepo = async () => false
     harness.store.claimRepoLease = async (repo, holder, ttl) => {
       repoLeaseClaims += 1
-      // The loop's run() claim and its single tick's renewal; any later claim
-      // is the adopting HarvestRunner re-acquiring after its lost heartbeat.
-      return repoLeaseClaims <= 2 ? originalClaimRepoLease(repo, holder, ttl) : false
+      // Only the loop's initial claim succeeds; current-lease ticks no longer
+      // re-claim. A later claim is the adopting HarvestRunner re-acquiring
+      // after its deliberately lost heartbeat.
+      return repoLeaseClaims === 1 ? originalClaimRepoLease(repo, holder, ttl) : false
     }
   }
 
