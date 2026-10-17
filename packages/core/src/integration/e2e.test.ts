@@ -255,7 +255,10 @@ test('a. happy path: ready ticket → dispatch → pipeline → PR → janitor m
     'workspace.released',
     'build.completed',
   ])
-  expect(ofType(final, 'pr.merged')[0]!.payload).toEqual({ sha: 'squash-1' })
+  expect(ofType(final, 'pr.merged')[0]!.payload).toEqual({
+    sha: 'squash-1',
+    buildTrailerPresent: false,
+  })
   expect(ofType(final, 'build.completed')[0]!.payload).toEqual({ outcome: 'merged' })
   expect(existsSync(ws)).toBe(false) // the worktree is actually gone
   expect(h.tickets.transitions).toEqual([{ id: 'T-1', state: 'Done' }])
@@ -980,7 +983,9 @@ test('local-git defers for missing identity, then lands under repository identit
     'Lifecycle Operator <lifecycle@example.test>\nLifecycle Operator <lifecycle@example.test>',
   )
   const description = textContent((await h.store.getArtifact(SLUG, 'pr-description'))!)
-  expect(await git(['show', '-s', '--format=%B', landed], h.origin)).toBe(description.trimEnd())
+  expect(await git(['show', '-s', '--format=%B', landed], h.origin)).toBe(
+    `${description.trimEnd()}\n\nAutobuild-Build: ${SLUG}`,
+  )
   expect(await git(['rev-parse', `refs/heads/${BRANCH}`], h.origin)).toBe(head)
   expect(h.tickets.comments.at(-1)?.body).toBe(`build ${SLUG} merged: refs/heads/${BRANCH}`)
 }, 30_000)

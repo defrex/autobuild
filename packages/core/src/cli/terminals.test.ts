@@ -1224,6 +1224,7 @@ describe('ab done — finalize', () => {
         changed: true,
       },
     ])
+    expect(deps.forge.buildSlugs.get(1)).toBe(BUILD)
     const events = await store.getEvents(BUILD)
     const applied = events.find((event) => event.type === 'pr.auto-merge-enabled')
     expect(applied?.actor).toEqual(KERNEL)

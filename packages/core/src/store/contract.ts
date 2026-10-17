@@ -1,3 +1,4 @@
+import { readBuildFacts } from './reduced-reads'
 import { REDUCERS } from '../kernel/reducer-registry'
 import { resolveReducerValue } from './reducer-values'
 import { prepareAssetSnapshots } from './ticket-asset-snapshots'
@@ -1863,6 +1864,32 @@ export function describeBuildStoreContract(name: string, factory: BuildStoreFact
           const err = await store.append('val-extra', extra).catch((e: unknown) => e)
           expect(err).toBeInstanceOf(EventValidationError)
           expect((await store.getEvents('val-extra')).length).toBe(1)
+        })
+      })
+
+      test('merged trailer evidence persists as true, false or historical absence without changing reduction', async () => {
+        await withStore(factory, undefined, async (store) => {
+          for (const evidence of [undefined, true, false]) {
+            const slug = `merge-evidence-${String(evidence)}`
+            await store.createBuild(sampleBuildInput(slug))
+            await store.append(slug, sampleEventWrite())
+            const payload = {
+              sha: 'landed',
+              ...(evidence === undefined ? {} : { buildTrailerPresent: evidence }),
+            }
+            await store.append(slug, { actor: DISPATCHER, type: 'pr.merged', payload })
+            const events = await store.getEvents(slug)
+            expect(events.at(-1)?.payload).toEqual(payload)
+            const historical = events.map((event) =>
+              event.type === 'pr.merged'
+                ? { ...event, payload: { sha: event.payload.sha } }
+                : event,
+            )
+            const { lastEvent: _observedEvent, ...observedState } = reduceBuild(events)
+            const { lastEvent: _historicalEvent, ...historicalState } = reduceBuild(historical)
+            expect(observedState).toEqual(historicalState)
+            expect((await readBuildFacts(store, slug)).value.state).toEqual(reduceBuild(events))
+          }
         })
       })
 

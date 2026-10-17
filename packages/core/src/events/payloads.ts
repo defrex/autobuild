@@ -606,7 +606,10 @@ export const eventPayloadSchemas = {
     /** seq of the human auto-merge command this forge mutation applied. */
     commandSeq: z.number().int().positive(),
   }),
-  'pr.merged': z.strictObject({ sha: z.string().min(1) }),
+  'pr.merged': z.strictObject({
+    sha: z.string().min(1),
+    buildTrailerPresent: z.boolean().optional(),
+  }),
   'pr.closed': empty,
   'pr.conflicted': z.strictObject({ baseSha: z.string().min(1) }),
   'reconcile.progress-checked': z.strictObject({

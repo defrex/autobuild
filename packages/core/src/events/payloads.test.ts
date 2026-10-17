@@ -1138,3 +1138,15 @@ describe('post-reconcile policy facts', () => {
     expect(() => verify({ ...payload, outcome: 'pass' })).toThrow()
   })
 })
+
+test('merged evidence is additive: historical unknown, inspected true and inspected false', () => {
+  const schema = eventPayloadSchemas['pr.merged']
+  expect(schema.parse({ sha: 'historical' })).toEqual({ sha: 'historical' })
+  for (const buildTrailerPresent of [true, false]) {
+    expect(schema.parse({ sha: 'landed', buildTrailerPresent })).toEqual({
+      sha: 'landed',
+      buildTrailerPresent,
+    })
+  }
+  expect(schema.safeParse({ sha: 'landed', buildTrailerPresent: null }).success).toBe(false)
+})
