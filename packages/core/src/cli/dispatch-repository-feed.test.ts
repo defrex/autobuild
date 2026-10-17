@@ -289,3 +289,31 @@ test('a stale frontend cannot replace a newer persisted cursor', async () => {
     (await store.getReducerSnapshot({ kind: 'repo', repo }, 'dispatchFrontend', 1))?.cursor,
   ).toBe(2)
 })
+
+test('a standby identity remembered during a pending refresh survives its commit', async () => {
+  const store = new MemoryBuildStore()
+  await store.ensureRepo(repo)
+  const owner = await start(store, 'owner')
+  await start(store, 'self')
+  const feed = new DispatchRepositoryFeed(store, repo, clock)
+  await feed.warm()
+  let release!: () => void
+  let reading!: () => void
+  const entered = new Promise<void>((resolve) => {
+    reading = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  store.getRepoEvents = async () => {
+    reading()
+    await gate
+    return []
+  }
+  const pending = feed.refresh()
+  await entered
+  feed.remember([owner])
+  release()
+  await pending
+  expect(feed.identities.map((e) => e.seq)).toEqual([1, 2])
+})

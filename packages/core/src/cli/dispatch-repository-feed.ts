@@ -142,6 +142,9 @@ export class DispatchRepositoryFeed {
       } else {
         delta = await this.store.getRepoEvents(this.repo, cursor)
         this.validate(delta, cursor, true)
+        // A standby correlation may have supplied an older identity while the
+        // delta read was pending. Keep those memoized facts in this commit.
+        retained = this.retained
       }
       retained = dispatchFrontendReducer.advance({ retained }, delta).retained
       this.cursor = Math.max(cursor, delta.at(-1)?.seq ?? 0)
